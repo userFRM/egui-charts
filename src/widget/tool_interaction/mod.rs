@@ -77,6 +77,7 @@ impl Chart {
         price_map: &PriceMap,
         painter: &Painter,
         timescale: &crate::model::TimeScale,
+        time_format: (&dyn crate::scales::TimeFormatter, i64),
     ) {
         self.handle_pane_drawings(
             ui,
@@ -87,6 +88,7 @@ impl Chart {
             price_map,
             painter,
             timescale,
+            time_format,
             None,
         );
     }
@@ -101,6 +103,7 @@ impl Chart {
         price_map: &PriceMap,
         painter: &Painter,
         timescale: &crate::model::TimeScale,
+        time_format: (&dyn crate::scales::TimeFormatter, i64),
         pane: Option<super::PaneId>,
     ) {
         // New drawings belong to the pane's first member, or to an empty pane itself.
@@ -386,15 +389,11 @@ impl Chart {
         };
         // Drawings write dates as the crosshair labels the same bar; a host horizontal scale has
         // no dates.
-        let time_formatter = self
-            .horizontal_scale
-            .is_none()
-            .then(|| self.build_time_formatter());
         // Render existing drawings against the chart's bars
         let view = ChartView {
             price_formatter,
-            time_formatter: time_formatter.as_deref(),
-            bar_seconds: self.time_label_seconds(),
+            time_formatter: self.horizontal_scale.is_none().then_some(time_format.0),
+            bar_seconds: time_format.1,
             instrument: self.instrument(),
             bars: self.state.shown(),
             revision: self.state.revision(),
@@ -655,6 +654,59 @@ mod tests {
             }
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn drawings_reuse_the_frames_time_formatter() {
+        use crate::scales::{TickMarkType, TimeFormatter};
+        use chrono::{DateTime, Utc};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        #[derive(Clone)]
+        struct Host(Arc<AtomicUsize>);
+        impl TimeFormatter for Host {
+            fn format(&self, _: DateTime<Utc>, _: TickMarkType) -> String {
+                "tick".into()
+            }
+            fn clone_box(&self) -> Box<dyn TimeFormatter> {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                Box::new(self.clone())
+            }
+        }
+
+        let clones = Arc::new(AtomicUsize::new(0));
+        let mut chart = crate::widget::test_frames::chart(&[95.0; 100], &[105.0; 100]);
+        chart.config.show_volume = false;
+        // Exclude the axis mark generator's own formatter clone.
+        chart.config.show_time_labels = false;
+        chart.config.show_grid = false;
+        chart.set_time_formatter(Some(Arc::new(Host(clones.clone()))));
+        let ctx = Context::default();
+        for forecast in [false, true] {
+            if forecast {
+                let mut drawing = Drawing::new(1, DrawingToolType::Forecast);
+                drawing.chart_points =
+                    vec![ChartPoint::new(30.0, 100.0), ChartPoint::new(40.0, 105.0)];
+                drawing.completed = true;
+                chart.drawings_mut().drawings.push(drawing);
+            }
+            clones.store(0, Ordering::Relaxed);
+            let mut shows = 0;
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                shows += 1;
+                chart.show(ui);
+            });
+            output.textures_delta.clear();
+            assert!(shows > 0);
+            assert_eq!(
+                clones.load(Ordering::Relaxed),
+                shows,
+                "forecast: {forecast}"
+            );
+        }
     }
 
     /// Primary clicks place two anchors; secondary drags leave the preview and Escape cancels it.

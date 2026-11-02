@@ -1115,6 +1115,7 @@ impl Chart {
                     let mut cursors = std::mem::take(&mut self.cursor_modes);
                     let timescale = self.state.time_scale().clone();
                     let painter = ui.painter().clone();
+                    let time_formatter = self.build_time_formatter();
                     self.handle_pane_drawings(
                         ui,
                         &mut drawings,
@@ -1124,6 +1125,7 @@ impl Chart {
                         &map,
                         &painter,
                         &timescale,
+                        (time_formatter.as_ref(), self.time_label_seconds()),
                         Some(pane_id),
                     );
                     let drawing_hit = pane_response
