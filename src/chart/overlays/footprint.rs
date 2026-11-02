@@ -3,10 +3,11 @@
 use crate::chart::coords::ChartMapping;
 use crate::data::{Footprint, FootprintBar, FootprintLevel, NodeSensitivity};
 use crate::model::Bar;
-use egui::epaint::{Mesh, Shape};
+use egui::epaint::{Galley, Mesh, Shape};
 use egui::{Align2, Color32, FontId, Painter, Rect, Stroke, StrokeKind, pos2, vec2};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 /// The smallest and largest font size a footprint number is drawn at, in points.
 const FONT_LIMITS: [f32; 2] = [8.0, 24.0];
@@ -66,13 +67,14 @@ pub struct FootprintConfig {
     /// Group adjacent rows automatically to at least this screen height. `None` keeps the
     /// aggregation's manual grouping. Grouping is an integer multiple of the input step.
     pub auto_row_height: Option<f32>,
-    /// Hide numbers when a row is shorter than this height or the column cannot fit them.
+    /// Hide numbers when a row is shorter than this height. A column uses compact values and
+    /// fonts down to 8 points before switching to a profile overview without numbers.
     pub min_text_height: f32,
     /// Dominance multiple, normally 3 (300%).
     pub imbalance_ratio: f64,
     /// Compare to the opposite side one price away instead of at the same price.
     pub diagonal: bool,
-    /// Outline the highest-volume row.
+    /// Outline the highest-volume row when its cells are large enough for the stroke.
     pub show_poc: bool,
     /// Shade the contiguous value area containing this share of the bar volume.
     pub value_area: Option<f64>,
@@ -82,15 +84,16 @@ pub struct FootprintConfig {
     pub value_area_low: Option<Stroke>,
     /// Trade profiles: how volume nodes are chosen.
     pub node_sensitivity: NodeSensitivity,
-    /// Write 1,200 as 1.2K and 3,400,000 as 3.4M, instead of every digit.
+    /// Prefer 1.2K for 1,200 and 3.4M for 3,400,000, even when every digit would fit.
+    /// Otherwise compact units are only a width-fitting fallback.
     pub abbreviate: bool,
     /// Write zero volumes as 0. Otherwise they are left blank, so a one-sided row shows only
     /// the side that traded.
     pub show_zero: bool,
-    /// Smallest and largest font size of the numbers, in points. A row's size follows its volume
-    /// relative to the bar's largest row, and equal values give a fixed size. Both are held
-    /// within 8 and 24 points so that numbers stay readable, and a number whose size exceeds
-    /// its row's height is left out.
+    /// Preferred smallest and largest font size of the numbers, in points. A row's size follows
+    /// its volume relative to the bar's largest row; equal values request one size. Both are held
+    /// within 8 and 24 points. Fitting to the cell can reduce the size to 8 points; columns that
+    /// cannot fit readable numbers use an overview without them.
     pub font_size: [f32; 2],
     /// Write the ask/bid ratio of the highest and lowest row of each bar above and below it,
     /// or `n/a` when the bid is zero and the ratio is undefined.
@@ -175,7 +178,8 @@ pub(crate) fn footprint_column_width(bar_spacing: f32, config: &FootprintConfig)
 /// tick and above their last tick, including grouped rows. Fractional volumes below 100 retain
 /// up to three decimals; nonzero magnitudes below 0.001 use scientific notation. Only display
 /// grouping runs during painting. Cells under a point wide are too narrow to read and are skipped
-/// before looking up executions.
+/// before looking up executions. A price spine occupies a separate gutter to the left of each
+/// bar: the opening tick points left, the closing tick right, and the colour follows price direction.
 pub fn render_footprint(
     painter: &Painter,
     mapping: &ChartMapping,
@@ -202,6 +206,8 @@ pub fn render_footprint(
     let background = painter.add(Shape::Noop);
     let mut mesh = Mesh::default();
     let columns = config.modes.len().min(4);
+    // Use the existing half-gap so price markers do not shrink execution columns.
+    let gutter = (mapping.bar_spacing * 0.04).min(2.5);
     // Bars cut by dropped executions are drawn as candles, not as complete footprint bars.
     let complete_from = flow.complete_from();
     for (index, bar) in bars.iter().enumerate().take(end).skip(first) {
@@ -212,6 +218,29 @@ pub fn render_footprint(
             continue;
         };
         let x = mapping.idx_to_x(index);
+        let left = x - mapping.bar_spacing * 0.46;
+        let price_left = (left - gutter).max(mapping.rect.left());
+        let price_right = left.max(price_left);
+        let spine = (price_left + price_right) * 0.5;
+        let color = if bar.close > bar.open {
+            config.ask_color
+        } else if bar.close < bar.open {
+            config.bid_color
+        } else {
+            config.text_color
+        };
+        let stroke = Stroke::new((gutter * 0.2).clamp(0.25, 1.0), color);
+        let [high, low, open, close] =
+            [bar.high, bar.low, bar.open, bar.close].map(|price| mapping.price_to_y(price));
+        if price_right > price_left && [high, low, open, close].iter().all(|y| y.is_finite()) {
+            painter.line_segment([pos2(spine, high), pos2(spine, low)], stroke);
+            painter.line_segment(
+                [pos2(spine, open), pos2(spine, close)],
+                Stroke::new(stroke.width * 2.0, color),
+            );
+            painter.line_segment([pos2(price_left, open), pos2(spine, open)], stroke);
+            painter.line_segment([pos2(spine, close), pos2(price_right, close)], stroke);
+        }
         // Automatic grouping uses the local price mapping, including log and inverted scales.
         let group = row_group(mapping, bar, flow, config);
         let grouped;
@@ -238,7 +267,35 @@ pub fn render_footprint(
             .then(|| pullback_range(bar, flow))
             .flatten()
             .map(|(low, high)| (low.div_euclid(group), high.div_euclid(group)));
-        let [smallest, largest] = font_limits(config.font_size);
+        let text_rows: Vec<_> = shown
+            .levels
+            .values()
+            .filter(|row| {
+                let price =
+                    row.level as f64 * flow.price_step() * group as f64 - flow.tick_size() * 0.5;
+                let y1 = mapping.price_to_y(price);
+                let y2 = mapping.price_to_y(price + flow.price_step() * group as f64);
+                let center = (y1 + y2) * 0.5;
+                y1.is_finite()
+                    && y2.is_finite()
+                    && center - FONT_LIMITS[0] * 0.5 >= mapping.rect.top()
+                    && center + FONT_LIMITS[0] * 0.5 <= mapping.rect.bottom()
+                    && (y2 - y1).abs() >= config.min_text_height.max(10.0)
+                    && Rect::from_min_max(
+                        pos2(left, y1.min(y2)),
+                        pos2(x + mapping.bar_spacing * 0.46, y1.max(y2)),
+                    )
+                    .intersects(mapping.rect)
+            })
+            .collect();
+        let text: Vec<_> = config
+            .modes
+            .iter()
+            .take(columns)
+            .map(|mode| {
+                column_galleys(&painter, &text_rows, max_volume, *mode, config, width - 2.5)
+            })
+            .collect();
         for row in shown.levels.values() {
             let price =
                 row.level as f64 * flow.price_step() * group as f64 - flow.tick_size() * 0.5;
@@ -296,7 +353,7 @@ pub fn render_footprint(
                         StrokeKind::Inside,
                     );
                 }
-                if poc == Some(row.level) {
+                if poc == Some(row.level) && rect.width() >= 12.0 && rect.height() >= 4.0 {
                     painter.rect_stroke(
                         rect,
                         0,
@@ -304,25 +361,34 @@ pub fn render_footprint(
                         StrokeKind::Inside,
                     );
                 }
-                if rect.height() >= config.min_text_height.max(10.0) && width >= 22.0 {
-                    let text = cell_text(*mode, row, config);
-                    if text.is_empty() {
-                        continue;
+                if rect.height() >= config.min_text_height.max(10.0)
+                    && let Some(galley) = text[column]
+                        .as_ref()
+                        .and_then(|galleys| galleys.get(&row.level))
+                {
+                    let mut galley = galley.clone();
+                    if !galley.is_empty() && galley.size().y > rect.height() {
+                        let size = galley.job.sections[0].format.font_id.size;
+                        for size in [
+                            (size * rect.height() / galley.size().y).max(FONT_LIMITS[0]),
+                            FONT_LIMITS[0],
+                        ] {
+                            galley = painter.layout_no_wrap(
+                                galley.text().to_owned(),
+                                FontId::monospace(size),
+                                config.text_color,
+                            );
+                            if galley.size().y <= rect.height() {
+                                break;
+                            }
+                        }
                     }
-                    let share = if max_volume > 0.0 {
-                        (row.volume() / max_volume) as f32
-                    } else {
-                        0.0
-                    };
-                    let size = smallest + (largest - smallest) * share;
-                    let galley =
-                        painter.layout_no_wrap(text, FontId::monospace(size), config.text_color);
-                    if galley.size().x + 4.0 <= rect.width() && size <= rect.height() {
+                    if !galley.is_empty() && galley.size().y <= rect.height() {
                         let center = rect.center().x;
                         let x = match mode {
-                            FootprintMode::DominantSide if row.bid > row.ask => rect.left() + 2.0,
+                            FootprintMode::DominantSide if row.bid > row.ask => rect.left() + 1.0,
                             FootprintMode::DominantSide if row.ask > row.bid => {
-                                rect.right() - 2.0 - galley.size().x
+                                rect.right() - 1.0 - galley.size().x
                             }
                             _ => center - galley.size().x / 2.0,
                         };
@@ -394,14 +460,75 @@ fn font_limits(sizes: [f32; 2]) -> [f32; 2] {
     [a.min(b), a.max(b)]
 }
 
+/// Fit the whole column before painting, so its largest executions never disappear alone.
+fn column_galleys(
+    painter: &Painter,
+    rows: &[&FootprintLevel],
+    max_volume: f64,
+    mode: FootprintMode,
+    config: &FootprintConfig,
+    width: f32,
+) -> Option<BTreeMap<i64, Arc<Galley>>> {
+    if rows.is_empty() || width < 18.0 {
+        return None;
+    }
+    let [smallest, largest] = font_limits(config.font_size);
+    for compact in [false, true] {
+        let mut fits = true;
+        let galleys = rows
+            .iter()
+            .map(|row| {
+                let mut text = cell_text(mode, row, config.abbreviate || compact, config.show_zero);
+                if compact {
+                    text = text.replace(" × ", "×").replace(" / ", "/");
+                }
+                let share = if max_volume > 0.0 {
+                    (row.volume() / max_volume) as f32
+                } else {
+                    0.0
+                };
+                let size = smallest + (largest - smallest) * share;
+                let mut galley = painter.layout_no_wrap(
+                    text.clone(),
+                    FontId::monospace(size),
+                    config.text_color,
+                );
+                if galley.size().x > width {
+                    let size = (size * width / galley.size().x).max(FONT_LIMITS[0]);
+                    galley =
+                        painter.layout_no_wrap(text, FontId::monospace(size), config.text_color);
+                }
+                if galley.size().x > width && size > FONT_LIMITS[0] {
+                    galley = painter.layout_no_wrap(
+                        galley.text().to_owned(),
+                        FontId::monospace(FONT_LIMITS[0]),
+                        config.text_color,
+                    );
+                }
+                fits &= galley.size().x <= width;
+                (row.level, galley)
+            })
+            .collect();
+        if fits {
+            return Some(galleys);
+        }
+    }
+    None
+}
+
 /// The text of one cell in `mode`; empty when every number in it is a hidden zero.
-fn cell_text(mode: FootprintMode, row: &FootprintLevel, config: &FootprintConfig) -> String {
-    let hidden = |value: f64| value == 0.0 && !config.show_zero;
+fn cell_text(
+    mode: FootprintMode,
+    row: &FootprintLevel,
+    abbreviate: bool,
+    show_zero: bool,
+) -> String {
+    let hidden = |value: f64| value == 0.0 && !show_zero;
     let number = |value: f64| {
         if hidden(value) {
             String::new()
         } else {
-            volume_text(value, config.abbreviate)
+            volume_text(value, abbreviate)
         }
     };
     let signed = |value: f64| match number(value) {
@@ -526,8 +653,13 @@ fn cell_color(
 /// Rows show total, bid, ask, delta, minimum and maximum intrabar delta, cumulative delta,
 /// delta percentage, and ask/bid ratio (undefined for zero volume or bid). Bars before
 /// [`Footprint::complete_from`] get no column and no share of the cumulative delta.
-/// A column too narrow for text, or cut by the plot edge, is left empty; values are still
-/// available in [`FootprintBar`].
+/// Shared labels occupy the left margin. Numeric columns stay aligned with their bars and
+/// use unabbreviated volume values when they fit, then compact units. Percentages have one
+/// decimal and ask/bid ratios two decimals.
+/// A column cut by the margin or plot edge is omitted as a whole. When the complete table
+/// cannot fit at a readable size, a zoom-in or resize notice replaces it; values remain in
+/// [`FootprintBar`].
+/// A view without complete executions reports that statistics are unavailable.
 pub fn render_footprint_statistics(
     painter: &Painter,
     mapping: &ChartMapping,
@@ -536,8 +668,25 @@ pub fn render_footprint_statistics(
     text_color: Color32,
 ) {
     let painter = painter.with_clip_rect(mapping.rect.intersect(painter.clip_rect()));
+    let labels = [
+        "Vol", "Bid", "Ask", "Delta", "Min", "Max", "CVD", "Delta %", "Ask/Bid",
+    ];
+    let row_height = (mapping.rect.height() / labels.len() as f32).min(12.0);
+    let font = FontId::monospace(10.0);
+    let labels: Vec<_> = labels
+        .into_iter()
+        .map(|label| painter.layout_no_wrap(label.into(), font.clone(), text_color))
+        .collect();
+    let rows_fit = labels.iter().all(|label| label.size().y <= row_height);
+    let label_width = labels
+        .iter()
+        .map(|label| label.size().x)
+        .fold(0.0, f32::max)
+        + 8.0;
     let mut cumulative = 0.0;
     let complete = flow.complete_from();
+    let mut has_data = false;
+    let mut columns = Vec::new();
     for (i, bar) in bars.iter().enumerate() {
         let Some(row) = flow
             .bar_at(bar.time)
@@ -547,40 +696,111 @@ pub fn render_footprint_statistics(
         };
         cumulative += row.delta();
         let x = mapping.idx_to_x(i);
-        if !mapping.is_x_visible(x) || mapping.bar_spacing < 48.0 {
+        if !mapping.is_x_visible(x) {
             continue;
         }
-        for (line, (label, value)) in [
-            ("Vol", Some(row.volume())),
-            ("Bid", Some(row.bid)),
-            ("Ask", Some(row.ask)),
-            ("Delta", Some(row.delta())),
-            ("Min", Some(row.min_delta)),
-            ("Max", Some(row.max_delta)),
-            ("CVD", Some(cumulative)),
-            ("Delta %", row.delta_percent()),
-            ("Ask/Bid", (row.bid > 0.0).then(|| row.ask / row.bid)),
-        ]
-        .into_iter()
-        .enumerate()
+        has_data = true;
+        if x - mapping.bar_spacing * 0.5 < mapping.rect.left() + label_width
+            || x + mapping.bar_spacing * 0.5 > mapping.rect.right()
         {
-            let text = value.map_or_else(
-                || format!("{label} n/a"),
-                |value| format!("{label} {}", volume_text(value, false)),
-            );
-            let galley = painter.layout_no_wrap(text, FontId::monospace(10.0), text_color);
-            let at = pos2(
-                x - galley.size().x / 2.0,
-                mapping.rect.top() + 12.0 * line as f32,
-            );
-            // Whole or absent, as in the cells: a column cut by the plot edge shows no number.
-            if galley.size().x <= mapping.bar_spacing - 2.0
-                && mapping
-                    .rect
-                    .contains_rect(Rect::from_min_size(at, galley.size()))
-            {
-                painter.galley(at, galley, text_color);
+            continue;
+        }
+        let values = [
+            Some(row.volume()),
+            Some(row.bid),
+            Some(row.ask),
+            Some(row.delta()),
+            Some(row.min_delta),
+            Some(row.max_delta),
+            Some(cumulative),
+            row.delta_percent(),
+            (row.bid > 0.0).then(|| row.ask / row.bid),
+        ];
+        columns.push((x, values));
+    }
+    let mut size = 10.0;
+    let mut fitted = Vec::new();
+    if mapping.bar_spacing >= 22.0 && rows_fit {
+        'fitting: for abbreviate in [false, true] {
+            for font_size in [10.0, FONT_LIMITS[0]] {
+                size = font_size;
+                fitted = columns
+                    .iter()
+                    .map(|(x, values)| {
+                        (
+                            *x,
+                            values
+                                .iter()
+                                .copied()
+                                .enumerate()
+                                .map(|(line, value)| {
+                                    let text = value.map_or_else(
+                                        || "n/a".to_owned(),
+                                        |value| match line {
+                                            7 => format!("{value:.1}%"),
+                                            8 => format!("{value:.2}:1"),
+                                            _ => volume_text(value, abbreviate),
+                                        },
+                                    );
+                                    painter.layout_no_wrap(
+                                        text,
+                                        FontId::monospace(size),
+                                        text_color,
+                                    )
+                                })
+                                .collect::<Vec<_>>(),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                if fitted.iter().all(|(_, values)| {
+                    values
+                        .iter()
+                        .all(|value| value.size().x <= mapping.bar_spacing - 4.0)
+                }) {
+                    break 'fitting;
+                }
             }
+        }
+    }
+    if fitted.is_empty()
+        || fitted.iter().any(|(_, values)| {
+            values
+                .iter()
+                .any(|value| value.size().x > mapping.bar_spacing - 4.0)
+        })
+    {
+        painter.text(
+            mapping.rect.center(),
+            Align2::CENTER_CENTER,
+            if !has_data {
+                "Execution statistics unavailable"
+            } else if !rows_fit {
+                "Enlarge chart for per-bar statistics"
+            } else {
+                "Zoom in for per-bar statistics"
+            },
+            font,
+            text_color,
+        );
+        return;
+    }
+    for (line, label) in labels.into_iter().enumerate() {
+        painter.galley(
+            pos2(
+                mapping.rect.left() + 2.0,
+                mapping.rect.top() + row_height * line as f32,
+            ),
+            label,
+            text_color,
+        );
+    }
+    for (x, values) in fitted {
+        for (line, value) in values.into_iter().enumerate() {
+            let at = pos2(
+                x - value.size().x * 0.5,
+                mapping.rect.top() + row_height * line as f32 + (10.0 - size) * 0.5,
+            );
+            painter.galley(at, value, text_color);
         }
     }
 }
@@ -646,9 +866,11 @@ pub(crate) fn render_footprint_annotations(
 /// Paints footprint study levels and zones. Compute `studies` only after executions change.
 /// Stacks, naked POCs and unfinished levels extend to their first revisit, their expiry or the
 /// last displayed bar, in full colour while unvisited and dimmed once revisited or expired;
-/// local annotations remain inside their originating bar. Delta percentage and ratio markers
+/// local annotations stay anchored to their originating bar. Delta percentage and ratio markers
 /// are triangles outside the bar: buy markers above it, sell markers below, the delta marker
-/// nearest and the ratio marker beyond it. Prices use the aggregation's row step.
+/// nearest and the ratio marker beyond it. Captions avoid every footprint and its marker rows; details are
+/// available on hover when a caption has no room. Overview marks shrink with bar spacing and
+/// zones become faint centre lines. Prices use the aggregation's row step.
 #[cfg(feature = "studies")]
 #[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
 pub fn render_footprint_studies(
@@ -666,7 +888,35 @@ pub fn render_footprint_studies(
         .enumerate()
         .filter_map(|(i, bar)| flow.bar_at(bar.time).map(|flow_bar| (flow_bar.time, i)))
         .collect();
+    let occupied: BTreeMap<_, _> = bars
+        .iter()
+        .enumerate()
+        .filter_map(|(index, bar)| {
+            let source = flow.bar_at(bar.time)?;
+            let group = row_group(mapping, bar, flow, config);
+            let low = source.levels.first_key_value()?.0.div_euclid(group);
+            let high = source.levels.last_key_value()?.0.div_euclid(group);
+            let step = flow.price_step() * group as f64;
+            let y1 = mapping.price_to_y((low as f64 * step - flow.tick_size() * 0.5).min(bar.low));
+            let y2 = mapping
+                .price_to_y(((high as f64 + 1.0) * step - flow.tick_size() * 0.5).max(bar.high));
+            let x = mapping.idx_to_x(index);
+            let rect = Rect::from_min_max(
+                pos2(x - mapping.bar_spacing * 0.46, y1.min(y2)),
+                pos2(x + mapping.bar_spacing * 0.46, y1.max(y2)),
+            );
+            // The two threshold-marker rows extend up to 18 points beyond either extreme.
+            rect.intersects(mapping.rect)
+                .then_some((index, rect.expand2(vec2(0.0, 18.0))))
+        })
+        .collect();
     let mut labels: Vec<Rect> = Vec::new();
+    let mut hovered = Vec::new();
+    let pointer = painter
+        .ctx()
+        .pointer_hover_pos()
+        .filter(|p| mapping.rect.contains(*p) && painter.clip_rect().contains(*p));
+    let detail = mapping.bar_spacing >= 48.0;
     for study in studies {
         let Some(&start) = indices.get(&study.start) else {
             continue;
@@ -702,6 +952,20 @@ pub fn render_footprint_studies(
             }
             _ => color,
         };
+        let label = match study.kind {
+            FootprintStudyKind::StackedBid => "Bid stack",
+            FootprintStudyKind::StackedAsk => "Ask stack",
+            FootprintStudyKind::UnfinishedHigh => "UH",
+            FootprintStudyKind::UnfinishedLow => "UL",
+            FootprintStudyKind::NakedPoc => "POC",
+            FootprintStudyKind::DeltaPoc => "Delta POC",
+            FootprintStudyKind::VolumeCluster => "Cluster",
+            FootprintStudyKind::SinglePrint => "Single",
+            FootprintStudyKind::DeltaAsk => "Buy delta %",
+            FootprintStudyKind::DeltaBid => "Sell delta %",
+            FootprintStudyKind::RatioAsk => "Buy ask/bid ratio",
+            FootprintStudyKind::RatioBid => "Sell bid/ask ratio",
+        };
         let marker = match study.kind {
             FootprintStudyKind::DeltaAsk | FootprintStudyKind::DeltaBid => Some(0.0),
             FootprintStudyKind::RatioAsk | FootprintStudyKind::RatioBid => Some(1.0),
@@ -717,14 +981,60 @@ pub fn render_footprint_studies(
             } else {
                 (rect.bottom(), 1.0)
             };
-            let tip = edge + away * (3.0 + 9.0 * order);
-            let base = tip + away * 6.0;
+            let radius = (mapping.bar_spacing * 0.2).min(4.0);
+            let tip = edge + away * (radius * 0.75 + radius * 2.25 * order);
+            let base = tip + away * radius * 1.5;
             let x = (rect.left() + rect.right()) / 2.0;
             painter.add(Shape::convex_polygon(
-                vec![pos2(x, tip), pos2(x - 4.0, base), pos2(x + 4.0, base)],
-                color,
+                vec![pos2(x, tip), pos2(x - radius, base), pos2(x + radius, base)],
+                if detail {
+                    color
+                } else {
+                    color.gamma_multiply(0.5)
+                },
                 Stroke::NONE,
             ));
+            let bounds = Rect::from_min_max(
+                pos2(x - radius, tip.min(base)),
+                pos2(x + radius, tip.max(base)),
+            );
+            if pointer.is_some_and(|p| bounds.expand(2.0).contains(p)) {
+                let source = flow.bar_at(bars[start].time);
+                let value = match study.kind {
+                    FootprintStudyKind::DeltaAsk | FootprintStudyKind::DeltaBid => source
+                        .and_then(FootprintBar::delta_percent)
+                        .map(|value| format!("{value:.1}%")),
+                    _ => source.and_then(|bar| {
+                        let (side, opposite) = if above {
+                            (bar.ask, bar.bid)
+                        } else {
+                            (bar.bid, bar.ask)
+                        };
+                        (opposite > 0.0).then(|| format!("{:.2}:1", side / opposite))
+                    }),
+                };
+                hovered.push(format!("{label}: {}", value.as_deref().unwrap_or("n/a")));
+            }
+            continue;
+        }
+        if pointer.is_some_and(|p| rect.expand(2.0).contains(p)) {
+            let state = match study.state {
+                FootprintStudyState::Unvisited => "unvisited",
+                FootprintStudyState::Revisited => "revisited",
+                FootprintStudyState::Expired => "expired",
+                FootprintStudyState::Local => "this bar",
+            };
+            hovered.push(format!(
+                "{label}: {} to {} ({state})",
+                study.low as f64 * flow.price_step(),
+                study.high as f64 * flow.price_step(),
+            ));
+        }
+        if !detail {
+            painter.line_segment(
+                [rect.left_center(), rect.right_center()],
+                Stroke::new(0.5, color.gamma_multiply(0.3)),
+            );
             continue;
         }
         if matches!(
@@ -735,18 +1045,7 @@ pub fn render_footprint_studies(
         ) {
             painter.rect_filled(rect, 0, color.gamma_multiply(0.12));
         }
-        if mapping.bar_spacing >= 48.0 {
-            let label = match study.kind {
-                FootprintStudyKind::StackedBid => "Bid stack",
-                FootprintStudyKind::StackedAsk => "Ask stack",
-                FootprintStudyKind::UnfinishedHigh => "UH",
-                FootprintStudyKind::UnfinishedLow => "UL",
-                FootprintStudyKind::NakedPoc => "POC",
-                FootprintStudyKind::DeltaPoc => "Delta POC",
-                FootprintStudyKind::VolumeCluster => "Cluster",
-                FootprintStudyKind::SinglePrint => "Single",
-                _ => continue,
-            };
+        {
             let (at, anchor) = if matches!(
                 study.kind,
                 FootprintStudyKind::StackedAsk
@@ -755,20 +1054,56 @@ pub fn render_footprint_studies(
                     | FootprintStudyKind::UnfinishedHigh
                     | FootprintStudyKind::UnfinishedLow
             ) {
-                (rect.right_top(), Align2::RIGHT_BOTTOM)
+                (rect.right_top() - vec2(0.0, 3.0), Align2::RIGHT_BOTTOM)
             } else {
-                (rect.left_center(), Align2::RIGHT_CENTER)
+                (rect.left_center() - vec2(3.0, 0.0), Align2::RIGHT_CENTER)
             };
             let galley = painter.layout_no_wrap(label.into(), FontId::monospace(10.0), color);
             let bounds = anchor.anchor_size(at, galley.size());
-            if mapping.rect.contains_rect(bounds)
-                && !labels.iter().any(|label| label.intersects(bounds))
-            {
+            let bar = occupied.get(&start).copied().unwrap_or(rect);
+            let alternatives = [
+                bounds,
+                Align2::CENTER_BOTTOM
+                    .anchor_size(pos2(bar.center().x, bar.top() - 3.0), galley.size()),
+                Align2::CENTER_TOP
+                    .anchor_size(pos2(bar.center().x, bar.bottom() + 3.0), galley.size()),
+            ];
+            if let Some(bounds) = alternatives.into_iter().find(|bounds| {
+                mapping.rect.contains_rect(*bounds)
+                    && !labels
+                        .iter()
+                        .any(|label| label.expand(1.0).intersects(*bounds))
+                    && !occupied
+                        .values()
+                        .any(|cell| cell.expand(1.0).intersects(*bounds))
+            }) {
                 painter.galley(bounds.min, galley, color);
                 labels.push(bounds);
+            } else {
+                let x = mapping.idx_to_x(start) + mapping.bar_spacing * 0.46 + 0.5;
+                painter.circle_filled(pos2(x, rect.center().y), 0.75, color);
             }
         }
         painter.rect_stroke(rect, 0, Stroke::new(1.0, color), StrokeKind::Inside);
+    }
+    if let Some(pointer) = pointer.filter(|_| !hovered.is_empty()) {
+        hovered.sort();
+        hovered.dedup();
+        egui::Tooltip::always_open(
+            painter.ctx().clone(),
+            painter.layer_id(),
+            egui::Id::unique((
+                "footprint_study_details",
+                mapping.rect.min.x.to_bits(),
+                mapping.rect.min.y.to_bits(),
+            )),
+            pointer,
+        )
+        .show(|ui| {
+            for text in &hovered {
+                ui.label(text);
+            }
+        });
     }
 }
 
@@ -1091,6 +1426,328 @@ mod tests {
         }
     }
 
+    /// Shared row labels and complete numeric columns survive narrow detail widths; a short pane
+    /// reports unavailable detail instead of clipping a row. The first bar has 13 buys and 3 sells:
+    /// delta 10, 62.5%, ask/bid 4.33:1; the second adds 2500 sells.
+    #[test]
+    fn statistics_keep_shared_rows_and_aligned_values_or_explain_the_overview() {
+        let time = "2026-01-05T10:00:00Z".parse().unwrap();
+        let next = time + chrono::TimeDelta::minutes(1);
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 0.25, 1).unwrap();
+        for (time, bid, ask) in [(time, 3.0, 13.0), (next, 2500.0, 0.0)] {
+            for (size, side) in [(bid, OrderSide::Sell), (ask, OrderSide::Buy)] {
+                if size > 0.0 {
+                    flow.push(&Tick::new(time, 100.0, size, Some(side)))
+                        .unwrap();
+                }
+            }
+        }
+        let bars = [
+            Bar::new(time, 100.0, 100.0, 100.0, 100.0, 16.0),
+            Bar::new(next, 100.0, 100.0, 100.0, 100.0, 2500.0),
+        ];
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(240.0, 112.0));
+        let empty = Footprint::new(BarClock::new(Timeframe::Min1), 0.25, 1).unwrap();
+        for (spacing, available, large, height) in [
+            (60.0, true, false, 112.0),
+            (40.0, true, false, 112.0),
+            (3.0, true, false, 112.0),
+            (60.0, false, false, 112.0),
+            (40.0, true, true, 112.0),
+            (60.0, true, false, 90.0),
+        ] {
+            let rect = Rect::from_min_size(rect.min, vec2(rect.width(), height));
+            let mut shown = flow.clone();
+            let mut bars = bars.clone();
+            if large {
+                shown
+                    .push(&Tick::new(
+                        next,
+                        100.0,
+                        123_454_289.0,
+                        Some(OrderSide::Sell),
+                    ))
+                    .unwrap();
+                bars[1].volume = 123_456_789.0;
+            }
+            let map = ChartMapping::new(
+                rect,
+                spacing,
+                0,
+                1,
+                0.0,
+                PriceMap::new(
+                    PriceTransform::default(),
+                    PriceRange::new(99.0, 102.0),
+                    0.0,
+                    112.0,
+                    false,
+                ),
+            );
+            let mut output = egui::Context::default().run_ui(
+                egui::RawInput {
+                    screen_rect: Some(rect),
+                    ..Default::default()
+                },
+                |ui| {
+                    render_footprint_statistics(
+                        ui.painter(),
+                        &map,
+                        &bars,
+                        if available { &shown } else { &empty },
+                        Color32::WHITE,
+                    )
+                },
+            );
+            output.textures_delta.clear();
+            let texts: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    Shape::Text(t) => Some(t),
+                    _ => None,
+                })
+                .collect();
+            for text in &texts {
+                assert!(
+                    rect.contains_rect(Rect::from_min_size(text.pos, text.galley.size())),
+                    "statistics text is clipped at height {height}: {} {:?}",
+                    text.galley.text(),
+                    Rect::from_min_size(text.pos, text.galley.size()),
+                );
+            }
+            if spacing == 3.0 || !available || height == 90.0 {
+                assert_eq!(texts.len(), 1);
+                assert_eq!(
+                    texts[0].galley.text(),
+                    if !available {
+                        "Execution statistics unavailable"
+                    } else if height == 90.0 {
+                        "Enlarge chart for per-bar statistics"
+                    } else {
+                        "Zoom in for per-bar statistics"
+                    }
+                );
+                continue;
+            }
+            assert_eq!(
+                texts.len(),
+                27,
+                "nine labels and two complete columns at {spacing}"
+            );
+            assert_eq!(
+                texts
+                    .iter()
+                    .filter(|t| t.galley.text() == "Delta %")
+                    .count(),
+                1
+            );
+            for (column, expected) in [
+                ["16", "3", "13", "10", "-3", "10", "10", "62.5%", "4.33:1"],
+                if large {
+                    [
+                        "123.5M", "123.5M", "0", "-123.5M", "-123.5M", "0", "-123.5M", "-100.0%",
+                        "0.00:1",
+                    ]
+                } else {
+                    [
+                        "2500", "2500", "0", "-2500", "-2500", "0", "-2490", "-100.0%", "0.00:1",
+                    ]
+                },
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                for (line, expected) in expected.into_iter().enumerate() {
+                    let text = texts[9 + column * 9 + line];
+                    assert_eq!(text.galley.text(), expected);
+                    assert!(
+                        (text.pos.x + text.galley.size().x * 0.5 - map.idx_to_x(column)).abs()
+                            < 0.01
+                    );
+                }
+            }
+        }
+    }
+
+    /// OHLC ticks use exact prices even inside grouped rows and on inverted mappings.
+    /// Identical execution delta must not hide opposite price directions.
+    #[test]
+    fn price_spines_identify_open_close_and_direction_without_covering_values() {
+        let time = "2026-01-05T10:00:00Z".parse().unwrap();
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 0.25, 1).unwrap();
+        for price in [100.0, 100.25, 100.5, 100.75, 101.0] {
+            flow.push(&Tick::new(time, price, 3.0, Some(OrderSide::Buy)))
+                .unwrap();
+        }
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(240.0, 160.0));
+        for spacing in [60.0, 3.0] {
+            for inverted in [false, true] {
+                for (open, close) in [(100.25, 100.75), (100.75, 100.25), (100.5, 100.5)] {
+                    let map = ChartMapping::new(
+                        rect,
+                        spacing,
+                        0,
+                        0,
+                        0.0,
+                        PriceMap::new(
+                            PriceTransform::default(),
+                            PriceRange::new(99.0, 103.0),
+                            0.0,
+                            160.0,
+                            inverted,
+                        ),
+                    );
+                    let bars = [Bar::new(time, open, 101.0, 100.0, close, 15.0)];
+                    let config = FootprintConfig::default();
+                    let mut output = egui::Context::default().run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(rect),
+                            ..Default::default()
+                        },
+                        |ui| render_footprint(ui.painter(), &map, &bars, &flow, &config),
+                    );
+                    output.textures_delta.clear();
+                    let lines: Vec<_> = output
+                        .shapes
+                        .iter()
+                        .filter_map(|s| match &s.shape {
+                            Shape::LineSegment { points, stroke } => Some((points, stroke)),
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(
+                        lines.len(),
+                        4,
+                        "price spine and body with opening and closing ticks"
+                    );
+                    // y(P) = (103 - P) * 40; inversion gives 160 - y(P).
+                    let y = |price: f64| {
+                        let y = (103.0 - price) as f32 * 40.0;
+                        if inverted { 160.0 - y } else { y }
+                    };
+                    assert_eq!(lines[0].0.map(|p| p.y), [y(101.0), y(100.0)]);
+                    assert_eq!(lines[2].0.map(|p| p.y), [y(open); 2]);
+                    assert_eq!(lines[3].0.map(|p| p.y), [y(close); 2]);
+                    assert!(lines[2].0[0].x < lines[2].0[1].x);
+                    assert!(lines[3].0[0].x < lines[3].0[1].x);
+                    let color = if close > open {
+                        config.ask_color
+                    } else if close < open {
+                        config.bid_color
+                    } else {
+                        config.text_color
+                    };
+                    assert!(lines.iter().all(|(_, stroke)| stroke.color == color));
+                    for shape in &output.shapes {
+                        if let Shape::Text(text) = &shape.shape {
+                            assert!(text.pos.x > lines[3].0[1].x);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// A column keeps its largest values at detail zoom and switches all its numbers off
+    /// together when even compact text is too wide. POC strokes must not dominate the overview.
+    #[test]
+    fn detail_columns_keep_large_values_and_overview_preserves_fills() {
+        let time = "2026-01-05T10:00:00Z".parse().unwrap();
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 0.25, 1).unwrap();
+        for (price, bid, ask) in [
+            (100.0, 1234.0, 3456.0),
+            (100.25, 1.0, 2.0),
+            (100.5, 3456.0, 1234.0),
+        ] {
+            for (size, side) in [(bid, OrderSide::Sell), (ask, OrderSide::Buy)] {
+                flow.push(&Tick::new(time, price, size, Some(side)))
+                    .unwrap();
+            }
+        }
+        let bars = [Bar::new(time, 100.0, 100.5, 100.0, 100.5, 9383.0)];
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(240.0, 160.0));
+        for mode in [FootprintMode::BidAsk, FootprintMode::DeltaVolume] {
+            for (spacing, numbers, outlines, clipped) in [
+                (60.0, 3, 1, false),
+                (57.0, 3, 1, false),
+                (22.0, 0, 1, false),
+                (3.0, 0, 0, false),
+                (60.0, 3, 1, true),
+            ] {
+                let mut visible = flow.clone();
+                let mut bars = bars.clone();
+                if clipped {
+                    // A print cut by the top edge must not suppress the fully visible numbers.
+                    visible
+                        .push(&Tick::new(time, 102.0, 1e20, Some(OrderSide::Buy)))
+                        .unwrap();
+                    bars[0].high = 102.0;
+                    bars[0].close = 102.0;
+                    bars[0].volume += 1e20;
+                }
+                let map = ChartMapping::new(
+                    rect,
+                    spacing,
+                    0,
+                    0,
+                    0.0,
+                    PriceMap::new(
+                        PriceTransform::default(),
+                        PriceRange::new(99.0, 102.0),
+                        0.0,
+                        160.0,
+                        false,
+                    ),
+                );
+                let config = FootprintConfig {
+                    modes: vec![mode],
+                    auto_row_height: None,
+                    ..Default::default()
+                };
+                let mut output = egui::Context::default().run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(rect),
+                        ..Default::default()
+                    },
+                    |ui| render_footprint(ui.painter(), &map, &bars, &visible, &config),
+                );
+                output.textures_delta.clear();
+                let texts: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        Shape::Text(t) => Some(t),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(texts.len(), numbers, "{mode:?}, spacing {spacing}");
+                for text in texts {
+                    assert!(
+                        text.pos.x >= map.idx_to_x(0) - spacing * 0.46
+                            && text.pos.x + text.galley.size().x
+                                <= map.idx_to_x(0) + spacing * 0.46,
+                        "execution values stay inside their column"
+                    );
+                    assert!(
+                        text.galley
+                            .job
+                            .sections
+                            .iter()
+                            .all(|section| section.format.font_id.size >= 8.0)
+                    );
+                }
+                assert_eq!(output.shapes.iter().filter(|s| matches!(&s.shape, Shape::Rect(r) if r.stroke.color == config.text_color)).count(), outlines, "POC at {spacing}");
+                assert!(
+                    output
+                        .shapes
+                        .iter()
+                        .any(|s| matches!(&s.shape, Shape::Mesh(m) if !m.is_empty()))
+                );
+            }
+        }
+    }
+
     /// Guards the number and colour choices: abbreviation switches units before one decimal
     /// would round up to 1000, a hidden zero leaves only the side that traded, the dominant
     /// side is the only number of its cell, delta opacity follows the share of the bar's largest
@@ -1126,7 +1783,11 @@ mod tests {
             (FootprintMode::DominantSide, row(2.0, 3.0, 9.0), config(false, true), "3"),
         ];
         for (mode, row, config, expected) in texts {
-            assert_eq!(cell_text(mode, &row, &config), expected, "{mode:?} {row:?}");
+            assert_eq!(
+                cell_text(mode, &row, config.abbreviate, config.show_zero),
+                expected,
+                "{mode:?} {row:?}"
+            );
         }
         let bar = FootprintBar {
             time: "2026-01-05T10:00:00Z".parse().unwrap(),
@@ -1268,5 +1929,158 @@ mod tests {
             triangle.is_some_and(|points| points.len() == 3 && points.iter().all(|p| p.y < top)),
             "buy marker above the bar"
         );
+        // A local label anchored beside the second bar used to cover the first bar's values.
+        let next = time + chrono::TimeDelta::minutes(1);
+        flow.push(&Tick::new(next, 100.0, 2.0, Some(OrderSide::Buy)))
+            .unwrap();
+        let bars = [
+            bars[0].clone(),
+            Bar::new(next, 100.0, 100.0, 100.0, 100.0, 2.0),
+        ];
+        let local = FootprintStudy {
+            start: next,
+            end: Some(next),
+            low: 400,
+            high: 400,
+            kind: FootprintStudyKind::SinglePrint,
+            state: FootprintStudyState::Local,
+        };
+        for spacing in [60.0, 3.0] {
+            let map = ChartMapping {
+                bar_spacing: spacing,
+                base_idx: 1,
+                ..map
+            };
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(rect),
+                    ..Default::default()
+                },
+                |ui| {
+                    render_footprint(ui.painter(), &map, &bars, &flow, &config);
+                    render_footprint_studies(
+                        ui.painter(),
+                        &map,
+                        &bars,
+                        &flow,
+                        &[
+                            local.clone(),
+                            FootprintStudy {
+                                kind: FootprintStudyKind::VolumeCluster,
+                                ..local.clone()
+                            },
+                            FootprintStudy {
+                                kind: FootprintStudyKind::DeltaPoc,
+                                ..local.clone()
+                            },
+                            FootprintStudy {
+                                kind: FootprintStudyKind::DeltaAsk,
+                                high: 401,
+                                ..local.clone()
+                            },
+                            FootprintStudy {
+                                kind: FootprintStudyKind::RatioAsk,
+                                high: 401,
+                                ..local.clone()
+                            },
+                            studies[3].clone(),
+                        ],
+                        &config,
+                    );
+                },
+            );
+            output.textures_delta.clear();
+            let texts: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    Shape::Text(t) => Some(t),
+                    _ => None,
+                })
+                .collect();
+            for (index, caption) in texts
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| ["Single", "Cluster", "Delta POC"].contains(&t.galley.text()))
+            {
+                let bounds = Rect::from_min_size(caption.pos, caption.galley.size());
+                assert!(
+                    texts.iter().enumerate().all(|(other, t)| other == index
+                        || !bounds.intersects(Rect::from_min_size(t.pos, t.galley.size()))),
+                    "caption over execution values"
+                );
+                for shape in &output.shapes {
+                    if let Shape::Path(path) = &shape.shape {
+                        assert!(
+                            !bounds.intersects(Rect::from_points(&path.points)),
+                            "caption over threshold marker"
+                        );
+                    }
+                }
+            }
+            if spacing == 60.0 {
+                let marker = output
+                    .shapes
+                    .iter()
+                    .find_map(|s| match &s.shape {
+                        Shape::Circle(circle) => Some(circle),
+                        _ => None,
+                    })
+                    .expect("a caption without room leaves a marker");
+                assert!(
+                    marker.center.x > map.idx_to_x(1) + spacing * 0.46,
+                    "annotation marker uses the gap after the cells, away from the price spine"
+                );
+            }
+            if spacing == 3.0 {
+                assert!(
+                    output
+                        .shapes
+                        .iter()
+                        .all(|s| !matches!(&s.shape, Shape::Rect(r) if r.stroke.width > 0.0)),
+                    "no historical boxes at overview zoom"
+                );
+                for shape in &output.shapes {
+                    if let Shape::Path(path) = &shape.shape {
+                        let (lo, hi) = path
+                            .points
+                            .iter()
+                            .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), p| {
+                                (lo.min(p.x), hi.max(p.x))
+                            });
+                        assert!(
+                            hi - lo <= spacing * 0.8,
+                            "overview triangle stays within its bar"
+                        );
+                    }
+                }
+            }
+        }
+        let map = ChartMapping { base_idx: 1, ..map };
+        let at = pos2(map.idx_to_x(1), map.price_to_y(100.0));
+        let mut details = false;
+        // Tooltips need a sizing frame before their text is painted.
+        for _ in 0..3 {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(rect),
+                    events: vec![egui::Event::PointerMoved(at)],
+                    ..Default::default()
+                },
+                |ui| {
+                    render_footprint_studies(
+                        ui.painter(),
+                        &map,
+                        &bars,
+                        &flow,
+                        std::slice::from_ref(&local),
+                        &config,
+                    )
+                },
+            );
+            output.textures_delta.clear();
+            details |= output.shapes.iter().any(|s| matches!(&s.shape, Shape::Text(t) if t.galley.text().starts_with("Single: 100 to 100")));
+        }
+        assert!(details, "compact annotations retain hover details");
     }
 }
