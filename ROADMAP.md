@@ -168,7 +168,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Sequenced aggregated-depth snapshots/deltas and per-order add, modify, cancel and execute events, with gap detection and resynchronisation.
 - [x] Public order book and order queue retain tick-aware prices, best quotes and queue priority.
 - [x] `DepthHistory` retains sampled resting-size columns in bounded tiers; the heatmap uses retained texture tiles and partial updates.
-- [x] Heatmap best bid/ask paths and a side profile of total resting size.
+- [x] Heatmap best bid/ask paths and a compact current-book profile of total or largest-order resting size, with host-supplied quantity units, a maximum-size key including offscreen levels and exact price, side and size on hover.
 - [x] Volume bubbles aggregate by chart bar and price, adapt automatic grouping, sizing and borders to screen density, and offer side/delta colours, linear/square-root/logarithmic scaling and outlier limits.
 - [x] Time-and-sales panel with aggressor colours, size filters and sound intents.
 - [x] Explicit aggressor identifiers combine split fills into parent orders with total size, price span and fill count.

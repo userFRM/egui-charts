@@ -414,6 +414,7 @@ Order flow,Order flow,Combine fills in time and sales,done,library,src/ui/widget
 Order flow,Order flow,Connectors for futures data feeds with aggregated and order-level depth,partial,host,src/data/mod.rs;src/data/inbox/mod.rs;src/widget/builder.rs;src/widget/feed/mod.rs;src/data/inbox/sink.rs;examples/demo/orders.rs
 Order flow,Order flow,Cumulative aggressor volume delta with resets,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/studies/builtin/mod.rs;src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/studies/factory/mod.rs;src/chart/indicators/plots.rs;src/widget/pane/indicator/mod.rs;src/widget/pane/indicator/paint.rs;src/data/trades.rs
 Order flow,Order flow,Cumulative iceberg and stop counts over time with alerts,missing,host,
+Order flow,Order flow,Current order book profile with quantity key and exact row readout,done,library,src/chart/overlays/book_profile.rs;src/widget/feed/mod.rs
 Order flow,Order flow,Custom range profile drawn on the chart by selection,partial,library,src/drawings/rendering/trading/volume_profile.rs;src/data/volume_profile.rs;src/studies/builtin/trade_profile.rs;src/painting/volume_profile.rs;src/drawings/rendering/mod.rs
 Order flow,Order flow,DOM levels panel beside the heatmap,partial,library,src/data/orders.rs;src/widget/feed/mod.rs
 Order flow,Order flow,Delta % and bid/ask ratio highlight markers on bars,done,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/studies/builtin/footprint_studies.rs;src/widget/frame.rs
