@@ -350,7 +350,7 @@ impl fmt::Display for Timeframe {
 }
 
 impl FromStr for Timeframe {
-    type Err = String;
+    type Err = super::ParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         for (suffix, make) in [
@@ -361,17 +361,22 @@ impl FromStr for Timeframe {
             if let Some(value) = s.to_lowercase().strip_suffix(suffix)
                 && value.chars().all(|c| c.is_ascii_digit())
             {
-                return value
-                    .parse::<NonZeroU64>()
-                    .map(make)
-                    .map_err(|_| "Trade interval must be a positive integer".into());
+                return value.parse::<NonZeroU64>().map(make).map_err(|_| {
+                    super::ParseError::new(
+                        "timeframe",
+                        s,
+                        "trade interval must be a positive integer",
+                    )
+                });
             }
         }
         if let Some(count) = s.to_lowercase().strip_suffix('t') {
             return count
                 .parse::<NonZeroU64>()
                 .map(Timeframe::Ticks)
-                .map_err(|_| "Tick count must be a positive integer".into());
+                .map_err(|_| {
+                    super::ParseError::new("timeframe", s, "tick count must be a positive integer")
+                });
         }
         // Try known preset names first
         match s.to_lowercase().as_str() {
@@ -402,11 +407,13 @@ impl FromStr for Timeframe {
             ("w", Timeframe::Weeks),
         ] {
             if let Some(value) = s.to_lowercase().strip_suffix(suffix) {
-                return value
-                    .trim()
-                    .parse::<NonZeroU32>()
-                    .map(make)
-                    .map_err(|_| "Calendar interval must be a positive 32-bit integer".into());
+                return value.trim().parse::<NonZeroU32>().map(make).map_err(|_| {
+                    super::ParseError::new(
+                        "timeframe",
+                        s,
+                        "calendar interval must be a positive 32-bit integer",
+                    )
+                });
             }
         }
 
@@ -415,11 +422,19 @@ impl FromStr for Timeframe {
         if let Some(seconds) = parse_custom_timeframe(&lower) {
             return NonZeroU64::new(seconds)
                 .map(Timeframe::Custom)
-                .ok_or_else(|| "Custom timeframe must be greater than zero".to_string());
+                .ok_or_else(|| {
+                    super::ParseError::new(
+                        "timeframe",
+                        s,
+                        "custom timeframe must be greater than zero",
+                    )
+                });
         }
 
-        Err(format!(
-            "Invalid timeframe '{s}'. Valid formats: 100ms, 250ms, 500ms, 1s-30s, 1min-30min, 1h, 4h, 1D, 1W, 1M, or custom (e.g. 45s, 3min, 2h)"
+        Err(super::ParseError::new(
+            "timeframe",
+            s,
+            "valid formats are 100ms, 250ms, 500ms, 1s-30s, 1min-30min, 1h, 4h, 1D, 1W, 1M, or custom (e.g. 45s, 3min, 2h)",
         ))
     }
 }

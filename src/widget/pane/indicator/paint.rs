@@ -273,8 +273,8 @@ impl IndicatorPane {
             visible_range.start,
         );
         let mapping = coords.to_mapping(rect, y_min, y_max);
-        crate::chart::renderers::IndicatorRenderer::render_study(
-            &crate::chart::renderers::RenderContext::new(painter, rect),
+        crate::chart::rendering::IndicatorRenderer::render_study(
+            &crate::chart::rendering::RenderContext::new(painter, rect),
             indicator,
             bars,
             0,
@@ -297,8 +297,8 @@ impl IndicatorPane {
         if let Some(map) = self.price_map {
             mapping.price = map;
         }
-        crate::chart::renderers::IndicatorRenderer::render_study(
-            &crate::chart::renderers::RenderContext::new(painter, rect),
+        crate::chart::rendering::IndicatorRenderer::render_study(
+            &crate::chart::rendering::RenderContext::new(painter, rect),
             indicator,
             bars,
             0,
@@ -425,7 +425,7 @@ impl IndicatorPane {
             chart_rect.right() + DESIGN_TOKENS.spacing.sm
         };
 
-        for mark in crate::chart::renderers::price_marks(&map, self.price_formatter.as_deref()) {
+        for mark in crate::chart::rendering::price_marks(&map, self.price_formatter.as_deref()) {
             let y = mark.y_coord;
             if y >= full_rect.min.y + 10.0 && y <= full_rect.max.y - 10.0 {
                 let label = if self.price_formatter.is_some() {
@@ -794,7 +794,7 @@ mod tests {
                     Some(crate::scales::PriceScaleId::Right),
                     None,
                 );
-                let mut legend = crate::chart::renderers::Legend::new("SAMPLE", "1h", &bars[2]);
+                let mut legend = crate::chart::rendering::Legend::new("SAMPLE", "1h", &bars[2]);
                 legend.studies = &studies;
                 legend.bar_index = 2;
                 legend.instrument = Some(&instrument);
@@ -979,7 +979,7 @@ mod tests {
                 for separate in [false, true] {
                     let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
                         if separate {
-                            crate::chart::renderers::render_study_axis(
+                            crate::chart::rendering::render_study_axis(
                                 ui.painter(),
                                 &[&study],
                                 &coords,

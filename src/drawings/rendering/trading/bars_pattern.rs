@@ -300,6 +300,8 @@ mod tests {
                         bars: source,
                         revision: 0,
                         price_formatter: None,
+                        time_formatter: None,
+                        bar_seconds: 0,
                         instrument: None,
                         bar_to_x: &|bar| bar * 10.,
                         price_to_y: &|price| price as f32 * 10.,

@@ -14,6 +14,11 @@
 //!   double-click on the price axis re-enables auto-scale.
 //! - **Timescale config** -- applies pending visible-bar and width settings.
 
+mod box_zoom;
+pub(super) mod state;
+
+pub(super) use box_zoom::render_box_zoom;
+
 use egui::{Event, MouseWheelUnit, Pos2, Rect, Response, Ui, Vec2, vec2};
 use web_time::Instant;
 
@@ -434,7 +439,7 @@ impl Chart {
             return;
         }
         if !self.kinetic_scroll.velocity.is_finite() {
-            self.kinetic_scroll = super::state::KineticScrollState::new();
+            self.kinetic_scroll = state::KineticScrollState::new();
             return;
         }
 
@@ -455,7 +460,7 @@ impl Chart {
             let new_offset = curr_offset - f64::from(delta_offset);
 
             if !new_offset.is_finite() {
-                self.kinetic_scroll = super::state::KineticScrollState::new();
+                self.kinetic_scroll = state::KineticScrollState::new();
                 return;
             }
             self.state.time_scale_mut().set_right_offset(new_offset);
@@ -466,7 +471,7 @@ impl Chart {
 
             let min_v_px_s = self.chart_options.kinetic_scroll.min_scroll_speed * 60.0;
             if self.kinetic_scroll.velocity.abs() < min_v_px_s {
-                self.kinetic_scroll = super::state::KineticScrollState::new();
+                self.kinetic_scroll = state::KineticScrollState::new();
                 return;
             }
         }

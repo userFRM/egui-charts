@@ -6,8 +6,8 @@
 //! - Eraser mode (click to delete)
 //! - Keyboard shortcuts (Delete, Escape)
 
-use crate::chart::cursor_modes::CursorModeState;
 use crate::drawings::{DrawingManager, DrawingToolType, HandlePos};
+use crate::widget::tool_interaction::cursor_modes::CursorModeState;
 use egui::{Painter, Rect, Response, Stroke, Ui, epaint::StrokeKind};
 
 /// Handle drawing selection, handle dragging, and eraser-mode deletion.

@@ -624,6 +624,8 @@ mod tests {
             let output = egui::Context::default().run_ui(Default::default(), |ui| {
                 let view = ChartView {
                     price_formatter: None,
+                    time_formatter: None,
+                    bar_seconds: 0,
                     instrument: None,
                     bars: &bars,
                     executions: None,

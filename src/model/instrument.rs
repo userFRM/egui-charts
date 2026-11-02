@@ -80,6 +80,8 @@ pub enum FeedService {
     /// [`Datafeed::option_expiries`](crate::data::Datafeed::option_expiries) and
     /// [`Datafeed::option_chain`](crate::data::Datafeed::option_chain).
     OptionChain,
+    /// [`Datafeed::option_exposure`](crate::data::Datafeed::option_exposure).
+    OptionExposure,
     /// [`Datafeed::metrics`](crate::data::Datafeed::metrics) and
     /// [`Datafeed::metric_history`](crate::data::Datafeed::metric_history).
     Metrics,

@@ -645,6 +645,8 @@ mod tests {
                     pane,
                     &crate::drawings::rendering::ChartView {
                         price_formatter: None,
+                        time_formatter: None,
+                        bar_seconds: 0,
                         instrument: None,
                         bars: &[],
                         revision: 0,
@@ -1440,6 +1442,8 @@ mod tests {
             let output = ctx.run_ui(input, |ui| {
                 let view = ChartView {
                     price_formatter: None,
+                    time_formatter: None,
+                    bar_seconds: 0,
                     instrument: None,
                     bars: &[],
                     revision: 0,

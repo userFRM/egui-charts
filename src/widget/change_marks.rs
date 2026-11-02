@@ -94,7 +94,7 @@ impl ChangeMarks {
                 } else {
                     self.options.down_color
                 };
-                crate::chart::renderers::render_change_mark(painter, pos, mark.up, color);
+                crate::chart::rendering::render_change_mark(painter, pos, mark.up, color);
             }
         }
         if let Some(next) = next {

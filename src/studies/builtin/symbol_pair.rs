@@ -226,14 +226,14 @@ impl<const RATIO: bool, const CORRELATION: bool> Indicator for SymbolPair<RATIO,
         inputs
     }
 
-    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), &'static str> {
+    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), crate::studies::StudyError> {
         let schema = self
             .inputs()
             .into_iter()
             .find(|input| input.id == id)
-            .ok_or("unknown study input")?;
+            .ok_or_else(|| crate::studies::StudyError::UnknownInput(id.into()))?;
         if !schema.accepts(&value) {
-            return Err("study input is outside its accepted values");
+            return Err(crate::studies::StudyError::invalid_input(id));
         }
         match (id, value) {
             ("symbol_0", InputValue::Symbol(value)) => self.symbols[0] = value,
@@ -242,7 +242,7 @@ impl<const RATIO: bool, const CORRELATION: bool> Indicator for SymbolPair<RATIO,
             ("source_1", InputValue::Choice(value)) => self.sources[1] = PriceSource::all()[value],
             ("length", InputValue::Length(value)) => self.length = value,
             ("log_returns", InputValue::Toggle(value)) => self.log_returns = value,
-            _ => return Err("unknown study input"),
+            _ => return Err(crate::studies::StudyError::UnknownInput(id.into())),
         }
         self.pairs.clear();
         self.values.clear();

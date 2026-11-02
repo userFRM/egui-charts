@@ -134,12 +134,12 @@ impl Terminal {
     }
 
     fn show_region(&mut self, ui: &mut egui::Ui, region: Region) {
+        self.panels_show(ui, region);
         self.drawings_show(ui, region);
         self.studies_show(ui, region);
         self.time_show(ui, region);
         self.replay_show(ui, region);
         self.alerts_show(ui, region);
-        self.panels_show(ui, region);
         self.trading_show(ui, region);
         self.layouts_show(ui, region);
         self.compare_show(ui, region);

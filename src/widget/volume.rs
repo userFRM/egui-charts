@@ -1,6 +1,6 @@
 //! Volume study layout and painting on its independent zero-based scale.
 
-use crate::chart::renderers::{ChartMapping, paint_study_plot};
+use crate::chart::rendering::{ChartMapping, paint_study_plot};
 use crate::studies::{Indicator, PlotType};
 use egui::{Painter, Pos2, Rect};
 use std::ops::Range;
@@ -381,7 +381,7 @@ mod tests {
             );
             let study = chart.indicators().find(|(id, _)| *id == next).unwrap().1;
             let map =
-                crate::chart::renderers::study_mapping(study, &chart.get_chart_mapping()).price;
+                crate::chart::rendering::study_mapping(study, &chart.get_chart_mapping()).price;
             assert!(map.range().min <= 0.0 && map.range().max >= 1_000_000.0);
             assert!(map.price_to_y(1_000_000.0) < map.price_to_y(0.0));
         }

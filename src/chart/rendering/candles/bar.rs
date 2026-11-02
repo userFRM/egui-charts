@@ -1,4 +1,4 @@
-use super::context::{BarRenderParams, RenderContext, StyleColors};
+use super::super::context::{BarRenderParams, RenderContext, StyleColors};
 use crate::model::{Bar, BarsStyle};
 use crate::scales::PriceMap;
 use crate::tokens::DESIGN_TOKENS;

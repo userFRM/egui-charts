@@ -32,9 +32,7 @@
 //! `drawings`. Toolbars and dialogs in `ui` are separate components placed and
 //! connected by the host.
 
-#[cfg(feature = "drawings")]
-use crate::chart::cursor_modes::CursorModeState;
-use crate::chart::renderers::ChartMapping;
+use crate::chart::rendering::ChartMapping;
 use crate::chart::selection::SelectionState;
 use crate::chart::series::SeriesSettings;
 use crate::config::{ChartConfig, ChartOptions};
@@ -44,8 +42,10 @@ use crate::drawings::DrawingManager;
 use crate::model::Timeframe;
 use crate::model::{ChartType, ChartTypeParams};
 use crate::studies::ChartState;
+#[cfg(feature = "drawings")]
+use crate::widget::tool_interaction::cursor_modes::CursorModeState;
 
-pub use crate::chart::renderers::{
+pub use crate::chart::rendering::{
     Legend, LegendStatus, QuoteSide, StudyAction, StudyValue, ValueFormatters, Watermark,
     WatermarkLine,
 };
@@ -55,12 +55,12 @@ use crate::studies::IndicatorRegistry;
 pub use builder::ChartBuilder;
 use chrono::{DateTime, Utc};
 use egui::{Pos2, Rect, Vec2};
-pub use export::{ChartImage, DataTable, ImageExportOptions};
+pub use export::{ChartImage, DataTable, ExportError, ImageExportOptions};
 pub use pane::{IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneInteraction};
 use std::collections::BTreeMap;
 
 // Re-export from logic layer
-use crate::chart::state;
+use pan_zoom::state;
 
 mod accessibility;
 #[cfg(feature = "drawings")]
@@ -87,6 +87,7 @@ mod targets;
 pub use events::ImageRequest;
 pub use events::{ChartEvent, ChartPointer, PointerKind, PointerTarget};
 mod export;
+mod format;
 mod frame;
 mod history;
 pub(crate) mod interaction;
@@ -124,6 +125,9 @@ mod trade_profile;
 #[cfg(feature = "drawings")]
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 mod drawing_api;
+#[cfg(feature = "drawings")]
+#[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
+pub use drawing_api::DrawingError;
 mod studies_data;
 pub use crate::chart::primitives::{
     PriceAxisLabel, Primitive, PrimitiveId, PrimitivePass, PrimitiveView, TimeAxisLabel,
@@ -134,7 +138,7 @@ pub use series::{BarsInRange, MismatchDirection, PriceLineId};
 #[cfg(feature = "ui")]
 #[cfg_attr(docsrs, doc(cfg(feature = "ui")))]
 pub use snapshot::{
-    ChartSnapshot, SavedAnnotations, SavedLayout, SavedPane, SavedSeries, SavedStudy,
+    ChartSnapshot, RestoreError, SavedAnnotations, SavedLayout, SavedPane, SavedSeries, SavedStudy,
 };
 mod volume;
 pub use layout::{ChartLayout, ChartLayoutMode, ChartSyncOptions};

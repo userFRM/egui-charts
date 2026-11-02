@@ -7,8 +7,8 @@ pub(crate) use study_controls::study_controls;
 
 use quotes::paint_quotes;
 
-use super::labels::semibold;
-use crate::chart::renderers::StyleColors;
+use crate::chart::rendering::StyleColors;
+use crate::chart::rendering::axes::semibold;
 use crate::localization as l10n;
 use crate::model::session::MarketSession;
 use crate::model::{Bar, DataStatus, Instrument, Level1Quote, percent_change};
@@ -1396,7 +1396,7 @@ mod layout_tests {
     #[cfg(feature = "studies")]
     #[test]
     fn supplementary_rows_mask_profiles_over_their_content_and_controls() {
-        use crate::chart::renderers::Legend;
+        use crate::chart::rendering::Legend;
         use crate::studies::{CustomIndicator, IndicatorValue};
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
             let ctx = Context::default();
@@ -1450,7 +1450,7 @@ mod layout_tests {
     #[cfg(feature = "studies")]
     #[test]
     fn overlay_values_keep_their_output_names_when_rows_wrap() {
-        use crate::chart::renderers::Legend;
+        use crate::chart::rendering::Legend;
         use crate::studies::{CustomIndicator, Indicator, IndicatorValue};
         let mut study = CustomIndicator::new("Levels", |_| {
             vec![IndicatorValue::Multiple(vec![1.0, 2.0, 3.0])]
@@ -1508,7 +1508,7 @@ mod layout_tests {
     /// Legend fields stay inside the plot and keep their positions during hover.
     #[test]
     fn legend_fields_stay_inside_the_plot() {
-        use crate::chart::renderers::{Legend, LegendStatus};
+        use crate::chart::rendering::{Legend, LegendStatus};
         use crate::theme::apply_to_egui;
         use egui::Vec2;
 

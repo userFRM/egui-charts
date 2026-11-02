@@ -156,6 +156,12 @@ impl Strategy for PriceAction {
         }
     }
 
+    fn prepare_update(&mut self, bars: &[Bar]) {
+        let pivots = (self.pivot_high, self.pivot_low);
+        self.prepare(bars);
+        (self.pivot_high, self.pivot_low) = pivots;
+    }
+
     fn on_bar(&mut self, context: &mut StrategyContext<'_>) {
         if context.is_after_fill() {
             return;

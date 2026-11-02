@@ -139,13 +139,16 @@ impl Indicator for HigherIntervalCandles {
             .with_default(InputValue::Toggle(true)),
         ]
     }
-    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), &'static str> {
+    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), crate::studies::StudyError> {
         match (id, value) {
             ("interval", InputValue::Choice(index)) => {
-                self.interval = *self.intervals().get(index).ok_or("invalid interval")?
+                self.interval = *self
+                    .intervals()
+                    .get(index)
+                    .ok_or_else(|| crate::studies::StudyError::invalid_input(id))?
             }
             ("extended_hours", InputValue::Toggle(enabled)) => self.extended_hours = enabled,
-            _ => return Err("invalid candle input"),
+            _ => return Err(crate::studies::StudyError::rejected(&self.inputs(), id)),
         }
         self.candles.clear();
         self.values.clear();
@@ -299,7 +302,7 @@ mod tests {
         #[cfg(feature = "widget")]
         {
             use crate::chart::coords::ChartMapping;
-            use crate::chart::renderers::{IndicatorRenderer, RenderContext};
+            use crate::chart::rendering::{IndicatorRenderer, RenderContext};
             use crate::scales::{PriceMap, PriceRange, PriceScaleMode, PriceTransform};
             use crate::studies::ConfiguredStudy;
             use egui::{Pos2, Rect, Shape};
