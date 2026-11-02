@@ -192,7 +192,7 @@ Chart,Legend and data window,Symbol status line,done,library,src/chart/rendering
 Chart,Legend and data window,Volume in the status line,done,library,src/widget/settings/apply.rs;src/chart/rendering/legend/mod.rs;src/scales/price_formatter.rs;src/widget/frame/mod.rs,
 Chart,Multi-chart and sync,Grid layout presets,done,library,src/widget/layout.rs;src/ui/top_toolbar/components/chart_grid_selector.rs;src/ui/top_toolbar/toolbar.rs;terminal/src/layouts.rs,
 Chart,Multi-chart and sync,Multi-chart layout container,done,library,src/widget/layout.rs;src/widget/mod.rs;src/chart/rendering/axes/mod.rs;src/widget/frame/mod.rs,
-Chart,Multi-chart and sync,Symbol and interval sync groups,done,library,src/widget/layout.rs,
+Chart,Multi-chart and sync,Symbol and interval sync groups,done,library,src/widget/layout.rs;examples/demo/replay.rs;examples/demo/storage.rs;examples/demo/layouts.rs,1941
 Chart,Multi-chart and sync,Sync crosshair,done,library,src/widget/layout.rs;src/widget/sync.rs;src/widget/frame/mod.rs,
 Chart,Multi-chart and sync,Sync date range,done,library,src/widget/layout.rs;src/widget/sync.rs;src/model/timescale.rs,
 Chart,Multi-chart and sync,Sync drawings,done,library,src/widget/layout.rs;src/widget/layout/drawings.rs;src/widget/stored_drawings.rs,
@@ -408,7 +408,7 @@ Order flow,Order flow,Book speed,partial,library,src/data/order_flow.rs;src/stud
 Order flow,Order flow,Book thickness and resting-size delta over time,partial,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/data/orders.rs;src/data/inbox/sink.rs;src/widget/feed/mod.rs;src/widget/feed/pump.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/chart/rendering/legend/mod.rs;src/widget/pane/indicator/paint.rs,
 Order flow,Order flow,"Bubble grouping: automatic with screen density, by time window, by price, tick grouping",done,library,src/chart/overlays/volume_bubbles.rs;src/model/clock.rs,
 Order flow,Order flow,CVD drawn as candles,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/chart/series/mod.rs;src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/studies/factory/mod.rs;src/chart/indicators/plots.rs;src/data/trades.rs;src/widget/pane/indicator/mod.rs;src/widget/pane/indicator/paint.rs,
-Order flow,Order flow,"Chart tabs, detached groups and shared crosshair",done,library,src/widget/layout.rs;src/widget/sync.rs;src/widget/frame/mod.rs,
+Order flow,Order flow,"Chart tabs, detached groups and shared crosshair",done,library,src/widget/layout.rs;src/widget/sync.rs;src/widget/frame/mod.rs;examples/demo/replay.rs;examples/demo/storage.rs;examples/demo/layouts.rs,1941
 Order flow,Order flow,Combine fills in time and sales,done,library,src/ui/widget_bar/panels/time_and_sales.rs;src/data/trades.rs,
 Order flow,Order flow,Connectors for futures data feeds with aggregated and order-level depth,partial,host,src/data/mod.rs;src/data/inbox/mod.rs;src/widget/builder.rs;src/widget/feed/mod.rs;src/data/inbox/sink.rs;examples/demo/orders.rs,
 Order flow,Order flow,Cumulative aggressor volume delta with resets,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/studies/builtin/mod.rs;src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/studies/factory/mod.rs;src/chart/indicators/plots.rs;src/widget/pane/indicator/mod.rs;src/widget/pane/indicator/paint.rs;src/data/trades.rs,

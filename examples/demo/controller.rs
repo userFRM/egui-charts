@@ -1524,7 +1524,11 @@ impl eframe::App for DemoApp {
         }
         self.show_strategy_report(ui, panel_bg);
         self.show_bottom_toolbar(ui, panel_bg);
+        let groups = self.layout_groups();
         self.show_chart(ui, panel_bg);
+        if self.layout_groups() != groups {
+            self.grid_edits = self.grid_edits.wrapping_add(1);
+        }
         self.show_replay_control(&ctx);
         self.show_replay_start(&ctx);
         self.show_dialogs(&ctx);
@@ -5284,6 +5288,13 @@ mod tests {
             .set_range(100.0, 200.0);
         app.add_spread("AAPL-MSFT");
         app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
+        app.layout.set_sync_group(0, Some("A".into()));
+        app.layout.set_sync_group(1, Some("B".into()));
+        app.layout.set_detached(1, true);
+        app.layout.sync.sync_symbol = true;
+        app.layout.sync.sync_timeframe = true;
+        app.layout.sync.sync_time_axis = false;
+        app.top_toolbar.chart_grid_selector.sync = app.layout.sync.clone();
         for _ in 0..3 {
             ctx.run_ui(Default::default(), |ui| {
                 app.chart.show(ui);
@@ -5312,6 +5323,13 @@ mod tests {
         app.poll_storage(&ctx);
         assert_eq!(app.settings_state.alerts, settings.alerts);
         let saved = |app: &DemoApp| {
+            assert_eq!(app.layout.sync_group(0), Some("A"));
+            assert_eq!(app.layout.sync_group(1), Some("B"));
+            assert!(app.layout.is_detached(1));
+            assert!(app.layout.sync.sync_symbol);
+            assert!(app.layout.sync.sync_timeframe);
+            assert!(!app.layout.sync.sync_time_axis);
+            assert_eq!(app.top_toolbar.chart_grid_selector.sync, app.layout.sync);
             assert_eq!(app.chart.chart_type(), ChartType::Line);
             assert_eq!(app.comparisons.len(), 2);
             assert_eq!(

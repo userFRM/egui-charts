@@ -545,6 +545,8 @@ impl DemoApp {
 
     fn save_comparisons(&self, name: &str) -> Result<(), String> {
         self.storage
+            .save_layout_groups(name, &self.layout_groups())?;
+        self.storage
             .save_comparisons(name, &self.capture_comparisons()?)
     }
 
@@ -576,6 +578,13 @@ impl DemoApp {
                 .error("Could not open layout: invalid chart count");
             return;
         }
+        let groups = match self.storage.layout_groups(&name) {
+            Ok(groups) => groups,
+            Err(error) => {
+                self.toasts.error(error);
+                return;
+            }
+        };
         let mut comparisons = match self.storage.comparisons(&name) {
             Ok(saved) if saved.is_empty() => (0..layout.charts.len()).map(|_| Vec::new()).collect(),
             Ok(saved) if saved.len() == layout.charts.len() => saved,
@@ -602,6 +611,7 @@ impl DemoApp {
                 return;
             }
         }
+        self.restore_layout_groups(groups);
         self.layout_tabs[self.layout_tab].name = name;
         if self.layout_slot >= layout.charts.len() {
             self.activate_chart_slot(0);

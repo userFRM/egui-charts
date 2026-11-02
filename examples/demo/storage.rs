@@ -85,6 +85,35 @@ impl DemoStorage {
             )
     }
 
+    pub(super) fn save_layout_groups(
+        &self,
+        name: &str,
+        groups: &super::replay::LayoutGroups,
+    ) -> Result<(), String> {
+        let document = serde_json::to_string(groups).map_err(|error| error.to_string())?;
+        self.documents
+            .lock()
+            .unwrap()
+            .insert(format!("layout-groups/{name}"), document);
+        self.changed.store(true, Ordering::Relaxed);
+        Ok(())
+    }
+
+    pub(super) fn layout_groups(
+        &self,
+        name: &str,
+    ) -> Result<Option<super::replay::LayoutGroups>, String> {
+        self.documents
+            .lock()
+            .unwrap()
+            .get(&format!("layout-groups/{name}"))
+            .map(|json| {
+                serde_json::from_str(json)
+                    .map_err(|error| format!("Could not open chart groups: {error}"))
+            })
+            .transpose()
+    }
+
     fn write(&self, kind: StoreKind, name: &str, document: Option<String>) {
         let mut documents = self.documents.lock().unwrap();
         match document {
@@ -129,6 +158,10 @@ impl Storage for DemoStorage {
                 .lock()
                 .unwrap()
                 .remove(&format!("layout-comparisons/{name}"));
+            self.documents
+                .lock()
+                .unwrap()
+                .remove(&format!("layout-groups/{name}"));
         }
         reply.send(Ok(()));
     }

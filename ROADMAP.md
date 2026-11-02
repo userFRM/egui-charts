@@ -264,7 +264,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 
 ## Layouts and Persistence
 
-- [x] `ChartLayout` arranges up to 16 charts in grids or tabs, tracks the active chart, supports detached views and groups, and synchronises selected symbol, interval, time range and crosshair time.
+- [x] `ChartLayout` arranges up to 16 charts in grids or tabs, tracks the active chart, supports detached views and groups, and synchronises selected symbol, interval, time range and crosshair time. The demo saves group memberships, detached slots and synchronization switches with each layout.
 - [x] Main-pane drawings synchronise between grouped charts by timestamp.
 - [x] `ChartSnapshot` saves symbol, interval, chart configuration, built-in studies, panes, scales, viewport and drawings in versioned documents; feed-backed comparisons and spreads reconnect on restore, and the dividend-adjustment choice persists.
 - [x] The terminal creates, copies, renames, lists, saves, opens and deletes layouts through supplied storage, with debounced autosave and Ctrl+S. Layout tabs keep independent charts and undo history; Tab and Shift+Tab cycle the visible chart slots, and new slots inherit the study limit.

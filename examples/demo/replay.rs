@@ -41,7 +41,57 @@ impl Capture {
     }
 }
 
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(super) struct LayoutGroups {
+    groups: [Option<String>; 16],
+    detached: [bool; 16],
+    sync: [bool; 6],
+}
+
 impl DemoApp {
+    pub(super) fn layout_groups(&self) -> LayoutGroups {
+        let sync = &self.layout.sync;
+        LayoutGroups {
+            groups: std::array::from_fn(|slot| self.layout.sync_group(slot).map(str::to_owned)),
+            detached: std::array::from_fn(|slot| self.layout.is_detached(slot)),
+            sync: [
+                sync.sync_symbol,
+                sync.sync_timeframe,
+                sync.sync_crosshair,
+                sync.sync_time_axis,
+                sync.sync_date_range,
+                sync.sync_drawings,
+            ],
+        }
+    }
+
+    pub(super) fn restore_layout_groups(&mut self, groups: Option<LayoutGroups>) {
+        let Some(groups) = groups else {
+            for slot in 0..16 {
+                self.layout.set_sync_group(slot, None);
+                self.layout.set_detached(slot, false);
+            }
+            self.layout.sync = Default::default();
+            self.top_toolbar.chart_grid_selector.sync = self.layout.sync.clone();
+            return;
+        };
+        for slot in 0..16 {
+            self.layout
+                .set_sync_group(slot, groups.groups[slot].clone());
+            self.layout.set_detached(slot, groups.detached[slot]);
+        }
+        let sync = &mut self.layout.sync;
+        [
+            sync.sync_symbol,
+            sync.sync_timeframe,
+            sync.sync_crosshair,
+            sync.sync_time_axis,
+            sync.sync_date_range,
+            sync.sync_drawings,
+        ] = groups.sync;
+        self.top_toolbar.chart_grid_selector.sync = sync.clone();
+    }
+
     pub(super) fn advance_replay(&mut self) {
         let Some(replay) = self.replay.as_mut() else {
             return;
