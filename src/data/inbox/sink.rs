@@ -582,7 +582,7 @@ impl TradeBars {
 }
 
 impl Live {
-    #[cfg(feature = "widget")]
+    #[cfg(any(feature = "widget", feature = "alert-engine"))]
     pub(super) fn connect_study_inputs(&mut self, inputs: Vec<crate::data::OrderFlowInput>) {
         if self.clock.timeframe().is_some_and(|tf| tf.is_trade_based()) {
             for input in &inputs {

@@ -241,11 +241,6 @@ impl LiveFeed {
             .map_or_else(|| sim.capture.bytes(), Self::recording)
     }
 
-    /// The same synthetic metric history supplied through the feed contract.
-    pub(super) fn metric_snapshot(&self) -> Vec<MetricPoint> {
-        metric_points(&self.state())
-    }
-
     pub(super) fn instrument(&self) -> Instrument {
         let sim = self.state();
         let spec = DemoSymbol::find(&sim.symbol);
@@ -1047,23 +1042,37 @@ impl Datafeed for LiveFeed {
         reply.send(Ok(self.instrument()));
     }
 
+    fn resolve_converted(&self, symbol: &str, conversion: &str, reply: Reply<Instrument>) {
+        if conversion == "adjusted" {
+            self.resolve(symbol, reply);
+        } else {
+            reply.send(Err(FeedError::NotSupported));
+        }
+    }
+
     fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
-        let sim = self.state();
-        if let Some(feed) = sim
-            .streams
-            .iter()
-            .find(|feed| feed.state().symbol == request.symbol)
-        {
-            feed.history(request, reply);
-            return;
+        let source = {
+            let sim = self.state();
+            sim.streams
+                .iter()
+                .find(|feed| feed.state().symbol == request.symbol)
+                .map(LiveFeed::fork)
         }
-        if request.symbol != sim.symbol {
-            drop(sim);
-            let feed = self.fork();
-            feed.set_symbol(&request.symbol);
-            feed.history(request, reply);
-            return;
-        }
+        .unwrap_or_else(|| self.fork());
+        source.set_symbol(&request.symbol);
+        source.set_view(
+            if request.clock.has_session() {
+                if request.extended_hours {
+                    SessionType::ETH
+                } else {
+                    SessionType::RTH
+                }
+            } else {
+                SessionType::Full24x7
+            },
+            request.conversion.as_deref() == Some("adjusted"),
+        );
+        let sim = source.state();
         // The retained executions are replayed through the subscription, including its partial
         // final count bar. OHLC history cannot reconstruct a count or a smaller time interval.
         let bars = if request.timeframe.duration_ms() >= 60_000
@@ -1093,8 +1102,17 @@ impl Datafeed for LiveFeed {
         };
         let feed = feed.unwrap_or_else(|| self.fork());
         feed.set_symbol(&subscription.symbol);
-        let (session, adjusted) = self.view(subscription.extended_hours);
-        feed.set_view(session, adjusted);
+        let session = if !subscription.clock.has_session() {
+            SessionType::Full24x7
+        } else if subscription.extended_hours {
+            SessionType::ETH
+        } else {
+            SessionType::RTH
+        };
+        feed.set_view(
+            session,
+            subscription.conversion.as_deref() == Some("adjusted"),
+        );
         feed.set_paused(false);
         let mut sim = feed.state();
         subscription.sink.set_server_time(sim.now);

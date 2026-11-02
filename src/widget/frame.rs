@@ -466,6 +466,86 @@ impl Chart {
         self.show_content(ui, None)
     }
 
+    /// Keeps a cropped distribution's session and central levels readable at its visible edge.
+    fn paint_profile_context(
+        &self,
+        ui: &Ui,
+        mapping: &ChartMapping,
+        span: std::ops::Range<f32>,
+        session: chrono::DateTime<chrono::Utc>,
+        levels: &[(&str, f64)],
+        top: f32,
+    ) {
+        let left = span.start.max(mapping.rect.left());
+        let right = span.end.min(mapping.rect.right());
+        if right <= left {
+            return;
+        }
+        let theme = ui.active_theme();
+        let mut text = self.format_time(session);
+        for &(name, price) in levels {
+            let y = mapping.price_to_y(price);
+            let direction = if y < mapping.rect.top() {
+                "above"
+            } else if y > mapping.rect.bottom() {
+                "below"
+            } else {
+                ""
+            };
+            let formatter =
+                self.series_label_formatter(super::SeriesId::MAIN, mapping.price.transform().mode);
+            let value = mapping.price.label(
+                mapping.price.transform().to_scale(price),
+                rendering::axes::tag_decimals(&mapping.price, y),
+                formatter.as_deref(),
+            );
+            text.push_str(&format!("\n{name} {value}"));
+            if !direction.is_empty() {
+                text.push_str(&format!(" ({})", l10n::text(ui.ctx(), direction)));
+            }
+        }
+        let target = Rect::from_x_y_ranges(left..=right, top..=mapping.rect.bottom())
+            .intersect(mapping.rect);
+        // Painted rows can own another tooltip, so use the same hit test as the rows.
+        if ui.ctx().pointer_hover_pos().is_some_and(|pos| {
+            target.contains(pos) && ui.ctx().layer_id_at(pos) == Some(ui.layer_id())
+        }) {
+            egui::Tooltip::always_open(
+                ui.ctx().clone(),
+                ui.layer_id(),
+                ui.scope_id().with(("profile_context", session)),
+                target,
+            )
+            .show(|ui| {
+                ui.label(&text);
+            });
+        }
+        let painter = ui.painter().with_clip_rect(mapping.rect);
+        if right - left < 40.0 {
+            painter.with_clip_rect(target).text(
+                Pos2::new((left + right) * 0.5, top),
+                egui::Align2::CENTER_TOP,
+                "i",
+                egui::FontId::proportional(theme.text.label),
+                theme.chart.axis_text,
+            );
+            return;
+        }
+        let galley = painter.layout(
+            text,
+            egui::FontId::proportional(theme.text.label),
+            theme.chart.axis_text,
+            (right - left - 12.0).max(1.0),
+        );
+        let pos = Pos2::new(right - galley.size().x - 6.0, top);
+        painter.rect_filled(
+            Rect::from_min_size(pos, galley.size()).expand(3.0),
+            2.0,
+            theme.chart.bg,
+        );
+        painter.galley(pos, galley, theme.chart.axis_text);
+    }
+
     /// Draws a footprint in place of the price series, below studies, cursor and legend.
     /// Supply executions aggregated with the same clock as the chart's source bars.
     /// Bars without complete executions are drawn as candles. While cells would be too narrow to
@@ -1219,6 +1299,56 @@ impl Chart {
             self.config.price_source,
         );
 
+        #[cfg(feature = "studies")]
+        let execution_profiles = self
+            .feed_link
+            .as_ref()
+            .and_then(|link| link.footprint.as_ref())
+            .filter(|_| {
+                self.main_series_visible
+                    && footprint.is_none()
+                    && self.replay.is_none()
+                    && self.chart_type == ChartType::SessionVolumeProfile
+            })
+            .and_then(|flow| {
+                let first = flow.complete_from()?;
+                let candles =
+                    self.state.shown()[start_idx..end_idx].partition_point(|bar| bar.time < first);
+                let ranges = self.execution_profile_ranges(start_idx + candles..end_idx)?;
+                let mapping = self.get_chart_mapping().with_rect(price_rect);
+                let bars = &self.state.data().bars;
+                let mut profiles = crate::studies::trade_profiles(flow, &ranges);
+                profiles.retain(|profile| {
+                    let first = bars.partition_point(|b| b.time < profile.range.start);
+                    let end = bars.partition_point(|b| b.time < profile.range.end);
+                    first < end
+                        && mapping.idx_to_x(end - 1) >= price_rect.left()
+                        && mapping.idx_to_x(first) - mapping.bar_spacing * 0.45
+                            <= price_rect.right()
+                });
+                Some((flow.price_step(), flow.tick_size(), profiles))
+            });
+        #[cfg(feature = "studies")]
+        let profile_prices = execution_profiles
+            .iter()
+            .flat_map(|(step, tick, profiles)| {
+                profiles.iter().flat_map(move |profile| {
+                    profile
+                        .volume
+                        .levels
+                        .first_key_value()
+                        .zip(profile.volume.levels.last_key_value())
+                        .into_iter()
+                        .flat_map(move |((&low, _), (&high, _))| {
+                            [
+                                low as f64 * step - tick * 0.5,
+                                (high as f64 + 1.0) * step - tick * 0.5,
+                            ]
+                        })
+                })
+            });
+        #[cfg(not(feature = "studies"))]
+        let profile_prices = std::iter::empty();
         // Fit the price scale, then apply this frame's price zoom
         let series_values = self.fit_secondary_series();
         let primitive_prices = self.main_primitive_prices();
@@ -1239,7 +1369,7 @@ impl Chart {
             self.heikin_ashi
                 .bars(&self.state.data().bars, self.state.revision())
         });
-        let transform = self.state.fit_price_scale_with_series(
+        let (transform, data_range) = self.state.fit_price_scale_with_series(
             (if self.chart_type.is_time_independent() {
                 &self.element_studies.studies
             } else {
@@ -1267,10 +1397,96 @@ impl Chart {
             marker_prices
                 .into_iter()
                 .chain(primitive_prices)
-                .chain(target_prices),
+                .chain(target_prices)
+                .chain(profile_prices),
             series_values,
         );
         drop(heikin_ashi);
+        if self.main_series_visible
+            && footprint.is_none()
+            && self.chart_type == ChartType::TimePriceOpportunity
+            && !self.state.price_scale().is_manual()
+        {
+            let mut clock = self.bar_clock();
+            if let Some(zone) = self
+                .instrument()
+                .filter(|i| i.session.is_none())
+                .and_then(|i| i.time_zone.as_ref())
+            {
+                clock = clock.with_timezone(zone.clone());
+            }
+            let tick = self
+                .instrument()
+                .and_then(|instrument| instrument.tick_size);
+            let config = self.chart_type_params.tpo_config(tick);
+            // Automatic rows depend on the scale span. Revisit after fitting until the rows
+            // actually drawn, including their outer half-tick edges, fit in the scale. Retain
+            // fitted edges when the grid changes, so non-nested grids cannot alternate ranges.
+            let initial = self.state.price_scale().range();
+            let mut fitted = data_range;
+            loop {
+                let map =
+                    self.state
+                        .price_scale()
+                        .map(transform, price_rect.top(), price_rect.bottom());
+                let range = map.range();
+                let (mut low, mut high) = fitted;
+                let (mut traded_low, mut traded_high) = data_range;
+                let mapping = self.get_chart_mapping().with_rect(price_rect);
+                rendering::candles::tpo::visit_profiles(
+                    &self.state.data().bars,
+                    start_idx..end_idx,
+                    self.state.revision(),
+                    (&config, tick),
+                    &clock,
+                    (&map, price_rect, |i| mapping.idx_to_x(i)),
+                    |profile, _, anchor, _, _| {
+                        if anchor >= price_rect.right() {
+                            return;
+                        }
+                        for value in [profile.profile_low, profile.profile_high]
+                            .map(|p| transform.to_scale(p))
+                        {
+                            if value.is_finite() {
+                                traded_low = traded_low.min(value);
+                                traded_high = traded_high.max(value);
+                            }
+                        }
+                        for price in [
+                            profile.row_span(profile.profile_low).0,
+                            profile.row_span(profile.profile_high).1,
+                        ] {
+                            let value = transform.to_scale(price);
+                            if value.is_finite() {
+                                low = low.min(value);
+                                high = high.max(value);
+                            }
+                        }
+                    },
+                );
+                if (low, high) == fitted {
+                    break;
+                }
+                self.state.price_scale_mut().autoscale(low, high);
+                fitted = (low, high);
+                let next = self.state.price_scale().range();
+                // A flat session without a tick must keep the scale's minimum span, rather than
+                // deriving ever smaller rows from its own fitted row height.
+                if traded_high - traded_low <= 1e-9
+                    && next.max - next.min < initial.max - initial.min
+                    && initial.contains(low)
+                    && initial.contains(high)
+                {
+                    self.state
+                        .price_scale_mut()
+                        .autoscale(data_range.0, data_range.1);
+                    break;
+                }
+                if next == range {
+                    break;
+                }
+            }
+        }
         self.apply_price_zoom(pending_price_zoom, &response, price_rect, transform);
         let bar_spacing = self.state.time_scale().bar_spacing();
         if self.config.lock_price_to_bar_ratio != self.last_ratio_lock {
@@ -1582,6 +1798,83 @@ impl Chart {
             self.config.price_source,
         );
 
+        let host = footprint.filter(|_| time_based);
+        let feed = self
+            .feed_link
+            .as_ref()
+            .and_then(|link| link.footprint.as_ref())
+            .filter(|_| {
+                time_based
+                    && self.replay.is_none()
+                    && (self.chart_type == ChartType::VolumeFootprint
+                        || (self.chart_type == ChartType::SessionVolumeProfile
+                            && cfg!(feature = "studies")))
+            });
+        let feed_config = feed.map(|_| FootprintConfig {
+            text_color: colors.text,
+            neutral_color: colors.text,
+            ask_color: colors.bullish,
+            bid_color: colors.bearish,
+            ..Default::default()
+        });
+        let session_profiles = host.is_none() && self.chart_type == ChartType::SessionVolumeProfile;
+        // Bars from the first execution on are drawn from executions, those before as
+        // candles, and all of them as candles while their cells would not be readable.
+        let executions = host
+            .or_else(|| feed.zip(feed_config.as_ref()))
+            .filter(|(_, config)| {
+                session_profiles
+                    || crate::chart::overlays::footprint_column_width(bar_spacing, config).is_some()
+            })
+            .map(|(flow, config)| {
+                let first = flow.complete_from();
+                let candles = first.map_or(visible_data.len(), |first| {
+                    visible_data.partition_point(|bar| bar.time < first)
+                });
+                (flow, config, candles)
+            });
+
+        let style = &self.main_series_style;
+        // Last price line & label, from the newest bar even when it is scrolled out of view, or
+        // from the newest bar in view
+        let last = match style.price_line_source {
+            crate::model::PriceLineSource::LastBar => {
+                crate::model::last_with_value(&self.state.data().bars)
+            }
+            crate::model::PriceLineSource::LastVisible => {
+                crate::model::last_with_value(visible_data)
+            }
+        };
+        let last_price_line = last.filter(|_| self.main_series_visible).map(|last| {
+            let color = style
+                .price_line_color
+                .or_else(|| last.colors.as_ref().and_then(|own| own.color))
+                .unwrap_or(if last.close >= last.open {
+                    self.config.bullish_color
+                } else {
+                    self.config.bearish_color
+                });
+            PriceLine::new(last.close, color)
+                .with_width(if self.config.show_price_line && style.price_line_visible {
+                    style.price_line_width
+                } else {
+                    0.0
+                })
+                .with_style(style.price_line_style)
+                .with_axis_label(
+                    (self.config.show_right_axis || self.config.show_left_axis)
+                        && self.config.show_symbol_last_val
+                        && style.last_value_visible,
+                )
+        });
+        // Footprint fills and glyphs must cover the current-price stroke.
+        let price_line_below = !session_profiles
+            && executions.is_some_and(|(flow, _, candles)| {
+                visible_data[candles..]
+                    .iter()
+                    .any(|bar| flow.bar_at(bar.time).is_some())
+            });
+
         self.paint_primitives(&painter, &coords, PrimitivePass::Below);
         let studies = if self.chart_type.is_time_independent() {
             &self.element_studies.studies
@@ -1835,43 +2128,6 @@ impl Chart {
                         &render_params,
                     ),
                 };
-                let host = footprint.filter(|_| time_based);
-                let feed = self
-                    .feed_link
-                    .as_ref()
-                    .and_then(|link| link.footprint.as_ref())
-                    .filter(|_| {
-                        time_based
-                            && self.replay.is_none()
-                            && (self.chart_type == ChartType::VolumeFootprint
-                                || (self.chart_type == ChartType::SessionVolumeProfile
-                                    && cfg!(feature = "studies")))
-                    });
-                let feed_config = feed.map(|_| FootprintConfig {
-                    text_color: colors.text,
-                    neutral_color: colors.text,
-                    ask_color: colors.bullish,
-                    bid_color: colors.bearish,
-                    ..Default::default()
-                });
-                let session_profiles =
-                    host.is_none() && self.chart_type == ChartType::SessionVolumeProfile;
-                // Bars from the first execution on are drawn from executions, those before as
-                // candles, and all of them as candles while their cells would not be readable.
-                let executions = host
-                    .or_else(|| feed.zip(feed_config.as_ref()))
-                    .filter(|(_, config)| {
-                        session_profiles
-                            || crate::chart::overlays::footprint_column_width(bar_spacing, config)
-                                .is_some()
-                    })
-                    .map(|(flow, config)| {
-                        let first = flow.complete_from();
-                        let candles = first.map_or(visible_data.len(), |first| {
-                            visible_data.partition_point(|bar| bar.time < first)
-                        });
-                        (flow, config, candles)
-                    });
                 if let Some((_, _, candles)) = executions {
                     data.visible_data = match &merged {
                         // Merged candles end before the group of the first execution.
@@ -1933,6 +2189,17 @@ impl Chart {
                     let mapping = self.get_chart_mapping();
                     let bars = self.bars(super::SeriesId::MAIN);
                     if !session_profiles {
+                        if price_line_below && let Some(line) = &last_price_line {
+                            rendering::render_price_line(
+                                &painter,
+                                price_rect,
+                                &price_map,
+                                line,
+                                price_rect.left(),
+                                false,
+                                price_rect.right(),
+                            );
+                        }
                         crate::chart::overlays::render_footprint(
                             &clipped_painter,
                             &mapping,
@@ -1951,19 +2218,14 @@ impl Chart {
                         );
                     }
                     #[cfg(feature = "studies")]
-                    if session_profiles
-                        && let Some(ranges) = self.execution_profile_ranges(
-                            start_idx + candles..start_idx + visible_data.len(),
-                        )
-                    {
-                        let profiles = crate::studies::trade_profiles(flow, &ranges);
+                    if session_profiles && let Some((step, tick, profiles)) = &execution_profiles {
                         crate::chart::overlays::render_session_volume_profiles(
                             &clipped_painter,
                             &mapping,
                             bars,
-                            &profiles,
-                            flow.price_step(),
-                            flow.tick_size(),
+                            profiles,
+                            *step,
+                            *tick,
                             self.trade_profile_settings(),
                         );
                     }
@@ -2300,35 +2562,12 @@ impl Chart {
             );
         }
 
-        // Last price line & label, from the newest bar even when it is scrolled out of view, or
-        // from the newest bar in view
-        let last = match style.price_line_source {
-            crate::model::PriceLineSource::LastBar => {
-                crate::model::last_with_value(&self.state.data().bars)
-            }
-            crate::model::PriceLineSource::LastVisible => {
-                crate::model::last_with_value(visible_data)
-            }
-        };
-        let last_price_tag = if let Some(last) = last.filter(|_| self.main_series_visible) {
-            let color = style
-                .price_line_color
-                .or_else(|| last.colors.as_ref().and_then(|own| own.color))
-                .unwrap_or(if last.close >= last.open {
-                    self.config.bullish_color
-                } else {
-                    self.config.bearish_color
-                });
-            let line = PriceLine::new(last.close, color)
-                .with_width(if self.config.show_price_line && style.price_line_visible {
-                    style.price_line_width
-                } else {
-                    0.0
-                })
-                .with_style(style.price_line_style)
-                .with_axis_label(
-                    show_price_axis && self.config.show_symbol_last_val && style.last_value_visible,
-                );
+        let last_price_tag = if let Some((last, line)) = last.zip(last_price_line) {
+            let line = if price_line_below {
+                line.with_width(0.0)
+            } else {
+                line
+            };
             // Only a countdown drawn on the axis needs the once-a-second repaint.
             let countdown = self.current_bar_countdown().filter(|_| {
                 line.axis_label
@@ -2997,6 +3236,96 @@ impl Chart {
             legend_bottom + 4.0,
             self.main_pane_series(),
         );
+        #[cfg(feature = "studies")]
+        if let Some((step, tick, profiles)) = &execution_profiles {
+            for profile in profiles {
+                let levels = &profile.volume.levels;
+                let Some(((&low, _), (&high, _))) =
+                    levels.first_key_value().zip(levels.last_key_value())
+                else {
+                    continue;
+                };
+                if [
+                    low as f64 * step - tick * 0.5,
+                    (high as f64 + 1.0) * step - tick * 0.5,
+                ]
+                .into_iter()
+                .all(|p| price_map.range().contains(transform.to_scale(p)))
+                {
+                    continue;
+                }
+                let mut labels = Vec::new();
+                if let Some(poc) = profile.volume.poc() {
+                    labels.push(("POC", poc as f64 * step));
+                }
+                if let Some((low, high)) = self
+                    .trade_profile_settings()
+                    .value_area
+                    .and_then(|s| profile.volume.value_area(s))
+                {
+                    labels.extend([("VAH", high as f64 * step), ("VAL", low as f64 * step)]);
+                }
+                let bars = &self.state.data().bars;
+                let first = bars.partition_point(|b| b.time < profile.range.start);
+                let end = bars.partition_point(|b| b.time < profile.range.end);
+                self.paint_profile_context(
+                    ui,
+                    &coords,
+                    (coords.idx_to_x(first) - coords.bar_spacing * 0.45)
+                        ..(coords.idx_to_x(end.saturating_sub(1)) + coords.bar_spacing * 0.5),
+                    profile.range.start,
+                    &labels,
+                    legend_bottom + 6.0,
+                );
+            }
+        }
+        if self.main_series_visible
+            && footprint.is_none()
+            && self.chart_type == ChartType::TimePriceOpportunity
+            && self.state.price_scale().is_manual()
+        {
+            rendering::candles::tpo::visit_profiles(
+                &self.state.data().bars,
+                start_idx..end_idx,
+                self.state.revision(),
+                (
+                    &self.chart_type_params.tpo_config(render_ctx.tick_size),
+                    render_ctx.tick_size,
+                ),
+                &bar_clock,
+                (&price_map, price_rect, |i| coords.idx_to_x(i)),
+                |profile, config, anchor, column, _| {
+                    let cropped = [
+                        profile.row_span(profile.profile_low).0,
+                        profile.row_span(profile.profile_high).1,
+                    ]
+                    .into_iter()
+                    .any(|p| !price_map.range().contains(transform.to_scale(p)));
+                    if !cropped {
+                        return;
+                    }
+                    let mut labels = Vec::new();
+                    if config.show_poc {
+                        labels.push(("POC", profile.poc_price));
+                    }
+                    if config.show_value_area {
+                        labels.extend([
+                            ("VAH", profile.value_area_high),
+                            ("VAL", profile.value_area_low),
+                        ]);
+                    }
+                    let widest = profile.price_tpo_count.values().max().copied().unwrap_or(0);
+                    self.paint_profile_context(
+                        ui,
+                        &coords,
+                        anchor..anchor + column * widest as f32,
+                        profile.session_date,
+                        &labels,
+                        legend_bottom + 6.0,
+                    );
+                },
+            );
+        }
         if let Some(lines) = target_lines {
             self.paint_targets(ui, &coords, legend_bottom + 4.0, lines);
         }
@@ -3591,30 +3920,44 @@ mod tests {
         use crate::chart::overlays::{FootprintColor, FootprintConfig};
         use crate::data::Footprint;
         use crate::model::{BarClock, OrderSide, Tick, Timeframe};
+        use crate::widget::{Primitive, PrimitivePass, PrimitiveView};
+        struct Underlay(egui::Color32);
+        impl Primitive for Underlay {
+            fn draw(&self, painter: &egui::Painter, view: &PrimitiveView<'_>, pass: PrimitivePass) {
+                if pass == PrimitivePass::Below {
+                    painter.rect_filled(view.mapping.rect, 0.0, self.0);
+                }
+            }
+        }
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
             for (width, pane) in [(1440.0, false), (600.0, false), (600.0, true)] {
                 let ctx = egui::Context::default();
                 crate::theme::apply_to_egui(&ctx, &theme);
-                let mut chart = chart(&[100.0], &[110.0]);
+                let mut chart = chart(&[100.0], &[101.0]);
                 chart.set_symbol("FLOW");
+                chart.apply_synced_time_scale(100.0, 1.0);
+                let line_color = egui::Color32::from_rgb(191, 72, 216);
+                chart.main_series_style.price_line_color = Some(line_color);
+                let below_color = egui::Color32::from_rgb(93, 17, 126);
+                chart
+                    .attach_primitive(crate::widget::SeriesId::MAIN, Underlay(below_color))
+                    .unwrap();
                 #[cfg(feature = "studies")]
                 if pane {
                     chart.add_indicator(Box::new(crate::studies::RSI::new(14)));
                 }
                 let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
-                flow.push(&Tick::new(
-                    chart
-                        .bars(crate::widget::SeriesId::MAIN)
-                        .last()
-                        .unwrap()
-                        .time,
-                    100.0,
-                    2.0,
-                    Some(OrderSide::Buy),
-                ))
-                .unwrap();
+                for (i, bar) in chart.bars(crate::widget::SeriesId::MAIN).iter().enumerate() {
+                    for (price, size) in [(100.0, 2.0), (101.0, if i % 2 == 0 { 1.0 } else { 4.0 })]
+                    {
+                        flow.push(&Tick::new(bar.time, price, size, Some(OrderSide::Buy)))
+                            .unwrap();
+                    }
+                }
                 let config = FootprintConfig {
+                    auto_row_height: None,
                     color_by: FootprintColor::Volume,
+                    text_color: theme.chart.axis_text,
                     neutral_color: egui::Color32::from_rgb(21, 45, 78),
                     ..Default::default()
                 };
@@ -3649,6 +3992,76 @@ mod tests {
                         _ => false,
                     })
                     .expect("footprint cells");
+                let Shape::Mesh(mesh) = &output.shapes[cells].shape else {
+                    unreachable!()
+                };
+                for text in output.shapes.iter().filter_map(|shape| match &shape.shape {
+                    Shape::Text(text) if text.galley.text().contains('×') => Some(text),
+                    _ => None,
+                }) {
+                    let bounds = Rect::from_min_size(text.pos, text.galley.size());
+                    assert!(
+                        mesh.vertices.as_chunks::<4>().0.iter().any(|quad| {
+                            let opaque = quad.iter().all(|v| v.color.a() == 255);
+                            let backing = quad.iter().fold(Rect::NOTHING, |rect, vertex| {
+                                rect.union(Rect::from_min_max(vertex.pos, vertex.pos))
+                            });
+                            opaque && backing.contains_rect(bounds)
+                        }),
+                        "opaque clearance beneath {}",
+                        text.galley.text()
+                    );
+                }
+                let strokes: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, shape)| {
+                        let is_line = match &shape.shape {
+                            Shape::LineSegment { stroke, .. } => stroke.color == line_color,
+                            Shape::Mesh(mesh) => {
+                                mesh.vertices.iter().any(|v| v.color == line_color)
+                            }
+                            _ => false,
+                        };
+                        is_line.then_some(i)
+                    })
+                    .collect();
+                assert!(!strokes.is_empty(), "current-price line remains visible");
+                let below = output
+                    .shapes
+                    .iter()
+                    .position(|shape| matches!(&shape.shape, Shape::Rect(rect) if rect.fill == below_color))
+                    .expect("below-series content");
+                assert!(
+                    strokes.iter().all(|i| below < *i),
+                    "current-price guide stays above below-series content"
+                );
+                assert!(
+                    strokes.iter().all(|i| *i < cells),
+                    "current-price line covers footprint cells"
+                );
+                for value in ["0 × 1", "0 × 4"] {
+                    assert!(
+                        output.shapes.iter().any(|shape| matches!(&shape.shape,
+                        Shape::Text(text) if text.galley.text() == value)),
+                        "ordinary and POC close rows retain {value}"
+                    );
+                }
+                let badge = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        Shape::Rect(rect) if rect.fill == line_color => Some(rect.rect),
+                        _ => None,
+                    })
+                    .expect("current-price badge retains its fill");
+                assert!(
+                    output.shapes.iter().any(|shape| matches!(&shape.shape,
+                    Shape::Text(text) if text.galley.text().starts_with("101")
+                        && badge.contains(text.pos + text.galley.size() * 0.5))),
+                    "current-price badge retains its value at width {width}, pane {pane}"
+                );
                 let legend = output
                     .shapes
                     .iter()
@@ -6900,6 +7313,291 @@ mod tests {
             let ranges = super::session_ranges(&bars, shown.clone(), &clock);
             let ranges = ranges.map(|ranges| ranges.ranges().to_vec());
             assert_eq!(ranges, expected, "{shown:?}");
+        }
+    }
+
+    /// A visible closing bar still draws the full distribution. Autoscale fits its row edges,
+    /// range edits select the same distributions as painting, and manual cropping retains levels.
+    #[cfg(feature = "studies")]
+    #[test]
+    fn session_distributions_fit_their_rows_and_keep_cropped_levels_readable() {
+        use crate::chart::overlays::{FootprintMode, TradeProfileSettings};
+        use crate::data::{Datafeed, HistoryPage, HistoryRequest, Reply, Subscription};
+        use crate::model::{Bar, ChartType, Instrument, OrderSide, Tick, Timeframe};
+        use std::sync::Arc;
+        struct Feed(Vec<Bar>);
+        impl Datafeed for Feed {
+            fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {
+                reply.send(Ok(Instrument::new(symbol).with_tick_size(0.25)));
+            }
+            fn subscribe(&self, subscription: Subscription) {
+                for bar in &self.0 {
+                    subscription.sink.push_tick(Tick::new(
+                        bar.time,
+                        bar.close,
+                        bar.volume,
+                        Some(OrderSide::Buy),
+                    ));
+                }
+            }
+            fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
+                reply.send(Ok(HistoryPage::new(self.0.clone(), true)));
+            }
+        }
+        let open: chrono::DateTime<chrono::Utc> = "2026-01-05T00:00:00Z".parse().unwrap();
+        let bars: Vec<_> = (0..16)
+            .map(|i| {
+                let time =
+                    open + chrono::TimeDelta::days(i / 8) + chrono::TimeDelta::minutes(i % 8 * 30);
+                let price = [100.0, 100.0, 100.0, 100.0, 110.0, 130.0, 150.0, 160.0]
+                    [i as usize % 8]
+                    - if i < 8 { 50.0 } else { 0.0 };
+                Bar::new(
+                    time,
+                    price,
+                    price,
+                    price,
+                    price,
+                    if i % 8 < 4 { 9.0 } else { 1.0 },
+                )
+            })
+            .collect();
+        // On the last day 100 holds 36 of 40 volume units, and four of eight TPOs.
+        // Its 0.25 row spans 99.875..100.125; the last row spans 159.875..160.125.
+        for (kind, mode, letters) in [
+            (
+                ChartType::SessionVolumeProfile,
+                FootprintMode::BidAsk,
+                false,
+            ),
+            (
+                ChartType::SessionVolumeProfile,
+                FootprintMode::Volume,
+                false,
+            ),
+            (ChartType::SessionVolumeProfile, FootprintMode::Delta, false),
+            (
+                ChartType::SessionVolumeProfile,
+                FootprintMode::DeltaVolume,
+                false,
+            ),
+            (
+                ChartType::TimePriceOpportunity,
+                FootprintMode::Volume,
+                false,
+            ),
+            (ChartType::TimePriceOpportunity, FootprintMode::Volume, true),
+        ] {
+            for (width, theme) in [800.0, 1440.0].into_iter().flat_map(|width| {
+                [crate::theme::Theme::light(), crate::theme::Theme::dark()]
+                    .map(|theme| (width, theme))
+            }) {
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let mut chart = crate::ChartBuilder::new()
+                    .with_symbol("SESSION")
+                    .with_timeframe(Timeframe::Min30)
+                    .with_feed(Arc::new(Feed(bars.clone())))
+                    .build();
+                for _ in 0..3 {
+                    shapes(&ctx, &mut chart, 0.0, vec![]);
+                }
+                chart.set_instrument(Some(Instrument::new("SESSION").with_tick_size(0.25)));
+                chart.set_chart_type(kind);
+                chart.set_chart_type_params(crate::model::ChartTypeParams {
+                    tpo_letters: letters,
+                    ..Default::default()
+                });
+                chart.set_trade_profile_settings(TradeProfileSettings {
+                    mode,
+                    ..Default::default()
+                });
+                let draw = |chart: &mut crate::widget::Chart, pointer: Option<Pos2>| {
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            events: pointer.into_iter().map(Event::PointerMoved).collect(),
+                            screen_rect: Some(Rect::from_min_size(
+                                Pos2::ZERO,
+                                egui::vec2(width, 600.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            chart.show(ui);
+                        },
+                    );
+                    output.textures_delta.clear();
+                    output.shapes
+                };
+                let mut last_day: Option<crate::scales::PriceRange> = None;
+                for (count, start) in [(16, 0), (8, 8), (1, 15)] {
+                    chart.set_visible_bars(count);
+                    chart.set_start_idx(start);
+                    draw(&mut chart, None);
+                    let map = chart.get_chart_mapping();
+                    for price in [99.875, 160.125] {
+                        assert!(
+                            map.price
+                                .range()
+                                .contains(map.price.transform().to_scale(price)),
+                            "{kind:?} {mode:?} letters={letters} count={count} width={width}: {price}"
+                        );
+                    }
+                    if count <= 8 {
+                        let range = map.price.range();
+                        // At 10% margins each side: 60.25 / 0.8 = 75.3125 for executed rows;
+                        // TPO rows of 2 span 99.875..161.875, so 62 / 0.8 = 77.5.
+                        let (low, high) = if kind == ChartType::SessionVolumeProfile {
+                            (92.34375, 167.65625)
+                        } else {
+                            (92.125, 169.625)
+                        };
+                        assert!(
+                            (range.min - low).abs() < 1e-9 && (range.max - high).abs() < 1e-9,
+                            "{kind:?} fits its rows with one margin: {range:?}"
+                        );
+                        if let Some(previous) = last_day {
+                            assert_eq!(
+                                range, previous,
+                                "the same session keeps its price range when time narrows"
+                            );
+                        }
+                        last_day = Some(range);
+                    }
+                }
+                if kind == ChartType::SessionVolumeProfile {
+                    assert!(chart.merge_trade_profile(0));
+                    draw(&mut chart, None);
+                    assert!(
+                        chart.state.price_scale().range().contains(49.875),
+                        "merged earlier session is fitted"
+                    );
+                    assert!(chart.split_trade_profile(0, bars[8].time));
+                    draw(&mut chart, None);
+                    assert!(
+                        chart.state.price_scale().range().min > 90.0,
+                        "offscreen split profile is excluded"
+                    );
+                } else {
+                    let mut params = chart.chart_type_params().clone();
+                    params.tpo_composites = vec![bars[0].time..=bars[15].time];
+                    chart.set_chart_type_params(params);
+                    draw(&mut chart, None);
+                    assert!(
+                        chart.state.price_scale().range().contains(49.875),
+                        "TPO composite is fitted"
+                    );
+                }
+                chart.price_scale_mut().set_range(150.0, 162.0);
+                let painted = draw(&mut chart, None);
+                assert_eq!(
+                    chart.state.price_scale().range(),
+                    crate::scales::PriceRange::new(150.0, 162.0)
+                );
+                let session = chart.format_time(
+                    bars[if kind == ChartType::SessionVolumeProfile {
+                        8
+                    } else {
+                        0
+                    }]
+                    .time,
+                );
+                assert!(
+                    painted.iter().any(|s| matches!(&s.shape, Shape::Text(t)
+                    if t.galley.text().starts_with(&session) && t.galley.text().contains("POC 100.00") && t.galley.text().contains("VAH")
+                        && t.galley.text().contains("VAL") && t.galley.text().contains("below"))),
+                    "cropped {kind:?} retains its central levels"
+                );
+                let readout = painted
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        Shape::Text(text) if text.galley.text().starts_with(&session) => Some(text),
+                        _ => None,
+                    })
+                    .unwrap();
+                let volume_bottom = painted
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        Shape::Text(text) if text.galley.text().starts_with("Vol") => {
+                            Some(text.pos.y + text.galley.size().y)
+                        }
+                        _ => None,
+                    })
+                    .fold(0.0, f32::max);
+                assert!(
+                    readout.pos.y > volume_bottom,
+                    "cropped profile context clears the legend"
+                );
+                chart.set_visible_bars(1);
+                chart.set_start_idx(0);
+                draw(&mut chart, None);
+                assert_eq!(
+                    chart.state.price_scale().range(),
+                    crate::scales::PriceRange::new(150.0, 162.0)
+                );
+                chart.apply_synced_time_scale(2.0, 0.0);
+                let compact = draw(&mut chart, None);
+                let hint = compact
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        Shape::Text(text) if text.galley.text() == "i" => {
+                            Some(text.pos + text.galley.size() * 0.5)
+                        }
+                        _ => None,
+                    })
+                    .expect("compact cropped profiles advertise their hover readout");
+                ctx.all_styles_mut(|style| {
+                    style.interaction.tooltip_delay = 0.0;
+                    style.interaction.show_tooltips_only_when_still = false;
+                });
+                let mut hovered = Vec::new();
+                for frame in 0..3 {
+                    let mut corrected = bars[14].clone();
+                    corrected.volume += frame as f64 + 1.0;
+                    chart.update(crate::widget::SeriesId::MAIN, corrected);
+                    hovered = draw(&mut chart, Some(hint));
+                }
+                assert!(
+                    hovered.iter().any(|s| matches!(&s.shape, Shape::Text(text)
+                        if text.galley.text().contains("POC")
+                            && text.galley.text().contains("below"))),
+                    "compact cropped levels remain readable over row tooltips: {kind:?} {mode:?} width={width} dark={}",
+                    theme.dark
+                );
+                if kind == ChartType::TimePriceOpportunity {
+                    for (prices, expected) in [
+                        (
+                            [100.0, 100.0],
+                            crate::scales::PriceRange::new(99.875, 100.125),
+                        ),
+                        // Rows of 2 cover 7..73; rows of 2.5 cover 8.75..71.25. Starting over
+                        // would alternate between spans 66/0.8 = 82.5 and 62.5/0.8 = 78.125.
+                        ([8.9, 71.0], crate::scales::PriceRange::new(-1.25, 81.25)),
+                    ] {
+                        let mut chart =
+                            crate::widget::Chart::new(crate::model::BarData::from_bars(
+                                bars[8..]
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(i, bar)| Bar::from_value(bar.time, prices[i % 2]))
+                                    .collect(),
+                            ));
+                        chart.set_chart_type(kind);
+                        chart.set_chart_type_params(crate::model::ChartTypeParams {
+                            tpo_letters: letters,
+                            ..Default::default()
+                        });
+                        chart.set_visible_bars(8);
+                        chart.set_start_idx(0);
+                        draw(&mut chart, None);
+                        assert_eq!(
+                            chart.state.price_scale().range(),
+                            expected,
+                            "automatic rows converge and preserve flat-session bounds: {prices:?}"
+                        );
+                    }
+                }
+            }
         }
     }
 
