@@ -51,8 +51,8 @@ mod market;
 mod metrics;
 pub use metrics::{MetricPage, MetricPoint, MetricRequest, MetricSeries, MetricSubscription};
 #[cfg_attr(
-    not(any(test, feature = "widget")),
-    expect(dead_code, reason = "only the chart widget consumes a feed")
+    not(any(test, feature = "widget", feature = "alert-engine")),
+    expect(dead_code, reason = "only charts and alerts consume a feed")
 )]
 pub(crate) mod merge;
 mod options_volume;

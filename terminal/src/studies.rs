@@ -23,7 +23,7 @@ use egui_charts::widget::{ChartElementId, ChartEvent, PointerTarget, SeriesId};
 
 #[derive(Default)]
 pub(super) struct State {
-    indicators: IndicatorDialog,
+    pub(super) indicators: IndicatorDialog,
     indicator_settings: IndicatorSettingsDialog,
     settings_dialog: SettingsDialog,
     /// The chart settings as last applied. The groups that apply a part of them to their own

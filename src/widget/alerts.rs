@@ -5,6 +5,96 @@ use crate::chart::series::SeriesId;
 use crate::model::AlertSource;
 
 impl Chart {
+    /// Lend loaded live bars to the alert evaluator. A paused or replaying chart cannot take
+    /// over an alert's live subscription, and loading history keeps its background reader.
+    #[cfg(feature = "alert-engine")]
+    pub fn alert_data(&self) -> Option<crate::services::AlertData<'_>> {
+        let link = self.feed_link.as_ref()?;
+        if link.paused
+            || self.replay.is_some()
+            || self.feed.loading_history
+            || self.feed.last_error.is_some()
+            || self.bars(SeriesId::MAIN).is_empty()
+        {
+            return None;
+        }
+        let mut request =
+            crate::services::AlertFeed::history_request(self.symbol(), self.timeframe()?);
+        request.clock = self.bar_clock();
+        request.extended_hours = self.extended_hours();
+        request.conversion = self.conversion().map(str::to_owned);
+        Some(crate::services::AlertData {
+            request,
+            bars: self.bars(SeriesId::MAIN),
+            history_complete: self.feed.history_complete,
+            #[cfg(feature = "ui")]
+            drawings: &self.drawings().drawings,
+        })
+    }
+
+    /// Capture calculation inputs for alert creation, independently of later chart changes.
+    /// Copies and edits retain the inputs already carried by the alert.
+    pub fn prepare_alert(&self, alert: &mut crate::model::Alert) {
+        alert.timeframe = alert.timeframe.or(self.timeframe());
+        if let Some(inputs) = &mut alert.inputs {
+            inputs.add_sources_from(&self.alert_inputs());
+        } else if alert.id.is_none() {
+            let mut inputs = self.alert_inputs();
+            if alert.symbol != self.symbol()
+                || alert.timeframe != self.timeframe()
+                || alert.watchlist.is_some()
+            {
+                inputs.start = None;
+                inputs.visible = None;
+                inputs.count = inputs.count.max(1000);
+            }
+            alert.inputs = Some(Box::new(inputs));
+        }
+    }
+
+    /// A snapshot for an inline alert form. Capture again when the form is shown; submitting it
+    /// copies this view into the alert, so storage never needs the chart to recover its inputs.
+    pub fn alert_inputs(&self) -> crate::model::AlertInputs {
+        let bars = self.bars(SeriesId::MAIN);
+        let (left, right) = self.state.visible_range();
+        crate::model::AlertInputs {
+            timezone: match &self.chart_options().time_scale.timezone {
+                crate::config::TimezoneMode::Local => None,
+                zone => Some(zone.to_tz().unwrap_or_else(crate::model::TimezoneId::utc)),
+            },
+            calendar: self
+                .instrument()
+                .map(|instrument| crate::model::AlertCalendar {
+                    symbol: self.symbol().to_owned(),
+                    timezone: instrument.time_zone.clone(),
+                    session: instrument.session.clone(),
+                }),
+            sources: self.alert_sources(),
+            extended_hours: self.extended_hours(),
+            conversion: self.conversion().map(str::to_owned),
+            count: if bars.is_empty() { 1000 } else { bars.len() },
+            start: bars.first().map(|bar| bar.time),
+            visible: bars
+                .get(left)
+                .zip(bars.get(right.min(bars.len()).saturating_sub(1)))
+                .map(|(first, last)| (first.time, last.time)),
+            logarithmic: self.config().right_axis_scale_mode
+                == crate::scales::PriceScaleMode::Logarithmic,
+            studies: self
+                .indicators()
+                .map(|(id, study)| crate::model::AlertStudy {
+                    id: id.0,
+                    name: study.name().to_owned(),
+                    inputs: study
+                        .inputs()
+                        .into_iter()
+                        .map(|input| (input.id, input.value))
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
+
     /// The value `source` has at bar `bar` of the main series, which `AlertEngine::update` takes as
     /// its `value` function and any other evaluator can use: the close for
     /// [`Price`](AlertSource::Price), the volume for [`Volume`](AlertSource::Volume), the value of

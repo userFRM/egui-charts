@@ -102,6 +102,7 @@ pub struct AlertsPanel {
     sources: Vec<(AlertSource, String)>,
     symbol: String,
     draft: Alert,
+    inputs: Option<(crate::model::AlertInputs, Option<crate::model::Timeframe>)>,
     draft_saving: bool,
     pending: usize,
     sound_choice: Option<String>,
@@ -133,6 +134,7 @@ impl AlertsPanel {
             sources: Vec::new(),
             symbol: String::new(),
             draft: Alert::new("", AlertCondition::Crossing(0.0)),
+            inputs: None,
             draft_saving: false,
             pending: 0,
             sound_choice: None,
@@ -153,6 +155,15 @@ impl AlertsPanel {
     /// inline alert form.
     pub fn set_sources(&mut self, sources: Vec<(AlertSource, String)>) {
         self.sources = sources;
+    }
+
+    /// Creation inputs for the inline form, captured from its source view by the host.
+    pub fn set_inputs(
+        &mut self,
+        inputs: crate::model::AlertInputs,
+        timeframe: Option<crate::model::Timeframe>,
+    ) {
+        self.inputs = Some((inputs, timeframe));
     }
 
     /// Keep each trigger notification on screen for this many seconds, five by default.
@@ -222,11 +233,28 @@ impl AlertsPanel {
     }
 
     /// Send `alert` and say whether a service took it; its reply arrives under `key`.
-    fn save_with(&mut self, alert: Alert, key: u64) -> bool {
+    fn save_with(&mut self, mut alert: Alert, key: u64) -> bool {
         let Some(service) = &self.service else {
             self.error = Some(FeedError::NotSupported);
             return false;
         };
+        if let Some((available, timeframe)) = &self.inputs {
+            if let Some(inputs) = &mut alert.inputs {
+                inputs.add_sources_from(available);
+            } else if alert.id.is_none() {
+                let mut inputs = available.clone();
+                alert.timeframe = alert.timeframe.or(*timeframe);
+                if alert.symbol != self.symbol
+                    || alert.timeframe != *timeframe
+                    || alert.watchlist.is_some()
+                {
+                    inputs.start = None;
+                    inputs.visible = None;
+                    inputs.count = inputs.count.max(1000);
+                }
+                alert.inputs = Some(Box::new(inputs));
+            }
+        }
         self.pending += 1;
         service.save(alert, self.inbox.reply(key));
         true

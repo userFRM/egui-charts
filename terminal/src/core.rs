@@ -186,7 +186,6 @@ impl Terminal {
     }
 
     /// Hands `contents` to the host's file export as `name`. False without one.
-    #[expect(dead_code, reason = "the export dialog and the panels save files")]
     pub(super) fn save_file(&mut self, name: String, contents: ExportContents) -> bool {
         let Some(save) = &mut self.services.save else {
             return false;
