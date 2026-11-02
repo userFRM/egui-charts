@@ -93,6 +93,13 @@ impl DemoApp {
         };
         let mut playback_time = None;
         if let Some(driver) = self.chart.replay_driver().cloned() {
+            // Keep live host analytics out of recorded market playback.
+            self.chart.set_signal_source(None);
+            for extra in &mut self.extra_charts {
+                if extra.chart.replay_driver().is_some() {
+                    extra.chart.set_signal_source(None);
+                }
+            }
             let now = Utc::now();
             let elapsed = self
                 .replay_updated
@@ -186,6 +193,7 @@ impl DemoApp {
         self.replay_start.is_open = false;
         self.replay_selecting = false;
         if self.replay.take().is_some() {
+            let market = self.chart.replay_driver().is_some();
             self.paper.set_replay_time(None);
             self.chart.set_replay_time(None);
             for extra in &mut self.extra_charts {
@@ -198,6 +206,9 @@ impl DemoApp {
             self.live.set_paused(self.live_was_paused);
             self.state.replay_active = false;
             self.replay_control.hide_control();
+            if market {
+                self.refresh_strategy_signals();
+            }
         }
     }
 
@@ -377,6 +388,7 @@ impl DemoApp {
                     extra.chart.set_replay_time(cutoff);
                 }
             }
+            self.refresh_strategy_signals();
         }
         let mut next =
             ReplayController::new(bars.clone(), Vec::new()).with_symbol(self.state.symbol.clone());
@@ -403,6 +415,7 @@ impl DemoApp {
             }
             if self.chart.replay_driver().is_none() {
                 self.chart.set_market_replay(Some(driver));
+                self.chart.set_signal_source(None);
             }
         }
         let driver = self.chart.replay_driver().cloned();
@@ -417,6 +430,7 @@ impl DemoApp {
                 extra.chart.set_replay_source(bars, clock);
                 if let Some(driver) = &driver {
                     extra.chart.set_market_replay(Some(driver.clone()));
+                    extra.chart.set_signal_source(None);
                 }
             }
         }
@@ -598,6 +612,19 @@ mod tests {
             )
             .drop_without_applying_deltas();
         }
+        app.api_samples = true;
+        app.refresh_strategy_signals();
+        let signals = |app: &mut DemoApp| {
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                app.chart.show(ui);
+            });
+            let shown = output.shapes.iter().any(|shape| {
+                matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Signals")
+            });
+            output.drop_without_applying_deltas();
+            shown
+        };
+        assert!(signals(&mut app), "live host analytics are available");
         let start = chrono::DateTime::from_timestamp(1_704_067_200, 0).unwrap();
         let bars = [100.0, 80.0, 110.0]
             .into_iter()
@@ -699,6 +726,16 @@ mod tests {
         app.handle_replay_control(ReplayControlAction::SetUpdateInterval(trade));
         assert_eq!(app.replay_interval, trade);
         assert!(
+            !signals(&mut app),
+            "unrecorded live analytics cannot appear over recorded executions"
+        );
+        app.refresh_strategy_signals();
+        app.advance_replay();
+        assert!(
+            !signals(&mut app),
+            "refreshing a report cannot restore live analytics during market replay"
+        );
+        assert!(
             app.chart.replay_time() < before,
             "the cursor sits just after the last trade"
         );
@@ -725,12 +762,15 @@ mod tests {
             "the transport starts at the first recorded execution"
         );
         app.handle_replay_control(ReplayControlAction::SetUpdateInterval(app.state.timeframe));
+        assert!(signals(&mut app), "candle replay restores host analytics");
         app.handle_replay_control(ReplayControlAction::SetUpdateInterval(trade));
         assert_eq!(
             app.chart.replay_driver().unwrap().time_range(),
             range,
             "returning to trade updates must retain the recording"
         );
+        app.stop_replay();
+        assert!(signals(&mut app), "leaving replay restores host analytics");
     }
 
     /// The feed keeps trades from 14:00, the hour two hours before 16:30: an hourly chart's
