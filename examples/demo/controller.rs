@@ -5076,7 +5076,7 @@ mod tests {
                         let head = output
                             .shapes
                             .iter()
-                            .find_map(|shape| match &shape.shape {
+                            .filter_map(|shape| match &shape.shape {
                                 egui::Shape::Circle(circle)
                                     if circle.fill == egui::Color32::from_rgb(255, 152, 0)
                                         && shape.clip_rect.contains(circle.center) =>
@@ -5085,14 +5085,13 @@ mod tests {
                                 }
                                 _ => None,
                             })
+                            .max_by(|left, right| left.y.total_cmp(&right.y))
                             .expect("custom range heads are visible");
                         output.drop_without_applying_deltas();
                         let output = frame(&mut app, vec![Event::PointerMoved(head)]);
-                        assert_eq!(
-                            output.platform_output.cursor_icon,
-                            egui::CursorIcon::PointingHand
-                        );
+                        let cursor = output.platform_output.cursor_icon;
                         output.drop_without_applying_deltas();
+                        assert_eq!(cursor, egui::CursorIcon::PointingHand);
                         for enabled in [false, true] {
                             for control in ["Session background", "Custom range series"] {
                                 let output = frame(&mut app, Vec::new());
