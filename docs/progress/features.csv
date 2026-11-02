@@ -116,9 +116,9 @@ Chart,Chart settings and themes,Status line tab,done,library,src/widget/settings
 Chart,Chart settings and themes,Symbol tab,done,library,src/widget/settings/apply.rs;src/ui/dialogs/chart_settings/tabs/symbol.rs;src/ui/dialogs/chart_settings/tabs/mod.rs,
 Chart,Chart settings and themes,Trading tab,done,host,src/widget/settings/data.rs;src/ui/trading/mod.rs;src/ui/dialogs/chart_settings/tabs/trading.rs;src/ui/dialogs/chart_settings/tabs/mod.rs;terminal/src/trading.rs,
 Chart,Chart settings and themes,Watermark,done,library,src/widget/settings/apply.rs;src/widget/mod.rs;src/chart/rendering/watermark.rs;src/config/chart.rs;src/widget/palette.rs;src/theme/presets.rs;src/widget/frame/mod.rs;src/widget/frame/background.rs,
-Chart,Chart types,Area,done,library,src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/area.rs;src/widget/frame/mod.rs;src/model/chart_style.rs;src/chart/rendering/candles/line.rs;src/widget/series/options.rs,1870
+Chart,Chart types,Area,done,library,src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/area.rs;src/widget/frame/mod.rs;src/model/chart_style.rs;src/chart/rendering/candles/line.rs;src/widget/series/options.rs;src/ui/dialogs/series_settings/tabs/symbol.rs,1870
 Chart,Chart types,Bars,done,library,src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/candlestick.rs;src/chart/rendering/candles/bar.rs,
-Chart,Chart types,Baseline,done,library,src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/area.rs;src/model/chart_style.rs;src/chart/rendering/candles/line.rs;src/widget/series/options.rs,1870
+Chart,Chart types,Baseline,done,library,src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/area.rs;src/model/chart_style.rs;src/chart/rendering/candles/line.rs;src/widget/series/options.rs;src/ui/dialogs/series_settings/tabs/symbol.rs,1870
 Chart,Chart types,Candlestick chart,done,library,src/widget/builder.rs;src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/candle.rs;src/widget/frame/mod.rs,
 Chart,Chart types,Chart type selector,done,library,src/ui/top_toolbar/components/chart_type_selector.rs;src/ui/top_toolbar/toolbar.rs;src/widget/builder.rs,
 Chart,Chart types,Columns,done,library,src/model/chart_type.rs;src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/candlestick.rs,

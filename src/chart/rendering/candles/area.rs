@@ -52,16 +52,14 @@ pub(super) fn render_area(
     }
     draw_area_fill(painter, &fill_points, price_rect, style);
     draw_bar_line(painter, visible_data, &line_points, &style.line, false);
-    if style.marker_radius.is_finite() && style.marker_radius > 0.0 {
-        for (point, bar) in line_points.iter().zip(visible_data) {
-            if !bar.is_whitespace() {
-                draw_point_marker(
-                    painter,
-                    *point,
-                    style.marker_radius,
-                    line_color(bar, &style.line),
-                );
-            }
+    for (point, bar) in line_points.iter().zip(visible_data) {
+        if !bar.is_whitespace() {
+            draw_point_marker(
+                painter,
+                *point,
+                style.marker_radius,
+                line_color(bar, &style.line),
+            );
         }
     }
 
@@ -419,21 +417,19 @@ fn draw_baseline_segments(
         };
         draw_baseline_line_part(painter, a, b, &line, distance);
     }
-    if style.marker_radius.is_finite() && style.marker_radius > 0.0 {
-        for (point, bar) in points.iter().zip(data) {
-            if bar.is_whitespace() {
-                continue;
-            }
-            let own = bar.colors.as_deref();
-            let color = if above(*point, *point) {
-                own.and_then(|colors| colors.top_line)
-                    .unwrap_or(style.above.color)
-            } else {
-                own.and_then(|colors| colors.bottom_line)
-                    .unwrap_or(style.below.color)
-            };
-            draw_point_marker(painter, *point, style.marker_radius, color);
+    for (point, bar) in points.iter().zip(data) {
+        if bar.is_whitespace() {
+            continue;
         }
+        let own = bar.colors.as_deref();
+        let color = if above(*point, *point) {
+            own.and_then(|colors| colors.top_line)
+                .unwrap_or(style.above.color)
+        } else {
+            own.and_then(|colors| colors.bottom_line)
+                .unwrap_or(style.below.color)
+        };
+        draw_point_marker(painter, *point, style.marker_radius, color);
     }
 }
 
