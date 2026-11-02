@@ -1,4 +1,4 @@
-use super::{ChartMapping, RenderContext};
+use super::super::{ChartMapping, RenderContext};
 use crate::chart::rendering::axes::tick_decimals;
 use crate::chart::rendering::axes::{axis_font, paint_crosshair_tag};
 use crate::config::{CrosshairMode, CrosshairOptions, CrosshairStyle};

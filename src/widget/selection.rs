@@ -4,7 +4,7 @@ use super::{Chart, RightClickTarget};
 use crate::chart::indicators::{
     SelectionDotConfig, hit_test_indicator, render_indicator_selection_dots,
 };
-use crate::chart::renderers::ChartMapping;
+use crate::chart::rendering::ChartMapping;
 use crate::chart::selection::{ChartElementId, SeriesId};
 use crate::chart::series::{
     SelectionHandleConfig, calculate_dot_interval, hit_test_candles, hit_test_volume,
@@ -107,7 +107,7 @@ impl Chart {
                         Some(&self.merge_groups),
                     )
                 });
-                let study_coords = crate::chart::renderers::study_mapping(indicator, coords);
+                let study_coords = crate::chart::rendering::study_mapping(indicator, coords);
                 let coords = volume_coords.as_ref().unwrap_or(&study_coords);
                 let config = SelectionDotConfig {
                     dot_interval: calculate_dot_interval(coords.bar_spacing),
@@ -247,7 +247,7 @@ pub(super) fn hit_test_main_chart(
             } else {
                 None
             };
-            let study_coords = crate::chart::renderers::study_mapping(indicator.as_ref(), coords);
+            let study_coords = crate::chart::rendering::study_mapping(indicator.as_ref(), coords);
             let coords = volume_mapping.as_ref().unwrap_or(&study_coords);
             if let Some(hit) = hit_test_indicator(
                 click_pos,

@@ -43,12 +43,9 @@ where
         return None;
     }
 
-    if let Some(bar_idx) = crate::chart::renderers::volume_profile::hit_profile(
-        click_pos,
-        indicator,
-        coords,
-        &price_to_y,
-    ) {
+    if let Some(bar_idx) =
+        crate::painting::volume_profile::hit_profile(click_pos, indicator, coords, &price_to_y)
+    {
         return Some(IndicatorHitResult {
             indicator_idx,
             bar_idx,
@@ -248,7 +245,7 @@ pub fn hit_test_pane_indicator(
     coords: &ChartMapping,
 ) -> Option<IndicatorHitResult> {
     let mapped = matches!(indicator.scale(), crate::studies::StudyScale::Shared(_))
-        .then(|| crate::chart::renderers::study_mapping(indicator, coords));
+        .then(|| crate::chart::rendering::study_mapping(indicator, coords));
     let coords = mapped.as_ref().unwrap_or(coords);
     // Only test non-overlay indicators
     if indicator.is_overlay() || !indicator.is_visible() {
@@ -260,12 +257,11 @@ pub fn hit_test_pane_indicator(
         return None;
     }
 
-    if let Some(bar_idx) = crate::chart::renderers::volume_profile::hit_profile(
-        click_pos,
-        indicator,
-        coords,
-        &|price| coords.price_to_y(price),
-    ) {
+    if let Some(bar_idx) =
+        crate::painting::volume_profile::hit_profile(click_pos, indicator, coords, &|price| {
+            coords.price_to_y(price)
+        })
+    {
         return Some(IndicatorHitResult {
             indicator_idx,
             bar_idx,

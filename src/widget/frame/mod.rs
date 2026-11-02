@@ -9,8 +9,7 @@ pub(super) use sessions::session_ranges;
 use super::selection::hit_test_main_chart;
 use super::{Chart, PrimitivePass, RightClickTarget, primitives};
 use crate::chart::overlays::FootprintConfig;
-use crate::chart::renderers::{self, ChartMapping, RenderContext, StyleColors};
-use crate::chart::rendering;
+use crate::chart::rendering::{self, ChartMapping, RenderContext, StyleColors};
 use crate::data::Footprint;
 use crate::localization as l10n;
 use crate::model::{ChartType, MarkerZOrder, PriceLine};
@@ -287,8 +286,8 @@ impl Chart {
                     ));
                 }
             }
-            renderers::render_event_breaks(ui, &breaks, self.state.shown(), &coords);
-            if let Some(id) = renderers::render_event_badges(
+            rendering::render_event_breaks(ui, &breaks, self.state.shown(), &coords);
+            if let Some(id) = rendering::render_event_badges(
                 ui,
                 events.iter().map(|(key, event)| (*key, event)),
                 self.state.shown(),
@@ -751,7 +750,7 @@ impl Chart {
         // Draw watermark overlay (if enabled)
         self.draw_watermark(ui, &painter, chart_rect);
         if let Some(watermark) = &self.watermark {
-            renderers::render_watermark(ui, &painter, chart_rect, watermark);
+            rendering::render_watermark(ui, &painter, chart_rect, watermark);
         }
 
         if self.state.data().is_empty() {
@@ -1129,7 +1128,7 @@ impl Chart {
         let (time_marks, time_points, axis_coords) = if time_grid || self.config.show_time_labels {
             // Resolved once: a fixed-offset zone allocates on every clone.
             let calendar = self.calendar_timezone();
-            renderers::time_axis_marks(
+            rendering::time_axis_marks(
                 &RenderContext::new(&painter, chart_rect),
                 time_data,
                 &time_coords,
@@ -1155,7 +1154,7 @@ impl Chart {
                 .vertical_grid_line_style
                 .unwrap_or(self.config.grid_line_style);
             if time_based {
-                renderers::render_time_grid(
+                rendering::render_time_grid(
                     &RenderContext::new(&painter, chart_rect),
                     &time_marks,
                     &time_points,
@@ -1181,7 +1180,7 @@ impl Chart {
         }
 
         let session_tf = self.resolve_session_timeframe(visible_data);
-        let exchange_session = renderers::exchange_session(
+        let exchange_session = rendering::exchange_session(
             self.instrument(),
             self.config.session_config.as_ref(),
             &timezone,
@@ -1196,7 +1195,7 @@ impl Chart {
                 .as_deref()
                 .unwrap_or(&exchange_session);
             let background =
-                renderers::SessionBackgroundRenderer::from_background(self.config.background_color);
+                rendering::SessionBackgroundRenderer::from_background(self.config.background_color);
             background.render(
                 &session_ctx,
                 time_data,
@@ -1204,7 +1203,7 @@ impl Chart {
                 &time_coords,
                 time_coords.start_idx,
             );
-            renderers::SessionBreakRenderer::new(renderers::SessionBreakRenderConfig {
+            rendering::SessionBreakRenderer::new(rendering::SessionBreakRenderConfig {
                 line_color: self.config.session_break_color,
                 line_width: 1.0,
                 style: self.config.session_break_style,
@@ -1227,7 +1226,7 @@ impl Chart {
             } else {
                 self.config.extended_hours_color
             };
-            renderers::render_extended_hours(
+            rendering::render_extended_hours(
                 &session_ctx,
                 time_data,
                 &exchange_session,
@@ -1627,13 +1626,13 @@ impl Chart {
             if self.has_renderer(*id) {
                 let view = self.primitive_view(
                     *id,
-                    crate::chart::renderers::study_mapping(study.as_ref(), &coords),
+                    crate::chart::rendering::study_mapping(study.as_ref(), &coords),
                 );
                 for item in self.primitives_of(*id).filter(|item| item.replaces) {
                     item.draw(&clipped_painter, &view, PrimitivePass::Series);
                 }
             } else {
-                renderers::IndicatorRenderer::render(
+                rendering::IndicatorRenderer::render(
                     &price_ctx,
                     std::slice::from_ref(study),
                     visible_data,
@@ -2270,14 +2269,14 @@ impl Chart {
                 / (axes.clone().count() + series_left).max(1) as f32;
             edge -= series_left as f32 * slot_width;
             for study in axes {
-                let mapping = crate::chart::renderers::study_mapping(study.as_ref(), &coords);
+                let mapping = crate::chart::rendering::study_mapping(study.as_ref(), &coords);
                 let axis = Rect::from_min_max(
                     Pos2::new(edge - slot_width, price_rect.top()),
                     Pos2::new(edge, price_rect.bottom()),
                 );
                 edge -= slot_width;
                 independent_axis_width =
-                    independent_axis_width.max(crate::chart::renderers::render_study_axis(
+                    independent_axis_width.max(crate::chart::rendering::render_study_axis(
                         &painter,
                         &[study.as_ref()],
                         &mapping,
@@ -2695,7 +2694,7 @@ impl Chart {
                 if legend.show_title && legend.show_market_status {
                     // The quote's time is not a clock: it stops when quotes stop.
                     let now = self.chart_time().unwrap_or_else(chrono::Utc::now);
-                    legend.session = renderers::exchange_session(
+                    legend.session = rendering::exchange_session(
                         self.instrument(),
                         self.config.session_config.as_ref(),
                         &self.display_timezone(),
@@ -2975,13 +2974,13 @@ impl Chart {
                     let mut options = crosshair_options.resolved(ui.ctx());
                     options.vert_line_visible = false;
                     let context = RenderContext::new(&painter, volume_rect);
-                    renderers::render_crosshair_lines(
+                    rendering::render_crosshair_lines(
                         &context,
                         pos,
                         &options,
                         volume_rect.bottom(),
                     );
-                    crosshair_tags[0] = renderers::render_crosshair_price_tag(
+                    crosshair_tags[0] = rendering::render_crosshair_price_tag(
                         &context,
                         pos,
                         &map,
@@ -3218,7 +3217,7 @@ impl Chart {
                 Pos2::new(axis_edge, price_rect.bottom()),
             );
             let (button, choice) =
-                renderers::render_axis_currency(ui, axis, currency, unit, &self.currency_choices);
+                rendering::render_axis_currency(ui, axis, currency, unit, &self.currency_choices);
             self.measured_axis_width = self.measured_axis_width.max(header_width);
             if choice.is_some() {
                 self.currency_choice = choice;
@@ -3245,7 +3244,7 @@ impl Chart {
                 price_formatter.as_deref(),
             );
         } else if self.config.show_left_axis {
-            renderers::render_price_labels_at_pos(
+            rendering::render_price_labels_at_pos(
                 &price_ctx,
                 &price_map,
                 &colors,

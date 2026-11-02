@@ -10,7 +10,7 @@ use crate::scales::PriceMap;
 use crate::theme::{ThemeExt, contrast};
 pub use currency::render_axis_currency;
 use egui::{Align2, Color32, CornerRadius, FontId, Painter, Pos2, Rect, Stroke, Vec2};
-pub(in crate::chart) use labels::semibold;
+pub(super) use labels::semibold;
 pub(crate) use labels::{price_marks, render_time_grid, tick_decimals, time_axis_marks};
 pub use labels::{render_price_labels, render_price_labels_at_pos, render_time_labels};
 pub(crate) use study_scale::{render_study_axis, study_mapping};

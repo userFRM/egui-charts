@@ -371,7 +371,7 @@ fn footprint_annotations_and_statistics_follow_executions() {
 #[cfg(feature = "studies")]
 #[test]
 fn main_series_legend_actions_preserve_studies_and_comparisons() {
-    use crate::chart::renderers::SeriesAction;
+    use crate::chart::rendering::SeriesAction;
     use crate::widget::{SeriesId, SeriesOptions};
     let mut chart = chart(&[100.0], &[110.0]);
     let study = chart.add_indicator(Box::new(crate::studies::SMA::new(1)));

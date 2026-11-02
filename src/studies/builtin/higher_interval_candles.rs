@@ -302,7 +302,7 @@ mod tests {
         #[cfg(feature = "widget")]
         {
             use crate::chart::coords::ChartMapping;
-            use crate::chart::renderers::{IndicatorRenderer, RenderContext};
+            use crate::chart::rendering::{IndicatorRenderer, RenderContext};
             use crate::scales::{PriceMap, PriceRange, PriceScaleMode, PriceTransform};
             use crate::studies::ConfiguredStudy;
             use egui::{Pos2, Rect, Shape};

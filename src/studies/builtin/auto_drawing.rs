@@ -815,7 +815,7 @@ mod tests {
     fn automatic_drawing_uses_the_study_renderer_and_hit_test() {
         use crate::chart::coords::ChartMapping;
         use crate::chart::indicators::hit_test_indicator;
-        use crate::chart::renderers::{IndicatorRenderer, RenderContext};
+        use crate::chart::rendering::{IndicatorRenderer, RenderContext};
         use crate::scales::{PriceMap, PriceRange, PriceTransform};
         use egui::{Pos2, Rect};
         let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(400.0, 300.0));
@@ -871,7 +871,7 @@ mod tests {
         let mut study = ConfiguredStudy::new(Box::new(automatic));
         study.set_scale(crate::studies::StudyScale::Independent);
         let zoomed = ChartMapping::new(rect, 400.0, 6, 7, 0.0, price);
-        let mapped = crate::chart::renderers::study_mapping(&study, &zoomed);
+        let mapped = crate::chart::rendering::study_mapping(&study, &zoomed);
         for value in [113.0, 118.0] {
             assert!((0.0..=300.0).contains(&mapped.price_to_y(value)));
         }

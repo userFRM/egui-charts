@@ -34,7 +34,7 @@
 
 #[cfg(feature = "drawings")]
 use crate::chart::cursor_modes::CursorModeState;
-use crate::chart::renderers::ChartMapping;
+use crate::chart::rendering::ChartMapping;
 use crate::chart::selection::SelectionState;
 use crate::chart::series::SeriesSettings;
 use crate::config::{ChartConfig, ChartOptions};
@@ -45,7 +45,7 @@ use crate::model::Timeframe;
 use crate::model::{ChartType, ChartTypeParams};
 use crate::studies::ChartState;
 
-pub use crate::chart::renderers::{
+pub use crate::chart::rendering::{
     Legend, LegendStatus, QuoteSide, StudyAction, StudyValue, ValueFormatters, Watermark,
     WatermarkLine,
 };
