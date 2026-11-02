@@ -197,8 +197,8 @@ impl StudyDataCache {
 }
 
 impl Chart {
-    /// Histories required by feed-backed series, study inputs and profile drawings, with chart defaults
-    /// resolved. Hosts without a connected feed supply these through [`Self::set_study_data`]. A connected
+    /// Histories required by feed-backed series, study inputs and profile drawings, with chart
+    /// defaults resolved. Hosts without a connected feed supply these through [`Self::set_study_data`]. A connected
     /// feed receives resolve, history and subscription calls automatically on the next frame.
     pub fn study_data_requests(&self) -> Vec<StudyDataRequest> {
         let mut requests = self.fed_requests();

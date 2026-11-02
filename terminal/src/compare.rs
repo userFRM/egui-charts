@@ -92,8 +92,7 @@ impl Terminal {
                 self.user_action(|terminal| terminal.perform_comparison(action))
             }
             Action::SymbolPicked(instrument)
-                if instrument.symbol_type == Some(SymbolType::Spread)
-                    || is_spread(&instrument.symbol) =>
+                if instrument.symbol_type == Some(SymbolType::Spread) =>
             {
                 self.user_action(|terminal| terminal.add_spread(&instrument.symbol));
             }
@@ -407,9 +406,10 @@ mod tests {
                 Instrument::new(symbol).with_symbol_type(SymbolType::Spread),
             ))
         };
-        let plain = Action::SymbolPicked(Box::new(Instrument::new("MSFT")));
+        // A symbol whose name holds an operator sign is still a symbol to open.
+        let plain = Action::SymbolPicked(Box::new(Instrument::new("BRK-B")));
         assert!(terminal.run(plain).is_none());
-        assert_eq!(terminal.chart().symbol(), "MSFT");
+        assert_eq!(terminal.chart().symbol(), "BRK-B");
         terminal.chart_mut().set_symbol("AAPL");
         settle(&mut terminal);
         terminal.run(Action::Compare(CompareAction::AddSymbol(

@@ -429,11 +429,11 @@ impl Chart {
 
     /// Adds a bar series like [`add_series`](Self::add_series) whose bars the chart's feed
     /// supplies: the history and live updates of the symbol in `options.name`, at the chart's
-    /// interval, or of a spread such as `AAPL-MSFT` (see
-    /// [`SymbolExpression`]), computed from the history of each
-    /// of its symbols. The series pages back as far as the main series, and a new name is a new
-    /// symbol. A chart without a feed adds a plain series, which the host supplies through
-    /// [`set_data`](Self::set_data); a symbol that contains an operator sign cannot be named.
+    /// interval, or of a spread such as `AAPL-MSFT` (see [`SymbolExpression`]), computed from
+    /// the history of each of its symbols. The series pages back as far as the main series, and
+    /// a new name is a new symbol. A chart without a feed adds a plain series, which the host
+    /// supplies through [`set_data`](Self::set_data); a symbol that contains an operator sign
+    /// cannot be named.
     pub fn add_feed_series(&mut self, options: SeriesOptions) -> SeriesId {
         let id = self.add_series(options);
         self.price_series.last_mut().expect("added series").fed = self.feed_link.is_some();
