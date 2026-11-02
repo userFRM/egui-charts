@@ -63,6 +63,7 @@ fn sample_backtest(symbol: &str, timeframe: Timeframe, bars: &[Bar]) -> Strategy
 
 impl DemoApp {
     pub(super) fn run_sample_backtest(&mut self) {
+        self.stop_live_strategy();
         let bars = self.chart.bars(SeriesId::MAIN);
         // The newest bar can still change. Bound this synchronous demonstration to 121 opens.
         let completed = &bars[..bars.len().saturating_sub(1)];
@@ -83,6 +84,7 @@ impl DemoApp {
     }
 
     pub(super) fn show_strategy_report(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
+        self.update_live_strategy();
         if self.strategy_report.report().is_none() {
             return;
         }
@@ -94,7 +96,21 @@ impl DemoApp {
             .frame(panel_frame(bg))
             .show(ui, |ui| {
                 ui.take_available_space();
-                clear = ui.button("Clear report").clicked();
+                ui.horizontal_wrapped(|ui| {
+                    clear = ui.button("Clear report").clicked();
+                    if self.live_strategy.is_some() {
+                        if ui.button("Stop forward test").clicked() {
+                            self.stop_live_strategy();
+                        }
+                    } else if ui.button("Forward test").clicked() {
+                        self.start_live_strategy();
+                    }
+                });
+                if self.live_strategy.is_some() {
+                    return vec![StrategyTesterAction::Report(
+                        self.strategy_report.show_report(ui),
+                    )];
+                }
                 let bars = self.chart.bars(SeriesId::MAIN);
                 self.strategy_report.show(
                     ui,
@@ -105,6 +121,7 @@ impl DemoApp {
             })
             .inner;
         if clear {
+            self.stop_live_strategy();
             self.strategy_report.set_report(None, &[]);
             self.strategy_trade = None;
             self.refresh_strategy_signals();
@@ -400,6 +417,34 @@ mod tests {
                     |s| matches!(&s.shape, Shape::Text(t) if t.galley.text() == "Clear report")
                 ));
                 empty.drop_without_applying_deltas();
+                app.execute_search_command(&ctx, "backtest");
+                for _ in 0..3 {
+                    frame(&mut app, vec![]).drop_without_applying_deltas();
+                }
+                let output = frame(&mut app, vec![]);
+                let forward = text_at(&output, "Forward test");
+                output.drop_without_applying_deltas();
+                click(&mut app, forward);
+                assert!(app.live_strategy.is_some());
+                for _ in 0..3 {
+                    frame(&mut app, vec![]).drop_without_applying_deltas();
+                }
+                let output = frame(&mut app, vec![]);
+                assert!(
+                    !output
+                        .shapes
+                        .iter()
+                        .any(|shape| matches!(&shape.shape, Shape::Text(text)
+                            if text.galley.text() == "Strategy tester")),
+                    "live refreshes must not offer tester jobs that they would cancel"
+                );
+                let stop = text_at(&output, "Stop forward test");
+                output.drop_without_applying_deltas();
+                click(&mut app, stop);
+                assert!(app.live_strategy.is_none());
+                let output = frame(&mut app, vec![]);
+                text_at(&output, "Strategy tester");
+                output.drop_without_applying_deltas();
                 app.execute_search_command(&ctx, "backtest");
                 let report = app
                     .strategy_report

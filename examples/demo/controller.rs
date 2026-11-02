@@ -29,6 +29,8 @@ mod replay;
 mod storage;
 #[path = "strategy.rs"]
 mod strategy;
+#[path = "strategy_live.rs"]
+mod strategy_live;
 #[path = "templates.rs"]
 mod templates;
 use egui_charts::services::StoreKind;
@@ -408,6 +410,7 @@ pub struct DemoApp {
 
     // A finished host-run sample, independent of subsequent chart navigation.
     strategy_report: egui_charts::ui::strategy_report::StrategyTester,
+    live_strategy: Option<(egui_charts::strategies::Backtest, String)>,
     strategy_trade: Option<usize>,
     strategy_session: SessionType,
 
@@ -673,6 +676,7 @@ impl DemoApp {
             export_dialog: ExportDialog::new().with_formats(EXPORT_FORMATS),
             date_picker: DatePicker::new(),
             strategy_report: Default::default(),
+            live_strategy: None,
             strategy_trade: None,
             strategy_session: SessionType::Full24x7,
             object_tree: ObjectTreePanel::new(),
