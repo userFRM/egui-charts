@@ -331,8 +331,9 @@ pub enum AlertCondition {
     },
     /// Test against two boundaries resolved on each evaluated bar. The boundaries may change
     /// order; their minimum and maximum define the inclusive channel. Missing, non-finite or
-    /// coincident boundaries cannot satisfy the condition. Transitions require both previous
-    /// boundaries and the previous source value, just as a crossing requires both previous values.
+    /// coincident boundaries cannot satisfy the condition. On a new bar, transitions resolve the
+    /// source and both boundaries at the preceding bar again. Within a bar they compare with the
+    /// previous evaluation, just as a crossing does.
     Channel {
         /// Stable sources of the two boundary lines, retained through drawing edits and storage.
         boundaries: [AlertSource; 2],

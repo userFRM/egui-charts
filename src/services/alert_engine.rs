@@ -51,6 +51,8 @@ use crate::model::{
 /// previous value strictly below the level and a current value at or above it, crossing down the
 /// reverse; a value that touches the level and stays there fires once. Moving by and volume
 /// above average read the bars before the evaluated one, as [`AlertCondition`] documents.
+/// Moving channels resolve the preceding bar again when a new bar arrives, so edits and
+/// skipped updates use that bar's current geometry. Within a bar they use the previous evaluation.
 ///
 /// *Frequency.* [`Once`](AlertFrequency::Once) fires on the first evaluation that holds and the
 /// alert becomes [`Triggered`](AlertStatus::Triggered); a watchlist alert fires once per member
@@ -484,8 +486,13 @@ fn evaluate<'a>(
         && rules.iter().enumerate().all(|(n, (src, condition))| {
             let [current, a, b] = seen.rules[n];
             let previous = match &run.seen {
-                Some(last) => last.rules[n],
-                None => {
+                Some(last)
+                    if last.time == bar.time
+                        || !matches!(condition, AlertCondition::Channel { .. }) =>
+                {
+                    last.rules[n]
+                }
+                _ => {
                     let previous = |src| index.checked_sub(1).and_then(|at| source(src, at));
                     let [a, b] = condition.partners().map(|other| other.and_then(previous));
                     [previous(src), a, b]
@@ -1223,9 +1230,20 @@ mod tests {
             AlertEngine::new().with_alerts(vec![Alert::new("A", AlertCondition::Above(1.0)), kept]);
         assert_eq!(restored.alerts().len(), 2);
     }
+
     #[test]
     fn moving_channels_resolve_both_boundaries_and_forget_missing_values() {
         // Price stays at 105. Bounds rise 10/bar: [90,100], [100,110], [110,120].
+        let rising = |source: &AlertSource, at: usize| {
+            Some(
+                90.0 + at as f64 * 10.0
+                    + if *source == AlertSource::Drawing("d#1".into()) {
+                        10.0
+                    } else {
+                        0.0
+                    },
+            )
+        };
         for (comparison, expected) in [
             ("Entering", vec![1]),
             ("Exiting", vec![2]),
@@ -1249,16 +1267,7 @@ mod tests {
                     Timeframe::Min1,
                     &bars[..=i],
                     time(1000 + i as i64),
-                    |source, at| {
-                        Some(
-                            90.0 + at as f64 * 10.0
-                                + if *source == AlertSource::Drawing("d#1".into()) {
-                                    10.0
-                                } else {
-                                    0.0
-                                },
-                        )
-                    },
+                    rising,
                 );
                 if !host.fired().is_empty() {
                     fired.push(i);
@@ -1284,25 +1293,42 @@ mod tests {
                     });
                 assert_eq!(!host.fired().is_empty(), fires, "{comparison} {bounds:?}");
             }
+            // A later bar uses the edited drawing at the preceding bar, even after skipped updates.
+            for (last, current) in [(0, 2), (1, 2)] {
+                let host = Host::new(vec![watching.clone()]);
+                host.events();
+                host.engine.update(
+                    "SYM",
+                    Timeframe::Min1,
+                    &bars[..=last],
+                    time(1020),
+                    |source, _| {
+                        Some(if *source == AlertSource::Drawing("d#1".into()) {
+                            210.0
+                        } else {
+                            200.0
+                        })
+                    },
+                );
+                host.fired();
+                host.engine.update(
+                    "SYM",
+                    Timeframe::Min1,
+                    &bars[..=current],
+                    time(1030),
+                    rising,
+                );
+                assert_eq!(
+                    !host.fired().is_empty(),
+                    comparison == "Exiting" || comparison == "Outside",
+                    "{comparison}: changed geometry after bar {last}",
+                );
+            }
             // First evaluation on bar 1 must use bar 0's bounds, not bar 1's bounds twice.
             let host = Host::new(host.engine.alerts());
             host.events();
-            host.engine.update(
-                "SYM",
-                Timeframe::Min1,
-                &bars[..2],
-                time(1020),
-                |source, at| {
-                    Some(
-                        90.0 + at as f64 * 10.0
-                            + if *source == AlertSource::Drawing("d#1".into()) {
-                                10.0
-                            } else {
-                                0.0
-                            },
-                    )
-                },
-            );
+            host.engine
+                .update("SYM", Timeframe::Min1, &bars[..2], time(1020), rising);
             assert_eq!(
                 !host.fired().is_empty(),
                 comparison == "Entering" || comparison == "Inside"
