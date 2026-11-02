@@ -17,7 +17,7 @@
 use std::{cell::RefCell, collections::HashMap, ops::Range, rc::Rc};
 
 use crate::localization as l10n;
-use crate::painting::span_cache::SpanCache;
+use crate::painting::span_cache::{SpanCache, SpanFingerprint};
 use crate::scales::PriceMap;
 use egui::emath::GuiRounding as _;
 use egui::text::{LayoutJob, TextFormat};
@@ -127,9 +127,19 @@ struct CachedProfile {
     profiles: Rc<Vec<TPOProfile>>,
 }
 
+type ProfileUnits = Vec<(usize, usize, Rc<Vec<TPOProfile>>)>;
+
+struct CachedProfiles {
+    span: SpanFingerprint,
+    config: TPOConfig,
+    clock: BarClock,
+    units: Rc<ProfileUnits>,
+}
+
 thread_local! {
     static GRID_CACHE: RefCell<SpanCache<f64, u64>> = const { RefCell::new(SpanCache::new(8)) };
     static PROFILE_CACHE: RefCell<Vec<CachedProfile>> = const { RefCell::new(Vec::new()) };
+    static PROFILES_CACHE: RefCell<Vec<CachedProfiles>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Whether profiles built with `old` equal those built with `new`.
@@ -202,13 +212,48 @@ fn whole_sessions(
 /// Profiles of the sessions in `bars`, each with the index of its first bar and its bar count,
 /// reusing those whose inputs are unchanged. Sessions in one composite are built together.
 fn cached_profiles(
+    bars: &[Bar],
+    revision: u64,
+    start_idx: usize,
+    config: &TPOConfig,
+    clock: &BarClock,
+    sessions: &ExchangeSessionProvider,
+) -> Rc<ProfileUnits> {
+    let span = SpanFingerprint::of(start_idx, bars, revision);
+    PROFILES_CACHE.with_borrow_mut(|cache| {
+        if let Some(at) = cache.iter().position(|entry| {
+            entry.span == span && same_profiles(&entry.config, config) && entry.clock == *clock
+        }) {
+            let entry = cache.remove(at);
+            let units = Rc::clone(&entry.units);
+            cache.push(entry);
+            return units;
+        }
+        // Fitting and painting share the same sessions without rebuilding their lookup tables.
+        let units = Rc::new(build_profiles(
+            bars, revision, start_idx, config, clock, sessions,
+        ));
+        if cache.len() >= 8 {
+            cache.remove(0);
+        }
+        cache.push(CachedProfiles {
+            span,
+            config: config.clone(),
+            clock: clock.clone(),
+            units: Rc::clone(&units),
+        });
+        units
+    })
+}
+
+fn build_profiles(
     mut bars: &[Bar],
     revision: u64,
     mut start_idx: usize,
     config: &TPOConfig,
     clock: &BarClock,
     sessions: &ExchangeSessionProvider,
-) -> Vec<(usize, usize, Rc<Vec<TPOProfile>>)> {
+) -> ProfileUnits {
     // Sessions must share the visible series' grid, including when only one session changes.
     let tick = config.tick_size;
     let grid = GRID_CACHE.with_borrow_mut(|cache| {
@@ -1887,6 +1932,7 @@ mod tests {
         // (input change, reused sessions, letters per session, first letter, row height)
         let cases = [
             ("steady", [true, true], [6, 3], 'A', 1.0),
+            ("display", [true, true], [6, 3], 'A', 1.0),
             ("forming bar", [true, false], [6, 4], 'A', 1.0),
             ("revision", [false, false], [6, 4], 'A', 1.0),
             ("older correction", [false, false], [7, 4], 'A', 1.0),
@@ -1904,6 +1950,7 @@ mod tests {
         for (change, reused, counts, first_letter, tick) in cases {
             match change {
                 "steady" | "steady NaN" => {}
+                "display" => config.display_mode = TPODisplayMode::Blocks,
                 "forming bar" => bars[2].high = 103.0,
                 "revision" => revision += 1,
                 "older correction" => {
@@ -1929,6 +1976,22 @@ mod tests {
                 &clock,
                 &sessions(&clock),
             );
+            assert_eq!(
+                Rc::ptr_eq(&current, &previous),
+                matches!(change, "steady" | "display" | "steady NaN"),
+                "session lookup reuse: {change}"
+            );
+            assert!(Rc::ptr_eq(
+                &current,
+                &cached_profiles(
+                    &bars,
+                    revision,
+                    start_idx,
+                    &config,
+                    &clock,
+                    &sessions(&clock),
+                ),
+            ));
             assert_eq!(current.len(), 2, "{change}");
             for (i, profile) in current.iter().enumerate() {
                 assert_eq!(
