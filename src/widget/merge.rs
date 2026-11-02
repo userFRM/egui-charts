@@ -98,7 +98,8 @@ pub(super) struct Group {
 
 /// The groups of the main bars at the frame's factor, rebuilt when the bars, the factor or the
 /// price source change, so a frame that only pans or hovers does not read every bar in view.
-/// Appending or updating the last bar keeps the revision, so it rebuilds the last group only.
+/// Appending or updating the last bar keeps the revision, so it rebuilds the last group only;
+/// a frame whose bars are unchanged rebuilds nothing.
 #[derive(Default)]
 pub(super) struct Groups {
     key: Option<(u64, usize, PriceSource)>,
