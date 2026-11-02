@@ -29,16 +29,15 @@ impl Chart {
     /// applied bars, including a replay cutoff; it does not poll a connected feed.
     /// Disabled conflation and price-based chart types return 1 and clear the groups.
     pub fn prepare_conflation(&mut self, bar_spacing: f32, pixels_per_point: f32) -> usize {
-        let factor = super::merge::factor(
-            bar_spacing,
-            pixels_per_point,
-            self.config.conflation_threshold,
-        )
-        .min(if self.chart_type.is_time_independent() {
+        let factor = if self.chart_type.is_time_independent() {
             1
         } else {
-            usize::MAX
-        });
+            super::merge::factor(
+                bar_spacing,
+                pixels_per_point,
+                self.config.conflation_threshold,
+            )
+        };
         self.merge_groups.update(
             &self.state.data().bars,
             self.state.revision(),

@@ -113,18 +113,7 @@ impl Groups {
     pub fn update(&mut self, bars: &[Bar], revision: u64, factor: usize, source: PriceSource) {
         if self.key == Some((revision, factor, source))
             && self.len == bars.len()
-            && match (self.tail.as_ref(), bars.last()) {
-                (None, None) => true,
-                (Some(old), Some(last)) => {
-                    old.time == last.time
-                        && [old.open, old.high, old.low, old.close, old.volume].map(f64::to_bits)
-                            == [last.open, last.high, last.low, last.close, last.volume]
-                                .map(f64::to_bits)
-                        && old.colors == last.colors
-                        && old.payload == last.payload
-                }
-                _ => false,
-            }
+            && self.tail.as_ref() == bars.last()
         {
             return;
         }

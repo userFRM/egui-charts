@@ -251,17 +251,6 @@ impl SessionConfig {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct ChartConfig {
-    /// Minimum spacing in physical pixels for unmerged main-series samples; `None` disables
-    /// conflation. The default, `Some(1.0)`, preserves the one-pixel grouping. Below the
-    /// threshold, consecutive bars form groups of the smallest power of two whose spacing
-    /// reaches it, capped at 2^30 bars. For example, 0.25 points at two pixels per point gives
-    /// groups of two at a threshold of 1, and four at a threshold of 2. Equality stays unmerged.
-    /// Non-positive and non-finite thresholds use 1. Price-based chart types stay unmerged;
-    /// gaps and per-bar colours keep their source samples even within a group.
-    /// [`Chart::prepare_conflation`](crate::Chart::prepare_conflation) prepares these groups
-    /// before rendering. Saved configurations without this field keep the default.
-    #[serde(default = "pixel_conflation_threshold")]
-    pub conflation_threshold: Option<f32>,
     /// Color for bullish (up) bars/candles body
     pub bullish_color: Color32,
     /// Color for bearish (down) bars/candles body
@@ -276,6 +265,17 @@ pub struct ChartConfig {
     pub bearish_wick_color: Option<Color32>,
     /// Price source for line-based charts (Line, Area, StepLine, etc.)
     pub price_source: PriceSource,
+    /// Minimum spacing in physical pixels for unmerged main-series samples; `None` disables
+    /// conflation. The default, `Some(1.0)`, preserves the one-pixel grouping. Below the
+    /// threshold, consecutive bars form groups of the smallest power of two whose spacing
+    /// reaches it, capped at 2^30 bars. For example, 0.25 points at two pixels per point gives
+    /// groups of two at a threshold of 1, and four at a threshold of 2. Equality stays unmerged.
+    /// Non-positive and non-finite thresholds use 1. Price-based chart types stay unmerged;
+    /// gaps and per-bar colours keep their source samples even within a group.
+    /// [`Chart::prepare_conflation`](crate::Chart::prepare_conflation) prepares these groups
+    /// before rendering. Saved configurations without this field keep the default.
+    #[serde(default = "pixel_conflation_threshold")]
+    pub conflation_threshold: Option<f32>,
     /// Background color for the chart (used when background_style is Solid)
     pub background_color: Color32,
     /// Background style (Solid, VerticalGradient, HorizontalGradient)
@@ -491,7 +491,6 @@ impl Default for ChartConfig {
     fn default() -> Self {
         let chart = Theme::dark().chart;
         Self {
-            conflation_threshold: pixel_conflation_threshold(),
             bullish_color: chart.candle_up,
             bearish_color: chart.candle_down,
             // Border colors (None = same as body)
@@ -502,6 +501,7 @@ impl Default for ChartConfig {
             bearish_wick_color: None,
             // Price source for line charts (default: Close)
             price_source: PriceSource::default(),
+            conflation_threshold: pixel_conflation_threshold(),
             // Dark background
             background_color: chart.bg,
             // Default to solid background
