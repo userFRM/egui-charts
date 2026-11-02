@@ -443,6 +443,15 @@ impl Chart {
                 transform.to_scale(shared_range.0),
                 transform.to_scale(shared_range.1),
             );
+            let marker_map = pane_scale.map(transform, panel_rect.top(), panel_rect.bottom());
+            let marker_bounds: Vec<_> = series
+                .iter()
+                .flat_map(|at| {
+                    self.series_marker_bounds(ui.painter(), self.price_series[*at].id, marker_map)
+                })
+                .collect();
+            let pane_scale = &mut self.pane_layout.panes[pane_idx].scale;
+            Self::fit_marker_bounds(pane_scale, panel_rect, marker_bounds);
             let map = pane_scale
                 .map(transform, panel_rect.top(), panel_rect.bottom())
                 .with_thousands_sep(thousands_sep);

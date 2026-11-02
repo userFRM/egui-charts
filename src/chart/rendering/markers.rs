@@ -20,8 +20,6 @@ pub fn render_markers<'a>(
     coords: &ChartMapping,
 ) -> Vec<(&'a Marker, Rect)> {
     let mut hits = Vec::new();
-    let price_y =
-        |marker: &Marker, bar: &Bar| price_scale.price_to_y(marker.price.unwrap_or(bar.close));
     let mut tooltip_shown = false;
     let theme = context.painter.ctx().active_theme().chart;
     let background = theme.bg;
@@ -37,29 +35,14 @@ pub fn render_markers<'a>(
                 continue;
             }
 
-            // The bar's ends on screen; the high is the lower end on an inverted scale.
-            let (high_y, low_y) = (
-                price_scale.price_to_y(bar.high),
-                price_scale.price_to_y(bar.low),
-            );
-            let (top, bottom) = (high_y.min(low_y), high_y.max(low_y));
-
-            // Calculate Y position based on marker position setting
             let y = match marker.position {
-                MarkerPos::AboveBar => top - 20.0 * marker.size,
-                MarkerPos::BelowBar => bottom + 20.0 * marker.size,
-                MarkerPos::InBar => price_scale.price_to_y(bar.close),
                 MarkerPos::Top => context.rect.top() + 20.0 * marker.size,
                 MarkerPos::Bottom => context.rect.bottom() - 20.0 * marker.size,
-                MarkerPos::Left | MarkerPos::Right | MarkerPos::Absolute => {
-                    price_scale.price_to_y(bar.close)
+                _ => {
+                    let (price, offset) =
+                        marker_anchor(marker, bar, price_scale).expect("a price-relative marker");
+                    price_scale.price_to_y(price) + offset
                 }
-                MarkerPos::AbsoluteUp => top - 10.0 * marker.size,
-                MarkerPos::AbsoluteDown => bottom + 10.0 * marker.size,
-                // Offset by the shape's half size, 8 points at size 1.
-                MarkerPos::AtPriceTop => price_y(marker, bar) - 8.0 * marker.size,
-                MarkerPos::AtPriceBottom => price_y(marker, bar) + 8.0 * marker.size,
-                MarkerPos::AtPriceMiddle => price_y(marker, bar),
             };
             if !y.is_finite() {
                 continue;
@@ -121,6 +104,74 @@ pub fn render_markers<'a>(
         }
     }
     hits
+}
+
+/// The price anchor and screen offset shared by painting and fitting. Pane-edge positions
+/// do not move with the price range.
+fn marker_anchor(marker: &Marker, bar: &Bar, map: &PriceMap) -> Option<(f64, f32)> {
+    // A flat range puts both ends at the same y, so choose the anchor in scale units.
+    let (high, low) = (
+        map.transform().to_scale(bar.high),
+        map.transform().to_scale(bar.low),
+    );
+    let reversed = (map.extent().0 > map.extent().1) ^ (map.range().min > map.range().max);
+    let (top, bottom) = if map.is_inverted() ^ reversed {
+        (high.min(low), high.max(low))
+    } else {
+        (high.max(low), high.min(low))
+    };
+    let price = |value| if value == high { bar.high } else { bar.low };
+    let (top, bottom) = (price(top), price(bottom));
+    let (price, offset) = match marker.position {
+        MarkerPos::AboveBar => (top, -20.0),
+        MarkerPos::BelowBar => (bottom, 20.0),
+        MarkerPos::AbsoluteUp => (top, -10.0),
+        MarkerPos::AbsoluteDown => (bottom, 10.0),
+        MarkerPos::AtPriceTop => (marker.price.unwrap_or(bar.close), -8.0),
+        MarkerPos::AtPriceBottom => (marker.price.unwrap_or(bar.close), 8.0),
+        MarkerPos::AtPriceMiddle => (marker.price.unwrap_or(bar.close), 0.0),
+        MarkerPos::InBar | MarkerPos::Left | MarkerPos::Right | MarkerPos::Absolute => {
+            (bar.close, 0.0)
+        }
+        MarkerPos::Top | MarkerPos::Bottom => return None,
+    };
+    Some((price, offset * marker.size))
+}
+
+/// A marker's price anchor and its painted extent above and below it, in points, including
+/// strokes and the text background. Text uses the same font layout as the renderer.
+pub(crate) fn marker_bounds(
+    painter: &Painter,
+    marker: &Marker,
+    bar: &Bar,
+    map: &PriceMap,
+) -> Option<(f64, f32, f32)> {
+    if !marker.size.is_finite() || marker.size <= 0.0 {
+        return None;
+    }
+    let (price, offset) = marker_anchor(marker, bar, map)?;
+    let base = 8.0 * marker.size;
+    let (top, bottom) = match marker.shape {
+        MarkerShape::ArrowUp | MarkerShape::TriangleUp => (-base * 1.2, base * 0.6),
+        MarkerShape::ArrowDown | MarkerShape::TriangleDown => (-base * 0.6, base * 1.2),
+        MarkerShape::Cross => (-base * 1.2, base * 1.2),
+        MarkerShape::Flag => (-base * 1.2, base * 2.0),
+        _ => (-base, base),
+    };
+    // Allow the outside square outline, polygon joins and antialiasing at the pane edge.
+    let stroke = DESIGN_TOKENS.stroke.thick;
+    let (mut top, mut bottom) = (top - stroke, bottom + stroke);
+    if let Some(text) = &marker.text {
+        let galley = painter.layout_no_wrap(
+            text.clone(),
+            FontId::proportional(10.0 * marker.size),
+            Color32::WHITE,
+        );
+        let y = 12.0 * marker.size;
+        top = top.min(y + galley.mesh_bounds.top().min(-1.0));
+        bottom = bottom.max(y + galley.mesh_bounds.bottom().max(galley.size().y + 1.0));
+    }
+    Some((price, -offset - top, offset + bottom))
 }
 
 /// A marker colour with `PLACEHOLDER` resolved to the theme's text colour.

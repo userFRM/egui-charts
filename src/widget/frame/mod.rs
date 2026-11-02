@@ -1021,6 +1021,7 @@ impl Chart {
                 }
             }
         }
+        self.fit_marker_scales(&painter, price_rect);
         self.apply_price_zoom(pending_price_zoom, &response, price_rect, transform);
         let bar_spacing = self.state.time_scale().bar_spacing();
         if self.config.lock_price_to_bar_ratio != self.last_ratio_lock {
