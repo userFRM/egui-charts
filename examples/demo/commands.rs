@@ -99,25 +99,32 @@ pub(super) fn quick_search_commands() -> Vec<Command> {
 
 impl DemoApp {
     pub(super) fn show_showcase(&mut self, ui: &mut egui::Ui) {
-        egui::TopBottomPanel::top("demo_showcase").show_inside(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                self.show_readout_controls(ui);
-                self.show_appearance_controls(ui);
-                self.show_formatting_controls(ui);
-                ui.menu_button("Showcase", |ui| {
-                    ui.set_max_width(360.0);
-                    ui.label("Explore the demo's synthetic data");
-                    ui.separator();
-                    for &(id, label, description) in SAMPLES {
-                        if ui.button(label).clicked() {
-                            self.execute_search_command(ui.ctx(), id);
-                            ui.close();
+        egui::Panel::top("demo_showcase")
+            .resizable(false)
+            .exact_size(28.0)
+            .frame(
+                super::panel_frame(self.theme.ui.panel_bg)
+                    .inner_margin(egui::Margin::symmetric(8, 2)),
+            )
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    self.show_readout_controls(ui);
+                    self.show_appearance_controls(ui);
+                    self.show_formatting_controls(ui);
+                    ui.menu_button("Showcase", |ui| {
+                        ui.set_max_width(360.0);
+                        ui.label("Explore the demo's synthetic data");
+                        ui.separator();
+                        for &(id, label, description) in SAMPLES {
+                            if ui.button(label).clicked() {
+                                self.execute_search_command(ui.ctx(), id);
+                                ui.close();
+                            }
+                            ui.small(description);
                         }
-                        ui.small(description);
-                    }
+                    });
                 });
             });
-        });
     }
 
     fn enable_samples(&mut self) {

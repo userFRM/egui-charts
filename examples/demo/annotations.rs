@@ -8,7 +8,9 @@ impl DemoApp {
         egui::Popup::menu(&ui.button("Readout"))
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show(|ui| {
-                let options = &mut self.chart.chart_options_mut().tooltip;
+                let mut chart_options = self.chart.chart_options().clone();
+                let previous = chart_options.tooltip.clone();
+                let options = &mut chart_options.tooltip;
                 ui.checkbox(&mut options.enabled, "Show readout");
                 for mode in [
                     TooltipMode::Floating,
@@ -38,6 +40,10 @@ impl DemoApp {
                     ui.checkbox(&mut options.show_change, "Change");
                     ui.checkbox(&mut options.show_indicators, "Studies");
                     ui.checkbox(&mut options.show_volume_details, "Held volume details");
+                }
+                if chart_options.tooltip != previous {
+                    self.chart.set_chart_options(chart_options);
+                    ui.ctx().request_repaint();
                 }
             });
     }
