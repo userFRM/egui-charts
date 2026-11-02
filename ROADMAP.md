@@ -14,8 +14,8 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Line, line with markers, step line, area, HLC area, baseline, columns and high-low charts; line and area charts accept a `PriceSource`.
 - [x] Heikin-Ashi, Renko, Kagi, line break, point and figure, and range-bar transformations and rendering.
 - [x] Renko box sizing and wicks, line-break lookback, and price-based chart parameters are configurable.
-- [x] Market Profile (TPO) uses exchange sessions or calendar days, with letters or blocks, initial balance, point of control, value area and composite profiles.
-- [x] Volume Footprint and Session Volume Profile aggregate supplied executions on time-based intervals with an instrument tick size; unsupported intervals and bars without retained trades use candles. Session profiles require `studies`.
+- [x] Market Profile (TPO) uses exchange sessions or calendar days, with letters or blocks, initial balance, point of control, value area and composite profiles; autoscale fits the full displayed distributions and cropped profiles retain their session and central-level readouts.
+- [x] Volume Footprint and Session Volume Profile aggregate supplied executions on time-based intervals with an instrument tick size; unsupported intervals and bars without retained trades use candles. Session profiles require `studies`; autoscale includes their full price rows after range edits, and manual crops retain session and POC/value-area readouts.
 - [ ] Change Kagi line thickness at shoulder and waist crossings within a continuing leg.
 - [ ] Expose the standalone point-and-figure close-only source in chart parameters and settings.
 - [x] Range charts build their bars from the supplied executions, falling back to the OHLC approximation while the chart holds none; `Chart::range_bar_source` reports which one is shown.
@@ -148,7 +148,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 ### Footprints, Delta and Profiles
 
 - [x] `Footprint` aggregates bid, ask and unknown volume by bar and integer tick row, with execution-size filtering.
-- [x] Footprint cells support bid/ask, total volume, delta and delta-plus-volume modes, up to four columns per bar, profile or boxed rendering, automatic row grouping and opening/closing price ticks in a separate gutter.
+- [x] Footprint cells support bid/ask, total volume, delta and delta-plus-volume modes, up to four columns per bar, profile or boxed rendering, automatic row grouping and opening/closing price ticks in a separate gutter; their values have clearance from underlying price guides.
 - [x] Per-bar point of control, value area and horizontal/diagonal imbalance highlighting; compact values fit detail columns and POC outlines recede in the overview.
 - [x] Public calculations and renderers expose stacked diagonal imbalance zones, unrevisited POC levels, volume clusters and per-bar statistics; annotation captions avoid footprint values, with compact overview marks and hover details. Statistics use shared row labels, aligned compact values, explicit percentages and ratios, and a zoom-in or resize notice when detail cannot fit.
 - [x] Execution-based delta histograms and cumulative-delta candles, including intrabar extremes and configurable reset boundaries, render in a supplied pane mapping. The cumulative execution study offers optional confirmed divergence and exhaustion price markers, with study outputs for bar-close alerts.

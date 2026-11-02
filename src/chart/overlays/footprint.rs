@@ -3,6 +3,7 @@
 use crate::chart::coords::ChartMapping;
 use crate::data::{Footprint, FootprintBar, FootprintLevel, NodeSensitivity};
 use crate::model::Bar;
+use crate::theme::ThemeExt;
 use egui::epaint::{Galley, Mesh, Shape};
 use egui::{Align2, Color32, FontId, Painter, Rect, Stroke, StrokeKind, pos2, vec2};
 use serde::{Deserialize, Serialize};
@@ -206,6 +207,7 @@ pub fn render_footprint(
     let background = painter.add(Shape::Noop);
     let mut mesh = Mesh::default();
     let columns = config.modes.len().min(4);
+    let text_background = painter.ctx().active_theme().chart.bg.to_opaque();
     // Use the existing half-gap so price markers do not shrink execution columns.
     let gutter = (mapping.bar_spacing * 0.04).min(2.5);
     // Bars cut by dropped executions are drawn as candles, not as complete footprint bars.
@@ -314,12 +316,6 @@ pub fn render_footprint(
                     continue;
                 }
                 let color = cell_color(shown, row, max_volume, max_delta, config);
-                if area.is_some_and(|(low, high)| (low..=high).contains(&row.level)) {
-                    mesh.add_colored_rect(
-                        rect.intersect(mapping.rect),
-                        config.neutral_color.gamma_multiply(0.12),
-                    );
-                }
                 let share = if config.profile && max_volume > 0.0 {
                     (row.volume() / max_volume) as f32
                 } else {
@@ -329,21 +325,22 @@ pub fn render_footprint(
                     rect.min,
                     vec2(rect.width() * share, rect.height().max(1.0)),
                 );
+                let mut fills = [
+                    area.is_some_and(|(low, high)| (low..=high).contains(&row.level))
+                        .then_some((rect, config.neutral_color.gamma_multiply(0.12))),
+                    Some((fill, color.gamma_multiply(0.5))),
+                    None,
+                ];
                 if config.color_by == FootprintColor::Imbalance
                     && shown.imbalance(row.level, config.imbalance_ratio, config.diagonal)
                         == (true, true)
                 {
                     let (bid, ask) = fill.split_left_right_at_x(fill.center().x);
-                    mesh.add_colored_rect(
-                        bid.intersect(mapping.rect),
-                        config.bid_color.gamma_multiply(0.5),
-                    );
-                    mesh.add_colored_rect(
-                        ask.intersect(mapping.rect),
-                        config.ask_color.gamma_multiply(0.5),
-                    );
-                } else {
-                    mesh.add_colored_rect(fill.intersect(mapping.rect), color.gamma_multiply(0.5));
+                    fills[1] = Some((bid, config.bid_color.gamma_multiply(0.5)));
+                    fills[2] = Some((ask, config.ask_color.gamma_multiply(0.5)));
+                }
+                for &(fill, color) in fills.iter().flatten() {
+                    mesh.add_colored_rect(fill.intersect(mapping.rect), color);
                 }
                 if pullback.is_some_and(|(low, high)| (low..=high).contains(&row.level)) {
                     painter.rect_stroke(
@@ -398,6 +395,18 @@ pub fn render_footprint(
                             .rect
                             .contains_rect(Rect::from_min_size(at, galley.size()))
                         {
+                            // Replay the cell fills over an opaque patch so underlays cannot
+                            // show through the numbers, keeping their existing cell colours.
+                            let backing = Rect::from_min_size(at, galley.size())
+                                .expand2(vec2(2.0, 1.0))
+                                .intersect(rect)
+                                .intersect(mapping.rect);
+                            mesh.add_colored_rect(backing, text_background);
+                            for &(fill, color) in fills.iter().flatten() {
+                                if fill.intersects(backing) {
+                                    mesh.add_colored_rect(fill.intersect(backing), color);
+                                }
+                            }
                             painter.galley(at, galley, config.text_color);
                         }
                     }

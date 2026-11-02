@@ -380,7 +380,7 @@ mod tests {
                 state.time_scale_mut().set_width(40.0);
                 state.time_scale_mut().set_bar_spacing(40.0);
                 state.price_scale_mut().options_mut().mode = mode;
-                let transform = state.fit_price_scale_with_series(
+                let (transform, _) = state.fit_price_scale_with_series(
                     [&study as &dyn Indicator],
                     None,
                     false,

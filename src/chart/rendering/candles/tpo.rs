@@ -17,7 +17,7 @@
 use std::{cell::RefCell, collections::HashMap, ops::Range, rc::Rc};
 
 use crate::localization as l10n;
-use crate::painting::span_cache::SpanCache;
+use crate::painting::span_cache::{SpanCache, SpanFingerprint};
 use crate::scales::PriceMap;
 use egui::emath::GuiRounding as _;
 use egui::text::{LayoutJob, TextFormat};
@@ -127,9 +127,20 @@ struct CachedProfile {
     profiles: Rc<Vec<TPOProfile>>,
 }
 
+type ProfileUnits = Vec<(usize, usize, Rc<Vec<TPOProfile>>)>;
+
+struct CachedProfiles {
+    span: SpanFingerprint,
+    last_time: Option<chrono::DateTime<chrono::Utc>>,
+    config: TPOConfig,
+    clock: BarClock,
+    units: Rc<ProfileUnits>,
+}
+
 thread_local! {
     static GRID_CACHE: RefCell<SpanCache<f64, u64>> = const { RefCell::new(SpanCache::new(8)) };
     static PROFILE_CACHE: RefCell<Vec<CachedProfile>> = const { RefCell::new(Vec::new()) };
+    static PROFILES_CACHE: RefCell<Vec<CachedProfiles>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Whether profiles built with `old` equal those built with `new`.
@@ -202,13 +213,53 @@ fn whole_sessions(
 /// Profiles of the sessions in `bars`, each with the index of its first bar and its bar count,
 /// reusing those whose inputs are unchanged. Sessions in one composite are built together.
 fn cached_profiles(
+    bars: &[Bar],
+    revision: u64,
+    start_idx: usize,
+    config: &TPOConfig,
+    clock: &BarClock,
+    sessions: &ExchangeSessionProvider,
+) -> Rc<ProfileUnits> {
+    let span = SpanFingerprint::of(start_idx, bars, revision);
+    let last_time = bars.last().map(|bar| bar.time);
+    PROFILES_CACHE.with_borrow_mut(|cache| {
+        if let Some(at) = cache.iter().position(|entry| {
+            entry.span == span
+                && entry.last_time == last_time
+                && same_profiles(&entry.config, config)
+                && entry.clock == *clock
+        }) {
+            let entry = cache.remove(at);
+            let units = Rc::clone(&entry.units);
+            cache.push(entry);
+            return units;
+        }
+        // Fitting and painting share the same sessions without rebuilding their lookup tables.
+        let units = Rc::new(build_profiles(
+            bars, revision, start_idx, config, clock, sessions,
+        ));
+        if cache.len() >= 8 {
+            cache.remove(0);
+        }
+        cache.push(CachedProfiles {
+            span,
+            last_time,
+            config: config.clone(),
+            clock: clock.clone(),
+            units: Rc::clone(&units),
+        });
+        units
+    })
+}
+
+fn build_profiles(
     mut bars: &[Bar],
     revision: u64,
     mut start_idx: usize,
     config: &TPOConfig,
     clock: &BarClock,
     sessions: &ExchangeSessionProvider,
-) -> Vec<(usize, usize, Rc<Vec<TPOProfile>>)> {
+) -> ProfileUnits {
     // Sessions must share the visible series' grid, including when only one session changes.
     let tick = config.tick_size;
     let grid = GRID_CACHE.with_borrow_mut(|cache| {
@@ -331,6 +382,45 @@ pub fn render_live_tpo(
     bullish_color: Color32,
     bearish_color: Color32,
 ) {
+    let render_config = TpoRenderConfig {
+        poc_color: painter.ctx().active_theme().ui.text,
+        ..Default::default()
+    };
+    visit_profiles(
+        full_data,
+        visible,
+        revision,
+        (base_config, instrument_tick),
+        clock,
+        (price_map, price_rect, |i| idx_to_coord(i, chart_rect_min_x)),
+        |profile, config, anchor_x, column_width, labels| {
+            draw_session_profile(
+                painter,
+                price_rect,
+                price_map,
+                profile,
+                config,
+                &render_config,
+                anchor_x,
+                column_width,
+                labels,
+                bullish_color,
+                bearish_color,
+            );
+        },
+    );
+}
+
+/// Visits the renderer's placed distributions, for painting and price fitting.
+pub(crate) fn visit_profiles(
+    full_data: &[Bar],
+    visible: Range<usize>,
+    revision: u64,
+    (base_config, instrument_tick): (&TPOConfig, Option<f64>),
+    clock: &BarClock,
+    (price_map, price_rect, idx_to_coord): (&PriceMap, Rect, impl Fn(usize) -> f32),
+    mut visit: impl FnMut(&TPOProfile, &TPOConfig, f32, f32, bool),
+) {
     if visible.is_empty() || visible.end > full_data.len() {
         return;
     }
@@ -350,32 +440,14 @@ pub fn render_live_tpo(
         clock,
         &sessions,
     );
-    let render_config = TpoRenderConfig {
-        poc_color: painter.ctx().active_theme().ui.text,
-        ..Default::default()
-    };
     place_profiles(
         &units,
         full_data,
         price_rect,
         &config,
         &sessions,
-        |i| idx_to_coord(i, chart_rect_min_x),
-        |profile, anchor_x, column_width, labels| {
-            draw_session_profile(
-                painter,
-                price_rect,
-                price_map,
-                profile,
-                &config,
-                &render_config,
-                anchor_x,
-                column_width,
-                labels,
-                bullish_color,
-                bearish_color,
-            );
-        },
+        idx_to_coord,
+        |profile, anchor, column, labels| visit(profile, &config, anchor, column, labels),
     );
 }
 
@@ -1866,6 +1938,7 @@ mod tests {
         // (input change, reused sessions, letters per session, first letter, row height)
         let cases = [
             ("steady", [true, true], [6, 3], 'A', 1.0),
+            ("display", [true, true], [6, 3], 'A', 1.0),
             ("forming bar", [true, false], [6, 4], 'A', 1.0),
             ("revision", [false, false], [6, 4], 'A', 1.0),
             ("older correction", [false, false], [7, 4], 'A', 1.0),
@@ -1873,6 +1946,7 @@ mod tests {
             ("append", [true, false], [7, 4], 'A', 1.0),
             ("last bits", [true, false], [7, 4], 'A', 1.0),
             ("last time", [true, false], [7, 8], 'A', 1.0),
+            ("last fraction", [true, false], [7, 8], 'A', 1.0),
             ("steady NaN", [true, true], [7, 8], 'A', 1.0),
             ("period", [false, false], [4, 4], 'A', 1.0),
             ("letters", [false, false], [4, 4], 'x', 1.0),
@@ -1883,6 +1957,7 @@ mod tests {
         for (change, reused, counts, first_letter, tick) in cases {
             match change {
                 "steady" | "steady NaN" => {}
+                "display" => config.display_mode = TPODisplayMode::Blocks,
                 "forming bar" => bars[2].high = 103.0,
                 "revision" => revision += 1,
                 "older correction" => {
@@ -1892,6 +1967,9 @@ mod tests {
                 "start index" => start_idx += 1,
                 "append" => bars.push(bars.last().unwrap().clone()),
                 "last time" => bars.last_mut().unwrap().time += chrono::Duration::minutes(30),
+                "last fraction" => {
+                    bars.last_mut().unwrap().time += chrono::Duration::nanoseconds(1);
+                }
                 "last bits" => bars.last_mut().unwrap().volume = f64::NAN,
                 "period" => config.period_minutes = 60,
                 "letters" => config.custom_letters = Some("xy".into()),
@@ -1908,6 +1986,22 @@ mod tests {
                 &clock,
                 &sessions(&clock),
             );
+            assert_eq!(
+                Rc::ptr_eq(&current, &previous),
+                matches!(change, "steady" | "display" | "steady NaN"),
+                "session lookup reuse: {change}"
+            );
+            assert!(Rc::ptr_eq(
+                &current,
+                &cached_profiles(
+                    &bars,
+                    revision,
+                    start_idx,
+                    &config,
+                    &clock,
+                    &sessions(&clock),
+                ),
+            ));
             assert_eq!(current.len(), 2, "{change}");
             for (i, profile) in current.iter().enumerate() {
                 assert_eq!(
