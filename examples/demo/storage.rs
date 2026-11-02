@@ -433,8 +433,10 @@ mod tests {
             app.chart.price_scale_mut().set_range(2.0, 6.0);
             app.chart
                 .set_crosshair_style(egui_charts::config::CrosshairStyle::Dot);
-            app.chart.chart_options_mut().time_scale.timezone =
-                egui_charts::scales::TimezoneMode::Timezone("+05:45".parse().unwrap());
+            let mut settings =
+                egui_charts::widget::settings::ChartSettingsState::from_chart(&app.chart);
+            settings.timezone = "+05:45".into();
+            app.apply_chart_settings(settings);
             app.save(&mut storage);
             app = restart(&ctx, &storage);
             assert_eq!(app.layout.mode, mode);
