@@ -1,4 +1,4 @@
-//! Commands exposed by the demo's quick search.
+//! Quick-search commands, sample scenes and image layout composition for the demo.
 
 use super::{DemoApp, TopToolbarAction};
 use eframe::egui;
@@ -258,7 +258,7 @@ impl DemoApp {
                     &mut scene.chart
                 }
             };
-            chart.set_theme(ui.ctx(), &self.theme);
+            chart.set_theme_override(Some(self.theme.clone()));
             chart.show(ui);
         });
         true
@@ -387,7 +387,7 @@ mod tests {
                     let mut theme = app.theme.clone();
                     let [r, g, b] = colors[slot];
                     theme.chart.bg = egui::Color32::from_rgb(r, g, b);
-                    chart.set_theme(&ctx, &theme);
+                    chart.set_theme_override(Some(theme));
                     chart.config_mut().show_volume = false;
                 }
             }
