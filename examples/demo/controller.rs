@@ -12,6 +12,8 @@ mod audio;
 mod commands;
 #[path = "annotations.rs"]
 mod annotations;
+#[path = "formatting.rs"]
+mod formatting;
 #[path = "images.rs"]
 mod images;
 #[path = "interval.rs"]
@@ -371,7 +373,7 @@ pub struct DemoApp {
     pub bars: Vec<Bar>,
     pub theme: Theme,
     /// No explicit choice follows the system appearance without saving its current value.
-    theme_choice: Option<bool>,
+    theme_choice: Option<String>,
 
     // Persistent toolbars.
     pub(crate) top_toolbar: TopToolbar,
@@ -520,17 +522,9 @@ impl DemoApp {
         cc.egui_ctx.include_bytes(SAMPLE_LOGO, SAMPLE_LOGO_SVG);
 
         // Earlier releases saved active palettes without an explicit choice.
-        let theme_choice = cc
-            .storage
-            .and_then(|storage| eframe::get_value(storage, "theme_choice"));
-        let dark = theme_choice
-            .or_else(|| {
-                cc.egui_ctx
-                    .system_theme()
-                    .map(|theme| theme == egui::Theme::Dark)
-            })
-            .unwrap_or(false);
-        let theme = if dark { Theme::dark() } else { Theme::light() };
+        let theme_choice = formatting::load_theme_choice(cc.storage);
+        let theme =
+            formatting::selected_theme(theme_choice.as_deref(), cc.egui_ctx.system_theme(), false);
         let timeframe = Timeframe::Min1;
         let symbol = "SAMPLE";
         let mut options = egui_charts::config::ChartOptions::default();
@@ -1370,9 +1364,11 @@ impl DemoApp {
 
 impl eframe::App for DemoApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        if let Some(dark) = self.theme_choice {
-            eframe::set_value(storage, "theme_choice", &dark);
-        }
+        eframe::set_value(
+            storage,
+            "theme_choice",
+            &self.theme_choice.as_deref().unwrap_or("system"),
+        );
         let current = self.user_settings();
         self.settings.flush(&current);
         eframe::set_value(
@@ -1537,11 +1533,15 @@ impl eframe::App for DemoApp {
 
         // Transient status notice.
         self.show_notice(ui);
-        if let Some(dark) = self.theme_choice
-            && let Some(storage) = frame.storage_mut()
-            && eframe::get_value::<bool>(storage, "theme_choice") != Some(dark)
+        if let Some(storage) = frame.storage_mut()
+            && eframe::get_value::<String>(storage, "theme_choice").as_deref()
+                != Some(self.theme_choice.as_deref().unwrap_or("system"))
         {
-            eframe::set_value(storage, "theme_choice", &dark);
+            eframe::set_value(
+                storage,
+                "theme_choice",
+                &self.theme_choice.as_deref().unwrap_or("system"),
+            );
             storage.flush();
         }
         self.storage.flush(frame.storage_mut());
@@ -4350,6 +4350,54 @@ mod tests {
                     restored.chart.config().bearish_color,
                     restored.theme.chart.candle_down
                 );
+            }
+        }
+
+        let ctx = egui::Context::default();
+        let mut storage = AppStorage::default();
+        for old in [false, true] {
+            eframe::set_value(&mut storage, "theme_choice", &old);
+            let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+            cc.storage = Some(&storage);
+            let mut app = DemoApp::new(&cc);
+            assert_eq!(
+                app.theme.dark, old,
+                "explicit boolean preferences still load"
+            );
+            app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
+            for (command, expected) in [
+                ("appearance:high-contrast", Theme::high_contrast()),
+                ("appearance:light", Theme::light()),
+                ("appearance:dark", Theme::dark()),
+            ] {
+                app.execute_search_command(&ctx, command);
+                assert_eq!(app.theme, expected);
+                assert_eq!(app.chart.config().background_color, expected.chart.bg);
+                assert_eq!(
+                    app.extra_charts[0].chart.config().background_color,
+                    expected.chart.bg
+                );
+                app.save(&mut storage);
+                let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+                cc.storage = Some(&storage);
+                assert_eq!(DemoApp::new(&cc).theme, expected);
+            }
+            app.execute_search_command(&ctx, "appearance:system");
+            app.save(&mut storage);
+            for system in [egui::Theme::Dark, egui::Theme::Light] {
+                ctx.run_ui(
+                    egui::RawInput {
+                        system_theme: Some(system),
+                        ..Default::default()
+                    },
+                    |_| {},
+                )
+                .drop_without_applying_deltas();
+                let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+                cc.storage = Some(&storage);
+                let restored = DemoApp::new(&cc);
+                assert_eq!(restored.theme.dark, system == egui::Theme::Dark);
+                assert_eq!(restored.user_settings().theme, None);
             }
         }
     }

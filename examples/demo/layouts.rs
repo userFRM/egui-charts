@@ -46,23 +46,20 @@ impl LayoutTab {
 
 impl DemoApp {
     pub(super) fn toggle_theme(&mut self, ctx: &egui::Context) {
-        self.theme_choice = Some(!self.theme.dark);
+        self.theme_choice = Some(if self.theme.dark { "light" } else { "dark" }.into());
         self.update_theme(ctx);
     }
 
     pub(super) fn update_theme(&mut self, ctx: &egui::Context) {
-        let dark = self
-            .theme_choice
-            .or_else(|| ctx.system_theme().map(|theme| theme == egui::Theme::Dark))
-            .unwrap_or(self.theme.dark);
-        if self.theme.dark == dark {
+        let theme = super::formatting::selected_theme(
+            self.theme_choice.as_deref(),
+            ctx.system_theme(),
+            self.theme.dark,
+        );
+        if self.theme == theme {
             return;
         }
-        self.theme = if dark {
-            egui_charts::theme::Theme::dark()
-        } else {
-            egui_charts::theme::Theme::light()
-        };
+        self.theme = theme;
         let saved = self
             .layout_tabs
             .iter_mut()
@@ -694,9 +691,7 @@ impl DemoApp {
     pub(super) fn user_settings(&self) -> UserSettings {
         let menu = &self.top_toolbar.layout_menu;
         let mut settings = UserSettings::default();
-        settings.theme = self
-            .theme_choice
-            .map(|dark| if dark { "dark" } else { "light" }.into());
+        settings.theme = self.theme_choice.clone();
         settings.symbol = Some(self.state.symbol.clone());
         settings.interval = Some(self.state.timeframe);
         let toolbar = &self.drawing_toolbar.state;

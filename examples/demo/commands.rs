@@ -68,6 +68,13 @@ pub(super) fn quick_search_commands() -> Vec<Command> {
             .category("Showcase")
             .keywords([*description])
     }));
+    for (name, _) in egui_charts::theme::presets() {
+        commands.push(
+            Command::new(format!("appearance:{name}"), format!("Appearance: {name}"))
+                .category("Settings"),
+        );
+    }
+    commands.push(Command::new("appearance:system", "Appearance: system").category("Settings"));
     for category in DrawingToolType::categories() {
         for tool in DrawingToolType::by_category(category) {
             if !tool.is_cursor() {
@@ -95,6 +102,7 @@ impl DemoApp {
         egui::TopBottomPanel::top("demo_showcase").show_inside(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 self.show_readout_controls(ui);
+                self.show_appearance_controls(ui);
                 ui.menu_button("Showcase", |ui| {
                     ui.set_max_width(360.0);
                     ui.label("Explore the demo's synthetic data");
@@ -124,6 +132,17 @@ impl DemoApp {
     }
 
     fn execute_search_edit(&mut self, ctx: &egui::Context, id: &str) {
+        if let Some(name) = id.strip_prefix("appearance:") {
+            if name == "system"
+                || egui_charts::theme::presets()
+                    .iter()
+                    .any(|(preset, _)| *preset == name)
+            {
+                self.theme_choice = (name != "system").then(|| name.to_owned());
+                self.update_theme(ctx);
+            }
+            return;
+        }
         if let Some(name) = id.strip_prefix("tool:") {
             if let Some(tool) = DrawingToolType::all()
                 .iter()
