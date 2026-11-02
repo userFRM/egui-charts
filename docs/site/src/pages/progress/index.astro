@@ -1,6 +1,7 @@
 ---
 import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
 import { areas, counts, features, percentage, slug } from '../../lib/progress';
+import { progressSvg } from '../../lib/progress-svg';
 
 const repo = 'https://github.com/userFRM/egui-charts/blob/main';
 const tables = areas.map((area) => {
@@ -18,7 +19,7 @@ const tables = areas.map((area) => {
   frontmatter={{ title: 'Progress', description: 'Feature status and remaining gaps in egui-charts.', editUrl: false }}
   headings={areas.map((area) => ({ depth: 2, slug: slug(area), text: area }))}
 >
-<img src="progress.svg" alt="Feature map grouped by area: green is done, yellow is partial and grey is missing.">
+<div class="feature-map" set:html={progressSvg()} />
 <p>Generated from <a href={`${repo}/docs/progress/features.csv`}>docs/progress/features.csv</a> by <a href={`${repo}/docs/site/src/lib/progress-svg.ts`}>docs/site/src/lib/progress-svg.ts</a> on every push to <code>main</code>.</p>
 <p>In the map, green features are done, yellow ones partial and grey ones missing. A feature is done when its whole behaviour works; partial and missing features count as not done. A host feature is done when the library provides its interface and UI; the application supplies the data, account or storage behind it. <a href={`${repo}/CONTRIBUTING.md#feature-status`}>Counting rules</a>.</p>
 {tables.map((table) => (
@@ -42,7 +43,7 @@ const tables = areas.map((area) => {
 </StarlightPage>
 
 <style>
-  img{max-width:100%;height:auto}
+  .feature-map :global(svg){display:block;max-width:100%;height:auto}
   table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
   .table th,.table td{border:1px solid var(--sl-color-gray-5);padding:4px 8px;text-align:left}
   .table td,.table th+th{text-align:right}tbody th{font-weight:normal}tfoot{font-weight:bold}

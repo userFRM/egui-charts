@@ -10,6 +10,7 @@
 //! `-- tpo` runs it alone.
 //! A fifth draws a host-supplied footprint with executions on all 100,000 visible bars;
 //! `-- footprint-host` runs it alone.
+//! `-- comparisons` measures moving-pointer frames with zero, one, two and five comparisons.
 //! `--regression <scenario>` runs a compact workload for `benches/check-regressions.sh`.
 
 use egui::{Rect, UiBuilder, pos2, vec2};
@@ -21,6 +22,8 @@ use egui_charts::studies::{
 };
 use egui_charts::widget::{Chart, SeriesId};
 
+#[path = "frame/comparisons.rs"]
+mod comparisons;
 #[path = "../examples/bare_chart.rs"]
 #[expect(dead_code, reason = "the bench draws only the example's sample bars")]
 mod example;
@@ -219,7 +222,13 @@ fn main() {
     let args: Vec<_> = std::env::args().collect();
     if let Some(at) = args.iter().position(|arg| arg == "--regression") {
         let name = args.get(at + 1).expect("a regression scenario");
-        if matches!(name.as_str(), "tpo-400" | "tpo-1600") {
+        if let Some(count) = name.strip_prefix("comparisons-") {
+            std::hint::black_box(comparisons::samples(
+                100_000,
+                count.parse().expect("a comparison count"),
+                frames,
+            ));
+        } else if matches!(name.as_str(), "tpo-400" | "tpo-1600") {
             tpo(std::slice::from_ref(name), frames);
         } else {
             regression::run(name, frames);
@@ -282,6 +291,7 @@ fn main() {
     tpo(&filters, frames);
     println!();
     footprint(&filters, frames);
+    comparisons::run(&filters, frames);
 }
 
 /// A host footprint, without the feed's history budget, with executions on every visible bar.
