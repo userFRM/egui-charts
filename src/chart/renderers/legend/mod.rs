@@ -132,6 +132,7 @@ pub struct Legend<'a> {
     /// change between them.
     pub day_change: Option<(f64, f64)>,
     /// Opacity from 0 to 1 of the chart background behind the volume and study rows.
+    /// Text and controls retain opaque backing so profiles cannot interfere with them.
     pub study_backdrop: f32,
     /// The order quantity shown in a box under the quote buttons' spread, which the user clicks
     /// to change it.
@@ -228,7 +229,7 @@ impl<'a> Legend<'a> {
         let mut series_action = None;
         let id = ui.next_auto_id().with(("series_legend", self.symbol));
         ui.skip_ahead_auto_ids(1);
-        let painter = ui.painter().with_clip_rect(bounds);
+        let painter = ui.painter().with_clip_rect(plot);
         let mut layout = Layout::new(&painter, bounds, colors);
         #[cfg(feature = "icons")]
         let title_start = layout.pos;
@@ -713,6 +714,7 @@ impl<'a> Legend<'a> {
                         );
                     }
                     let study_colors = study.colors();
+                    let names = study.line_names();
                     let precision = study.precision().or_else(|| {
                         (study.value_format() == crate::scales::StudyFormat::Price)
                             .then_some(precision)
@@ -720,7 +722,7 @@ impl<'a> Legend<'a> {
                     for index in (0..study.line_count()).filter(|index| {
                         self.show_indicator_values
                             && study.is_visible()
-                            && study.plot_style(*index).visible
+                            && study.legend_visible(*index)
                     }) {
                         let value = study.plot_value(index, self.bar_index).unwrap_or(f64::NAN);
                         let text = if value.is_finite() {
@@ -730,7 +732,7 @@ impl<'a> Legend<'a> {
                                     self.thousands_sep,
                                 )
                             } else {
-                                study.format_value(value)
+                                study.format_plot_value(index, value)
                             }
                         } else {
                             "∅".to_owned()
@@ -740,12 +742,15 @@ impl<'a> Legend<'a> {
                             .get(index)
                             .filter(|color| color.a() != 0)
                             .map_or(colors.text, |color| color.to_opaque());
+                        let text = if study.line_count() > 1 {
+                            format!("{}: {text}", names.get(index).map_or("", String::as_str))
+                        } else {
+                            text
+                        };
                         layout.text(text, theme.text.ohlc, color, bounds.width());
                     }
                 }
-                let controls = layout
-                    .reserve_space(Vec2::new(80.0, 20.0))
-                    .intersect(bounds);
+                let controls = layout.reserve(Vec2::new(80.0, 20.0)).intersect(bounds);
                 let row_right = if layout.pos.y > row_start.y {
                     bounds.right()
                 } else {
@@ -963,14 +968,23 @@ impl<'a> Layout<'a> {
             self.background,
             egui::Shape::rect_filled(
                 Rect::from_min_max(
-                    Pos2::new(self.bounds.left(), self.pos.y),
+                    Pos2::new(self.bounds.left() - 2.0, self.pos.y),
                     Pos2::new(rect.right() + 4.0, self.pos.y + self.height),
                 )
-                .intersect(self.bounds),
+                .intersect(self.bounds.expand(2.0)),
                 0.0,
                 self.backdrop,
             ),
         );
+        let background = self.painter.ctx().active_theme().chart.bg;
+        if self.backdrop != background {
+            // Profiles can be opaque or contain letters; protect the full content bounds.
+            self.painter.rect_filled(
+                rect.expand(2.0).intersect(self.bounds.expand(2.0)),
+                0.0,
+                background,
+            );
+        }
         rect
     }
 
@@ -1377,6 +1391,119 @@ mod layout_tests {
     use crate::model::Bar;
     use chrono::{TimeZone, Utc};
     use egui::{Context, Event, Pos2, Rect, Shape};
+
+    /// Profiles painted first cannot bleed through volume, study text or reserved controls.
+    #[cfg(feature = "studies")]
+    #[test]
+    fn supplementary_rows_mask_profiles_over_their_content_and_controls() {
+        use crate::chart::renderers::Legend;
+        use crate::studies::{CustomIndicator, IndicatorValue};
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            let ctx = Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut study =
+                CustomIndicator::new("Profile readout", |_| vec![IndicatorValue::Single(120.0)])
+                    .with_overlay(true);
+            crate::studies::Indicator::calculate(&mut study, &[]);
+            let studies: Vec<Box<dyn crate::studies::Indicator>> = vec![Box::new(study)];
+            let bar = Bar::new(Utc.timestamp_opt(0, 0).unwrap(), 1.0, 1.0, 1.0, 1.0, 240.0);
+            let instrument = crate::model::Instrument::new("SAMPLE").with_price_decimals(2);
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let mut legend = Legend::new("SAMPLE", "1m", &bar);
+                legend.studies = &studies;
+                legend.instrument = Some(&instrument);
+                legend.show(
+                    ui,
+                    Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0)),
+                );
+            });
+            output.textures_delta.clear();
+            for (at, shape) in output.shapes.iter().enumerate() {
+                if let Shape::Text(text) = &shape.shape {
+                    let bounds = Rect::from_min_size(text.pos, text.galley.size());
+                    assert!(output.shapes[..at].iter().any(|shape| matches!(&shape.shape,
+                        Shape::Rect(rect) if rect.fill == theme.chart.bg && rect.rect.contains_rect(bounds)
+                    )), "unprotected {}", text.galley.text());
+                    if text.galley.text().starts_with("Vol ")
+                        || text.galley.text() == "Profile readout"
+                        || text.galley.text() == "120.00"
+                    {
+                        assert!(output.shapes[..at].iter().any(|shape| matches!(&shape.shape,
+                            Shape::Rect(rect) if rect.fill == theme.chart.bg && rect.rect.contains_rect(bounds.expand(2.0))
+                        )), "unprotected text padding");
+                    }
+                    if text.galley.text() == "120.00" {
+                        let controls = Rect::from_min_size(
+                            Pos2::new(bounds.right() + 8.0, bounds.center().y - 10.0),
+                            egui::vec2(80.0, 20.0),
+                        );
+                        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                            Shape::Rect(rect) if rect.fill == theme.chart.bg && rect.rect.contains_rect(controls)
+                        )), "unprotected study controls");
+                    }
+                }
+            }
+            output.drop_without_applying_deltas();
+        }
+    }
+
+    #[cfg(feature = "studies")]
+    #[test]
+    fn overlay_values_keep_their_output_names_when_rows_wrap() {
+        use crate::chart::renderers::Legend;
+        use crate::studies::{CustomIndicator, Indicator, IndicatorValue};
+        let mut study = CustomIndicator::new("Levels", |_| {
+            vec![IndicatorValue::Multiple(vec![1.0, 2.0, 3.0])]
+        })
+        .with_overlay(true)
+        .with_line_count(3)
+        .with_line_names(vec![
+            "Ask levels".into(),
+            "Bid levels".into(),
+            "Total levels".into(),
+        ]);
+        study.calculate(&[]);
+        let studies: Vec<Box<dyn Indicator>> = vec![Box::new(study)];
+        let ctx = Context::default();
+        let bar = Bar::new(Utc.timestamp_opt(0, 0).unwrap(), 1.0, 1.0, 1.0, 1.0, 0.0);
+        let instrument = crate::model::Instrument::new("SAMPLE").with_price_decimals(2);
+        for width in [320.0, 800.0, 1440.0] {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let mut legend = Legend::new("SAMPLE", "1m", &bar);
+                legend.studies = &studies;
+                legend.instrument = Some(&instrument);
+                legend.show_indicator_inputs = false;
+                legend.show(
+                    ui,
+                    Rect::from_min_size(Pos2::ZERO, egui::vec2(width, 400.0)),
+                );
+            });
+            output.textures_delta.clear();
+            let texts: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| {
+                    if let Shape::Text(text) = &shape.shape {
+                        Some(text)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            for (index, name) in ["Ask levels", "Bid levels", "Total levels"]
+                .iter()
+                .enumerate()
+            {
+                let expected = format!("{name}: {:.2}", (index + 1) as f64);
+                let text = texts
+                    .iter()
+                    .find(|text| text.galley.text() == expected)
+                    .expect(&expected);
+                assert!(text.pos.x + text.galley.size().x <= width);
+            }
+            output.drop_without_applying_deltas();
+        }
+    }
 
     /// Legend fields stay inside the plot and keep their positions during hover.
     #[test]

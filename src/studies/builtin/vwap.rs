@@ -676,11 +676,10 @@ impl Indicator for VolumeWeightedAvgPrice {
 
     fn line_names(&self) -> Vec<String> {
         std::iter::once("VWAP".to_string())
-            .chain(
-                self.bands
-                    .iter()
-                    .flat_map(|k| [format!("Upper({k})"), format!("Lower({k})")]),
-            )
+            .chain(self.bands.iter().flat_map(|k| {
+                let unit = if self.percentage_bands { "%" } else { "σ" };
+                [format!("Upper {k}{unit}"), format!("Lower {k}{unit}")]
+            }))
             .collect()
     }
 }
@@ -990,7 +989,13 @@ mod tests {
 
             let lines = 1 + 2 * case.bands.len();
             assert_eq!(study.line_count(), lines, "{}", case.name);
-            assert_eq!(study.line_names().len(), lines, "{}", case.name);
+            let names = study.line_names();
+            assert_eq!(names.len(), lines, "{}", case.name);
+            assert_eq!(names[0], "VWAP");
+            for (band, multiplier) in case.bands.iter().enumerate() {
+                assert_eq!(names[1 + band * 2], format!("Upper {multiplier}σ"));
+                assert_eq!(names[2 + band * 2], format!("Lower {multiplier}σ"));
+            }
             assert_eq!(study.colors().len(), lines, "{}", case.name);
             assert_eq!(study.values().len(), case.want.len(), "{}", case.name);
             for (i, (got, want)) in study.values().to_rows().iter().zip(case.want).enumerate() {
@@ -1038,6 +1043,7 @@ mod tests {
                 study = study.with_event_anchors([event, event, times[0]]);
             }
             study = study.with_percentage_bands([1.0]);
+            assert_eq!(study.line_names(), ["VWAP", "Upper 1%", "Lower 1%"]);
             let bars: Vec<_> = times
                 .into_iter()
                 .zip([10.0, 14.0, 18.0])
