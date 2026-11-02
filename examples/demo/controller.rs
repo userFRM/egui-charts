@@ -1599,6 +1599,7 @@ impl DemoApp {
             .show(ui, |ui| {
                 use egui_charts::ui_kit::buttons::IconButton;
                 let mut menu_action = TopToolbarAction::None;
+                let mut sample = None;
                 let mut panel_action = None;
                 let mut widget_action = None;
                 let mut show_help = false;
@@ -1668,6 +1669,7 @@ impl DemoApp {
                                     ui.close();
                                 }
                             }
+                            sample = commands::sample_menu(ui);
                         });
                     },
                     |_| {},
@@ -1701,6 +1703,9 @@ impl DemoApp {
                 }
                 self.handle_top_toolbar(ui.ctx(), action);
                 self.handle_top_toolbar(ui.ctx(), menu_action);
+                if let Some(id) = sample {
+                    self.execute_search_command(ui.ctx(), id);
+                }
             });
     }
 

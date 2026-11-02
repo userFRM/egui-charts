@@ -218,30 +218,40 @@ pub(super) enum SampleScene {
     Extensions(super::primitive_scene::PrimitiveScene),
 }
 
+/// The Samples submenu, shared by the application menu and an open sample. Returns the chosen
+/// command.
+pub(super) fn sample_menu(ui: &mut egui::Ui) -> Option<&'static str> {
+    let mut command = None;
+    ui.menu_button("Samples", |ui| {
+        for (id, label) in [
+            ("smile", "Volatility smile"),
+            ("yield", "Yield curve"),
+            ("primitives", "Primitives and custom series"),
+            ("sample-study", "Sample study editor"),
+        ] {
+            if ui.button(label).clicked() {
+                command = Some(id);
+                ui.close();
+            }
+        }
+    });
+    command
+}
+
 impl DemoApp {
+    /// Shows the open sample in place of the price workspace. Returns `false` when none is open.
     pub(super) fn show_samples(&mut self, ui: &mut egui::Ui) -> bool {
+        if self.sample_scene.is_none() {
+            return false;
+        }
         let mut command = None;
         egui::Panel::top("sample_chooser").show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
-                ui.menu_button("Samples", |ui| {
-                    for (id, label) in [
-                        ("smile", "Volatility smile"),
-                        ("yield", "Yield curve"),
-                        ("primitives", "Primitives and custom series"),
-                        ("sample-study", "Sample study editor"),
-                    ] {
-                        if ui.button(label).clicked() {
-                            command = Some(id);
-                            ui.close();
-                        }
-                    }
-                });
-                if self.sample_scene.is_some() {
-                    if ui.button("Return to price chart").clicked() {
-                        command = Some("price-workspace");
-                    }
-                    ui.label("Synthetic sample data. Pan, zoom and hover to inspect values.");
+                command = sample_menu(ui);
+                if ui.button("Return to price chart").clicked() {
+                    command = Some("price-workspace");
                 }
+                ui.label("Synthetic sample data. Pan, zoom and hover to inspect values.");
             });
         });
         if let Some(command) = command {
