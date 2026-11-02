@@ -16,6 +16,7 @@ fn request() -> HistoryRequest {
         since: None,
         count: 2,
         extended_hours: false,
+        adjusted: false,
         conversion: None,
     }
 }

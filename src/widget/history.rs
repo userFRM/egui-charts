@@ -650,6 +650,7 @@ impl Chart {
         {
             self.selection.deselect();
         }
+        self.fill_fed_series();
     }
 
     /// Whether a chart user action can be undone (also drives toolbar availability).

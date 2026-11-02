@@ -469,6 +469,7 @@ fn history(symbol: &str, timeframe: Timeframe, before: Option<DateTime<Utc>>) ->
         since: None,
         count: 1000,
         extended_hours: false,
+        adjusted: false,
         conversion: None,
     })
 }
@@ -2992,4 +2993,219 @@ fn profile_drawings_read_executions_on_every_time_based_chart_type() {
     chart.drawings_mut().drawings.clear();
     frames.run(&mut chart);
     assert!(chart.feed_link.as_ref().unwrap().footprint.is_none());
+}
+
+/// Answers every request at once with bars closing at the symbol's base plus their index:
+/// AAPL from 100, MSFT from 40. It records the history requests.
+#[derive(Default)]
+struct Instant {
+    requests: Mutex<Vec<HistoryRequest>>,
+    subscriptions: Mutex<Vec<(String, crate::data::Sink)>>,
+    stopped: Mutex<Vec<SubscriptionId>>,
+}
+
+impl Datafeed for Instant {
+    fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {
+        reply.send(Ok(Instrument::new(symbol)));
+    }
+    fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
+        let base = if request.symbol == "AAPL" {
+            100.0
+        } else {
+            40.0
+        };
+        let bars = bars(6)
+            .into_iter()
+            .map(|bar| {
+                let close = bar.close - 100.0 + base;
+                Bar::new(bar.time, close, close, close, close, 1.0)
+            })
+            .collect();
+        self.requests.lock().unwrap().push(request);
+        reply.send(page(bars, true));
+    }
+    fn subscribe(&self, subscription: Subscription) {
+        self.subscriptions
+            .lock()
+            .unwrap()
+            .push((subscription.symbol, subscription.sink));
+    }
+    fn unsubscribe(&self, id: SubscriptionId) {
+        self.stopped.lock().unwrap().push(id);
+    }
+}
+
+fn closes(chart: &Chart, id: SeriesId) -> Vec<f64> {
+    chart.bars(id).iter().map(|bar| bar.close).collect()
+}
+
+/// A comparison or spread on a chart with a feed gets its bars from that feed, and a restored
+/// snapshot gets them again; `add_comparison` and a chart without a feed leave the series to
+/// the host.
+#[test]
+fn comparisons_are_filled_from_the_feed_and_survive_a_snapshot() {
+    use crate::model::SeriesScale;
+    use crate::widget::SeriesOptions;
+    let feed = Arc::new(Instant::default());
+    let mut chart = ChartBuilder::new()
+        .with_feed(feed.clone())
+        .with_symbol("AAPL")
+        .build();
+    let msft = chart.add_feed_series(SeriesOptions {
+        name: "MSFT".into(),
+        color: egui::Color32::RED,
+        scale: SeriesScale::Separate(1),
+        ..Default::default()
+    });
+    let spread = chart.add_feed_series(SeriesOptions {
+        name: "AAPL-MSFT".into(),
+        scale: SeriesScale::Left,
+        ..Default::default()
+    });
+    chart
+        .series_price_scale_mut(msft)
+        .unwrap()
+        .set_range(10.0, 80.0);
+    let pane = chart.add_pane();
+    chart.move_series_to_pane(spread, pane);
+    chart.set_series_visible(spread, false);
+    let mut frames = Frames::new();
+    for _ in 0..3 {
+        frames.run(&mut chart);
+    }
+    assert_eq!(closes(&chart, msft), [40.0, 41.0, 42.0, 43.0, 44.0, 45.0]);
+    assert_eq!(closes(&chart, spread), [60.0; 6]);
+
+    #[cfg(feature = "ui")]
+    {
+        use crate::widget::PaneId;
+        chart.set_dividend_adjusted(true);
+        for _ in 0..3 {
+            frames.run(&mut chart);
+        }
+        let saved = chart.snapshot().unwrap();
+        let saved: crate::widget::ChartSnapshot =
+            serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        let mut other = ChartBuilder::new()
+            .with_feed(feed.clone())
+            .with_symbol("AAPL")
+            .build();
+        other.restore(&saved).unwrap();
+        for _ in 0..3 {
+            frames.run(&mut other);
+        }
+        let restored: Vec<_> = other.series().collect();
+        assert_eq!(restored.len(), 2);
+        assert!(other.dividend_adjusted());
+        let (msft, spread) = (restored[0].0, restored[1].0);
+        assert_eq!(restored[0].1.name, "MSFT");
+        assert_eq!(restored[0].1.color, egui::Color32::RED);
+        assert_eq!(restored[0].1.scale, SeriesScale::Separate(1));
+        assert_eq!(restored[1].1.scale, SeriesScale::Left);
+        let range = other.series_price_scale(msft).unwrap().range();
+        assert_eq!((range.min, range.max), (10.0, 80.0));
+        assert_eq!(closes(&other, msft), [40.0, 41.0, 42.0, 43.0, 44.0, 45.0]);
+        assert_eq!(closes(&other, spread), [60.0; 6]);
+        assert!(other.is_fed(msft) && other.is_fed(spread));
+        assert!(other.is_series_visible(msft) && !other.is_series_visible(spread));
+        assert_eq!(other.series_pane(msft), Some(PaneId::MAIN));
+        assert_eq!(other.series_pane(spread), Some(other.panes()[1]));
+    }
+
+    let sink = feed
+        .subscriptions
+        .lock()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|(symbol, sink)| symbol == "MSFT" && sink.is_active())
+        .unwrap()
+        .1
+        .clone();
+    let time = chart.bars(msft).last().unwrap().time;
+    sink.push_bar(Bar::new(time, 50.0, 50.0, 50.0, 50.0, 1.0));
+    frames.run(&mut chart);
+    assert_eq!(chart.bars(msft).last().unwrap().close, 50.0);
+    assert_eq!(chart.bars(spread).last().unwrap().close, 55.0);
+    let duplicate = chart.add_feed_series(SeriesOptions {
+        name: "MSFT".into(),
+        ..Default::default()
+    });
+    frames.run(&mut chart);
+    assert_eq!(closes(&chart, duplicate), closes(&chart, msft));
+    let mut renamed = chart
+        .series()
+        .find(|(id, _)| *id == duplicate)
+        .unwrap()
+        .1
+        .clone();
+    renamed.name = "OTHER".into();
+    chart.set_series_options(duplicate, renamed);
+    for _ in 0..3 {
+        frames.run(&mut chart);
+    }
+    assert_eq!(chart.bars(duplicate).last().unwrap().close, 45.0);
+    let mut options = chart
+        .series()
+        .find(|(id, _)| *id == msft)
+        .unwrap()
+        .1
+        .clone();
+    options.name = "OTHER".into();
+    chart.begin_user_action();
+    chart.set_series_options(msft, options);
+    chart.end_user_action();
+    frames.run(&mut chart);
+    assert_eq!(chart.bars(msft).last().unwrap().close, 45.0);
+    assert!(chart.undo());
+    frames.run(&mut chart);
+    assert_eq!(chart.bars(msft).last().unwrap().close, 50.0);
+    chart.remove_series(msft);
+    chart.remove_series(spread);
+    frames.run(&mut chart);
+    assert!(!sink.is_active());
+    assert!(feed.stopped.lock().unwrap().contains(&sink.id));
+
+    let host = chart.add_comparison("MSFT", egui::Color32::RED);
+    assert!(!chart.is_fed(host));
+    let mut manual = ChartBuilder::new().build();
+    let id = manual.add_feed_series(SeriesOptions {
+        name: "MSFT".into(),
+        ..Default::default()
+    });
+    assert!(!manual.is_fed(id));
+}
+
+/// Dividend adjustment is asked of the feed for the main series and the comparisons, and
+/// changing it loads them again.
+#[test]
+fn dividend_adjustment_is_requested_for_the_chart_and_its_comparisons() {
+    let feed = Arc::new(Instant::default());
+    let mut chart = ChartBuilder::new()
+        .with_feed(feed.clone())
+        .with_symbol("AAPL")
+        .build();
+    chart.add_feed_series(crate::widget::SeriesOptions {
+        name: "MSFT".into(),
+        ..Default::default()
+    });
+    let mut frames = Frames::new();
+    for adjusted in [false, true] {
+        chart.set_dividend_adjusted(adjusted);
+        for _ in 0..3 {
+            frames.run(&mut chart);
+        }
+        #[cfg(feature = "alert-engine")]
+        assert_eq!(chart.alert_data().unwrap().request.adjusted, adjusted);
+        let mut asked: Vec<_> = std::mem::take(&mut *feed.requests.lock().unwrap())
+            .into_iter()
+            .map(|request| (request.symbol, request.adjusted))
+            .collect();
+        asked.sort();
+        assert_eq!(
+            asked,
+            [("AAPL".into(), adjusted), ("MSFT".into(), adjusted)],
+            "adjusted {adjusted}"
+        );
+    }
 }
