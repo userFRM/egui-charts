@@ -27,7 +27,7 @@ test('published area bars and group tables count every CSV status', () => {
       return [escape(group), ...counts.map(String), String(rows.length), `${Math.round(counts[0] / rows.length * 100)}%`];
     });
     expected.push(['Total', ...summary.map(String), String(members.length), `${(summary[0] / members.length * 100).toFixed(1)}%`]);
-    const rows = [...sections[index].matchAll(/<tr>(.*?)<\/tr>/gs)].slice(1);
+    const rows = [...sections[index].matchAll(/<tr\b[^>]*>(.*?)<\/tr>/gs)].slice(1);
     assert.deepEqual(rows.map((row) => [...row[1].matchAll(/<t[dh]\b[^>]*>(.*?)<\/t[dh]>/g)].map((cell) => cell[1])), expected, area);
   }
 });
@@ -39,6 +39,7 @@ test('incomplete features link their recorded issues and omit completed features
         `<a href="https://github.com/userFRM/egui-charts/issues/${issue}">#${issue}</a>`).join(', ');
       return `${escape(feature.feature)} (${feature.status})${links ? ': ' + links : ''}`;
     });
-    assert.deepEqual([...sections[index].matchAll(/<li>(.*?)<\/li>/gs)].map((match) => match[1]), expected, area);
+    assert.deepEqual([...sections[index].matchAll(/<li\b[^>]*>(.*?)<\/li>/gs)].map((match) =>
+      match[1].replace(/<a\b[^>]*href="([^"]+)"[^>]*>/g, '<a href="$1">')), expected, area);
   }
 });
