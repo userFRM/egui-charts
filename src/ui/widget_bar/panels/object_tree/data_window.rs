@@ -304,10 +304,11 @@ mod tests {
                 .shapes
                 .iter()
                 .filter_map(|shape| match &shape.shape {
-                    egui::Shape::Text(text) => Some(text.galley.text()),
+                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
                     _ => None,
                 })
                 .collect();
+            output.drop_without_applying_deltas();
             // 0.00001 / 1.23455 * 100 = 0.000810... percentage points.
             let expected = if custom {
                 [
@@ -320,9 +321,11 @@ mod tests {
                 ["0.00000", "1.23456", "+0.00001 (+0.00%)", "1.234K"]
             };
             for expected in expected {
-                assert!(texts.contains(&expected), "{expected}: {texts:?}");
+                assert!(
+                    texts.iter().any(|text| text == expected),
+                    "{expected}: {texts:?}"
+                );
             }
-            output.drop_without_applying_deltas();
         }
     }
 
