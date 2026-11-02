@@ -1,6 +1,6 @@
 //! A host-run sample backtest and the report's navigation, signals and CSV delivery.
 
-use super::{Bar, DemoApp, LiveFeed, SeriesId, Timeframe, panel_frame};
+use super::{Bar, DemoApp, SeriesId, Timeframe, panel_frame};
 use egui_charts::model::{OrderSide, SignalId, StrategyExit, StrategyReport, StrategyTrade};
 use egui_charts::services::{Events, SignalEvent, Signals};
 use egui_charts::ui::strategy_report::{StrategyReportAction, StrategyTesterAction};
@@ -211,29 +211,31 @@ impl DemoApp {
                 .iter_mut()
                 .map(|extra| (&mut extra.chart, &extra.live)),
         ) {
-            let live = self.api_samples.then(|| live.clone());
-            let source: Option<Arc<dyn Signals>> = match self.strategy_report.report() {
-                Some(report) => Some(Arc::new(ReportSignals {
+            let live: Arc<dyn Signals> = if self.api_samples {
+                live.clone()
+            } else {
+                live.detectors()
+            };
+            let source: Arc<dyn Signals> = match self.strategy_report.report() {
+                Some(report) => Arc::new(ReportSignals {
                     report: report.clone(),
                     live,
-                })),
-                None => live.map(|live| live as Arc<dyn Signals>),
+                }),
+                None => live,
             };
-            chart.set_signal_source(source);
+            chart.set_signal_source(Some(source));
         }
     }
 }
 
 struct ReportSignals {
     report: StrategyReport,
-    live: Option<Arc<LiveFeed>>,
+    live: Arc<dyn Signals>,
 }
 
 impl Signals for ReportSignals {
     fn subscribe(&self, symbol: &str, timeframe: Timeframe, events: Events<SignalEvent>) {
-        if let Some(live) = &self.live {
-            live.subscribe(symbol, timeframe, events.clone());
-        }
+        self.live.subscribe(symbol, timeframe, events.clone());
         if self.report.symbol != symbol || self.report.timeframe != timeframe {
             return;
         }
@@ -243,9 +245,7 @@ impl Signals for ReportSignals {
     }
 
     fn clicked(&self, id: &SignalId) {
-        if let Some(live) = &self.live {
-            live.clicked(id);
-        }
+        self.live.clicked(id);
     }
 }
 
