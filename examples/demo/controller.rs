@@ -1512,6 +1512,7 @@ impl eframe::App for DemoApp {
         self.refresh_layout_menu();
         self.show_top_toolbar(ui, panel_bg);
         self.layout.sync = self.top_toolbar.chart_grid_selector.sync.clone();
+        self.show_showcase(ui);
         self.show_drawing_toolbar(ui, panel_bg);
         self.show_widget_bar(ui, panel_bg);
         self.trading.show_ticket(ui, &self.chart);
