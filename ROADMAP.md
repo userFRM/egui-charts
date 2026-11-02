@@ -267,7 +267,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] `ChartSnapshot` saves symbol, interval, chart configuration, built-in studies, panes, scales, viewport and drawings in versioned documents; feed-backed comparisons and spreads reconnect on restore, and the dividend-adjustment choice persists.
 - [x] Layout menus create, copy, rename, list, save, open and delete layouts, with debounced autosave through supplied storage.
 - [x] Chart, study and drawing template catalogues support named save, replace, apply and delete operations; the terminal wires indicator templates to host storage and applies their studies, links and shared panes as one undoable edit.
-- [x] `SettingsStore` persists preferences with debouncing, failed-write retry and error reporting.
+- [x] `SettingsStore` persists preferences with debouncing, failed-write retry and error reporting. `Terminal` saves and restores custom and hidden intervals, interval favourites and chart type favourites through host storage.
 - [ ] Preserve added/custom series, markers, price lines and custom-study reconstruction in chart snapshots, with explicit reattachment of application services and formatters.
 - [ ] Add layout favourites to the catalogue and menu.
 - [ ] Synchronise crosshair price as well as time in `ChartLayout`.
