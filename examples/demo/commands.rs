@@ -101,7 +101,8 @@ impl DemoApp {
     pub(super) fn show_showcase(&mut self, ui: &mut egui::Ui) {
         egui::Panel::top("demo_showcase")
             .resizable(false)
-            .exact_size(28.0)
+            .default_size(28.0)
+            .min_size(28.0)
             .frame(
                 super::panel_frame(self.theme.ui.panel_bg)
                     .inner_margin(egui::Margin::symmetric(8, 2)),
