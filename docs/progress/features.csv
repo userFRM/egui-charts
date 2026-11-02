@@ -453,7 +453,7 @@ Order flow,Order flow,Multi-column footprint,done,library,src/chart/overlays/foo
 Order flow,Order flow,"On-chart order lines with drag to move entry, stop and target",done,host,src/ui/trading/mod.rs;src/ui/trading/view.rs;src/chart/rendering/trading_lines/mod.rs,
 Order flow,Order flow,Options gamma exposure suite,partial,host,;src/data/option_chain.rs;src/data/mod.rs;src/model/instrument.rs,
 Order flow,Order flow,"Order book, heatmap and order-level replay",done,library,src/data/replay.rs;src/data/recording.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/widget/replay.rs;src/widget/feed/mod.rs;src/widget/feed/pump.rs,
-Order flow,Order flow,Minimum traded volume for imbalances and stacked imbalance zones,missing,library,,
+Order flow,Order flow,Minimum traded volume for imbalances and stacked imbalance zones,done,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/studies/builtin/footprint_studies.rs,1749
 Order flow,Order flow,Order-flow entries offered only for symbols whose feed supplies their data,missing,host,,
 Order flow,Order flow,Order-flow event alerts,done,library,src/services/detectors/alerts.rs;src/services/detectors/mod.rs;src/services/notifications.rs;src/ui/widget_bar/panels/order_flow.rs;src/ui/widget_bar/panels/time_and_sales.rs,1148;1149
 Order flow,Order flow,Order-level trade classification,partial,library,src/data/trades.rs;src/data/orders.rs;src/model/quote.rs;src/widget/feed/mod.rs,

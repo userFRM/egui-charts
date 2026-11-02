@@ -210,13 +210,29 @@ impl FootprintBar {
     /// A positive side against a zero opposite side is imbalanced. Ratios below 1 or
     /// non-finite ratios produce no signals.
     pub fn imbalance(&self, level: i64, ratio: f64, diagonal: bool) -> (bool, bool) {
+        self.imbalance_with_min_volume(level, ratio, diagonal, 0.0)
+    }
+
+    /// (bid, ask) dominance as in [`imbalance`](Self::imbalance), requiring at least
+    /// `min_volume` on the dominant side, in instrument volume units after row grouping.
+    /// Equality includes the same rounding tolerance as the ratio threshold. Zero preserves
+    /// the unfiltered result; negative or non-finite minima produce no signals.
+    pub fn imbalance_with_min_volume(
+        &self,
+        level: i64,
+        ratio: f64,
+        diagonal: bool,
+        min_volume: f64,
+    ) -> (bool, bool) {
         let Some(row) = self.levels.get(&level) else {
             return (false, false);
         };
-        if !ratio.is_finite() || ratio < 1.0 {
+        if !ratio.is_finite() || ratio < 1.0 || !min_volume.is_finite() || min_volume < 0.0 {
             return (false, false);
         }
-        let dominant = |a: f64, b: f64| a > b && meets_threshold(a / ratio, b);
+        let dominant = |a: f64, b: f64| {
+            a > b && meets_threshold(a, min_volume) && meets_threshold(a / ratio, b)
+        };
         if !diagonal {
             return (dominant(row.bid, row.ask), dominant(row.ask, row.bid));
         }
