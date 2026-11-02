@@ -230,7 +230,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Editable shortcut bindings are shared by chart input, help and menu hints; quick search uses a command palette.
 - [x] Watchlists support named lists, sections, sorting, row reordering, flags, symbol navigation and text import/export.
 - [x] Feed-backed panels render symbol details, news, calendars, hotlists, screener tables and grouped market heatmaps; `FinancialsPanel` charts and tabulates supplied financial figures.
-- [ ] Assemble a terminal that owns component state, handles all actions and lets the application intercept them. `Terminal` also runs the widget bar and side panels, persists watchlists, routes panel symbol selections, derives performance and seasonality from chart bars, and opens host-fed profile cards. It also handles time controls, comparisons, spread selection and host-supplied dividend adjustment. Remaining action groups and the demo migration are unfinished.
+- [ ] Assemble a terminal that owns component state, handles all actions and lets the application intercept them. `Terminal` also runs the widget bar and side panels, persists watchlists, routes panel symbol selections, derives performance and seasonality from chart bars, and opens host-fed profile cards. It also handles time controls, comparisons, spread selection and host-supplied dividend adjustment, and runs multi-chart grids, layout tabs, saved layouts, favourites, autosave and Ctrl+S. Remaining action groups and the demo migration are unfinished.
 - [ ] Provide a shared docked tab container for account, strategy report, study editor and replay-trading surfaces.
 - [ ] Open the drawing toolbar's colour popup from a visible control and render its saved favourites bar.
 - [ ] Persist and restore indicator favourites in the assembled UI.
@@ -265,11 +265,11 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] `ChartLayout` arranges up to 16 charts in grids or tabs, tracks the active chart, supports detached views and groups, and synchronises selected symbol, interval, time range and crosshair time.
 - [x] Main-pane drawings synchronise between grouped charts by timestamp.
 - [x] `ChartSnapshot` saves symbol, interval, chart configuration, built-in studies, panes, scales, viewport and drawings in versioned documents; feed-backed comparisons and spreads reconnect on restore, and the dividend-adjustment choice persists.
-- [x] Layout menus create, copy, rename, list, save, open and delete layouts, with debounced autosave through supplied storage.
+- [x] The terminal creates, copies, renames, lists, saves, opens and deletes layouts through supplied storage, with debounced autosave and Ctrl+S. Layout tabs keep independent charts and undo history; Tab and Shift+Tab cycle the visible chart slots, and new slots inherit the study limit.
 - [x] Chart, study and drawing template catalogues support named save, replace, apply and delete operations; the terminal wires indicator templates to host storage and applies their studies, links and shared panes as one undoable edit.
 - [x] `SettingsStore` persists preferences with debouncing, failed-write retry and error reporting.
 - [ ] Preserve added/custom series, markers, price lines and custom-study reconstruction in chart snapshots, with explicit reattachment of application services and formatters.
-- [ ] Add layout favourites to the catalogue and menu.
+- [x] Layout favourites appear in the catalogue and menu, follow renames and deletions, and persist in user settings.
 - [ ] Synchronise crosshair price as well as time in `ChartLayout`.
 - [ ] Map study-pane drawings across charts and propagate mirrored updates, unlocking and deletion to locked receivers.
 - [ ] Include symbol navigation in terminal undo/redo; comparison membership, placement and visibility are undoable and reconnect feeds when restored.
