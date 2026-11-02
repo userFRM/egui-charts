@@ -24,6 +24,7 @@ test('resolve guide and API members as browser links and reject missing pages or
       ['https://userfrm.github.io/egui-charts/docs/api/type.html#method.update', true],
       ['//userfrm.github.io/egui-charts/docs/api/alias.html#method.update', true],
       ['#top', true],
+      ['/egui-charts/docs/examples/widget/?scene=first-chart', true],
       ['https://docs.rs/egui-charts/', true],
       ['/egui-charts/demo/', true],
       ['chapter/missing/', false],

@@ -61,6 +61,8 @@ export function checkLinks(root, api = join(root, 'api')) {
           try {
             const url = new URL(href, from);
             if (url.origin !== site.origin || !url.pathname.startsWith(site.pathname)) continue;
+            // The runnable examples are published by the Pages assembly and checked by its own test.
+            if (url.pathname.startsWith(`${site.pathname}examples/`)) continue;
             links++;
             target(url);
           } catch (error) {
