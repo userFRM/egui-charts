@@ -138,7 +138,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [ ] Offer interval and wait-for-close inputs for OHLC-based studies as well as source-aware studies.
 - [ ] Expose every supported plot type in the Style editor.
 - [ ] Add a configurable per-chart study limit and rejection feedback.
-- [ ] Restore custom registered studies and remap study-source dependencies through a library-owned template operation.
+- [x] Restore custom registered studies and remap study-source dependencies through a library-owned template operation, including the terminal's indicator templates.
 - [ ] Provide a study editor surface with host callbacks for submitted content.
 
 ## Order Flow
@@ -264,7 +264,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Main-pane drawings synchronise between grouped charts by timestamp.
 - [x] `ChartSnapshot` saves symbol, interval, chart configuration, built-in studies, panes, scales, viewport and drawings in versioned documents.
 - [x] Layout menus create, copy, rename, list, save, open and delete layouts, with debounced autosave through supplied storage.
-- [x] Chart, study and drawing template catalogues support named save, replace, apply and delete operations.
+- [x] Chart, study and drawing template catalogues support named save, replace, apply and delete operations; the terminal wires indicator templates to host storage and applies their studies, links and shared panes as one undoable edit.
 - [x] `SettingsStore` persists preferences with debouncing, failed-write retry and error reporting.
 - [ ] Preserve added/custom series, markers, price lines and custom-study reconstruction in chart snapshots, with explicit reattachment of application services and formatters.
 - [ ] Add layout favourites to the catalogue and menu.

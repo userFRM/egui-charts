@@ -36,7 +36,7 @@ pub(super) struct State {
 }
 
 /// The legend caption of a study: its inputs, in order.
-fn study_input_summary(study: &dyn Indicator) -> String {
+pub(super) fn study_input_summary(study: &dyn Indicator) -> String {
     study
         .inputs()
         .iter()
