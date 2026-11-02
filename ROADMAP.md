@@ -68,7 +68,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Long/short position drawings expose entry, stop, target, instrument-aware risk sizing and bar-based profit/loss; forecasts, copied bars and three-anchor measured projections.
 - [x] Anchored VWAP with deviation bands; fixed and anchored volume-profile drawings estimate distributions from chart bars.
 - [x] Price, date and combined range measurements use actual bar timestamps; quick measure also reports volume and instrument ticks/pips when supplied.
-- [x] Brush, highlighter, arrows, rectangles, rotated rectangles, circles, ellipses, triangles, arcs, sectors, polylines, paths and quadratic/cubic curves.
+- [x] Brush, highlighter, arrows, rectangles, rotated rectangles, circles, ellipses, triangles, arcs, sectors, polylines, paths and quadratic/cubic curves. Curved outlines and analysis arcs adapt to physical pixels and refine only near the view; freehand strokes interpolate their samples with centripetal Catmull-Rom curves, with matching selection outlines.
 - [x] Editable text, notes, callouts, price labels, comments, signposts and tables with persistent cell contents.
 - [x] Image annotations load an address through application-installed egui image loaders; local post and idea cards store editable supplied content.
 - [x] Searchable bundled icons, emoji and stickers with size controls and recent selections.
@@ -168,7 +168,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Sequenced aggregated-depth snapshots/deltas and per-order add, modify, cancel and execute events, with gap detection and resynchronisation.
 - [x] Public order book and order queue retain tick-aware prices, best quotes and queue priority.
 - [x] `DepthHistory` retains sampled resting-size columns in bounded tiers; the heatmap uses retained texture tiles and partial updates.
-- [x] Heatmap best bid/ask paths and a side profile of total resting size.
+- [x] Heatmap best bid/ask paths and a side profile of total resting size. The Order flow settings tab saves independent heatmap, book profile and volume bubble visibility and appearance; declared feed services and instrument tick size determine its controls.
 - [x] Volume bubbles aggregate by chart bar and price, adapt automatic grouping, sizing and borders to screen density, and offer side/delta colours, linear/square-root/logarithmic scaling and outlier limits.
 - [x] Time-and-sales panel with aggressor colours, size filters, sound intents, selectable milliseconds and full execution timestamps on hover.
 - [x] Explicit aggressor identifiers combine split fills into parent orders with total size, price span and fill count.
@@ -193,6 +193,9 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Account summary, positions, orders, history, executions, balance and journal tables, with CSV export.
 - [x] Execution markers, rejection/fill notifications and execution sound intents.
 - [x] `StrategyReportPanel` accepts `StrategyReport` data and shows trade lists, equity/drawdown plots, performance metrics, supplied properties and chart navigation; trades export as CSV.
+- [x] `StrategyFactory` lists and creates built-in and host strategies with editable study inputs, defaults and bounds.
+- [x] Ten price-action strategies trade gaps, consecutive closes, inside/outside bars, channels, confirmed pivots and ATR expansion, with fill-relative tick brackets where needed.
+- [x] Twelve study strategies use public indicator values for bands, momentum, averages, oscillators, trend flips and technical ratings; every built-in preserves its trades on historical prefixes.
 - [ ] Extend risk-percent sizing to limit, stop and stop-limit tickets.
 - [ ] Add performance-summary CSV or spreadsheet export to strategy reports.
 

@@ -59,8 +59,8 @@ impl BarClock {
 
     /// Clock in which every instant opens a bar of its own, for bars of an unknown timeframe.
     #[cfg_attr(
-        not(feature = "widget"),
-        expect(dead_code, reason = "only the chart widget edits bars by hand")
+        not(any(feature = "widget", feature = "alert-engine")),
+        expect(dead_code, reason = "only charts and alerts read unaggregated bars")
     )]
     pub(crate) fn exact() -> Self {
         Self {
@@ -301,6 +301,11 @@ impl BarClock {
         sessions
             .with_calendar_zone(self.timezone.clone())
             .with_timeframe(self.timeframe.unwrap_or(Timeframe::Min1))
+    }
+
+    /// Whether this clock restricts bars to exchange trading windows.
+    pub fn has_session(&self) -> bool {
+        self.session.is_some()
     }
 
     /// Whether `t` is inside a window of this clock's session, always without a session.
