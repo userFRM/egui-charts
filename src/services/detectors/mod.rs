@@ -1082,19 +1082,32 @@ mod tests {
 
     #[test]
     fn detections_past_the_retained_5000_leave_the_live_chart_too() {
-        for kind in [DetectionKind::StopRun, DetectionKind::Iceberg] {
+        for kind in [
+            DetectionKind::BigTrade,
+            DetectionKind::StopRun,
+            DetectionKind::Iceberg,
+        ] {
             let host = Host::new(Some(10.0));
             let mut settings = host.detectors.settings();
             settings.stop_runs.enabled = kind == DetectionKind::StopRun;
             settings.stop_runs.alert = true;
             settings.icebergs.enabled = kind == DetectionKind::Iceberg;
             settings.icebergs.alert = true;
+            settings.big_trades.alert = kind == DetectionKind::BigTrade;
+            settings.liquidity.enabled = kind == DetectionKind::BigTrade;
+            settings.liquidity.rule.threshold = Threshold::Fixed(f64::MAX);
+            settings.liquidity.rule.fresh_threshold = Threshold::Fixed(1.0);
             host.detectors.set_settings(settings);
             let push = |ms, event| {
                 host.detectors
                     .push("ES", time(0) + chrono::TimeDelta::milliseconds(ms), &event)
             };
-            if kind == DetectionKind::StopRun {
+            if kind == DetectionKind::BigTrade {
+                push(
+                    0,
+                    MarketEvent::Trade(fill(0, 100.0, 10.0, OrderSide::Buy, Some(7))),
+                );
+            } else if kind == DetectionKind::StopRun {
                 for i in 0..5 {
                     let ts = time(0) + chrono::TimeDelta::milliseconds(i * 10);
                     push(
@@ -1141,10 +1154,46 @@ mod tests {
                     );
                 }
             }
-            assert_eq!(host.detectors.take_alerts().len(), 1, "{kind:?}");
+            assert_eq!(
+                host.detectors.take_alerts().len(),
+                if kind == DetectionKind::BigTrade {
+                    2
+                } else {
+                    1
+                },
+                "{kind:?}"
+            );
             let ts = time(0) + chrono::TimeDelta::milliseconds(45);
-            host.detectors
-                .push_history("ES", &vec![Tick::new(ts, 100.0, 10.0, None); 2501]);
+            if kind == DetectionKind::BigTrade {
+                // Depth detections evict the marker without ending its aggressor's fills.
+                for sequence in 1..=5001 {
+                    let book = OrderBook {
+                        ts,
+                        symbol: "ES".into(),
+                        bids: vec![OrderBookLevel {
+                            price: 99.0,
+                            size: sequence as f64,
+                            order_cnt: None,
+                        }],
+                        asks: Vec::new(),
+                    };
+                    push(
+                        45,
+                        if sequence == 1 {
+                            MarketEvent::DepthSnapshot { sequence, book }
+                        } else {
+                            MarketEvent::DepthDelta { sequence, book }
+                        },
+                    );
+                }
+                push(
+                    50,
+                    MarketEvent::Trade(fill(0, 100.0, 5.0, OrderSide::Buy, Some(7))),
+                );
+            } else {
+                host.detectors
+                    .push_history("ES", &vec![Tick::new(ts, 100.0, 10.0, None); 2501]);
+            }
             if kind == DetectionKind::StopRun {
                 push(
                     50,
@@ -1155,7 +1204,7 @@ mod tests {
                         Some(OrderSide::Buy),
                     )),
                 );
-            } else {
+            } else if kind == DetectionKind::Iceberg {
                 push(
                     50,
                     MarketEvent::Order {

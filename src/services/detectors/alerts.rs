@@ -188,9 +188,13 @@ impl Counting {
         let now = self.now.map_or(time, |last| last.max(time));
         self.now = Some(now);
         for counter in self.kinds.values_mut() {
-            counter
+            while counter
                 .times
-                .retain(|&time, _| now.signed_duration_since(time) < TimeDelta::minutes(5));
+                .first_key_value()
+                .is_some_and(|(&time, _)| now.signed_duration_since(time) >= TimeDelta::minutes(5))
+            {
+                counter.times.pop_first();
+            }
         }
         for kind in [DetectionKind::Iceberg, DetectionKind::StopRun] {
             self.check(kind, now, settings, live, symbol, delivery);
@@ -265,7 +269,13 @@ impl Tracked {
             };
             let counter = self.counting.kinds.entry(kind).or_default();
             // These episodes can outlive chart retention; their numbers only increase.
-            if matches!(kind, DetectionKind::StopRun | DetectionKind::Iceberg) {
+            if matches!(
+                kind,
+                DetectionKind::BigTrade
+                    | DetectionKind::BigTradeZone
+                    | DetectionKind::StopRun
+                    | DetectionKind::Iceberg
+            ) {
                 let number = signal
                     .id
                     .0
