@@ -210,7 +210,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] `AlertsPanel` uses `services::Alerts` to list, edit, pause/enable and remove alerts, and to show supplied trigger events in toasts and an exportable log.
 - [ ] Add user-controlled sorting and cloning to the alerts panel.
 - [ ] Offer inline creation and series-level alert settings alongside the shared dialog.
-- [ ] Add channel-drawing alert geometry.
+- [x] Drawing alerts follow fork, pitchfan and regression lines on linear and logarithmic scales, with entry, exit, inside and outside conditions resolving both moving boundaries.
 - [ ] Model persistent inside/outside-channel conditions and once-per-minute frequency.
 - [ ] Expose message placeholder and per-alert notification-schedule configuration for host processing.
 

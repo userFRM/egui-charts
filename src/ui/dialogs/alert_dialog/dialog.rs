@@ -10,8 +10,8 @@ use egui::{Context, Ui};
 use super::{AlertDialogAction, AlertDialogConfig};
 use crate::data::{FeedError, inbox::Inbox};
 use crate::model::{
-    Alert, AlertComparison, AlertCondition, AlertFrequency, AlertRule, AlertSource,
-    NotificationSchedule, NotificationWindow, TimezoneId,
+    Alert, AlertChannelComparison, AlertComparison, AlertCondition, AlertFrequency, AlertRule,
+    AlertSource, NotificationSchedule, NotificationWindow, TimezoneId,
 };
 use crate::services::{Storage, StoreKind};
 use crate::ui_kit::FormGrid;
@@ -649,8 +649,10 @@ fn source_picker(
         .truncate()
         .selected_text(l10n::text(ui.ctx(), label))
         .show_ui(ui, |ui| {
-            ui.selectable_value(source, AlertSource::Price, l10n::text(ui.ctx(), "Price"));
-            ui.selectable_value(source, AlertSource::Volume, l10n::text(ui.ctx(), "Volume"));
+            if !id.starts_with("boundary_") {
+                ui.selectable_value(source, AlertSource::Price, l10n::text(ui.ctx(), "Price"));
+                ui.selectable_value(source, AlertSource::Volume, l10n::text(ui.ctx(), "Volume"));
+            }
             for (value, name) in sources {
                 ui.selectable_value(source, value.clone(), l10n::text(ui.ctx(), name));
             }
@@ -658,12 +660,56 @@ fn source_picker(
         .response
         .accessible_name(l10n::text(
             ui.ctx(),
-            if id == "other" {
-                "Comparison source"
-            } else {
-                "Source"
+            match id {
+                "other" => "Comparison source",
+                "boundary_a" => "First boundary",
+                "boundary_b" => "Second boundary",
+                _ => "Source",
             },
         ));
+}
+
+fn drawing_id(source: &AlertSource) -> Option<&str> {
+    match source {
+        AlertSource::Drawing(id) => Some(id.split('#').next().unwrap_or(id)),
+        _ => None,
+    }
+}
+
+/// Seed a channel from the selected drawing, retaining an existing pair verbatim.
+fn drawing_channel(
+    source: &AlertSource,
+    condition: &AlertCondition,
+    sources: &[(AlertSource, String)],
+) -> Option<AlertCondition> {
+    if let AlertCondition::Channel { .. } = condition {
+        return Some(condition.clone());
+    }
+    let selected = match condition {
+        AlertCondition::Compare { other, .. } if drawing_id(other).is_some() => Some(other),
+        _ if drawing_id(source).is_some() => Some(source),
+        _ => sources
+            .iter()
+            .find(|(s, _)| {
+                drawing_id(s).is_some()
+                    && sources
+                        .iter()
+                        .filter(|(other, _)| drawing_id(other) == drawing_id(s))
+                        .count()
+                        >= 2
+            })
+            .map(|(s, _)| s),
+    }?;
+    let mut levels = sources
+        .iter()
+        .filter(|(s, _)| drawing_id(s) == drawing_id(selected))
+        .rev();
+    let b = levels.next()?.0.clone();
+    let a = levels.next()?.0.clone();
+    Some(AlertCondition::Channel {
+        boundaries: [a, b],
+        comparison: AlertChannelComparison::Entering,
+    })
 }
 
 pub(crate) fn rule_form(
@@ -677,6 +723,7 @@ pub(crate) fn rule_form(
         |ui| source_picker(ui, "source", source, sources),
     );
     let level = condition.level().unwrap_or(0.0);
+    let channel = drawing_channel(source, condition, sources);
     let choices = [
         (AlertCondition::Crossing(level), "Crossing"),
         (AlertCondition::CrossingUp(level), "Crossing up"),
@@ -739,7 +786,10 @@ pub(crate) fn rule_form(
             },
             "Volume above average",
         ),
-    ];
+    ]
+    .into_iter()
+    .chain(channel.map(|c| (c, "Drawing channel")))
+    .collect::<Vec<_>>();
     let selected = choices
         .iter()
         .find(|(c, _)| std::mem::discriminant(c) == std::mem::discriminant(condition))
@@ -801,6 +851,37 @@ pub(crate) fn rule_form(
             ui.add(egui::DragValue::new(bars).range(1..=u32::MAX))
                 .accessible_name(l10n::text(ui.ctx(), "Bars"));
         }
+        AlertCondition::Channel {
+            boundaries,
+            comparison,
+        } => {
+            let drawings: Vec<_> = sources
+                .iter()
+                .filter(|(s, _)| drawing_id(s).is_some())
+                .cloned()
+                .collect();
+            ui.label(l10n::text(ui.ctx(), "Drawing boundaries"));
+            source_picker(ui, "boundary_a", &mut boundaries[0], &drawings);
+            source_picker(ui, "boundary_b", &mut boundaries[1], &drawings);
+            egui::ComboBox::from_id_salt("channel_comparison")
+                .selected_text(l10n::text(ui.ctx(), comparison.to_string()))
+                .show_ui(ui, |ui| {
+                    for value in [
+                        AlertChannelComparison::Entering,
+                        AlertChannelComparison::Exiting,
+                        AlertChannelComparison::Inside,
+                        AlertChannelComparison::Outside,
+                    ] {
+                        ui.selectable_value(
+                            comparison,
+                            value,
+                            l10n::text(ui.ctx(), value.to_string()),
+                        );
+                    }
+                })
+                .response
+                .accessible_name(l10n::text(ui.ctx(), "Channel condition"));
+        }
         AlertCondition::Compare { other, comparison } => {
             source_picker(ui, "other", other, sources);
             egui::ComboBox::from_id_salt("comparison")
@@ -847,6 +928,65 @@ mod tests {
         }
         fn delete(&self, _: StoreKind, _: &str, reply: Reply<()>) {
             reply.send(Ok(()));
+        }
+    }
+
+    #[test]
+    fn drawing_channel_keeps_selected_boundaries_through_edits() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        for dark in [false, true] {
+            for width in [320.0, 960.0] {
+                let drawing = |id: &str| AlertSource::Drawing(id.into());
+                let sources = vec![
+                    (drawing("a"), "Other line".into()),
+                    (drawing("a#1"), "Other boundary".into()),
+                    (drawing("b%23saved"), "Median".into()),
+                    (drawing("b%23saved#1"), "Upper".into()),
+                    (drawing("b%23saved#2"), "Lower".into()),
+                ];
+                let single = AlertCondition::Compare {
+                    other: drawing("b%23saved"),
+                    comparison: AlertComparison::Crossing,
+                };
+                let mut dialog = AlertDialog::new();
+                dialog.sources = sources;
+                dialog.edit(Alert::new("SAMPLE", single));
+                let mut h = Harness::builder()
+                    .with_size(egui::vec2(width, 900.0))
+                    .build_ui_state(
+                        |ui, dialog: &mut AlertDialog| {
+                            ui.ctx().set_visuals(if dark {
+                                egui::Visuals::dark()
+                            } else {
+                                egui::Visuals::light()
+                            });
+                            dialog.form(ui)
+                        },
+                        dialog,
+                    );
+                h.run();
+                h.get_by_label("Condition").click();
+                h.run();
+                h.get_by_label("Drawing channel").scroll_to_me();
+                h.run();
+                h.get_by_label("Drawing channel").click();
+                h.run();
+                let expected: AlertCondition = serde_json::from_value(serde_json::json!({"Channel": {
+                    "boundaries": [{"Drawing":"b%23saved#1"},{"Drawing":"b%23saved#2"}], "comparison":"Entering"
+                }})).unwrap();
+                assert_eq!(h.state().alert.condition, expected);
+                let saved = serde_json::to_string(&h.state().alert).unwrap();
+                h.state_mut().edit(serde_json::from_str(&saved).unwrap());
+                h.run();
+                assert_eq!(h.state().alert.condition, expected);
+                for label in ["First boundary", "Second boundary", "Channel condition"] {
+                    let rect = h.get_by_label(label).rect();
+                    assert!(
+                        rect.left() >= 0.0 && rect.right() <= width,
+                        "{label}: {rect:?} at {width}"
+                    );
+                }
+            }
         }
     }
 
@@ -914,6 +1054,20 @@ mod tests {
                 condition: AlertCondition::Compare {
                     other: AlertSource::Drawing("7".into()),
                     comparison: AlertComparison::Crossing,
+                },
+            });
+            dialog.sources.push((
+                AlertSource::Drawing("7#1".into()),
+                "A long second boundary name".repeat(4),
+            ));
+            dialog.alert.additional_conditions.push(AlertRule {
+                source: AlertSource::Price,
+                condition: AlertCondition::Channel {
+                    boundaries: [
+                        AlertSource::Drawing("7".into()),
+                        AlertSource::Drawing("7#1".into()),
+                    ],
+                    comparison: AlertChannelComparison::Entering,
                 },
             });
             for size in [
