@@ -148,18 +148,19 @@ Chart,Crosshair and interaction,"Chart, series and drawing context menus",partia
 Chart,Crosshair and interaction,Crosshair across all panes,done,library,src/widget/pane/render/mod.rs;src/widget/pane/indicator/mod.rs;src/widget/frame/mod.rs,
 Chart,Crosshair and interaction,Crosshair lines and axis labels,done,library,src/chart/rendering/overlays/crosshair.rs;src/scales/time_formatter.rs;src/painting/dashed_line.rs;src/config/crosshair.rs;src/chart/rendering/axes/mod.rs;src/theme/presets.rs;src/widget/pane/render/mod.rs;src/scales/horizontal.rs;src/widget/frame/mod.rs,
 Chart,Crosshair and interaction,Cursor types,done,library,src/widget/tool_interaction/cursor_modes/mod.rs;src/widget/tool_interaction/cursor_modes/eraser.rs;src/widget/tool_interaction/selection.rs;src/widget/pane/render/mod.rs;src/drawings/manager/interaction.rs;src/widget/frame/mod.rs,
-Chart,Crosshair and interaction,Double-click on axes to reset,done,library,src/widget/pan_zoom/mod.rs;src/widget/pane/mod.rs;src/widget/pane/controls.rs;src/widget/frame/mod.rs,
-Chart,Crosshair and interaction,Drag on the time axis to zoom,done,library,src/widget/pan_zoom/mod.rs;src/widget/frame/mod.rs,
-Chart,Crosshair and interaction,Drag or wheel on the price axis to zoom,done,library,src/widget/pan_zoom/mod.rs;src/widget/frame/mod.rs,
-Chart,Crosshair and interaction,Drag to pan,done,library,src/widget/pan_zoom/mod.rs;src/widget/frame/mod.rs,
+Chart,Crosshair and interaction,Double-click on axes to reset,done,library,src/widget/pan_zoom/mod.rs;src/widget/pane/mod.rs;src/widget/pane/controls.rs;src/widget/frame/mod.rs;src/config/interaction.rs,1888
+Chart,Crosshair and interaction,Drag on the time axis to zoom,done,library,src/widget/pan_zoom/mod.rs;src/widget/frame/mod.rs;src/config/interaction.rs,1888
+Chart,Crosshair and interaction,Drag or wheel on the price axis to zoom,done,library,src/widget/pan_zoom/mod.rs;src/widget/frame/mod.rs;src/config/interaction.rs;src/widget/pane/controls.rs;src/widget/series/paint.rs,1888
+Chart,Crosshair and interaction,Drag to pan,done,library,src/widget/pan_zoom/mod.rs;src/widget/frame/mod.rs;src/config/interaction.rs,1888
 Chart,Crosshair and interaction,Go to date,done,library,src/widget/builder.rs;src/widget/pan_zoom/mod.rs;terminal/src/time.rs,
-Chart,Crosshair and interaction,Horizontal scroll,done,library,src/widget/pan_zoom/mod.rs;src/widget/frame/mod.rs,
+Chart,Crosshair and interaction,Horizontal scroll,done,library,src/widget/pan_zoom/mod.rs;src/widget/frame/mod.rs;src/config/interaction.rs,1888
 Chart,Crosshair and interaction,Hover tooltip and floating data window,done,library,src/chart/rendering/overlays/tooltip.rs;src/widget/readout.rs;src/scales/horizontal.rs;src/scales/time_formatter.rs;src/widget/frame/mod.rs,
-Chart,Crosshair and interaction,Kinetic scroll,done,library,src/widget/pan_zoom/mod.rs;src/config/kinetic.rs;src/widget/mod.rs;src/widget/builder.rs,
+Chart,Crosshair and interaction,Kinetic scroll,done,library,src/widget/pan_zoom/mod.rs;src/config/kinetic.rs;src/widget/mod.rs;src/widget/builder.rs;src/config/interaction.rs,1888
 Chart,Crosshair and interaction,Magnet crosshair,done,library,src/widget/crosshair.rs;src/widget/series/options.rs;src/widget/series/paint.rs,
-Chart,Crosshair and interaction,Mouse wheel zoom anchored at the cursor,done,library,src/widget/pan_zoom/mod.rs;src/model/timescale.rs;src/widget/frame/mod.rs,
-Chart,Crosshair and interaction,Pinch zoom and two-finger pan,done,library,src/widget/pan_zoom/mod.rs;src/widget/frame/mod.rs,
+Chart,Crosshair and interaction,Mouse wheel zoom anchored at the cursor,done,library,src/widget/pan_zoom/mod.rs;src/model/timescale.rs;src/widget/frame/mod.rs;src/config/interaction.rs,1888
+Chart,Crosshair and interaction,Pinch zoom and two-finger pan,done,library,src/widget/pan_zoom/mod.rs;src/widget/frame/mod.rs;src/config/interaction.rs,1888
 Chart,Crosshair and interaction,Price scale and time scale context menus,done,library,src/ui/context_menu/mod.rs;src/ui/context_menu/chart_menus/mod.rs;src/ui/context_menu/axis.rs,
+Chart,Crosshair and interaction,Scroll and scale handler group switches,done,library,src/config/interaction.rs;src/widget/pan_zoom/mod.rs;src/widget/pane/controls.rs;src/widget/series/paint.rs,1888
 Chart,Crosshair and interaction,Table view of chart data,done,library,src/widget/export.rs;src/ui/dialogs/data_table.rs;src/ui/context_menu/mod.rs,
 Chart,Crosshair and interaction,Undo and redo,done,library,src/widget/history.rs;src/widget/feed/mod.rs;examples/demo/controller.rs;src/widget/series/mod.rs;src/widget/replay.rs;src/widget/pane/render/mod.rs;src/widget/events.rs;src/widget/series/options.rs;examples/demo/comparison.rs;terminal/src/compare.rs,
 Chart,Crosshair and interaction,Zoom-to-rectangle tool,done,library,src/widget/pan_zoom/mod.rs;src/widget/pan_zoom/box_zoom.rs,

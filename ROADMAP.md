@@ -25,7 +25,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 
 ### Pan, Zoom and Cursor
 
-- [x] Cursor-centred wheel zoom, horizontal pan, drag pan, touch pan and pinch zoom.
+- [x] Cursor-centred wheel zoom, horizontal pan, drag pan, touch pan and pinch zoom. Scroll and scale gesture groups can be disabled independently without changing their individual permissions; disabling scrolling stops its momentum, and the scale switch also covers axis drags and resets in every pane.
 - [x] Touch drags can start kinetic scrolling with configurable damping.
 - [x] Axis drag scaling, double-click reset, box zoom and optional chart-owned navigation buttons.
 - [x] Cross, dot and arrow cursor modes, styled crosshair lines, price/time labels and OHLC snapping.
