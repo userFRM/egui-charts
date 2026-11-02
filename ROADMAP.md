@@ -193,6 +193,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Account summary, positions, orders, history, executions, balance and journal tables, with CSV export.
 - [x] Execution markers, rejection/fill notifications and execution sound intents.
 - [x] `StrategyReportPanel` accepts `StrategyReport` data and shows trade lists, equity/drawdown plots, performance metrics, supplied properties and chart navigation; trades export as CSV.
+- [x] `Backtest::update` processes new closed bars incrementally, retains observed forming-bar fills when tick recalculation is enabled, and rebuilds corrected history.
 - [x] `StrategyFactory` lists and creates built-in and host strategies with editable study inputs, defaults and bounds.
 - [x] `strategies::optimise` lazily runs every input combination on a fresh strategy with the same bars and settings, yielding its inputs and report performance; dropping the iterator stops further trials.
 - [x] Ten price-action strategies trade gaps, consecutive closes, inside/outside bars, channels, confirmed pivots and ATR expansion, with fill-relative tick brackets where needed.
@@ -205,6 +206,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Typed `Alert` conditions model price crossings/comparisons, moves over a bar span, study plots, supported drawing levels, watchlists and multiple conditions.
 - [x] Shared creation/editing dialog validates conditions, name, message, frequency and expiry; presets use storage.
 - [x] Toolbar, context-menu, price-scale and keyboard entry points, plus draggable chart alert levels.
+- [x] Strategy-run fill alerts carry execution prices and position messages, suppress repeated fill batches and run on the demo live feed.
 - [x] `AlertsPanel` uses `services::Alerts` to list, edit, pause/enable and remove alerts, and to show supplied trigger events in toasts and an exportable log.
 - [ ] Add user-controlled sorting and cloning to the alerts panel.
 - [ ] Offer inline creation and series-level alert settings alongside the shared dialog.

@@ -2,6 +2,10 @@
 
 use chrono::{DateTime, TimeDelta, Utc};
 
+#[path = "live.rs"]
+mod live;
+pub use live::StrategyFill;
+
 use crate::model::rounding_tolerance;
 use crate::model::{
     Bar, OrderSide, OrderType, StrategyExit, StrategyReport, StrategyTrade, Timeframe,
@@ -74,6 +78,9 @@ pub struct BacktestSettings {
     pub fill_on_close: bool,
     /// Decide again after every fill, at its execution price, without exposing future bars.
     pub recalculate_after_fills: bool,
+    /// Decide on changes of the forming bar in [`Backtest::update`], retaining intrabar fills.
+    /// Historical [`Backtest::run`] still decides only on closed bars.
+    pub recalculate_on_every_update: bool,
     /// First eligible chart-bar open. Earlier bars warm studies and strategy state without trading.
     pub start_time: Option<DateTime<Utc>>,
 }
@@ -91,6 +98,7 @@ impl Default for BacktestSettings {
             leverage: 1.0,
             fill_on_close: false,
             recalculate_after_fills: false,
+            recalculate_on_every_update: false,
             start_time: None,
         }
     }
@@ -130,7 +138,7 @@ impl BacktestSettings {
     }
 }
 
-/// A trading strategy that decides on closed bars.
+/// A trading strategy that decides on closed bars and, when enabled, live ticks.
 ///
 /// # Example
 ///
@@ -210,19 +218,28 @@ pub trait Strategy {
 
     /// Computes what the strategy needs from the whole run once, before the first bar, such as
     /// its studies. A value at a bar must depend only on that bar and earlier ones, as a study's
-    /// does, or the run looks ahead. Does nothing by default.
+    /// does, or the run looks ahead. Reset any decision state here so a corrected history can
+    /// start a fresh run. Does nothing by default.
     fn prepare(&mut self, bars: &[Bar]) {
         let _ = bars;
     }
 
+    /// Refreshes calculations for appended bars or a changed forming bar, preserving decision
+    /// state from `on_bar`. The default calls `prepare`; override it if `prepare` resets that
+    /// state. Like `prepare`, calculations must use only the prefix through each bar.
+    fn prepare_update(&mut self, bars: &[Bar]) {
+        self.prepare(bars);
+    }
+
     /// Decides on the bar that just closed, the last of [`StrategyContext::bars`], by placing and
     /// cancelling orders. With fill recalculation enabled this also runs immediately after a fill;
-    /// use the context's price and fill flag rather than reading an unfinished bar. Calls before
+    /// use the context's price and fill flag rather than reading an unfinished bar. Live updates
+    /// also call this on forming-bar changes when enabled; `is_forming_bar` identifies them. Calls before
     /// the start time warm the strategy's state, but cannot place orders.
     fn on_bar(&mut self, context: &mut StrategyContext<'_>);
 }
 
-/// What a [`Strategy`] sees on a closed bar: the bars up to it and the open position. It places
+/// What a [`Strategy`] sees at a decision: the bars up to it and the open position. It places
 /// and cancels working orders by id.
 ///
 /// An order placed with the id of a working order replaces it, keeping its original place
@@ -235,12 +252,14 @@ pub struct StrategyContext<'a> {
     price: f64,
     equity: f64,
     after_fill: bool,
+    forming: bool,
     trading: bool,
     tick: u64,
 }
 
 impl StrategyContext<'_> {
-    /// Closed chart bars, oldest first. During fill recalculation the current bar is excluded.
+    /// Chart bars through this decision, oldest first. Live tick decisions include the forming
+    /// bar; intrabar fill callbacks exclude the unfinished bar. See [`Self::is_forming_bar`].
     pub fn bars(&self) -> &[Bar] {
         self.bars
     }
@@ -250,7 +269,7 @@ impl StrategyContext<'_> {
         self.position
     }
 
-    /// The close on a bar decision, or the execution price immediately after a fill.
+    /// The latest close on a bar decision, or the execution price immediately after a fill.
     pub fn price(&self) -> f64 {
         self.price
     }
@@ -263,6 +282,12 @@ impl StrategyContext<'_> {
     /// Whether this is a recalculation immediately after a fill rather than a closed bar.
     pub fn is_after_fill(&self) -> bool {
         self.after_fill
+    }
+
+    /// Whether the current decision belongs to a still-forming live bar. Fill callbacks
+    /// continue to exclude that bar from `bars`, even while this flag is true.
+    pub fn is_forming_bar(&self) -> bool {
+        self.forming
     }
 
     /// Places an entry of `quantity` on `side`. Against an open position on the other side it
@@ -347,7 +372,7 @@ impl StrategyContext<'_> {
             id,
             quantity,
             kind,
-            deferred: self.after_fill.then_some(self.tick),
+            deferred: (self.after_fill || self.forming).then_some(self.tick),
         };
         match self
             .orders
@@ -361,16 +386,17 @@ impl StrategyContext<'_> {
 }
 
 /// A working order of a backtest.
+#[derive(Clone, Debug, PartialEq)]
 struct Working {
     id: String,
     /// `None` for an exit of the whole position or an entry using the default size.
     quantity: Option<f64>,
     kind: Kind,
-    /// Orders created after a fill wait for a subsequent price point.
+    /// Orders created after a fill or on a forming-bar decision wait for a subsequent price point.
     deferred: Option<u64>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Kind {
     Entry(OrderSide, OrderType),
     /// Take profit, stop loss and the exit's side, `None` until a position opens for it to reduce.
@@ -380,6 +406,7 @@ enum Kind {
 }
 
 /// An entry's quantity that is still open.
+#[derive(Clone, Debug, PartialEq)]
 struct Lot {
     entry: String,
     side: OrderSide,
@@ -425,6 +452,7 @@ pub struct Backtest {
     pub timeframe: Timeframe,
     /// Account and execution assumptions, also recorded in the report's properties.
     pub settings: BacktestSettings,
+    live: Option<Box<live::LiveState>>,
 }
 
 impl Backtest {
@@ -439,6 +467,7 @@ impl Backtest {
             name: name.into(),
             symbol: symbol.into(),
             timeframe,
+            live: None,
             settings: BacktestSettings {
                 initial_capital,
                 ..Default::default()
@@ -461,6 +490,35 @@ impl Backtest {
     ///
     /// Panics if the starting capital is not finite.
     pub fn run(&self, strategy: &mut dyn Strategy, bars: &[Bar], lower: &[Bar]) -> StrategyReport {
+        let settings = &self.settings;
+        let mut report = self.new_report(strategy, lower.len());
+        let mut lower: Vec<_> = lower.iter().filter(|bar| valid_bar(bar)).collect();
+        lower.sort_by_key(|bar| bar.time);
+        lower.dedup_by_key(|bar| bar.time);
+        strategy.prepare(bars);
+        let mut run = Run {
+            orders: Vec::new(),
+            lots: Vec::new(),
+            trades: Vec::new(),
+            realized: 0.0,
+            rejected: 0,
+            settings,
+            strategy,
+            history: &[],
+            trading: false,
+            tick: 0,
+            fills: None,
+            forming: false,
+        };
+        run.start_equity(self.timeframe, bars, &mut report);
+        for index in 0..bars.len() {
+            run.closed_bar(bars, index, &lower, &mut report, true);
+        }
+        run.report_trades(&mut report);
+        report
+    }
+
+    fn new_report(&self, strategy: &dyn Strategy, lower_count: usize) -> StrategyReport {
         let settings = &self.settings;
         assert!(
             settings.initial_capital.is_finite(),
@@ -501,6 +559,10 @@ impl Backtest {
                 "Recalculate after fills".into(),
                 settings.recalculate_after_fills.to_string(),
             ),
+            (
+                "Recalculate on every update".into(),
+                settings.recalculate_on_every_update.to_string(),
+            ),
         ];
         report.properties.push((
             "Start time".into(),
@@ -510,106 +572,13 @@ impl Backtest {
         ));
         report
             .properties
-            .push(("Lower-interval bars".into(), lower.len().to_string()));
+            .push(("Lower-interval bars".into(), lower_count.to_string()));
         report.properties.extend(
             strategy
                 .inputs()
                 .into_iter()
                 .map(|(name, value)| (format!("Input: {name}"), value)),
         );
-        let mut lower: Vec<_> = lower.iter().filter(|bar| valid_bar(bar)).collect();
-        lower.sort_by_key(|bar| bar.time);
-        lower.dedup_by_key(|bar| bar.time);
-        strategy.prepare(bars);
-        let mut run = Run {
-            orders: Vec::new(),
-            lots: Vec::new(),
-            trades: Vec::new(),
-            realized: 0.0,
-            rejected: 0,
-            settings,
-            strategy,
-            history: &[],
-            trading: false,
-            tick: 0,
-        };
-        if let Some(first) = bars
-            .iter()
-            .find(|bar| settings.start_time.is_none_or(|start| bar.time >= start))
-        {
-            let interval = self.timeframe.duration().max(TimeDelta::milliseconds(1));
-            let before = first.time.checked_sub_signed(interval);
-            report.equity.push((
-                settings
-                    .start_time
-                    .unwrap_or(before.unwrap_or(DateTime::<Utc>::MIN_UTC)),
-                settings.initial_capital,
-            ));
-        }
-        for (index, bar) in bars.iter().enumerate() {
-            run.trading = settings.start_time.is_none_or(|start| bar.time >= start);
-            if !run.trading {
-                run.history = &bars[..=index];
-                run.decide(bar.close, false);
-                continue;
-            }
-            let end = bar_end(self.timeframe, bar, bars.get(index + 1));
-            run.history = &bars[..index];
-            let valid = valid_bar(bar);
-            let from = lower.partition_point(|lower| lower.time < bar.time);
-            let to = lower.partition_point(|lower| end.is_none_or(|end| lower.time < end));
-            let last_price_time = if from < to {
-                lower[to - 1].time
-            } else {
-                bar.time
-            };
-            if valid {
-                if from < to {
-                    for lower in &lower[from..to] {
-                        run.fill_bar(lower);
-                    }
-                } else {
-                    run.fill_bar(bar);
-                }
-            }
-            run.history = &bars[..=index];
-            run.decide(bar.close, false);
-            if valid && settings.fill_on_close {
-                let close_time = if from < to || settings.start_time.is_some() {
-                    end.unwrap_or(last_price_time)
-                } else {
-                    bar.time
-                };
-                run.fill_markets(bar.close, close_time);
-            }
-            report.equity.push((
-                if settings.start_time.is_some() {
-                    // A final execution bar has no known end; keep its mark after its last price.
-                    end.unwrap_or_else(|| {
-                        last_price_time
-                            .checked_add_signed(TimeDelta::nanoseconds(1))
-                            .unwrap_or(last_price_time)
-                    })
-                } else {
-                    bar.time
-                },
-                if valid {
-                    run.equity(bar.close)
-                } else {
-                    f64::NAN
-                },
-            ));
-        }
-        report
-            .properties
-            .push(("Rejected orders".into(), run.rejected.to_string()));
-        report.trades = run.trades;
-        report.trades.extend(run.lots.into_iter().map(|lot| {
-            let mut trade = StrategyTrade::new(lot.side, lot.quantity, lot.time, lot.price);
-            trade.label = Some(lot.entry);
-            trade.fees = lot.fees;
-            trade
-        }));
         report
     }
 }
@@ -665,9 +634,112 @@ struct Run<'a> {
     history: &'a [Bar],
     trading: bool,
     tick: u64,
+    fills: Option<&'a mut Vec<StrategyFill>>,
+    forming: bool,
 }
 
-impl Run<'_> {
+impl<'a> Run<'a> {
+    fn start_equity(&self, timeframe: Timeframe, bars: &[Bar], report: &mut StrategyReport) {
+        if let Some(first) = bars.iter().find(|bar| {
+            self.settings
+                .start_time
+                .is_none_or(|start| bar.time >= start)
+        }) {
+            let interval = timeframe.duration().max(TimeDelta::milliseconds(1));
+            let before = first.time.checked_sub_signed(interval);
+            report.equity.push((
+                self.settings
+                    .start_time
+                    .unwrap_or(before.unwrap_or(DateTime::<Utc>::MIN_UTC)),
+                self.settings.initial_capital,
+            ));
+        }
+    }
+
+    fn closed_bar(
+        &mut self,
+        bars: &'a [Bar],
+        index: usize,
+        lower: &[&Bar],
+        report: &mut StrategyReport,
+        walk: bool,
+    ) {
+        self.forming = false;
+        let timeframe = report.timeframe;
+        let bar = &bars[index];
+        self.trading = self
+            .settings
+            .start_time
+            .is_none_or(|start| bar.time >= start);
+        if !self.trading {
+            self.history = &bars[..=index];
+            self.decide(bar.close, false);
+            return;
+        }
+        let end = bar_end(timeframe, bar, bars.get(index + 1));
+        self.history = &bars[..index];
+        let valid = valid_bar(bar);
+        let from = lower.partition_point(|lower| lower.time < bar.time);
+        let to = lower.partition_point(|lower| end.is_none_or(|end| lower.time < end));
+        let last_price_time = if from < to {
+            lower[to - 1].time
+        } else {
+            bar.time
+        };
+        if valid && walk {
+            if from < to {
+                for lower in &lower[from..to] {
+                    self.fill_bar(lower);
+                }
+            } else {
+                self.fill_bar(bar);
+            }
+        }
+        self.history = &bars[..=index];
+        self.decide(bar.close, false);
+        if valid && self.settings.fill_on_close {
+            let close_time = if from < to || self.settings.start_time.is_some() {
+                end.unwrap_or(last_price_time)
+            } else {
+                bar.time
+            };
+            self.fill_markets(bar.close, close_time);
+        }
+        report.equity.push((
+            if self.settings.start_time.is_some() {
+                // A final execution bar has no known end; keep its mark after its last price.
+                end.unwrap_or_else(|| {
+                    last_price_time
+                        .checked_add_signed(TimeDelta::nanoseconds(1))
+                        .unwrap_or(last_price_time)
+                })
+            } else {
+                bar.time
+            },
+            if valid {
+                self.equity(bar.close)
+            } else {
+                f64::NAN
+            },
+        ));
+    }
+
+    fn report_trades(&self, report: &mut StrategyReport) {
+        report
+            .properties
+            .retain(|(name, _)| name != "Rejected orders");
+        report
+            .properties
+            .push(("Rejected orders".into(), self.rejected.to_string()));
+        report.trades = self.trades.clone();
+        report.trades.extend(self.lots.iter().map(|lot| {
+            let mut trade = StrategyTrade::new(lot.side, lot.quantity, lot.time, lot.price);
+            trade.label = Some(lot.entry.clone());
+            trade.fees = lot.fees;
+            trade
+        }));
+    }
+
     fn position(&self) -> f64 {
         self.lots.iter().fold(0.0, |position, lot| {
             position + sign(lot.side) * lot.quantity
@@ -694,6 +766,7 @@ impl Run<'_> {
             price,
             equity,
             after_fill,
+            forming: self.forming,
             trading: self.trading,
             tick: self.tick,
         });
@@ -934,6 +1007,8 @@ impl Run<'_> {
             mark
         };
         let held = self.position().abs();
+        let order_id = self.fills.as_ref().map(|_| order.id.clone());
+        let filled_quantity;
         match order.kind {
             Kind::Entry(..) => {
                 let reversing = self.lots.first().is_some_and(|lot| lot.side != side);
@@ -964,6 +1039,7 @@ impl Run<'_> {
                     self.rejected += 1;
                     return;
                 }
+                filled_quantity = filled;
                 self.realized -= fee;
                 if reversing {
                     self.close(f64::INFINITY, &order.id, price, fee, filled, time);
@@ -987,6 +1063,7 @@ impl Run<'_> {
                 if !price.is_finite() || !fee.is_finite() {
                     return;
                 }
+                filled_quantity = quantity;
                 self.realized -= fee;
                 self.close(
                     order.quantity.unwrap_or(f64::INFINITY),
@@ -1006,6 +1083,17 @@ impl Run<'_> {
             }
         }
         let position = self.position();
+        if let Some(fills) = &mut self.fills {
+            fills.push(StrategyFill {
+                sequence: 0,
+                time,
+                order_id: order_id.unwrap_or_default(),
+                side,
+                price,
+                quantity: filled_quantity,
+                position,
+            });
+        }
         let pending = [OrderSide::Buy, OrderSide::Sell].map(|side| {
             self.orders
                 .iter()

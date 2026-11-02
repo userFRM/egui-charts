@@ -151,19 +151,24 @@ pub struct AlertStudy {
 }
 
 impl Alert {
-    /// An active alert on `symbol` with no id, frequency `Once`, no expiry and no message.
+    /// An active alert on `symbol` with no id, no expiry and no message. Frequency is `Once`
+    /// for bar conditions and `EveryTime` for strategy fills.
     pub fn new(symbol: impl Into<String>, condition: AlertCondition) -> Self {
         Self {
             id: None,
             symbol: symbol.into(),
-            condition,
             name: String::new(),
             watchlist: None,
             timeframe: None,
             inputs: None,
             source: AlertSource::Price,
             additional_conditions: Vec::new(),
-            frequency: AlertFrequency::default(),
+            frequency: if matches!(condition, AlertCondition::StrategyFills(_)) {
+                AlertFrequency::EveryTime
+            } else {
+                AlertFrequency::default()
+            },
+            condition,
             expires: None,
             schedule: None,
             message: String::new(),
@@ -269,6 +274,10 @@ impl Alert {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum AlertCondition {
+    /// Each fill of the host's uniquely named strategy run. Feed `Backtest::update` results to
+    /// `AlertEngine::strategy_fills` with the same run id. Uses the price source, no additional
+    /// rules, and frequency `EveryTime` (the constructor default) or `Once`. No bars evaluate it.
+    StrategyFills(String),
     /// The previous value was strictly below or above the level and the current value reaches
     /// or passes it, in either direction.
     Crossing(f64),
@@ -394,9 +403,10 @@ impl AlertSource {
 }
 
 impl AlertCondition {
-    /// Whether the condition has finite, ordered levels and a nonzero lookback.
+    /// Whether levels are finite and ordered, lookbacks positive, and referenced ids nonempty.
     pub fn is_valid(&self) -> bool {
         match self {
+            Self::StrategyFills(run) => !run.trim().is_empty(),
             Self::Crossing(v)
             | Self::CrossingUp(v)
             | Self::CrossingDown(v)
@@ -435,6 +445,7 @@ impl AlertCondition {
 impl std::fmt::Display for AlertCondition {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::StrategyFills(run) => write!(f, "Fills of strategy {run}"),
             Self::Crossing(v) => write!(f, "Crossing {v}"),
             Self::CrossingUp(v) => write!(f, "Crossing up {v}"),
             Self::CrossingDown(v) => write!(f, "Crossing down {v}"),
@@ -469,6 +480,17 @@ impl Alert {
                 .watchlist
                 .as_ref()
                 .is_none_or(|id| !id.trim().is_empty())
+            && (!matches!(self.condition, AlertCondition::StrategyFills(_))
+                || (self.source == AlertSource::Price
+                    && self.additional_conditions.is_empty()
+                    && matches!(
+                        self.frequency,
+                        AlertFrequency::EveryTime | AlertFrequency::Once
+                    )))
+            && self
+                .additional_conditions
+                .iter()
+                .all(|rule| !matches!(rule.condition, AlertCondition::StrategyFills(_)))
             && self.source.is_valid()
             && self.condition.is_valid()
             && self
@@ -655,7 +677,31 @@ mod tests {
     #[test]
     fn saved_alerts_require_finite_levels_ordered_channels_and_positive_lookbacks() {
         type Edit = fn(&mut Alert);
-        let rows: [(Edit, bool); 18] = [
+        let rows: [(Edit, bool); 22] = [
+            (
+                |a| a.condition = AlertCondition::StrategyFills("run".into()),
+                true,
+            ),
+            (
+                |a| a.condition = AlertCondition::StrategyFills(" ".into()),
+                false,
+            ),
+            (
+                |a| {
+                    a.condition = AlertCondition::StrategyFills("run".into());
+                    a.frequency = AlertFrequency::OncePerBar;
+                },
+                false,
+            ),
+            (
+                |a| {
+                    a.additional_conditions.push(AlertRule {
+                        source: AlertSource::Price,
+                        condition: AlertCondition::StrategyFills("run".into()),
+                    });
+                },
+                false,
+            ),
             (|a| a.condition = AlertCondition::Crossing(f64::NAN), false),
             (
                 |a| a.condition = AlertCondition::Above(f64::INFINITY),

@@ -673,7 +673,10 @@ pub(crate) fn rule_form(
     sources: &[(AlertSource, String)],
 ) {
     ui.add_enabled_ui(
-        !matches!(condition, AlertCondition::VolumeAboveAverage { .. }),
+        !matches!(
+            condition,
+            AlertCondition::VolumeAboveAverage { .. } | AlertCondition::StrategyFills(_)
+        ),
         |ui| source_picker(ui, "source", source, sources),
     );
     let level = condition.level().unwrap_or(0.0);
@@ -744,7 +747,11 @@ pub(crate) fn rule_form(
         .iter()
         .find(|(c, _)| std::mem::discriminant(c) == std::mem::discriminant(condition))
         .map(|(_, name)| *name)
-        .unwrap_or("Condition");
+        .unwrap_or(if matches!(condition, AlertCondition::StrategyFills(_)) {
+            "Strategy fills"
+        } else {
+            "Condition"
+        });
     egui::ComboBox::from_id_salt("condition")
         .selected_text(l10n::text(ui.ctx(), selected))
         .show_ui(ui, |ui| {
@@ -764,6 +771,10 @@ pub(crate) fn rule_form(
         .response
         .accessible_name(l10n::text(ui.ctx(), "Condition"));
     ui.horizontal_wrapped(|ui| match condition {
+        AlertCondition::StrategyFills(run) => {
+            ui.text_edit_singleline(run)
+                .accessible_name(l10n::text(ui.ctx(), "Strategy run"));
+        }
         AlertCondition::Crossing(v)
         | AlertCondition::CrossingUp(v)
         | AlertCondition::CrossingDown(v)

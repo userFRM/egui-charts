@@ -66,6 +66,7 @@ fn sample_backtest(symbol: &str, timeframe: Timeframe, bars: &[Bar]) -> Strategy
 
 impl DemoApp {
     pub(super) fn run_sample_backtest(&mut self) {
+        self.stop_live_strategy();
         let bars = self.chart.bars(SeriesId::MAIN);
         // The newest bar can still change. Bound this synchronous demonstration to 121 opens.
         let completed = &bars[..bars.len().saturating_sub(1)];
@@ -83,6 +84,7 @@ impl DemoApp {
     }
 
     pub(super) fn show_strategy_report(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
+        self.update_live_strategy();
         if self.strategy_report.report().is_none() {
             return;
         }
@@ -93,11 +95,21 @@ impl DemoApp {
             .size_range(100.0..=(ui.available_height() * 0.7).max(100.0))
             .frame(panel_frame(bg))
             .show(ui, |ui| {
-                clear = ui.button("Clear report").clicked();
+                ui.horizontal(|ui| {
+                    clear = ui.button("Clear report").clicked();
+                    if self.live_strategy.is_some() {
+                        if ui.button("Stop forward test").clicked() {
+                            self.stop_live_strategy();
+                        }
+                    } else if ui.button("Forward test").clicked() {
+                        self.start_live_strategy();
+                    }
+                });
                 self.strategy_report.show(ui)
             })
             .inner;
         if clear {
+            self.stop_live_strategy();
             self.strategy_report.set_report(None, &[]);
             self.strategy_trade = None;
             self.refresh_strategy_signals();
@@ -200,15 +212,22 @@ impl Signals for ReportSignals {
             return;
         }
         for (index, trade) in self.report.trades.iter().enumerate() {
-            for (fill, time, price, direction) in [
-                ("Entry", trade.entry_time, trade.entry_price, Direction::Up),
-                (
-                    "Exit",
-                    trade.exit.as_ref().expect("sample round trip").time,
-                    trade.exit.as_ref().expect("sample round trip").price,
-                    Direction::Down,
-                ),
-            ] {
+            let (entry_direction, exit_direction) = match trade.side {
+                OrderSide::Buy => (Direction::Up, Direction::Down),
+                OrderSide::Sell => (Direction::Down, Direction::Up),
+            };
+            for (fill, time, price, direction) in std::iter::once((
+                "Entry",
+                trade.entry_time,
+                trade.entry_price,
+                entry_direction,
+            ))
+            .chain(
+                trade
+                    .exit
+                    .as_ref()
+                    .map(|exit| ("Exit", exit.time, exit.price, exit_direction)),
+            ) {
                 events.push(SignalEvent::Upsert(Signal {
                     id: SignalId(format!("sample-backtest-{index}-{fill}")),
                     shape: SignalShape::Marker {
