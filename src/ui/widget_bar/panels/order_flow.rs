@@ -367,7 +367,7 @@ mod tests {
                 assert!(service.settings().big_trades.enabled);
                 assert!(service.settings().big_trades.alert);
                 assert!(service.settings().big_trades.sound);
-                for second in 1..=4 {
+                for second in 1..=6 {
                     let time = now + chrono::TimeDelta::seconds(second);
                     service.push(
                         "ES",
@@ -377,10 +377,7 @@ mod tests {
                 }
                 let mut toasts = Toasts::new();
                 let sounds = panel.poll(&ctx, &mut toasts);
-                assert_eq!(
-                    sounds,
-                    [DetectionKind::BigTrade, DetectionKind::BigTradeZone].repeat(4)
-                );
+                assert_eq!(sounds, [DetectionKind::BigTrade; 6]);
                 assert_eq!(toasts.len(), 5);
                 assert!(
                     toasts.toasts().iter().all(|toast| toast

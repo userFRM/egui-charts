@@ -788,7 +788,8 @@ mod tests {
         let alerts = host.detectors.take_alerts();
         assert_eq!(
             alerts.iter().map(|alert| alert.kind).collect::<Vec<_>>(),
-            [DetectionKind::BigTrade, DetectionKind::BigTradeZone]
+            [DetectionKind::BigTrade],
+            "a big trade alerts once, not again for its zone"
         );
         assert!(alerts.iter().all(|alert| alert.sound
             && alert.notification.symbol.as_deref() == Some("ES")
@@ -812,7 +813,7 @@ mod tests {
         host.detectors.watch(replay);
         assert_eq!(
             inbox.drain().answers.len(),
-            2,
+            1,
             "late subscribers receive the live log only"
         );
         assert_eq!(
@@ -1154,15 +1155,7 @@ mod tests {
                     );
                 }
             }
-            assert_eq!(
-                host.detectors.take_alerts().len(),
-                if kind == DetectionKind::BigTrade {
-                    2
-                } else {
-                    1
-                },
-                "{kind:?}"
-            );
+            assert_eq!(host.detectors.take_alerts().len(), 1, "{kind:?}");
             let ts = time(0) + chrono::TimeDelta::milliseconds(45);
             if kind == DetectionKind::BigTrade {
                 // Depth detections evict the marker without ending its aggressor's fills.

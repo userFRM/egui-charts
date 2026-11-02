@@ -293,9 +293,9 @@ impl Tracked {
             let number = counter.times.entry(time).or_default();
             *number = number.saturating_add(1);
             let (alert, sound) = match kind {
-                DetectionKind::BigTrade | DetectionKind::BigTradeZone => {
-                    (settings.big_trades.alert, settings.big_trades.sound)
-                }
+                DetectionKind::BigTrade => (settings.big_trades.alert, settings.big_trades.sound),
+                // A zone is the price range of a trade that has already alerted.
+                DetectionKind::BigTradeZone => (false, false),
                 DetectionKind::StopRun => (settings.stop_runs.alert, settings.stop_runs.sound),
                 DetectionKind::StopSweep => {
                     (settings.stop_sweeps.alert, settings.stop_sweeps.sound)
