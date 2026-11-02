@@ -44,6 +44,7 @@ mod time;
 mod trading;
 
 pub use action::Action;
+pub use panels::MarketPanels;
 pub use services::{ExportContents, ExportFile};
 
 use egui_charts::data::Datafeed;
@@ -98,12 +99,10 @@ pub struct Terminal {
     hidden: HashSet<Control>,
     settings: Option<SettingsStore>,
     /// Entries for the notifications panel, taken by the panel when it is shown.
-    #[allow(dead_code, reason = "the notifications panel takes the entries")]
     notices: Vec<Notification>,
     /// What each chart slot reported this frame, by slot.
     chart_events: Vec<(usize, ChartEvent)>,
     /// The side panel on show.
-    #[allow(dead_code, reason = "the side panels read the open panel")]
     panel: Option<core::SidePanel>,
     /// Whether a replay is running, so a symbol change stops it.
     replay_active: bool,
@@ -114,11 +113,9 @@ pub struct Terminal {
     #[allow(dead_code, reason = "the group keeps its state here")]
     replay: replay::State,
     alerts: alerts::State,
-    #[allow(dead_code, reason = "the group keeps its state here")]
     panels: panels::State,
     #[allow(dead_code, reason = "the group keeps its state here")]
     trading: trading::State,
-    #[allow(dead_code, reason = "the group keeps its state here")]
     layouts: layouts::State,
     #[allow(dead_code, reason = "the group keeps its state here")]
     compare: compare::State,

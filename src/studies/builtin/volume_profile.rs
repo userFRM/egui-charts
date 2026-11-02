@@ -267,13 +267,13 @@ impl ProfileStudy {
         inputs
     }
 
-    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), &'static str> {
+    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), crate::studies::StudyError> {
         if !self
             .inputs()
             .iter()
             .any(|input| input.id == id && input.accepts(&value))
         {
-            return Err("invalid volume profile input");
+            return Err(crate::studies::StudyError::rejected(&self.inputs(), id));
         }
         match (id, value) {
             ("row_count", InputValue::Length(v)) => self.rows = v,
@@ -283,12 +283,26 @@ impl ProfileStudy {
             ("source_interval", InputValue::Timeframe(v)) => self.source = v,
             ("feed_source", InputValue::Toggle(v)) => self.feed_source = v,
             ("adaptive_rows", InputValue::Toggle(v)) => self.adaptive = v,
-            ("start_time", InputValue::Text(text)) => self.start_time = parse_time(&text, -8e15)?,
-            ("end_time", InputValue::Text(text)) => self.end_time = parse_time(&text, 8e15)?,
+            ("start_time", InputValue::Text(text)) => {
+                self.start_time = parse_time(&text, -8e15).map_err(|reason| {
+                    crate::studies::StudyError::InvalidInput {
+                        id: id.into(),
+                        reason: reason.into(),
+                    }
+                })?
+            }
+            ("end_time", InputValue::Text(text)) => {
+                self.end_time = parse_time(&text, 8e15).map_err(|reason| {
+                    crate::studies::StudyError::InvalidInput {
+                        id: id.into(),
+                        reason: reason.into(),
+                    }
+                })?
+            }
             ("period", InputValue::Choice(v)) => self.period = PERIODS[v],
             ("anchor", InputValue::Choice(v)) => self.anchor = ANCHORS[v],
             ("length", InputValue::Length(v)) => self.length = v,
-            _ => return Err("invalid volume profile input"),
+            _ => return Err(crate::studies::StudyError::invalid_input(id)),
         }
         self.values.clear();
         self.data.clear();
@@ -712,7 +726,11 @@ macro_rules! profile_study {
                     .map(|(input, default)| input.with_default(default.value))
                     .collect()
             }
-            fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), &'static str> {
+            fn set_input(
+                &mut self,
+                id: &str,
+                value: InputValue,
+            ) -> Result<(), crate::studies::StudyError> {
                 self.profile.set_input(id, value)
             }
             fn calculate(&mut self, data: &[Bar]) {
@@ -1247,7 +1265,7 @@ mod tests {
 #[cfg(all(test, feature = "widget"))]
 mod rendering_tests {
     use super::*;
-    use crate::chart::renderers::{ChartMapping, IndicatorRenderer, RenderContext};
+    use crate::chart::rendering::{ChartMapping, IndicatorRenderer, RenderContext};
     use crate::scales::{PriceMap, PriceRange, PriceTransform};
     use crate::{model::Bar, studies::Indicator};
 
@@ -1337,7 +1355,7 @@ mod rendering_tests {
             base_idx: 10,
             ..coords
         };
-        let mapping = crate::chart::renderers::study_mapping(&independent, &coords);
+        let mapping = crate::chart::rendering::study_mapping(&independent, &coords);
         assert!((mapping.price_to_y(12.0) - 200.0 / 12.0).abs() < 0.01);
         assert!((mapping.price_to_y(10.0) - 200.0 * 11.0 / 12.0).abs() < 0.01);
         assert!(

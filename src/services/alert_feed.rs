@@ -67,6 +67,7 @@ impl AlertFeed {
             since: None,
             count: 1000,
             extended_hours: false,
+            adjusted: false,
             conversion: None,
         }
     }
@@ -171,6 +172,7 @@ impl AlertFeed {
             && data.request.timeframe == self.request.timeframe
             && data.request.clock == self.request.clock
             && data.request.extended_hours == self.request.extended_hours
+            && data.request.adjusted == self.request.adjusted
             && data.request.conversion == self.request.conversion
     }
 

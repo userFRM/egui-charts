@@ -74,7 +74,11 @@ pub use market::{
     NewsStory, ScreenerColumn, ScreenerColumnSet, ScreenerFilter, ScreenerOp, ScreenerQuery,
     ScreenerRow, ScreenerTextAnswer, ScreenerUniverse,
 };
-pub use option_chain::{OptionChain, OptionChainQuery, OptionChainSink, OptionKind, OptionQuote};
+pub use option_chain::{
+    OptionChain, OptionChainQuery, OptionChainSink, OptionExposure, OptionExposureHandle,
+    OptionExposureKind, OptionExposureQuery, OptionExposureRow, OptionExposureSink, OptionKind,
+    OptionQuote,
+};
 #[cfg(feature = "studies")]
 pub(crate) use options_volume::OptionsVolumeSource;
 pub use options_volume::{OptionsVolume, OptionsVolumeQuery, OptionsVolumeSink};
@@ -274,6 +278,18 @@ pub trait Datafeed: MaybeSend + 'static {
         sink.report_error(FeedError::NotSupported);
     }
 
+    /// Push complete exposure snapshots for the underlying, inclusive expiry range and kind.
+    /// Without [`as_of`](OptionExposureQuery::as_of), keep pushing until the sink is inactive;
+    /// with it, answer once for that instant or report [`FeedError::NotSupported`] (the default).
+    /// Declared by [`FeedService::OptionExposure`]. The host supplies the data and model.
+    ///
+    /// [`OptionExposureHandle::snapshot_or_gamma`] prefers the supplied snapshot unchanged over
+    /// computed gamma. See [`OptionExposureSink::push`] for atomic validation and replacement.
+    fn option_exposure(&self, query: OptionExposureQuery, sink: OptionExposureSink) {
+        let _ = query;
+        sink.report_error(FeedError::NotSupported);
+    }
+
     /// One page of recorded depth on the requested grid. The default answers
     /// [`FeedError::NotSupported`]; live-only feeds need not implement this method.
     fn depth_history(&self, request: DepthRequest, reply: Reply<DepthPage>) {
@@ -460,6 +476,9 @@ pub struct HistoryRequest {
     pub count: usize,
     /// Include the instrument's extended trading hours, as well as regular hours.
     pub extended_hours: bool,
+    /// Request dividend-adjusted bars when the instrument supports them. An unsupported feed
+    /// returns unadjusted bars; [`Instrument::dividend_adjustment`] advertises the choice.
+    pub adjusted: bool,
     /// The currency or unit the host chose, in which the bars are wanted, as
     /// [`Datafeed::resolve_converted`] described the symbol. `None` asks for the instrument's own.
     pub conversion: Option<String>,

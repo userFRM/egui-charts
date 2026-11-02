@@ -34,8 +34,6 @@
 //! # }
 //! ```
 
-#[cfg(feature = "drawings")]
-use crate::chart::cursor_modes::CursorModeState;
 use crate::chart::selection::SelectionState;
 use crate::config::{ChartConfig, ChartOptions, RealtimeButtonPos};
 use crate::data::{Datafeed, FeedState};
@@ -47,6 +45,8 @@ use crate::scales::{PriceMap, PriceRange, PriceTransform};
 use crate::studies::ChartState;
 use crate::studies::IndicatorRegistry;
 use crate::theme::Theme;
+#[cfg(feature = "drawings")]
+use crate::widget::tool_interaction::cursor_modes::CursorModeState;
 
 use super::Chart;
 use super::state::{BoxZoomState, KineticScrollState};
@@ -1026,7 +1026,8 @@ impl ChartBuilder {
     pub fn build_restored(
         mut self,
         snapshot: &super::ChartSnapshot,
-    ) -> Result<(Chart, Vec<crate::drawings::persistence::SkippedDrawing>), String> {
+    ) -> Result<(Chart, Vec<crate::drawings::persistence::SkippedDrawing>), super::RestoreError>
+    {
         let factory = self.study_factory.take().unwrap_or_default();
         let mut chart = self.build();
         let skipped = chart.restore_with(snapshot, &factory)?;

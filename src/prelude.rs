@@ -32,7 +32,7 @@ pub use crate::data::{
     Datafeed, FeedError, HistoryPage, HistoryRequest, Reply, Sink, Subscription,
 };
 pub use crate::model::{Bar, BarData, ChartType, Instrument, LineStyle, OrderSide, Timeframe};
-pub use crate::studies::{CustomIndicator, Indicator, IndicatorValue};
+pub use crate::studies::{CustomIndicator, Indicator, IndicatorValue, StudyError};
 
 #[cfg(feature = "widget")]
 pub use crate::config::{ChartConfig, ChartOptions};

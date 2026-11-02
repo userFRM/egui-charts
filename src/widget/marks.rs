@@ -2,7 +2,7 @@
 
 use super::{Chart, ChartEvent, SeriesId};
 use crate::chart::coords::ChartMapping;
-use crate::chart::renderers::RenderContext;
+use crate::chart::rendering::RenderContext;
 use crate::data::{FeedError, inbox::Inbox};
 use crate::model::{Bar, EventVisibility, Marker, MarkerZOrder, TimeScaleEvent};
 use crate::services::{Marks, MarksPage, MarksRequest};
@@ -184,7 +184,7 @@ impl Chart {
                 &self.chart_type_params,
                 self.older_bars_drawn,
             );
-            let hits = crate::chart::renderers::render_markers(
+            let hits = crate::chart::rendering::render_markers(
                 ctx,
                 mapped.iter().map(|(index, mark)| (*index, mark)),
                 self.state.shown(),
@@ -193,7 +193,7 @@ impl Chart {
             );
             self.record_mark_hits(SeriesId::MAIN, hits);
         } else {
-            let hits = crate::chart::renderers::render_markers(
+            let hits = crate::chart::rendering::render_markers(
                 ctx,
                 marks,
                 self.state.shown(),

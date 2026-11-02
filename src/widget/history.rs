@@ -650,6 +650,7 @@ impl Chart {
         {
             self.selection.deselect();
         }
+        self.fill_fed_series();
     }
 
     /// Whether a chart user action can be undone (also drives toolbar availability).
@@ -940,7 +941,11 @@ mod tests {
             fn inputs(&self) -> Vec<crate::studies::StudyInput> {
                 self.0.inputs()
             }
-            fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), &'static str> {
+            fn set_input(
+                &mut self,
+                id: &str,
+                value: InputValue,
+            ) -> Result<(), crate::studies::StudyError> {
                 self.0.set_input(id, value)
             }
             fn clone_box(&self) -> Box<dyn Indicator> {

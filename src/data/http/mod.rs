@@ -245,6 +245,7 @@ impl Poll {
             since: self.since,
             count: 500,
             extended_hours: self.subscription.extended_hours,
+            adjusted: false,
             conversion: self.subscription.conversion.clone(),
         };
         let target = match history_url(&self.base, &request) {

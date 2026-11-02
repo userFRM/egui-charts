@@ -10,19 +10,19 @@
 //! - `interaction` - Active drawing tool interaction handling
 //! - `selection` - Drawing selection, manipulation, eraser
 
-mod effects;
+pub(super) mod cursor_modes;
 mod interaction;
 mod selection;
 mod text;
 
 pub(super) use selection::render_eraser_highlight as render_pane_eraser_highlight;
 
-use crate::chart::cursor_modes::CursorModeState;
 use crate::drawings::DrawingInteractionMode;
 use crate::drawings::DrawingManager;
 use crate::drawings::rendering::ChartView;
 use crate::scales::PriceMap;
 use crate::widget::Chart;
+use crate::widget::tool_interaction::cursor_modes::CursorModeState;
 use egui::{Painter, Pos2, Rect, Response, Ui};
 
 impl Chart {
@@ -77,6 +77,7 @@ impl Chart {
         price_map: &PriceMap,
         painter: &Painter,
         timescale: &crate::model::TimeScale,
+        time_format: (&dyn crate::scales::TimeFormatter, i64),
     ) {
         self.handle_pane_drawings(
             ui,
@@ -87,6 +88,7 @@ impl Chart {
             price_map,
             painter,
             timescale,
+            time_format,
             None,
         );
     }
@@ -101,6 +103,7 @@ impl Chart {
         price_map: &PriceMap,
         painter: &Painter,
         timescale: &crate::model::TimeScale,
+        time_format: (&dyn crate::scales::TimeFormatter, i64),
         pane: Option<super::PaneId>,
     ) {
         // New drawings belong to the pane's first member, or to an empty pane itself.
@@ -384,9 +387,13 @@ impl Chart {
                 })
                 .and_then(|id| self.series_price_formatter(*id)),
         };
+        // Drawings write dates as the crosshair labels the same bar; a host horizontal scale has
+        // no dates.
         // Render existing drawings against the chart's bars
         let view = ChartView {
             price_formatter,
+            time_formatter: self.horizontal_scale.is_none().then_some(time_format.0),
+            bar_seconds: time_format.1,
             instrument: self.instrument(),
             bars: self.state.shown(),
             revision: self.state.revision(),
@@ -574,6 +581,132 @@ mod tests {
             );
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// Forecast anchors use the crosshair's date format, display zone and bar duration.
+    #[test]
+    fn forecast_dates_follow_the_chart_time_zone_and_time_formatter() {
+        use crate::model::{Bar, BarData, TimezoneId};
+        use crate::scales::{TickMarkType, TimeFormatter, TimezoneMode};
+        use chrono::{DateTime, Duration, TimeZone, Utc};
+        use std::sync::Arc;
+
+        #[derive(Clone)]
+        struct Host;
+        impl TimeFormatter for Host {
+            fn format(&self, _: DateTime<Utc>, _: TickMarkType) -> String {
+                String::new()
+            }
+            fn format_crosshair(&self, time: DateTime<Utc>, bar_seconds: i64) -> String {
+                format!("host {} {bar_seconds}", time.format("%H:%M"))
+            }
+            fn clone_box(&self) -> Box<dyn TimeFormatter> {
+                Box::new(self.clone())
+            }
+        }
+
+        let start = Utc.with_ymd_and_hms(2024, 1, 10, 14, 0, 0).unwrap();
+        let bars = (0..100)
+            .map(|i| Bar::new(start + Duration::minutes(i), 95.0, 110.0, 90.0, 105.0, 1.0))
+            .collect();
+        let mut chart = crate::Chart::new(BarData::from_bars(bars));
+        let mut forecast = Drawing::new(1, DrawingToolType::Forecast);
+        forecast.chart_points = vec![ChartPoint::new(30.0, 100.0), ChartPoint::new(40.0, 105.0)];
+        forecast.completed = true;
+        chart.drawings_mut().drawings.push(forecast);
+        let ctx = Context::default();
+        let mut failures = Vec::new();
+        // Wednesday 10 January 2024: 14:00 + 30/40 one-minute bars, then minus five hours.
+        for (step, expected) in [
+            ["Wed 10 Jan '24 14:30", "Wed 10 Jan '24 14:40"],
+            ["Wed 10 Jan '24 09:30", "Wed 10 Jan '24 09:40"],
+            ["host 09:30 60", "host 09:40 60"],
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if step == 1 {
+                chart.chart_options.time_scale.timezone =
+                    TimezoneMode::Exchange(TimezoneId::fixed_offset(-5 * 3600).unwrap());
+                assert_eq!(
+                    chart.format_time(start + Duration::minutes(30)),
+                    expected[0]
+                );
+            } else if step == 2 {
+                chart.set_time_formatter(Some(Arc::new(Host)));
+            }
+            let texts: Vec<_> = shapes(&ctx, &mut chart, step as f64 * 0.1, vec![])
+                .into_iter()
+                .filter_map(|shape| match shape {
+                    Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            for date in expected {
+                if !texts
+                    .iter()
+                    .any(|text| text.ends_with(&format!("\n{date}")))
+                {
+                    failures.push(format!(
+                        "step {step}: missing forecast date {date}: {texts:?}"
+                    ));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn drawings_reuse_the_frames_time_formatter() {
+        use crate::scales::{TickMarkType, TimeFormatter};
+        use chrono::{DateTime, Utc};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        #[derive(Clone)]
+        struct Host(Arc<AtomicUsize>);
+        impl TimeFormatter for Host {
+            fn format(&self, _: DateTime<Utc>, _: TickMarkType) -> String {
+                "tick".into()
+            }
+            fn clone_box(&self) -> Box<dyn TimeFormatter> {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                Box::new(self.clone())
+            }
+        }
+
+        let clones = Arc::new(AtomicUsize::new(0));
+        let mut chart = crate::widget::test_frames::chart(&[95.0; 100], &[105.0; 100]);
+        chart.config.show_volume = false;
+        // Exclude the axis mark generator's own formatter clone.
+        chart.config.show_time_labels = false;
+        chart.config.show_grid = false;
+        chart.set_time_formatter(Some(Arc::new(Host(clones.clone()))));
+        let ctx = Context::default();
+        for forecast in [false, true] {
+            if forecast {
+                let mut drawing = Drawing::new(1, DrawingToolType::Forecast);
+                drawing.chart_points =
+                    vec![ChartPoint::new(30.0, 100.0), ChartPoint::new(40.0, 105.0)];
+                drawing.completed = true;
+                chart.drawings_mut().drawings.push(drawing);
+            }
+            clones.store(0, Ordering::Relaxed);
+            let mut shows = 0;
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                shows += 1;
+                chart.show(ui);
+            });
+            output.textures_delta.clear();
+            assert!(shows > 0);
+            assert_eq!(
+                clones.load(Ordering::Relaxed),
+                shows,
+                "forecast: {forecast}"
+            );
+        }
     }
 
     /// Primary clicks place two anchors; secondary drags leave the preview and Escape cancels it.

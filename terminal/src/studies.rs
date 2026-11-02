@@ -36,7 +36,7 @@ pub(super) struct State {
 }
 
 /// The legend caption of a study: its inputs, in order.
-fn study_input_summary(study: &dyn Indicator) -> String {
+pub(super) fn study_input_summary(study: &dyn Indicator) -> String {
     study
         .inputs()
         .iter()
@@ -150,7 +150,13 @@ impl Terminal {
             Action::Settings(SettingsAction::PreviewSound { name, volume }) => {
                 self.play_sound(&name, volume);
             }
-            Action::Settings(SettingsAction::Cancel | SettingsAction::None) => {}
+            // The settings dialog keeps its templates itself.
+            Action::Settings(
+                SettingsAction::Cancel
+                | SettingsAction::None
+                | SettingsAction::SaveTemplate(_)
+                | SettingsAction::LoadTemplate(_),
+            ) => {}
             Action::ChartMenu(ChartContextAction::Chart(menu)) => {
                 return self.perform_chart_menu(menu);
             }
@@ -284,7 +290,7 @@ impl Terminal {
                 .map(drop)
         });
         if let Err(error) = added {
-            self.toasts.error(error);
+            self.toasts.error(format!("Study not added: {error}"));
         }
     }
 
@@ -326,7 +332,7 @@ impl Terminal {
         let applied = self.user_action(|terminal| state.apply_to_chart(terminal.chart_mut()));
         match applied {
             Ok(()) => self.studies.settings = state,
-            Err(error) => self.toasts.error(error),
+            Err(error) => self.toasts.error(error.to_string()),
         }
     }
 
@@ -411,6 +417,13 @@ impl Terminal {
             emitted.push(Action::SymbolPicked(Box::new(instrument)));
         }
         let _ = state.shortcuts.show_with_shortcuts(ctx, chart.shortcuts());
+        self.top_toolbar.favorite_indicators = state
+            .indicators
+            .indicators()
+            .iter()
+            .filter(|info| state.indicators.favorites.contains(&info.id))
+            .map(|info| (info.id.clone(), info.name.clone()))
+            .collect();
 
         if let Some(edit) = edit {
             self.apply_study_edit(edit);
@@ -425,13 +438,15 @@ impl Terminal {
         &mut self,
         edit: egui_charts::ui::top_toolbar::components::indicator_dialog::StudyEdit,
     ) {
-        let result: Result<(), &'static str> = self.user_action(|terminal| {
+        let result: Result<(), String> = self.user_action(|terminal| {
             let chart = terminal.chart_mut();
             let inputs = chart
                 .indicator_mut(edit.id)
-                .ok_or("Study was removed")
+                .ok_or_else(|| "Study was removed".to_owned())
                 .and_then(|study| {
-                    study.apply_settings(&edit.inputs, edit.settings)?;
+                    study
+                        .apply_settings(&edit.inputs, edit.settings)
+                        .map_err(|error| format!("Study settings not applied: {error}"))?;
                     Ok(study_input_summary(study))
                 })?;
             chart.set_indicator_inputs(edit.id, inputs);

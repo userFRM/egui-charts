@@ -49,7 +49,7 @@ const PERIOD_COLUMN_PX: f32 = 24.0;
 /// zoomed in.
 const LETTER_MIN_COLUMN_PX: f32 = 7.0;
 
-/// Width kept free before each session for the level labels of the profile after it.
+/// Width kept free to the left of a profile for its level captions.
 const LABEL_ROOM_PX: f32 = 40.0;
 
 /// TPO rendering configuration (visual settings)
@@ -549,6 +549,15 @@ fn place_profiles(
         .filter(|(.., cut)| !cut)
         .all(|&(_, _, width, ..)| width >= 2.0 * LABEL_ROOM_PX);
     let room = (if labels { LABEL_ROOM_PX } else { 0.0 }).max(balance_room + poor_room);
+    if labels {
+        for (_, anchor, width, widest, _) in &mut placed {
+            let gutter = (price_rect.left() + LABEL_ROOM_PX - *anchor).max(0.0);
+            if *width >= gutter + room + *widest as f32 {
+                *anchor += gutter;
+                *width -= gutter;
+            }
+        }
+    }
     let fit = |width: f32, widest: usize| (width - room) / widest as f32;
     // One column width for every profile that fits its whole session, so all show letters or
     // all show blocks; a profile cut by the plot's edge narrows further on its own.
@@ -602,7 +611,7 @@ pub(crate) fn profile_at(
         &config,
         &sessions,
         |i| mapping.idx_to_x(i),
-        |profile, anchor, column, _| {
+        |profile, anchor, column, labels| {
             let column = column.min(profile_row_height(profile, &mapping.price));
             let price = mapping.y_to_price(pos.y);
             let row = profile.row_price(price);
@@ -611,7 +620,9 @@ pub(crate) fn profile_at(
             } else {
                 profile.tpo_count_at(row)
             };
-            if pos.x >= anchor && pos.x < anchor + count as f32 * column {
+            // Keep the gutter beside occupied rows in the profile's context-menu target.
+            let left = anchor - if labels { LABEL_ROOM_PX } else { 0.0 };
+            if count > 0 && pos.x >= left && pos.x < anchor + count as f32 * column {
                 hit = Some(profile.session_date);
             }
         },
@@ -839,51 +850,64 @@ fn draw_session_profile(
 
     if labels {
         let mut label_rows = Vec::new();
-        for (show, y, text, color) in [
+        for (show, price, y, text, color) in [
             (
                 config.show_poc,
+                profile.poc_price,
                 row_y(profile.poc_price),
                 "POC",
                 chart.axis_text,
             ),
             (
                 config.show_value_area,
+                profile.value_area_high,
                 row_y(profile.value_area_high),
                 "VAH",
                 guide_color,
             ),
             (
                 config.show_value_area,
+                profile.value_area_low,
                 row_y(profile.value_area_low),
                 "VAL",
                 guide_color,
             ),
             (
                 true,
+                (profile.profile_high + profile.profile_low) * 0.5,
                 coords.price_to_y((profile.profile_high + profile.profile_low) * 0.5),
                 "Mid",
                 readable_color(bearish_color, chart.axis_text, &[chart.bg], 4.5),
             ),
         ] {
-            if !labels
-                || !show
-                || !price_rect.y_range().contains(y)
-                || anchor_x - price_rect.left() < 32.0
-            {
+            if !show || !price_rect.y_range().contains(y) || anchor_x - price_rect.left() < 32.0 {
                 continue;
             }
+            let galley =
+                painter.layout_no_wrap(text.into(), FontId::proportional(typography::XS), color);
+            let half_height = galley.size().y * 0.5;
+            if price_rect.height() < galley.size().y {
+                continue;
+            }
+            let spacing = galley.size().y + 2.0;
+            let center = y.clamp(
+                price_rect.top() + half_height,
+                price_rect.bottom() - half_height,
+            );
             // Displace only the caption when levels coincide; the marker keeps its price.
-            let Some(label_y) = [0.0, -12.0, 12.0, -24.0, 24.0, -36.0, 36.0]
-                .into_iter()
-                .map(|offset| y + offset)
-                .find(|candidate| {
-                    *candidate >= price_rect.top() + typography::XS
-                        && *candidate <= price_rect.bottom() - typography::XS
-                        && label_rows.iter().all(|previous: &f32| {
-                            (candidate - previous).abs() >= typography::XS + 1.0
-                        })
-                })
-            else {
+            // Each earlier caption can block two neighbouring candidates.
+            let Some(label_y) = [
+                0.0, -1.0, 1.0, -2.0, 2.0, -3.0, 3.0, -4.0, 4.0, -5.0, 5.0, -6.0, 6.0,
+            ]
+            .into_iter()
+            .map(|offset| center + offset * spacing)
+            .find(|candidate| {
+                *candidate >= price_rect.top() + half_height
+                    && *candidate <= price_rect.bottom() - half_height
+                    && label_rows
+                        .iter()
+                        .all(|previous: &f32| (candidate - previous).abs() >= galley.size().y + 1.0)
+            }) else {
                 continue;
             };
             label_rows.push(label_y);
@@ -896,13 +920,25 @@ fn draw_session_profile(
                     Stroke::new(DESIGN_TOKENS.stroke.extra_thin, color),
                 );
             }
-            painter.text(
-                Pos2::new(anchor_x - 8.0, label_y),
-                egui::Align2::RIGHT_CENTER,
-                text,
-                FontId::proportional(typography::XS),
-                color,
-            );
+            let caption = egui::Align2::RIGHT_CENTER
+                .anchor_size(Pos2::new(anchor_x - 8.0, label_y), galley.size());
+            painter.galley(caption.min, galley, color);
+            let ctx = painter.ctx();
+            if ctx.pointer_hover_pos().is_some_and(|p| {
+                caption.contains(p) && ctx.layer_id_at(p) == Some(painter.layer_id())
+            }) {
+                egui::Tooltip::always_open(
+                    ctx.clone(),
+                    painter.layer_id(),
+                    egui::Id::unique(("tpo-level", profile.session_date, text)),
+                    caption,
+                )
+                .show(|ui| {
+                    // A midpoint can lie halfway between instrument ticks.
+                    let decimals = crate::scales::decimals(profile.instrument_tick * 0.5);
+                    ui.label(format!("{text} {price:.decimals$}"));
+                });
+            }
             painter.add(Shape::convex_polygon(
                 vec![
                     Pos2::new(anchor_x - 6.0, y - 2.5),
@@ -1611,86 +1647,171 @@ mod tests {
 
     #[test]
     fn level_labels_and_extremes_fit_between_sessions() {
-        // Three UTC days of four half-hour bars each
-        let bars: Vec<_> = (0..12)
-            .map(|i| {
-                let minute = i / 4 * 1440 + i % 4 * 30;
-                let time = chrono::DateTime::UNIX_EPOCH + Duration::minutes(minute);
-                Bar::new(time, 100.0, 101.0, 99.0, 100.0, 1.0)
-            })
-            .collect();
-        let config = TPOConfig {
-            tick_size: 1.0,
-            ..Default::default()
-        };
-        let rect = Rect::from_x_y_ranges(0.0..=400.0, 0.0..=400.0);
-        let coords = PriceMap::new(
-            crate::scales::PriceTransform::default(),
-            crate::scales::PriceRange::new(90.0, 115.0),
-            rect.min.y,
-            rect.max.y,
-            false,
-        );
-        // (pixels per bar, sessions labelled): the first session has no room left of the plot.
-        for (spacing, expected, extremes, offset) in [
-            (30.0, 2, false, 0.0),
-            (10.0, 0, false, 0.0),
-            (30.0, 2, true, 0.0),
-            (10.0, 0, true, 0.0),
-            (10.0, 0, true, -4.0),
+        for (high, tick, prices, readouts) in [
+            (
+                101.0,
+                1.0,
+                [99.0, 101.0, 99.0, 100.0],
+                ["POC 99.0", "VAH 101.0", "VAL 99.0", "Mid 100.0"],
+            ),
+            (
+                101.25,
+                0.25,
+                [99.0, 100.5, 99.0, 100.125],
+                ["POC 99.000", "VAH 100.500", "VAL 99.000", "Mid 100.125"],
+            ),
         ] {
+            // Three UTC days of four half-hour bars each
+            let bars: Vec<_> = (0..12)
+                .map(|i| {
+                    let minute = i / 4 * 1440 + i % 4 * 30;
+                    let time = chrono::DateTime::UNIX_EPOCH + Duration::minutes(minute);
+                    Bar::new(time, 100.0, high, 99.0, 100.0, 1.0)
+                })
+                .collect();
             let config = TPOConfig {
-                show_poor_highs_lows: extremes,
-                show_initial_balance_extensions: extremes,
-                display_mode: TPODisplayMode::Blocks,
-                ..config.clone()
+                tick_size: tick,
+                ..Default::default()
             };
-            let ctx = egui::Context::default();
-            ctx.begin_pass(egui::RawInput::default());
-            render_live_tpo(
-                &ctx.layer_painter(egui::LayerId::background()),
-                rect,
-                &bars,
-                0..12,
-                1,
-                &coords,
-                &config,
-                None,
-                &BarClock::new(Timeframe::Min30),
-                |i, _| i as f32 * spacing + offset,
-                0.0,
-                Color32::GREEN,
-                Color32::RED,
-            );
-            let mut output = ctx.end_pass();
-            output.textures_delta.clear();
-            let labelled = output
-                .shapes
-                .iter()
-                .filter(|s| matches!(&s.shape, Shape::Text(t) if t.galley.text() == "VAH"))
-                .count();
-            assert_eq!(labelled, expected, "{spacing} px per bar");
-            let mut extensions = 0;
-            let mut poor = 0;
-            for shape in &output.shapes {
-                let Shape::LineSegment { points, .. } = &shape.shape else {
-                    continue;
+            let rect = Rect::from_x_y_ranges(0.0..=400.0, 0.0..=400.0);
+            // Labels include the first session, whether its opening bar is visible or offscreen.
+            for (spacing, expected, extremes, offset, end, range, inverted) in [
+                (30.0, 3, false, 0.0, 12, (90.0, 115.0), false),
+                (10.0, 0, false, 0.0, 12, (90.0, 115.0), false),
+                (30.0, 3, true, 0.0, 12, (90.0, 115.0), false),
+                (10.0, 0, true, 0.0, 12, (90.0, 115.0), false),
+                (10.0, 0, true, -4.0, 12, (90.0, 115.0), false),
+                (30.0, 3, true, -30.0, 12, (90.0, 115.0), false),
+                (30.0, 1, false, 0.0, 4, (90.0, 115.0), false),
+                (30.0, 1, false, -90.0, 4, (90.0, 115.0), false),
+                // Nearby levels at either vertical edge must all keep a caption.
+                (30.0, 1, false, 0.0, 4, (99.0, 129.0), false),
+                (30.0, 1, false, 0.0, 4, (99.0, 129.0), true),
+            ] {
+                let coords = PriceMap::new(
+                    crate::scales::PriceTransform::default(),
+                    crate::scales::PriceRange::new(range.0, range.1),
+                    rect.min.y,
+                    rect.max.y,
+                    inverted,
+                );
+                let config = TPOConfig {
+                    show_poor_highs_lows: extremes,
+                    show_initial_balance_extensions: extremes,
+                    display_mode: TPODisplayMode::Blocks,
+                    ..config.clone()
                 };
-                let width = points[1].x - points[0].x;
-                if width == 10.0 {
-                    assert!(points.iter().all(|p| rect.contains(*p)), "{points:?}");
-                    extensions += 1;
-                } else if width == 8.0 {
-                    let session = poor / 2;
-                    if session < 2 {
-                        let next_balance = (session + 1) as f32 * 4.0 * spacing + offset - 10.0;
-                        assert!(points[1].x <= next_balance, "{points:?}");
+                let ctx = egui::Context::default();
+                let draw = |events| {
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(rect),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            ui.allocate_rect(rect, egui::Sense::hover());
+                            render_live_tpo(
+                                ui.painter(),
+                                rect,
+                                &bars[..end],
+                                0..end,
+                                1,
+                                &coords,
+                                &config,
+                                None,
+                                &BarClock::new(Timeframe::Min30),
+                                |i, _| i as f32 * spacing + offset,
+                                0.0,
+                                Color32::GREEN,
+                                Color32::RED,
+                            )
+                        },
+                    );
+                    output.textures_delta.clear();
+                    output
+                };
+                let output = draw(vec![]);
+                let labelled = output
+                    .shapes
+                    .iter()
+                    .filter(|s| matches!(&s.shape, Shape::Text(t) if t.galley.text() == "VAH"))
+                    .count();
+                assert_eq!(labelled, expected, "{spacing} px per bar");
+                let captions: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        Shape::Text(t)
+                            if ["POC", "VAH", "VAL", "Mid"].contains(&t.galley.text()) =>
+                        {
+                            Some(Rect::from_min_size(t.pos, t.galley.size()))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(captions.len(), expected * 4);
+                for session in captions.chunks(4) {
+                    for (i, caption) in session.iter().enumerate() {
+                        assert!(rect.contains_rect(*caption), "{caption:?}");
+                        assert!(
+                            session[..i].iter().all(|other| !other.intersects(*caption)),
+                            "{session:?}"
+                        );
                     }
-                    poor += 1;
+                }
+                // Equal row counts put POC = VAL at 99. The 70% area needs all three
+                // unit rows or seven of ten quarter-point rows. Mid is (99 + high) / 2.
+                let markers: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        Shape::Path(p)
+                            if p.points.len() == 3
+                                && p.points[0].x == p.points[2].x
+                                && p.points[1].x > p.points[0].x =>
+                        {
+                            Some(p.points[1].y)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                let expected_y: Vec<_> = (0..expected)
+                    .flat_map(|_| prices)
+                    .map(|price| coords.price_to_y(price))
+                    .collect();
+                assert_eq!(markers, expected_y);
+                let mut extensions = 0;
+                let mut poor = 0;
+                for shape in &output.shapes {
+                    let Shape::LineSegment { points, .. } = &shape.shape else {
+                        continue;
+                    };
+                    let width = points[1].x - points[0].x;
+                    if width == 10.0 {
+                        assert!(points.iter().all(|p| rect.contains(*p)), "{points:?}");
+                        extensions += 1;
+                    } else if width == 8.0 {
+                        let session = poor / 2;
+                        if session < end / 4 - 1 {
+                            let next_balance = (session + 1) as f32 * 4.0 * spacing + offset - 10.0;
+                            assert!(points[1].x <= next_balance, "{points:?}");
+                        }
+                        poor += 1;
+                    }
+                }
+                assert_eq!(extensions, if extremes { end } else { 0 });
+                assert_eq!(poor, if extremes { end / 2 } else { 0 });
+                for (caption, readout) in captions.iter().take(4).zip(readouts) {
+                    draw(vec![egui::Event::PointerMoved(caption.center())]);
+                    let hovered = draw(vec![egui::Event::PointerMoved(caption.center())]);
+                    assert!(
+                        hovered.shapes.iter().any(|s| matches!(&s.shape,
+                    Shape::Text(t) if t.galley.text() == readout)),
+                        "missing {readout}"
+                    );
                 }
             }
-            assert_eq!(extensions, if extremes { 12 } else { 0 });
-            assert_eq!(poor, if extremes { 6 } else { 0 });
         }
     }
 

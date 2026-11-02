@@ -1460,6 +1460,8 @@ mod tests {
                 let view = ChartView {
                     price_formatter: custom
                         .then_some(&formatter as &dyn crate::scales::PriceFormatter),
+                    time_formatter: None,
+                    bar_seconds: 0,
                     instrument: Some(&instrument),
                     bars: &[],
                     revision: 0,
@@ -1601,6 +1603,8 @@ mod tests {
                 drawing.update_screen_coords(|x| x, |p| 600.0 - p as f32);
                 let view = ChartView {
                     price_formatter: None,
+                    time_formatter: None,
+                    bar_seconds: 0,
                     instrument: None,
                     bars: &[],
                     revision: 0,
@@ -1979,6 +1983,8 @@ mod tests {
                     rect,
                     &ChartView {
                         price_formatter: None,
+                        time_formatter: None,
+                        bar_seconds: 0,
                         instrument: None,
                         bars: &[],
                         revision: 0,

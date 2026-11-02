@@ -114,21 +114,21 @@ impl<const RATIO: bool, const VOLUME: bool> Indicator for MarketBreadth<RATIO, V
             .with_default(InputValue::Toggle(true)),
         ]
     }
-    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), &'static str> {
+    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), crate::studies::StudyError> {
         let schema = self
             .inputs()
             .into_iter()
             .find(|input| input.id == id)
-            .ok_or("unknown study input")?;
+            .ok_or_else(|| crate::studies::StudyError::UnknownInput(id.into()))?;
         if !schema.accepts(&value) {
-            return Err("invalid breadth input");
+            return Err(crate::studies::StudyError::invalid_input(id));
         }
         match (id, value) {
             ("advancing_symbol", InputValue::Symbol(value)) => self.advancing_symbol = value,
             ("declining_symbol", InputValue::Symbol(value)) => self.declining_symbol = value,
             ("timeframe", InputValue::Timeframe(value)) => self.timeframe = value,
             ("wait_for_close", InputValue::Toggle(value)) => self.wait_for_close = value,
-            _ => return Err("invalid breadth input"),
+            _ => return Err(crate::studies::StudyError::invalid_input(id)),
         }
         self.values.clear();
         Ok(())

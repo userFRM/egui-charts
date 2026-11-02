@@ -80,6 +80,8 @@ pub enum FeedService {
     /// [`Datafeed::option_expiries`](crate::data::Datafeed::option_expiries) and
     /// [`Datafeed::option_chain`](crate::data::Datafeed::option_chain).
     OptionChain,
+    /// [`Datafeed::option_exposure`](crate::data::Datafeed::option_exposure).
+    OptionExposure,
     /// [`Datafeed::metrics`](crate::data::Datafeed::metrics) and
     /// [`Datafeed::metric_history`](crate::data::Datafeed::metric_history).
     Metrics,
@@ -166,6 +168,9 @@ pub struct Instrument {
     pub services: Option<Vec<FeedService>>,
     /// How current the feed's data is. The legend marks delayed and end-of-day data.
     pub data_status: Option<DataStatus>,
+    /// Whether the feed supplies dividend-adjusted history when
+    /// [`HistoryRequest::adjusted`](crate::data::HistoryRequest::adjusted) is set.
+    pub dividend_adjustment: bool,
     /// Bar intervals the feed suggests for volume profile studies and drawings, by profile
     /// length. A study whose source follows the chart, or a fixed range or anchored drawing
     /// without executions, reads the shortest suggested interval shorter than the chart's that
@@ -198,6 +203,7 @@ impl Instrument {
             supported_timeframes: None,
             services: None,
             data_status: None,
+            dividend_adjustment: false,
             profile_resolutions: Vec::new(),
         }
     }
@@ -313,6 +319,12 @@ impl Instrument {
     /// Sets [`services`](Self::services).
     pub fn with_services(mut self, services: impl IntoIterator<Item = FeedService>) -> Self {
         self.services = Some(services.into_iter().collect());
+        self
+    }
+
+    /// Sets [`dividend_adjustment`](Self::dividend_adjustment).
+    pub fn with_dividend_adjustment(mut self, adjustment: bool) -> Self {
+        self.dividend_adjustment = adjustment;
         self
     }
 

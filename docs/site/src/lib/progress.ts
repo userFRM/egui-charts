@@ -11,6 +11,7 @@ export type Feature = {
   status: Status;
   provided_by: 'library' | 'host';
   source: string;
+  issues: string;
 };
 
 export const slug = (area: string) => area.toLowerCase().replaceAll(' ', '-');
@@ -33,7 +34,7 @@ function parseFeatures(csv: string): Feature[] {
   }
   if (quoted) throw new Error('Unclosed feature CSV field');
   if (field || row.length) rows.push([...row, field]);
-  const columns = ['area', 'group', 'feature', 'status', 'provided_by', 'source'];
+  const columns = ['area', 'group', 'feature', 'status', 'provided_by', 'source', 'issues'];
   if (rows.shift()?.join(',') !== columns.join(',')) throw new Error('Invalid feature CSV columns');
   const identities = new Set<string>();
   return rows.map((values) => {
@@ -42,7 +43,8 @@ function parseFeatures(csv: string): Feature[] {
     if (values.length !== columns.length || !areas.includes(feature.area) ||
         !statuses.includes(feature.status) || !['library', 'host'].includes(feature.provided_by) ||
         !feature.group || !feature.feature || identities.has(identity) ||
-        (feature.status === 'missing' && feature.source)) {
+        (feature.status === 'missing' && feature.source) ||
+        (feature.issues && !/^[1-9]\d*(;[1-9]\d*)*$/.test(feature.issues))) {
       throw new Error(`Invalid or duplicate feature: ${identity}`);
     }
     for (const source of feature.source ? feature.source.split(';') : []) {
