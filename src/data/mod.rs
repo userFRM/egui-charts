@@ -55,6 +55,7 @@ pub use metrics::{MetricPage, MetricPoint, MetricRequest, MetricSeries, MetricSu
     expect(dead_code, reason = "only charts and alerts consume a feed")
 )]
 pub(crate) mod merge;
+mod option_chain;
 mod options_volume;
 mod order_flow;
 mod orders;
@@ -73,6 +74,7 @@ pub use market::{
     NewsStory, ScreenerColumn, ScreenerColumnSet, ScreenerFilter, ScreenerOp, ScreenerQuery,
     ScreenerRow, ScreenerTextAnswer, ScreenerUniverse,
 };
+pub use option_chain::{OptionChain, OptionChainQuery, OptionChainSink, OptionKind, OptionQuote};
 #[cfg(feature = "studies")]
 pub(crate) use options_volume::OptionsVolumeSource;
 pub use options_volume::{OptionsVolume, OptionsVolumeQuery, OptionsVolumeSink};
@@ -209,6 +211,67 @@ pub trait Datafeed: MaybeSend + 'static {
     /// The default supplies none; the library never fetches options data itself.
     fn options_volume(&self, query: OptionsVolumeQuery, sink: OptionsVolumeSink) {
         let _ = (query, sink);
+    }
+
+    /// Listed expiry dates for `underlying`, in ascending order with no duplicates.
+    /// The default answers [`FeedError::NotSupported`]. Both options methods are declared by
+    /// [`FeedService::OptionChain`]; the host supplies the data.
+    fn option_expiries(&self, underlying: &str, reply: Reply<Vec<chrono::NaiveDate>>) {
+        let _ = underlying;
+        reply.send(Err(FeedError::NotSupported));
+    }
+
+    /// Push complete snapshots of the listed contracts in `query`'s inclusive expiry range.
+    /// Without [`as_of`](OptionChainQuery::as_of), keep pushing until the sink is inactive.
+    /// With it, push one snapshot for that instant or report [`FeedError::NotSupported`].
+    /// Unknown figures stay absent. See [`OptionQuote`] for units and [`OptionChainSink::push`]
+    /// for validation. The default reports [`FeedError::NotSupported`] to the sink.
+    ///
+    /// ```
+    /// use chrono::{NaiveDate, TimeZone, Utc};
+    /// use egui_charts::data::{
+    ///     Datafeed, HistoryPage, HistoryRequest, OptionChain, OptionChainQuery,
+    ///     OptionChainSink, OptionKind, OptionQuote, Reply,
+    /// };
+    ///
+    /// struct Feed;
+    /// impl Datafeed for Feed {
+    ///     fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
+    ///         reply.send(Ok(HistoryPage::default()));
+    ///     }
+    ///     fn option_expiries(&self, _: &str, reply: Reply<Vec<NaiveDate>>) {
+    ///         reply.send(Ok(vec![
+    ///             NaiveDate::from_ymd_opt(2026, 12, 18).unwrap(),
+    ///             NaiveDate::from_ymd_opt(2027, 1, 15).unwrap(),
+    ///         ]));
+    ///     }
+    ///     fn option_chain(&self, query: OptionChainQuery, sink: OptionChainSink) {
+    ///         let time = Utc.with_ymd_and_hms(2026, 11, 2, 12, 0, 0).unwrap();
+    ///         let mut row = OptionQuote::new(
+    ///             "SAMPLE-261218-C100", *query.expiries.start(), 100.0, OptionKind::Call, time,
+    ///         );
+    ///         row.bid = Some(3.5);
+    ///         row.open_interest = Some(1200.0);
+    ///         row.gamma = Some(0.04);
+    ///         sink.push(vec![row]).unwrap();
+    ///     }
+    /// }
+    /// let expiry = NaiveDate::from_ymd_opt(2026, 12, 18).unwrap();
+    /// let chain = OptionChain::new(
+    ///     &Feed, OptionChainQuery::new("SAMPLE", expiry..=expiry), || {},
+    /// ).unwrap();
+    /// let rows = chain.rows();
+    /// assert_eq!(rows.len(), 1);
+    /// assert_eq!(rows[0].bid, Some(3.5));
+    /// assert_eq!(rows[0].open_interest, Some(1200.0));
+    /// assert_eq!(rows[0].gamma, Some(0.04));
+    /// assert_eq!(rows[0].ask, None);
+    /// assert_eq!(rows[0].volume, None);
+    /// assert_eq!(chain.error(), None);
+    /// ```
+    fn option_chain(&self, query: OptionChainQuery, sink: OptionChainSink) {
+        let _ = query;
+        sink.report_error(FeedError::NotSupported);
     }
 
     /// One page of recorded depth on the requested grid. The default answers

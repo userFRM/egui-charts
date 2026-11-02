@@ -25,26 +25,41 @@ pub struct OptionsVolume {
     pub puts: f64,
 }
 
-struct Snapshot {
-    values: Mutex<Arc<[OptionsVolume]>>,
+pub(super) struct Snapshot<T> {
+    values: Mutex<T>,
     wake: Box<dyn Fn() + Send + Sync>,
+}
+
+impl<T> Snapshot<T> {
+    pub(super) fn new(values: T, wake: impl Fn() + Send + Sync + 'static) -> Arc<Self> {
+        Arc::new(Self {
+            values: Mutex::new(values),
+            wake: Box::new(wake),
+        })
+    }
+
+    pub(super) fn read<R>(&self, read: impl FnOnce(&T) -> R) -> R {
+        read(&self.values.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    pub(super) fn update<R>(&self, update: impl FnOnce(&mut T) -> R) -> R {
+        let result = update(&mut self.values.lock().unwrap_or_else(PoisonError::into_inner));
+        (self.wake)();
+        result
+    }
 }
 
 /// A feed's options snapshots for one underlying and expiry query. Cheap to clone.
 /// Only the latest snapshot is retained, so updates cannot accumulate between frames.
 #[derive(Clone)]
-pub struct OptionsVolumeSink(Weak<Snapshot>);
+pub struct OptionsVolumeSink(Weak<Snapshot<Arc<[OptionsVolume]>>>);
 
 impl OptionsVolumeSink {
     /// Replace all figures, including clearing them with an empty snapshot, and wake the host.
     /// Pushes after the last consumer is dropped are ignored.
     pub fn push(&self, values: Vec<OptionsVolume>) {
         if let Some(snapshot) = self.0.upgrade() {
-            *snapshot
-                .values
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner) = values.into();
-            (snapshot.wake)();
+            snapshot.update(|latest| *latest = values.into());
         }
     }
 
@@ -56,20 +71,17 @@ impl OptionsVolumeSink {
 
 #[cfg(feature = "studies")]
 #[derive(Clone)]
-pub(crate) struct OptionsVolumeSource(Arc<Snapshot>);
+pub(crate) struct OptionsVolumeSource(Arc<Snapshot<Arc<[OptionsVolume]>>>);
 
 #[cfg(feature = "studies")]
 impl OptionsVolumeSource {
     pub(crate) fn new(wake: impl Fn() + Send + Sync + 'static) -> (Self, OptionsVolumeSink) {
-        let snapshot = Arc::new(Snapshot {
-            values: Mutex::new(Arc::from([])),
-            wake: Box::new(wake),
-        });
+        let snapshot = Snapshot::new(Arc::from([]), wake);
         let sink = OptionsVolumeSink(Arc::downgrade(&snapshot));
         (Self(snapshot), sink)
     }
 
     pub(crate) fn values(&self) -> Arc<[OptionsVolume]> {
-        Arc::clone(&self.0.values.lock().unwrap_or_else(PoisonError::into_inner))
+        self.0.read(Arc::clone)
     }
 }
