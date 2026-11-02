@@ -1,0 +1,31 @@
+---
+import SiteTitle from '@astrojs/starlight/components/SiteTitle.astro';
+import Search from '@astrojs/starlight/components/Search.astro';
+import ThemeSelect from '@astrojs/starlight/components/ThemeSelect.astro';
+import SocialIcons from '@astrojs/starlight/components/SocialIcons.astro';
+
+const path = Astro.url.pathname;
+const base = '/egui-charts/docs/';
+const sections = [
+  { label: 'Getting started', href: `${base}installation/`, slugs: ['installation', 'first-chart', 'data-model', 'data'] },
+  { label: 'Features', href: `${base}chart-types/`, slugs: ['chart-types', 'scales', 'studies', 'study-data', 'drawings', 'order-flow', 'replay', 'strategy-report', 'host-services', 'theming', 'application-ui', 'performance'] },
+  { label: 'Reference', href: `${base}builder-guide/`, slugs: ['builder-guide', 'api-reference'] },
+  { label: 'Status', href: `${base}progress/`, slugs: ['progress'] },
+];
+---
+
+<div class="site-header">
+  <SiteTitle />
+  <nav class="section-nav" aria-label="Main sections">
+    {sections.map(({ label, href, slugs }) => (
+      <a href={href} aria-current={slugs.some((slug) => path === `${base}${slug}/`) ? 'true' : undefined}>{label}</a>
+    ))}
+    <a href="/egui-charts/demo/">Live demo</a>
+    <a href="https://docs.rs/egui-charts">docs.rs</a>
+  </nav>
+  <div class="header-controls">
+    <Search />
+    <ThemeSelect />
+    <SocialIcons />
+  </div>
+</div>

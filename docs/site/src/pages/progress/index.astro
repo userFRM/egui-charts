@@ -1,5 +1,6 @@
 ---
-import { areas, counts, features, percentage } from '../../lib/progress';
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import { areas, counts, features, percentage, slug } from '../../lib/progress';
 
 const repo = 'https://github.com/userFRM/egui-charts/blob/main';
 const tables = areas.map((area) => {
@@ -12,22 +13,16 @@ const tables = areas.map((area) => {
   return { area, groups, done: counts(rows).done, total: rows.length, share: percentage(rows) };
 });
 ---
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>egui-charts progress</title>
-<style is:inline>body{font-family:sans-serif;max-width:1000px;margin:auto;padding:16px}img{max-width:100%}table{border-collapse:collapse}th,td{border:1px solid #ccc;padding:2px 8px}td+td,th+th{text-align:right}</style>
-</head>
-<body>
-<h1>Progress</h1>
-<img src="progress.svg" alt="progress">
+<StarlightPage
+  frontmatter={{ title: 'Progress', description: 'Feature status and remaining gaps in egui-charts.', editUrl: false }}
+  headings={areas.map((area) => ({ depth: 2, slug: slug(area), text: area }))}
+>
+<img src="progress.svg" alt="Feature map grouped by area: green is done, yellow is partial and grey is missing.">
 <p>Generated from <a href={`${repo}/docs/progress/features.csv`}>docs/progress/features.csv</a> by <a href={`${repo}/docs/site/src/lib/progress-svg.ts`}>docs/site/src/lib/progress-svg.ts</a> on every push to <code>main</code>.</p>
 <p>In the map, green features are done, yellow ones partial and grey ones missing. A feature is done when its whole behaviour works; partial and missing features count as not done. A host feature is done when the library provides its interface and UI; the application supplies the data, account or storage behind it. <a href={`${repo}/CONTRIBUTING.md#feature-status`}>Counting rules</a>.</p>
 {tables.map((table) => (
   <Fragment>
-    <h2>{table.area}</h2>
+    <h2 id={slug(table.area)}>{table.area}</h2>
     <table>
       <tr><th>Group</th><th>Done</th><th>Total</th><th>%</th></tr>
       {table.groups.map((group) => <tr><td>{group.name}</td><td>{group.done}</td><td>{group.total}</td><td>{group.share}%</td></tr>)}
@@ -35,5 +30,4 @@ const tables = areas.map((area) => {
     </table>
   </Fragment>
 ))}
-</body>
-</html>
+</StarlightPage>

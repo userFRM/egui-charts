@@ -1,60 +1,32 @@
 ---
 title: Financial charts. Your data.
-description: Embed interactive financial charts in your Rust application with egui-charts.
+description: Interactive financial charts for Rust and egui. Bring your historical and streaming data, and build your own workspace.
+template: splash
+editUrl: false
+prev: false
+next: false
+hero:
+  title: Financial charts.<br />Your data.
+  tagline: Interactive financial charts for Rust and egui, built around your historical and streaming data.
+  actions:
+    - text: Get started
+      link: /egui-charts/docs/installation/
+      icon: right-arrow
+    - text: Live demo
+      link: /egui-charts/demo/
+      variant: secondary
 ---
 
-import { Aside, Card, CardGrid, LinkButton } from '@astrojs/starlight/components';
+import { LinkCard, CardGrid } from '@astrojs/starlight/components';
+import FirstChart from '../../components/FirstChart.astro';
 
-egui-charts is a financial charting engine for egui. Put an interactive chart in
-your application, connect your data, and add analysis and workspace controls as
-you need them. The same Rust code runs natively and in WebAssembly.
-
-<LinkButton href="/egui-charts/docs/installation/" icon="right-arrow">Start building</LinkButton>
-<LinkButton href="/egui-charts/docs/api-reference/" variant="secondary">Explore the API</LinkButton>
-
-## Build around your chart
+<FirstChart />
 
 <CardGrid>
-  <Card title="Start with a widget" icon="puzzle">
-    Keep a chart alive between frames and call `Chart::show` in your egui layout.
-    It handles painting, navigation and interaction.
-
-    [Create your first chart](first-chart.mdx)
-  </Card>
-  <Card title="Connect your data" icon="setting">
-    Supply bars already in memory, or attach a feed for asynchronous history
-    and live subscriptions.
-
-    [Bring history and live updates](data.mdx)
-  </Card>
-  <Card title="Add analysis" icon="magnifier">
-    Attach built-in or custom studies, draw on the chart, and work with actual
-    executions and order-book data.
-
-    [Explore studies](studies.mdx)
-  </Card>
-  <Card title="Compose a workspace" icon="window">
-    Use toolbars, dialogs and panels alongside your chart. The headless engine
-    also works without egui.
-
-    [Build your application UI](application-ui.mdx)
-  </Card>
+  <LinkCard title="Getting started" href="/egui-charts/docs/installation/" description="Install the crate, learn the data model, and put your first chart on screen." />
+  <LinkCard title="Features" href="/egui-charts/docs/chart-types/" description="Explore chart types, studies, drawings, order flow and workspace controls." />
+  <LinkCard title="Integration reference" href="/egui-charts/docs/builder-guide/" description="Connect your history and live stream, handle events, and save chart state." />
+  <LinkCard title="Status" href="/egui-charts/docs/progress/" description="See what works today and which capabilities still have gaps." />
 </CardGrid>
 
-## Bring your own services
-
-Your application owns market data connections, credentials, accounts and durable
-storage. The library provides data contracts, chart rendering, study calculations
-and host actions. It does not supply a market data feed or run trading strategies.
-
-Start with [the data model](data-model.mdx), then use the
-[builder guide](../../../../builder-guide.md) to connect events, persistence and
-synchronized charts.
-
-<Aside title="Choose the matching API">
-This guide follows `main`, which includes changes beyond the published 0.2.0
-release. Use the Git dependency in [installation](installation.mdx) for these
-examples. For released APIs, read [the 0.2.0 documentation](https://docs.rs/egui-charts/0.2.0).
-</Aside>
-
-[Third-party licenses](https://userfrm.github.io/egui-charts/docs/licenses.txt)
+<p id="bring-your-own-services" className="host-note">Your application owns market data connections, credentials, accounts and storage. egui-charts supplies the chart, analysis and host interfaces.</p>

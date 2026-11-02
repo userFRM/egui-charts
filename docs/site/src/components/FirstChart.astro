@@ -1,0 +1,21 @@
+---
+import { Code } from '@astrojs/starlight/components';
+import guide from '../content/docs/first-chart.mdx?raw';
+
+// Display the exact application already compiled by the first-chart doctest.
+const code = guide.split('```rust,no_run\n')[1].split('\n   ```')[0].replace(/^   /gm, '');
+---
+
+<section id="build-around-your-chart" class="first-chart" aria-labelledby="first-chart-heading">
+  <div class="first-chart-copy">
+    <p class="eyebrow">FROM BARS TO A CHART</p>
+    <h2 id="first-chart-heading">A widget in your application.</h2>
+    <p>Create a chart once, give it your bars, and show it on every egui frame. The same Rust code runs natively and in WebAssembly.</p>
+    <p>This guide follows <code>main</code>. Install the Git dependency for egui 0.37; <a href="https://docs.rs/egui-charts/0.2.0">release 0.2.0</a> has its own API.</p>
+    <a href="/egui-charts/docs/first-chart/">Build your first chart <span aria-hidden="true">→</span></a>
+  </div>
+  <div class="first-chart-code">
+    <Code lang="sh" code={'cargo add egui-charts --git https://github.com/userFRM/egui-charts\ncargo add eframe@0.37 chrono@0.4'} />
+    <Code lang="rust" title="src/main.rs" code={code} />
+  </div>
+</section>
