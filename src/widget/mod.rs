@@ -506,14 +506,20 @@ pub enum RightClickTarget {
 }
 
 impl Chart {
-    /// Supplies instrument metadata for a chart without a feed, including price precision.
+    /// Supplies instrument metadata for a chart without a feed, including price precision
+    /// and the default tick-mark grid. An explicit `tick_marks.min_price_step` takes precedence.
     /// Pass `None` to clear the metadata. Feed metadata takes precedence when available.
     pub fn set_instrument(&mut self, instrument: Option<crate::model::Instrument>) {
         self.legend_instrument = instrument;
         let precision = self
             .instrument()
             .and_then(crate::scales::instrument_price_precision);
-        self.state.price_scale_mut().set_price_precision(precision);
+        let tick_size = self
+            .instrument()
+            .and_then(|instrument| instrument.tick_size);
+        let scale = self.state.price_scale_mut();
+        scale.set_price_precision(precision);
+        scale.set_tick_size(tick_size);
     }
 
     /// Supplies currencies the host can convert the chart into. Choosing one emits an intent;
