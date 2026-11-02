@@ -354,11 +354,11 @@ impl Terminal {
         let available = ui.available_height();
         let body = match self.trading.dock {
             Dock::Minimised => 0.0,
-            Dock::Maximised => (available - 160.0 - STRIP).max(BODY),
+            Dock::Maximised => (available - 160.0 - STRIP - 5.0).max(BODY),
             _ => BODY,
         };
         // The chart keeps 96 points over the 40 point bottom bar.
-        let height = (STRIP + body).min((available - 136.0).max(STRIP));
+        let height = (STRIP + body + 5.0).min((available - 136.0).max(STRIP + 5.0));
         let theme = self.theme.clone();
         let symbol = self.chart().symbol().to_owned();
         let (dock, tab) = (self.trading.dock, self.trading.tab);
@@ -368,7 +368,7 @@ impl Terminal {
         let mut report = StrategyReportAction::None;
         let mut clear = false;
         egui::Panel::bottom("egui_charts_terminal_dock")
-            .exact_size(height + 5.0)
+            .exact_size(height)
             .show_separator_line(false)
             .frame(panel_frame(theme.ui.panel_bg).outer_margin(egui::Margin {
                 top: 5,
@@ -809,6 +809,24 @@ mod tests {
         let tabs = frame(&mut terminal, SIZE, vec![]);
         assert!(tabs.text_at("Account Manager").is_some());
         assert!(tabs.text_at("Strategy Report").is_none());
+        for dock in [Dock::Normal, Dock::Maximised] {
+            terminal.trading.dock = dock;
+            let ctx = terminal.ctx();
+            ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(640.0, 420.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    terminal.show_dock(ui);
+                    assert!(
+                        ui.available_height() >= 136.0,
+                        "dock leaves space for the chart and bottom bar"
+                    );
+                },
+            )
+            .drop_without_applying_deltas();
+        }
     }
 
     #[test]
