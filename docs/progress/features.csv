@@ -24,6 +24,7 @@ Builder API,Builder integration,Full trading-terminal UI around the chart,partia
 Builder API,Builder integration,Minimal embedding,done,library,src/widget/builder.rs;src/widget/frame/mod.rs,
 Builder API,Builder integration,Pluggable formatters and session rules,done,library,src/widget/builder.rs;src/model/session/mod.rs;src/widget/format.rs;src/widget/frame/sessions.rs,
 Builder API,Builder integration,Public API surface and structure,done,library,src/prelude.rs;src/lib.rs;src/widget/mod.rs;src/model/mod.rs;src/widget/pan_zoom/mod.rs;src/widget/interaction.rs;src/widget/builder.rs;src/styles/mod.rs,
+Builder API,Builder integration,Runnable guide examples,done,library,examples/docs/Cargo.toml;examples/docs/main.rs;examples/docs/first_chart.rs;examples/docs/index.html;docs/site/src/components/Example.astro;docs/site/src/content/docs/first-chart.mdx;docs/site/src/styles/custom.css;.github/workflows/deploy-demo.yml,1845
 Builder API,Builder integration,Threading model for feeding data,done,library,src/data/mod.rs;src/data/inbox/mod.rs;src/widget/feed/mod.rs;src/data/inbox/sink.rs,
 Builder API,Builder integration,WebAssembly target,done,library,src/data/mod.rs,
 Builder API,Datafeed API,"Option expiries and chain snapshots with open interest, quotes, implied volatility and Greeks",done,host,src/data/mod.rs;src/data/option_chain.rs;src/data/options_volume.rs;src/model/instrument.rs,
