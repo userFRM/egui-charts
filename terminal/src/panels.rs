@@ -296,10 +296,11 @@ impl Terminal {
             .collect();
         symbols.sort();
         symbols.dedup();
+        // Compared as the list keeps them, so a symbol it trims or drops does not resubscribe.
+        let list = Watchlist::from_text("Heatmap", &symbols.join(","));
         let quotes = &mut self.panels.heatmap_quotes;
-        if !quotes.symbols().eq(symbols.iter().map(String::as_str)) {
-            *quotes =
-                WatchlistPanel::new(vec![Watchlist::from_text("Heatmap", &symbols.join(","))]);
+        if !quotes.symbols().eq(list.symbols()) {
+            *quotes = WatchlistPanel::new(vec![list]);
             if let Some(service) = &self.services.quotes {
                 quotes.set_service(service.clone());
             }
