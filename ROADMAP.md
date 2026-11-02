@@ -151,7 +151,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Footprint cells support bid/ask, total volume, delta and delta-plus-volume modes, up to four columns per bar, profile or boxed rendering, automatic row grouping and opening/closing price ticks in a separate gutter.
 - [x] Per-bar point of control, value area and horizontal/diagonal imbalance highlighting; compact values fit detail columns and POC outlines recede in the overview.
 - [x] Public calculations and renderers expose stacked diagonal imbalance zones, unrevisited POC levels, volume clusters and per-bar statistics; annotation captions avoid footprint values, with compact overview marks and hover details. Statistics use shared row labels, aligned compact values, explicit percentages and ratios, and a zoom-in or resize notice when detail cannot fit.
-- [x] Execution-based delta histograms and cumulative-delta candles, including intrabar extremes and configurable reset boundaries, render in a supplied pane mapping.
+- [x] Execution-based delta histograms and cumulative-delta candles, including intrabar extremes and configurable reset boundaries, render in a supplied pane mapping. The cumulative execution study offers optional confirmed divergence and exhaustion price markers, with study outputs for bar-close alerts.
 - [x] Trade profiles aggregate supplied ranges with bid/ask, volume or delta display, developing POC, value area and local volume nodes; public range editing supports merging and splitting.
 - [ ] Bound live footprint retention when trades are evicted, including accumulated bars and price levels.
 - [ ] Integrate size-filtered cumulative delta into a study pane with its own scale and labels.
@@ -301,7 +301,7 @@ The crate renders supplied data and exposes interfaces for application services.
 - `Broker` supplies real or paper-account state, trading rules, execution and account updates. Trading components submit actions and render the reported orders, positions, fills and history.
 - `Storage` supplies layouts, drawings, settings and template documents; an application may use local or remote storage and manage accounts, synchronisation and sharing.
 - `Alerts` stores and evaluates alert conditions and reports changes and triggers. The crate edits models and draws levels, dialogs, logs and toasts; the application supplies sound, schedules and external delivery.
-- `Signals` supplies markers, levels and zones with category visibility and click callbacks. Applications can deliver iceberg, absorption, spoofing, large-order and other interpreted order-flow events through it.
+- `Signals` supplies markers, levels and zones with category visibility and click callbacks. Captions yield to price bars, signal borders and other captions, prioritising recent markers; hover retains the labels and details of coincident events. Applications can deliver iceberg, absorption, spoofing, large-order and other interpreted order-flow events through it.
 - `Notifications` and `Chats` supply notification records and conversation messages. Publishing and sharing actions are application intents; post/idea drawings display supplied local content.
 - `StrategyReport` supplies the trade list, equity and performance inputs for the report panel; `CompanyFinancials` supplies financial tables. Applications also provide translations, additional fonts, image loaders and platform save/clipboard facilities.
 
