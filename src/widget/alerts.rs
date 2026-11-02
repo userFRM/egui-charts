@@ -325,18 +325,15 @@ mod tests {
                 }
                 #[cfg(feature = "ui")]
                 {
-                    #[cfg(feature = "ui")]
-                    {
-                        let mut menu = crate::ui::context_menu::drawing::DrawingContextMenu::new();
-                        menu.open_on(&egui::Context::default(), &chart, egui::Pos2::ZERO, 7);
-                        assert_eq!(
-                            menu.alert.unwrap().condition,
-                            crate::model::AlertCondition::Compare {
-                                other: sources[0].clone(),
-                                comparison: crate::model::AlertComparison::Crossing
-                            }
-                        );
-                    }
+                    let mut menu = crate::ui::context_menu::drawing::DrawingContextMenu::new();
+                    menu.open_on(&egui::Context::default(), &chart, egui::Pos2::ZERO, 7);
+                    assert_eq!(
+                        menu.alert.unwrap().condition,
+                        crate::model::AlertCondition::Compare {
+                            other: sources[0].clone(),
+                            comparison: crate::model::AlertComparison::Crossing
+                        }
+                    );
                     let mut config = crate::drawings::PitchforkConfig::legacy();
                     config.levels[0].visible = false;
                     chart.drawings_mut().drawings[0].pitchfork = Some(config);
@@ -368,25 +365,28 @@ mod tests {
                     assert_eq!(chart.alert_value(&sources[0], 3), None);
                 }
             }
-            chart.config_mut().right_axis_scale_mode = crate::scales::PriceScaleMode::Normal;
-            // y=[100,104,102,108], x=[0,1,2,3]: mean=103.5, Sxx=5, Sxy=11.
-            // slope=2.2, intercept=100.2, residual SS=10.8, sigma=sqrt(10.8/3).
-            let mut regression = Drawing::new(8, DrawingToolType::RegressionTrend);
-            regression.chart_points = vec![ChartPoint::new(0.0, 999.0), ChartPoint::new(3.0, 1.0)];
-            regression.completed = true;
-            chart.drawings_mut().drawings = vec![regression];
-            let drawing = &chart.drawings().drawings[0];
-            for (level, expected) in [
-                (0, 106.8),
-                (1, 106.8 + 2.0 * 3.6_f64.sqrt()),
-                (2, 106.8 - 2.0 * 3.6_f64.sqrt()),
-            ] {
-                let got = chart.alert_value(&drawing.alert_source(level), 3).unwrap();
-                assert!(
-                    (got - expected).abs() < 1e-9,
-                    "regression {level}: {got} != {expected}"
-                );
-            }
+        }
+        chart.config_mut().right_axis_scale_mode = crate::scales::PriceScaleMode::Normal;
+        // y=[100,104,102,108], x=[0,1,2,3]: mean=103.5, Sxx=5, Sxy=11.
+        // slope=2.2, intercept=100.2, residual SS=10.8, sigma=sqrt(10.8/3).
+        let mut regression = Drawing::new(8, DrawingToolType::RegressionTrend);
+        regression.chart_points = vec![ChartPoint::new(0.0, 999.0), ChartPoint::new(3.0, 1.0)];
+        regression.completed = true;
+        chart.drawings_mut().drawings = vec![regression];
+        let drawing = &chart.drawings().drawings[0];
+        for (level, expected) in [
+            (0, 106.8),
+            (1, 106.8 + 2.0 * 3.6_f64.sqrt()),
+            (2, 106.8 - 2.0 * 3.6_f64.sqrt()),
+        ] {
+            let got = chart.alert_value(&drawing.alert_source(level), 3).unwrap();
+            assert!(
+                (got - expected).abs() < 1e-9,
+                "regression {level}: {got} != {expected}"
+            );
+        }
+        #[cfg(feature = "ui")]
+        {
             let mut menu = crate::ui::context_menu::drawing::DrawingContextMenu::new();
             menu.open_on(&egui::Context::default(), &chart, egui::Pos2::ZERO, 8);
             assert_eq!(

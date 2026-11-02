@@ -934,42 +934,60 @@ mod tests {
     #[test]
     fn drawing_channel_keeps_selected_boundaries_through_edits() {
         use egui_kittest::{Harness, kittest::Queryable};
-        let drawing = |id: &str| AlertSource::Drawing(id.into());
-        let sources = vec![
-            (drawing("a"), "Other line".into()),
-            (drawing("a#1"), "Other boundary".into()),
-            (drawing("b%23saved"), "Median".into()),
-            (drawing("b%23saved#1"), "Upper".into()),
-            (drawing("b%23saved#2"), "Lower".into()),
-        ];
-        let single = AlertCondition::Compare {
-            other: drawing("b%23saved"),
-            comparison: AlertComparison::Crossing,
-        };
-        let mut dialog = AlertDialog::new();
-        dialog.sources = sources;
-        dialog.edit(Alert::new("SAMPLE", single));
-        let mut h = Harness::builder()
-            .with_size(egui::vec2(960.0, 900.0))
-            .build_ui_state(|ui, dialog: &mut AlertDialog| dialog.form(ui), dialog);
-        h.run();
-        h.get_by_label("Condition").click();
-        h.run();
-        h.get_by_label("Drawing channel").scroll_to_me();
-        h.run();
-        h.get_by_label("Drawing channel").click();
-        h.run();
-        let expected: AlertCondition = serde_json::from_value(serde_json::json!({"Channel": {
-            "boundaries": [{"Drawing":"b%23saved#1"},{"Drawing":"b%23saved#2"}], "comparison":"Entering"
-        }})).unwrap();
-        assert_eq!(h.state().alert.condition, expected);
-        let saved = serde_json::to_string(&h.state().alert).unwrap();
-        h.state_mut().edit(serde_json::from_str(&saved).unwrap());
-        h.run();
-        assert_eq!(h.state().alert.condition, expected);
-        h.get_by_label("First boundary");
-        h.get_by_label("Second boundary");
-        h.get_by_label("Channel condition");
+        for dark in [false, true] {
+            for width in [320.0, 960.0] {
+                let drawing = |id: &str| AlertSource::Drawing(id.into());
+                let sources = vec![
+                    (drawing("a"), "Other line".into()),
+                    (drawing("a#1"), "Other boundary".into()),
+                    (drawing("b%23saved"), "Median".into()),
+                    (drawing("b%23saved#1"), "Upper".into()),
+                    (drawing("b%23saved#2"), "Lower".into()),
+                ];
+                let single = AlertCondition::Compare {
+                    other: drawing("b%23saved"),
+                    comparison: AlertComparison::Crossing,
+                };
+                let mut dialog = AlertDialog::new();
+                dialog.sources = sources;
+                dialog.edit(Alert::new("SAMPLE", single));
+                let mut h = Harness::builder()
+                    .with_size(egui::vec2(width, 900.0))
+                    .build_ui_state(
+                        |ui, dialog: &mut AlertDialog| {
+                            ui.ctx().set_visuals(if dark {
+                                egui::Visuals::dark()
+                            } else {
+                                egui::Visuals::light()
+                            });
+                            dialog.form(ui)
+                        },
+                        dialog,
+                    );
+                h.run();
+                h.get_by_label("Condition").click();
+                h.run();
+                h.get_by_label("Drawing channel").scroll_to_me();
+                h.run();
+                h.get_by_label("Drawing channel").click();
+                h.run();
+                let expected: AlertCondition = serde_json::from_value(serde_json::json!({"Channel": {
+                    "boundaries": [{"Drawing":"b%23saved#1"},{"Drawing":"b%23saved#2"}], "comparison":"Entering"
+                }})).unwrap();
+                assert_eq!(h.state().alert.condition, expected);
+                let saved = serde_json::to_string(&h.state().alert).unwrap();
+                h.state_mut().edit(serde_json::from_str(&saved).unwrap());
+                h.run();
+                assert_eq!(h.state().alert.condition, expected);
+                for label in ["First boundary", "Second boundary", "Channel condition"] {
+                    let rect = h.get_by_label(label).rect();
+                    assert!(
+                        rect.left() >= 0.0 && rect.right() <= width,
+                        "{label}: {rect:?} at {width}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -1036,6 +1054,20 @@ mod tests {
                 condition: AlertCondition::Compare {
                     other: AlertSource::Drawing("7".into()),
                     comparison: AlertComparison::Crossing,
+                },
+            });
+            dialog.sources.push((
+                AlertSource::Drawing("7#1".into()),
+                "A long second boundary name".repeat(4),
+            ));
+            dialog.alert.additional_conditions.push(AlertRule {
+                source: AlertSource::Price,
+                condition: AlertCondition::Channel {
+                    boundaries: [
+                        AlertSource::Drawing("7".into()),
+                        AlertSource::Drawing("7#1".into()),
+                    ],
+                    comparison: AlertChannelComparison::Entering,
                 },
             });
             for size in [
