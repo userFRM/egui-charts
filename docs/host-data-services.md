@@ -34,6 +34,14 @@ A symbol change clears the targets and ignores its old replies. `reload_price_ta
 
 The demo's quick search has **Toggle API samples** for host signals and **Show analyst price targets** for SAMPLE's daily projection. Its synthetic feed implements these contracts on native and browser builds.
 
+## Company financials
+
+Implement optional `Datafeed::financials(symbol, reply)` to answer `data::CompanyFinancials` with the host's reported statements. Each `FinancialPage` names a page and its periods, oldest first; each `FinancialRow` supplies one optional figure per period. Keep missing figures as `None`; non-finite values render as unavailable. The currency labels amounts without converting them. The data types are available without UI features and remain re-exported from `ui::financials`.
+
+The terminal requests figures for its active symbol and shows **Financials** in the symbol details' More menu only after a nonempty set of pages arrives. Pending requests, empty answers and the default `FeedError::NotSupported` leave the entry hidden. When a feed or instrument reports a service list, include `FeedService::Financials` to allow requests. Other errors appear once as terminal notices. Changing symbols discards the previous figures and ignores late replies.
+
+Choosing Financials replaces the chart workspace with `FinancialsPanel` and closes the side panel to give the statements room. Open analysis follows symbol changes; **Back to chart** restores the chart. The panel provides statement tabs, a chart of the selected row and a table of all reported rows. A host composing its own UI can keep using `FinancialsPanel::new` with local figures, or call `request`, `poll` each frame and `is_available` to connect the optional feed method. The host owns financial data acquisition and refreshes; the library supplies no accounts or data provider.
+
 ## Market heatmap
 
 `ui::widget_bar::MarketHeatmapPanel` owns public lists of `MarketHeatmapUniverse` values (a named market with its `MarketHeatmapEntry` instruments) and `MarketHeatmapMetric` values (an identifier, label, unit, availability and optional colour saturation). Each entry supplies its symbol, group and the value of each metric by identifier; then call `show`. It returns the selected symbol for the host to open. The user picks the universe, the metric that sizes the tiles and the metric that colours them independently, and a legend shows the size metric and the colour scale. `MarketHeatmapPanel::selection` holds the three choices: store it as `UserSettings::market_heatmap` and assign it back to restore them. A chosen metric or universe the host does not offer, or has no data for, stays chosen and shows as unavailable. Mutate the lists and request a repaint when host data changes; no new panel is needed.

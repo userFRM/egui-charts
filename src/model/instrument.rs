@@ -87,6 +87,8 @@ pub enum FeedService {
     Metrics,
     /// [`Datafeed::price_targets`](crate::data::Datafeed::price_targets).
     PriceTargets,
+    /// [`Datafeed::financials`](crate::data::Datafeed::financials).
+    Financials,
     /// [`Datafeed::symbol_details`](crate::data::Datafeed::symbol_details).
     SymbolDetails,
     /// [`Datafeed::news`](crate::data::Datafeed::news).
