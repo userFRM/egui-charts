@@ -24,3 +24,4 @@ maudio = "0.1.15"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+rfd = "0.17.2"
