@@ -268,7 +268,7 @@ impl AlertFeed {
                 );
                 let level = drawing.alert_level(source)?;
                 drawing
-                    .alert_levels(at as f64, scale)
+                    .alert_levels_with_bars(at as f64, scale, bars)
                     .into_iter()
                     .find(|(index, ..)| *index == level)
                     .map(|(.., value)| value)

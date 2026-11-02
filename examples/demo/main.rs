@@ -25,10 +25,12 @@ fn main() -> eframe::Result {
         use wasm_bindgen::JsCast;
         let document = web_sys::window().unwrap().document().unwrap();
         let canvas = document
-            .get_element_by_id("demo_canvas")
+            .get_element_by_id("landing_canvas")
+            .or_else(|| document.get_element_by_id("demo_canvas"))
             .unwrap()
             .dyn_into::<web_sys::HtmlCanvasElement>()
             .unwrap();
+        let landing = canvas.id() == "landing_canvas";
 
         // Hide loading overlay.
         if let Some(el) = document.get_element_by_id("loading") {
@@ -40,7 +42,13 @@ fn main() -> eframe::Result {
                 .start(
                     canvas,
                     eframe::WebOptions::default(),
-                    Box::new(|cc| Ok(Box::new(DemoApp::new(cc)))),
+                    Box::new(move |cc| {
+                        if landing {
+                            Ok(Box::new(controller::landing::LandingChart::new(cc)))
+                        } else {
+                            Ok(Box::new(DemoApp::new(cc)))
+                        }
+                    }),
                 )
                 .await
                 .expect("Failed to start eframe");

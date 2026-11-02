@@ -619,7 +619,10 @@ impl Drawing {
     /// top/bottom, a horizontal level, a rectangle's top and bottom, a position's entry, target
     /// and stop, and each visible Fibonacci retracement or extension level, numbered by its place
     /// in the level settings. Sloping lines are straight on the price axis `scale` paints, so
-    /// they are linear in price except on a logarithmic scale. Empty for other drawings, and for
+    /// they are linear in price except on a logarithmic scale.
+    /// Fork levels use two stable slots per configured level (first and second line), with
+    /// only the first slot used by a median. Regression levels require
+    /// [`Self::alert_levels_with_bars`]. Empty for other drawings and for
     /// geometry with no price at `bar`, such as a vertical line or a sloping line through a
     /// non-positive price on a logarithmic scale.
     pub fn alert_levels(&self, bar: f64, scale: PriceScaleMode) -> Vec<(usize, String, f64)> {
@@ -675,6 +678,14 @@ impl Drawing {
                     ],
                 )
             }
+            (
+                T::Pitchfork
+                | T::SchiffPitchfork
+                | T::ModifiedSchiffPitchfork
+                | T::InsidePitchfork
+                | T::Pitchfan,
+                _,
+            ) => self.fork_alert_levels(bar, scale),
             (T::Rect, [a, b, ..]) => named(
                 &["Top", "Bottom"],
                 &[a.price.max(b.price), a.price.min(b.price)],

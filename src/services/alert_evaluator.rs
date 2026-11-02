@@ -427,7 +427,7 @@ impl AlertEvaluator {
                                         .and_then(|instrument| instrument.time_zone.as_ref()),
                                 )?;
                                 drawing
-                                    .alert_levels(index, scale)
+                                    .alert_levels_with_bars(index, scale, data.bars)
                                     .into_iter()
                                     .find(|(index, ..)| *index == level)
                                     .map(|(.., value)| value)

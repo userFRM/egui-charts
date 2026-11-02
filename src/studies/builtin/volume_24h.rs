@@ -629,7 +629,7 @@ mod tests {
     }
 
     /// Saved settings retain the unit choice and all public readouts describe the same amount.
-    #[cfg(all(feature = "widget", feature = "drawings"))]
+    #[cfg(feature = "ui")]
     #[test]
     fn units_survive_templates_and_layouts_with_labelled_readouts() {
         use crate::model::{BarData, Instrument};
