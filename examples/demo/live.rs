@@ -67,6 +67,7 @@ struct Simulation {
     tape: u64,
     trades: VecDeque<Tick>,
     history: Vec<Bar>,
+    volume_by_day: BTreeMap<chrono::NaiveDate, f64>,
     next_trade: DateTime<Utc>,
     retain_from: DateTime<Utc>,
     now: DateTime<Utc>,
@@ -108,7 +109,8 @@ impl LiveFeed {
             tape: 0,
             trades: VecDeque::new(),
             history: Vec::new(),
-            next_trade: start - TimeDelta::days(7),
+            volume_by_day: BTreeMap::new(),
+            next_trade: start,
             retain_from: start,
             now,
             paused: false,
@@ -126,6 +128,24 @@ impl LiveFeed {
             capture: super::replay::Capture::new(),
             orders: None,
         };
+        // Older minutes need OHLCV only; generate executions just for the retained window.
+        for minute in 0..7 * 24 * 60 {
+            let time = start - TimeDelta::days(7) + TimeDelta::minutes(minute);
+            let open = sim.price_ticks;
+            sim.price_ticks = (open + (sim.random() % 101) as i64 - 50).max(1);
+            let high = open.max(sim.price_ticks) + 25 + (sim.random() % 26) as i64;
+            let low = (open.min(sim.price_ticks) - 25 - (sim.random() % 26) as i64).max(1);
+            let volume = (4_000 + sim.random() % 8_001) as f64;
+            sim.history.push(Bar::new(
+                time,
+                open as f64 * tick_size,
+                high as f64 * tick_size,
+                low as f64 * tick_size,
+                sim.price_ticks as f64 * tick_size,
+                volume,
+            ));
+            *sim.volume_by_day.entry(time.date_naive()).or_default() += volume;
+        }
         while sim.next_trade <= now {
             sim.trade();
         }
@@ -154,6 +174,7 @@ impl LiveFeed {
                 tape: sim.tape,
                 trades: sim.trades.clone(),
                 history: sim.history.clone(),
+                volume_by_day: sim.volume_by_day.clone(),
                 next_trade: sim.next_trade,
                 retain_from: sim.retain_from,
                 now: sim.now,
@@ -433,19 +454,18 @@ impl LiveFeed {
     /// The synthetic history spans a week, which stands in for the 30 days of the average.
     pub(super) fn daily_volume(&self) -> (f64, f64) {
         let sim = self.state();
-        let mut days = BTreeMap::new();
-        let sizes = sim
-            .history
-            .iter()
-            .map(|bar| (bar.time, bar.volume))
-            .chain(sim.trades.iter().map(|trade| (trade.ts, trade.size)));
-        for (time, size) in sizes {
-            *days.entry(time.date_naive()).or_insert(0.0) += size;
-        }
-        let today = days.remove(&sim.now.date_naive()).unwrap_or(0.0);
+        let date = sim.now.date_naive();
+        let today = sim.volume_by_day.get(&date).copied().unwrap_or(0.0);
         // The first day starts mid-day.
-        let whole: Vec<f64> = days.into_values().skip(1).collect();
-        let average = whole.iter().sum::<f64>() / whole.len().max(1) as f64;
+        let (sum, count) = sim
+            .volume_by_day
+            .iter()
+            .filter(|(day, _)| **day != date)
+            .skip(1)
+            .fold((0.0, 0_usize), |(sum, count), (_, volume)| {
+                (sum + volume, count + 1)
+            });
+        let average = sum / count.max(1) as f64;
         (today, average)
     }
 
@@ -814,6 +834,7 @@ impl Simulation {
         )
         .with_id(self.id);
         self.id += 1;
+        *self.volume_by_day.entry(trade.ts.date_naive()).or_default() += trade.size;
         self.signals.retain(Events::is_active);
         for events in &self.signals {
             events.push(SignalEvent::Upsert(live_signal(trade.ts, trade.price)));
@@ -930,7 +951,15 @@ impl Simulation {
             self.history
                 .extend(aggregate_trades(&expired, Timeframe::Min1).expect("generated executions"));
             if self.history.len() > 10_000 {
-                self.history.drain(..self.history.len() - 10_000);
+                for bar in self.history.drain(..self.history.len() - 10_000) {
+                    let day = bar.time.date_naive();
+                    if let Some(volume) = self.volume_by_day.get_mut(&day) {
+                        *volume -= bar.volume;
+                        if *volume <= 0.0 {
+                            self.volume_by_day.remove(&day);
+                        }
+                    }
+                }
             }
         }
         // Keep the price RNG sequence independent of the daily profile and clustered arrivals.
@@ -1883,6 +1912,14 @@ mod tests {
                 );
             }
         }
+        {
+            let sim = feed.state();
+            let first = &sim.history[0];
+            assert_eq!(
+                [first.open, first.high, first.low, first.close, first.volume],
+                [735.0, 735.29, 734.38, 734.66, 5350.0]
+            );
+        }
         let ctx = egui::Context::default();
         let mut chart = ChartBuilder::new()
             .with_feed(feed.clone())
@@ -1926,7 +1963,7 @@ mod tests {
                 // Independently folded across the archived and retained executions.
                 for (actual, expected) in [join.open, join.high, join.low, join.close, join.volume]
                     .into_iter()
-                    .zip([763.95, 765.29, 758.36, 759.55, 376_797.0])
+                    .zip([784.98, 787.37, 783.51, 785.34, 422_818.0])
                 {
                     assert!((actual - expected).abs() < 1e-9);
                 }
@@ -1968,6 +2005,49 @@ mod tests {
             bars,
             "resume must deliver executions"
         );
+        let midnight = (now + TimeDelta::days(1))
+            .date_naive()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc();
+        for time in [
+            now,
+            midnight - TimeDelta::milliseconds(1),
+            midnight + TimeDelta::seconds(2),
+        ] {
+            {
+                let mut sim = feed.state();
+                sim.now = time;
+                sim.next_trade = time;
+                // Force whole-minute archival without simulating every intervening execution.
+                while sim.trades.len() < RETAINED_TRADES {
+                    let trade = sim.trades.back().unwrap().clone();
+                    *sim.volume_by_day.entry(trade.ts.date_naive()).or_default() += trade.size;
+                    sim.trades.push_back(trade);
+                }
+                sim.trade();
+            }
+            let expected = {
+                let sim = feed.state();
+                let mut days = BTreeMap::new();
+                for (time, size) in sim
+                    .history
+                    .iter()
+                    .map(|bar| (bar.time, bar.volume))
+                    .chain(sim.trades.iter().map(|trade| (trade.ts, trade.size)))
+                {
+                    *days.entry(time.date_naive()).or_insert(0.0) += size;
+                }
+                let today = days.remove(&time.date_naive()).unwrap_or(0.0);
+                let previous: Vec<f64> = days.into_values().skip(1).collect();
+                (
+                    today,
+                    previous.iter().sum::<f64>() / previous.len().max(1) as f64,
+                )
+            };
+            assert_eq!(feed.daily_volume(), expected);
+            assert_eq!(feed.quote(time).unwrap().volume, Some(expected.0));
+        }
     }
 
     /// The controller publishes the subscribed quotes once per frame, and the first push after a
