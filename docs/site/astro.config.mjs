@@ -11,11 +11,23 @@ export default defineConfig({
   integrations: [
     starlight({
       title: 'egui-charts',
+      logo: {
+        light: '../images/logo-light.svg',
+        dark: '../images/logo-dark.svg',
+        replacesTitle: true,
+      },
       description: 'Build financial charts with your own data, in Rust and egui.',
       favicon: '/favicon.svg',
+      disable404Route: true,
       social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/userFRM/egui-charts' }],
       editLink: { baseUrl: 'https://github.com/userFRM/egui-charts/edit/main/docs/site/' },
       customCss: ['./src/styles/custom.css'],
+      components: {
+        Header: './src/components/Header.astro',
+        Hero: './src/components/Hero.astro',
+        Footer: './src/components/Footer.astro',
+      },
+      expressiveCode: { themes: ['github-dark', 'github-light'] },
       sidebar: [
         { slug: 'index', label: 'Introduction' },
         { label: 'Status', link: '/progress/' },

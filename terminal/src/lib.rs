@@ -47,7 +47,7 @@ pub use action::Action;
 pub use services::{ExportContents, ExportFile};
 
 use egui_charts::data::Datafeed;
-use egui_charts::model::{StrategyReport, Timeframe};
+use egui_charts::model::Timeframe;
 use egui_charts::services::{
     Alerts, Broker, Chats, Marks, Notification, Notifications, Quotes, SettingsStore, Signals,
     Storage, SymbolSearch,
@@ -107,23 +107,22 @@ pub struct Terminal {
     panel: Option<core::SidePanel>,
     /// Whether a replay is running, so a symbol change stops it.
     replay_active: bool,
-    strategy_report: Option<StrategyReport>,
     drawings: drawings::State,
     studies: studies::State,
-    #[expect(dead_code, reason = "the group keeps its state here")]
+    #[allow(dead_code, reason = "the group keeps its state here")]
     time: time::State,
-    #[expect(dead_code, reason = "the group keeps its state here")]
+    #[allow(dead_code, reason = "the group keeps its state here")]
     replay: replay::State,
     alerts: alerts::State,
-    #[expect(dead_code, reason = "the group keeps its state here")]
+    #[allow(dead_code, reason = "the group keeps its state here")]
     panels: panels::State,
-    #[expect(dead_code, reason = "the group keeps its state here")]
+    #[allow(dead_code, reason = "the group keeps its state here")]
     trading: trading::State,
-    #[expect(dead_code, reason = "the group keeps its state here")]
+    #[allow(dead_code, reason = "the group keeps its state here")]
     layouts: layouts::State,
-    #[expect(dead_code, reason = "the group keeps its state here")]
+    #[allow(dead_code, reason = "the group keeps its state here")]
     compare: compare::State,
-    #[expect(dead_code, reason = "the group keeps its state here")]
+    #[allow(dead_code, reason = "the group keeps its state here")]
     commands: commands::State,
 }
 
@@ -183,7 +182,6 @@ impl Terminal {
             chart_events: Vec::new(),
             panel: None,
             replay_active: false,
-            strategy_report: None,
             drawings: Default::default(),
             studies: Default::default(),
             time: Default::default(),
@@ -299,11 +297,13 @@ impl Terminal {
     }
 
     /// Offers `formats` in the export dialog and hands each finished export to `save`. Without
-    /// it, exports go to the clipboard only.
+    /// it, alert-log exports are returned to the host as unhandled actions. The host returns an
+    /// error message if saving or opening fails, and opens the saved image when
+    /// [`ExportFile::open`] is true. Errors are shown as toasts; the action remains handled.
     pub fn with_file_export(
         mut self,
         formats: &'static [ExportFormat],
-        save: impl FnMut(ExportFile) + 'static,
+        save: impl FnMut(ExportFile) -> Result<(), String> + 'static,
     ) -> Self {
         self.services.export_formats = formats;
         self.services.save = Some(Box::new(save));
@@ -366,11 +366,6 @@ impl Terminal {
     /// The top toolbar, to add host entries and a call to action.
     pub fn top_toolbar_mut(&mut self) -> &mut TopToolbar {
         &mut self.top_toolbar
-    }
-
-    /// Shows `report` in the strategy report panel, or closes it with `None`.
-    pub fn set_strategy_report(&mut self, report: Option<StrategyReport>) {
-        self.strategy_report = report;
     }
 
     /// Passes `action` along the groups until one performs it, and returns what is left.
@@ -483,6 +478,70 @@ mod tests {
         }
         let help = frame(&mut terminal, SIZE, vec![key(Key::F1, Modifiers::NONE)]).actions;
         assert!(matches!(help.as_slice(), [Action::Shortcut(_)]));
+    }
+
+    #[test]
+    fn export_errors_are_shown_without_returning_handled_actions() {
+        use egui_charts::ui::widget_bar::panels::alerts_panel::AlertPanelAction;
+        use std::{cell::Cell, rc::Rc};
+
+        for (size, dark) in [
+            (SIZE, false),
+            (SIZE, true),
+            (vec2(480.0, 640.0), false),
+            (vec2(480.0, 640.0), true),
+        ] {
+            for outcome in [None, Some(Ok(())), Some(Err("Permission denied"))] {
+                let calls = Rc::new(Cell::new(0));
+                let mut terminal = Terminal::new(Arc::new(TestFeed))
+                    .with_symbol("AAPL")
+                    .with_alerts(Arc::new(egui_charts::services::AlertEngine::new()));
+                if let Some(outcome) = outcome {
+                    let calls = calls.clone();
+                    terminal = terminal.with_file_export(&[ExportFormat::Csv], move |file| {
+                        calls.set(calls.get() + 1);
+                        assert_eq!(file.name, "alerts.csv");
+                        assert!(file.path.is_none());
+                        assert!(!file.open);
+                        assert!(matches!(file.contents, ExportContents::Text(csv) if csv == "time,symbol\n"));
+                        outcome.map_err(str::to_owned)
+                    });
+                }
+                test_support::frame_with(&mut terminal, size, vec![], |input| {
+                    input.system_theme = Some(if dark {
+                        egui::Theme::Dark
+                    } else {
+                        egui::Theme::Light
+                    });
+                });
+                terminal.emit(Action::Alerts(AlertPanelAction::ExportLog(
+                    "time,symbol\n".into(),
+                )));
+                let screen = frame(&mut terminal, size, vec![]);
+                assert_eq!(terminal.theme.dark, dark);
+                assert_eq!(calls.get(), usize::from(outcome.is_some()));
+                if outcome.is_none() {
+                    assert!(
+                        matches!(screen.actions.as_slice(), [Action::Alerts(AlertPanelAction::ExportLog(csv))] if csv == "time,symbol\n")
+                    );
+                } else {
+                    assert!(screen.actions.is_empty());
+                }
+                // A newly opened toast gets its final position on the next frame.
+                let screen = frame(&mut terminal, size, vec![]);
+                let failed = outcome.is_some_and(|result| result.is_err());
+                assert_eq!(terminal.toasts.len(), usize::from(failed));
+                if failed {
+                    assert_eq!(
+                        terminal.toasts.toasts()[0].message,
+                        "Export failed: Permission denied"
+                    );
+                    let pos = screen.text_at("Dismiss").expect("visible error toast");
+                    assert!(egui::Rect::from_min_size(egui::Pos2::ZERO, size).contains(pos));
+                }
+                assert_eq!(calls.get(), usize::from(outcome.is_some()));
+            }
+        }
     }
 
     /// Guards #1100 and #1463: two windows change the settings or the drawings of a symbol, the

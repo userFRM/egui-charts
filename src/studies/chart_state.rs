@@ -239,12 +239,14 @@ impl ChartState {
             std::iter::empty(),
             std::iter::empty(),
         )
+        .0
     }
 
     /// Fits visible series and studies together. `autoscale` replaces the main series' range of
     /// lows and highs; `prices` are further prices to fit, such as those of markers;
     /// `series_values` are already in scale units. `main_bars` supplies transformed visible
     /// bars; `main_range` reuses a precomputed exact range before calling the autoscale provider.
+    /// Returns the transform and the fitted data bounds in scale units, before margins.
     pub(crate) fn fit_price_scale_with_series<'a>(
         &mut self,
         indicators: impl IntoIterator<Item = &'a dyn Indicator>,
@@ -254,7 +256,7 @@ impl ChartState {
         main_range: Option<(f64, f64)>,
         prices: impl IntoIterator<Item = f64>,
         series_values: impl IntoIterator<Item = f64>,
-    ) -> PriceTransform {
+    ) -> (PriceTransform, (f64, f64)) {
         let mode = self.price_scale.options().mode;
         let (start, end) = self.visible_range();
         let visible = main_bars.unwrap_or(&self.shown()[start..end]);
@@ -388,7 +390,7 @@ impl ChartState {
             });
         self.price_scale.rebase(transform);
         self.price_scale.autoscale(min, max);
-        transform
+        (transform, (min, max))
     }
 
     /// Save current zoom state to history
