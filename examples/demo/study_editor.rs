@@ -6,6 +6,7 @@ use egui_charts::ui::study_editor::{Diagnostic, Severity, StudyEditor, StudyEdit
 
 const TITLE: &str = "Sample close difference";
 const SOURCE: &str = "close - close[10]";
+const STORAGE: &str = "Documents are kept locally with this demo. Apply calculates against the active chart's bars, including live updates.";
 const SYNTAX: &str = "Sample syntax: close - close[N], where N is an integer from 1 to 10000 bars. Edit N and Apply. This sample supports only this expression.";
 
 pub(super) struct SampleStudyEditor {
@@ -75,18 +76,25 @@ impl DemoApp {
         }
         let mut action = StudyEditorAction::None;
         let mut load = None;
-        egui::Panel::bottom("sample_study_editor").resizable(true).default_size(250.0)
-            .size_range(180.0..=450.0).show(ui, |ui| {
+        egui::Panel::bottom("sample_study_editor")
+            .resizable(true)
+            .default_size(250.0)
+            .size_range(180.0..=450.0)
+            .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.heading("Sample study editor");
                     if ui.button("Reload saved").clicked() {
                         load = Some(self.sample_study.editor.title().to_owned());
                     }
-                    if ui.button("Close editor").clicked() { self.sample_study.open = false; }
+                    if ui.button("Close editor").clicked() {
+                        self.sample_study.open = false;
+                    }
                 });
                 ui.label(SYNTAX);
-                ui.label("Documents are kept locally with this demo. Apply calculates against the active chart's bars, including live updates.");
-                if !self.sample_study.message.is_empty() { ui.label(&self.sample_study.message); }
+                ui.label(STORAGE);
+                if !self.sample_study.message.is_empty() {
+                    ui.label(&self.sample_study.message);
+                }
                 if self.sample_study.choosing {
                     ui.horizontal_wrapped(|ui| {
                         ui.label("Open local document:");
@@ -95,9 +103,13 @@ impl DemoApp {
                             self.sample_study.choosing = false;
                         }
                         for name in self.storage.sample_studies() {
-                            if ui.button(&name).clicked() { load = Some(name); }
+                            if ui.button(&name).clicked() {
+                                load = Some(name);
+                            }
                         }
-                        if ui.button("Cancel open").clicked() { self.sample_study.choosing = false; }
+                        if ui.button("Cancel open").clicked() {
+                            self.sample_study.choosing = false;
+                        }
                     });
                 }
                 action = self.sample_study.editor.show(ui);
