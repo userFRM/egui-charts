@@ -15,11 +15,11 @@ use std::fmt::Write;
 pub(super) fn svg(
     size: [u32; 2],
     shapes: &[ClippedShape],
-    _delta: &TexturesDelta,
+    #[cfg_attr(not(feature = "png-export"), allow(unused_variables))] delta: &TexturesDelta,
 ) -> Result<String, String> {
     let mut out = Svg {
         #[cfg(feature = "png-export")]
-        textures: textures(_delta),
+        textures: textures(delta),
         defs: String::new(),
         body: String::new(),
         #[cfg(feature = "png-export")]
