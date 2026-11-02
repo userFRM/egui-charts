@@ -2,7 +2,7 @@ name: Pages
 
 # Builds the project site on every pull request and publishes it to GitHub
 # Pages on every push to `main`: the WebAssembly demo at /egui-charts/demo/,
-# the same page at /egui-charts/, and the guide and API at /egui-charts/docs/.
+# the landing page at /egui-charts/, and the guide and API at /egui-charts/docs/.
 # Pages must use the "GitHub Actions" source for the deploy job to publish.
 
 on:
@@ -67,13 +67,13 @@ jobs:
       - name: Build wasm demo
         working-directory: examples/demo
         run: trunk build --release --public-url /egui-charts/demo/
-      # The demo's asset URLs are absolute, so its index.html also works at the
-      # site root.
       - name: Assemble site
         run: |
           mkdir _site
           cp -r examples/demo/dist _site/demo
-          cp examples/demo/dist/index.html _site/index.html
+          # Both canvases use the same wasm build and its absolute asset URLs.
+          sed 's/demo_canvas/landing_canvas/g; s/egui-charts | Live Demo/egui-charts | Sample chart/g; s/Loading egui-charts demo/Loading sample chart/g' examples/demo/dist/index.html > _site/demo/chart.html
+          cp docs/site/dist/index.html _site/index.html
           cp -r docs/site/dist _site/docs
           cp -r target/doc _site/docs/api
           # rustdoc's crate index is nested; give /docs/api/ a stable entry point.

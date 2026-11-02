@@ -38,6 +38,9 @@ use egui_charts::studies::StudyTemplateSet;
 use egui_charts::ui::dialogs::templates::{DrawingTemplate, TemplateDialog};
 #[path = "feeds.rs"]
 mod feeds;
+#[cfg(target_arch = "wasm32")]
+#[path = "landing.rs"]
+pub(crate) mod landing;
 #[path = "live.rs"]
 mod live;
 #[path = "market.rs"]
