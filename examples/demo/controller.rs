@@ -92,8 +92,8 @@ use egui_charts::ui::widget_bar::{
 };
 use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBar, WidgetBarAction};
 use egui_charts::ui_kit::notifications::{NotificationPanel, Toasts};
-use egui_charts::widget::{ChartLayoutMode, SeriesId};
 use egui_charts::widget::settings::ChartSettingsState;
+use egui_charts::widget::{ChartLayoutMode, SeriesId};
 use live::LiveFeed;
 use std::sync::Arc;
 
@@ -1481,8 +1481,8 @@ impl eframe::App for DemoApp {
             } else {
                 index
             };
-            if (self.layout.mode == ChartLayoutMode::Tabs || slot >= visible)
-                && !self.layout.is_detached(slot)
+            if slot >= visible
+                || (self.layout.mode == ChartLayoutMode::Tabs && !self.layout.is_detached(slot))
             {
                 continue;
             }
@@ -7268,6 +7268,7 @@ mod tests {
         for extra in &app.extra_charts {
             extra.live.set_paused(false);
         }
+        app.layout.set_detached(1, true);
         app.ensure_chart_slots(ChartLayoutMode::Single);
         let hidden: Vec<_> = app
             .extra_charts
