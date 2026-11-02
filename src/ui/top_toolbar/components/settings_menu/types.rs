@@ -7,6 +7,8 @@ use crate::icons::{Icon, icons};
 pub enum SettingsTab {
     /// Symbol-specific settings (candle colors, precision, timezone)
     Symbol,
+    /// Heatmap, live book and trade bubble settings.
+    OrderFlow,
     /// Status line visibility options (OHLC, volume, change)
     StatusLine,
     /// Scale modes and price line settings
@@ -27,6 +29,7 @@ impl SettingsTab {
     pub fn all() -> &'static [SettingsTab] {
         &[
             SettingsTab::Symbol,
+            SettingsTab::OrderFlow,
             SettingsTab::StatusLine,
             SettingsTab::ScalesAndLines,
             SettingsTab::Canvas,
@@ -40,6 +43,7 @@ impl SettingsTab {
     pub fn icon(&self) -> &'static Icon {
         match self {
             SettingsTab::Symbol => &icons::SETTINGS_SYMBOL,
+            SettingsTab::OrderFlow => &icons::CHART_VOLUME_FOOTPRINT,
             SettingsTab::StatusLine => &icons::SETTINGS_STATUS_LINE,
             SettingsTab::ScalesAndLines => &icons::SETTINGS_SCALES_LINES,
             SettingsTab::Canvas => &icons::SETTINGS_CANVAS,
@@ -53,6 +57,7 @@ impl SettingsTab {
     pub fn name(&self) -> &'static str {
         match self {
             SettingsTab::Symbol => "Symbol",
+            SettingsTab::OrderFlow => "Order flow",
             SettingsTab::StatusLine => "Status line",
             SettingsTab::ScalesAndLines => "Scales and lines",
             SettingsTab::Canvas => "Canvas",

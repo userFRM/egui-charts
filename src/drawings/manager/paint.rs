@@ -300,7 +300,7 @@ impl DrawingManager {
         {
             self.render_drawing(drawing, painter, price_rect, view);
             if drawing.tool_type == DrawingToolType::Rect {
-                drawing.render_rect_guides(painter);
+                drawing.render_rect_guides(painter, view.price_formatter);
                 self.render_handles(painter, drawing);
             }
         }
@@ -319,7 +319,7 @@ impl DrawingManager {
                 && d.is_visible_on_timeframe(&self.curr_timeframe)
         }) {
             if drawing.tool_type == DrawingToolType::Rect {
-                drawing.render_rect_guides(painter);
+                drawing.render_rect_guides(painter, view.price_formatter);
             }
             self.render_handles(painter, drawing);
         }

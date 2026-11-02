@@ -210,7 +210,7 @@ pub(crate) fn render_study_tags(
                 formatter,
             )
         } else {
-            study.format_value(value)
+            study.format_plot_value(line, value)
         };
         let color = axis.study_value_color.unwrap_or(plot_style.color);
         tags.push((

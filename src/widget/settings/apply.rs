@@ -59,6 +59,27 @@ impl ChartSettingsState {
             chart_type_params: Some(chart.chart_type_params().clone()),
             price_source: Some(chart.config().price_source),
             events: chart.event_visibility().clone(),
+            order_flow: super::OrderFlowSettings {
+                show_heatmap: chart
+                    .feed_link
+                    .as_ref()
+                    .is_some_and(|link| link.heatmap.is_some()),
+                heatmap: chart.liquidity_heatmap_config(),
+                show_order_book: chart
+                    .feed_link
+                    .as_ref()
+                    .is_some_and(|link| link.book_visible.unwrap_or(link.heatmap.is_some())),
+                order_book: chart.order_book_view(),
+                show_volume_bubbles: chart
+                    .feed_link
+                    .as_ref()
+                    .is_some_and(|link| link.bubbles.is_some()),
+                volume_bubbles: chart
+                    .feed_link
+                    .as_ref()
+                    .map(|link| link.bubbles_config.clone())
+                    .unwrap_or_default(),
+            },
             show_price_targets: chart.price_targets_visible(),
             ..Self::default()
         };
@@ -268,6 +289,18 @@ impl ChartSettingsState {
         if let Some(source) = self.price_source {
             chart.config_mut().price_source = source;
         }
+        chart.set_liquidity_heatmap_config(self.order_flow.heatmap);
+        chart.set_liquidity_heatmap(self.order_flow.show_heatmap);
+        chart.set_order_book_view(self.order_flow.order_book.clone());
+        chart.set_order_book_visible(self.order_flow.show_order_book);
+        if let Some(link) = &mut chart.feed_link {
+            link.bubbles_config = self.order_flow.volume_bubbles.clone();
+        }
+        chart.set_volume_bubbles(
+            self.order_flow
+                .show_volume_bubbles
+                .then(|| self.order_flow.volume_bubbles.clone()),
+        );
         chart.set_event_visibility(self.events.clone());
         chart.set_price_targets_visible(self.show_price_targets);
         chart.chart_options.time_scale.timezone = timezone;
@@ -471,6 +504,137 @@ mod tests {
     use crate::studies::{CustomIndicator, IndicatorValue};
     use crate::theme::Theme;
     use egui::{Context, Shape, Vec2};
+
+    #[cfg(feature = "drawings")]
+    struct DepthFeed;
+
+    #[cfg(feature = "drawings")]
+    impl crate::data::Datafeed for DepthFeed {
+        fn resolve(&self, symbol: &str, reply: crate::data::Reply<Instrument>) {
+            reply.send(Ok(Instrument::new(symbol).with_tick_size(1.0)));
+        }
+
+        fn history(
+            &self,
+            _: crate::data::HistoryRequest,
+            reply: crate::data::Reply<crate::data::HistoryPage>,
+        ) {
+            reply.send(Ok(crate::data::HistoryPage::new(
+                vec![Bar::new(
+                    chrono::DateTime::UNIX_EPOCH,
+                    100.0,
+                    110.0,
+                    90.0,
+                    105.0,
+                    0.0,
+                )],
+                true,
+            )));
+        }
+
+        fn subscribe(&self, subscription: crate::data::Subscription) {
+            subscription.sink.push_depth_snapshot(
+                1,
+                crate::model::OrderBook {
+                    ts: chrono::DateTime::UNIX_EPOCH,
+                    symbol: subscription.symbol,
+                    bids: vec![crate::model::OrderBookLevel {
+                        price: 99.0,
+                        size: 10.0,
+                        order_cnt: None,
+                    }],
+                    asks: vec![],
+                },
+            );
+        }
+    }
+
+    /// Saved layers and disabled preferences survive a layout round trip, while each book
+    /// profile follows its own switch, irrespective of the heatmap or the chart type.
+    #[test]
+    #[cfg(feature = "drawings")]
+    fn order_flow_settings_round_trip_and_render_independently() {
+        use crate::chart::overlays::{BubbleColor, BubbleGrouping, BubbleScalingMode};
+        use crate::widget::{ChartBuilder, ChartSnapshot};
+        for (kind, clamp_std_devs) in [
+            (crate::model::ChartType::Candles, 3.0),
+            (crate::model::ChartType::Line, f64::INFINITY),
+        ] {
+            for flags in 0..8 {
+                let ctx = Context::default();
+                let mut chart = ChartBuilder::new()
+                    .with_feed(std::sync::Arc::new(DepthFeed))
+                    .with_symbol("A")
+                    .with_timeframe(crate::model::Timeframe::Min1)
+                    .with_chart_type(kind)
+                    .build();
+                chart.set_size(Some(Vec2::new(800.0, 600.0)));
+                for _ in 0..4 {
+                    ctx.run_ui(Default::default(), |ui| {
+                        chart.show(ui);
+                    })
+                    .drop_without_applying_deltas();
+                }
+                let mut settings = ChartSettingsState::from_chart(&chart);
+                assert_eq!(
+                    settings.order_flow,
+                    super::super::OrderFlowSettings::default()
+                );
+                let flow = &mut settings.order_flow;
+                flow.show_heatmap = flags & 1 != 0;
+                flow.show_order_book = flags & 2 != 0;
+                flow.show_volume_bubbles = flags & 4 != 0;
+                flow.heatmap.brightness = 0.5;
+                flow.heatmap.lower_cutoff = 2.0;
+                flow.heatmap.full_intensity_size = Some(20.0);
+                flow.volume_bubbles.color_by = BubbleColor::Split;
+                flow.volume_bubbles.grouping =
+                    BubbleGrouping::TimeWindow(chrono::TimeDelta::milliseconds(250));
+                flow.volume_bubbles.scaling_mode = BubbleScalingMode::SquareRoot;
+                flow.volume_bubbles.min_size_filter = Some(3.0);
+                flow.volume_bubbles.clamp_std_devs = clamp_std_devs;
+                settings.apply_to_chart(&mut chart).unwrap();
+                assert_eq!(chart.chart_type(), kind);
+                assert_eq!(
+                    ChartSettingsState::from_chart(&chart).order_flow,
+                    settings.order_flow
+                );
+                let output = ctx.run_ui(Default::default(), |ui| {
+                    chart.show(ui);
+                });
+                let book_drawn = output.shapes.iter().any(|shape| {
+                    matches!(&shape.shape,
+                    Shape::Rect(rect) if (rect.rect.width() - 60.0).abs() < 0.01
+                        && rect.fill == chart.config().bullish_color.gamma_multiply(0.7))
+                });
+                output.drop_without_applying_deltas();
+                assert_eq!(
+                    book_drawn, settings.order_flow.show_order_book,
+                    "flags={flags}"
+                );
+                let saved = chart.snapshot().unwrap();
+                let json = serde_json::to_value(&saved).unwrap();
+                let loaded: ChartSnapshot = serde_json::from_value(json.clone()).unwrap();
+                chart.restore(&loaded).unwrap();
+                assert_eq!(
+                    ChartSettingsState::from_chart(&chart).order_flow,
+                    settings.order_flow
+                );
+                let mut legacy = json;
+                legacy["settings"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("order_flow");
+                chart
+                    .restore(&serde_json::from_value(legacy).unwrap())
+                    .unwrap();
+                assert_eq!(
+                    ChartSettingsState::from_chart(&chart).order_flow,
+                    super::super::OrderFlowSettings::default()
+                );
+            }
+        }
+    }
 
     #[test]
     fn scale_settings_render_values_and_preserve_the_entered_ratio() {
