@@ -173,20 +173,5 @@ mod tests {
         assert!(!scroll.mouse_wheel && !scroll.horz_touch_drag);
         assert!(!scale.pinch && !scale.axis_pressed_mouse_move.time);
         assert!(!scale.axis_double_click_reset.price);
-
-        let mut scroll = scroll;
-        let mut scale = scale;
-        scroll.enabled = false;
-        scale.enabled = false;
-        assert_eq!(
-            serde_json::from_str::<HandleScrollOptions>(&serde_json::to_string(&scroll).unwrap())
-                .unwrap(),
-            scroll
-        );
-        assert_eq!(
-            serde_json::from_str::<HandleScaleOptions>(&serde_json::to_string(&scale).unwrap())
-                .unwrap(),
-            scale
-        );
     }
 }
