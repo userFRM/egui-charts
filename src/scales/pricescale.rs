@@ -43,7 +43,7 @@ impl fmt::Display for PriceScaleMode {
 }
 
 impl FromStr for PriceScaleMode {
-    type Err = String;
+    type Err = crate::model::ParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
@@ -51,7 +51,11 @@ impl FromStr for PriceScaleMode {
             "logarithmic" | "log" => Ok(PriceScaleMode::Logarithmic),
             "percentage" | "percent" | "%" => Ok(PriceScaleMode::Percentage),
             "indexedto100" | "indexed to 100" | "indexed" => Ok(PriceScaleMode::IndexedTo100),
-            _ => Err(format!("Invalid price scale mode: {s}")),
+            _ => Err(crate::model::ParseError::new(
+                "price scale mode",
+                s,
+                "expected normal, logarithmic, percentage or indexed to 100",
+            )),
         }
     }
 }

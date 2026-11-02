@@ -418,7 +418,7 @@ impl Indicator for VolumeWeightedAvgPrice {
         &mut self,
         id: &str,
         value: crate::studies::InputValue,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), crate::studies::StudyError> {
         use crate::studies::InputValue;
         // Older templates stored this inferred flag; it never controlled the calculation.
         if id == "daily" && matches!(value, InputValue::Toggle(_)) {
@@ -434,14 +434,19 @@ impl Indicator for VolumeWeightedAvgPrice {
             .inputs()
             .into_iter()
             .find(|input| input.id == id)
-            .ok_or("unknown study input")?;
+            .ok_or_else(|| crate::studies::StudyError::UnknownInput(id.into()))?;
         if !schema.accepts(&value) {
-            return Err("study input is outside its accepted values");
+            return Err(crate::studies::StudyError::invalid_input(id));
         }
         match (id, value) {
             ("anchor", InputValue::Choice(index)) => self.anchor = VWAP_ANCHORS[index],
             ("time_zone", InputValue::Text(name)) => {
-                self.time_zone = TimezoneId::named(&name).ok_or("unknown time zone")?;
+                self.time_zone = TimezoneId::named(&name).ok_or_else(|| {
+                    crate::studies::StudyError::InvalidInput {
+                        id: id.into(),
+                        reason: "names no known time zone".into(),
+                    }
+                })?;
             }
             ("day_start", InputValue::Length(minutes)) => self.windows = day_start_windows(minutes),
             ("percentage_bands", InputValue::Toggle(value)) => self.percentage_bands = value,
@@ -454,7 +459,12 @@ impl Indicator for VolumeWeightedAvgPrice {
                 self.fit_colors();
             }
             ("event_time_zone", InputValue::Text(name)) => {
-                self.event_zone = TimezoneId::named(&name).ok_or("unknown time zone")?;
+                self.event_zone = TimezoneId::named(&name).ok_or_else(|| {
+                    crate::studies::StudyError::InvalidInput {
+                        id: id.into(),
+                        reason: "names no known time zone".into(),
+                    }
+                })?;
             }
             ("event_count", InputValue::Length(count)) => {
                 self.event_anchors.resize(count, DateTime::UNIX_EPOCH);
@@ -465,15 +475,21 @@ impl Indicator for VolumeWeightedAvgPrice {
             (id, InputValue::Text(text)) if slot(id, "event_").is_some() => {
                 let local = NaiveDateTime::parse_from_str(&text, EVENT_FORMAT)
                     .or_else(|_| NaiveDateTime::parse_from_str(&text, "%Y-%m-%d %H:%M"))
-                    .map_err(|_| "event time must read YYYY-MM-DD HH:MM:SS")?;
+                    .map_err(|_| crate::studies::StudyError::InvalidInput {
+                        id: id.into(),
+                        reason: "must read YYYY-MM-DD HH:MM:SS".into(),
+                    })?;
                 self.event_anchors[slot(id, "event_").unwrap()] = self
                     .event_zone
                     .from_local_datetime(&local)
                     .earliest()
-                    .ok_or("event time does not exist in the time zone")?
+                    .ok_or_else(|| crate::studies::StudyError::InvalidInput {
+                        id: id.into(),
+                        reason: "names a time that does not exist in the event time zone".into(),
+                    })?
                     .with_timezone(&Utc);
             }
-            _ => return Err("invalid VWAP input"),
+            _ => return Err(crate::studies::StudyError::rejected(&self.inputs(), id)),
         }
         self.calculate(&[]);
         Ok(())

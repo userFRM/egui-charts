@@ -425,17 +425,22 @@ impl SettingsDialog {
         });
         self.active_tab = active;
 
-        let error = self.settings.validate().err().or_else(|| {
-            (self.margin_top_str.parse::<f32>().is_err()
-                || self.margin_bottom_str.parse::<f32>().is_err()
-                || self.margin_right_str.parse::<u32>().is_err())
-            .then_some("Enter valid margins")
-        });
+        let error = self
+            .settings
+            .validate()
+            .err()
+            .map(|error| error.to_string())
+            .or_else(|| {
+                (self.margin_top_str.parse::<f32>().is_err()
+                    || self.margin_bottom_str.parse::<f32>().is_err()
+                    || self.margin_right_str.parse::<u32>().is_err())
+                .then(|| "Enter valid margins".to_owned())
+            });
         let (ok, cancel) = DialogFooter::new("Ok")
             .secondary("Cancel")
             .primary_enabled(error.is_none())
             .show_with_left(ui, |ui| {
-                if let Some(error) = error {
+                if let Some(error) = &error {
                     crate::ui_kit::status_message::status_message(
                         ui,
                         crate::ui_kit::status_message::MessageKind::Error,
