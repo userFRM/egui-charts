@@ -380,6 +380,7 @@ mod tests {
         }
         let mut storage = Storage::default();
         app.save(&mut storage);
+        egui::Popup::close_all(&ctx);
         drop(app);
         let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
         cc.storage = Some(&storage);

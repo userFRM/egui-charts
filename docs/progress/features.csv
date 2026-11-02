@@ -67,7 +67,7 @@ Builder API,Save/load adapter,Auto-save trigger,done,library,src/widget/history.
 Builder API,Save/load adapter,Chart templates,done,library,src/ui/dialogs/chart_settings/mod.rs;src/ui/dialogs/templates/store.rs,
 Builder API,Save/load adapter,Drawing templates,done,library,src/drawings/domain/template.rs;src/ui/dialogs/templates/dialog.rs;src/ui/dialogs/templates/store.rs,
 Builder API,Save/load adapter,Drawings persistence,done,library,src/widget/anchors.rs;src/widget/stored_drawings.rs;src/widget/time_scale.rs;src/model/bar/time.rs;src/drawings/persistence.rs;src/widget/pane/mod.rs;src/widget/frame/mod.rs,
-Builder API,Save/load adapter,Save and load layout UI,done,library,src/ui/top_toolbar/components/layout_menu.rs;terminal/src/layouts.rs,
+Builder API,Save/load adapter,Save and load layout UI,done,library,src/ui/top_toolbar/components/layout_menu.rs;terminal/src/layouts.rs;examples/demo/layouts.rs;examples/demo/replay.rs;examples/demo/storage.rs,1941
 Builder API,Save/load adapter,Save and restore the complete chart state,partial,library,src/widget/snapshot.rs;src/studies/template.rs;src/studies/factory/mod.rs;src/studies/builtin/ma_combination.rs;src/widget/builder.rs;src/studies/builtin/trading_sessions.rs;src/studies/builtin/vwap.rs;src/studies/builtin/auto_drawing.rs,
 Builder API,Save/load adapter,Storage adapter contract,done,host,src/services/storage.rs;src/services/document.rs;src/ui/dialogs/templates/store.rs;src/ui/top_toolbar/components/layout_menu.rs,
 Builder API,Save/load adapter,Study templates,done,library,src/studies/template.rs;src/widget/study_templates.rs;src/studies/factory/mod.rs;src/studies/builtin/ma_combination.rs;src/ui/dialogs/templates/store.rs;src/studies/builtin/trading_sessions.rs;src/studies/builtin/vwap.rs;src/studies/builtin/auto_drawing.rs,
@@ -184,7 +184,7 @@ Chart,Keyboard shortcuts,Shortcut list dialog,done,library,src/config/keyboard.r
 Chart,Keyboard shortcuts,Snapshot,done,library,src/config/keyboard.rs;src/widget/export.rs;src/ui/top_toolbar/toolbar.rs,
 Chart,Keyboard shortcuts,Type to change symbol,done,host,src/widget/keyboard.rs,
 Chart,Keyboard shortcuts,Undo and redo,done,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/history.rs,
-Chart,Legend and data window,Data window panel,done,library,src/ui/widget_bar/panels/object_tree/data_window.rs;src/widget/readout.rs;src/scales/horizontal.rs;src/scales/time_formatter.rs;src/widget/frame/mod.rs;examples/demo/formatting.rs;src/ui/widget_bar/panels/object_tree/data_window.rs,1939
+Chart,Legend and data window,Data window panel,done,library,src/ui/widget_bar/panels/object_tree/data_window.rs;src/widget/readout.rs;src/scales/horizontal.rs;src/scales/time_formatter.rs;src/widget/frame/mod.rs;examples/demo/formatting.rs,1939
 Chart,Legend and data window,Indicator entries in the legend,done,library,src/chart/rendering/legend/mod.rs;src/widget/pane/render/mod.rs;src/widget/pane/indicator/mod.rs;src/widget/pane/indicator/paint.rs;src/config/chart.rs;src/theme/presets.rs;src/studies/builtin/order_flow.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/widget/frame/mod.rs,
 Chart,Legend and data window,Legend buttons,done,library,src/chart/rendering/legend/mod.rs;src/chart/rendering/legend/study_controls.rs;src/widget/crosshair.rs;src/widget/pane/render/mod.rs,
 Chart,Legend and data window,Status line values follow the crosshair,done,library,src/chart/rendering/legend/mod.rs;src/widget/frame/mod.rs,

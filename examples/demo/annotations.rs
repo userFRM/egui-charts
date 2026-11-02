@@ -5,39 +5,41 @@ use egui_charts::config::TooltipMode;
 
 impl DemoApp {
     pub(super) fn show_readout_controls(&mut self, ui: &mut egui::Ui) {
-        ui.menu_button("Readout", |ui| {
-            let options = &mut self.chart.chart_options_mut().tooltip;
-            ui.checkbox(&mut options.enabled, "Show readout");
-            for mode in [
-                TooltipMode::Floating,
-                TooltipMode::Tracking,
-                TooltipMode::Magnifier,
-            ] {
-                ui.radio_value(&mut options.mode, mode, mode.to_string());
-            }
-            ui.separator();
-            ui.radio_value(&mut options.on_long_press, false, "Hover to inspect");
-            ui.radio_value(&mut options.on_long_press, true, "Hold to inspect");
-            ui.small(if options.on_long_press {
-                "Hold the primary button over a bar. On touch, press and wait."
-            } else {
-                "Move the pointer over a bar. On touch, press and wait."
+        egui::Popup::menu(&ui.button("Readout"))
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| {
+                let options = &mut self.chart.chart_options_mut().tooltip;
+                ui.checkbox(&mut options.enabled, "Show readout");
+                for mode in [
+                    TooltipMode::Floating,
+                    TooltipMode::Tracking,
+                    TooltipMode::Magnifier,
+                ] {
+                    ui.radio_value(&mut options.mode, mode, mode.to_string());
+                }
+                ui.separator();
+                ui.radio_value(&mut options.on_long_press, false, "Hover to inspect");
+                ui.radio_value(&mut options.on_long_press, true, "Hold to inspect");
+                ui.small(if options.on_long_press {
+                    "Hold the primary button over a bar. On touch, press and wait."
+                } else {
+                    "Move the pointer over a bar. On touch, press and wait."
+                });
+                if options.mode == TooltipMode::Magnifier {
+                    ui.add(
+                        egui::Slider::new(&mut options.magnifier_size, 60.0..=360.0)
+                            .text("Lens diameter"),
+                    );
+                    ui.add(egui::Slider::new(&mut options.magnifier_zoom, 1.0..=8.0).text("Zoom"));
+                } else {
+                    ui.checkbox(&mut options.show_time, "Time");
+                    ui.checkbox(&mut options.show_ohlc, "OHLC");
+                    ui.checkbox(&mut options.show_volume, "Volume");
+                    ui.checkbox(&mut options.show_change, "Change");
+                    ui.checkbox(&mut options.show_indicators, "Studies");
+                    ui.checkbox(&mut options.show_volume_details, "Held volume details");
+                }
             });
-            if options.mode == TooltipMode::Magnifier {
-                ui.add(
-                    egui::Slider::new(&mut options.magnifier_size, 60.0..=360.0)
-                        .text("Lens diameter"),
-                );
-                ui.add(egui::Slider::new(&mut options.magnifier_zoom, 1.0..=8.0).text("Zoom"));
-            } else {
-                ui.checkbox(&mut options.show_time, "Time");
-                ui.checkbox(&mut options.show_ohlc, "OHLC");
-                ui.checkbox(&mut options.show_volume, "Volume");
-                ui.checkbox(&mut options.show_change, "Change");
-                ui.checkbox(&mut options.show_indicators, "Studies");
-                ui.checkbox(&mut options.show_volume_details, "Held volume details");
-            }
-        });
     }
 }
 
@@ -104,50 +106,60 @@ impl DemoApp {
                 ui.label("Marker");
                 let mut enabled = existing.is_some();
                 let mut changed = ui.checkbox(&mut enabled, "Show marker").changed();
+                let shapes = [
+                    (MarkerShape::Circle, "Circle"),
+                    (MarkerShape::Square, "Square"),
+                    (MarkerShape::ArrowUp, "Arrow up"),
+                    (MarkerShape::ArrowDown, "Arrow down"),
+                    (MarkerShape::TriangleUp, "Triangle up"),
+                    (MarkerShape::TriangleDown, "Triangle down"),
+                    (MarkerShape::Diamond, "Diamond"),
+                    (MarkerShape::Star, "Star"),
+                    (MarkerShape::Cross, "Cross"),
+                    (MarkerShape::Flag, "Flag"),
+                ];
                 egui::ComboBox::from_label("Shape")
-                    .selected_text(format!("{:?}", marker.shape))
+                    .selected_text(
+                        shapes
+                            .iter()
+                            .find(|(shape, _)| *shape == marker.shape)
+                            .unwrap()
+                            .1,
+                    )
                     .show_ui(ui, |ui| {
-                        for shape in [
-                            MarkerShape::Circle,
-                            MarkerShape::Square,
-                            MarkerShape::ArrowUp,
-                            MarkerShape::ArrowDown,
-                            MarkerShape::TriangleUp,
-                            MarkerShape::TriangleDown,
-                            MarkerShape::Diamond,
-                            MarkerShape::Star,
-                            MarkerShape::Cross,
-                            MarkerShape::Flag,
-                        ] {
+                        for (shape, label) in shapes {
                             changed |= ui
-                                .selectable_value(&mut marker.shape, shape, format!("{shape:?}"))
+                                .selectable_value(&mut marker.shape, shape, label)
                                 .changed();
                         }
                     });
+                let positions = [
+                    (MarkerPos::AboveBar, "Above bar"),
+                    (MarkerPos::BelowBar, "Below bar"),
+                    (MarkerPos::InBar, "In bar"),
+                    (MarkerPos::Top, "Pane top"),
+                    (MarkerPos::Bottom, "Pane bottom"),
+                    (MarkerPos::Left, "Pane left"),
+                    (MarkerPos::Right, "Pane right"),
+                    (MarkerPos::AbsoluteUp, "Absolute up"),
+                    (MarkerPos::AbsoluteDown, "Absolute down"),
+                    (MarkerPos::Absolute, "Absolute"),
+                    (MarkerPos::AtPriceTop, "Above explicit price"),
+                    (MarkerPos::AtPriceBottom, "Below explicit price"),
+                    (MarkerPos::AtPriceMiddle, "On explicit price"),
+                ];
                 egui::ComboBox::from_label("Position")
-                    .selected_text(format!("{:?}", marker.position))
+                    .selected_text(
+                        positions
+                            .iter()
+                            .find(|(position, _)| *position == marker.position)
+                            .unwrap()
+                            .1,
+                    )
                     .show_ui(ui, |ui| {
-                        for position in [
-                            MarkerPos::AboveBar,
-                            MarkerPos::BelowBar,
-                            MarkerPos::InBar,
-                            MarkerPos::Top,
-                            MarkerPos::Bottom,
-                            MarkerPos::Left,
-                            MarkerPos::Right,
-                            MarkerPos::AbsoluteUp,
-                            MarkerPos::AbsoluteDown,
-                            MarkerPos::Absolute,
-                            MarkerPos::AtPriceTop,
-                            MarkerPos::AtPriceBottom,
-                            MarkerPos::AtPriceMiddle,
-                        ] {
+                        for (position, label) in positions {
                             changed |= ui
-                                .selectable_value(
-                                    &mut marker.position,
-                                    position,
-                                    format!("{position:?}"),
-                                )
+                                .selectable_value(&mut marker.position, position, label)
                                 .changed();
                         }
                     });
@@ -186,16 +198,23 @@ impl DemoApp {
                         "Include explicit price in autoscale",
                     )
                     .changed();
+                let layers = [
+                    (MarkerZOrder::Normal, "With series"),
+                    (MarkerZOrder::AboveSeries, "Above series"),
+                    (MarkerZOrder::Top, "Above drawings"),
+                ];
                 egui::ComboBox::from_label("Layer")
-                    .selected_text(format!("{:?}", options.z_order))
+                    .selected_text(
+                        layers
+                            .iter()
+                            .find(|(layer, _)| *layer == options.z_order)
+                            .unwrap()
+                            .1,
+                    )
                     .show_ui(ui, |ui| {
-                        for layer in [
-                            MarkerZOrder::Normal,
-                            MarkerZOrder::AboveSeries,
-                            MarkerZOrder::Top,
-                        ] {
+                        for (layer, label) in layers {
                             changed |= ui
-                                .selectable_value(&mut options.z_order, layer, format!("{layer:?}"))
+                                .selectable_value(&mut options.z_order, layer, label)
                                 .changed();
                         }
                     });

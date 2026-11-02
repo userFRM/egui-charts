@@ -41,6 +41,7 @@ impl Capture {
     }
 }
 
+/// Group membership, detached slots and synchronization switches kept with a demo layout.
 #[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(super) struct LayoutGroups {
     groups: [Option<String>; 16],
