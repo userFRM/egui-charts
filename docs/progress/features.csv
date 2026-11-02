@@ -22,7 +22,7 @@ Builder API,Builder integration,Desktop webview integration,missing,library,
 Builder API,Builder integration,Embedding with a data feed,done,host,src/widget/builder.rs;src/widget/frame/mod.rs;src/widget/feed/mod.rs
 Builder API,Builder integration,Full trading-terminal UI around the chart,partial,library,src/ui/app_state.rs;src/ui/trading/mod.rs;terminal/src/lib.rs
 Builder API,Builder integration,Minimal embedding,done,library,src/widget/builder.rs;src/widget/frame/mod.rs
-Builder API,Builder integration,Pluggable formatters and session rules,done,library,src/widget/frame/mod.rs;src/widget/builder.rs;src/model/session/mod.rs
+Builder API,Builder integration,Pluggable formatters and session rules,done,library,src/widget/format.rs;src/widget/frame/sessions.rs;src/widget/builder.rs;src/model/session/mod.rs
 Builder API,Builder integration,Public API surface and structure,done,library,src/prelude.rs;src/lib.rs;src/widget/mod.rs;src/model/mod.rs;src/widget/pan_zoom.rs;src/widget/interaction.rs;src/widget/builder.rs;src/styles/mod.rs
 Builder API,Builder integration,Threading model for feeding data,done,library,src/data/mod.rs;src/data/inbox/mod.rs;src/widget/feed/mod.rs;src/data/inbox/sink.rs
 Builder API,Builder integration,WebAssembly target,done,library,src/data/mod.rs
@@ -32,14 +32,14 @@ Builder API,Datafeed API,Bar data model,done,library,src/model/bar/bar.rs;src/wi
 Builder API,Datafeed API,Bar marks,done,host,src/services/marks.rs;src/widget/marks.rs;src/chart/renderers/markers.rs;src/model/markers.rs;src/widget/events.rs
 Builder API,Datafeed API,Bounded history size,done,library,src/widget/series/mod.rs;src/widget/feed/pump.rs;src/widget/replay.rs;src/data/order_flow.rs
 Builder API,Datafeed API,Cache reset and full reload,done,host,src/widget/anchors.rs;src/widget/feed/mod.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs
-Builder API,Datafeed API,Chart time zone,done,library,src/widget/frame/mod.rs;src/chart/renderers/session_breaks.rs;src/widget/feed/mod.rs;src/widget/time_scale.rs;src/model/bar/time.rs;src/model/clock.rs;src/model/session/exchange.rs
+Builder API,Datafeed API,Chart time zone,done,library,src/widget/frame/mod.rs;src/widget/format.rs;src/chart/renderers/session_breaks.rs;src/widget/feed/mod.rs;src/widget/time_scale.rs;src/model/bar/time.rs;src/model/clock.rs;src/model/session/exchange.rs
 Builder API,Datafeed API,Connection status and symbol list notifications,done,host,src/widget/series/mod.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/widget/feed/mod.rs
 Builder API,Datafeed API,"Data status, currency and unit metadata",done,host,src/model/instrument.rs;src/chart/renderers/legend/mod.rs;src/chart/renderers/axis_currency.rs;src/data/mod.rs;src/widget/feed/mod.rs;src/widget/studies_data.rs
 Builder API,Datafeed API,Datafeed configuration handshake,done,host,src/data/mod.rs;src/model/instrument.rs;src/widget/feed/mod.rs;src/ui/top_toolbar/components/timeframe_selector/mod.rs;src/ui/dialogs/symbol_search/mod.rs
 Builder API,Datafeed API,Depth of market feed,done,host,src/ui/trading/dom.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/widget/feed/mod.rs
 Builder API,Datafeed API,End of history and gap signalling,done,host,src/data/mod.rs;src/widget/feed/mod.rs;src/widget/studies_data.rs
 Builder API,Datafeed API,Error and retry signalling,done,host,src/widget/series/mod.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/widget/feed/mod.rs
-Builder API,Datafeed API,Extended hours,done,host,src/model/instrument.rs;src/data/mod.rs;src/widget/frame/mod.rs;examples/demo/sampledata.rs;examples/demo/live.rs;src/widget/feed/mod.rs;examples/demo/controller.rs
+Builder API,Datafeed API,Extended hours,done,host,src/model/instrument.rs;src/data/mod.rs;src/widget/frame/mod.rs;src/widget/frame/sessions.rs;examples/demo/sampledata.rs;examples/demo/live.rs;src/widget/feed/mod.rs;examples/demo/controller.rs
 Builder API,Datafeed API,HTTP history and streaming adapter,done,host,src/data/http/mod.rs;src/data/http/protocol.rs;src/services/search.rs;examples/network_feed.rs
 Builder API,Datafeed API,History paging when scrolling back,done,host,src/widget/frame/mod.rs;src/widget/feed/mod.rs;src/widget/studies_data.rs;src/data/merge.rs;src/widget/feed/pump.rs;src/studies/indicator_trait.rs;src/studies/settings.rs
 Builder API,Datafeed API,History request parameters,done,host,src/data/mod.rs;src/widget/feed/mod.rs
@@ -48,12 +48,12 @@ Builder API,Datafeed API,Interval resampling,done,library,src/data/mod.rs;src/da
 Builder API,Datafeed API,Live bar stream lifecycle,done,host,src/widget/feed/mod.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/data/merge.rs;src/model/clock.rs;examples/demo/live.rs
 Builder API,Datafeed API,Paginated symbol search,done,host,src/services/search.rs;src/ui/dialogs/symbol_search/service.rs;src/ui/dialogs/symbol_search/mod.rs
 Builder API,Datafeed API,Per-symbol resolution capabilities,done,host,src/model/instrument.rs;src/widget/feed/mod.rs;src/ui/top_toolbar/components/timeframe_selector/mod.rs
-Builder API,Datafeed API,Price precision from symbol metadata,done,host,src/model/instrument.rs;src/scales/price_formatter.rs;src/widget/frame/mod.rs;src/ui/trading/mod.rs;src/widget/feed/mod.rs
+Builder API,Datafeed API,Price precision from symbol metadata,done,host,src/model/instrument.rs;src/scales/price_formatter.rs;src/widget/frame/mod.rs;src/widget/format.rs;src/ui/trading/mod.rs;src/widget/feed/mod.rs
 Builder API,Datafeed API,Quotes for watchlist and details,done,host,src/services/quotes.rs;src/ui/widget_bar/panels/watchlist.rs;src/ui/trading/mod.rs;examples/demo/live.rs;examples/demo/sampledata.rs
 Builder API,Datafeed API,Realtime bar updates,done,host,src/data/merge.rs;src/widget/series/mod.rs;src/data/inbox/mod.rs;src/widget/feed/mod.rs;src/data/inbox/sink.rs
 Builder API,Datafeed API,Resolve symbol to symbol metadata,done,host,src/data/mod.rs;src/model/instrument.rs;src/widget/feed/mod.rs
-Builder API,Datafeed API,Server time,done,host,src/widget/mod.rs;src/widget/frame/mod.rs;src/data/inbox/mod.rs;src/widget/feed/mod.rs;src/data/inbox/sink.rs
-Builder API,Datafeed API,Session breaks on intraday charts,done,library,src/widget/frame/mod.rs;src/chart/renderers/session_breaks.rs;src/model/session/mod.rs;src/config/chart.rs;src/widget/palette.rs
+Builder API,Datafeed API,Server time,done,host,src/widget/mod.rs;src/widget/frame/mod.rs;src/widget/format.rs;src/data/inbox/mod.rs;src/widget/feed/mod.rs;src/data/inbox/sink.rs
+Builder API,Datafeed API,Session breaks on intraday charts,done,library,src/widget/frame/mod.rs;src/widget/format.rs;src/widget/frame/sessions.rs;src/chart/renderers/session_breaks.rs;src/model/session/mod.rs;src/config/chart.rs;src/widget/palette.rs
 Builder API,Datafeed API,Symbol logos,done,host,src/model/instrument.rs;src/painting/symbol_mark.rs;src/chart/renderers/legend/mod.rs;src/ui/dialogs/symbol_search/row.rs;src/ui/dialogs/symbol_search/compare.rs;src/ui/widget_bar/panels/watchlist.rs;src/icons/loader.rs;src/ui/trading/mod.rs;src/ui/trading/view.rs;src/ui/trading/ticket/view.rs;src/ui/trading/account_panel/view.rs;src/ui/trading/events.rs;src/ui_kit/notifications/toast.rs;src/ui_kit/notifications/panel.rs
 Builder API,Datafeed API,Symbol search,done,host,src/services/search.rs;src/ui/dialogs/symbol_search/mod.rs;src/ui/dialogs/symbol_search/service.rs
 Builder API,Datafeed API,Timescale marks,done,host,src/services/marks.rs;src/widget/marks.rs;src/widget/frame/mod.rs;src/chart/renderers/markers.rs;src/widget/mod.rs;src/model/markers.rs
@@ -61,7 +61,7 @@ Builder API,Datafeed API,Trade tick input,done,host,src/ui/widget_bar/panels/tim
 Builder API,Datafeed API,Trading session definition from the feed,done,host,src/model/instrument.rs;src/model/session/mod.rs;examples/demo/sampledata.rs;examples/demo/live.rs;src/widget/feed/mod.rs;examples/demo/controller.rs
 Builder API,Datafeed API,Update cost and coalescing of fast streams,done,library,src/widget/series/mod.rs;src/widget/studies.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/widget/feed/mod.rs;src/data/order_flow.rs;src/widget/feed/pump.rs
 Builder API,Datafeed API,Validation of incoming bars,done,library,src/widget/builder.rs;src/widget/series/mod.rs;src/data/merge.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs
-Builder API,Datafeed API,Volume precision,partial,host,src/model/instrument.rs;src/chart/renderers/legend/mod.rs;src/chart/renderers/tooltip.rs;src/widget/frame/mod.rs;src/scales/price_formatter.rs;src/studies/builtin/order_flow.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/widget/pane/indicator/paint.rs;src/chart/rendering/axes.rs;src/chart/renderers/study_scale.rs;src/widget/readout.rs;src/ui/context_menu/study.rs
+Builder API,Datafeed API,Volume precision,partial,host,src/model/instrument.rs;src/chart/renderers/legend/mod.rs;src/chart/renderers/tooltip.rs;src/widget/frame/mod.rs;src/widget/format.rs;src/scales/price_formatter.rs;src/studies/builtin/order_flow.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/widget/pane/indicator/paint.rs;src/chart/rendering/axes.rs;src/chart/renderers/study_scale.rs;src/widget/readout.rs;src/ui/context_menu/study.rs
 Builder API,Datafeed API,Volume profile resolution hint,done,host,src/model/instrument.rs;src/studies/builtin/volume_profile.rs
 Builder API,Save/load adapter,Auto-save trigger,done,library,src/widget/history.rs;src/widget/feed/mod.rs;src/ui/top_toolbar/components/layout_menu.rs
 Builder API,Save/load adapter,Chart templates,done,library,src/ui/dialogs/chart_settings/mod.rs;src/ui/dialogs/templates/store.rs
@@ -81,11 +81,11 @@ Builder API,Widget API and customization,Chart without toolbars,done,library,Car
 Builder API,Widget API and customization,Context menu customisation,done,library,src/ui/context_menu/mod.rs;src/ui/context_menu/chart_menus/mod.rs
 Builder API,Widget API and customization,Create and edit drawings from code,done,library,src/widget/drawing_api.rs;src/widget/anchors.rs;src/drawings/manager/mod.rs;src/widget/mod.rs;src/drawings/manager/edit.rs
 Builder API,Widget API and customization,Create and remove studies,done,library,src/widget/series/mod.rs;src/widget/studies.rs;src/studies/settings.rs;src/widget/pane/mod.rs
-Builder API,Widget API and customization,Custom date and time formatters,done,library,src/widget/frame/mod.rs;src/scales/time_formatter.rs
-Builder API,Widget API and customization,Custom price formatter,done,library,src/widget/frame/mod.rs;src/widget/tool_interaction/mod.rs;src/drawings/rendering/mod.rs
+Builder API,Widget API and customization,Custom date and time formatters,done,library,src/widget/format.rs;src/scales/time_formatter.rs
+Builder API,Widget API and customization,Custom price formatter,done,library,src/widget/format.rs;src/widget/tool_interaction/mod.rs;src/drawings/rendering/mod.rs
 Builder API,Widget API and customization,Export chart data,done,library,src/widget/export.rs;src/model/bar/io.rs
 Builder API,Widget API and customization,Hide or show the main series,done,library,src/widget/series/mod.rs;src/widget/frame/mod.rs;src/widget/marks.rs
-Builder API,Widget API and customization,Locale-aware date formatting,done,library,src/widget/frame/mod.rs;src/scales/time_formatter.rs;Cargo.toml
+Builder API,Widget API and customization,Locale-aware date formatting,done,library,src/widget/format.rs;src/scales/time_formatter.rs;Cargo.toml
 Builder API,Widget API and customization,Localisation of UI text,partial,library,src/localization.rs;src/ui/top_toolbar/components/layout_menu.rs;src/chart/renderers/trading_lines/mod.rs;src/chart/renderers/legend/mod.rs;src/ui/context_menu/mod.rs;src/ui/context_menu/series.rs;src/ui/context_menu/study.rs;src/ui/context_menu/drawing.rs;src/ui/trading/view.rs;src/ui/trading/events.rs;src/ui/trading/account_panel/mod.rs;src/ui_kit/notifications/panel.rs;src/chart/renderers/tooltip.rs;src/chart/renderers/alert_levels.rs;src/chart/rendering/axes.rs;src/drawings/rendering/trading/position.rs;src/ui/timeframe_toolbar/date_picker.rs;src/ui/timeframe_toolbar/toolbar.rs;src/ui/dialogs/indicator_dialog/dialog.rs;src/ui/export.rs;src/ui/widget_bar/panels/alerts_panel.rs;src/ui/widget_bar/panels/calendar.rs;src/ui/widget_bar/panels/chats.rs;src/ui/widget_bar/panels/hotlists.rs;src/ui/widget_bar/panels/news.rs;src/ui/widget_bar/panels/screener.rs;src/ui/widget_bar/panels/symbol_details.rs;src/ui/dialogs/indicator_dialog/templates.rs;src/ui/trading/ticket/form.rs;src/widget/stored_drawings.rs;src/ui_kit/status_message/mod.rs
 Builder API,Widget API and customization,Multiple charts per widget,done,library,src/widget/layout.rs;src/ui/multi_chart.rs
 Builder API,Widget API and customization,Price scale API,done,library,src/scales/pricescale.rs;src/widget/mod.rs;src/widget/series/options.rs;src/widget/series/scales/mod.rs;src/widget/frame/mod.rs
@@ -98,7 +98,7 @@ Builder API,Widget API and customization,UI component visibility,done,library,sr
 Builder API,Widget API and customization,Visible range get and set,done,library,src/widget/sync.rs;src/widget/time_scale.rs;src/scales/pricescale.rs;src/model/bar/time.rs;src/model/timescale.rs
 Builder API,Widget API and customization,Widget constructor options,partial,library,src/widget/builder.rs;src/widget/frame/mod.rs;src/widget/stored_drawings.rs
 Chart,Chart settings and themes,Alerts tab,done,host,src/ui/dialogs/chart_settings/tabs/trading.rs;src/widget/settings/data.rs;src/ui/dialogs/chart_settings/tabs/mod.rs
-Chart,Chart settings and themes,Background,done,library,src/widget/settings/apply.rs;src/widget/frame/mod.rs
+Chart,Chart settings and themes,Background,done,library,src/widget/settings/apply.rs;src/widget/frame/background.rs
 Chart,Chart settings and themes,Candle colour customisation,done,library,src/widget/settings/apply.rs;src/widget/frame/mod.rs;src/chart/rendering/candles/candlestick.rs;src/chart/renderers/candle.rs
 Chart,Chart settings and themes,Canvas tab,done,library,src/ui/dialogs/chart_settings/tabs/canvas.rs;src/widget/settings/apply.rs;src/widget/settings/data.rs;src/ui/dialogs/chart_settings/tabs/mod.rs
 Chart,Chart settings and themes,Chart settings dialog,done,library,src/ui/dialogs/chart_settings/mod.rs;src/widget/settings/apply.rs;src/ui_kit/modal/modal.rs;src/ui/dialogs/chart_settings/tabs/mod.rs;src/ui_kit/dialog/mod.rs;src/ui_kit/sidebar_layout/mod.rs;src/tokens/mod.rs
@@ -109,11 +109,11 @@ Chart,Chart settings and themes,Light and dark themes,done,library,src/widget/mo
 Chart,Chart settings and themes,Navigation and pane buttons,done,library,src/widget/navigation.rs;src/widget/frame/mod.rs;src/widget/pane/mod.rs;src/widget/pane/controls.rs;src/widget/settings/data.rs
 Chart,Chart settings and themes,Scales and lines tab,done,library,src/ui/dialogs/chart_settings/tabs/scales.rs;src/widget/settings/apply.rs;src/widget/settings/data.rs;src/ui/dialogs/chart_settings/tabs/mod.rs;src/widget/frame/mod.rs;src/chart/rendering/axes.rs
 Chart,Chart settings and themes,Scales text colour and size,done,library,src/widget/settings/data.rs;src/widget/settings/apply.rs;src/chart/rendering/axes.rs;src/chart/renderers/labels.rs
-Chart,Chart settings and themes,Session background shading,done,library,src/widget/frame/mod.rs;src/chart/renderers/session_breaks.rs
+Chart,Chart settings and themes,Session background shading,done,library,src/widget/frame/mod.rs;src/widget/frame/sessions.rs;src/chart/renderers/session_breaks.rs
 Chart,Chart settings and themes,Status line tab,done,library,src/widget/settings/apply.rs;src/widget/frame/mod.rs;src/ui/dialogs/chart_settings/tabs/symbol.rs;src/ui/dialogs/chart_settings/tabs/mod.rs
 Chart,Chart settings and themes,Symbol tab,done,library,src/widget/settings/apply.rs;src/ui/dialogs/chart_settings/tabs/symbol.rs;src/ui/dialogs/chart_settings/tabs/mod.rs
 Chart,Chart settings and themes,Trading tab,done,host,src/widget/settings/data.rs;src/ui/trading/mod.rs;src/ui/dialogs/chart_settings/tabs/trading.rs;src/ui/dialogs/chart_settings/tabs/mod.rs
-Chart,Chart settings and themes,Watermark,done,library,src/widget/settings/apply.rs;src/widget/frame/mod.rs;src/widget/mod.rs;src/chart/renderers/watermark.rs;src/config/chart.rs;src/widget/palette.rs;src/theme/presets.rs
+Chart,Chart settings and themes,Watermark,done,library,src/widget/settings/apply.rs;src/widget/frame/mod.rs;src/widget/frame/background.rs;src/widget/mod.rs;src/chart/renderers/watermark.rs;src/config/chart.rs;src/widget/palette.rs;src/theme/presets.rs
 Chart,Chart types,Area,done,library,src/widget/frame/mod.rs;src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/area.rs
 Chart,Chart types,Bars,done,library,src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/candlestick.rs;src/chart/renderers/bar.rs
 Chart,Chart types,Baseline,done,library,src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/area.rs
@@ -143,7 +143,7 @@ Chart,Compare and overlay,Compare on a new price scale,done,host,src/model/serie
 Chart,Compare and overlay,Compare symbol,done,host,src/widget/series/options.rs
 Chart,Compare and overlay,Overlay a symbol on the same price scale,done,host,src/widget/series/options.rs;src/widget/series/mod.rs
 Chart,Compare and overlay,Percent scale when comparing,done,library,src/widget/series/options.rs;src/widget/series/scales/mod.rs;src/scales/pricescale.rs
-Chart,Crosshair and interaction,Auto-scroll to realtime and jump-to-latest button,done,library,src/widget/series/mod.rs;src/widget/frame/mod.rs;src/widget/time_scale.rs
+Chart,Crosshair and interaction,Auto-scroll to realtime and jump-to-latest button,done,library,src/widget/series/mod.rs;src/widget/frame/mod.rs;src/widget/navigation.rs;src/widget/time_scale.rs
 Chart,Crosshair and interaction,"Chart, series and drawing context menus",partial,library,src/ui/context_menu/mod.rs;src/ui/context_menu/chart_menus/mod.rs;src/ui/context_menu/series.rs;src/ui/context_menu/drawing.rs;src/widget/drawing_api.rs;terminal/src/drawings.rs;terminal/src/studies.rs;src/ui/floating_toolbar/toolbar.rs;examples/demo/controller.rs
 Chart,Crosshair and interaction,Crosshair across all panes,done,library,src/widget/pane/render/mod.rs;src/widget/pane/indicator/mod.rs;src/widget/frame/mod.rs
 Chart,Crosshair and interaction,Crosshair lines and axis labels,done,library,src/chart/renderers/crosshair.rs;src/widget/frame/mod.rs;src/scales/time_formatter.rs;src/painting/dashed_line.rs;src/config/crosshair.rs;src/chart/rendering/axes.rs;src/theme/presets.rs;src/widget/pane/render/mod.rs;src/scales/horizontal.rs
@@ -214,8 +214,8 @@ Chart,Panes,Volume area in the main pane,done,library,src/widget/volume.rs;src/w
 Chart,Scales and axes,Auto-scale,done,library,src/widget/frame/mod.rs;src/studies/chart_state.rs;src/scales/pricescale.rs;src/ui/top_toolbar/components/settings_menu/menu.rs
 Chart,Scales and axes,Bar spacing and time zoom,done,library,src/model/timescale.rs;src/widget/pan_zoom.rs;src/config/timescale.rs;src/widget/sync.rs;src/widget/mod.rs;src/widget/builder.rs;src/widget/keyboard.rs
 Chart,Scales and axes,Bid and ask lines,done,host,src/widget/mod.rs;src/widget/settings/apply.rs;src/widget/frame/mod.rs;src/chart/rendering/axes.rs;src/painting/dashed_line.rs
-Chart,Scales and axes,Countdown to bar close,done,library,src/widget/mod.rs;src/widget/frame/mod.rs;src/chart/rendering/axes.rs;src/model/session/exchange.rs
-Chart,Scales and axes,Extended hours,done,host,src/widget/feed/mod.rs;src/widget/frame/mod.rs;src/chart/renderers/session_breaks.rs
+Chart,Scales and axes,Countdown to bar close,done,library,src/widget/mod.rs;src/widget/frame/mod.rs;src/widget/format.rs;src/chart/rendering/axes.rs;src/model/session/exchange.rs
+Chart,Scales and axes,Extended hours,done,host,src/widget/feed/mod.rs;src/widget/frame/mod.rs;src/widget/frame/sessions.rs;src/chart/renderers/session_breaks.rs
 Chart,Scales and axes,High and low price labels,done,library,src/widget/settings/apply.rs;src/widget/frame/mod.rs;src/chart/rendering/axes.rs
 Chart,Scales and axes,Index-based time axis,done,library,src/model/timescale.rs;src/widget/frame/mod.rs
 Chart,Scales and axes,Indexed to 100 scale,done,library,src/scales/pricescale.rs;src/scales/pricescale_marks.rs;src/studies/chart_state.rs;src/ui/dialogs/series_settings/tabs/scales.rs;src/widget/mod.rs
@@ -234,11 +234,11 @@ Chart,Scales and axes,Regular price scale,done,library,src/scales/pricescale.rs;
 Chart,Scales and axes,Right offset,done,library,src/model/timescale.rs;src/widget/mod.rs;src/widget/builder.rs;src/widget/time_scale.rs;src/widget/pan_zoom.rs;src/widget/sync.rs
 Chart,Scales and axes,Right price scale,done,library,src/widget/mod.rs;src/widget/frame/mod.rs;src/chart/renderers/labels.rs;src/chart/rendering/axes.rs
 Chart,Scales and axes,Scale margins,done,library,src/widget/settings/apply.rs;src/scales/pricescale.rs;src/widget/frame/mod.rs
-Chart,Scales and axes,Session breaks,done,library,src/widget/frame/mod.rs;src/chart/renderers/session_breaks.rs;src/ui/context_menu/axis.rs;src/config/chart.rs;src/widget/palette.rs;src/model/session/exchange.rs;src/model/session/mod.rs;src/model/clock.rs
+Chart,Scales and axes,Session breaks,done,library,src/widget/frame/mod.rs;src/widget/format.rs;src/widget/frame/sessions.rs;src/chart/renderers/session_breaks.rs;src/ui/context_menu/axis.rs;src/config/chart.rs;src/widget/palette.rs;src/model/session/exchange.rs;src/model/session/mod.rs;src/model/clock.rs
 Chart,Scales and axes,Symbol name label on the scale,done,library,;src/config/chart.rs;src/chart/rendering/axes.rs;src/widget/frame/mod.rs;src/widget/series/options.rs;src/widget/series/paint.rs;src/widget/series/scales/mod.rs;src/widget/settings/apply.rs;src/widget/settings/data.rs
 Chart,Scales and axes,Thousands grouping in price labels,done,library,src/config/chart.rs;src/scales/price_formatter.rs;src/scales/pricescale.rs;src/scales/pricescale_marks.rs;src/chart/rendering/axes.rs;src/chart/renderers/crosshair.rs;src/chart/renderers/labels.rs;src/chart/renderers/legend/mod.rs;src/widget/frame/mod.rs;src/widget/pane/render/mod.rs;src/widget/series/options.rs;src/widget/series/paint.rs;src/widget/series/scales/mod.rs
 Chart,Scales and axes,Time axis labels,partial,library,src/scales/timescale_marks.rs;src/scales/horizontal.rs;src/scales/time_formatter.rs;src/chart/renderers/labels.rs;src/widget/frame/mod.rs;src/model/bar/time.rs;src/widget/time_scale.rs;src/styles/sizing.rs;src/model/timezone.rs;src/widget/merge.rs
-Chart,Scales and axes,Time zone selection,done,library,src/widget/settings/apply.rs;src/widget/frame/mod.rs;src/scales/time_formatter.rs;src/widget/time_scale.rs;src/model/bar/time.rs;src/chart/renderers/labels.rs;src/model/timezone.rs
+Chart,Scales and axes,Time zone selection,done,library,src/widget/settings/apply.rs;src/widget/frame/mod.rs;src/widget/format.rs;src/scales/time_formatter.rs;src/widget/time_scale.rs;src/model/bar/time.rs;src/chart/renderers/labels.rs;src/model/timezone.rs
 Drawings,Drawing management,Alerts on drawings,done,library,src/drawings/domain/drawing.rs;src/ui/context_menu/drawing.rs
 Drawings,Drawing management,Anchor markers only on selected drawings,done,library,src/drawings/manager/paint.rs;src/drawings/services/handle.rs;src/drawings/rendering/lines.rs;src/drawings/rendering/measurements.rs;src/drawings/rendering/shapes.rs;src/drawings/rendering/pitchfork.rs;src/drawings/rendering/gann.rs;src/drawings/rendering/fibonacci.rs;src/drawings/rendering/patterns.rs;src/drawings/rendering/elliott.rs;src/drawings/rendering/cycles.rs;src/drawings/rendering/trading/volume_profile.rs;src/drawings/rendering/trading/bars_pattern.rs;src/drawings/rendering/trading/projection.rs;src/drawings/rendering/annotations/text.rs;src/drawings/rendering/annotations/callout.rs;src/drawings/rendering/annotations/notes.rs;src/drawings/rendering/annotations/signpost.rs;src/drawings/rendering/style.rs
 Drawings,Drawing management,Constrain drawings with Shift,done,library,src/widget/tool_interaction/interaction.rs;src/drawings/manager/interaction.rs;src/widget/tool_interaction/selection.rs;src/widget/tool_interaction/mod.rs
