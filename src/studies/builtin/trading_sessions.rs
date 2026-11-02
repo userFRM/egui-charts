@@ -585,7 +585,7 @@ impl Indicator for TradingSessions {
                 self.zones[slot] =
                     zone(&name).ok_or_else(|| crate::studies::StudyError::InvalidInput {
                         id: id.into(),
-                        reason: "names no known time zone",
+                        reason: "names no known time zone".into(),
                     })?;
             }
             _ => return Err(crate::studies::StudyError::UnknownInput(id.into())),

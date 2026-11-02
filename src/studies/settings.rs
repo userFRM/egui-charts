@@ -504,7 +504,8 @@ impl Indicator for ConfiguredStudy {
             {
                 return Err(super::StudyError::InvalidInput {
                     id: id.into(),
-                    reason: "must follow the chart while the source is another study's output",
+                    reason: "must follow the chart while the source is another study's output"
+                        .into(),
                 });
             }
             match value {
@@ -532,7 +533,7 @@ impl Indicator for ConfiguredStudy {
             {
                 return Err(super::StudyError::InvalidInput {
                     id: id.into(),
-                    reason: "cannot be another study's output while the study runs on another symbol or interval",
+                    reason: "cannot be another study's output while the study runs on another symbol or interval".into(),
                 });
             }
             self.source = Some(source);

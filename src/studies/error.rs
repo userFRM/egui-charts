@@ -6,8 +6,7 @@ use super::StudyInput;
 use std::fmt;
 use std::sync::{Mutex, PoisonError};
 
-/// Why a study was not built, edited, given a source or added. The study and the chart are
-/// unchanged unless the method that returned the error says otherwise.
+/// Why a study was not built, edited, given a source or added.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum StudyError {
@@ -22,7 +21,7 @@ pub enum StudyError {
         /// The id of the input.
         id: String,
         /// Why, completing the sentence "study input `id` ...".
-        reason: &'static str,
+        reason: String,
     },
     /// A declared input has an empty id.
     EmptyInputId {
@@ -79,7 +78,7 @@ impl StudyError {
     pub(crate) fn invalid_input(id: &str) -> Self {
         Self::InvalidInput {
             id: id.to_owned(),
-            reason: "is outside its accepted values",
+            reason: "is outside its accepted values".into(),
         }
     }
 

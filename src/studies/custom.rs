@@ -122,11 +122,11 @@ impl CustomIndicator {
                 return Err(super::StudyError::EmptyInputId { index: at });
             }
             let reason = if inputs[..at].iter().any(|other| other.id == input.id) {
-                "is declared twice"
+                "is declared twice".into()
             } else if !input.accepts(&input.value) {
-                "has a value outside its accepted values"
+                format!("has value {:?}, expected {:?}", input.value, input.kind)
             } else if !input.accepts(&input.default) {
-                "has a default outside its accepted values"
+                format!("has default {:?}, expected {:?}", input.default, input.kind)
             } else {
                 continue;
             };
@@ -436,11 +436,11 @@ mod tests {
             ),
             (
                 vec![length(InputValue::Length(0))],
-                "study input \"length\" has a value outside its accepted values",
+                "study input \"length\" has value Length(0), expected Length(1, 10)",
             ),
             (
                 vec![length(InputValue::Length(2)).with_default(InputValue::Length(11))],
-                "study input \"length\" has a default outside its accepted values",
+                "study input \"length\" has default Length(11), expected Length(1, 10)",
             ),
         ] {
             let error = CustomIndicator::new("Inputs", |_| Vec::new())

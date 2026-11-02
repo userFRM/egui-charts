@@ -444,7 +444,7 @@ impl Indicator for VolumeWeightedAvgPrice {
                 self.time_zone = TimezoneId::named(&name).ok_or_else(|| {
                     crate::studies::StudyError::InvalidInput {
                         id: id.into(),
-                        reason: "names no known time zone",
+                        reason: "names no known time zone".into(),
                     }
                 })?;
             }
@@ -462,7 +462,7 @@ impl Indicator for VolumeWeightedAvgPrice {
                 self.event_zone = TimezoneId::named(&name).ok_or_else(|| {
                     crate::studies::StudyError::InvalidInput {
                         id: id.into(),
-                        reason: "names no known time zone",
+                        reason: "names no known time zone".into(),
                     }
                 })?;
             }
@@ -477,7 +477,7 @@ impl Indicator for VolumeWeightedAvgPrice {
                     .or_else(|_| NaiveDateTime::parse_from_str(&text, "%Y-%m-%d %H:%M"))
                     .map_err(|_| crate::studies::StudyError::InvalidInput {
                         id: id.into(),
-                        reason: "must read YYYY-MM-DD HH:MM:SS",
+                        reason: "must read YYYY-MM-DD HH:MM:SS".into(),
                     })?;
                 self.event_anchors[slot(id, "event_").unwrap()] = self
                     .event_zone
@@ -485,7 +485,7 @@ impl Indicator for VolumeWeightedAvgPrice {
                     .earliest()
                     .ok_or_else(|| crate::studies::StudyError::InvalidInput {
                         id: id.into(),
-                        reason: "names a time that does not exist in the event time zone",
+                        reason: "names a time that does not exist in the event time zone".into(),
                     })?
                     .with_timezone(&Utc);
             }

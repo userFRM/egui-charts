@@ -124,7 +124,7 @@ impl Chart {
         }) {
             return Err(StudyError::InvalidInput {
                 id: id.clone(),
-                reason: "reads another study's output, which needs remapping before paste",
+                reason: "reads another study's output, which needs remapping before paste".into(),
             });
         }
         let mut study = crate::studies::ConfiguredStudy::new(

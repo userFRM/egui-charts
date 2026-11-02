@@ -287,7 +287,7 @@ impl ProfileStudy {
                 self.start_time = parse_time(&text, -8e15).map_err(|reason| {
                     crate::studies::StudyError::InvalidInput {
                         id: id.into(),
-                        reason,
+                        reason: reason.into(),
                     }
                 })?
             }
@@ -295,7 +295,7 @@ impl ProfileStudy {
                 self.end_time = parse_time(&text, 8e15).map_err(|reason| {
                     crate::studies::StudyError::InvalidInput {
                         id: id.into(),
-                        reason,
+                        reason: reason.into(),
                     }
                 })?
             }
