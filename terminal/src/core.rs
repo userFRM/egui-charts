@@ -24,13 +24,13 @@ pub(super) enum Direction {
 }
 
 /// The side panels beside the chart.
-#[allow(dead_code, reason = "the side panels open these")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SidePanel {
     ObjectTree,
     Alerts,
     DataWindow,
     Watchlist,
+    TimeAndSales,
     Highlights,
     Screener,
     Hotlists,
@@ -133,6 +133,7 @@ impl Terminal {
         let visible = visible && self.shown(control);
         self.top_toolbar.set_control_visible(control, visible);
         self.menus.set_control_visible(control, visible);
+        self.panels.widget_bar.set_control_visible(control, visible);
     }
 
     /// Whether the host left `control` visible.
@@ -208,7 +209,6 @@ impl Terminal {
     }
 
     /// Shows `message` briefly.
-    #[allow(dead_code, reason = "the groups report their results")]
     pub(super) fn toast(&mut self, message: impl Into<String>) {
         self.toasts.info(message);
     }

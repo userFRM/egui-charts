@@ -5,6 +5,38 @@ use crate::Chart;
 use crate::drawings::{ChartPoint, Drawing};
 use chrono::{DateTime, Utc};
 
+/// Why [`Chart::create_drawing`] or [`Chart::set_drawing_points`] changed nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DrawingError {
+    /// No drawing has this id.
+    UnknownDrawing(usize),
+    /// The drawing with this id is locked.
+    Locked(usize),
+    /// The price of the anchor at this index, counted from 0, is NaN or infinite.
+    NonFinitePrice {
+        /// The index of the anchor.
+        point: usize,
+    },
+    /// The drawing manager refused the drawing; the text says why, such as a disabled or
+    /// unknown tool or anchors the tool cannot use.
+    Invalid(&'static str),
+}
+
+impl std::fmt::Display for DrawingError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnknownDrawing(id) => write!(f, "Unknown drawing {id}"),
+            Self::Locked(id) => write!(f, "Drawing {id} is locked"),
+            Self::NonFinitePrice { point } => {
+                write!(f, "Drawing price of point {point} must be finite")
+            }
+            Self::Invalid(reason) => f.write_str(reason),
+        }
+    }
+}
+impl std::error::Error for DrawingError {}
+
 impl Chart {
     /// Creates a completed drawing from UTC times and prices, with the supplied drawing's
     /// properties, pane, group and layer. Its id and storage identity are replaced.
@@ -25,9 +57,11 @@ impl Chart {
         &mut self,
         mut drawing: Drawing,
         points: &[(DateTime<Utc>, f64)],
-    ) -> Result<usize, &'static str> {
+    ) -> Result<usize, DrawingError> {
         drawing.chart_points = self.map_drawing_points(points)?;
-        self.drawings_mut().add_drawing(drawing)
+        self.drawings_mut()
+            .add_drawing(drawing)
+            .map_err(DrawingError::Invalid)
     }
 
     /// Returns a drawing's UTC anchors and prices, or `None` for an unknown id or an index
@@ -49,19 +83,21 @@ impl Chart {
         &mut self,
         id: usize,
         points: &[(DateTime<Utc>, f64)],
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), DrawingError> {
         let mut drawing = self
             .drawings()
             .drawings
             .iter()
             .find(|d| d.id == id)
-            .ok_or("Unknown drawing")?
+            .ok_or(DrawingError::UnknownDrawing(id))?
             .clone();
         if drawing.locked {
-            return Err("Drawing is locked");
+            return Err(DrawingError::Locked(id));
         }
         drawing.chart_points = self.map_drawing_points(points)?;
-        self.drawings().validate_drawing(&drawing)?;
+        self.drawings()
+            .validate_drawing(&drawing)
+            .map_err(DrawingError::Invalid)?;
         self.drawings_mut().edit_drawing(id, |target| {
             target.chart_points = drawing.chart_points;
         });
@@ -265,12 +301,13 @@ impl Chart {
     fn map_drawing_points(
         &self,
         points: &[(DateTime<Utc>, f64)],
-    ) -> Result<Vec<ChartPoint>, &'static str> {
+    ) -> Result<Vec<ChartPoint>, DrawingError> {
         points
             .iter()
-            .map(|&(time, price)| {
+            .enumerate()
+            .map(|(point, &(time, price))| {
                 if !price.is_finite() {
-                    return Err("Drawing prices must be finite");
+                    return Err(DrawingError::NonFinitePrice { point });
                 }
                 Ok(self.drawing_point_at(time, price).unwrap_or_else(|| {
                     let mut point = ChartPoint::new(0.0, price);

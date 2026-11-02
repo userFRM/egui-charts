@@ -33,6 +33,12 @@ use crate::model::{Alert, AlertId};
 /// trigger time. Outside it, keep observing values for crossings without consuming an occurrence
 /// or disarming an alert that fires once.
 ///
+/// A [`StrategyFills`](crate::model::AlertCondition::StrategyFills) alert receives each execution
+/// of a host-named run through `AlertEngine::strategy_fills`, with `strategies` and `alert-engine`.
+/// Its event carries the fill time, execution price and a message such as
+/// "Buy 2 at 187.50, position 4". The host supplies bars and retains the run; delivery outside the
+/// application remains the host's responsibility.
+///
 /// These methods are called on the UI thread, while the terminal shows a frame or runs a command,
 /// and must return at once. Do the work elsewhere and answer through the [`Reply`] or push through
 /// the [`Events`] you were given, from any thread, runtime or browser task. A `Reply` dropped

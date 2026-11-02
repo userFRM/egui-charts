@@ -286,7 +286,7 @@ impl StudySettingsSnapshot {
     pub(super) fn restore(
         &self,
         study: &mut (impl Indicator + ?Sized),
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), crate::studies::StudyError> {
         let current = study.inputs();
         let inputs: Vec<_> = self
             .inputs
@@ -474,10 +474,10 @@ impl Indicator for ConfiguredStudy {
         }
         inputs
     }
-    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), &'static str> {
+    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), crate::studies::StudyError> {
         if id == "plot_offset" && self.study.source().is_some() {
             let InputValue::Integer(offset) = value else {
-                return Err("invalid plot offset");
+                return Err(crate::studies::StudyError::invalid_input(id));
             };
             self.offset = offset;
             self.aligned = None;
@@ -493,16 +493,20 @@ impl Indicator for ConfiguredStudy {
                 .inputs()
                 .into_iter()
                 .find(|input| input.id == id)
-                .ok_or("unknown study input")?;
+                .ok_or_else(|| crate::studies::StudyError::UnknownInput(id.into()))?;
             if !schema.accepts(&value) {
-                return Err("invalid study data input");
+                return Err(crate::studies::StudyError::invalid_input(id));
             }
             if matches!(self.source(), Some(super::StudySource::Study { .. }))
                 && !matches!(&value, InputValue::Symbol(s) if s.is_empty())
                 && value != InputValue::Timeframe(None)
                 && id != "wait_for_close"
             {
-                return Err("a study output already follows the chart interval and symbol");
+                return Err(super::StudyError::InvalidInput {
+                    id: id.into(),
+                    reason: "must follow the chart while the source is another study's output"
+                        .into(),
+                });
             }
             match value {
                 InputValue::Symbol(value) => self.calculation_symbol = value,
@@ -522,12 +526,15 @@ impl Indicator for ConfiguredStudy {
                 return Ok(());
             }
             let InputValue::Source(source) = value else {
-                return Err("invalid study source");
+                return Err(crate::studies::StudyError::invalid_input(id));
             };
             if matches!(source, super::StudySource::Study { .. })
                 && (!self.calculation_symbol.is_empty() || self.calculation_timeframe.is_some())
             {
-                return Err("a study output already follows the chart interval and symbol");
+                return Err(super::StudyError::InvalidInput {
+                    id: id.into(),
+                    reason: "cannot be another study's output while the study runs on another symbol or interval".into(),
+                });
             }
             self.source = Some(source);
             self.aligned = None;
@@ -780,11 +787,14 @@ impl Indicator for ConfiguredStudy {
         snapshot.offset = self.offset;
         snapshot
     }
-    fn restore_settings(&mut self, snapshot: &StudySettingsSnapshot) -> Result<(), &'static str> {
+    fn restore_settings(
+        &mut self,
+        snapshot: &StudySettingsSnapshot,
+    ) -> Result<(), crate::studies::StudyError> {
         let mut inputs: Vec<_> = snapshot.inputs.iter().collect();
         while !inputs.is_empty() {
             let remaining = inputs.len();
-            let mut error = "invalid study input";
+            let mut error = None;
             // An input can change another input's accepted range.
             inputs.retain(|(id, value)| {
                 if self
@@ -796,14 +806,14 @@ impl Indicator for ConfiguredStudy {
                     return false;
                 }
                 if let Err(message) = self.study.set_input(id, value.clone()) {
-                    error = message;
+                    error = Some(message);
                     true
                 } else {
                     false
                 }
             });
             if inputs.len() == remaining {
-                return Err(error);
+                return Err(error.expect("a retained input failed to apply"));
             }
         }
         self.study.set_colors(snapshot.colors.clone());
@@ -830,18 +840,34 @@ impl Indicator for ConfiguredStudy {
         &mut self,
         inputs: &[(String, InputValue)],
         mut settings: StudySettings,
-    ) -> Result<(), &'static str> {
-        if settings.precision.is_some_and(|precision| precision > 12)
-            || settings
-                .plots
-                .iter()
-                .any(|plot| !plot.width.is_finite() || !(0.5..=10.0).contains(&plot.width))
-            || settings
+    ) -> Result<(), crate::studies::StudyError> {
+        if let Some(precision) = settings.precision.filter(|precision| *precision > 12) {
+            return Err(super::StudyError::InvalidPrecision(precision));
+        }
+        if let Some((plot, style)) = settings
+            .plots
+            .iter()
+            .enumerate()
+            .find(|(_, plot)| !plot.width.is_finite() || !(0.5..=10.0).contains(&plot.width))
+        {
+            return Err(super::StudyError::InvalidPlotWidth {
+                plot,
+                width: style.width,
+            });
+        }
+        if let Some((level, value)) =
+            settings
                 .levels
                 .iter()
-                .any(|level| level.value.is_some_and(|value| !value.is_finite()))
+                .enumerate()
+                .find_map(|(level, style)| {
+                    style
+                        .value
+                        .filter(|value| !value.is_finite())
+                        .map(|value| (level, value))
+                })
         {
-            return Err("invalid study presentation settings");
+            return Err(super::StudyError::InvalidLevelValue { level, value });
         }
         let mut edited = self.clone();
         let mut inputs: Vec<_> = inputs.iter().collect();
@@ -868,7 +894,10 @@ impl Indicator for ConfiguredStudy {
                 .extend(defaults.untagged_plots.iter().filter(|&&line| line >= kept));
         }
         if settings.plots.len() != edited.line_count() {
-            return Err("one style is required per study plot");
+            return Err(super::StudyError::PlotCount {
+                expected: edited.line_count(),
+                found: settings.plots.len(),
+            });
         }
         settings
             .untagged_plots
@@ -1358,10 +1387,10 @@ mod tests {
         assert_eq!(values(&study), [70.0, 30.0]);
         let mut invalid = declared.clone();
         invalid.levels[0].value = Some(f64::INFINITY);
-        assert_eq!(
+        assert!(matches!(
             study.apply_settings(&[], invalid),
-            Err("invalid study presentation settings")
-        );
+            Err(super::super::StudyError::InvalidLevelValue { level: 0, value }) if value == f64::INFINITY
+        ));
         assert_eq!(study.settings(), declared);
         let mut adx = ConfiguredStudy::new(Box::new(AdxBreakout::default()));
         let settings = adx.settings();

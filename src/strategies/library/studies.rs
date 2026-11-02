@@ -151,9 +151,13 @@ impl Strategy for StudyStrategy {
                 "slow" => 1,
                 _ => return Err("unknown strategy input"),
             };
-            self.studies[index].set_input(id, value)?;
+            self.studies[index]
+                .set_input(id, value)
+                .map_err(|_| "invalid strategy study input")?;
         } else {
-            self.studies[0].set_input(id, value)?;
+            self.studies[0]
+                .set_input(id, value)
+                .map_err(|_| "invalid strategy study input")?;
         }
         self.signals.clear();
         Ok(())

@@ -32,6 +32,7 @@ pub mod line_break;
 mod markers;
 #[cfg(any(feature = "studies", feature = "drawings"))]
 pub(crate) mod math;
+mod parse;
 pub mod point_figure;
 mod post;
 mod price_source;
@@ -85,7 +86,10 @@ pub use markers::{
     ChangeMarkers, LineStyle, Marker, MarkerOptions, MarkerPos, MarkerShape, MarkerZOrder,
     PriceLine,
 };
-pub use point_figure::{ColumnDirection, PnfColumn, PointFigureConfig, to_pnf_columns};
+pub use parse::ParseError;
+pub use point_figure::{
+    ColumnDirection, PnfBoxesError, PnfColumn, PointFigureConfig, to_pnf_columns,
+};
 pub use post::{PostContent, PostLink};
 pub use price_source::PriceSource;
 pub use quote::{

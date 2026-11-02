@@ -271,7 +271,7 @@ impl Trading {
         chart: &Chart,
         ctx: &egui::Context,
         options: &crate::widget::ImageExportOptions,
-    ) -> Result<crate::widget::ChartImage, String> {
+    ) -> Result<crate::widget::ChartImage, crate::widget::ExportError> {
         chart.export_layout_image(ctx, options, |ui, chart| self.draw_export(ui, chart))
     }
 
@@ -281,7 +281,7 @@ impl Trading {
         chart: &Chart,
         ctx: &egui::Context,
         options: &crate::widget::ImageExportOptions,
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<Vec<u8>, crate::widget::ExportError> {
         chart.export_layout_png(ctx, options, |ui, chart| self.draw_export(ui, chart))
     }
 
@@ -291,7 +291,7 @@ impl Trading {
         chart: &Chart,
         ctx: &egui::Context,
         options: &crate::widget::ImageExportOptions,
-    ) -> Result<String, String> {
+    ) -> Result<String, crate::widget::ExportError> {
         chart.export_layout_svg(ctx, options, |ui, chart| self.draw_export(ui, chart))
     }
 
