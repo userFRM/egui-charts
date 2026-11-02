@@ -39,6 +39,11 @@ const src = `/egui-charts/docs/examples/widget/?scene=${encodeURIComponent(scene
     let timeout: number;
     let stateObserver: MutationObserver | undefined;
     let previousFocus: Element | null;
+    document.addEventListener('focusin', (event) => {
+      if (example.dataset.state === 'loading' && event.target !== frame) {
+        previousFocus = document.activeElement;
+      }
+    });
     const syncTheme = () => {
       const theme = document.documentElement.dataset.theme ?? 'dark';
       link.href = `${frame.dataset.src}&theme=${theme}`;
