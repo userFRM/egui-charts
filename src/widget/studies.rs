@@ -1074,4 +1074,11 @@ mod tests {
         chart.set_study_limit(None);
         assert!(chart.try_add_indicator(Box::new(SMA::new(8))).is_ok());
     }
+    #[test]
+    fn api_errors_are_std_errors() {
+        fn needs_error<E: std::error::Error + Send + Sync + 'static>() {}
+        needs_error::<crate::model::ParseError>();
+        needs_error::<crate::model::PnfBoxesError>();
+        needs_error::<crate::widget::ExportError>();
+    }
 }

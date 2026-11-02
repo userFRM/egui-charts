@@ -55,7 +55,7 @@ use crate::studies::IndicatorRegistry;
 pub use builder::ChartBuilder;
 use chrono::{DateTime, Utc};
 use egui::{Pos2, Rect, Vec2};
-pub use export::{ChartImage, DataTable, ImageExportOptions};
+pub use export::{ChartImage, DataTable, ExportError, ImageExportOptions};
 pub use pane::{IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneInteraction};
 use std::collections::BTreeMap;
 

@@ -54,12 +54,16 @@ impl ColorType {
     }
 
     /// Create a solid color from hex string (e.g., "#FF5733" or "FF5733")
-    pub fn from_hex(hex: &str) -> Result<Self, String> {
-        let hex = hex.strip_prefix('#').unwrap_or(hex);
+    pub fn from_hex(input: &str) -> Result<Self, super::ParseError> {
+        let hex = input.strip_prefix('#').unwrap_or(input);
 
         // Slicing panics inside a multi-byte character, and `from_str_radix` accepts a leading `+`.
         if !matches!(hex.len(), 6 | 8) || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return Err(format!("Invalid hex color: {hex}"));
+            return Err(super::ParseError::new(
+                "hex colour",
+                input,
+                "expected 6 or 8 hexadecimal digits after an optional #",
+            ));
         }
         let channel = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).unwrap_or_default();
         let (r, g, b) = (channel(0), channel(2), channel(4));
