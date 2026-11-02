@@ -143,6 +143,7 @@ impl DemoApp {
         }
         chart.set_instrument(Some(live.instrument()));
         chart.set_extended_hours(source.extended_hours());
+        chart.set_conversion(source.conversion().map(str::to_owned));
         chart.set_chart_type_params(source.chart_type_params().clone());
         *chart.price_scale_mut() = source.state().price_scale().clone();
         let (spacing, offset) = source.get_time_scale_state();
@@ -1157,7 +1158,13 @@ mod tests {
         drawing.id = 8;
         drawing.pane = Some(pane.0);
         app.chart.drawings_mut().drawings.push(drawing);
+        app.chart.set_conversion(Some("adjusted".into()));
         let copied = app.copy_chart(&app.chart, &app.live, &app.comparisons, &app.spreads);
+        assert_eq!(
+            copied.chart.conversion(),
+            Some("adjusted"),
+            "copied slots must keep the adjusted prices requested by their source"
+        );
         let copied_pane = copied
             .chart
             .indicators()
