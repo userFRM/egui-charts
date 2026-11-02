@@ -262,8 +262,10 @@ applies.
 Enable `detectors` and connect `services::OrderFlowDetectors` through `Chart::set_signal_source`.
 Track each instrument with its tick size, then push the same symbol-tagged `MarketEvent` to the
 chart and the service. Historical trades go through `push_history`; the host supplies all data.
-Settings hold separate enable, alert and sound choices for each detector. Alert delivery is a
-host integration; these choices do not themselves send notifications.
+Settings hold separate enable, alert and sound choices for each detector, all off until the host
+sets them; `DetectorSettings::validate` checks settings restored from storage before
+`set_settings` applies them. Alert delivery is a host integration; these choices do not
+themselves send notifications.
 
 Stop runs require five same-side fills, each no more than 20 ms after its predecessor, travelling
 at least three ticks without reversing. When any aggressor ids are known, three distinct ids are
