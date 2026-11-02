@@ -4,7 +4,8 @@ use super::core::{Direction, SidePanel};
 use super::layout::Region;
 use super::{Action, ExportContents, Terminal};
 use chrono::Utc;
-use egui_charts::model::{Alert, AlertCondition};
+use egui_charts::config::KeyboardAction;
+use egui_charts::model::{Alert, AlertCondition, Watchlist};
 use egui_charts::services::{AlertEvaluator, UserSettings};
 use egui_charts::ui::Control;
 use egui_charts::ui::context_menu::{ChartContextAction, ContextMenuAction};
@@ -14,13 +15,14 @@ use egui_charts::ui::dialogs::{
 };
 use egui_charts::ui::top_toolbar::TopToolbarAction;
 use egui_charts::ui::widget_bar::{AlertPanelAction, AlertsPanel, RightBarIcon, WidgetBarAction};
-use egui_charts::widget::SeriesId;
+use egui_charts::widget::{SeriesId, ShortcutRequest};
 
 #[derive(Default)]
 pub(super) struct State {
     panel: AlertsPanel,
     dialog: AlertDialog,
     evaluator: Option<AlertEvaluator>,
+    watchlists: Vec<Watchlist>,
 }
 
 impl Terminal {
@@ -37,6 +39,25 @@ impl Terminal {
     }
 
     pub(super) fn alerts_poll(&mut self, ctx: &egui::Context) {
+        let Some(service) = self.services.alerts.clone() else {
+            return;
+        };
+        // Read current lists through the panel group even without a settings store.
+        let mut settings = UserSettings::default();
+        self.alerts_settings(&mut settings, Direction::Save);
+        self.panels_settings(&mut settings, Direction::Save);
+        self.alerts_settings(&mut settings, Direction::Load);
+        let settings = &self.studies.settings.alerts;
+        self.alerts.panel.set_sound(settings.play_sound.then(|| {
+            if settings.sound.is_empty() {
+                self.services.sounds.first().cloned().unwrap_or_default()
+            } else {
+                settings.sound.clone()
+            }
+        }));
+        self.alerts
+            .panel
+            .set_notification_seconds(settings.notification_seconds as f32);
         self.alerts
             .panel
             .set_symbol(self.charts[self.active].symbol());
@@ -46,37 +67,36 @@ impl Terminal {
             .panel
             .set_inputs(inputs, self.charts[self.active].timeframe());
         self.alerts.panel.poll(ctx, &mut self.toasts);
-        let Some(service) = self.services.alerts.clone() else {
-            return;
-        };
-        let Some(engine) = service.engine() else {
-            return;
-        };
-        let evaluator = self.alerts.evaluator.as_mut().unwrap();
-        if let Some(storage) = &self.services.storage {
-            evaluator.set_storage(storage.clone());
+        if let Some(engine) = service.engine() {
+            let evaluator = self.alerts.evaluator.as_mut().unwrap();
+            if let Some(storage) = &self.services.storage {
+                evaluator.set_storage(storage.clone());
+            }
+            let live: Vec<_> = self
+                .charts
+                .iter()
+                .filter_map(|chart| chart.alert_data())
+                .collect();
+            for error in evaluator.poll(
+                engine,
+                self.studies.indicators.factory(),
+                &live,
+                ctx,
+                Utc::now(),
+            ) {
+                self.toasts.error(format!("Alert data: {error}"));
+            }
+            self.alerts.panel.poll(ctx, &mut self.toasts);
+            if engine
+                .alerts()
+                .iter()
+                .any(|alert| alert.status == egui_charts::model::AlertStatus::Active)
+            {
+                ctx.request_repaint_after(std::time::Duration::from_secs(1));
+            }
         }
-        let live: Vec<_> = self
-            .charts
-            .iter()
-            .filter_map(|chart| chart.alert_data())
-            .collect();
-        for error in evaluator.poll(
-            engine,
-            self.studies.indicators.factory(),
-            &live,
-            ctx,
-            Utc::now(),
-        ) {
-            self.toasts.error(format!("Alert data: {error}"));
-        }
-        self.alerts.panel.poll(ctx, &mut self.toasts);
-        if engine
-            .alerts()
-            .iter()
-            .any(|alert| alert.status == egui_charts::model::AlertStatus::Active)
-        {
-            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        if let Some(sound) = self.alerts.panel.take_sound() {
+            self.play_sound(&sound, self.studies.settings.alerts.sound_volume);
         }
     }
 
@@ -100,11 +120,47 @@ impl Terminal {
                     self.emit(Action::AlertDialog(action));
                 }
             }
+            Region::Chart if self.services.alerts.is_some() => {
+                let chart = self.chart();
+                let settings = &self.studies.settings.alerts;
+                let series = chart.series_settings().alerts;
+                if settings.show_alerts && series.visible {
+                    let mapping = chart.get_chart_mapping();
+                    let decimals = chart
+                        .instrument()
+                        .and_then(egui_charts::scales::instrument_price_precision)
+                        .map(usize::from)
+                        .unwrap_or(2);
+                    let currency = chart
+                        .instrument()
+                        .and_then(|i| i.currency.as_deref())
+                        .unwrap_or("");
+                    if let Some(alert) = egui_charts::chart::render_alert_levels(
+                        ui,
+                        &mapping,
+                        self.alerts.panel.alerts().iter().filter(|alert| {
+                            alert.symbol == chart.symbol() && alert.watchlist.is_none()
+                        }),
+                        if series.color != egui_charts::model::SeriesAlerts::default().color {
+                            series.color
+                        } else {
+                            settings.alert_color
+                        },
+                        settings.show_alert_labels && series.labels,
+                        settings.show_active_only,
+                        |price| format!("{price:.decimals$} {currency}"),
+                    ) {
+                        self.emit(Action::AlertDialog(AlertDialogAction::Create(Box::new(
+                            alert,
+                        ))));
+                    }
+                }
+            }
             _ => {}
         }
     }
 
-    fn open_alert(&mut self, alert: Option<Alert>, price: Option<f64>) {
+    fn open_alert(&mut self, alert: Option<Alert>) {
         self.alerts.dialog.sources = self.chart().alert_sources();
         self.alerts.dialog.timezone = self
             .chart()
@@ -119,11 +175,12 @@ impl Terminal {
         } else {
             let chart = self.chart();
             let symbol = chart.symbol().to_owned();
-            let price = price.or_else(|| chart.bars(SeriesId::MAIN).last().map(|bar| bar.close));
-            if let Some(price) = price {
-                self.alerts.dialog.open(symbol, price);
-                self.charts[self.active].prepare_alert(&mut self.alerts.dialog.alert);
-            }
+            let price = chart
+                .bars(SeriesId::MAIN)
+                .last()
+                .map_or(0.0, |bar| bar.close);
+            self.alerts.dialog.open(symbol, price);
+            self.charts[self.active].prepare_alert(&mut self.alerts.dialog.alert);
         }
     }
 
@@ -135,7 +192,7 @@ impl Terminal {
             Action::TopToolbar(TopToolbarAction::CreateAlert)
             | Action::Alerts(AlertPanelAction::CreateAlert)
             | Action::ChartMenu(ChartContextAction::Series(SeriesContextMenuAction::AddAlert)) => {
-                self.open_alert(None, None)
+                self.open_alert(None)
             }
             Action::WidgetBar(WidgetBarAction::Clicked(RightBarIcon::Alerts)) => {
                 self.open_panel(SidePanel::Alerts)
@@ -143,21 +200,47 @@ impl Terminal {
             Action::Alerts(
                 AlertPanelAction::EditAlert(alert) | AlertPanelAction::DuplicateAlert(alert),
             )
-            | Action::ChartMenu(ChartContextAction::Study {
-                action: StudyContextMenuAction::AddAlert(alert),
-                ..
-            })
             | Action::ChartMenu(ChartContextAction::Drawing(DrawingContextMenuAction::AddAlert(
                 alert,
-            ))) => self.open_alert(Some(*alert), None),
+            ))) => self.open_alert(Some(*alert)),
             Action::ChartMenu(ChartContextAction::Chart(ContextMenuAction::AddAlert {
                 symbol,
                 price,
-            })) => self.open_alert(
-                Some(Alert::new(symbol, AlertCondition::Crossing(price))),
-                None,
-            ),
-            Action::AlertDialog(AlertDialogAction::Create(alert)) => {
+            })) => {
+                let mut alert = Alert::new(symbol, AlertCondition::Crossing(price));
+                self.chart().prepare_alert(&mut alert);
+                self.alerts.panel.save(alert);
+            }
+            Action::Shortcut(ShortcutRequest::Action(KeyboardAction::CreateAlert)) => {
+                let ctx = self.ctx();
+                let mapping = self.chart().get_chart_mapping();
+                if let Some(pos) = ctx
+                    .pointer_hover_pos()
+                    .filter(|pos| mapping.rect.contains(*pos))
+                {
+                    if ctx
+                        .layer_id_at(pos)
+                        .is_some_and(|layer| layer.order == egui::Order::Background)
+                    {
+                        let price = mapping.y_to_price(pos.y);
+                        if price.is_finite() {
+                            self.emit(Action::ChartMenu(ChartContextAction::Chart(
+                                ContextMenuAction::AddAlert {
+                                    symbol: self.chart().symbol().to_owned(),
+                                    price,
+                                },
+                            )));
+                        }
+                    }
+                } else {
+                    self.open_alert(None);
+                }
+            }
+            Action::AlertDialog(AlertDialogAction::Create(alert))
+            | Action::ChartMenu(ChartContextAction::Study {
+                action: StudyContextMenuAction::AddAlert(alert),
+                ..
+            }) => {
                 let mut alert = *alert;
                 self.chart().prepare_alert(&mut alert);
                 self.alerts.panel.save(alert);
@@ -173,7 +256,42 @@ impl Terminal {
         None
     }
 
-    pub(super) fn alerts_settings(&mut self, _settings: &mut UserSettings, _direction: Direction) {}
+    pub(super) fn alerts_settings(&mut self, settings: &mut UserSettings, direction: Direction) {
+        match direction {
+            Direction::Save => settings.watchlists.clone_from(&self.alerts.watchlists),
+            Direction::Load => {
+                if settings.watchlists == self.alerts.watchlists {
+                    return;
+                }
+                if let Some(engine) = self
+                    .services
+                    .alerts
+                    .as_ref()
+                    .and_then(|service| service.engine())
+                {
+                    for list in &self.alerts.watchlists {
+                        if !settings
+                            .watchlists
+                            .iter()
+                            .any(|current| current.name == list.name)
+                        {
+                            engine.set_watchlist(&list.name, Vec::new());
+                        }
+                    }
+                    for list in &settings.watchlists {
+                        engine
+                            .set_watchlist(&list.name, list.symbols().map(str::to_owned).collect());
+                    }
+                }
+                self.alerts.dialog.watchlists = settings
+                    .watchlists
+                    .iter()
+                    .map(|list| (list.name.clone(), list.name.clone()))
+                    .collect();
+                self.alerts.watchlists.clone_from(&settings.watchlists);
+            }
+        }
+    }
 
     pub(super) fn alerts_modal(&self) -> bool {
         self.alerts.dialog.is_open
@@ -193,6 +311,7 @@ mod tests {
     use egui_charts::services::AlertEngine;
     use egui_charts::studies::{InputValue, SMA};
     use egui_charts::ui::dialogs::AlertDialogAction;
+    use egui_charts::widget::SeriesId;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
@@ -329,6 +448,8 @@ mod tests {
         let feed = Arc::new(Feed::default());
         let fired = Arc::new(Mutex::new(Vec::new()));
         let triggers = fired.clone();
+        let sounds = Arc::new(Mutex::new(Vec::new()));
+        let played = sounds.clone();
         let engine = Arc::new(
             AlertEngine::new()
                 .on_trigger(move |_, event| triggers.lock().unwrap().push(event.clone())),
@@ -336,7 +457,13 @@ mod tests {
         let mut terminal = Terminal::new(feed.clone())
             .with_symbol("SHOWN")
             .with_timeframe(Timeframe::Min5)
-            .with_alerts(engine.clone());
+            .with_alerts(engine.clone())
+            .with_sounds(vec!["Bell".into()], move |name, volume| {
+                played.lock().unwrap().push((name.to_owned(), volume));
+            });
+        terminal.studies.settings.alerts.play_sound = true;
+        terminal.studies.settings.alerts.sound = "Bell".into();
+        terminal.studies.settings.alerts.sound_volume = 0.35;
         let study = terminal.chart_mut().add_indicator(Box::new(SMA::new(2)));
         let mut alert = Alert::new("OTHER", AlertCondition::Above(25.0));
         alert.timeframe = Some(Timeframe::Min5);
@@ -352,11 +479,20 @@ mod tests {
         let mut list = alert;
         list.symbol.clear();
         list.watchlist = Some("list".into());
-        engine.set_watchlist("list", vec!["OTHER".into(), "THIRD".into()]);
+        let mut settings = egui_charts::services::UserSettings::default();
+        settings.watchlists = vec![egui_charts::model::Watchlist::from_text(
+            "list",
+            "OTHER,THIRD",
+        )];
+        terminal.alerts_settings(&mut settings, super::Direction::Load);
         terminal.run(Action::AlertDialog(AlertDialogAction::Create(Box::new(
             list,
         ))));
         frames(&mut terminal);
+        assert_eq!(
+            terminal.alerts.dialog.watchlists,
+            [("list".into(), "list".into())]
+        );
         assert_eq!(feed.count("OTHER", Timeframe::Min5), 1);
         assert_eq!(feed.count("THIRD", Timeframe::Min5), 1);
         assert!(fired.lock().unwrap().is_empty());
@@ -387,6 +523,7 @@ mod tests {
         feed.push("THIRD", Timeframe::Min5, bar(10, 40.0));
         frames(&mut terminal);
         assert_eq!(fired.lock().unwrap().len(), 3);
+        assert_eq!(*sounds.lock().unwrap(), vec![("Bell".into(), 0.35); 2]);
 
         // Loading that subject into a live chart releases the background subscription. Equal
         // bars and retained study outputs do not constitute another occurrence.
@@ -960,13 +1097,10 @@ mod tests {
             for _ in 0..5 {
                 frame(&mut terminal, size, vec![]);
             }
-            let screen = frame(&mut terminal, size, vec![]);
-            let save = screen.text_at("Save alert").unwrap();
-            assert!(egui::Rect::from_min_size(egui::Pos2::ZERO, size).contains(save));
-            click(&mut terminal, size, save);
-            for _ in 0..5 {
-                frame(&mut terminal, size, vec![]);
-            }
+            assert!(
+                !terminal.alerts.dialog.is_open,
+                "price menus save immediately"
+            );
             assert_eq!(engine.alerts().len(), 1, "size {size:?}, dark {dark}");
             assert_eq!(engine.alerts()[0].symbol, "OTHER");
             terminal.run(Action::WidgetBar(
@@ -1002,6 +1136,170 @@ mod tests {
                 serde_json::to_value(&engine.alerts()[1]).unwrap()["inputs"].is_object(),
                 "quick creation must save its inputs"
             );
+            let study = terminal.chart_mut().add_indicator(Box::new(SMA::new(2)));
+            let mut alert = Alert::new("SHOWN", AlertCondition::Above(100.0));
+            alert.source = AlertSource::Study {
+                id: study.0.to_string(),
+                output: 0,
+            };
+            terminal.run(Action::ChartMenu(
+                egui_charts::ui::context_menu::ChartContextAction::Study {
+                    id: study,
+                    action: egui_charts::ui::dialogs::StudyContextMenuAction::AddAlert(Box::new(
+                        alert,
+                    )),
+                },
+            ));
+            frames(&mut terminal);
+            assert!(
+                !terminal.alerts.dialog.is_open,
+                "study menus save immediately"
+            );
+            assert_eq!(engine.alerts().len(), 3);
+            terminal.run(Action::TopToolbar(
+                egui_charts::ui::top_toolbar::TopToolbarAction::CreateAlert,
+            ));
+            for _ in 0..5 {
+                frame(&mut terminal, size, vec![]);
+            }
+            let screen = frame(&mut terminal, size, vec![]);
+            let save = screen.text_at("Save alert").unwrap();
+            assert!(egui::Rect::from_min_size(egui::Pos2::ZERO, size).contains(save));
+            click(&mut terminal, size, save);
+            for _ in 0..5 {
+                frame(&mut terminal, size, vec![]);
+            }
+            assert_eq!(engine.alerts().len(), 4, "the bell opens the shared editor");
+        }
+    }
+
+    #[test]
+    fn alt_a_creates_a_host_alert_at_the_hovered_price_and_dragging_submits_its_new_level() {
+        use crate::test_support::key;
+        use egui::{Event, Key, Modifiers, PointerButton};
+        use egui_charts::config::KeyboardAction;
+        for dark in [false, true] {
+            let engine = Arc::new(AlertEngine::new());
+            let mut terminal = Terminal::new(Arc::new(Feed::default()))
+                .with_symbol("OTHER")
+                .with_alerts(engine.clone());
+            terminal.theme_choice = Some(dark);
+            frames(&mut terminal);
+            let map = terminal.chart().get_chart_mapping();
+            let point = map.rect.center();
+            let range = map.price.range();
+            let expected = (range.min + range.max) / 2.0;
+            frame(
+                &mut terminal,
+                SIZE,
+                vec![Event::PointerMoved(point), key(Key::A, Modifiers::ALT)],
+            );
+            frames(&mut terminal);
+            assert_eq!(engine.alerts().len(), 1);
+            assert_eq!(
+                engine.alerts()[0].condition,
+                AlertCondition::Crossing(expected)
+            );
+            assert_eq!(engine.alerts()[0].status, AlertStatus::Active);
+            let target = point + egui::vec2(0.0, 45.0);
+            let button = |pos, pressed| Event::PointerButton {
+                pos,
+                pressed,
+                button: PointerButton::Primary,
+                modifiers: Modifiers::NONE,
+            };
+            let scale = terminal.chart().get_time_scale_state();
+            frame(&mut terminal, SIZE, vec![button(point, true)]);
+            frame(
+                &mut terminal,
+                SIZE,
+                vec![Event::PointerMoved(point + egui::vec2(0.0, 5.0))],
+            );
+            frame(&mut terminal, SIZE, vec![Event::PointerMoved(target)]);
+            frame(&mut terminal, SIZE, vec![button(target, false)]);
+            frames(&mut terminal);
+            let AlertCondition::Crossing(level) = engine.alerts()[0].condition else {
+                panic!("expected crossing");
+            };
+            let expected_drag =
+                expected - 45.0 / f64::from(map.rect.height()) * (range.max - range.min);
+            assert!(
+                (level - expected_drag).abs() < 1e-6,
+                "{level} expected {expected_drag}"
+            );
+            assert_eq!(
+                terminal.chart().get_time_scale_state(),
+                scale,
+                "dragging an alert must not pan the chart"
+            );
+            for (chart_visible, series_visible) in [(false, true), (true, false)] {
+                terminal.studies.settings.alerts.show_alerts = chart_visible;
+                terminal
+                    .chart_mut()
+                    .series_style_mut(SeriesId::MAIN)
+                    .unwrap()
+                    .alerts
+                    .visible = series_visible;
+                frames(&mut terminal);
+                frame(&mut terminal, SIZE, vec![Event::PointerMoved(target)]);
+                frame(&mut terminal, SIZE, vec![button(target, true)]);
+                frame(
+                    &mut terminal,
+                    SIZE,
+                    vec![Event::PointerMoved(target + egui::vec2(0.0, 45.0))],
+                );
+                frame(
+                    &mut terminal,
+                    SIZE,
+                    vec![button(target + egui::vec2(0.0, 45.0), false)],
+                );
+                frames(&mut terminal);
+                assert_eq!(
+                    engine.alerts()[0].condition,
+                    AlertCondition::Crossing(level),
+                    "hidden levels cannot be dragged"
+                );
+            }
+            terminal.studies.settings.alerts.show_alerts = true;
+            terminal
+                .chart_mut()
+                .series_style_mut(SeriesId::MAIN)
+                .unwrap()
+                .alerts
+                .visible = true;
+            terminal
+                .chart_mut()
+                .shortcuts_mut()
+                .bindings
+                .retain(|(_, action)| *action != KeyboardAction::CreateAlert);
+            terminal.chart_mut().shortcuts_mut().bindings.insert(
+                0,
+                (
+                    egui::KeyboardShortcut::new(Modifiers::ALT, Key::B),
+                    KeyboardAction::CreateAlert,
+                ),
+            );
+            for (keycode, count) in [(Key::A, 1), (Key::B, 2)] {
+                frame(
+                    &mut terminal,
+                    SIZE,
+                    vec![Event::PointerMoved(point), key(keycode, Modifiers::ALT)],
+                );
+                frames(&mut terminal);
+                assert_eq!(
+                    engine.alerts().len(),
+                    count,
+                    "alert creation follows the chart map"
+                );
+            }
+            terminal.run(Action::TopToolbar(
+                egui_charts::ui::top_toolbar::TopToolbarAction::OpenSettings,
+            ));
+            frames(&mut terminal);
+            frame(&mut terminal, SIZE, vec![key(Key::B, Modifiers::ALT)]);
+            frames(&mut terminal);
+            assert_eq!(engine.alerts().len(), 2, "settings own their keys");
+            assert!(!terminal.alerts.dialog.is_open);
         }
     }
 
