@@ -10,21 +10,31 @@
 //! [`ProfileInput`] tells how much of a profile the finer bars cover.
 //! The chart notes each profile "Estimated from bars", also when finer bars cover all of it:
 //! they narrow the estimate without making it exact.
+//! Where the chart holds the executions of a profile's bars, through
+//! [`Indicator::order_flow_inputs`], the profile sums them instead, in rows of whole ticks: the
+//! Height input rounded to whole ticks, or the traded ticks over Row count, rounded up and widened
+//! where rows counted from multiples of that height would exceed Row count.
+//! A profile whose executions start after its first bar sums those held and reports itself
+//! partial; one without them, or whose bars do not each hold their own executions, keeps the bars.
 //!
 //! Row fills stay at or below 35% opacity so price bars remain readable. The point of control
 //! and value-area guides keep their line colours and widths.
 
 use super::AutoAnchor;
 use super::anchor_period::{AnchorPeriod, ExchangeDays};
-use crate::data::{ProfileDisplay, StudyProfile, VolumeProfile, VolumeProfileConfig};
-use crate::model::{Bar, Instrument, ProfileResolution, Timeframe};
+use crate::data::{
+    FootprintBar, FootprintLevel, OrderFlowBars, OrderFlowInput, ProfileDisplay, StudyProfile,
+    VolumeProfile, VolumeProfileConfig,
+};
+use crate::model::{Bar, BarClock, Instrument, ProfileResolution, Timeframe};
 use crate::studies::{
     Indicator, IndicatorValues, InputKind, InputValue, StudyData, StudyDataRequest, StudyInput,
 };
 use chrono::{DateTime, TimeDelta, Utc};
 use egui::Color32;
 use std::cell::RefCell;
-use std::ops::Range;
+use std::collections::BTreeMap;
+use std::ops::{Bound, Range};
 use std::sync::Arc;
 
 /// What a volume profile was built from.
@@ -34,7 +44,8 @@ pub struct ProfileInput {
     pub bars: Range<usize>,
     /// The share of those bars, from 0 to 1, whose volume comes from finer bars of the source
     /// interval. The volume of the other bars is an estimate spread over each bar's high to
-    /// low range, so 0 marks a profile that is an estimate throughout.
+    /// low range, so 0 marks a profile that is an estimate throughout, unless its
+    /// [`source`](crate::data::VolumeProfile::source) is its executions, which take no finer bars.
     pub coverage: f64,
 }
 
@@ -61,6 +72,8 @@ struct ProfileStudy {
     anchor: AutoAnchor,
     length: usize,
     interval: Timeframe,
+    /// Bar calendar, from `set_bar_clock`, by which each bar's executions are found.
+    clock: BarClock,
     source: Option<Timeframe>,
     /// Read the interval the instrument suggests while `source` follows the chart.
     feed_source: bool,
@@ -75,6 +88,8 @@ struct ProfileStudy {
     days: ExchangeDays,
     data: Vec<Bar>,
     fine: Vec<Bar>,
+    /// Each bar's executions by price, one level per tick. Clones share the chart-fed source.
+    flow: OrderFlowInput,
     ranges: Vec<Range<usize>>,
     cache: RefCell<Vec<CachedProfile>>,
     values: IndicatorValues,
@@ -155,6 +170,7 @@ impl ProfileStudy {
             anchor: AutoAnchor::Auto,
             length: 100,
             interval: Timeframe::Min1,
+            clock: BarClock::new(Timeframe::Min1),
             source: None,
             feed_source: true,
             adaptive: false,
@@ -165,6 +181,7 @@ impl ProfileStudy {
             days: ExchangeDays::default(),
             data: Vec::new(),
             fine: Vec::new(),
+            flow: OrderFlowInput::footprint(),
             ranges: Vec::new(),
             cache: RefCell::new(Vec::new()),
             values: IndicatorValues::new(),
@@ -425,6 +442,102 @@ impl ProfileStudy {
             .collect()
     }
 
+    /// The executions the chart holds from the bar before chart bar `start` on, while the source
+    /// opens its bars by this study's calendar; executions keyed by another calendar, as the
+    /// chart's are while the study runs on another interval, cannot be assigned to these bars.
+    fn held_executions(&self, start: usize) -> Option<OrderFlowBars<FootprintBar>> {
+        if self.flow.footprint_clock().as_ref() != Some(&self.clock) {
+            return None;
+        }
+        let from = start
+            .checked_sub(1)
+            .map_or(DateTime::<Utc>::MIN_UTC, |before| {
+                self.clock.bar_open(self.data[before].time)
+            });
+        // shortcut: viewport queries copy up to 110,000 held rows; retain the copy by revision
+        // if panning shows the cost.
+        Some(self.flow.footprints_from(from))
+    }
+
+    /// The executions of chart bars `range` in `flow`, merged per tick, and whether `flow` holds
+    /// all of them. `None` unless it holds some and every bar that can hold them is a bar of
+    /// `flow`: stamped at its open, in a slot of its own and apart from the bars beside the
+    /// range, with no executions held in a slot that no bar of the range opens. Bars of
+    /// price-based chart types and bars the chart lacks so keep the estimate.
+    fn executions_of(
+        &self,
+        range: &Range<usize>,
+        flow: &OrderFlowBars<FootprintBar>,
+    ) -> Option<(FootprintBar, bool)> {
+        let open = |bar: &Bar| self.clock.bar_open(bar.time);
+        let (start, end) = (
+            open(&self.data[range.start]),
+            open(&self.data[range.end - 1]),
+        );
+        let before = range.start.checked_sub(1).map(|i| open(&self.data[i]));
+        // A bar beside the range in one of its slots shares that slot's executions.
+        if start > end
+            || before.is_some_and(|before| before >= start)
+            || self
+                .data
+                .get(range.end)
+                .is_some_and(|after| open(after) <= end)
+        {
+            return None;
+        }
+        let lower = before.map_or(Bound::Unbounded, Bound::Excluded);
+        let held = flow.bars.range((lower, Bound::Included(end)));
+        let first = *held.clone().next()?.0;
+        // Bars stamped before the first held bar hold none of the executions.
+        let from = range.start + self.data[range.clone()].partition_point(|bar| bar.time < first);
+        let mut opens = Vec::with_capacity(range.end - from);
+        for bar in &self.data[from..range.end] {
+            let open = open(bar);
+            if open != bar.time || opens.last().is_some_and(|&last| last >= open) {
+                return None;
+            }
+            opens.push(open);
+        }
+        let mut opens = opens.into_iter().peekable();
+        let mut merged = FootprintBar::empty(start);
+        for (&time, bar) in held {
+            while opens.next_if(|&open| open < time).is_some() {}
+            // Executions in a slot that no bar of the range opens belong to bars it lacks.
+            if opens.peek() != Some(&time) {
+                return None;
+            }
+            merged.absorb(bar);
+        }
+        // During a replay the bar containing the cutoff is absent when its executions before the
+        // cutoff are not known.
+        let unknown = flow.cutoff.is_some_and(|cutoff| {
+            end <= cutoff
+                && self.clock.next_open(end).is_none_or(|next| cutoff < next)
+                && !flow.bars.contains_key(&end)
+        });
+        let complete = flow.complete_from.is_some_and(|from| from <= start) && !unknown;
+        Some((merged, complete))
+    }
+
+    /// The profile of chart bars `range` from the executions in `flow`, in rows of whole ticks
+    /// (`ticks_per_row`). `None` without them ([`Self::executions_of`]), with a volume that is
+    /// not finite, or past 10,000 rows.
+    fn executed_profile(
+        &self,
+        range: &Range<usize>,
+        config: &VolumeProfileConfig,
+        flow: &OrderFlowBars<FootprintBar>,
+    ) -> Option<VolumeProfile> {
+        let tick = flow.tick_size?;
+        let (bar, complete) = self.executions_of(range, flow)?;
+        let (&first, &last) = (bar.levels.keys().next()?, bar.levels.keys().next_back()?);
+        if !bar.volume().is_finite() {
+            return None;
+        }
+        let ticks = ticks_per_row(config, tick, first, last)?;
+        VolumeProfile::from_executions(&grouped(&bar, ticks), ticks as f64 * tick, tick, complete)
+    }
+
     fn period_ranges(&self, period: AnchorPeriod) -> Vec<Range<usize>> {
         let mut ranges = Vec::new();
         let mut previous = None;
@@ -588,11 +701,33 @@ impl ProfileStudy {
         ]);
         let mut cache = self.cache.borrow_mut();
         let mut profiles = Vec::new();
+        // Copied once, from the bar before the first profile built here on.
+        let mut held: Option<Option<OrderFlowBars<FootprintBar>>> = None;
         for range in ranges {
             if let Some(plot) = cache.iter().find(|cached| {
                 cached.plot.bars == range && cached.plot.config == config && !cached.dirty
             }) {
                 profiles.push(plot.plot.clone());
+            } else if let Some(profile) = held
+                .get_or_insert_with(|| self.held_executions(range.start))
+                .as_ref()
+                .and_then(|flow| self.executed_profile(&range, &config, flow))
+            {
+                let plot = StudyProfile {
+                    bars: range.clone(),
+                    profile: Arc::new(profile),
+                    config,
+                    color: self.colors[0].to_srgba_unmultiplied(),
+                    right_aligned: self.kind == Kind::Visible,
+                };
+                profiles.push(plot.clone());
+                cache.retain(|cached| cached.plot.bars != range);
+                cache.push(CachedProfile {
+                    plot,
+                    opening: None,
+                    coverage: 0.0,
+                    dirty: false,
+                });
             } else if self.finer().is_some() && !self.fine.is_empty() {
                 let end = self.data.get(range.end).map_or_else(
                     || self.close(self.data[range.end - 1].time),
@@ -684,6 +819,54 @@ fn nice_ceil(value: f64) -> Option<f64> {
         .find(|step| *step >= value * (1.0 - 1e-9))
 }
 
+/// Ticks per row of an executed profile over the traded levels `first..=last`: the row height in
+/// whole ticks, at least one. With equal rows, the levels over the row count, rounded up, when
+/// rows of that many ticks, counted from its multiples as a footprint groups them, stay within
+/// the row count; else the levels over one row fewer, which always do. Asked for one row, levels
+/// that straddle a multiple keep two.
+fn ticks_per_row(config: &VolumeProfileConfig, tick: f64, first: i64, last: i64) -> Option<i64> {
+    if let Some(height) = config.row_size() {
+        let ticks = (height / tick).round();
+        return (ticks < i64::MAX as f64).then(|| (ticks as i64).max(1));
+    }
+    let (first, last, rows) = (i128::from(first), i128::from(last), config.rows() as i128);
+    let count = |ticks: i128| last.div_euclid(ticks) - first.div_euclid(ticks) + 1;
+    let span = last - first + 1;
+    let even = (span + rows - 1) / rows;
+    let ticks = if rows == 1 || count(even) <= rows {
+        even
+    } else {
+        (span + rows - 2) / (rows - 1)
+    };
+    i64::try_from(ticks).ok()
+}
+
+/// `bar` with its levels summed into rows of `ticks` levels, level `n` into row
+/// `n.div_euclid(ticks)`, as a footprint with that many ticks per row groups them. Totals and the
+/// delta path are unchanged.
+fn grouped(bar: &FootprintBar, ticks: i64) -> FootprintBar {
+    let mut levels = BTreeMap::new();
+    for (&level, row) in &bar.levels {
+        let key = level.div_euclid(ticks);
+        let target = levels.entry(key).or_insert_with(|| FootprintLevel {
+            level: key,
+            ..Default::default()
+        });
+        target.bid += row.bid;
+        target.ask += row.ask;
+        target.unknown += row.unknown;
+    }
+    FootprintBar {
+        time: bar.time,
+        levels,
+        bid: bar.bid,
+        ask: bar.ask,
+        unknown: bar.unknown,
+        min_delta: bar.min_delta,
+        max_delta: bar.max_delta,
+    }
+}
+
 macro_rules! profile_study {
     ($ty:ident, $kind:ident, $name:literal, $doc:literal) => {
         #[doc = $doc]
@@ -748,6 +931,12 @@ macro_rules! profile_study {
             fn update_data(&mut self, data: &[Bar], from: usize, sources: &[StudyData<'_>]) {
                 self.profile.update_data(data, from, sources);
             }
+            fn order_flow_inputs(&self) -> &[OrderFlowInput] {
+                std::slice::from_ref(&self.profile.flow)
+            }
+            fn needs_order_flow(&self) -> bool {
+                false
+            }
             fn volume_profiles(&self, visible: Range<usize>) -> Vec<StudyProfile> {
                 self.profile.profiles(visible)
             }
@@ -765,6 +954,12 @@ macro_rules! profile_study {
             }
             fn set_timeframe(&mut self, timeframe: Timeframe) {
                 self.profile.interval = timeframe;
+                self.profile.clock = self.profile.clock.for_timeframe(timeframe);
+            }
+            fn set_bar_clock(&mut self, clock: &BarClock) -> bool {
+                let changed = self.profile.clock != *clock;
+                self.profile.clock = clock.clone();
+                changed
             }
             fn values(&self) -> &IndicatorValues {
                 &self.profile.values
@@ -863,6 +1058,300 @@ impl VolProfileAnchored {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Profiles sum the executions held for their bars, in rows of whole ticks within the row
+    /// count or of the row height, as a footprint with that many ticks per row sums them. One
+    /// whose executions start inside it is partial; one without them, or whose bars they cannot
+    /// be assigned to exactly, keeps the estimate.
+    #[test]
+    fn profiles_read_the_executions_of_their_bars() {
+        use crate::data::{Footprint, ProfileSource};
+        use crate::model::{
+            BarClock,
+            OrderSide::{Buy, Sell},
+            Tick,
+        };
+        let time = |at: &str| at.parse::<DateTime<Utc>>().unwrap();
+        let bar = |at: &str| Bar::new(time(at), 100.0, 105.0, 99.0, 102.0, 10.0);
+        let trade = |at: &str, price, size, side| Tick::new(time(at), price, size, side);
+        let bars: Vec<Bar> = [
+            "2026-03-06T23:58:00Z",
+            "2026-03-06T23:59:00Z",
+            "2026-03-07T00:00:00Z",
+            "2026-03-07T00:01:00Z",
+        ]
+        .map(bar)
+        .into();
+        // Bar 2 trades 2 bought at 100 and 1 sold at 101; bar 3 trades 1 bought at 101 and 3 of
+        // unknown side at 104.
+        let trades = vec![
+            trade("2026-03-07T00:00:10Z", 100.0, 2.0, Some(Buy)),
+            trade("2026-03-07T00:00:20Z", 101.0, 1.0, Some(Sell)),
+            trade("2026-03-07T00:01:10Z", 101.0, 1.0, Some(Buy)),
+            trade("2026-03-07T00:01:20Z", 104.0, 3.0, None),
+        ];
+        let negative = vec![
+            trade("2026-03-07T00:00:10Z", -1.0, 1.0, Some(Buy)),
+            trade("2026-03-07T00:00:20Z", -3.0, 2.0, Some(Sell)),
+        ];
+        // Range bars of these executions end at 00:00:20 and 00:01:30.
+        let ranged = vec![bar("2026-03-07T00:00:20Z"), bar("2026-03-07T00:01:30Z")];
+        let range_trades = vec![
+            trade("2026-03-07T00:00:10Z", 100.0, 1.0, Some(Buy)),
+            trade("2026-03-07T00:00:40Z", 101.0, 1.0, Some(Buy)),
+            trade("2026-03-07T00:01:20Z", 102.0, 1.0, Some(Buy)),
+        ];
+        let gap = vec![bars[0].clone(), bars[1].clone(), bars[3].clone()];
+        let mut shared = bars.clone();
+        shared.insert(3, bars[2].clone());
+        let fixed = |rows, first: &Bar, last: &Bar| -> Box<dyn Indicator> {
+            Box::new(VolProfileFixed::new(rows).with_range(first.time, last.time))
+        };
+        let mut height = fixed(24, &bars[2], &bars[3]);
+        height
+            .set_input("row_size", InputValue::Number(1.6))
+            .unwrap();
+        let minute = BarClock::new(Timeframe::Min1);
+        let (complete, partial, estimated) = (
+            ProfileSource::Executions { complete: true },
+            ProfileSource::Executions { complete: false },
+            ProfileSource::Estimated,
+        );
+        // Ticks per row, low, and volume, buys and sells per row.
+        type Rows = (u32, f64, Vec<f64>, Vec<f64>, Vec<f64>);
+        let per_tick: Rows = (
+            1,
+            99.5,
+            vec![2.0, 2.0, 0.0, 0.0, 3.0],
+            vec![2.0, 1.0, 0.0, 0.0, 0.0],
+            vec![0.0, 1.0, 0.0, 0.0, 0.0],
+        );
+        type Expected = Vec<(Range<usize>, ProfileSource, Option<Rows>)>;
+        type Case = (
+            &'static str,
+            Box<dyn Indicator>,
+            Vec<Bar>,
+            Vec<Tick>,
+            BarClock,
+            Range<usize>,
+            Expected,
+        );
+        let rows: Vec<Case> = vec![
+            // Levels 100..=104 take 5 rows of 24.
+            (
+                "single ticks within the row count",
+                fixed(24, &bars[2], &bars[3]),
+                bars.clone(),
+                trades.clone(),
+                minute.clone(),
+                0..4,
+                vec![(2..4, complete, Some(per_tick.clone()))],
+            ),
+            // ceil(5 / 2) = 3 ticks: rows 33 (99..=101) and 34 (102..=104).
+            (
+                "the traded ticks over the row count",
+                fixed(2, &bars[2], &bars[3]),
+                bars.clone(),
+                trades.clone(),
+                minute.clone(),
+                0..4,
+                vec![(
+                    2..4,
+                    complete,
+                    Some((3, 98.5, vec![4.0, 3.0], vec![3.0, 0.0], vec![1.0, 0.0])),
+                )],
+            ),
+            // Levels 101..=104: 2 ticks give rows 50, 51, 52, too many; 4 ticks give 25 and 26.
+            (
+                "levels across a multiple take wider rows",
+                fixed(2, &bars[3], &bars[3]),
+                bars.clone(),
+                trades.clone(),
+                minute.clone(),
+                0..4,
+                vec![(
+                    3..4,
+                    complete,
+                    Some((4, 99.5, vec![1.0, 3.0], vec![1.0, 0.0], vec![0.0, 0.0])),
+                )],
+            ),
+            // round(1.6) = 2 ticks: rows 50, 51, 52.
+            (
+                "the row height in whole ticks",
+                height,
+                bars.clone(),
+                trades.clone(),
+                minute.clone(),
+                0..4,
+                vec![(
+                    2..4,
+                    complete,
+                    Some((
+                        2,
+                        99.5,
+                        vec![4.0, 0.0, 3.0],
+                        vec![3.0, 0.0, 0.0],
+                        vec![1.0, 0.0, 0.0],
+                    )),
+                )],
+            ),
+            // Held from 00:00, after the profile's first bar at 23:59.
+            (
+                "executions from inside the profile",
+                fixed(24, &bars[1], &bars[3]),
+                bars.clone(),
+                trades.clone(),
+                minute.clone(),
+                0..4,
+                vec![(1..4, partial, Some(per_tick.clone()))],
+            ),
+            (
+                "a session before the executions",
+                Box::new(VolProfileSession::new(24)),
+                bars.clone(),
+                trades.clone(),
+                minute.clone(),
+                0..4,
+                vec![
+                    (0..2, estimated, None),
+                    (2..4, complete, Some(per_tick.clone())),
+                ],
+            ),
+            // Levels -3 and -1 in 2-tick rows: rows -2 (-4..=-3) and -1 (-2..=-1).
+            (
+                "negative prices group downwards",
+                fixed(2, &bars[2], &bars[3]),
+                bars.clone(),
+                negative,
+                minute.clone(),
+                0..4,
+                vec![(
+                    2..4,
+                    complete,
+                    Some((2, -4.5, vec![2.0, 1.0], vec![0.0, 1.0], vec![2.0, 0.0])),
+                )],
+            ),
+            (
+                "executions of another calendar",
+                fixed(24, &bars[2], &bars[3]),
+                bars.clone(),
+                trades.clone(),
+                BarClock::new(Timeframe::Min5),
+                0..4,
+                vec![(2..4, estimated, None)],
+            ),
+            (
+                "executions of a bar the chart lacks",
+                fixed(24, &bars[1], &bars[3]),
+                gap,
+                trades.clone(),
+                minute.clone(),
+                0..3,
+                vec![(1..3, estimated, None)],
+            ),
+            (
+                "a bar before sharing the first bar's slot",
+                Box::new(VolProfileVisible::new(24)),
+                shared.clone(),
+                trades.clone(),
+                minute.clone(),
+                3..5,
+                vec![(3..5, estimated, None)],
+            ),
+            (
+                "a bar after sharing the last bar's slot",
+                Box::new(VolProfileVisible::new(24)),
+                shared,
+                trades.clone(),
+                minute.clone(),
+                2..3,
+                vec![(2..3, estimated, None)],
+            ),
+            (
+                "a bar stamped inside its slot",
+                fixed(24, &ranged[1], &ranged[1]),
+                ranged,
+                range_trades,
+                minute.clone(),
+                0..2,
+                vec![(1..2, estimated, None)],
+            ),
+            (
+                "unordered bar opens keep the estimate",
+                Box::new(VolProfileVisible::new(24)),
+                vec![
+                    bars[3].clone(),
+                    bar("2026-03-07T00:02:00Z"),
+                    bars[2].clone(),
+                ],
+                trades.clone(),
+                minute.clone(),
+                1..3,
+                vec![(1..3, estimated, None)],
+            ),
+        ];
+        for (label, mut study, bars, trades, clock, view, expected) in rows {
+            let flow = study.order_flow_inputs()[0].clone();
+            flow.set_tick_size(Some(1.0));
+            for trade in &trades {
+                flow.push_trade(&clock, trade);
+            }
+            study.calculate(&bars);
+            let got = study.volume_profiles(view);
+            assert_eq!(got.len(), expected.len(), "{label}");
+            for (got, (range, source, rows)) in got.iter().zip(expected) {
+                assert_eq!(got.bars, range, "{label}");
+                assert_eq!(got.profile.source(), source, "{label}");
+                let Some((ticks, low, volume, up, down)) = rows else {
+                    continue;
+                };
+                let profile = &*got.profile;
+                assert_eq!(
+                    (profile.low(), profile.row_height()),
+                    (low, f64::from(ticks)),
+                    "{label}"
+                );
+                assert_eq!(profile.volume(), volume, "{label}");
+                assert_eq!(profile.up(), up, "{label}");
+                assert_eq!(profile.down(), down, "{label}");
+                // The same executions, grouped by a footprint as they arrive.
+                let mut footprint = Footprint::new(clock.clone(), 1.0, ticks).unwrap();
+                for trade in &trades {
+                    footprint.push(trade).unwrap();
+                }
+                let span = footprint.profile(bars[range.start].time, bars[range.end - 1].time);
+                let independent = VolumeProfile::from_executions(
+                    &span,
+                    footprint.price_step(),
+                    footprint.tick_size(),
+                    source == complete,
+                );
+                assert_eq!(Some(profile), independent.as_ref(), "{label}");
+            }
+        }
+        // A later execution in the last bar shows at the next update, as a fresh calculation has.
+        let mut study = fixed(24, &bars[2], &bars[3]);
+        let flow = study.order_flow_inputs()[0].clone();
+        flow.set_tick_size(Some(1.0));
+        for trade in &trades {
+            flow.push_trade(&minute, trade);
+        }
+        study.calculate(&bars);
+        assert_eq!(
+            study.volume_profiles(0..4)[0].profile.volume(),
+            [2.0, 2.0, 0.0, 0.0, 3.0]
+        );
+        flow.push_trade(&minute, &trade("2026-03-07T00:01:30Z", 104.0, 2.0, None));
+        study.update(&bars, 3);
+        let got = study.volume_profiles(0..4);
+        assert_eq!(got[0].profile.volume(), [2.0, 2.0, 0.0, 0.0, 5.0]);
+        let mut fresh = study.clone_box();
+        fresh.calculate(&bars);
+        assert_eq!(
+            format!("{got:?}"),
+            format!("{:?}", fresh.volume_profiles(0..4))
+        );
+    }
 
     /// Zoom changes the shared tick grid without reusing cached rows or adding volume.
     #[test]

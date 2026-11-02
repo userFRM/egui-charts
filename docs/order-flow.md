@@ -229,6 +229,22 @@ synchronized update; a loss after it, or an update with an invalid level, leaves
 one. Footprint and book sources keep at most 11,000 bars and 110,000 price rows, then drop their
 oldest bars at once, down to 10,000 bars and 100,000 rows.
 
+### Volume profile studies
+
+Vol Profile VR, FR, Session, Periodic, Anchored and Auto Anchored each return a footprint
+source from `Indicator::order_flow_inputs`. Where it holds the executions of a profile's bars,
+the profile sums them, in rows of whole ticks: the Height input rounded to whole ticks, at least
+one, or the traded ticks over Row count, rounded up, with rows counted from multiples of their
+height as the volume footprint groups them and widened where that would exceed Row count. A
+profile whose executions start after its first bar sums those held and is noted "Partial
+executions". A profile without executions, one calculated on another interval, and one whose bars
+do not each hold their own executions, as on price-based chart types, keep the estimate from
+bars. `Indicator::needs_order_flow` is `false` for these studies, so they keep their Interval
+input. A host without a feed gives the source the tick size with `OrderFlowInput::set_tick_size`
+and pushes executions with `OrderFlowInput::push_trade` and the bar clock it gives the study
+through `Indicator::set_bar_clock` (by default `BarClock::new` of the study's interval), then
+updates the study from the first bar that changed.
+
 ### Replay
 
 While `Chart::set_replay_time` shows bars up to a cutoff, every input reads as of it: later bars
