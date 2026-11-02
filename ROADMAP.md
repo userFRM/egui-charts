@@ -68,7 +68,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Long/short position drawings expose entry, stop, target, instrument-aware risk sizing and bar-based profit/loss; forecasts, copied bars and three-anchor measured projections.
 - [x] Anchored VWAP with deviation bands; fixed and anchored volume-profile drawings estimate distributions from chart bars.
 - [x] Price, date and combined range measurements use actual bar timestamps; quick measure also reports volume and instrument ticks/pips when supplied.
-- [x] Brush, highlighter, arrows, rectangles, rotated rectangles, circles, ellipses, triangles, arcs, sectors, polylines, paths and quadratic/cubic curves.
+- [x] Brush, highlighter, arrows, rectangles, rotated rectangles, circles, ellipses, triangles, arcs, sectors, polylines, paths and quadratic/cubic curves. Curved outlines and analysis arcs adapt to physical pixels and refine only near the view; freehand strokes interpolate their samples with centripetal Catmull-Rom curves, with matching selection outlines.
 - [x] Editable text, notes, callouts, price labels, comments, signposts and tables with persistent cell contents.
 - [x] Image annotations load an address through application-installed egui image loaders; local post and idea cards store editable supplied content.
 - [x] Searchable bundled icons, emoji and stickers with size controls and recent selections.
