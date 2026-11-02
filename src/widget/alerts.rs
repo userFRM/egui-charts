@@ -22,6 +22,7 @@ impl Chart {
             crate::services::AlertFeed::history_request(self.symbol(), self.timeframe()?);
         request.clock = self.bar_clock();
         request.extended_hours = self.extended_hours();
+        request.adjusted = self.dividend_adjusted();
         request.conversion = self.conversion().map(str::to_owned);
         Some(crate::services::AlertData {
             request,
