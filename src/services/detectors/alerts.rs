@@ -151,6 +151,7 @@ pub(super) struct Counting {
 struct Counter {
     total: u64,
     times: BTreeMap<DateTime<Utc>, u64>,
+    last_episode: u64,
     rule: Option<(CountWindow, u64)>,
     above: bool,
 }
@@ -263,6 +264,21 @@ impl Tracked {
                 continue;
             };
             let counter = self.counting.kinds.entry(kind).or_default();
+            // These episodes can outlive chart retention; their numbers only increase.
+            if matches!(kind, DetectionKind::StopRun | DetectionKind::Iceberg) {
+                let number = signal
+                    .id
+                    .0
+                    .rsplit('-')
+                    .next()
+                    .unwrap()
+                    .parse::<u64>()
+                    .expect("numbered detector episode");
+                if number <= counter.last_episode {
+                    continue;
+                }
+                counter.last_episode = number;
+            }
             counter.total = counter.total.saturating_add(1);
             let number = counter.times.entry(time).or_default();
             *number = number.saturating_add(1);

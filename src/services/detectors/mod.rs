@@ -1082,6 +1082,109 @@ mod tests {
 
     #[test]
     fn detections_past_the_retained_5000_leave_the_live_chart_too() {
+        for kind in [DetectionKind::StopRun, DetectionKind::Iceberg] {
+            let host = Host::new(Some(10.0));
+            let mut settings = host.detectors.settings();
+            settings.stop_runs.enabled = kind == DetectionKind::StopRun;
+            settings.stop_runs.alert = true;
+            settings.icebergs.enabled = kind == DetectionKind::Iceberg;
+            settings.icebergs.alert = true;
+            host.detectors.set_settings(settings);
+            let push = |ms, event| {
+                host.detectors
+                    .push("ES", time(0) + chrono::TimeDelta::milliseconds(ms), &event)
+            };
+            if kind == DetectionKind::StopRun {
+                for i in 0..5 {
+                    let ts = time(0) + chrono::TimeDelta::milliseconds(i * 10);
+                    push(
+                        i * 10,
+                        MarketEvent::Trade(Tick::new(
+                            ts,
+                            100.0 + i as f64 * 0.25,
+                            1.0,
+                            Some(OrderSide::Buy),
+                        )),
+                    );
+                }
+            } else {
+                push(
+                    0,
+                    MarketEvent::OrderSnapshot {
+                        sequence: 1,
+                        orders: vec![RestingOrder::new(1, OrderSide::Sell, 100.0, 10.0)],
+                    },
+                );
+                for i in 0..2 {
+                    push(
+                        i * 20,
+                        MarketEvent::Order {
+                            sequence: 2 + i as u64 * 2,
+                            event: OrderEvent::Execute {
+                                id: 1 + i as u64,
+                                size: 10.0,
+                                trade: None,
+                            },
+                        },
+                    );
+                    push(
+                        i * 20 + 10,
+                        MarketEvent::Order {
+                            sequence: 3 + i as u64 * 2,
+                            event: OrderEvent::Add(RestingOrder::new(
+                                2 + i as u64,
+                                OrderSide::Sell,
+                                100.0,
+                                10.0,
+                            )),
+                        },
+                    );
+                }
+            }
+            assert_eq!(host.detectors.take_alerts().len(), 1, "{kind:?}");
+            let ts = time(0) + chrono::TimeDelta::milliseconds(45);
+            host.detectors
+                .push_history("ES", &vec![Tick::new(ts, 100.0, 10.0, None); 2501]);
+            if kind == DetectionKind::StopRun {
+                push(
+                    50,
+                    MarketEvent::Trade(Tick::new(
+                        time(0) + chrono::TimeDelta::milliseconds(50),
+                        101.25,
+                        1.0,
+                        Some(OrderSide::Buy),
+                    )),
+                );
+            } else {
+                push(
+                    50,
+                    MarketEvent::Order {
+                        sequence: 6,
+                        event: OrderEvent::Execute {
+                            id: 3,
+                            size: 10.0,
+                            trade: None,
+                        },
+                    },
+                );
+                push(
+                    60,
+                    MarketEvent::Order {
+                        sequence: 7,
+                        event: OrderEvent::Add(RestingOrder::new(4, OrderSide::Sell, 100.0, 10.0)),
+                    },
+                );
+            }
+            assert_eq!(
+                host.detectors.counts("ES", kind, time(1)).total,
+                1,
+                "an evicted {kind:?} keeps its detection identity"
+            );
+            assert!(
+                host.detectors.take_alerts().is_empty(),
+                "an update of an evicted {kind:?} stays silent"
+            );
+        }
         let mut host = Host::new(Some(10.0));
         let buy = |price| fill(1, price, 10.0, OrderSide::Buy, None);
         // One page evicts the first marker and zone, then ends all 2,501 zones.
