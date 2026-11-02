@@ -476,7 +476,7 @@ Order flow,Order flow,TPO poor high and poor low marks,done,library,src/model/tp
 Order flow,Order flow,Tape reconstruction and passive fill details,done,library,src/data/trades.rs;src/data/orders.rs;src/model/quote.rs;src/widget/feed/mod.rs;src/ui/widget_bar/panels/time_and_sales.rs
 Order flow,Order flow,Tick-by-tick trade replay with speed control and multi-symbol sessions,done,library,src/data/replay.rs;src/data/mod.rs;src/widget/replay.rs;examples/demo/replay.rs
 Order flow,Order flow,Tick-count bars,done,library,src/model/timeframe.rs;src/ui/top_toolbar/components/timeframe_selector/mod.rs;src/data/inbox/mod.rs;src/widget/feed/mod.rs;src/data/inbox/sink.rs
-Order flow,Order flow,Time and sales with size filters and sound alerts,done,library,src/ui/widget_bar/panels/time_and_sales.rs;src/data/trades.rs
+Order flow,Order flow,"Time and sales with size filters, sound alerts and fractional timestamps",done,library,src/ui/widget_bar/panels/time_and_sales.rs;src/data/trades.rs
 Order flow,Order flow,Time price opportunity profiles and single prints,done,library,src/model/tpo.rs;src/model/session/exchange.rs;src/chart/rendering/candles/tpo.rs;src/widget/frame.rs;src/studies/builtin/time_price_opportunity.rs;src/tokens/mod.rs;src/tokens/semantic.rs;src/model/chart_type.rs;src/ui/dialogs/series_settings/tabs/symbol.rs
 Order flow,Order flow,"Trade-based session, composite and visible-range volume profiles",done,library,src/studies/builtin/trade_profile.rs;src/chart/overlays/trade_profile.rs;src/widget/frame.rs;src/data/footprint.rs;src/widget/trade_profile.rs
 Order flow,Order flow,Trade-size filtered CVD,done,library,src/data/order_flow.rs;src/studies/builtin/order_flow.rs;src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/data/inbox/sink.rs;src/widget/feed/pump.rs;src/studies/factory/mod.rs;src/chart/indicators/plots.rs;src/widget/pane/indicator/mod.rs;src/widget/pane/indicator/paint.rs;src/data/trades.rs
@@ -506,8 +506,8 @@ Order flow,Order flow data model,Streaming path that delivers trades into the ch
 Order flow,Order flow data model,Tick-size-aware integer price keys from symbol metadata,done,library,src/widget/feed/mod.rs;src/data/depth.rs;src/data/footprint.rs;src/data/orders.rs
 Order flow,Order flow data model,Top-of-book quote stream,done,library,src/data/inbox/mod.rs;src/widget/feed/mod.rs;src/widget/frame.rs;src/data/mod.rs;src/data/inbox/sink.rs
 Order flow,Order flow data model,Trade tick record with aggressor side,done,library,src/model/quote.rs;src/data/mod.rs
-Order flow,Order flow,Cumulative delta divergence markers,missing,library,
-Order flow,Order flow,Delta exhaustion markers,missing,library,
+Order flow,Order flow,Cumulative delta divergence markers,done,library,src/studies/builtin/trade_delta.rs;src/studies/builtin/order_flow.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/chart/renderers/indicator.rs;src/widget/frame.rs
+Order flow,Order flow,Delta exhaustion markers,done,library,src/studies/builtin/trade_delta.rs;src/studies/builtin/order_flow.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/chart/renderers/indicator.rs;src/widget/frame.rs
 Order flow,Order flow,Footprint and session volume profile settings in the chart settings dialog,missing,library,
 Studies,Custom studies,Custom studies reading other symbols or timeframes,done,library,src/studies/indicator_trait.rs;src/widget/studies_data.rs;src/widget/studies.rs;src/studies/settings.rs
 Studies,Custom studies,Custom study input metadata,done,library,src/studies/inputs.rs;src/studies/custom.rs;src/ui/dialogs/indicator_dialog/settings.rs

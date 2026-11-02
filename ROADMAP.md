@@ -151,7 +151,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Footprint cells support bid/ask, total volume, delta and delta-plus-volume modes, up to four columns per bar, profile or boxed rendering, automatic row grouping and opening/closing price ticks in a separate gutter; their values have clearance from underlying price guides.
 - [x] Per-bar point of control, value area and horizontal/diagonal imbalance highlighting; compact values fit detail columns and POC outlines recede in the overview.
 - [x] Public calculations and renderers expose stacked diagonal imbalance zones, unrevisited POC levels, volume clusters and per-bar statistics; annotation captions avoid footprint values, with compact overview marks and hover details. Statistics use shared row labels, aligned compact values, explicit percentages and ratios, and a zoom-in or resize notice when detail cannot fit.
-- [x] Execution-based delta histograms and cumulative-delta candles, including intrabar extremes and configurable reset boundaries, render in a supplied pane mapping.
+- [x] Execution-based delta histograms and cumulative-delta candles, including intrabar extremes and configurable reset boundaries, render in a supplied pane mapping. The cumulative execution study offers optional confirmed divergence and exhaustion price markers, with study outputs for bar-close alerts.
 - [x] Trade profiles aggregate supplied ranges with bid/ask, volume or delta display, developing POC, value area and local volume nodes; public range editing supports merging and splitting.
 - [ ] Bound live footprint retention when trades are evicted, including accumulated bars and price levels.
 - [ ] Integrate size-filtered cumulative delta into a study pane with its own scale and labels.
@@ -170,7 +170,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] `DepthHistory` retains sampled resting-size columns in bounded tiers; the heatmap uses retained texture tiles and partial updates.
 - [x] Heatmap best bid/ask paths and a side profile of total resting size.
 - [x] Volume bubbles aggregate by chart bar and price, adapt automatic grouping, sizing and borders to screen density, and offer side/delta colours, linear/square-root/logarithmic scaling and outlier limits.
-- [x] Time-and-sales panel with aggressor colours, size filters and sound intents.
+- [x] Time-and-sales panel with aggressor colours, size filters, sound intents, selectable milliseconds and full execution timestamps on hover.
 - [x] Explicit aggressor identifiers combine split fills into parent orders with total size, price span and fill count.
 - [x] Fixed stream studies calculate quoted spread, resting book totals/difference, execution rate and inside-quote movement.
 - [ ] Add bubble time-window/count grouping, ungrouped execution timestamps, split bid/ask and additional delta/volume colour modes.
