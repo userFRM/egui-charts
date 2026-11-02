@@ -122,7 +122,6 @@ pub struct Terminal {
     layouts: layouts::State,
     #[allow(dead_code, reason = "the group keeps its state here")]
     compare: compare::State,
-    #[allow(dead_code, reason = "the group keeps its state here")]
     commands: commands::State,
 }
 
@@ -296,10 +295,12 @@ impl Terminal {
         self
     }
 
-    /// Offers `formats` in the export dialog and hands each finished export to `save`. Without
-    /// it, alert-log exports are returned to the host as unhandled actions. The host returns an
+    /// Offers `formats` in the export dialog, beside copying to the clipboard, and hands each
+    /// finished export to `save`. Without it, chart images and data go to the clipboard and
+    /// alert-log exports are returned to the host as unhandled actions. The host returns an
     /// error message if saving or opening fails, and opens the saved image when
-    /// [`ExportFile::open`] is true. Errors are shown as toasts; the action remains handled.
+    /// [`ExportFile::open`] is true. Errors are shown as toasts and in the open export dialog;
+    /// the action remains handled.
     pub fn with_file_export(
         mut self,
         formats: &'static [ExportFormat],

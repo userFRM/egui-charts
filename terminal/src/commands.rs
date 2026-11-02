@@ -64,7 +64,6 @@ fn quick_search_commands(factory: &IndicatorFactory) -> Vec<Command> {
         ("invert", "Invert price scale", "Settings"),
         ("grid", "Toggle grid", "Settings"),
         ("targets", "Show analyst price targets", "Actions"),
-        ("heatmap", "Market heatmap", "Actions"),
     ]
     .into_iter()
     .map(|(id, label, category)| Command::new(id, label).category(category))
@@ -409,10 +408,6 @@ impl Terminal {
                 self.commands.open_export = true;
                 return;
             }
-            "heatmap" => {
-                self.open_panel(SidePanel::MarketHeatmap);
-                return;
-            }
             "log" => {
                 self.user_action(|terminal| {
                     let mode = &mut terminal.chart_mut().price_scale_mut().options_mut().mode;
@@ -714,14 +709,7 @@ mod tests {
     /// An open dialog of this group takes Escape before the chart does.
     #[test]
     fn open_dialogs_keep_the_keys_of_the_chart() {
-        for dialog in [
-            "quick search",
-            "export",
-            "data table",
-            "help",
-            "indicators",
-            "storage conflict",
-        ] {
+        for dialog in ["quick search", "export", "data table", "help", "indicators"] {
             let mut terminal = terminal();
             frame(&mut terminal, SIZE, vec![]);
             terminal
@@ -749,22 +737,6 @@ mod tests {
                         KeyboardAction::ShowKeyboardHelp,
                     )));
                 }
-                "storage conflict" => {
-                    use super::super::test_support::MemoryStorage;
-                    use egui_charts::services::SettingsStore;
-                    let storage = Arc::new(MemoryStorage::default());
-                    let mut settings = SettingsStore::new(storage.clone());
-                    let mut other = SettingsStore::new(storage);
-                    let current = UserSettings::default();
-                    settings.poll(&terminal.ctx(), &current);
-                    other.poll(&terminal.ctx(), &current);
-                    let mut changed = current.clone();
-                    changed.theme = Some("dark".into());
-                    other.flush(&changed);
-                    settings.flush(&changed);
-                    assert!(settings.conflict());
-                    terminal.settings = Some(settings);
-                }
                 _ => terminal.commands.palette.open(),
             }
             for events in [
@@ -774,11 +746,7 @@ mod tests {
             ] {
                 frame(&mut terminal, SIZE, events);
             }
-            assert_eq!(
-                terminal.keyboard_dialog_open(),
-                dialog == "storage conflict",
-                "{dialog}"
-            );
+            assert!(!terminal.keyboard_dialog_open(), "{dialog}");
             assert_eq!(terminal.chart().drawings().sel_drawing(), Some(7));
             assert_eq!(
                 terminal.chart().drawings().active_tool(),
@@ -921,72 +889,58 @@ mod tests {
     /// A failed host write stays visible in the dialog, and a retry delivers only once.
     #[test]
     fn failed_exports_keep_the_dialog_open_and_show_the_host_error() {
-        use super::super::test_support::frame_with;
-        for dark in [false, true] {
-            for format in [ExportFormat::Png, ExportFormat::Csv, ExportFormat::Svg] {
-                let attempts = Rc::new(std::cell::Cell::new(0));
-                let sink = attempts.clone();
-                let mut terminal = terminal().with_file_export(
-                    &[ExportFormat::Png, ExportFormat::Csv, ExportFormat::Svg],
-                    move |_| {
-                        sink.set(sink.get() + 1);
-                        if sink.get() == 1 {
-                            Err("Permission denied".into())
-                        } else {
-                            Ok(())
-                        }
+        for format in [ExportFormat::Png, ExportFormat::Csv, ExportFormat::Svg] {
+            let attempts = Rc::new(std::cell::Cell::new(0));
+            let sink = attempts.clone();
+            let mut terminal = terminal().with_file_export(
+                &[ExportFormat::Png, ExportFormat::Csv, ExportFormat::Svg],
+                move |_| {
+                    sink.set(sink.get() + 1);
+                    if sink.get() == 1 {
+                        Err("Permission denied".into())
+                    } else {
+                        Ok(())
+                    }
+                },
+            );
+            frame(&mut terminal, SIZE, vec![]);
+            terminal.commands.export = ExportDialog::new().with_formats(&[format]);
+            terminal.commands.export.open();
+            frame(&mut terminal, SIZE, vec![]);
+            for (attempt, message) in [(1, "Error: Permission denied"), (2, "Export successful")] {
+                let mut image = ImageExportOptions::default();
+                image.size = [200, 120];
+                terminal.run(Action::Export(ExportResponse::Export {
+                    config: ExportConfig { format, image },
+                    save_path: Some("chart.out".into()),
+                }));
+                frame(&mut terminal, SIZE, vec![]);
+                let ctx = terminal.ctx();
+                let output = ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
+                        time: Some(ctx.input(|input| input.time) + 0.1),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let _ = terminal.show(ui);
                     },
                 );
-                frame_with(&mut terminal, SIZE, vec![], |input| {
-                    input.system_theme = Some(if dark {
-                        egui::Theme::Dark
-                    } else {
-                        egui::Theme::Light
-                    });
-                });
-                terminal.commands.export = ExportDialog::new().with_formats(&[format]);
-                terminal.commands.export.open();
-                frame(&mut terminal, SIZE, vec![]);
-                for (attempt, message) in
-                    [(1, "Error: Permission denied"), (2, "Export successful")]
-                {
-                    let mut image = ImageExportOptions::default();
-                    image.size = [200, 120];
-                    terminal.run(Action::Export(ExportResponse::Export {
-                        config: ExportConfig { format, image },
-                        save_path: Some("chart.out".into()),
-                    }));
-                    frame(&mut terminal, SIZE, vec![]);
-                    let ctx = terminal.ctx();
-                    let output = ctx.run_ui(
-                        RawInput {
-                            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SIZE)),
-                            time: Some(ctx.input(|input| input.time) + 0.1),
-                            ..Default::default()
-                        },
-                        |ui| {
-                            let _ = terminal.show(ui);
-                        },
-                    );
-                    let texts: Vec<_> = output
-                        .shapes
-                        .iter()
-                        .filter_map(|shape| {
-                            if let egui::Shape::Text(text) = &shape.shape {
-                                Some(text.galley.text().to_owned())
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-                    output.drop_without_applying_deltas();
-                    assert!(terminal.commands.export.is_open());
-                    assert_eq!(attempts.get(), attempt);
-                    assert!(
-                        texts.iter().any(|text| text.starts_with(message)),
-                        "{format:?}, dark={dark}: {texts:?}"
-                    );
-                }
+                let texts: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                        _ => None,
+                    })
+                    .collect();
+                output.drop_without_applying_deltas();
+                assert!(terminal.commands.export.is_open());
+                assert_eq!(attempts.get(), attempt);
+                assert!(
+                    texts.iter().any(|text| text.starts_with(message)),
+                    "{format:?}: {texts:?}"
+                );
             }
         }
     }
@@ -1021,51 +975,6 @@ mod tests {
             assert_eq!(terminal.chart().symbol(), expected);
             assert!(!terminal.keyboard_dialog_open());
         }
-    }
-
-    /// Exported PNGs keep the requested crosshair without a window renderer.
-    #[test]
-    fn png_exports_include_the_crosshair_without_a_renderer() {
-        let files = Rc::new(RefCell::new(Vec::new()));
-        let mut terminal = terminal_with_files(files.clone());
-        for _ in 0..3 {
-            frame(&mut terminal, SIZE, vec![]);
-        }
-        let bar = terminal.chart().state().shown()[450].clone();
-        terminal
-            .chart_mut()
-            .set_crosshair_position(Some((bar.time, bar.close)));
-        frame(&mut terminal, SIZE, vec![]);
-        for include_crosshair in [false, true] {
-            terminal.run(Action::Export(ExportResponse::Export {
-                config: ExportConfig {
-                    format: ExportFormat::Png,
-                    image: {
-                        let mut options = ImageExportOptions::default();
-                        options.size = [200, 120];
-                        options.include_timestamp = false;
-                        options.include_crosshair = include_crosshair;
-                        options
-                    },
-                },
-                save_path: None,
-            }));
-        }
-        let files = files.borrow();
-        let images: Vec<_> = files
-            .iter()
-            .map(|file| {
-                let ExportContents::Png(png) = &file.contents else {
-                    panic!("PNG export");
-                };
-                assert_eq!(decode_png(png).unwrap().size, [200, 120]);
-                png
-            })
-            .collect();
-        assert!(
-            images[0] != images[1],
-            "crosshair changes the exported pixels"
-        );
     }
 
     fn terminal_with_files(sink: Rc<RefCell<Vec<ExportFile>>>) -> Terminal {

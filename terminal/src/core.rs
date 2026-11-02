@@ -208,7 +208,6 @@ impl Terminal {
     }
 
     /// Shows `message` briefly.
-    #[allow(dead_code, reason = "the groups report their results")]
     pub(super) fn toast(&mut self, message: impl Into<String>) {
         self.toasts.info(message);
     }
