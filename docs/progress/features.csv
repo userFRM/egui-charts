@@ -92,7 +92,7 @@ Builder API,Widget API and customization,Localisation of UI text,partial,library
 Builder API,Widget API and customization,Multiple charts per widget,done,library,src/widget/layout.rs;src/ui/multi_chart.rs,
 Builder API,Widget API and customization,Price scale API,done,library,src/scales/pricescale.rs;src/widget/mod.rs;src/widget/series/options.rs;src/widget/series/scales/mod.rs;src/widget/frame/mod.rs,
 Builder API,Widget API and customization,Screenshots,done,library,src/widget/export.rs;src/widget/raster.rs;src/widget/svg.rs;src/widget/feed/mod.rs,
-Builder API,Widget API and customization,Series and scale API facade,done,library,src/widget/series/options.rs;src/widget/series/scales/mod.rs;src/widget/time_scale.rs;src/widget/series/mod.rs,
+Builder API,Widget API and customization,Series and scale API facade,done,library,src/widget/series/options.rs;src/widget/series/scales/mod.rs;src/widget/time_scale.rs;src/widget/series/mod.rs,1863
 Builder API,Widget API and customization,Style overrides,partial,library,src/widget/mod.rs;src/widget/builder.rs;src/config/chart.rs;src/widget/frame/mod.rs,
 Builder API,Widget API and customization,Themes and custom colour schemes,done,library,src/widget/mod.rs;src/theme/context.rs;src/chart/rendering/markers.rs;src/config/chart.rs;src/widget/palette.rs;src/model/markers.rs;src/theme/presets.rs;src/theme/style.rs;src/widget/frame/mod.rs,
 Builder API,Widget API and customization,Toolbar customisation,done,library,src/ui/top_toolbar/host.rs;src/ui/top_toolbar/toolbar.rs;src/ui/top_toolbar/config.rs;src/ui/top_toolbar/buttons.rs,
