@@ -301,6 +301,158 @@ impl DemoApp {
 mod tests {
     use super::*;
 
+    fn frame(app: &mut DemoApp, ctx: &egui::Context, events: Vec<egui::Event>) -> egui::FullOutput {
+        use eframe::App;
+        ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1440.0, 900.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+        )
+    }
+
+    fn click(app: &mut DemoApp, ctx: &egui::Context, label: &str) {
+        let output = frame(app, ctx, vec![]);
+        let pos = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == label => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing control: {label}"));
+        output.drop_without_applying_deltas();
+        for pressed in [true, false] {
+            frame(
+                app,
+                ctx,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            )
+            .drop_without_applying_deltas();
+        }
+    }
+
+    #[derive(Default)]
+    struct Storage(std::collections::HashMap<String, String>);
+    impl eframe::Storage for Storage {
+        fn get_string(&self, key: &str) -> Option<String> {
+            self.0.get(key).cloned()
+        }
+        fn set_string(&mut self, key: &str, value: String) {
+            self.0.insert(key.into(), value);
+        }
+        fn remove_string(&mut self, key: &str) {
+            self.0.remove(key);
+        }
+        fn flush(&mut self) {}
+    }
+
+    #[test]
+    fn formatting_samples_survive_restart_and_reach_readouts_and_export() {
+        use eframe::App;
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        click(&mut app, &ctx, "Formatting");
+        for label in [
+            "Deutsch",
+            "Price: 123.456 u",
+            "Percentage: +12.34 pct",
+            "Volume: 123456 units",
+        ] {
+            click(&mut app, &ctx, label);
+        }
+        let mut storage = Storage::default();
+        app.save(&mut storage);
+        drop(app);
+        let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        cc.storage = Some(&storage);
+        let mut app = DemoApp::new(&cc);
+        app.live.set_paused(true);
+        frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        let time = "2024-03-13T14:30:00Z".parse().unwrap();
+        assert!(app.chart.format_time(time).contains("Mär"));
+        let info = app.build_data_window();
+        let output = ctx.run_ui(Default::default(), |ui| {
+            egui_charts::ui::widget_bar::panels::object_tree::show_data_window(ui, &info, true);
+        });
+        let texts: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.text()),
+                _ => None,
+            })
+            .collect();
+        for suffix in [" u", " units", " pct)"] {
+            assert!(
+                texts.iter().any(|text| text.ends_with(suffix)),
+                "{suffix}: {texts:?}"
+            );
+        }
+        output.drop_without_applying_deltas();
+        let svg = app.chart.export_svg(&ctx, &Default::default()).unwrap();
+        assert!(svg.contains(" u"));
+        assert!(svg.contains(" units"));
+        click(&mut app, &ctx, "Formatting");
+        click(&mut app, &ctx, "Restore default formatting");
+        assert!(app.chart.format_time(time).contains("Mar"));
+    }
+
+    #[test]
+    fn annotation_editor_removes_only_its_marker_and_keeps_other_price_lines() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.execute_search_command(&ctx, "markers");
+        frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        let before =
+            serde_json::to_string(app.chart.markers(egui_charts::widget::SeriesId::MAIN)).unwrap();
+        click(&mut app, &ctx, "Show marker");
+        assert!(
+            app.chart
+                .markers(egui_charts::widget::SeriesId::MAIN)
+                .iter()
+                .any(|marker| marker.id.as_deref() == Some("demo-editor"))
+        );
+        click(&mut app, &ctx, "Show price line");
+        click(&mut app, &ctx, "Show marker");
+        assert_eq!(
+            serde_json::to_string(app.chart.markers(egui_charts::widget::SeriesId::MAIN)).unwrap(),
+            before
+        );
+        let annotations = app.chart.snapshot().unwrap().main_annotations.unwrap();
+        assert!(
+            annotations
+                .price_lines
+                .iter()
+                .any(|line| line.title.as_deref() == Some("Demo level"))
+        );
+        assert!(
+            annotations
+                .price_lines
+                .iter()
+                .any(|line| line.title.as_deref() == Some("Sample line"))
+        );
+    }
+
     #[test]
     fn showcase_routes_enable_samples_once_and_check_target_prerequisite() {
         let ctx = egui::Context::default();
