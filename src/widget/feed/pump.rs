@@ -465,6 +465,7 @@ impl Chart {
             since: None,
             count: link.initial_bars,
             extended_hours: self.extended_hours,
+            adjusted: link.adjusted,
             conversion: self.conversion.clone(),
         };
         let reply = link.reply(Request::History {
@@ -826,6 +827,7 @@ impl Chart {
             since: self.range_start(before),
             count: link.initial_bars.max(MIN_SCROLL_BACK_PAGE),
             extended_hours: self.extended_hours,
+            adjusted: link.adjusted,
             conversion: self.conversion.clone(),
         };
         self.feed.loading_history = true;

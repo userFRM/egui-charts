@@ -41,6 +41,8 @@ pub(crate) struct FeedLink {
     /// Slots of the chart's timeframe, by which history, live bars and ticks merge.
     pub(super) clock: BarClock,
     initial_bars: usize,
+    /// Whether history is requested adjusted for dividends.
+    pub(super) adjusted: bool,
     /// The viewport the chart was last shown in, which the waker wakes. Set by the first `pump`,
     /// which installs the waker, and cleared by `Drop` before it unsubscribes, so the waker does
     /// nothing then.
@@ -141,6 +143,7 @@ impl FeedLink {
             inbox: Arc::default(),
             clock: self.clock.clone(),
             initial_bars: self.initial_bars,
+            adjusted: self.adjusted,
             wake: Arc::default(),
             reload_pending: false,
             paused: true,
@@ -246,6 +249,7 @@ impl Chart {
             inbox: Arc::default(),
             clock: BarClock::new(timeframe),
             initial_bars,
+            adjusted: false,
             wake: Arc::default(),
             reload_pending: true,
             paused: false,
@@ -516,6 +520,25 @@ impl Chart {
     /// The currency or unit chosen with [`set_conversion`](Self::set_conversion).
     pub fn conversion(&self) -> Option<&str> {
         self.conversion.as_deref()
+    }
+
+    /// Requests history adjusted for dividends (`true`) or as traded (`false`, the default), when
+    /// the feed supports it; comparisons are requested the same way. A changed choice reloads
+    /// history and replaces the live subscription on the next frame. Without a feed the host
+    /// supplies the selected bars with `set_data`.
+    pub fn set_dividend_adjusted(&mut self, adjusted: bool) {
+        if let Some(link) = &mut self.feed_link
+            && link.adjusted != adjusted
+        {
+            link.adjusted = adjusted;
+            link.reload_pending = true;
+            self.study_data.clear_feed();
+        }
+    }
+
+    /// Whether history is requested adjusted for dividends.
+    pub fn dividend_adjusted(&self) -> bool {
+        self.feed_link.as_ref().is_some_and(|link| link.adjusted)
     }
 
     /// Reloads the current feed key on the next frame, retaining drawings and chart history.
