@@ -207,6 +207,14 @@ impl DemoApp {
 
     pub(super) fn push_market_replay_window(&mut self) {
         if let Some(driver) = self.chart.replay_driver() {
+            if let Some(first) = self
+                .replay
+                .as_ref()
+                .and_then(|replay| replay.visible_bars().first())
+                && driver.time() < first.time
+            {
+                driver.seek(first.time);
+            }
             self.apply_replay_window(driver.time() + chrono::TimeDelta::nanoseconds(1), false);
         }
     }
@@ -290,18 +298,36 @@ impl DemoApp {
         if self.replay.is_none() {
             return;
         }
-        let (mut bars, clock) = replay_source(&self.live, interval, &self.chart);
-        if bars.is_empty() {
+        let (mut bars, clock) = if interval.is_trade_based() {
+            (Vec::new(), source_clock(&self.chart, interval))
+        } else {
+            replay_source(&self.live, interval, &self.chart)
+        };
+        if bars.is_empty() && !interval.is_trade_based() {
             self.notify("No source history for that update interval");
             return;
         }
         let market_driver = if interval.is_trade_based() {
+            let instrument = self.live.instrument();
+            let mut merged = Vec::new();
+            self.live.read_recording(&mut merged);
+            let trades: Vec<_> = merged
+                .iter()
+                .filter_map(|event| match &event.event {
+                    MarketEvent::Trade(trade) => Some(trade.clone()),
+                    _ => None,
+                })
+                .collect();
+            bars = egui_charts::data::aggregate_trades_with_tick_size(
+                &trades,
+                clock.clone(),
+                instrument.tick_size,
+            )
+            .expect("recorded demo executions");
             if let Some(driver) = self.chart.replay_driver().cloned() {
                 Some(driver)
             } else {
-                let mut instruments = vec![self.live.instrument()];
-                let mut merged = Vec::new();
-                self.live.read_recording(&mut merged);
+                let mut instruments = vec![instrument];
                 for (index, extra) in self.extra_charts.iter().enumerate() {
                     let slot = if index >= self.layout_slot {
                         index + 1
@@ -337,7 +363,7 @@ impl DemoApp {
                 return;
             }
             let after = chrono::TimeDelta::nanoseconds(1);
-            cutoff = cutoff.map(|time| time.clamp(from + after, to + after));
+            cutoff = cutoff.map(|time| time.clamp(bars[0].time + after, to + after));
             if self.chart.replay_driver().is_none() {
                 self.notify(format!("Recorded market replay: {from} to {to}"));
             }
@@ -691,6 +717,13 @@ mod tests {
         );
         let range = driver.time_range();
         assert!(range.is_some(), "the captured recording is not empty");
+        app.handle_replay_control(ReplayControlAction::GoToStart);
+        let first = app.replay.as_ref().unwrap().visible_bars()[0].time;
+        assert_eq!(
+            driver.time(),
+            first,
+            "the transport starts at the first recorded execution"
+        );
         app.handle_replay_control(ReplayControlAction::SetUpdateInterval(app.state.timeframe));
         app.handle_replay_control(ReplayControlAction::SetUpdateInterval(trade));
         assert_eq!(
