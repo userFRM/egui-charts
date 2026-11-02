@@ -83,13 +83,7 @@ impl Terminal {
             self.layouts.tabs[self.layouts.tab].name = name.clone();
         }
         self.refresh_layout_menu();
-        let mut errors = vec![self.top_toolbar.layout_menu.take_error()];
-        errors.extend(
-            self.charts
-                .iter_mut()
-                .map(|chart| chart.take_storage_error().map(|error| error.to_string())),
-        );
-        for error in errors.into_iter().flatten() {
+        if let Some(error) = self.top_toolbar.layout_menu.take_error() {
             self.toasts.error(error);
         }
         let edits = self
@@ -366,7 +360,13 @@ impl Terminal {
         if index == self.layouts.tab {
             return;
         }
-        if self.top_toolbar.layout_menu.autosave {
+        // Autosave keeps stored layouts current; it does not store the ones never saved.
+        let menu = &self.top_toolbar.layout_menu;
+        if menu.autosave
+            && menu
+                .layouts
+                .contains(&self.layouts.tabs[self.layouts.tab].name)
+        {
             self.save_layout();
         }
         self.layout_stop_replay();
@@ -706,10 +706,15 @@ mod tests {
         terminal
             .chart_mut()
             .user_action(|chart| chart.config_mut().show_grid = false);
+        terminal.top_toolbar.layout_menu.autosave = true;
         layout(&mut terminal, LayoutAction::CreateNew);
         // The new layout is one slot with a copy of the active chart; the strip lists both.
         let names: Vec<_> = terminal.layouts.tabs.iter().map(|tab| &*tab.name).collect();
         assert_eq!(names, ["Unnamed", "Unnamed 2"]);
+        assert!(
+            storage.get(StoreKind::Layouts, "Unnamed").is_none(),
+            "autosave does not store a layout that was never saved"
+        );
         assert!(
             terminal
                 .layouts
