@@ -495,7 +495,8 @@ impl Terminal {
 }
 
 /// Draws the tabs at the left of the strip and the minimise and maximise buttons at its right,
-/// and returns what was clicked. The selected tab is underlined while the dock is open.
+/// unless the open account panel shows its own, and returns what was clicked. The selected tab is
+/// underlined while the dock is open.
 fn show_strip(
     ui: &mut egui::Ui,
     theme: &egui_charts::theme::Theme,
@@ -538,7 +539,12 @@ fn show_strip(
     // Buttons 23 points apart, the last ending 15 points from the edge.
     let maximise = pos2(strip.right() - 15.0 - 8.0, strip.center().y);
     let minimise = maximise - vec2(23.0, 0.0);
-    for (centre, name) in [(minimise, "Minimize panel"), (maximise, "Maximize panel")] {
+    let buttons = if expanded && selected == Tab::Account {
+        &[][..]
+    } else {
+        &[(minimise, "Minimize panel"), (maximise, "Maximize panel")][..]
+    };
+    for &(centre, name) in buttons {
         let rect = egui::Rect::from_center_size(centre, vec2(22.0, 22.0));
         let label = l10n::text(ui.ctx(), name);
         let response = ui
