@@ -301,7 +301,7 @@ The crate renders supplied data and exposes interfaces for application services.
 - `Broker` supplies real or paper-account state, trading rules, execution and account updates. Trading components submit actions and render the reported orders, positions, fills and history.
 - `Storage` supplies layouts, drawings, settings and template documents; an application may use local or remote storage and manage accounts, synchronisation and sharing.
 - `Alerts` stores and evaluates alert conditions and reports changes and triggers. The crate edits models and draws levels, dialogs, logs and toasts; the application supplies sound, schedules and external delivery.
-- `Signals` supplies markers, levels and zones with category visibility and click callbacks. Applications can deliver iceberg, absorption, spoofing, large-order and other interpreted order-flow events through it.
+- `Signals` supplies markers, levels and zones with category visibility and click callbacks. Captions yield to price bars, signal borders and other captions, prioritising recent markers; hover retains the labels and details of coincident events. Applications can deliver iceberg, absorption, spoofing, large-order and other interpreted order-flow events through it.
 - `Notifications` and `Chats` supply notification records and conversation messages. Publishing and sharing actions are application intents; post/idea drawings display supplied local content.
 - `StrategyReport` supplies the trade list, equity and performance inputs for the report panel; `CompanyFinancials` supplies financial tables. Applications also provide translations, additional fonts, image loaders and platform save/clipboard facilities.
 
