@@ -505,10 +505,17 @@ impl Chart {
                                         item,
                                         self.primitive_view(
                                             *id,
-                                            crate::chart::rendering::study_mapping(
-                                                study,
-                                                &pane_mapping,
-                                            ),
+                                            if matches!(
+                                                study.scale(),
+                                                crate::studies::StudyScale::Shared(_)
+                                            ) {
+                                                crate::chart::rendering::study_mapping(
+                                                    study,
+                                                    &pane_mapping,
+                                                )
+                                            } else {
+                                                pane_mapping
+                                            },
                                         ),
                                     )
                                 }),
@@ -877,7 +884,12 @@ impl Chart {
                             })
                             .map(|item| {
                                 let mut view = self.primitive_view(item.series, pane_coords);
-                                if let Some(study) = view.study {
+                                if let Some(study) = view.study
+                                    && matches!(
+                                        study.scale(),
+                                        crate::studies::StudyScale::Shared(_)
+                                    )
+                                {
                                     view.mapping =
                                         crate::chart::rendering::study_mapping(study, &pane_coords);
                                 }
