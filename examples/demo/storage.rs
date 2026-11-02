@@ -26,6 +26,7 @@ struct SavedWorkspace {
     layout: SavedLayout,
     comparisons: Vec<Vec<super::comparison::SavedComparison>>,
     active_slot: usize,
+    continuous_sessions: Vec<bool>,
 }
 
 impl super::DemoApp {
@@ -53,6 +54,9 @@ impl super::DemoApp {
             if saved.active_slot >= saved.layout.charts.len() {
                 return Err("invalid active chart slot".to_owned());
             }
+            if saved.continuous_sessions.len() != saved.layout.charts.len() {
+                return Err("invalid session count".to_owned());
+            }
             Ok(saved)
         })();
         match saved {
@@ -64,7 +68,55 @@ impl super::DemoApp {
                     suffix += 1;
                 }
                 if self.restore_layout(name, saved.layout, Ok(saved.comparisons)) {
+                    let restore_view = |chart: &mut egui_charts::widget::Chart,
+                                        live: &super::LiveFeed,
+                                        continuous| {
+                        let session = if continuous {
+                            super::SessionType::Full24x7
+                        } else if chart.extended_hours() {
+                            super::SessionType::ETH
+                        } else {
+                            super::SessionType::RTH
+                        };
+                        live.set_view(session, chart.dividend_adjusted());
+                        chart.reload_feed();
+                        chart.set_data(
+                            egui_charts::widget::SeriesId::MAIN,
+                            live.snapshot(
+                                chart
+                                    .timeframe()
+                                    .unwrap_or(egui_charts::model::Timeframe::Min1),
+                                chart.bar_clock(),
+                                chart.extended_hours(),
+                            ),
+                        );
+                    };
+                    let mut continuous = saved.continuous_sessions;
+                    restore_view(
+                        &mut self.chart,
+                        &self.live,
+                        continuous.remove(self.layout_slot),
+                    );
+                    for (extra, continuous) in self.extra_charts.iter_mut().zip(continuous) {
+                        restore_view(&mut extra.chart, &extra.live, continuous);
+                    }
                     self.activate_chart_slot(saved.active_slot);
+                    self.bars = self
+                        .chart
+                        .bars(egui_charts::widget::SeriesId::MAIN)
+                        .to_vec();
+                    self.timeframe_toolbar
+                        .set_session(self.live.view(self.chart.extended_hours()).0);
+                    self.timeframe_toolbar.state.adjust_for_dividends =
+                        self.chart.dividend_adjusted();
+                    let zone = self
+                        .chart
+                        .chart_options()
+                        .time_scale
+                        .timezone
+                        .to_tz()
+                        .map_or_else(|| "UTC".to_owned(), |zone| zone.name().to_owned());
+                    self.timeframe_toolbar.set_timezone(zone);
                 } else {
                     self.workspace_recovery.unreadable = true;
                 }
@@ -87,11 +139,25 @@ impl super::DemoApp {
             return;
         }
         let document = (|| {
+            let layout = self.capture_layout()?;
+            let mut continuous_sessions: Vec<_> = self
+                .extra_charts
+                .iter()
+                .map(|extra| {
+                    extra.live.view(extra.chart.extended_hours()).0 == super::SessionType::Full24x7
+                })
+                .collect();
+            continuous_sessions.insert(
+                self.layout_slot,
+                self.live.view(self.chart.extended_hours()).0 == super::SessionType::Full24x7,
+            );
+            continuous_sessions.truncate(layout.charts.len());
             let saved = SavedWorkspace {
                 version: SavedLayout::VERSION,
-                layout: self.capture_layout()?,
+                layout,
                 comparisons: self.capture_comparisons()?,
                 active_slot: self.layout_slot,
+                continuous_sessions,
             };
             serde_json::to_string(&saved).map_err(|e| e.to_string())
         })();
@@ -338,14 +404,20 @@ mod tests {
     fn unnamed_workspace_recovers_chart_settings_and_keeps_named_save_policy() {
         use egui_charts::model::ChartType;
         use egui_charts::scales::PriceScaleMode;
+        use egui_charts::ui::timeframe_toolbar::SessionType;
         use egui_charts::ui::top_toolbar::{CompareAction, TopToolbarAction};
         use egui_charts::widget::ChartLayoutMode;
-        for mode in [ChartLayoutMode::Single, ChartLayoutMode::TwoHorizontal] {
+        for (mode, session) in [
+            (ChartLayoutMode::Single, SessionType::Full24x7),
+            (ChartLayoutMode::TwoHorizontal, SessionType::RTH),
+        ] {
             let ctx = egui::Context::default();
             let mut storage = AppStorage::default();
             let mut app = restart(&ctx, &storage);
             app.ensure_chart_slots(mode);
             app.activate_chart_slot(mode.chart_count() - 1);
+            app.timeframe_toolbar.set_session(session);
+            app.apply_session();
             show_charts(&mut app, &ctx);
             app.handle_top_toolbar(&ctx, TopToolbarAction::ChartStyleSelected(ChartType::Line));
             app.chart
@@ -361,11 +433,15 @@ mod tests {
             app.chart.price_scale_mut().set_range(2.0, 6.0);
             app.chart
                 .set_crosshair_style(egui_charts::config::CrosshairStyle::Dot);
+            app.chart.chart_options_mut().time_scale.timezone =
+                egui_charts::scales::TimezoneMode::Timezone("+05:45".parse().unwrap());
             app.save(&mut storage);
             app = restart(&ctx, &storage);
             assert_eq!(app.layout.mode, mode);
             assert_eq!(app.layout_slot, mode.chart_count() - 1);
             assert_eq!(app.chart.chart_type(), ChartType::Line);
+            assert_eq!(app.timeframe_toolbar.state.session_type, session);
+            assert_eq!(app.timeframe_toolbar.state.timezone, "+05:45");
             assert_eq!(
                 app.chart.state().price_scale().options().mode,
                 PriceScaleMode::Logarithmic
@@ -490,6 +566,7 @@ mod tests {
             serde_json::from_str(&app.capture_layout().unwrap().to_json().unwrap()).unwrap();
         valid["active_slot"] = 0.into();
         valid["comparisons"] = serde_json::json!([[]]);
+        valid["continuous_sessions"] = serde_json::json!([true]);
         let valid = valid.to_string();
         let invalid_slot = valid.replace("\"active_slot\":0", "\"active_slot\":99");
         let invalid_chart = valid.replace("\"charts\":[", "\"charts\":[{\"symbol\":false},");
