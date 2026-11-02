@@ -58,6 +58,9 @@ impl super::DemoApp {
             if saved.continuous_sessions.len() != saved.layout.charts.len() {
                 return Err("invalid session count".to_owned());
             }
+            if saved.comparisons.len() != saved.layout.charts.len() {
+                return Err("invalid comparison chart count".to_owned());
+            }
             Ok(saved)
         })();
         match saved {
@@ -575,11 +578,13 @@ mod tests {
         valid["continuous_sessions"] = serde_json::json!([true]);
         let valid = valid.to_string();
         let invalid_slot = valid.replace("\"active_slot\":0", "\"active_slot\":99");
+        let invalid_comparisons = valid.replace("\"comparisons\":[[]]", "\"comparisons\":[]");
         let invalid_chart = valid.replace("\"charts\":[", "\"charts\":[{\"symbol\":false},");
         let unsupported = valid.replace("\"version\":3", "\"version\":999");
         for json in [
             "{",
             invalid_slot.as_str(),
+            invalid_comparisons.as_str(),
             invalid_chart.as_str(),
             unsupported.as_str(),
         ] {
