@@ -4,9 +4,7 @@ use crate::drawings::domain::{ChartPoint, Drawing};
 use crate::drawings::rendering::measurements::{boxed_label, elapsed_ms, format_duration};
 use crate::drawings::rendering::{ChartView, bars_between};
 use crate::model::{Bar, percent_change};
-use crate::scales::{
-    DefaultPriceFormatter, PriceFormatter, instrument_price_precision, price_decimals,
-};
+use crate::scales::{DefaultPriceFormatter, instrument_price_precision, price_decimals};
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Align2, Pos2};
@@ -28,7 +26,8 @@ impl Drawing {
             .instrument
             .and_then(instrument_price_precision)
             .map_or_else(|| price_decimals(from.price), usize::from);
-        let formatter = DefaultPriceFormatter::with_precision(precision);
+        let built_in = DefaultPriceFormatter::with_precision(precision);
+        let formatter = view.price_formatter.unwrap_or(&built_in);
         let anchor_label = |point: ChartPoint| {
             let mut text = formatter.format(point.price);
             if view.time_axis {

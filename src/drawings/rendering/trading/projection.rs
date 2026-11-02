@@ -78,7 +78,15 @@ impl Drawing {
         }
 
         // Labels
-        self.draw_projection_labels(painter, start, end, proj_end, dy, dashed_color);
+        self.draw_projection_labels(
+            painter,
+            start,
+            end,
+            proj_end,
+            dy,
+            dashed_color,
+            view.price_formatter,
+        );
     }
 
     pub(super) fn draw_projection_main_line(
@@ -139,6 +147,7 @@ impl Drawing {
         proj_end: Pos2,
         dy: f32,
         dashed_color: Color32,
+        price_formatter: Option<&dyn crate::scales::PriceFormatter>,
     ) {
         // Price/percentage labels
         let price_change = if !self.chart_points.is_empty() && self.chart_points.len() >= 2 {
@@ -160,7 +169,10 @@ impl Drawing {
 
         // Move label (at midpoint of AB)
         let mid_ab = Pos2::new((start.x + end.x) / 2.0, (start.y + end.y) / 2.0);
-        let label_text = format!("{price_change:.2} ({pct_change:.1}%)");
+        let label_text = match price_formatter {
+            Some(formatter) => format!("{} ({pct_change:.1}%)", formatter.format(price_change)),
+            None => format!("{price_change:.2} ({pct_change:.1}%)"),
+        };
         let chart = painter.ctx().active_theme().chart;
         boxed_label(
             painter,
@@ -176,10 +188,11 @@ impl Drawing {
         let target_label = self.chart_points.get(2).map_or_else(
             || "Target: n/a".to_owned(),
             |c| {
-                format!(
-                    "Target: {:.2}",
-                    c.price + self.chart_points[1].price - self.chart_points[0].price
-                )
+                let target = c.price + self.chart_points[1].price - self.chart_points[0].price;
+                match price_formatter {
+                    Some(formatter) => format!("Target: {}", formatter.format(target)),
+                    None => format!("Target: {target:.2}"),
+                }
             },
         );
         boxed_label(
@@ -216,6 +229,7 @@ mod tests {
                     Pos2::new(500.0, 100.0),
                     -100.0,
                     Color32::BLUE,
+                    None,
                 );
             });
             // egui panics when an output with unfreed textures is dropped.

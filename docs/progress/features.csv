@@ -82,7 +82,7 @@ Builder API,Widget API and customization,Context menu customisation,done,library
 Builder API,Widget API and customization,Create and edit drawings from code,done,library,src/widget/drawing_api.rs;src/widget/anchors.rs;src/drawings/manager/mod.rs;src/widget/mod.rs;src/drawings/manager/edit.rs
 Builder API,Widget API and customization,Create and remove studies,done,library,src/widget/series/mod.rs;src/widget/studies.rs;src/studies/settings.rs;src/widget/pane/mod.rs
 Builder API,Widget API and customization,Custom date and time formatters,done,library,src/widget/frame.rs;src/scales/time_formatter.rs
-Builder API,Widget API and customization,Custom price formatter,done,library,src/widget/frame.rs
+Builder API,Widget API and customization,Custom price formatter,done,library,src/widget/frame.rs;src/widget/tool_interaction/mod.rs;src/drawings/rendering/mod.rs
 Builder API,Widget API and customization,Export chart data,done,library,src/widget/export.rs;src/model/bar/io.rs
 Builder API,Widget API and customization,Hide or show the main series,done,library,src/widget/series/mod.rs;src/widget/frame.rs;src/widget/marks.rs
 Builder API,Widget API and customization,Locale-aware date formatting,done,library,src/widget/frame.rs;src/scales/time_formatter.rs;Cargo.toml

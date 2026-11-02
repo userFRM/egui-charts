@@ -143,7 +143,12 @@ impl Drawing {
         let clip = painter.clip_rect();
         // A line out of view leaves no box at the pane's edge.
         let Some(info_text) = self
-            .measurement_label(view.bars, view.instrument, view.time_axis)
+            .measurement_label(
+                view.bars,
+                view.instrument,
+                view.time_axis,
+                view.price_formatter,
+            )
             .filter(|_| crate::painting::dashed_line::clip_segment(start, end, clip).is_some())
         else {
             self.render_line_text(painter, start, end, end.y >= start.y);
@@ -172,8 +177,9 @@ impl Drawing {
     // Note: render_bars_pattern is now in trading.rs with full projection features
 
     /// Label of the measuring tools: the price change from the first anchor to the second in
-    /// the instrument's price decimals (by magnitude without them), its percentage and its whole
-    /// number of pips, or else ticks, the bars between them and, on a `time_axis`, the time they
+    /// `price_formatter`'s text, else the instrument's price decimals (by magnitude without them),
+    /// its percentage and its whole number of pips, or else ticks, the bars between them and,
+    /// on a `time_axis`, the time they
     /// span, the volume traded over them, and for the info line the angle of the line on screen.
     /// Volume drops trailing zeros. Each anchor counts at its nearest bar: anchors N bars apart
     /// span N bars of time and the volume of the N + 1 bars from one to the other, both included.
@@ -182,6 +188,7 @@ impl Drawing {
         bars: &[Bar],
         instrument: Option<&crate::model::Instrument>,
         time_axis: bool,
+        price_formatter: Option<&dyn PriceFormatter>,
     ) -> Option<String> {
         let [a, b, ..] = &self.chart_points[..] else {
             return None;
@@ -189,7 +196,8 @@ impl Drawing {
         let change = b.price - a.price;
         let pct = percent_change(a.price, b.price);
         let decimals = change_decimals(instrument, a.price, change);
-        let text = DefaultPriceFormatter::with_precision(decimals).format(change);
+        let built_in = DefaultPriceFormatter::with_precision(decimals);
+        let text = price_formatter.unwrap_or(&built_in).format(change);
         let sign = if text.starts_with('-') { "" } else { "+" };
         let mut change = format!("{sign}{text} ({pct:+.2}%)");
         // Pips where the instrument quotes them, else ticks. Past 2^53 an f64 no longer holds
@@ -246,12 +254,17 @@ impl Drawing {
     }
 
     /// The rectangle's width in bars and height in price, from its stored anchors.
-    pub(crate) fn size_labels(&self) -> Vec<String> {
+    pub(crate) fn size_labels(&self, price_formatter: Option<&dyn PriceFormatter>) -> Vec<String> {
         let gap = |a: f64, b: f64| {
             let (low, gap) = (a.min(b), (a - b).abs());
             let pct = percent_change(low, low + gap);
-            let decimals = price_decimals(low);
-            format!("{gap:.decimals$} ({pct:.2}%)")
+            match price_formatter {
+                Some(formatter) => format!("{} ({pct:.2}%)", formatter.format(gap)),
+                None => {
+                    let decimals = price_decimals(low);
+                    format!("{gap:.decimals$} ({pct:.2}%)")
+                }
+            }
         };
         match (self.tool_type, &self.chart_points[..]) {
             (DrawingToolType::Rect, [a, b, ..]) => vec![
@@ -290,7 +303,12 @@ impl Drawing {
     /// level with or above the first on screen, below it otherwise.
     fn range_card(&self, painter: &egui::Painter, rect: Rect, view: &ChartView) {
         let (Some(text), [first, second, ..]) = (
-            self.measurement_label(view.bars, view.instrument, view.time_axis),
+            self.measurement_label(
+                view.bars,
+                view.instrument,
+                view.time_axis,
+                view.price_formatter,
+            ),
             self.points.as_slice(),
         ) else {
             return;
@@ -485,7 +503,7 @@ mod tests {
             let mut drawing = Drawing::new(1, tool);
             drawing.chart_points = vec![ChartPoint::new(b1, p1), ChartPoint::new(b2, p2)];
             drawing.update_screen_coords(|bar| bar * 10.0, |price| 500.0 - price as f32);
-            let got = drawing.measurement_label(&bars, None, true);
+            let got = drawing.measurement_label(&bars, None, true, None);
             if got.as_deref() != Some(want) {
                 wrong.push(format!("{tool:?}: got {got:?}, want {want:?}"));
             }
@@ -494,7 +512,9 @@ mod tests {
         drawing.chart_points = vec![ChartPoint::new(1.0, 1.1000), ChartPoint::new(4.0, 1.0995)];
         // On a horizontal scale other than time the bar times are keys, not times.
         assert_eq!(
-            drawing.measurement_label(&bars, None, false).as_deref(),
+            drawing
+                .measurement_label(&bars, None, false, None)
+                .as_deref(),
             Some("-0.0005 (-0.05%)\n3 bars\nVol 900")
         );
         for (tick, pip, precision, want) in [
@@ -534,7 +554,7 @@ mod tests {
             instrument.pip_size = pip;
             instrument.price_decimals = precision;
             let label = drawing
-                .measurement_label(&bars, Some(&instrument), true)
+                .measurement_label(&bars, Some(&instrument), true, None)
                 .unwrap();
             assert_eq!(
                 label.lines().next(),
@@ -545,7 +565,7 @@ mod tests {
         // Counts beyond the exactly representable integers, including overflow, are omitted.
         let instrument = crate::model::Instrument::new("PAIR").with_tick_size(1e-300);
         let label = drawing
-            .measurement_label(&bars, Some(&instrument), true)
+            .measurement_label(&bars, Some(&instrument), true, None)
             .unwrap();
         assert!(
             !label.contains("ticks") && !label.contains("pips"),
@@ -577,7 +597,7 @@ mod tests {
     fn size_labels_are_in_price_and_bars() {
         let mut drawing = Drawing::new(1, DrawingToolType::Rect);
         drawing.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(20.0, 110.0)];
-        assert_eq!(drawing.size_labels(), ["20 bars", "10.00 (10.00%)"]);
+        assert_eq!(drawing.size_labels(None), ["20 bars", "10.00 (10.00%)"]);
     }
 
     /// In a 500 x 400 pane, info lines near its top and bottom edges and steep ones in either
