@@ -14,6 +14,7 @@ use std::sync::Arc;
 pub(super) struct Capture {
     writer: RecordingWriter<Vec<u8>>,
     sequence: u64,
+    pub(super) detectors: Option<Arc<egui_charts::services::OrderFlowDetectors>>,
 }
 
 impl Capture {
@@ -21,10 +22,14 @@ impl Capture {
         Self {
             writer: RecordingWriter::new(Vec::new()).expect("memory recording"),
             sequence: 0,
+            detectors: None,
         }
     }
 
     pub(super) fn push(&mut self, symbol: &str, time: DateTime<Utc>, event: MarketEvent) {
+        if let Some(detectors) = &self.detectors {
+            detectors.push(symbol, time, &event);
+        }
         self.writer
             .write(&ReplayEvent::new(symbol, time, self.sequence, event))
             .expect("generated market event");
