@@ -10,9 +10,10 @@ use super::{
     types::{IndicatorCategory, IndicatorTab},
 };
 use crate::data::inbox::Inbox;
-use crate::data::{Datafeed, FeedError, MetricSeries};
+use crate::data::{Datafeed, FeedCapabilities, FeedError, MetricSeries};
 use crate::icons::icons;
 use crate::localization as l10n;
+use crate::model::Instrument;
 use crate::studies::*;
 use crate::styles::focus::draw_focus_ring;
 use crate::theme::Theme;
@@ -58,6 +59,8 @@ pub struct IndicatorDialog {
     pub favorites: HashSet<String>,
     /// Creates the studies the dialog lists
     factory: IndicatorFactory,
+    feed_capabilities: Option<(Option<FeedCapabilities>, Option<Instrument>)>,
+    unavailable_order_flow: HashSet<String>,
     metric_source: Option<(Arc<dyn Datafeed>, String)>,
     metric_catalog: Option<Arc<Inbox>>,
     metric_names: Vec<String>,
@@ -78,6 +81,55 @@ impl Default for IndicatorDialog {
 }
 
 impl IndicatorDialog {
+    /// Restrict studies in the factory's Order flow category to services explicitly declared
+    /// for the resolved instrument. Pass [`Chart::feed_capabilities`](crate::widget::Chart::feed_capabilities)
+    /// and [`Chart::instrument`](crate::widget::Chart::instrument) when they change. Missing
+    /// metadata declares no services. Other categories and saved favorites are unchanged.
+    /// Until the first call every study is offered. Requirements are cached between updates.
+    pub fn set_feed_capabilities(
+        &mut self,
+        capabilities: Option<&FeedCapabilities>,
+        instrument: Option<&Instrument>,
+    ) {
+        if self
+            .feed_capabilities
+            .as_ref()
+            .is_some_and(|(previous, symbol)| {
+                previous.as_ref() == capabilities && symbol.as_ref() == instrument
+            })
+        {
+            return;
+        }
+        self.feed_capabilities = Some((capabilities.cloned(), instrument.cloned()));
+        self.refresh_order_flow_availability();
+    }
+
+    fn refresh_order_flow_availability(&mut self) {
+        self.unavailable_order_flow.clear();
+        let Some((capabilities, instrument)) = &self.feed_capabilities else {
+            return;
+        };
+        for ind in &self.indicators {
+            if ind.category != IndicatorFactory::ORDER_FLOW {
+                continue;
+            }
+            let available = self.factory.create(&ind.id).is_some_and(|study| {
+                study.order_flow_inputs().iter().all(|input| {
+                    input.services().iter().all(|service| {
+                        capabilities.as_ref().zip(instrument.as_ref()).is_some_and(
+                            |(capabilities, instrument)| {
+                                capabilities.declares(*service, instrument)
+                            },
+                        )
+                    })
+                })
+            });
+            if !available {
+                self.unavailable_order_flow.insert(ind.id.clone());
+            }
+        }
+    }
+
     /// Settings to save in the host's user settings document. The dialog owns no storage.
     pub fn preferences(&self) -> IndicatorPreferences {
         IndicatorPreferences {
@@ -105,6 +157,8 @@ impl IndicatorDialog {
             favorites: HashSet::new(),
             indicators: IndicatorInfo::from_factory(&factory),
             factory,
+            feed_capabilities: None,
+            unavailable_order_flow: HashSet::new(),
             metric_source: None,
             metric_catalog: None,
             metric_names: Vec::new(),
@@ -121,6 +175,7 @@ impl IndicatorDialog {
     pub fn with_factory(mut self, factory: IndicatorFactory) -> Self {
         self.indicators = IndicatorInfo::from_factory(&factory);
         self.factory = factory;
+        self.refresh_order_flow_availability();
         self
     }
 
@@ -141,6 +196,7 @@ impl IndicatorDialog {
             self.factory.unregister(&name);
         }
         self.indicators = IndicatorInfo::from_factory(&self.factory);
+        self.refresh_order_flow_availability();
     }
 
     fn poll_metrics(&mut self, ctx: &egui::Context) {
@@ -435,7 +491,7 @@ impl IndicatorDialog {
             || self
                 .indicators
                 .iter()
-                .any(|ind| Self::destination(ind).0 == category && self.accepts_source(ind))
+                .any(|ind| Self::destination(ind).0 == category && self.accepts(ind))
     }
 
     /// The built-in pages that have studies, above the built-in results. A search covers
@@ -447,7 +503,7 @@ impl IndicatorDialog {
             .filter(|tab| {
                 self.indicators.iter().any(|ind| {
                     Self::destination(ind) == (IndicatorCategory::BuiltIns, *tab)
-                        && self.accepts_source(ind)
+                        && self.accepts(ind)
                 })
             })
             .collect();
@@ -463,18 +519,19 @@ impl IndicatorDialog {
         }
     }
 
-    fn accepts_source(&self, ind: &IndicatorInfo) -> bool {
-        self.source.is_none()
-            || self
-                .factory
-                .create(&ind.id)
-                .is_some_and(|study| study.source().is_some())
+    fn accepts(&self, ind: &IndicatorInfo) -> bool {
+        !self.unavailable_order_flow.contains(&ind.id)
+            && (self.source.is_none()
+                || self
+                    .factory
+                    .create(&ind.id)
+                    .is_some_and(|study| study.source().is_some()))
     }
 
     /// Whether `ind` belongs to the active category, and page for the built-ins, and matches
     /// the search.
     fn matches(&self, ctx: &egui::Context, ind: &IndicatorInfo) -> bool {
-        if !self.accepts_source(ind) {
+        if !self.accepts(ind) {
             return false;
         }
         let searched = [&ind.name, &ind.desc, &ind.id, &ind.category]
@@ -1339,6 +1396,148 @@ mod tests {
                 );
             }
         }
+
+        use crate::data::{FeedCapabilities, OrderFlowKind};
+        use crate::model::{FeedService::*, Instrument};
+        let instrument = Instrument::new("A");
+        let none = FeedCapabilities::new().with_services([]);
+        let live = FeedCapabilities::new().with_services([LiveTrades]);
+        let sided = FeedCapabilities::new().with_services([LiveTrades, TradeSides]);
+        let all =
+            FeedCapabilities::new().with_services([LiveTrades, TradeSides, BestBidAsk, Depth]);
+        let unknown = FeedCapabilities::new();
+        let narrowed = instrument.clone().with_services([]);
+        let declared = instrument.clone().with_services([LiveTrades, TradeSides]);
+        for (updated, capabilities, symbol, expected) in [
+            (false, None, None, [true; 4]),
+            (true, None, None, [false; 4]),
+            (true, Some(&sided), None, [false; 4]),
+            (true, None, Some(&declared), [false; 4]),
+            (true, Some(&unknown), Some(&instrument), [false; 4]),
+            (true, Some(&none), Some(&instrument), [false; 4]),
+            (true, Some(&all), Some(&narrowed), [false; 4]),
+            (true, Some(&none), Some(&declared), [false; 4]),
+            (
+                true,
+                Some(&unknown),
+                Some(&declared),
+                [true, true, false, false],
+            ),
+            (
+                true,
+                Some(&live),
+                Some(&instrument),
+                [true, false, false, false],
+            ),
+            (
+                true,
+                Some(&sided),
+                Some(&instrument),
+                [true, true, false, false],
+            ),
+            (true, Some(&all), Some(&instrument), [true; 4]),
+        ] {
+            let mut dialog = IndicatorDialog::new();
+            if updated {
+                dialog.set_feed_capabilities(capabilities, symbol);
+            }
+            dialog.favorites.insert("Quoted Spread".into());
+            dialog.open_tab(OrderFlow);
+            for query in ["", "Order flow"] {
+                *dialog.search.query_mut() = query.into();
+                for (id, accepted) in [
+                    "Trade Rate",
+                    "Rolling Volume and Delta",
+                    "Quoted Spread",
+                    "Book Size",
+                ]
+                .into_iter()
+                .zip(expected)
+                {
+                    let ind = dialog.indicators.iter().find(|ind| ind.id == id).unwrap();
+                    assert_eq!(
+                        dialog.matches(&ctx, ind),
+                        accepted,
+                        "{id} / {query:?} / {capabilities:?}"
+                    );
+                }
+            }
+            dialog.search.clear();
+            let output = ctx.run_ui(Default::default(), |ui| {
+                dialog.draw_tabs(ui, &Theme::dark())
+            });
+            assert_eq!(output.shapes.iter().any(|shape| {
+                matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == "Order flow")
+            }), expected.iter().any(|accepted| *accepted));
+            output.drop_without_applying_deltas();
+            dialog.sel_category = Favorites;
+            let spread = dialog
+                .indicators
+                .iter()
+                .find(|ind| ind.id == "Quoted Spread")
+                .unwrap();
+            assert_eq!(dialog.matches(&ctx, spread), expected[2]);
+            assert!(dialog.preferences().favorites.contains("Quoted Spread"));
+            // Profiles keep their bar-based fallback even though they also expose a footprint.
+            dialog.sel_category = BuiltIns;
+            dialog.active_tab = Profiles;
+            let profile = dialog
+                .indicators
+                .iter()
+                .find(|ind| ind.id == "Vol Profile VR")
+                .unwrap();
+            assert!(dialog.matches(&ctx, profile));
+            dialog.set_feed_capabilities(Some(&all), Some(&instrument));
+            dialog.sel_category = Favorites;
+            let spread = dialog
+                .indicators
+                .iter()
+                .find(|ind| ind.id == "Quoted Spread")
+                .unwrap();
+            assert!(dialog.matches(&ctx, spread));
+        }
+
+        // Repeated capability updates and frames reuse the requirements; replacing the factory
+        // reevaluates them, including a host study registered in the Order flow category.
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let builds = Arc::new(AtomicUsize::new(0));
+        let counted = |kind| {
+            let builds = builds.clone();
+            let mut factory = IndicatorFactory::new();
+            for id in factory.list() {
+                factory.unregister(&id);
+            }
+            factory.register_in(IndicatorFactory::ORDER_FLOW, "Host book", move || {
+                builds.fetch_add(1, Ordering::Relaxed);
+                Box::new(OrderFlowStudy::new(kind))
+            });
+            factory
+        };
+        let mut dialog = IndicatorDialog::new().with_factory(counted(OrderFlowKind::BookSize {
+            levels: 5,
+            distance: 0.0,
+        }));
+        dialog.set_feed_capabilities(Some(&live), Some(&instrument));
+        assert!(!dialog.offers(BuiltIns));
+        let built = builds.load(Ordering::Relaxed);
+        for _ in 0..3 {
+            dialog.set_feed_capabilities(Some(&live), Some(&instrument));
+            ctx.run_ui(Default::default(), |ui| {
+                dialog.draw_content(ui, &dialog.config.clone(), &Theme::dark());
+            })
+            .drop_without_applying_deltas();
+        }
+        assert_eq!(builds.load(Ordering::Relaxed), built);
+        dialog = dialog.with_factory(counted(OrderFlowKind::TradeRate {
+            volume: false,
+            seconds: 60,
+            instant: 3,
+        }));
+        assert!(dialog.offers(BuiltIns));
+        dialog.set_feed_capabilities(Some(&none), Some(&instrument));
+        assert!(!dialog.offers(BuiltIns));
+        dialog.set_feed_capabilities(Some(&all), Some(&instrument));
+        assert!(dialog.offers(BuiltIns));
 
         // A study the host registers, under a new name or a built-in's, is added through the
         // factory.
