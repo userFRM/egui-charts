@@ -436,7 +436,7 @@ impl OrderFlowInput {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    #[cfg(feature = "widget")]
+    #[cfg(any(feature = "widget", feature = "alert-engine"))]
     pub(crate) fn same_source(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }
