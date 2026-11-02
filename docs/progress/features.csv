@@ -184,7 +184,7 @@ Chart,Keyboard shortcuts,Shortcut list dialog,done,library,src/config/keyboard.r
 Chart,Keyboard shortcuts,Snapshot,done,library,src/config/keyboard.rs;src/widget/export.rs;src/ui/top_toolbar/toolbar.rs,
 Chart,Keyboard shortcuts,Type to change symbol,done,host,src/widget/keyboard.rs,
 Chart,Keyboard shortcuts,Undo and redo,done,library,src/config/keyboard.rs;src/widget/keyboard.rs;src/widget/history.rs,
-Chart,Legend and data window,Data window panel,done,library,src/ui/widget_bar/panels/object_tree/data_window.rs;src/widget/readout.rs;src/scales/horizontal.rs;src/scales/time_formatter.rs;src/widget/frame/mod.rs;examples/demo/formatting.rs,1939
+Chart,Legend and data window,Data window panel,done,library,src/ui/widget_bar/panels/object_tree/data_window.rs;src/widget/readout.rs;src/scales/horizontal.rs;src/scales/time_formatter.rs;src/widget/frame/mod.rs;examples/demo/formatting.rs;terminal/src/drawings.rs,1939
 Chart,Legend and data window,Indicator entries in the legend,done,library,src/chart/rendering/legend/mod.rs;src/widget/pane/render/mod.rs;src/widget/pane/indicator/mod.rs;src/widget/pane/indicator/paint.rs;src/config/chart.rs;src/theme/presets.rs;src/studies/builtin/order_flow.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/widget/frame/mod.rs,
 Chart,Legend and data window,Legend buttons,done,library,src/chart/rendering/legend/mod.rs;src/chart/rendering/legend/study_controls.rs;src/widget/crosshair.rs;src/widget/pane/render/mod.rs,
 Chart,Legend and data window,Status line values follow the crosshair,done,library,src/chart/rendering/legend/mod.rs;src/widget/frame/mod.rs,
@@ -897,7 +897,7 @@ Terminal,Toolbars and panels,Chart settings button and applying the dialog,done,
 Terminal,Toolbars and panels,Chart type menu,done,library,src/ui/top_toolbar/toolbar.rs;src/ui/top_toolbar/components/chart_type_selector.rs,
 Terminal,Toolbars and panels,Compare / add symbol dialog,done,library,src/ui/dialogs/symbol_search/compare.rs;src/ui/dialogs/symbol_search/row.rs;src/ui/dialogs/symbol_search/service.rs;terminal/src/compare.rs;src/widget/series/options.rs;src/widget/studies_data.rs,
 Terminal,Toolbars and panels,Custom intervals,done,library,src/ui/top_toolbar/components/timeframe_selector/mod.rs;src/ui/top_toolbar/toolbar.rs;src/model/timeframe.rs;src/model/session/exchange.rs;terminal/src/time.rs,
-Terminal,Toolbars and panels,Data window,done,library,src/ui/widget_bar/panels/object_tree/data_window.rs;src/scales/horizontal.rs;src/scales/time_formatter.rs;terminal/src/panels.rs;src/widget/frame/mod.rs,
+Terminal,Toolbars and panels,Data window,done,library,src/ui/widget_bar/panels/object_tree/data_window.rs;src/scales/horizontal.rs;src/scales/time_formatter.rs;terminal/src/panels.rs;src/widget/frame/mod.rs;terminal/src/drawings.rs,1939
 Terminal,Toolbars and panels,Demo showcase menu,done,library,examples/demo/commands.rs;examples/demo/controller.rs,1943
 Terminal,Toolbars and panels,Depth ladder for analysis without a trading account,missing,library,,
 Terminal,Toolbars and panels,Favourite drawing tools floating bar,partial,library,src/ui/drawing_toolbar/toolbar/mod.rs;src/ui/drawing_toolbar/toolbar/floating.rs;src/ui/drawing_toolbar/state.rs;src/ui/drawing_toolbar/utilities/favorites.rs;src/services/settings.rs;examples/demo/layouts.rs,
