@@ -367,9 +367,26 @@ impl Chart {
             self.timeframe,
             self.replay_time(),
         );
+        // Match the pane's shared price axis; study-only panes keep their own units.
+        let price_formatter = match pane {
+            None => self.series_price_formatter(super::SeriesId::MAIN),
+            Some(pane) => self
+                .pane_layout
+                .panes
+                .iter()
+                .find(|p| p.id == pane)
+                .and_then(|p| {
+                    p.members.iter().find(|id| {
+                        self.price_series
+                            .iter()
+                            .any(|item| item.id == **id && item.visible)
+                    })
+                })
+                .and_then(|id| self.series_price_formatter(*id)),
+        };
         // Render existing drawings against the chart's bars
         let view = ChartView {
-            price_formatter: self.value_formatters().price,
+            price_formatter,
             instrument: self.instrument(),
             bars: self.state.shown(),
             revision: self.state.revision(),
@@ -426,6 +443,138 @@ mod tests {
     use crate::widget::RightClickTarget;
     use crate::widget::test_frames::{chart, frame, shapes};
     use egui::{Color32, Context, Event, Key, Modifiers, PointerButton, Shape};
+
+    /// Drawings use raw prices from their pane's series, including changes and level labels.
+    #[test]
+    fn drawings_write_prices_with_the_formatter_of_their_series() {
+        use crate::drawings::FibonacciConfig;
+        use crate::scales::CustomPriceFormatter;
+        use crate::widget::SeriesId;
+        use std::sync::Arc;
+
+        let marked = |suffix: &'static str| {
+            Some(Arc::new(CustomPriceFormatter::new(move |price| {
+                format!("{price:.1}{suffix}")
+            })) as Arc<dyn crate::scales::PriceFormatter>)
+        };
+        let ctx = Context::default();
+        let mut chart = chart(&[90.0], &[110.0]);
+        use DrawingToolType::*;
+        for (id, (tool, anchors)) in [
+            (Measure, vec![(30.0, 100.0), (40.0, 95.0)]),
+            (Forecast, vec![(30.0, 100.0), (40.0, 105.0)]),
+            (
+                ProjectionTool,
+                vec![(30.0, 100.0), (40.0, 104.0), (50.0, 101.0)],
+            ),
+            (LongPos, vec![(30.0, 100.0), (40.0, 106.0)]),
+            (FibonacciRetracement, vec![(30.0, 90.0), (40.0, 110.0)]),
+            (Rect, vec![(30.0, 92.0), (40.0, 108.0)]),
+            (PriceLabel, vec![(30.0, 102.0)]),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut drawing = Drawing::new(id, tool);
+            drawing.chart_points = anchors
+                .into_iter()
+                .map(|(bar, price)| ChartPoint::new(bar, price))
+                .collect();
+            drawing.completed = true;
+            if tool == FibonacciRetracement {
+                drawing.fib_config = Some(FibonacciConfig {
+                    show_prices: Some(true),
+                    ..Default::default()
+                });
+            }
+            chart.drawings_mut().drawings.push(drawing);
+        }
+        chart.drawings_mut().select(5);
+        let texts = |chart: &mut crate::Chart, time| {
+            shapes(&ctx, chart, time, vec![])
+                .into_iter()
+                .filter_map(|shape| match shape {
+                    Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut failures = Vec::new();
+        if !texts(&mut chart, 0.0).iter().any(|text| text == "102.00") {
+            failures.push("built-in price label".to_owned());
+        }
+        chart.set_price_formatter(marked(" pts"));
+        let formatted = texts(&mut chart, 0.1);
+        // Hand values: 95-100=-5, 105-100=5, |104-100|=4, 101+4=105,
+        // target 106 and mirrored stop 94, midpoint 100, height 16 at 16/92*100 percent.
+        for expected in [
+            "-5.0 pts (-5.00%)",
+            "+5.0 pts (+5.00%)",
+            "4.0 pts (4.0%)",
+            "Target: 105.0 pts",
+            "Target: 106.0 pts (6.00%)",
+            "Stop: 94.0 pts (-6.00%)",
+            "(100.0 pts)",
+            "16.0 pts (17.39%)",
+            "102.0 pts",
+        ] {
+            if !formatted.iter().any(|text| text.contains(expected)) {
+                failures.push(format!("missing {expected}"));
+            }
+        }
+        assert!(chart.set_series_formatter(SeriesId::MAIN, marked(" main")));
+        let formatted = texts(&mut chart, 0.2);
+        if !formatted.iter().any(|text| text == "102.0 main")
+            || formatted.iter().any(|text| text == "102.0 pts")
+        {
+            failures.push("main series formatter overrides chart formatter".to_owned());
+        }
+        let series = chart.add_series(Default::default());
+        chart.set_data(series, chart.bars(SeriesId::MAIN).to_vec());
+        let pane = chart.add_pane();
+        assert!(chart.move_series_to_pane(series, pane));
+        assert!(chart.set_series_formatter(series, marked(" alt")));
+        let mut drawing = Drawing::new(7, PriceLabel);
+        drawing.chart_points = vec![ChartPoint::new(30.0, 102.0)];
+        drawing.completed = true;
+        drawing.pane = Some(series.0);
+        chart.drawings_mut().drawings.push(drawing);
+        let formatted = texts(&mut chart, 0.3);
+        for expected in ["102.0 main", "102.0 alt"] {
+            if !formatted.iter().any(|text| text == expected) {
+                failures.push(format!("missing {expected}"));
+            }
+        }
+        // A host may supply its own sign or put a currency before a negative number.
+        chart.set_series_formatter(SeriesId::MAIN, None);
+        for (prefix, change, expected) in [
+            (false, 5.0, "+5.0 pts (+5.00%)"),
+            (false, -5.0, "-5.0 pts (-5.00%)"),
+            (true, 5.0, "+USD 5.0 (+5.00%)"),
+            (true, -5.0, "USD -5.0 (-5.00%)"),
+        ] {
+            chart.set_price_formatter(Some(Arc::new(CustomPriceFormatter::new(move |price| {
+                if prefix {
+                    format!("USD {price:.1}")
+                } else {
+                    format!("{price:+.1} pts")
+                }
+            }))));
+            for drawing in &mut chart.drawings_mut().drawings[..2] {
+                drawing.chart_points[1].price = 100.0 + change;
+            }
+            let formatted = texts(&mut chart, 0.4);
+            assert_eq!(
+                formatted
+                    .iter()
+                    .filter(|text| text.starts_with(expected))
+                    .count(),
+                2,
+                "measurement and forecast must each show {expected}"
+            );
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
 
     /// Primary clicks place two anchors; secondary drags leave the preview and Escape cancels it.
     #[test]

@@ -543,15 +543,15 @@ impl Indicator for TradingSessions {
         &mut self,
         id: &str,
         value: crate::studies::InputValue,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), crate::studies::StudyError> {
         use crate::studies::InputValue;
         let schema = self
             .inputs()
             .into_iter()
             .find(|input| input.id == id)
-            .ok_or("unknown study input")?;
+            .ok_or_else(|| crate::studies::StudyError::UnknownInput(id.into()))?;
         if !schema.accepts(&value) {
-            return Err("study input is outside its accepted values");
+            return Err(crate::studies::StudyError::invalid_input(id));
         }
         let option = match id {
             "boxes" => Some(&mut self.boxes),
@@ -569,20 +569,26 @@ impl Indicator for TradingSessions {
             return Ok(());
         }
         // Every other id is `field [slot]`, as the schema lookup confirmed.
-        let (field, slot) = id.split_once(" [").ok_or("unknown study input")?;
+        let (field, slot) = id
+            .split_once(" [")
+            .ok_or_else(|| crate::studies::StudyError::UnknownInput(id.into()))?;
         let slot: usize = slot
             .trim_end_matches(']')
             .parse()
-            .map_err(|_| "unknown study input")?;
+            .map_err(|_| crate::studies::StudyError::UnknownInput(id.into()))?;
         match (field, value) {
             ("show", InputValue::Toggle(show)) => self.show[slot] = show,
             ("name", InputValue::Text(name)) => self.names[slot] = name,
             ("start", InputValue::Length(minutes)) => self.start[slot] = minutes,
             ("end", InputValue::Length(minutes)) => self.end[slot] = minutes,
             ("zone", InputValue::Text(name)) => {
-                self.zones[slot] = zone(&name).ok_or("unknown time zone")?;
+                self.zones[slot] =
+                    zone(&name).ok_or_else(|| crate::studies::StudyError::InvalidInput {
+                        id: id.into(),
+                        reason: "names no known time zone".into(),
+                    })?;
             }
-            _ => return Err("unknown study input"),
+            _ => return Err(crate::studies::StudyError::UnknownInput(id.into())),
         }
         self.calculate(&[]);
         Ok(())

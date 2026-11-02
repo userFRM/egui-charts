@@ -18,6 +18,8 @@ pub struct ExportFile {
     pub path: Option<PathBuf>,
     /// What to write.
     pub contents: ExportContents,
+    /// Whether the host should open the saved image in a viewer or browser tab.
+    pub open: bool,
 }
 
 /// The contents of an [`ExportFile`].
@@ -30,6 +32,7 @@ pub enum ExportContents {
     Text(String),
 }
 
+type Save = Box<dyn FnMut(ExportFile) -> Result<(), String>>;
 type Play = Box<dyn FnMut(&str, f32)>;
 
 /// What the host supplied. Each service is handed to the components that consume it.
@@ -45,7 +48,7 @@ pub(super) struct Services {
     pub(super) notifications: Option<Arc<dyn Notifications>>,
     pub(super) chats: Option<Arc<dyn Chats>>,
     pub(super) export_formats: &'static [ExportFormat],
-    pub(super) save: Option<Box<dyn FnMut(ExportFile)>>,
+    pub(super) save: Option<Save>,
     pub(super) sounds: Vec<String>,
     pub(super) play: Option<Play>,
 }

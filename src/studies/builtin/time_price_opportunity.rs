@@ -130,7 +130,7 @@ impl Indicator for TimePriceOpportunity {
             ))),
         ]
     }
-    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), &'static str> {
+    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), crate::studies::StudyError> {
         match (id, value) {
             ("period", InputValue::Length(minutes @ 1..=1440)) => {
                 self.config.period_minutes = minutes as u32
@@ -150,7 +150,7 @@ impl Indicator for TimePriceOpportunity {
             ("sessions", InputValue::Choice(choice @ 0..=1)) => {
                 self.config.latest_session_only = choice == 1
             }
-            _ => return Err("invalid TPO input"),
+            _ => return Err(crate::studies::StudyError::rejected(&self.inputs(), id)),
         }
         Ok(())
     }

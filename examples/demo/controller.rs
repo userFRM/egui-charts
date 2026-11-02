@@ -409,7 +409,7 @@ pub struct DemoApp {
     date_picker: DatePicker,
 
     // A finished host-run sample, independent of subsequent chart navigation.
-    strategy_report: egui_charts::ui::strategy_report::StrategyReportPanel,
+    strategy_report: egui_charts::ui::strategy_report::StrategyTester,
     live_strategy: Option<(egui_charts::strategies::Backtest, String)>,
     strategy_trade: Option<usize>,
     strategy_session: SessionType,
@@ -1126,9 +1126,11 @@ impl DemoApp {
             let result = self
                 .chart
                 .indicator_mut(edit.id)
-                .ok_or("Study was removed")
+                .ok_or_else(|| "Study was removed".to_owned())
                 .and_then(|study| {
-                    study.apply_settings(&edit.inputs, edit.settings)?;
+                    study
+                        .apply_settings(&edit.inputs, edit.settings)
+                        .map_err(|error| format!("Study settings not applied: {error}"))?;
                     Ok(study_input_summary(study))
                 });
             match result {
@@ -1315,7 +1317,7 @@ impl DemoApp {
     ) {
         match self.chart.export_svg(ctx, image) {
             Ok(svg) => self.write_export(save_path, "svg", svg.as_bytes()),
-            Err(error) => self.export_failed(save_path.is_some(), error),
+            Err(error) => self.export_failed(save_path.is_some(), error.to_string()),
         }
     }
 
@@ -3401,6 +3403,7 @@ impl DemoApp {
         let result = self
             .trading
             .export_png(&self.chart, ctx, &options)
+            .map_err(|error| error.to_string())
             .and_then(|png| match target {
                 ScreenshotTarget::File(path) => self.save_screenshot(&png, path),
                 ScreenshotTarget::NewTab => open_image(ctx, &png),

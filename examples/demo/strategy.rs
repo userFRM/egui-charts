@@ -1,12 +1,9 @@
 //! A host-run sample backtest and the report's navigation, signals and CSV delivery.
 
 use super::{Bar, DemoApp, LiveFeed, SeriesId, Timeframe, panel_frame};
-use egui_charts::model::{
-    Direction, OrderSide, Signal, SignalId, SignalShape, StrategyExit, StrategyReport,
-    StrategyTrade,
-};
+use egui_charts::model::{OrderSide, SignalId, StrategyExit, StrategyReport, StrategyTrade};
 use egui_charts::services::{Events, SignalEvent, Signals};
-use egui_charts::ui::strategy_report::StrategyReportAction;
+use egui_charts::ui::strategy_report::{StrategyReportAction, StrategyTesterAction};
 use std::sync::Arc;
 
 /// Buys two units every 40 bars, holds for 20 and pays one currency unit per fill.
@@ -78,6 +75,9 @@ impl DemoApp {
         let mut report = sample_backtest(&self.state.symbol, self.state.timeframe, source);
         report.currency = self.chart.instrument().and_then(|i| i.currency.clone());
         self.strategy_report.set_report(Some(report), source);
+        self.strategy_report
+            .select_strategy("Consecutive Up/Down")
+            .expect("built-in strategy");
         self.strategy_session = self.timeframe_toolbar.state.session_type;
         self.strategy_trade = None;
         self.refresh_strategy_signals();
@@ -95,6 +95,7 @@ impl DemoApp {
             .size_range(100.0..=(ui.available_height() * 0.7).max(100.0))
             .frame(panel_frame(bg))
             .show(ui, |ui| {
+                ui.take_available_space();
                 ui.horizontal_wrapped(|ui| {
                     clear = ui.button("Clear report").clicked();
                     if self.live_strategy.is_some() {
@@ -105,7 +106,13 @@ impl DemoApp {
                         self.start_live_strategy();
                     }
                 });
-                self.strategy_report.show(ui)
+                let bars = self.chart.bars(SeriesId::MAIN);
+                self.strategy_report.show(
+                    ui,
+                    &self.state.symbol,
+                    self.state.timeframe,
+                    &bars[..bars.len().saturating_sub(1)],
+                )
             })
             .inner;
         if clear {
@@ -114,7 +121,21 @@ impl DemoApp {
             self.strategy_trade = None;
             self.refresh_strategy_signals();
         } else {
-            self.handle_strategy_action(action);
+            for action in action {
+                match action {
+                    StrategyTesterAction::Report(action) => self.handle_strategy_action(action),
+                    StrategyTesterAction::Signals { .. } => {
+                        self.strategy_session = self.timeframe_toolbar.state.session_type;
+                        self.strategy_trade = None;
+                        self.refresh_strategy_signals();
+                    }
+                    StrategyTesterAction::RequestHistory(request) => {
+                        self.strategy_report.history_failed(&request,
+                            "The synthetic demo supplies chart history only. Clear the start date and disable lower-interval fills, or connect a host datafeed.");
+                    }
+                    _ => {}
+                }
+            }
         }
     }
 
@@ -211,39 +232,8 @@ impl Signals for ReportSignals {
         if self.report.symbol != symbol || self.report.timeframe != timeframe {
             return;
         }
-        for (index, trade) in self.report.trades.iter().enumerate() {
-            let (entry_direction, exit_direction) = match trade.side {
-                OrderSide::Buy => (Direction::Up, Direction::Down),
-                OrderSide::Sell => (Direction::Down, Direction::Up),
-            };
-            for (fill, time, price, direction) in std::iter::once((
-                "Entry",
-                trade.entry_time,
-                trade.entry_price,
-                entry_direction,
-            ))
-            .chain(
-                trade
-                    .exit
-                    .as_ref()
-                    .map(|exit| ("Exit", exit.time, exit.price, exit_direction)),
-            ) {
-                events.push(SignalEvent::Upsert(Signal {
-                    id: SignalId(format!("sample-backtest-{index}-{fill}")),
-                    shape: SignalShape::Marker {
-                        time,
-                        price: Some(price),
-                        direction,
-                    },
-                    category: "Sample backtest".into(),
-                    label: Some(format!("{fill} {}", index + 1)),
-                    tooltip: Some(format!(
-                        "{} · {fill} {} @ {price}",
-                        self.report.name,
-                        index + 1
-                    )),
-                }));
-            }
+        for signal in self.report.signals() {
+            events.push(SignalEvent::Upsert(signal));
         }
     }
 

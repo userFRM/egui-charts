@@ -8,8 +8,8 @@ use chrono::{DateTime, Utc};
 use super::{AlertEvent, Alerts, Events};
 use crate::data::{FeedError, MaybeSend, Reply};
 use crate::model::{
-    Alert, AlertComparison, AlertCondition, AlertFrequency, AlertId, AlertSource, AlertStatus, Bar,
-    Timeframe,
+    Alert, AlertChannelComparison, AlertComparison, AlertCondition, AlertFrequency, AlertId,
+    AlertSource, AlertStatus, Bar, Timeframe,
 };
 
 /// An [`Alerts`] service that keeps alerts in memory and evaluates them on the bars the host
@@ -51,6 +51,8 @@ use crate::model::{
 /// previous value strictly below the level and a current value at or above it, crossing down the
 /// reverse; a value that touches the level and stays there fires once. Moving by and volume
 /// above average read the bars before the evaluated one, as [`AlertCondition`] documents.
+/// Moving channels resolve the preceding bar again when a new bar arrives, so edits and
+/// skipped updates use that bar's current geometry. Within a bar they use the previous evaluation.
 ///
 /// *Frequency.* [`Once`](AlertFrequency::Once) fires on the first evaluation that holds and the
 /// alert becomes [`Triggered`](AlertStatus::Triggered); a watchlist alert fires once per member
@@ -131,7 +133,7 @@ struct Seen {
     minute: Option<DateTime<Utc>>,
     /// The bits of the close and volume, so that a value that is not a number equals itself.
     bar: (u64, u64),
-    rules: Vec<(Option<f64>, Option<f64>)>,
+    rules: Vec<[Option<f64>; 3]>,
 }
 
 impl Default for AlertEngine {
@@ -563,14 +565,6 @@ impl Alerts for AlertEngine {
     }
 }
 
-/// The other output a comparison tests against.
-fn partner(condition: &AlertCondition) -> Option<&AlertSource> {
-    match condition {
-        AlertCondition::Compare { other, .. } => Some(other),
-        _ => None,
-    }
-}
-
 /// Evaluates `alert` on the newest of `bars` of `subject`, updating what `run` remembers. Returns
 /// the bar it fired on and its message, if it did.
 fn evaluate<'a>(
@@ -617,10 +611,10 @@ fn evaluate<'a>(
         rules: rules
             .iter()
             .map(|(src, condition)| {
-                (
-                    source(src, index),
-                    partner(condition).and_then(|other| source(other, index)),
-                )
+                let [a, b] = condition
+                    .partners()
+                    .map(|other| other.and_then(|other| source(other, index)));
+                [source(src, index), a, b]
             })
             .collect(),
     };
@@ -629,22 +623,26 @@ fn evaluate<'a>(
     }
     let holds = seen.scheduled
         && rules.iter().enumerate().all(|(n, (src, condition))| {
-            let (current, other) = seen.rules[n];
+            let [current, a, b] = seen.rules[n];
             let previous = match &run.seen {
-                Some(last) => last.rules[n],
-                None => (
-                    index.checked_sub(1).and_then(|at| source(src, at)),
-                    partner(condition)
-                        .zip(index.checked_sub(1))
-                        .and_then(|(other, at)| source(other, at)),
-                ),
+                Some(last)
+                    if last.time == bar.time
+                        || !matches!(condition, AlertCondition::Channel { .. }) =>
+                {
+                    last.rules[n]
+                }
+                _ => {
+                    let previous = |src| index.checked_sub(1).and_then(|at| source(src, at));
+                    let [a, b] = condition.partners().map(|other| other.and_then(previous));
+                    [previous(src), a, b]
+                }
             };
             current.is_some_and(|current| {
                 condition_holds(
                     condition,
                     current,
                     previous,
-                    other,
+                    [a, b],
                     &bars[..=index],
                     |back| {
                         index
@@ -689,12 +687,12 @@ fn occurrence(frequency: AlertFrequency, bar: &Bar, now: DateTime<Utc>) -> DateT
 fn condition_holds(
     condition: &AlertCondition,
     value: f64,
-    previous: (Option<f64>, Option<f64>),
-    other: Option<f64>,
+    previous: [Option<f64>; 3],
+    other: [Option<f64>; 2],
     bars: &[Bar],
     lookback: impl Fn(u32) -> Option<f64>,
 ) -> bool {
-    let (previous, previous_other) = previous;
+    let [previous, previous_other, previous_second] = previous;
     match condition {
         AlertCondition::StrategyFills(_) => false,
         AlertCondition::Crossing(level) => compare(
@@ -735,8 +733,28 @@ fn condition_holds(
             bars: back,
         } => lookback(*back)
             .is_some_and(|p| p != 0.0 && reaches(100.0 * (value - p) / p.abs(), *percent)),
-        AlertCondition::Compare { comparison, .. } => {
-            other.is_some_and(|level| compare(*comparison, value, previous, level, previous_other))
+        AlertCondition::Compare { comparison, .. } => other[0]
+            .is_some_and(|level| compare(*comparison, value, previous, level, previous_other)),
+        AlertCondition::Channel { comparison, .. } => {
+            let inside = |value: f64, a: f64, b: f64| {
+                (a != b).then_some(value >= a.min(b) && value <= a.max(b))
+            };
+            let Some(current) = other[0]
+                .zip(other[1])
+                .and_then(|(a, b)| inside(value, a, b))
+            else {
+                return false;
+            };
+            let previous = previous
+                .zip(previous_other)
+                .zip(previous_second)
+                .and_then(|((value, a), b)| inside(value, a, b));
+            match comparison {
+                AlertChannelComparison::Entering => previous == Some(false) && current,
+                AlertChannelComparison::Exiting => previous == Some(true) && !current,
+                AlertChannelComparison::Inside => current,
+                AlertChannelComparison::Outside => !current,
+            }
         }
         AlertCondition::VolumeAboveAverage {
             multiplier,
@@ -1351,5 +1369,110 @@ mod tests {
         let restored =
             AlertEngine::new().with_alerts(vec![Alert::new("A", AlertCondition::Above(1.0)), kept]);
         assert_eq!(restored.alerts().len(), 2);
+    }
+
+    #[test]
+    fn moving_channels_resolve_both_boundaries_and_forget_missing_values() {
+        // Price stays at 105. Bounds rise 10/bar: [90,100], [100,110], [110,120].
+        let rising = |source: &AlertSource, at: usize| {
+            Some(
+                90.0 + at as f64 * 10.0
+                    + if *source == AlertSource::Drawing("d#1".into()) {
+                        10.0
+                    } else {
+                        0.0
+                    },
+            )
+        };
+        for (comparison, expected) in [
+            ("Entering", vec![1]),
+            ("Exiting", vec![2]),
+            ("Inside", vec![1]),
+            ("Outside", vec![0, 2]),
+        ] {
+            let condition: AlertCondition = serde_json::from_value(serde_json::json!({
+                "Channel": {"boundaries": [{"Drawing":"d"}, {"Drawing":"d#1"}], "comparison": comparison}
+            })).unwrap();
+            let watching = alert(condition, AlertFrequency::EveryTime);
+            assert_eq!(watching.sources().count(), 3);
+            let restored: Alert =
+                serde_json::from_str(&serde_json::to_string(&watching).unwrap()).unwrap();
+            let host = Host::new(vec![restored]);
+            host.events();
+            let bars: Vec<_> = (0..3).map(|i| bar(i, 105.0, 1.0)).collect();
+            let mut fired = Vec::new();
+            for i in 0..3 {
+                host.engine.update(
+                    "SYM",
+                    Timeframe::Min1,
+                    &bars[..=i],
+                    time(1000 + i as i64),
+                    rising,
+                );
+                if !host.fired().is_empty() {
+                    fired.push(i);
+                }
+            }
+            assert_eq!(fired, expected, "{comparison}");
+            // A same-bar edit moves both bounds, then one disappears. Recovery cannot invent a transition.
+            for (bounds, fires) in [
+                (
+                    [Some(100.0), Some(110.0)],
+                    comparison == "Entering" || comparison == "Inside",
+                ),
+                ([Some(100.0), None], false),
+                ([Some(200.0), Some(210.0)], comparison == "Outside"),
+                ([None, None], false),
+                ([Some(f64::NAN), Some(210.0)], false),
+                ([Some(105.0), Some(105.0)], false),
+                ([Some(110.0), Some(100.0)], comparison == "Inside"),
+            ] {
+                host.engine
+                    .update("SYM", Timeframe::Min1, &bars, time(1010), |source, _| {
+                        bounds[usize::from(*source == AlertSource::Drawing("d#1".into()))]
+                    });
+                assert_eq!(!host.fired().is_empty(), fires, "{comparison} {bounds:?}");
+            }
+            // A later bar uses the edited drawing at the preceding bar, even after skipped updates.
+            for (last, current) in [(0, 2), (1, 2)] {
+                let host = Host::new(vec![watching.clone()]);
+                host.events();
+                host.engine.update(
+                    "SYM",
+                    Timeframe::Min1,
+                    &bars[..=last],
+                    time(1020),
+                    |source, _| {
+                        Some(if *source == AlertSource::Drawing("d#1".into()) {
+                            210.0
+                        } else {
+                            200.0
+                        })
+                    },
+                );
+                host.fired();
+                host.engine.update(
+                    "SYM",
+                    Timeframe::Min1,
+                    &bars[..=current],
+                    time(1030),
+                    rising,
+                );
+                assert_eq!(
+                    !host.fired().is_empty(),
+                    comparison == "Exiting" || comparison == "Outside",
+                    "{comparison}: changed geometry after bar {last}",
+                );
+            }
+            // First evaluation on bar 1 must use bar 0's bounds, not bar 1's bounds twice.
+            let host = Host::new(host.engine.alerts());
+            host.events();
+            host.engine
+                .update("SYM", Timeframe::Min1, &bars[..2], time(1020), rising);
+            assert_eq!(
+                !host.fired().is_empty(),
+                comparison == "Entering" || comparison == "Inside"
+            );
+        }
     }
 }
