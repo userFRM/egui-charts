@@ -532,6 +532,7 @@ mod tests {
                 );
             }
 
+            show_charts(&mut app, &ctx);
             let layout = app.capture_layout().unwrap();
             app.top_toolbar.layout_menu.save("Unnamed 2", &layout);
             app.poll_storage(&ctx);
