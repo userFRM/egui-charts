@@ -395,7 +395,7 @@ Options,Options profile,"Option expiry selection: nearest, one listed expiry or 
 Options,Options profile,Call and put volume by strike,done,host,src/data/options_volume.rs;src/studies/builtin/options_volume_profile.rs
 Options,Options profile,Max pain from open interest,missing,host,
 Options,Options profile,Put/call ratios of volume and open interest,missing,host,
-Order flow,Order flow,"Depth heatmap, order book and volume bubble settings in the chart settings dialog",missing,library,
+Order flow,Order flow,"Depth heatmap, order book and volume bubble settings in the chart settings dialog",done,library,src/ui/dialogs/chart_settings/mod.rs;src/ui/dialogs/chart_settings/tabs/order_flow.rs;src/ui/top_toolbar/components/settings_menu/types.rs;src/widget/settings/data.rs;src/widget/settings/apply.rs;src/widget/feed/mod.rs
 Order flow,Order flow,"Footprints on tick, volume, range and delta intervals",missing,library,
 Order flow,Order flow,"Prior-session POC, VAH and VAL extended until revisited, and developing value area lines",missing,library,
 Order flow,Order flow,Anchored developing VWAP drawing tool,done,library,src/drawings/rendering/trading/volume_profile.rs;src/drawings/rendering/mod.rs
