@@ -32,8 +32,6 @@
 //! `drawings`. Toolbars and dialogs in `ui` are separate components placed and
 //! connected by the host.
 
-#[cfg(feature = "drawings")]
-use crate::chart::cursor_modes::CursorModeState;
 use crate::chart::rendering::ChartMapping;
 use crate::chart::selection::SelectionState;
 use crate::chart::series::SeriesSettings;
@@ -44,6 +42,8 @@ use crate::drawings::DrawingManager;
 use crate::model::Timeframe;
 use crate::model::{ChartType, ChartTypeParams};
 use crate::studies::ChartState;
+#[cfg(feature = "drawings")]
+use crate::widget::tool_interaction::cursor_modes::CursorModeState;
 
 pub use crate::chart::rendering::{
     Legend, LegendStatus, QuoteSide, StudyAction, StudyValue, ValueFormatters, Watermark,
@@ -60,7 +60,7 @@ pub use pane::{IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneInt
 use std::collections::BTreeMap;
 
 // Re-export from logic layer
-use crate::chart::state;
+use pan_zoom::state;
 
 mod accessibility;
 #[cfg(feature = "drawings")]

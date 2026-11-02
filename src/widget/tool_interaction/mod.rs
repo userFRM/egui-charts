@@ -10,18 +10,19 @@
 //! - `interaction` - Active drawing tool interaction handling
 //! - `selection` - Drawing selection, manipulation, eraser
 
+pub(super) mod cursor_modes;
 mod interaction;
 mod selection;
 mod text;
 
 pub(super) use selection::render_eraser_highlight as render_pane_eraser_highlight;
 
-use crate::chart::cursor_modes::CursorModeState;
 use crate::drawings::DrawingInteractionMode;
 use crate::drawings::DrawingManager;
 use crate::drawings::rendering::ChartView;
 use crate::scales::PriceMap;
 use crate::widget::Chart;
+use crate::widget::tool_interaction::cursor_modes::CursorModeState;
 use egui::{Painter, Pos2, Rect, Response, Ui};
 
 impl Chart {

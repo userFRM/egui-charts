@@ -1,8 +1,8 @@
 //! Box zoom selection rendering
 
-use crate::chart::state::BoxZoomState;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
+use crate::widget::BoxZoomState;
 use egui::{Color32, FontId, Painter, Pos2, Rect, Stroke, Vec2};
 
 /// Renders the selection rectangle while dragging in box zoom mode.

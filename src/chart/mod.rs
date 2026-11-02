@@ -12,12 +12,9 @@ pub(crate) mod selection;
 pub mod series;
 
 // Internal engine modules: used within the crate but not part of the public API.
-#[cfg(feature = "drawings")]
-pub(crate) mod cursor_modes;
 pub(crate) mod hit_test;
 pub(crate) mod indicators;
 pub(crate) mod rendering;
-pub(crate) mod state;
 
 // Axis composition for hosts that allocate their own pane and input regions.
 #[cfg(feature = "icons")]
