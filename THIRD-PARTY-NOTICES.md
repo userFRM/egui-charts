@@ -100,6 +100,8 @@ The source is `web/split/Roboto[wdth,wght].ttf` in `Roboto_v3.015.zip` (SHA-256 
 
 The library embeds Roboto. The web demo under `examples/demo` also enables egui's `default_fonts` feature through `eframe`, so its WebAssembly module contains egui's default fonts: Hack Regular (MIT License and Bitstream Vera License), Ubuntu Light (Ubuntu Font Licence 1.0) and egui-icons, a five-glyph subset of emoji-icon-font (MIT License). The demo also enables egui's `monochrome_emoji_fonts` feature for the drawing bar's icon and emoji menu, which adds Noto Emoji Regular (SIL Open Font License 1.1) and the full emoji-icon-font (MIT License). Their notices and licences are in [`examples/demo/LICENSE-fonts.txt`](examples/demo/LICENSE-fonts.txt). The demo's build publishes that file and the Lucide licence next to the demo page.
 
+The guide examples under `examples/docs` embed Roboto and the same default fonts. Their build also publishes `LICENSE-fonts.txt` next to the example page at `/egui-charts/docs/examples/widget/`.
+
 ## Root certificates in the native demo
 
 The native demo's HTTP image loader includes Mozilla's root certificates through `webpki-roots` 1.0.11. This certificate data is licensed under the Community Data License Agreement - Permissive 2.0; the full text is in [`examples/demo/LICENSE-webpki-roots.txt`](examples/demo/LICENSE-webpki-roots.txt).

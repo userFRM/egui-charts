@@ -754,6 +754,8 @@ impl Chart {
         }
 
         if self.state.data().is_empty() {
+            self.last_hover_bar_idx = None;
+            self.last_crosshair = None;
             self.pump_marks(ui.ctx());
             painter.text(
                 rect.center(),
@@ -2649,7 +2651,8 @@ impl Chart {
             .or_else(|| {
                 ui.input(|input| input.pointer.hover_pos())
                     .filter(|pos| hover_rect.contains(*pos) && ui.rect_contains_pointer(hover_rect))
-            });
+            })
+            .and_then(|pos| self.crosshair_position(pos, &coords));
         let mut study_action = None;
         let mut series_action = None;
         let mut legend_bottom = price_rect.top() + 8.0;
@@ -2865,6 +2868,11 @@ impl Chart {
             self.paint_targets(ui, &coords, legend_bottom + 4.0, lines);
         }
 
+        if self.chart_options.time_scale.ignore_whitespace_indices
+            || self.chart_options.time_scale.ignore_hidden_indices
+        {
+            self.last_crosshair = None;
+        }
         if let Some(hover_pos) = hover_pos {
             // Cache the hover bar index for multi-chart sync
             self.last_hover_bar_idx = coords
@@ -3085,7 +3093,23 @@ impl Chart {
 
             // Render synced crosshair from other charts (if available)
             {
-                if !menu_open && let Some(bar_idx) = self.synced_crosshair_bar_idx {
+                if !menu_open
+                    && let Some(bar_idx) = self.synced_crosshair_bar_idx.and_then(|index| {
+                        let options = &self.chart_options.time_scale;
+                        if !options.ignore_whitespace_indices && !options.ignore_hidden_indices {
+                            return Some(index);
+                        }
+                        self.crosshair_position(
+                            Pos2::new(
+                                coords.idx_to_x(index.floor() as usize)
+                                    + index.fract() as f32 * coords.bar_spacing,
+                                price_rect.center().y,
+                            ),
+                            &coords,
+                        )
+                        .map(|pos| coords.x_to_idx_f64(pos.x))
+                    })
+                {
                     // Convert bar index to screen x coordinate
                     let x = coords.idx_to_x(bar_idx.round() as usize);
                     if coords.is_x_visible(x) {

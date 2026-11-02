@@ -366,10 +366,10 @@ impl ConfiguredStudy {
         }
     }
     /// Whether the study can be calculated on another interval: it reads one source, or the bars
-    /// alone, without data of its own to request or the chart's trades.
+    /// alone, without data of its own to request or order flow it cannot do without.
     fn runs_on_other_bars(&self) -> bool {
         self.study.source().is_some()
-            || (self.study.data_requests().is_empty() && self.study.order_flow_inputs().is_empty())
+            || (self.study.data_requests().is_empty() && !self.study.needs_order_flow())
     }
     fn update_price(&mut self, data: &[Bar], from: usize) {
         self.aligned = None;
@@ -626,6 +626,9 @@ impl Indicator for ConfiguredStudy {
     }
     fn order_flow_inputs(&self) -> &[crate::data::OrderFlowInput] {
         self.study.order_flow_inputs()
+    }
+    fn needs_order_flow(&self) -> bool {
+        self.study.needs_order_flow()
     }
 
     fn calculate(&mut self, data: &[Bar]) {
