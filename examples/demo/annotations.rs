@@ -290,7 +290,10 @@ impl DemoApp {
                 let mut changed = ui.checkbox(&mut enabled, "Live change markers").changed();
                 let mut seconds = changes.duration.as_secs_f32();
                 changed |= ui
-                    .add(egui::Slider::new(&mut seconds, 0.2..=20.0).text("Duration (seconds)"))
+                    .add_enabled(
+                        enabled,
+                        egui::Slider::new(&mut seconds, 0.2..=20.0).text("Duration (seconds)"),
+                    )
                     .changed();
                 if changed {
                     changes.duration = std::time::Duration::from_secs_f32(seconds);
