@@ -207,17 +207,10 @@ impl FootprintBar {
 
     /// (bid, ask) dominance at `level`, comparing horizontally or to the adjacent price.
     /// Missing adjacent prices and the outer diagonals do not signal an imbalance.
-    /// A positive side against a zero opposite side is imbalanced. Ratios below 1 or
-    /// non-finite ratios produce no signals.
-    pub fn imbalance(&self, level: i64, ratio: f64, diagonal: bool) -> (bool, bool) {
-        self.imbalance_with_min_volume(level, ratio, diagonal, 0.0)
-    }
-
-    /// (bid, ask) dominance as in [`imbalance`](Self::imbalance), requiring at least
-    /// `min_volume` on the dominant side, in instrument volume units after row grouping.
-    /// Equality includes the same rounding tolerance as the ratio threshold. Zero preserves
-    /// the unfiltered result; negative or non-finite minima produce no signals.
-    pub fn imbalance_with_min_volume(
+    /// A positive side against a zero opposite side is imbalanced. The dominant side needs at
+    /// least `min_volume`, inclusive and with the ratio's rounding tolerance; zero keeps every
+    /// ratio signal. Ratios below 1, negative minima or non-finite values produce no signals.
+    pub fn imbalance(
         &self,
         level: i64,
         ratio: f64,
@@ -638,8 +631,8 @@ mod tests {
         assert_eq!(bar.poc(), Some(401));
         // POC 8, choose upper neighbour 7 over lower 5, then lower 5: 20 >= 16.8.
         assert_eq!(bar.value_area(0.7), Some((400, 402)));
-        assert_eq!(bar.imbalance(401, 1.5, true), (false, true));
-        assert_eq!(bar.imbalance(403, 1.5, true), (false, true));
+        assert_eq!(bar.imbalance(401, 1.5, true, 0.0), (false, true));
+        assert_eq!(bar.imbalance(403, 1.5, true, 0.0), (false, true));
         assert_eq!(bar.delta_percent(), Some(7.0 / 24.0 * 100.0));
         let snapshot = flow.bars().clone();
         for trade in [

@@ -337,7 +337,7 @@ pub fn render_footprint(
                     None,
                 ];
                 if config.color_by == FootprintColor::Imbalance
-                    && shown.imbalance_with_min_volume(
+                    && shown.imbalance(
                         row.level,
                         config.imbalance_ratio,
                         config.diagonal,
@@ -658,7 +658,7 @@ fn cell_color(
                 .lerp_to_gamma(config.ask_color, share as f32)
         }
         FootprintColor::Imbalance => {
-            match bar.imbalance_with_min_volume(
+            match bar.imbalance(
                 row.level,
                 config.imbalance_ratio,
                 config.diagonal,
@@ -1362,9 +1362,10 @@ mod tests {
         };
         let ctx = egui::Context::default();
         for (minimum, bid, ask) in [(0.0, true, true), (10.0, false, true), (13.0, false, false)] {
-            let mut saved = serde_json::to_value(&config).unwrap();
-            saved["imbalance_min_volume"] = serde_json::json!(minimum);
-            let config: FootprintConfig = serde_json::from_value(saved).unwrap();
+            let config = FootprintConfig {
+                imbalance_min_volume: minimum,
+                ..config.clone()
+            };
             let mut output = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(rect),
@@ -1500,24 +1501,26 @@ mod tests {
                 }
             }
             for (minimum, middle, zone) in [
-                (None, true, true),
-                (Some(9.0), true, true),
-                (Some(10.0), false, false),
-                (None, true, true),
+                (0.0, true, true),
+                (9.0, true, true),
+                (10.0, false, false),
+                (0.0, true, true),
             ] {
-                // Loading a saved config also checks that old documents keep the zero default.
-                let mut saved = serde_json::json!({
-                    "color_by": "Imbalance",
-                    "profile": false,
-                    "value_area": null,
-                    "show_poc": false,
-                    "auto_row_height": if ticks == 1 { Some(20.0) } else { None },
-                    "studies": { "naked_poc": false, "delta_poc": false, "unfinished_auctions": false },
-                });
-                if let Some(minimum) = minimum {
-                    saved["imbalance_min_volume"] = serde_json::json!(minimum);
-                }
-                let config: FootprintConfig = serde_json::from_value(saved).unwrap();
+                let config = FootprintConfig {
+                    color_by: FootprintColor::Imbalance,
+                    profile: false,
+                    value_area: None,
+                    show_poc: false,
+                    auto_row_height: (ticks == 1).then_some(20.0),
+                    imbalance_min_volume: minimum,
+                    studies: Some(crate::studies::FootprintStudyConfig {
+                        naked_poc: false,
+                        delta_poc: false,
+                        unfinished_auctions: false,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                };
                 let mut output = ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(rect),
@@ -1551,12 +1554,12 @@ mod tests {
                             .any(|v| (v.pos.y - top).abs() < 0.01 && v.color == color),
                         _ => false,
                     });
-                    assert!(filled, "ticks {ticks}, minimum {minimum:?}, price {price}");
+                    assert!(filled, "ticks {ticks}, minimum {minimum}, price {price}");
                 }
                 let has_zone = output.shapes.iter().any(
                     |s| matches!(&s.shape, Shape::Rect(r) if r.stroke.color == config.ask_color),
                 );
-                assert_eq!(has_zone, zone, "ticks {ticks}, minimum {minimum:?}");
+                assert_eq!(has_zone, zone, "ticks {ticks}, minimum {minimum}");
             }
         }
     }

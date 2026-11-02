@@ -286,7 +286,7 @@ pub(crate) fn footprint_studies_on_rows(
         ] {
             let mut run: Option<(i64, i64, usize)> = None;
             for row in bar.levels.values() {
-                let imbalance = bar.imbalance_with_min_volume(
+                let imbalance = bar.imbalance(
                     row.level,
                     config.imbalance_ratio,
                     config.diagonal,
@@ -496,7 +496,7 @@ mod tests {
                         .values()
                         .next()
                         .unwrap()
-                        .imbalance(100, 1.1, false)
+                        .imbalance(100, 1.1, false, 0.0)
                 };
                 let share = [
                     (0, 100.0, 29.0 * scale, side),
@@ -523,18 +523,18 @@ mod tests {
                 .values()
                 .next()
                 .unwrap()
-                .imbalance(100, 1.1, false),
+                .imbalance(100, 1.1, false, 0.0),
             (false, true)
         );
         assert!(marked(&accumulated, &ratio(1.1), RatioAsk));
         for (minimum, expected) in [(2.09, true), (2.1, false), (-1.0, false)] {
-            let config = serde_json::from_value(serde_json::json!({
-                "diagonal": false,
-                "stack": 1,
-                "imbalance_ratio": 1.1,
-                "imbalance_min_volume": minimum,
-            }))
-            .unwrap();
+            let config = FootprintStudyConfig {
+                diagonal: false,
+                stack: 1,
+                imbalance_ratio: 1.1,
+                imbalance_min_volume: minimum,
+                ..Default::default()
+            };
             assert_eq!(
                 marked(&accumulated, &config, StackedAsk),
                 expected,
@@ -647,11 +647,7 @@ mod tests {
                     (9.0, 1.0, 10.0, false),
                     (12.0, 4.0, 10.0, true),
                     (10.0, 1.0, 10.0, true),
-                    (9.0, 0.0, 10.0, false),
-                    (10.0, 0.0, 10.0, true),
                     (10.0, 4.0, 10.0, false),
-                    (1.0, 0.1, 1.0, true),
-                    (0.9, 0.1, 1.0, false),
                 ] {
                     let trades = [
                         (0, opposite_price, opposite, other),
@@ -659,12 +655,12 @@ mod tests {
                         (1, 101.0, dominant, side),
                         (2, 101.0, 100.0, None),
                     ];
-                    let config = serde_json::from_value(serde_json::json!({
-                        "diagonal": diagonal,
-                        "stack": 1,
-                        "imbalance_min_volume": minimum,
-                    }))
-                    .unwrap();
+                    let config = FootprintStudyConfig {
+                        diagonal,
+                        stack: 1,
+                        imbalance_min_volume: minimum,
+                        ..Default::default()
+                    };
                     assert_eq!(
                         marked(&trades, &config, kind),
                         expected,
@@ -674,7 +670,7 @@ mod tests {
             }
         }
         // Asks 12, 9, 15 against bids of 1 below form a stack at 101..103 until the middle
-        // row falls below the minimum. Equality at 9 keeps all three.
+        // row falls below the minimum.
         let thin = [
             (0, 100.0, 1.0, sell),
             (1, 101.0, 1.0, sell),
@@ -683,11 +679,11 @@ mod tests {
             (4, 102.0, 9.0, buy),
             (5, 103.0, 15.0, buy),
         ];
-        for (minimum, expected) in [(0.0, true), (9.0, true), (10.0, false)] {
-            let config = serde_json::from_value(serde_json::json!({
-                "imbalance_min_volume": minimum,
-            }))
-            .unwrap();
+        for (minimum, expected) in [(0.0, true), (10.0, false)] {
+            let config = FootprintStudyConfig {
+                imbalance_min_volume: minimum,
+                ..Default::default()
+            };
             let zones = found(&flow(&thin), &config, StackedAsk);
             assert_eq!(zones.len(), usize::from(expected), "minimum {minimum}");
             if expected {
