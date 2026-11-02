@@ -454,7 +454,7 @@ Order flow,Order flow,Options gamma exposure suite,partial,host,;src/data/option
 Order flow,Order flow,"Order book, heatmap and order-level replay",done,library,src/data/replay.rs;src/data/recording.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/widget/replay.rs;src/widget/feed/mod.rs;src/widget/feed/pump.rs,
 Order flow,Order flow,Minimum traded volume for imbalances and stacked imbalance zones,missing,library,,
 Order flow,Order flow,Order-flow entries offered only for symbols whose feed supplies their data,missing,host,,
-Order flow,Order flow,Order-flow event alerts,done,host,src/services/detectors/alerts.rs;src/services/detectors/mod.rs;src/services/notifications.rs;src/ui/widget_bar/panels/order_flow.rs;src/ui/widget_bar/panels/time_and_sales.rs,1148;1149
+Order flow,Order flow,Order-flow event alerts,done,library,src/services/detectors/alerts.rs;src/services/detectors/mod.rs;src/services/notifications.rs;src/ui/widget_bar/panels/order_flow.rs;src/ui/widget_bar/panels/time_and_sales.rs,1148;1149
 Order flow,Order flow,Order-level trade classification,partial,library,src/data/trades.rs;src/data/orders.rs;src/model/quote.rs;src/widget/feed/mod.rs,
 Order flow,Order flow,Passive wall detection,done,library,src/services/detectors/liquidity.rs;src/services/detectors/depth.rs;src/services/detectors/mod.rs;src/model/signal.rs;src/widget/signals.rs,
 Order flow,Order flow,Per-bar delta and volume heatmap strip,done,library,src/chart/overlays/heatmap_strip.rs,
