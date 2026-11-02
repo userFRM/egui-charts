@@ -306,7 +306,9 @@ impl Chart {
 mod tests {
     use crate::chart::series::SeriesSettings;
     use crate::scales::PriceScaleMode;
-    use crate::widget::test_frames::{chart, frame, shapes};
+    #[cfg(feature = "timezones")]
+    use crate::widget::test_frames::chart;
+    use crate::widget::test_frames::{frame, shapes};
     use egui::{Event, Pos2, Shape};
 
     #[cfg(feature = "timezones")]
