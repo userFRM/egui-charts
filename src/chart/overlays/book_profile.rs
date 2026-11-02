@@ -195,12 +195,19 @@ pub fn render_book_profile(
     let layer = egui::LayerId::new(parent.order, parent.id.with("book_profile_readout"));
     ctx.set_sublayer(parent, layer);
     let painter = painter.clone().with_layer_id(layer);
-    let label = |text: String, bottom: f32, right: f32| {
-        let galley = painter.layout_no_wrap(text, FontId::proportional(11.0), theme.ui.text);
+    let label = |text: String, bottom: f32| {
+        let left = painter.clip_rect().left() + 4.0;
+        let right = (mapping.rect.right() - 64.0).min(painter.clip_rect().right() - 4.0);
+        let galley = painter.layout(
+            text,
+            FontId::proportional(11.0),
+            theme.ui.text,
+            (right - left - 12.0).max(1.0),
+        );
         let size = galley.size() + vec2(12.0, 8.0);
         let at = pos2(
-            (right - size.x).max(mapping.rect.left() + 4.0),
-            (bottom - size.y).max(mapping.rect.top() + 4.0),
+            (right - size.x).max(left),
+            (bottom - size.y).max(painter.clip_rect().top() + 4.0),
         );
         let rect = Rect::from_min_size(at, size);
         painter.rect_filled(rect, 3.0, theme.ui.panel_bg_floating);
@@ -213,11 +220,7 @@ pub fn render_book_profile(
         painter.galley(at + vec2(6.0, 4.0), galley, theme.ui.text);
         rect
     };
-    let key_rect = label(
-        key,
-        mapping.rect.bottom() - 4.0,
-        mapping.rect.right() - 64.0,
-    );
+    let key_rect = label(key, painter.clip_rect().bottom() - 4.0);
     if let Some((price, bid, size)) = hovered {
         let text = crate::localization::format_text(
             ctx,
@@ -236,7 +239,6 @@ pub fn render_book_profile(
         label(
             text,
             (mapping.price_to_y(price) - 4.0).min(key_rect.top() - 4.0),
-            mapping.rect.right() - 64.0,
         );
     }
     Ok(())
@@ -353,6 +355,7 @@ mod tests {
 
     /// The maximum includes offscreen levels and uses the same filtered measure as the bars;
     /// hover reads the whole strip, even where a small bar does not reach the pointer.
+    /// Captions fit beside the strip in narrow panes.
     #[test]
     fn readout_quantifies_the_full_book_and_the_hovered_row() {
         let time = "2026-01-05T10:00:00Z".parse().unwrap();
@@ -370,141 +373,163 @@ mod tests {
             )
             .unwrap();
         let book = queue.filtered("A", &OrderFilter::default()).unwrap();
-        let rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(800.0, 600.0));
-        let map = ChartMapping::new(
-            rect,
-            10.0,
-            0,
-            0,
-            0.0,
-            PriceMap::new(
-                PriceTransform::default(),
-                PriceRange::new(99.0, 102.0),
+        for width in [200.0, 800.0, 1440.0] {
+            let rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(width, 600.0));
+            let map = ChartMapping::new(
+                rect,
+                10.0,
+                0,
+                0,
                 0.0,
-                600.0,
-                false,
-            ),
-        );
-        for theme in [crate::theme::Theme::dark(), crate::theme::Theme::light()] {
-            for (profile, unit, orders, minimum, price, x, measure, size, side) in [
-                (
-                    BookProfile::Total,
-                    Some("lots"),
+                PriceMap::new(
+                    PriceTransform::default(),
+                    PriceRange::new(99.0, 102.0),
+                    0.0,
+                    600.0,
                     false,
-                    0.0,
-                    101.25,
-                    750.0,
-                    "Resting total",
-                    "1000",
-                    "Ask",
                 ),
-                (
-                    BookProfile::LargestOrder,
-                    Some("lots"),
-                    true,
-                    0.0,
-                    101.25,
-                    750.0,
-                    "Largest resting order",
-                    "600",
-                    "Ask",
-                ),
-                (
-                    BookProfile::Total,
-                    Some("lots"),
-                    true,
-                    500.0,
-                    101.25,
-                    750.0,
-                    "Resting total",
-                    "600",
-                    "Ask",
-                ),
-                (
-                    BookProfile::Total,
-                    None,
-                    false,
-                    0.0,
-                    99.75,
-                    750.0,
-                    "Resting total",
-                    "25.125",
-                    "Bid",
-                ),
-                (
-                    BookProfile::Total,
-                    Some("  "),
-                    false,
-                    0.0,
-                    101.25,
-                    750.0,
-                    "Resting total",
-                    "1000",
-                    "Ask",
-                ),
-                (
-                    BookProfile::Total,
-                    Some("lots"),
-                    false,
-                    0.0,
-                    101.25,
-                    700.0,
-                    "Resting total",
-                    "1000",
-                    "Ask",
-                ),
-            ] {
-                // Deserialize so the regression also compiles against views predating the unit.
-                let mut view: OrderBookView = serde_json::from_value(serde_json::json!({
-                    "quantity_unit": unit,
-                }))
-                .unwrap();
-                view.profile = profile;
-                view.filter.min_size = minimum;
-                let ctx = egui::Context::default();
-                crate::theme::apply_to_egui(&ctx, &theme);
-                let mut output = ctx.run_ui(
-                    egui::RawInput {
-                        screen_rect: Some(rect),
-                        events: vec![egui::Event::PointerMoved(pos2(x, map.price_to_y(price)))],
-                        ..Default::default()
-                    },
-                    |ui| {
-                        render_book_profile(
-                            ui.painter(),
-                            &map,
-                            Some(&book),
-                            orders.then_some(&queue),
-                            0.25,
-                            &view,
-                            [Color32::GREEN, Color32::RED],
-                        )
-                        .unwrap();
-                    },
-                );
-                output.textures_delta.clear();
-                let texts: Vec<_> = output
-                    .shapes
-                    .iter()
-                    .filter_map(|s| match &s.shape {
-                        Shape::Text(t) => Some(t.galley.text()),
-                        _ => None,
-                    })
-                    .collect();
-                let unit = unit
-                    .filter(|unit| !unit.trim().is_empty())
-                    .unwrap_or("feed units");
-                assert!(texts.contains(&format!("{measure} ({unit})\nFull width = 2000 {unit}\nAll supplied levels, after filtering").as_str()), "{texts:?}");
-                let hover = format!("{side} · Price {price}\n{measure}: {size} {unit}");
-                assert_eq!(texts.contains(&hover.as_str()), x >= 740.0, "{texts:?}");
-                // Hand calculation: a 1000-lot shelf against an offscreen 2000-lot max is
-                // 60 * 1000 / 2000 = 30 points, or 18 for the 600-lot measure.
-                if price == 101.25 {
-                    let width = 60.0 * size.parse::<f32>().unwrap() / 2000.0;
-                    assert!(output.shapes.iter().any(|s| matches!(&s.shape,
-                        Shape::Rect(r) if r.rect.contains(pos2(799.0, map.price_to_y(price)))
+            );
+            for theme in [crate::theme::Theme::dark(), crate::theme::Theme::light()] {
+                for (profile, unit, orders, minimum, price, from_right, measure, size, side) in [
+                    (
+                        BookProfile::Total,
+                        Some("lots"),
+                        false,
+                        0.0,
+                        101.25,
+                        50.0,
+                        "Resting total",
+                        "1000",
+                        "Ask",
+                    ),
+                    (
+                        BookProfile::LargestOrder,
+                        Some("lots"),
+                        true,
+                        0.0,
+                        101.25,
+                        50.0,
+                        "Largest resting order",
+                        "600",
+                        "Ask",
+                    ),
+                    (
+                        BookProfile::Total,
+                        Some("lots"),
+                        true,
+                        500.0,
+                        101.25,
+                        50.0,
+                        "Resting total",
+                        "600",
+                        "Ask",
+                    ),
+                    (
+                        BookProfile::Total,
+                        None,
+                        false,
+                        0.0,
+                        99.75,
+                        50.0,
+                        "Resting total",
+                        "25.125",
+                        "Bid",
+                    ),
+                    (
+                        BookProfile::Total,
+                        Some("  "),
+                        false,
+                        0.0,
+                        101.25,
+                        50.0,
+                        "Resting total",
+                        "1000",
+                        "Ask",
+                    ),
+                    (
+                        BookProfile::Total,
+                        Some("lots"),
+                        false,
+                        0.0,
+                        101.25,
+                        100.0,
+                        "Resting total",
+                        "1000",
+                        "Ask",
+                    ),
+                ] {
+                    // Deserialize so the regression also compiles against views predating the unit.
+                    let mut view: OrderBookView = serde_json::from_value(serde_json::json!({
+                        "quantity_unit": unit,
+                    }))
+                    .unwrap();
+                    view.profile = profile;
+                    view.filter.min_size = minimum;
+                    let ctx = egui::Context::default();
+                    crate::theme::apply_to_egui(&ctx, &theme);
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(rect),
+                            events: vec![egui::Event::PointerMoved(pos2(
+                                width - from_right,
+                                map.price_to_y(price),
+                            ))],
+                            ..Default::default()
+                        },
+                        |ui| {
+                            render_book_profile(
+                                ui.painter(),
+                                &map,
+                                Some(&book),
+                                orders.then_some(&queue),
+                                0.25,
+                                &view,
+                                [Color32::GREEN, Color32::RED],
+                            )
+                            .unwrap();
+                        },
+                    );
+                    output.textures_delta.clear();
+                    for clipped in &output.shapes {
+                        if let Shape::Text(text) = &clipped.shape {
+                            let bounds = text.visual_bounding_rect();
+                            assert!(
+                                clipped.clip_rect.contains_rect(bounds),
+                                "clipped readout: {bounds:?}"
+                            );
+                            assert!(
+                                bounds.right() <= rect.right() - 64.0,
+                                "readout overlaps the strip: {bounds:?}"
+                            );
+                        }
+                    }
+                    let texts: Vec<_> = output
+                        .shapes
+                        .iter()
+                        .filter_map(|s| match &s.shape {
+                            Shape::Text(t) => Some(t.galley.text()),
+                            _ => None,
+                        })
+                        .collect();
+                    let unit = unit
+                        .filter(|unit| !unit.trim().is_empty())
+                        .unwrap_or("feed units");
+                    assert!(texts.contains(&format!("{measure} ({unit})\nFull width = 2000 {unit}\nAll supplied levels, after filtering").as_str()), "{texts:?}");
+                    let hover = format!("{side} · Price {price}\n{measure}: {size} {unit}");
+                    assert_eq!(
+                        texts.contains(&hover.as_str()),
+                        from_right <= 60.0,
+                        "{texts:?}"
+                    );
+                    // Hand calculation: a 1000-lot shelf against an offscreen 2000-lot max is
+                    // 60 * 1000 / 2000 = 30 points, or 18 for the 600-lot measure.
+                    if price == 101.25 {
+                        let width = 60.0 * size.parse::<f32>().unwrap() / 2000.0;
+                        assert!(output.shapes.iter().any(|s| matches!(&s.shape,
+                        Shape::Rect(r) if r.rect.contains(pos2(rect.right() - 1.0, map.price_to_y(price)))
                             && (r.rect.width() - width).abs() < 0.001
                     )));
+                    }
                 }
             }
         }
