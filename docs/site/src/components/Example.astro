@@ -96,7 +96,6 @@ const src = `/egui-charts/docs/examples/widget/?scene=${encodeURIComponent(scene
       }
       update();
     });
-    frame.addEventListener('error', failed);
     button.addEventListener('click', start);
     if (example.dataset.run === 'manual') {
       message.textContent = 'Run this example when you are ready to explore.';
