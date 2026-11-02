@@ -1681,6 +1681,7 @@ impl DemoApp {
 
     pub(crate) fn handle_top_toolbar(&mut self, ctx: &egui::Context, action: TopToolbarAction) {
         match action {
+            TopToolbarAction::None => return,
             TopToolbarAction::Host(id) => {
                 if id == "copy-symbol" {
                     ctx.copy_text(self.chart.symbol().to_string());
@@ -1871,6 +1872,7 @@ impl DemoApp {
 
     pub(crate) fn handle_drawing_toolbar(&mut self, action: DrawingToolbarAction) {
         match action {
+            DrawingToolbarAction::None => return,
             DrawingToolbarAction::ZoomIn => {
                 self.chart
                     .set_zoom_mode(self.drawing_toolbar.state.zoom_mode_active);
