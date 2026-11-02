@@ -681,9 +681,9 @@ mod tests {
                 let first = chart.index_to_x(0.0).unwrap();
                 let spacing = chart.get_time_scale_state().0;
                 let expected_x = |key: f64| first + ((key - keys[0]) / unit) as f32 * spacing;
-                for &key in *keys {
+                let tick_x = |key: f64| {
                     let label = scale.format_crosshair(key_time(key).unwrap(), 0);
-                    let tick = painted.iter().find_map(|shape| match shape {
+                    let x = painted.iter().find_map(|shape| match shape {
                         egui::Shape::Text(text)
                             if text.galley.text() == label && text.pos.y >= plot.bottom() =>
                         {
@@ -691,6 +691,10 @@ mod tests {
                         }
                         _ => None,
                     });
+                    (label, x)
+                };
+                for &key in *keys {
+                    let (label, tick) = tick_x(key);
                     if let Some(x) = tick {
                         assert_close(x.into(), expected_x(key).into(), "numeric tick position");
                     } else if keys[0] == 100.0 && keys.len() == 3 {
@@ -699,19 +703,8 @@ mod tests {
                 }
                 if keys[0] == 100.0 && keys.len() == 3 {
                     for key in [90.0, 150.0] {
-                        let label = scale.format_crosshair(key_time(key).unwrap(), 0);
-                        let x = painted
-                            .iter()
-                            .find_map(|shape| match shape {
-                                egui::Shape::Text(text)
-                                    if text.galley.text() == label
-                                        && text.pos.y >= plot.bottom() =>
-                                {
-                                    Some(text.pos.x + text.galley.size().x / 2.0)
-                                }
-                                _ => None,
-                            })
-                            .unwrap_or_else(|| panic!("numeric whitespace tick {label}"));
+                        let (label, x) = tick_x(key);
+                        let x = x.unwrap_or_else(|| panic!("numeric whitespace tick {label}"));
                         assert_close(
                             x.into(),
                             expected_x(key).into(),
