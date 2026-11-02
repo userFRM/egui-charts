@@ -47,6 +47,17 @@ pub struct ChartView<'a> {
     /// [`Chart::set_price_formatter`](crate::Chart::set_price_formatter). Drawing prices and
     /// price changes use its `format`; `None` keeps their built-in decimals.
     pub price_formatter: Option<&'a dyn crate::scales::PriceFormatter>,
+    /// The chart's time formatter, which writes times in its display time zone with its
+    /// locale, date format, clock visibility and the host's
+    /// [`TimeFormatter`](crate::scales::TimeFormatter). Drawings write the dates they print with
+    /// its [`format_crosshair`](crate::scales::TimeFormatter::format_crosshair) and
+    /// [`bar_seconds`](Self::bar_seconds), as the crosshair time label does; `None` keeps their
+    /// built-in UTC dates. Custom renderers can use it the same way.
+    pub time_formatter: Option<&'a dyn crate::scales::TimeFormatter>,
+    /// The bar duration in seconds that the chart passes to `time_formatter`'s
+    /// `format_crosshair` for the crosshair time label, which sets how much of the clock a
+    /// date shows. Unused without `time_formatter`.
+    pub bar_seconds: i64,
     /// The series that drawing anchors index into.
     pub bars: &'a [Bar],
     /// [`ChartState::revision`](crate::studies::ChartState::revision) of `bars`.
@@ -809,6 +820,8 @@ mod tests {
                 let output = ctx.run_ui(RawInput::default(), |ui| {
                     let view = ChartView {
                         price_formatter: None,
+                        time_formatter: None,
+                        bar_seconds: 0,
                         instrument: None,
                         bars: &bars,
                         revision: 0,
@@ -1469,6 +1482,8 @@ mod tests {
         let output = ctx.run_ui(RawInput::default(), |ui| {
             let view = ChartView {
                 price_formatter: None,
+                time_formatter: None,
+                bar_seconds: 0,
                 instrument: None,
                 bars: if drawing.tool_type == DrawingToolType::RegressionTrend {
                     &bars
@@ -1742,6 +1757,8 @@ mod tests {
         let output = ctx.run_ui(RawInput::default(), |ui| {
             let view = ChartView {
                 price_formatter: None,
+                time_formatter: None,
+                bar_seconds: 0,
                 instrument: None,
                 bars: &[],
                 revision: 0,

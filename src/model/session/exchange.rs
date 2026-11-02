@@ -747,7 +747,7 @@ mod tests {
                 let providers = [
                     clock.sessions(),
                     #[cfg(feature = "widget")]
-                    crate::chart::renderers::exchange_session(
+                    crate::chart::rendering::exchange_session(
                         Some(&instrument),
                         None,
                         &crate::scales::TimezoneMode::Timezone(zone),

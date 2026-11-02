@@ -1265,7 +1265,7 @@ mod tests {
 #[cfg(all(test, feature = "widget"))]
 mod rendering_tests {
     use super::*;
-    use crate::chart::renderers::{ChartMapping, IndicatorRenderer, RenderContext};
+    use crate::chart::rendering::{ChartMapping, IndicatorRenderer, RenderContext};
     use crate::scales::{PriceMap, PriceRange, PriceTransform};
     use crate::{model::Bar, studies::Indicator};
 
@@ -1355,7 +1355,7 @@ mod rendering_tests {
             base_idx: 10,
             ..coords
         };
-        let mapping = crate::chart::renderers::study_mapping(&independent, &coords);
+        let mapping = crate::chart::rendering::study_mapping(&independent, &coords);
         assert!((mapping.price_to_y(12.0) - 200.0 / 12.0).abs() < 0.01);
         assert!((mapping.price_to_y(10.0) - 200.0 * 11.0 / 12.0).abs() < 0.01);
         assert!(

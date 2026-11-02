@@ -1,4 +1,4 @@
-use super::context::{BarRenderParams, RenderContext, StyleColors};
+use super::super::context::{BarRenderParams, RenderContext, StyleColors};
 use crate::model::{Bar, CandlesStyle};
 use crate::scales::PriceMap;
 use egui::{Pos2, Rect, Stroke, Vec2};

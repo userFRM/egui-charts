@@ -1,5 +1,5 @@
 use super::Chart;
-use crate::chart::renderers;
+use crate::chart::rendering;
 use crate::scales::TimeFormatterBuilder;
 
 impl Chart {
@@ -43,7 +43,7 @@ impl Chart {
         let now = self
             .chart_time()
             .or_else(|| self.quote.as_ref().map(|quote| quote.ts))?;
-        let session = renderers::exchange_session(
+        let session = rendering::exchange_session(
             self.instrument(),
             self.config.session_config.as_ref(),
             &self.display_timezone(),
@@ -155,8 +155,9 @@ impl Chart {
         builder.build()
     }
 
-    /// Names months and weekdays in time axis, crosshair and tooltip labels in `locale`'s
-    /// language, such as `"de-DE"` (see [`LocaleTimeFormatter`](crate::scales::LocaleTimeFormatter)).
+    /// Names months and weekdays in time axis, crosshair, tooltip and forecast date labels in
+    /// `locale`'s language, such as `"de-DE"` (see
+    /// [`LocaleTimeFormatter`](crate::scales::LocaleTimeFormatter)).
     /// `None` restores English names.
     ///
     /// The names need the `locales` cargo feature, on by default; without it they stay English.
@@ -164,16 +165,16 @@ impl Chart {
         self.locale = locale;
     }
 
-    /// Writes crosshair and tooltip dates with a `strftime` pattern, such as `"%d.%m.%Y"`, followed
-    /// by the clock for intraday bars. `None` restores the built-in dates, which an invalid pattern
-    /// also falls back to.
+    /// Writes crosshair, tooltip and forecast dates with a `strftime` pattern, such as
+    /// `"%d.%m.%Y"`, followed by the clock for intraday bars. `None` restores the built-in dates,
+    /// which an invalid pattern also falls back to.
     pub fn set_date_format(&mut self, date_format: Option<String>) {
         self.date_format = date_format;
     }
 
     /// Formats time axis marks with [`TimeFormatter::format`], which receives the
-    /// [`TickMarkType`](crate::scales::TickMarkType) of each mark, and crosshair, tooltip and
-    /// [`format_time`](Self::format_time) labels with [`TimeFormatter::format_crosshair`].
+    /// [`TickMarkType`](crate::scales::TickMarkType) of each mark, and crosshair, tooltip, forecast
+    /// date and [`format_time`](Self::format_time) labels with [`TimeFormatter::format_crosshair`].
     ///
     /// The formatter replaces the built-in one, the locale and the date format. It receives
     /// wall-clock times in the chart's time zone, and the time scale's
@@ -285,8 +286,8 @@ impl Chart {
             .map(|formatter| formatter.as_ref())
     }
 
-    pub(super) fn value_formatters(&self) -> renderers::ValueFormatters<'_> {
-        renderers::ValueFormatters {
+    pub(super) fn value_formatters(&self) -> rendering::ValueFormatters<'_> {
+        rendering::ValueFormatters {
             price: self.series_price_formatter(super::SeriesId::MAIN),
             volume: self.volume_formatter.as_deref(),
             percentage: self.percentage_formatter.as_deref(),

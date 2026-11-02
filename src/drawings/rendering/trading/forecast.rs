@@ -35,7 +35,12 @@ impl Drawing {
                     .and_then(|ms| view.bars.first()?.time.timestamp_millis().checked_add(ms))
                     .and_then(chrono::DateTime::from_timestamp_millis);
                 if let Some(time) = time {
-                    text.push_str(&format!("\n{}", time.format("%Y-%m-%d %H:%M")));
+                    let date = match view.time_formatter {
+                        Some(formatter) => formatter.format_crosshair(time, view.bar_seconds),
+                        None => time.format("%Y-%m-%d %H:%M").to_string(),
+                    };
+                    text.push('\n');
+                    text.push_str(&date);
                 }
             }
             text
@@ -221,6 +226,8 @@ mod tests {
                         ui.painter(),
                         &ChartView {
                             price_formatter: None,
+                            time_formatter: None,
+                            bar_seconds: 0,
                             instrument: Some(&instrument),
                             bars: &bars,
                             revision: 0,

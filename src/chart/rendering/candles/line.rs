@@ -9,7 +9,7 @@ use egui::{Color32, Painter, Pos2, Shape, Stroke};
 
 use super::helpers::valued_runs;
 use super::volume::render_volume_bars;
-use crate::chart::renderers::{RenderContext, StyleColors};
+use crate::chart::rendering::{RenderContext, StyleColors};
 use crate::model::{Bar, LinePlotStyle, LineType, PriceSource};
 
 pub(super) fn render_line(

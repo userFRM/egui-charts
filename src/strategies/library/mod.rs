@@ -18,8 +18,8 @@ type StrategyConstructor = Box<dyn Fn() -> Box<dyn Strategy> + Send + Sync>;
 /// Ten price-action strategies need only `strategies`; twelve more use the public study
 /// calculations when `studies` is enabled. Inputs are available through
 /// [`Strategy::study_inputs`] and edited through [`Strategy::set_input`]. Entry size and
-/// pyramiding come from [`super::BacktestSettings`]. Built-ins decide only at bar close,
-/// including when the engine also recalculates after fills.
+/// pyramiding come from [`super::BacktestSettings`]. Built-ins ignore fill callbacks and decide
+/// at bar close, or on forming-bar updates when tick recalculation is enabled.
 ///
 /// ```
 /// use egui_charts::strategies::StrategyFactory;

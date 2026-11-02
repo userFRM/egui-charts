@@ -42,7 +42,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Linear, logarithmic, percentage, indexed-to-100 and inverted price scales, autoscale, manual ranges and scale options.
 - [x] Time-axis tick hierarchy, price marks that default to the instrument tick grid with host overrides, exchange time zones, session breaks and extended-hours shading.
 - [x] Chart-wide time, price, percentage and volume formatters, plus per-series price formatters. Drawing prices and price changes use their pane's raw-price formatter, including measurements, forecasts, projections, position levels and rectangle heights.
-- [x] Locale-aware date names and configurable date patterns.
+- [x] Locale-aware date names and configurable date patterns. Forecast dates use the chart's display time zone and crosshair time formatter, including host formatting and clock visibility.
 - [x] Chart-owned panes share the time axis and support resizing, reordering, stretch sizing, collapse and maximise controls.
 - [x] Studies and added series can use separate panes and independent scales.
 - [x] Scale settings control currency and unit labels, scale-mode and price-action buttons, price-to-bar ratio, label overlap and symbol, study and extended-session value colours.
@@ -193,6 +193,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Account summary, positions, orders, history, executions, balance and journal tables, with CSV export.
 - [x] Execution markers, rejection/fill notifications and execution sound intents.
 - [x] `StrategyReportPanel` accepts `StrategyReport` data and shows trade lists, equity/drawdown plots, performance metrics, supplied properties and chart navigation; trades export as CSV.
+- [x] `Backtest::update` processes new closed bars incrementally, retains observed forming-bar fills when tick recalculation is enabled, and rebuilds corrected history.
 - [x] `StrategyTester` selects factory strategies, reuses the study input editor, edits account and execution settings, requests history from the host and displays runs with labelled fill signals. Edits mark the report stale.
 - [x] Parameter optimisation previews bounded numeric grids, yields between execution batches, sorts trial results and applies selected inputs on native and web builds.
 - [x] `StrategyFactory` lists and creates built-in and host strategies with editable study inputs, defaults and bounds.
@@ -206,10 +207,11 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 
 - [x] Typed `Alert` conditions model price crossings/comparisons, moves over a bar span, study plots, supported drawing levels, watchlists and multiple conditions.
 - [x] Shared creation/editing dialog validates conditions, name, message, frequency and expiry; presets use storage.
-- [x] Toolbar, context-menu, price-scale and keyboard entry points, plus draggable chart alert levels.
+- [x] The terminal wires toolbar, context-menu, price-scale and configurable keyboard entry points, plus draggable chart alert levels. Alert display, toast duration and host sound playback follow the Alerts settings tab.
+- [x] Strategy-run fill alerts carry execution prices and position messages, suppress repeated fill batches and run on the demo live feed.
 - [x] `AlertsPanel` uses `services::Alerts` to list, edit, pause/enable and remove alerts, and to show supplied trigger events in toasts and an exportable log.
-- [ ] Add user-controlled sorting and cloning to the alerts panel.
-- [ ] Offer inline creation and series-level alert settings alongside the shared dialog.
+- [x] The alerts panel sorts by name, symbol and status, and stages copies in the shared editor.
+- [x] Inline creation and series-level alert visibility, labels and colour work alongside the shared dialog.
 - [x] Drawing alerts follow fork, pitchfan and regression lines on linear and logarithmic scales, with entry, exit, inside and outside conditions resolving both moving boundaries.
 - [ ] Model persistent inside/outside-channel conditions and once-per-minute frequency.
 - [ ] Expose message placeholder and per-alert notification-schedule configuration for host processing.

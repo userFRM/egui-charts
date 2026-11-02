@@ -120,6 +120,8 @@ struct Run {
     fired: Option<DateTime<Utc>>,
     /// A watchlist alert with frequency once has fired on this symbol.
     done: bool,
+    #[cfg(feature = "strategies")]
+    last_fill: u64,
 }
 
 /// The inputs of one evaluation: the bar, its close and volume, and for each rule the value of
@@ -192,7 +194,10 @@ impl AlertEngine {
     pub fn subjects(&self, id: &AlertId) -> Vec<String> {
         let state = self.lock();
         let Some(alert) = state.alerts.iter().find(|alert| {
-            alert.id.as_ref() == Some(id) && alert.status == AlertStatus::Active && alert.is_valid()
+            alert.id.as_ref() == Some(id)
+                && alert.status == AlertStatus::Active
+                && alert.is_valid()
+                && !matches!(alert.condition, AlertCondition::StrategyFills(_))
         }) else {
             return Vec::new();
         };
@@ -277,6 +282,7 @@ impl AlertEngine {
         for alert in alerts.iter_mut().filter(|alert| {
             alert.status == AlertStatus::Active
                 && alert.is_valid()
+                && !matches!(alert.condition, AlertCondition::StrategyFills(_))
                 && id.is_none_or(|id| alert.id.as_ref() == Some(id))
         }) {
             let Some(id) = alert.id.clone() else { continue };
@@ -342,6 +348,123 @@ impl AlertEngine {
         }
     }
 
+    /// Delivers each new fill of `run` to matching strategy-fill alerts. Use a unique run id
+    /// for each `Backtest` instance, retained for its lifetime, and forward its update batches.
+    /// Repeated batches are ignored by sequence, including after edits or rearming an alert
+    /// on the same run and when multiple fills share a timestamp.
+    /// `now` gates expiry and notification schedules; event times are the source fill times.
+    /// Empty messages use the execution side, quantity, price and resulting signed position.
+    /// Custom messages expand the usual placeholders using a flat bar at the fill price, with
+    /// its source time and zero volume. Strategy-fill alerts need no price-reader subscription.
+    /// Delivery callbacks run after unlocking, as they do for price alerts.
+    #[cfg(feature = "strategies")]
+    pub fn strategy_fills(
+        &self,
+        run: &str,
+        symbol: &str,
+        timeframe: Timeframe,
+        fills: &[crate::strategies::StrategyFill],
+        now: DateTime<Utc>,
+    ) {
+        let mut fired = Vec::new();
+        let mut state = self.lock();
+        state.expire(now);
+        let State {
+            alerts,
+            runs,
+            events,
+            watchlists,
+            ..
+        } = &mut *state;
+        for alert in alerts.iter_mut().filter(|alert| {
+            alert.status == AlertStatus::Active
+                && alert.is_valid()
+                && matches!(&alert.condition, AlertCondition::StrategyFills(id) if id == run)
+                && alert.timeframe.is_none_or(|own| own == timeframe)
+                && match &alert.watchlist {
+                    Some(list) => watchlists
+                        .get(list)
+                        .is_some_and(|members| members.iter().any(|member| member == symbol)),
+                    None => alert.symbol == symbol,
+                }
+        }) {
+            let Some(id) = alert.id.clone() else { continue };
+            if alert.timeframe.is_none() {
+                alert.timeframe = Some(timeframe);
+                if let Some(events) = events {
+                    events.push(AlertEvent::Upsert(alert.clone()));
+                }
+            }
+            let seen = runs.entry((id.clone(), symbol.to_owned())).or_default();
+            for fill in fills {
+                if fill.sequence <= seen.last_fill
+                    || !fill.price.is_finite()
+                    || !fill.quantity.is_finite()
+                    || fill.quantity <= 0.0
+                    || !fill.position.is_finite()
+                {
+                    continue;
+                }
+                seen.last_fill = fill.sequence;
+                if seen.done
+                    || alert
+                        .schedule
+                        .as_ref()
+                        .is_some_and(|schedule| !schedule.allows(now))
+                {
+                    continue;
+                }
+                if alert.frequency == AlertFrequency::Once {
+                    seen.done = true;
+                    if alert.watchlist.is_none() {
+                        alert.status = AlertStatus::Triggered;
+                    }
+                    if let Some(events) = events {
+                        events.push(AlertEvent::Upsert(alert.clone()));
+                    }
+                }
+                let side = match fill.side {
+                    crate::model::OrderSide::Buy => "Buy",
+                    crate::model::OrderSide::Sell => "Sell",
+                };
+                let mut price = fill.price.to_string();
+                match price.split_once('.') {
+                    None => price.push_str(".00"),
+                    Some((_, fraction)) if fraction.len() == 1 => price.push('0'),
+                    _ => {}
+                }
+                let message = if alert.message.is_empty() {
+                    format!(
+                        "{side} {} at {price}, position {}",
+                        fill.quantity, fill.position
+                    )
+                } else {
+                    let bar = Bar::new(
+                        fill.time, fill.price, fill.price, fill.price, fill.price, 0.0,
+                    );
+                    alert.expand_message(symbol, timeframe, &bar, |_| Some(fill.price))
+                };
+                let event = AlertEvent::TriggeredForSymbol {
+                    id: id.clone(),
+                    symbol: symbol.to_owned(),
+                    time: fill.time,
+                    price: Some(fill.price),
+                    message,
+                };
+                if let Some(events) = events {
+                    events.push(event.clone());
+                }
+                fired.push((alert.clone(), event));
+            }
+        }
+        drop(state);
+        if let Some(deliver) = &self.deliver {
+            for (alert, event) in &fired {
+                deliver.deliver(alert, event);
+            }
+        }
+    }
+
     /// Marks the alerts whose expiry has passed as expired, without waiting for data. Call it
     /// at least once a second.
     pub fn tick(&self, now: DateTime<Utc>) {
@@ -362,7 +485,21 @@ impl State {
                 }
             }
         }
-        self.runs.retain(|(id, _), _| Some(id) != alert.id.as_ref());
+        let same_strategy = matches!(alert.condition, AlertCondition::StrategyFills(_))
+            && self
+                .alerts
+                .iter()
+                .any(|old| old.id == alert.id && old.condition == alert.condition);
+        self.runs.retain(|(id, _), run| {
+            if Some(id) != alert.id.as_ref() {
+                return true;
+            }
+            if same_strategy {
+                // Editing or rearming a run must not replay its executions.
+                run.done = false;
+            }
+            same_strategy
+        });
         match self.alerts.iter_mut().find(|a| a.id == alert.id) {
             Some(kept) => *kept = alert.clone(),
             None => self.alerts.push(alert.clone()),
@@ -385,7 +522,9 @@ impl State {
             expired.push(alert.clone());
         }
         for alert in expired {
-            self.runs.retain(|(id, _), _| Some(id) != alert.id.as_ref());
+            if !matches!(alert.condition, AlertCondition::StrategyFills(_)) {
+                self.runs.retain(|(id, _), _| Some(id) != alert.id.as_ref());
+            }
             self.push(AlertEvent::Upsert(alert));
         }
     }
@@ -555,6 +694,7 @@ fn condition_holds(
 ) -> bool {
     let [previous, previous_other, previous_second] = previous;
     match condition {
+        AlertCondition::StrategyFills(_) => false,
         AlertCondition::Crossing(level) => compare(
             AlertComparison::Crossing,
             value,

@@ -1,7 +1,7 @@
 //! Crosshair snapping and study legend actions shared by the chart panes.
 
 use super::{Chart, ChartElementId, PaneId, RightClickTarget, SeriesId};
-use crate::chart::renderers::{ChartMapping, SeriesAction, StudyAction, study_mapping};
+use crate::chart::rendering::{ChartMapping, SeriesAction, StudyAction, study_mapping};
 use crate::config::CrosshairMode;
 use crate::scales::PriceMap;
 use crate::studies::Indicator;

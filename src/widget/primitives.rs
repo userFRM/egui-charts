@@ -214,7 +214,7 @@ impl Chart {
                 && study.is_overlay()
                 && (!study.is_volume()
                     || matches!(study.scale(), crate::studies::StudyScale::Shared(_))))
-            .then(|| crate::chart::renderers::study_mapping(study.as_ref(), coords))?
+            .then(|| crate::chart::rendering::study_mapping(study.as_ref(), coords))?
         };
         Some(self.primitive_view(series, mapping))
     }
