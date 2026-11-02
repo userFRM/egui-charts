@@ -5074,7 +5074,8 @@ mod tests {
                             .iter()
                             .find_map(|shape| match &shape.shape {
                                 egui::Shape::Circle(circle)
-                                    if circle.fill == egui::Color32::from_rgb(255, 152, 0) =>
+                                    if circle.fill == egui::Color32::from_rgb(255, 152, 0)
+                                        && shape.clip_rect.contains(circle.center) =>
                                 {
                                     Some(circle.center)
                                 }
