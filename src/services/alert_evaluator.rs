@@ -96,7 +96,9 @@ impl Evaluation {
                     .ok_or_else(|| format!("Unknown alert study: {}", saved.name))?;
                 let mut study = ConfiguredStudy::new(study);
                 for (id, value) in &saved.inputs {
-                    study.set_input(id, value.clone()).map_err(str::to_owned)?;
+                    study
+                        .set_input(id, value.clone())
+                        .map_err(|error| error.to_string())?;
                 }
                 study.set_timeframe(alert.timeframe.unwrap_or_default());
                 Ok::<_, String>((id, Box::new(study) as Box<dyn Indicator>))
@@ -425,7 +427,7 @@ impl AlertEvaluator {
                                         .and_then(|instrument| instrument.time_zone.as_ref()),
                                 )?;
                                 drawing
-                                    .alert_levels(index, scale)
+                                    .alert_levels_with_bars(index, scale, data.bars)
                                     .into_iter()
                                     .find(|(index, ..)| *index == level)
                                     .map(|(.., value)| value)

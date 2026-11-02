@@ -182,10 +182,7 @@ impl Alert {
                     .map(|rule| (&rule.source, &rule.condition)),
             )
             .flat_map(|(source, condition)| {
-                std::iter::once(source).chain(match condition {
-                    AlertCondition::Compare { other, .. } => Some(other),
-                    _ => None,
-                })
+                std::iter::once(source).chain(condition.partners().into_iter().flatten())
             })
     }
 
@@ -332,6 +329,17 @@ pub enum AlertCondition {
         /// The required relationship between the outputs.
         comparison: AlertComparison,
     },
+    /// Test against two boundaries resolved on each evaluated bar. The boundaries may change
+    /// order; their minimum and maximum define the inclusive channel. Missing, non-finite or
+    /// coincident boundaries cannot satisfy the condition. On a new bar, transitions resolve the
+    /// source and both boundaries at the preceding bar again. Within a bar they compare with the
+    /// previous evaluation, just as a crossing does.
+    Channel {
+        /// Stable sources of the two boundary lines, retained through drawing edits and storage.
+        boundaries: [AlertSource; 2],
+        /// State or transition to test.
+        comparison: AlertChannelComparison,
+    },
     /// Current volume exceeds `multiplier` times the mean of the preceding `bars` completed volumes.
     VolumeAboveAverage {
         /// Positive, finite multiple of the preceding mean volume.
@@ -375,6 +383,30 @@ pub enum AlertComparison {
     Below,
 }
 
+/// Relationship of a value to two inclusive, independently resolved boundaries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AlertChannelComparison {
+    /// Previously outside, currently inside.
+    Entering,
+    /// Previously inside, currently outside.
+    Exiting,
+    /// Currently inside, regardless of the previous value.
+    Inside,
+    /// Currently outside, regardless of the previous value.
+    Outside,
+}
+
+impl std::fmt::Display for AlertChannelComparison {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Entering => "Entering channel",
+            Self::Exiting => "Exiting channel",
+            Self::Inside => "Inside channel",
+            Self::Outside => "Outside channel",
+        })
+    }
+}
+
 /// One additional condition of an alert; all rules must hold on the same bar.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AlertRule {
@@ -394,6 +426,17 @@ impl AlertSource {
 }
 
 impl AlertCondition {
+    /// Other sources required on the same bar, in boundary order for a channel.
+    pub(crate) fn partners(&self) -> [Option<&AlertSource>; 2] {
+        match self {
+            Self::Compare { other, .. } => [Some(other), None],
+            Self::Channel {
+                boundaries: [a, b], ..
+            } => [Some(a), Some(b)],
+            _ => [None, None],
+        }
+    }
+
     /// Whether the condition has finite, ordered levels and a nonzero lookback.
     pub fn is_valid(&self) -> bool {
         match self {
@@ -413,6 +456,9 @@ impl AlertCondition {
                 percent.is_finite() && *percent != 0.0 && *bars > 0
             }
             Self::Compare { other, .. } => other.is_valid(),
+            Self::Channel {
+                boundaries: [a, b], ..
+            } => a != b && a.is_valid() && b.is_valid(),
             Self::VolumeAboveAverage { multiplier, bars } => {
                 multiplier.is_finite() && *multiplier > 0.0 && *bars > 0
             }
@@ -449,6 +495,7 @@ impl std::fmt::Display for AlertCondition {
                 write!(f, "Moving by {percent}% over {bars} bars")
             }
             Self::Compare { comparison, .. } => write!(f, "{} another output", comparison),
+            Self::Channel { comparison, .. } => write!(f, "{comparison}"),
             Self::VolumeAboveAverage { multiplier, bars } => write!(
                 f,
                 "Volume above {multiplier} times the preceding {bars}-bar mean"

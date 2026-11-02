@@ -1026,7 +1026,8 @@ impl ChartBuilder {
     pub fn build_restored(
         mut self,
         snapshot: &super::ChartSnapshot,
-    ) -> Result<(Chart, Vec<crate::drawings::persistence::SkippedDrawing>), String> {
+    ) -> Result<(Chart, Vec<crate::drawings::persistence::SkippedDrawing>), super::RestoreError>
+    {
         let factory = self.study_factory.take().unwrap_or_default();
         let mut chart = self.build();
         let skipped = chart.restore_with(snapshot, &factory)?;
