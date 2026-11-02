@@ -196,12 +196,17 @@ impl Drawing {
         };
         let amount =
             |price: f64| money((price - entry_price).abs()).map(|amount| format!("{amount:.2}"));
-        let mut target_level = String::with_capacity(32);
-        let _ = write!(
-            target_level,
-            "{target_price:.2} ({:.2}%)",
-            pct(target_price)
-        );
+        let level_text = |price: f64| {
+            let mut level = String::with_capacity(32);
+            let _ = match view.price_formatter {
+                Some(formatter) => {
+                    write!(level, "{} ({:.2}%)", formatter.format(price), pct(price))
+                }
+                None => write!(level, "{price:.2} ({:.2}%)", pct(price)),
+            };
+            level
+        };
+        let target_level = level_text(target_price);
         let target_label = match amount(target_price) {
             Some(amount) => l10n::format_text(
                 ctx,
@@ -213,8 +218,7 @@ impl Drawing {
             ),
             None => l10n::format_text(ctx, "Target: {level}", &[("level", target_level.as_str())]),
         };
-        let mut stop_level = String::with_capacity(32);
-        let _ = write!(stop_level, "{stop_price:.2} ({:.2}%)", pct(stop_price));
+        let stop_level = level_text(stop_price);
         let stop_label = match amount(stop_price) {
             Some(amount) => l10n::format_text(
                 ctx,

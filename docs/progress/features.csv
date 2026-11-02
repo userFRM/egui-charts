@@ -82,7 +82,7 @@ Builder API,Widget API and customization,Context menu customisation,done,library
 Builder API,Widget API and customization,Create and edit drawings from code,done,library,src/widget/drawing_api.rs;src/widget/anchors.rs;src/drawings/manager/mod.rs;src/widget/mod.rs;src/drawings/manager/edit.rs,
 Builder API,Widget API and customization,Create and remove studies,done,library,src/widget/series/mod.rs;src/widget/studies.rs;src/studies/settings.rs;src/widget/pane/mod.rs,
 Builder API,Widget API and customization,Custom date and time formatters,done,library,src/widget/frame.rs;src/scales/time_formatter.rs,
-Builder API,Widget API and customization,Custom price formatter,done,library,src/widget/frame.rs,
+Builder API,Widget API and customization,Custom price formatter,done,library,src/widget/frame.rs;src/widget/tool_interaction/mod.rs;src/drawings/rendering/mod.rs,
 Builder API,Widget API and customization,Export chart data,done,library,src/widget/export.rs;src/model/bar/io.rs,
 Builder API,Widget API and customization,Hide or show the main series,done,library,src/widget/series/mod.rs;src/widget/frame.rs;src/widget/marks.rs,
 Builder API,Widget API and customization,Locale-aware date formatting,done,library,src/widget/frame.rs;src/scales/time_formatter.rs;Cargo.toml,
@@ -810,7 +810,7 @@ Studies,Strategy tester,Limit and stop orders,done,library,src/strategies/backte
 Studies,Strategy tester,List of trades,done,library,src/model/strategy.rs;src/ui/strategy_report/mod.rs,
 Studies,Strategy tester,"Long and short positions, margin and leverage",done,library,src/strategies/backtest.rs;docs/strategy-report.md,1152
 Studies,Strategy tester,Order fill model,done,library,src/strategies/backtest.rs;src/strategies/mod.rs;src/model/trading.rs;docs/strategy-report.md,1153
-Studies,Strategy tester,Parameter optimisation,missing,library,,1156
+Studies,Strategy tester,Parameter optimisation,done,library,src/strategies/optimize.rs;src/strategies/mod.rs;src/strategies/backtest.rs;src/model/strategy.rs,1156
 Studies,Strategy tester,Performance summary,done,library,src/model/strategy.rs;src/ui/strategy_report/mod.rs,
 Studies,Strategy tester,Position sizing,done,library,src/strategies/backtest.rs;src/strategies/mod.rs;docs/strategy-report.md,1152
 Studies,Strategy tester,Pyramiding limit,done,library,src/strategies/backtest.rs;src/strategies/mod.rs;docs/strategy-report.md,1152

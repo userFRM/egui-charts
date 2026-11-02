@@ -1,4 +1,5 @@
 ---
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
 import { areas, counts, features, percentage, slug } from '../../lib/progress';
 
 const repo = 'https://github.com/userFRM/egui-charts/blob/main';
@@ -13,28 +14,11 @@ const tables = areas.map((area) => {
   return { area, groups, ...counts(rows), share: percentage(rows) };
 });
 ---
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>egui-charts progress</title>
-<style is:inline>
-  :root{color-scheme:light dark;background:#fff;color:#1f2328}
-  body{font-family:sans-serif;max-width:1000px;margin:auto;padding:16px;line-height:1.5}
-  a{color:#0969da}img{max-width:100%;height:auto}
-  table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
-  th,td{border:1px solid #8c959f;padding:4px 8px;text-align:left}
-  td,th+th{text-align:right}tbody th{font-weight:normal}tfoot{font-weight:bold}
-  .table{overflow-x:auto}details{margin-top:8px}summary{cursor:pointer}
-  li{overflow-wrap:anywhere}section{margin-top:32px}
-  @media(prefers-color-scheme:dark){:root{background:#0d1117;color:#f0f6fc}a{color:#58a6ff}}
-  @media(max-width:480px){table{font-size:12px}th,td{padding:4px}}
-</style>
-</head>
-<body>
-<h1>Progress</h1>
-<img src="progress.svg" alt="progress">
+<StarlightPage
+  frontmatter={{ title: 'Progress', description: 'Feature status and remaining gaps in egui-charts.', editUrl: false }}
+  headings={areas.map((area) => ({ depth: 2, slug: slug(area), text: area }))}
+>
+<img src="progress.svg" alt="Feature map grouped by area: green is done, yellow is partial and grey is missing.">
 <p>Generated from <a href={`${repo}/docs/progress/features.csv`}>docs/progress/features.csv</a> by <a href={`${repo}/docs/site/src/lib/progress-svg.ts`}>docs/site/src/lib/progress-svg.ts</a> on every push to <code>main</code>.</p>
 <p>In the map, green features are done, yellow ones partial and grey ones missing. A feature is done when its whole behaviour works; partial and missing features count as not done. A host feature is done when the library provides its interface and UI; the application supplies the data, account or storage behind it. <a href={`${repo}/CONTRIBUTING.md#feature-status`}>Counting rules</a>.</p>
 {tables.map((table) => (
@@ -55,5 +39,14 @@ const tables = areas.map((area) => {
     ))}
   </section>
 ))}
-</body>
-</html>
+</StarlightPage>
+
+<style>
+  img{max-width:100%;height:auto}
+  table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
+  .table th,.table td{border:1px solid var(--sl-color-gray-5);padding:4px 8px;text-align:left}
+  .table td,.table th+th{text-align:right}tbody th{font-weight:normal}tfoot{font-weight:bold}
+  .table{overflow-x:auto}details{margin-top:8px}summary{cursor:pointer}
+  li{overflow-wrap:anywhere}section{margin-top:32px}
+  @media(max-width:480px){table{font-size:12px}.table th,.table td{padding:4px}}
+</style>
