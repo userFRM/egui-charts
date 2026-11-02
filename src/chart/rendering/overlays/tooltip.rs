@@ -1320,6 +1320,14 @@ mod tests {
                 magnifier_zoom: zoom,
                 ..Default::default()
             });
+            assert!(
+                shapes.iter().any(|shape| match &shape.shape {
+                    egui::Shape::Rect(body) => body.fill != egui::Color32::TRANSPARENT,
+                    egui::Shape::Path(body) => body.fill != egui::Color32::TRANSPARENT,
+                    _ => false,
+                }),
+                "a filled candle body in the lens"
+            );
             // Bar 40 is at 800 - (79 - 40 + 0.5) * 10 - 1 = 404.
             let wick_x = HOVER.x + 4.0 * zoom;
             let wick = shapes
