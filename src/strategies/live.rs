@@ -534,7 +534,8 @@ mod tests {
         }
         let delivered = Arc::new(Mutex::new(Vec::new()));
         let sink = delivered.clone();
-        let alert = Alert::new("SYM", AlertCondition::StrategyFills("run-1".into()));
+        let mut alert = Alert::new("SYM", AlertCondition::StrategyFills("run-1".into()));
+        alert.timeframe = Some(Timeframe::Min1);
         let alerts = AlertEngine::new()
             .with_alerts(vec![alert])
             .on_trigger(move |_, event| {
@@ -570,6 +571,11 @@ mod tests {
                 Timeframe::Hour1,
                 &fills,
                 bars[count - 1].time,
+            );
+            assert_eq!(
+                delivered.lock().unwrap().len(),
+                all.len(),
+                "other subjects do not notify"
             );
             alerts.strategy_fills(
                 "run-1",
