@@ -178,10 +178,10 @@ impl DemoApp {
                 changed |= ui
                     .add(egui::Slider::new(&mut marker.size, 0.5..=4.0).text("Size"))
                     .changed();
-                ui.label("Text");
-                changed |= ui
-                    .text_edit_singleline(marker.text.get_or_insert_with(String::new))
-                    .changed();
+                let label = ui.label("Text");
+                let text = ui.text_edit_singleline(marker.text.get_or_insert_with(String::new));
+                text.labelled_by(label.id);
+                changed |= text.changed();
                 changed |= ui.color_edit_button_srgba(&mut marker.color).changed();
                 if changed {
                     let mut markers = self.chart.markers(id).to_vec();

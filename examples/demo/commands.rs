@@ -417,11 +417,12 @@ mod tests {
     }
 
     #[test]
-    fn annotation_editor_removes_only_its_marker_and_keeps_other_price_lines() {
+    fn annotation_editor_owns_keyboard_input_and_preserves_other_annotations() {
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
         app.live.set_paused(true);
         app.execute_search_command(&ctx, "markers");
+        assert!(app.keyboard_dialog_open());
         frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
         frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
         let before =

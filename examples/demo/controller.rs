@@ -3298,6 +3298,7 @@ impl DemoApp {
     fn keyboard_dialog_open(&self) -> bool {
         self.keyboard_shortcuts.is_open
             || self.data_table.is_open
+            || self.annotation_editor
             || self.quick_search.is_open()
             || self.symbol_search.is_open()
             || self.compare_dialog.is_open
