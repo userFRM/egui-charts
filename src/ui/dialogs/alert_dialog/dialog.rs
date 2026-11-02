@@ -108,6 +108,10 @@ impl AlertDialog {
 
     /// Stage an existing alert, retaining its host identifier and status when saved.
     pub fn edit(&mut self, alert: Alert) {
+        if let Some(inputs) = &alert.inputs {
+            self.sources = inputs.sources.clone();
+        }
+
         self.expires = alert.expires.is_some();
         self.set_expiry_fields(alert.expires);
         self.set_schedule_fields(alert.schedule.as_deref());

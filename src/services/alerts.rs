@@ -113,7 +113,9 @@ pub trait Alerts: MaybeSend + 'static {
     /// triggers), or the stream lags on every call and no alert shows.
     fn watch(&self, events: Events<AlertEvent>);
 
-    /// Creates (`alert.id` is `None`) or replaces an alert. Answer `Ok` once the change is kept;
+    /// Creates (`alert.id` is `None`) or replaces an alert. Keep `alert.inputs` with the alert:
+    /// its independent study parameters and source view must survive copies and restoration.
+    /// Answer `Ok` once the change is kept;
     /// the alert appears when `watch` pushes it, so push the saved alert, with its id, as
     /// [`AlertEvent::Upsert`].
     fn save(&self, alert: Alert, reply: Reply<()>);

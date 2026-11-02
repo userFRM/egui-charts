@@ -37,6 +37,10 @@ pub struct Alert {
     /// fixed to one yet; `AlertEngine` fixes it to the first timeframe it evaluates the alert on.
     #[serde(default)]
     pub timeframe: Option<Timeframe>,
+    /// Independent creation inputs, retained through edits, copies and storage. Legacy alerts
+    /// without these inputs cannot recover a study from a chart-local identifier.
+    #[serde(default)]
+    pub inputs: Option<Box<AlertInputs>>,
     /// Value tested by the first condition.
     #[serde(default)]
     pub source: AlertSource,
@@ -64,6 +68,88 @@ pub struct Alert {
     pub status: AlertStatus,
 }
 
+/// The source view and study definitions captured when an alert is created. The alert's
+/// symbol and timeframe select its main series; auxiliary requests follow these saved studies.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AlertInputs {
+    /// Calendar zone; `None` follows the system's local calendar.
+    pub timezone: Option<TimezoneId>,
+    /// Exchange calendar of the creation symbol. Other symbols resolve their own calendars.
+    pub calendar: Option<AlertCalendar>,
+    /// Source choices shown when editing, independent of the currently displayed chart.
+    pub sources: Vec<(AlertSource, String)>,
+    /// Include extended trading sessions.
+    pub extended_hours: bool,
+    /// Host currency or unit conversion.
+    pub conversion: Option<String>,
+    /// Initial main-series history size when no start time was available.
+    pub count: usize,
+    /// Oldest main bar used at creation. Later evaluations retain this seed.
+    pub start: Option<DateTime<Utc>>,
+    /// Creation window for studies whose calculation depends on visible bars, inclusive.
+    pub visible: Option<(DateTime<Utc>, DateTime<Utc>)>,
+    /// Drawing levels interpolate logarithmically on a logarithmic source scale.
+    pub logarithmic: bool,
+    /// Independent calculation definitions, including study dependencies.
+    pub studies: Vec<AlertStudy>,
+}
+
+impl Default for AlertInputs {
+    fn default() -> Self {
+        Self {
+            timezone: Some(TimezoneId::utc()),
+            calendar: None,
+            sources: Vec::new(),
+            extended_hours: false,
+            conversion: None,
+            count: 1000,
+            start: None,
+            visible: None,
+            logarithmic: false,
+            studies: Vec::new(),
+        }
+    }
+}
+
+impl AlertInputs {
+    /// Offer newly available study sources during an explicit edit. Existing identifiers keep
+    /// their original definitions, including when another chart reuses an identifier.
+    pub fn add_sources_from(&mut self, other: &Self) {
+        for study in &other.studies {
+            if !self.studies.iter().any(|saved| saved.id == study.id) {
+                self.studies.push(study.clone());
+            }
+        }
+        for (source, name) in &other.sources {
+            if !self.sources.iter().any(|(saved, _)| saved == source) {
+                self.sources.push((source.clone(), name.clone()));
+            }
+        }
+    }
+}
+
+/// The creation symbol's exchange calendar, including an explicitly continuous session.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct AlertCalendar {
+    /// Symbol whose calendar was captured.
+    pub symbol: String,
+    /// Exchange zone, when supplied by the host.
+    pub timezone: Option<TimezoneId>,
+    /// Trading windows; `None` selects a continuous session.
+    pub session: Option<super::Session>,
+}
+
+/// Serializable calculation inputs of a study, without computed values or shared stream state.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AlertStudy {
+    /// Identifier used by the alert sources and by dependent studies.
+    pub id: usize,
+    /// Name resolved by the study factory.
+    pub name: String,
+    /// Typed parameters, including auxiliary symbols and intervals.
+    pub inputs: Vec<(String, super::InputValue)>,
+}
+
 impl Alert {
     /// An active alert on `symbol` with no id, frequency `Once`, no expiry and no message.
     pub fn new(symbol: impl Into<String>, condition: AlertCondition) -> Self {
@@ -74,6 +160,7 @@ impl Alert {
             name: String::new(),
             watchlist: None,
             timeframe: None,
+            inputs: None,
             source: AlertSource::Price,
             additional_conditions: Vec::new(),
             frequency: AlertFrequency::default(),
@@ -86,6 +173,22 @@ impl Alert {
 }
 
 impl Alert {
+    /// Every input tested by the alert, including comparison outputs and additional rules.
+    pub fn sources(&self) -> impl Iterator<Item = &AlertSource> {
+        std::iter::once((&self.source, &self.condition))
+            .chain(
+                self.additional_conditions
+                    .iter()
+                    .map(|rule| (&rule.source, &rule.condition)),
+            )
+            .flat_map(|(source, condition)| {
+                std::iter::once(source).chain(match condition {
+                    AlertCondition::Compare { other, .. } => Some(other),
+                    _ => None,
+                })
+            })
+    }
+
     /// The message with its placeholders filled in from the trigger: `{{symbol}}` and
     /// `{{timeframe}}` as given, `{{time}}` the open time of `bar` in RFC 3339, `{{open}}`,
     /// `{{high}}`, `{{low}}`, `{{close}}` and `{{volume}}` of `bar`, `{{value}}` the value of the
@@ -704,6 +807,7 @@ mod tests {
                 source: AlertSource::Price,
                 watchlist: None,
                 timeframe: None,
+                inputs: None,
                 additional_conditions: Vec::new(),
                 symbol: "AAPL".into(),
                 condition: AlertCondition::CrossingUp(101.5),

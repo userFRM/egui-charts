@@ -331,7 +331,7 @@ pub enum DataStatus {
 }
 
 /// Trading hours: the windows in which an instrument trades.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct Session {
     /// Regular windows. With no regular or extended windows, the session is always open, apart
@@ -388,7 +388,7 @@ impl Session {
 }
 
 /// The hours of one trading date, in place of its weekly windows and holiday.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct SessionOverride {
     /// The trading date, named by the day on which the windows close, as in
@@ -429,7 +429,7 @@ impl SessionOverride {
 }
 
 /// One window of a [`SessionOverride`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct OverrideWindow {
     /// Exchange time.
@@ -446,7 +446,7 @@ impl OverrideWindow {
 }
 
 /// One trading window, repeated on each of `days`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct SessionWindow {
     /// Trading days, named by the day on which the window closes.

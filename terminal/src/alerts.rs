@@ -4,12 +4,8 @@ use super::core::{Direction, SidePanel};
 use super::layout::Region;
 use super::{Action, ExportContents, Terminal};
 use chrono::Utc;
-use egui_charts::Chart;
-use egui_charts::data::HistoryRequest;
-use egui_charts::model::{Alert, AlertCondition, AlertId, AlertSource, BarClock, Timeframe};
-use egui_charts::scales::PriceScaleMode;
-use egui_charts::services::{AlertFeed, UserSettings};
-use egui_charts::studies::{Indicator, StudyData, StudySource};
+use egui_charts::model::{Alert, AlertCondition};
+use egui_charts::services::{AlertEvaluator, UserSettings};
 use egui_charts::ui::Control;
 use egui_charts::ui::context_menu::{ChartContextAction, ContextMenuAction};
 use egui_charts::ui::dialogs::{
@@ -19,209 +15,17 @@ use egui_charts::ui::dialogs::{
 use egui_charts::ui::top_toolbar::TopToolbarAction;
 use egui_charts::ui::widget_bar::{AlertPanelAction, AlertsPanel, RightBarIcon, WidgetBarAction};
 use egui_charts::widget::SeriesId;
-use std::collections::{HashMap, HashSet};
-
-#[derive(Clone, PartialEq, Eq, Hash)]
-struct Subject {
-    symbol: String,
-    timeframe: Timeframe,
-    metric: Option<String>,
-    timezone: Option<String>,
-    extended_hours: bool,
-    conversion: Option<String>,
-    count: usize,
-}
 
 #[derive(Default)]
 pub(super) struct State {
     panel: AlertsPanel,
     dialog: AlertDialog,
-    definitions: HashMap<AlertId, Definition>,
-    feeds: HashMap<Subject, AlertFeed>,
-}
-
-/// Studies keep their creation inputs and chart-local ids, including dependencies. They are
-/// recalculated from the subject's bars, without building or painting an offscreen chart.
-struct Definition {
-    sources: Vec<AlertSource>,
-    studies: Vec<(SeriesId, Box<dyn Indicator>)>,
-    timezone: egui_charts::config::TimezoneMode,
-    timeframe: Timeframe,
-    scale: PriceScaleMode,
-    extended_hours: bool,
-    conversion: Option<String>,
-    count: usize,
-}
-
-fn sources(alert: &Alert) -> Vec<AlertSource> {
-    std::iter::once((&alert.source, &alert.condition))
-        .chain(
-            alert
-                .additional_conditions
-                .iter()
-                .map(|rule| (&rule.source, &rule.condition)),
-        )
-        .flat_map(|(source, condition)| {
-            std::iter::once(source).chain(match condition {
-                AlertCondition::Compare { other, .. } => Some(other),
-                _ => None,
-            })
-        })
-        .cloned()
-        .collect()
-}
-
-impl Definition {
-    fn new(alert: &Alert, chart: &Chart) -> Self {
-        let sources = sources(alert);
-        let mut required: HashSet<_> = sources
-            .iter()
-            .filter_map(|source| match source {
-                AlertSource::Study { id, .. } => id.parse::<usize>().ok().map(SeriesId),
-                _ => None,
-            })
-            .collect();
-        loop {
-            let before = required.len();
-            for (id, study) in chart.indicators() {
-                if required.contains(&id)
-                    && let Some(StudySource::Study { id, .. }) = study.source()
-                {
-                    required.insert(SeriesId(id));
-                }
-            }
-            if before == required.len() {
-                break;
-            }
-        }
-        Self {
-            sources,
-            // shortcut: stream-backed studies need independent event histories before headless evaluation.
-            studies: chart
-                .indicators()
-                .filter(|(id, study)| required.contains(id) && study.order_flow_inputs().is_empty())
-                .map(|(id, study)| (id, study.clone_box()))
-                .collect(),
-            timezone: chart.chart_options().time_scale.timezone.clone(),
-            timeframe: alert.timeframe.or(chart.timeframe()).unwrap_or_default(),
-            scale: chart.config().right_axis_scale_mode,
-            extended_hours: chart.extended_hours(),
-            conversion: chart.conversion().map(str::to_owned),
-            count: chart.bars(SeriesId::MAIN).len().max(1000),
-        }
-    }
-
-    fn subject(&self, symbol: &str, timeframe: Timeframe, metric: Option<String>) -> Subject {
-        Subject {
-            symbol: symbol.into(),
-            timeframe,
-            metric,
-            timezone: match &self.timezone {
-                egui_charts::config::TimezoneMode::Local => None,
-                zone => Some(
-                    zone.to_tz()
-                        .unwrap_or_else(egui_charts::model::TimezoneId::utc)
-                        .to_string(),
-                ),
-            },
-            extended_hours: self.extended_hours,
-            conversion: self.conversion.clone(),
-            count: self.count,
-        }
-    }
-
-    fn request(&self, symbol: &str, timeframe: Timeframe) -> HistoryRequest {
-        let mut request = AlertFeed::history_request(symbol, timeframe);
-        request.clock = match &self.timezone {
-            egui_charts::config::TimezoneMode::Local => request.clock.with_local_timezone(),
-            zone => request.clock.with_timezone(
-                zone.to_tz()
-                    .unwrap_or_else(egui_charts::model::TimezoneId::utc),
-            ),
-        };
-        request.count = self.count;
-        request.extended_hours = self.extended_hours;
-        request.conversion = self.conversion.clone();
-        request
-    }
-
-    fn calculate(
-        &mut self,
-        bars: &[egui_charts::model::Bar],
-        clock: &BarClock,
-        instrument: Option<&egui_charts::model::Instrument>,
-        data: &[StudyData<'_>],
-    ) {
-        let mut pending: Vec<_> = self.studies.iter().map(|(id, _)| *id).collect();
-        while !pending.is_empty() {
-            let Some(at) = pending.iter().position(|id| {
-                let study = &self.studies.iter().find(|(key, _)| key == id).unwrap().1;
-                match study.source() {
-                    Some(StudySource::Study { id, .. }) => !pending.contains(&SeriesId(id)),
-                    _ => true,
-                }
-            }) else {
-                break;
-            };
-            let id = pending.remove(at);
-            let source = self
-                .studies
-                .iter()
-                .find(|(key, _)| *key == id)
-                .unwrap()
-                .1
-                .source();
-            let values = match source {
-                Some(StudySource::Study { id, plot }) => self
-                    .studies
-                    .iter()
-                    .find(|(key, _)| key.0 == id)
-                    .and_then(|(_, study)| study.values().columns().get(plot))
-                    .cloned(),
-                _ => None,
-            };
-            let study = &mut self
-                .studies
-                .iter_mut()
-                .find(|(key, _)| *key == id)
-                .unwrap()
-                .1;
-            study.set_timeframe(self.timeframe);
-            study.set_bar_clock(clock);
-            study.set_instrument(instrument);
-            if matches!(source, Some(StudySource::Study { .. })) {
-                study.update_source(bars, 0, values.as_deref().unwrap_or(&[]));
-            } else {
-                study.update_data(bars, 0, data);
-            }
-        }
-    }
-}
-
-/// A live chart takes over only once it holds data. Replay never supplies alert inputs.
-fn live_chart<'a>(
-    charts: &'a [Chart],
-    symbol: &str,
-    timeframe: Timeframe,
-    definition: &Definition,
-) -> Option<&'a Chart> {
-    charts.iter().find(|chart| {
-        chart.symbol() == symbol
-            && chart.extended_hours() == definition.extended_hours
-            && chart.conversion() == definition.conversion.as_deref()
-            && chart.chart_options().time_scale.timezone == definition.timezone
-            && chart.timeframe() == Some(timeframe)
-            && chart.replay_time().is_none()
-            && chart.instrument().is_some()
-            && chart
-                .feed_state(SeriesId::MAIN)
-                .is_none_or(|feed| !feed.loading_history)
-            && !chart.bars(SeriesId::MAIN).is_empty()
-    })
+    evaluator: Option<AlertEvaluator>,
 }
 
 impl Terminal {
     pub(super) fn alerts_init(&mut self) {
+        self.alerts.evaluator = Some(AlertEvaluator::new(self.feed.clone()));
         let available = self.services.alerts.is_some();
         self.set_control_visible(Control::Alerts, available);
         if let Some(service) = &self.services.alerts {
@@ -236,9 +40,11 @@ impl Terminal {
         self.alerts
             .panel
             .set_symbol(self.charts[self.active].symbol());
+        let inputs = self.charts[self.active].alert_inputs();
+        self.alerts.panel.set_sources(inputs.sources.clone());
         self.alerts
             .panel
-            .set_sources(self.charts[self.active].alert_sources());
+            .set_inputs(inputs, self.charts[self.active].timeframe());
         self.alerts.panel.poll(ctx, &mut self.toasts);
         let Some(service) = self.services.alerts.clone() else {
             return;
@@ -246,221 +52,16 @@ impl Terminal {
         let Some(engine) = service.engine() else {
             return;
         };
-        let now = Utc::now();
-        engine.tick(now);
-        let alerts = engine.alerts();
-        self.alerts
-            .definitions
-            .retain(|id, _| alerts.iter().any(|alert| alert.id.as_ref() == Some(id)));
-        let mut tasks = Vec::new();
-        let mut needed = HashSet::new();
-        for alert in &alerts {
-            let Some(id) = &alert.id else {
-                continue;
-            };
-            if self
-                .alerts
-                .definitions
-                .get(id)
-                .is_none_or(|definition| definition.sources != sources(alert))
-            {
-                let source = self
-                    .charts
-                    .iter()
-                    .find(|chart| chart.symbol() == alert.symbol)
-                    .unwrap_or(&self.charts[self.active]);
-                let mut definition = Definition::new(alert, source);
-                if definition
-                    .sources
-                    .iter()
-                    .any(|source| matches!(source, AlertSource::Study { .. }))
-                {
-                    // A chart-local id cannot recover the inputs an alert was created with.
-                    definition.studies.clear();
-                    self.toasts.error(format!(
-                        "Alert {} has no saved study inputs; recreate it from its source chart",
-                        id.0
-                    ));
-                }
-                self.alerts.definitions.insert(id.clone(), definition);
-            }
-            let definition = self.alerts.definitions.get_mut(id).unwrap();
-            if let Some(timeframe) = alert.timeframe
-                && timeframe != definition.timeframe
-            {
-                definition.timeframe = timeframe;
-            }
-            let definition = &*definition;
-            for symbol in engine.subjects(id) {
-                let timeframe = definition.timeframe;
-                let subject = definition.subject(&symbol, timeframe, None);
-                if live_chart(&self.charts, &symbol, timeframe, definition).is_none() {
-                    needed.insert(subject.clone());
-                    self.alerts.feeds.entry(subject.clone()).or_insert_with(|| {
-                        AlertFeed::new(
-                            self.feed.clone(),
-                            definition.request(&symbol, timeframe),
-                            None,
-                        )
-                    });
-                    if definition
-                        .sources
-                        .iter()
-                        .any(|source| matches!(source, AlertSource::Drawing(_)))
-                        && let Some(storage) = &self.services.storage
-                    {
-                        self.alerts
-                            .feeds
-                            .get_mut(&subject)
-                            .unwrap()
-                            .set_storage(storage.clone());
-                    }
-                }
-                for request in definition
-                    .studies
-                    .iter()
-                    .flat_map(|(_, study)| study.data_requests())
-                {
-                    let other = if request.symbol.is_empty() {
-                        symbol.clone()
-                    } else {
-                        request.symbol
-                    };
-                    let interval = request.timeframe.unwrap_or(timeframe);
-                    if request.metric.is_none()
-                        && live_chart(&self.charts, &other, interval, definition).is_some()
-                    {
-                        continue;
-                    }
-                    let subject = definition.subject(&other, interval, request.metric.clone());
-                    needed.insert(subject.clone());
-                    self.alerts.feeds.entry(subject).or_insert_with(|| {
-                        AlertFeed::new(
-                            self.feed.clone(),
-                            definition.request(&other, interval),
-                            request.metric,
-                        )
-                    });
-                }
-                tasks.push((id.clone(), symbol, timeframe));
-            }
+        let evaluator = self.alerts.evaluator.as_mut().unwrap();
+        if let Some(storage) = &self.services.storage {
+            evaluator.set_storage(storage.clone());
         }
-        self.alerts.feeds.retain(|key, _| needed.contains(key));
-        for (subject, feed) in &mut self.alerts.feeds {
-            for error in feed.poll(ctx, now) {
-                self.toasts
-                    .error(format!("Alert data for {}: {error}", subject.symbol));
-            }
+        for error in evaluator.poll(engine, self.studies.indicators.factory(), ctx, Utc::now()) {
+            self.toasts.error(format!("Alert data: {error}"));
         }
-        for (id, symbol, timeframe) in &tasks {
-            let definition = self.alerts.definitions.get_mut(id).unwrap();
-            let visible = live_chart(&self.charts, symbol, *timeframe, definition);
-            let feed = self
-                .alerts
-                .feeds
-                .get(&definition.subject(symbol, *timeframe, None));
-            let (bars, clock, instrument) = if let Some(chart) = visible {
-                (
-                    chart.bars(SeriesId::MAIN),
-                    chart.bar_clock(),
-                    chart.instrument(),
-                )
-            } else if let Some(feed) = feed {
-                (feed.bars(), feed.clock().clone(), feed.instrument())
-            } else {
-                continue;
-            };
-            let data: Vec<_> = definition
-                .studies
-                .iter()
-                .flat_map(|(_, study)| study.data_requests())
-                .map(|request| {
-                    let other = if request.symbol.is_empty() {
-                        symbol
-                    } else {
-                        &request.symbol
-                    };
-                    let interval = request.timeframe.unwrap_or(*timeframe);
-                    let chart = request
-                        .metric
-                        .is_none()
-                        .then(|| live_chart(&self.charts, other, interval, definition))
-                        .flatten();
-                    let feed = self.alerts.feeds.get(&definition.subject(
-                        other,
-                        interval,
-                        request.metric.clone(),
-                    ));
-                    let (bars, clock, instrument) = if let Some(chart) = chart {
-                        (
-                            chart.bars(SeriesId::MAIN),
-                            chart.bar_clock(),
-                            chart.instrument(),
-                        )
-                    } else if let Some(feed) = feed {
-                        (feed.bars(), feed.clock().clone(), feed.instrument())
-                    } else {
-                        (&[][..], BarClock::new(interval), None)
-                    };
-                    StudyData {
-                        request,
-                        bars,
-                        clock,
-                        instrument,
-                        timeframe: interval,
-                    }
-                })
-                .collect();
-            definition.calculate(bars, &clock, instrument, &data);
-            engine.update_alert(
-                id,
-                symbol,
-                *timeframe,
-                bars,
-                now,
-                |source, at| match source {
-                    AlertSource::Study { id, output } => definition
-                        .studies
-                        .iter()
-                        .find(|(key, _)| key.0.to_string() == *id)
-                        .and_then(|(_, study)| study.plot_value(*output, at)),
-                    AlertSource::Drawing(_) => visible
-                        .and_then(|chart| chart.alert_value(source, at))
-                        .or_else(|| {
-                            feed.and_then(|feed| feed.drawing_value(source, at, definition.scale))
-                        }),
-                    _ => None,
-                },
-            );
-        }
-        // Release inputs of alerts that fired once during this frame, without a later repaint.
-        let armed: HashSet<_> = tasks
-            .iter()
-            .filter(|(id, symbol, _)| engine.subjects(id).contains(symbol))
-            .flat_map(|(id, symbol, timeframe)| {
-                let definition = &self.alerts.definitions[id];
-                std::iter::once(definition.subject(symbol, *timeframe, None)).chain(
-                    definition
-                        .studies
-                        .iter()
-                        .flat_map(|(_, study)| study.data_requests())
-                        .map(|request| {
-                            definition.subject(
-                                if request.symbol.is_empty() {
-                                    symbol
-                                } else {
-                                    &request.symbol
-                                },
-                                request.timeframe.unwrap_or(*timeframe),
-                                request.metric,
-                            )
-                        }),
-                )
-            })
-            .collect();
-        self.alerts.feeds.retain(|key, _| armed.contains(key));
         self.alerts.panel.poll(ctx, &mut self.toasts);
-        if alerts
+        if engine
+            .alerts()
             .iter()
             .any(|alert| alert.status == egui_charts::model::AlertStatus::Active)
         {
@@ -501,7 +102,8 @@ impl Terminal {
             .timezone
             .to_tz()
             .unwrap_or_else(egui_charts::model::TimezoneId::utc);
-        if let Some(alert) = alert {
+        if let Some(mut alert) = alert {
+            self.chart().prepare_alert(&mut alert);
             self.alerts.dialog.edit(alert);
         } else {
             let chart = self.chart();
@@ -509,6 +111,7 @@ impl Terminal {
             let price = price.or_else(|| chart.bars(SeriesId::MAIN).last().map(|bar| bar.close));
             if let Some(price) = price {
                 self.alerts.dialog.open(symbol, price);
+                self.charts[self.active].prepare_alert(&mut self.alerts.dialog.alert);
             }
         }
     }
@@ -545,28 +148,8 @@ impl Terminal {
             ),
             Action::AlertDialog(AlertDialogAction::Create(alert)) => {
                 let mut alert = *alert;
-                alert.timeframe = alert.timeframe.or(self.chart().timeframe());
-                let definition = Definition::new(&alert, self.chart());
-                self.alerts.panel.save(alert.clone());
-                if let Some(engine) = self
-                    .services
-                    .alerts
-                    .as_ref()
-                    .and_then(|service| service.engine())
-                    && let Some(saved) = engine.alerts().iter().rev().find(|saved| {
-                        let mut saved = (*saved).clone();
-                        saved.id = alert.id.clone();
-                        saved == alert
-                    })
-                    && let Some(id) = &saved.id
-                    && self
-                        .alerts
-                        .definitions
-                        .get(id)
-                        .is_none_or(|kept| kept.sources != definition.sources)
-                {
-                    self.alerts.definitions.insert(id.clone(), definition);
-                }
+                self.chart().prepare_alert(&mut alert);
+                self.alerts.panel.save(alert);
             }
             Action::Alerts(AlertPanelAction::ExportLog(csv)) => {
                 if !self.save_file("alerts.csv".into(), ExportContents::Text(csv.clone())) {
@@ -628,6 +211,7 @@ mod tests {
             use chrono::{NaiveTime, Weekday};
             use egui_charts::model::{Instrument, Session, SessionWindow};
             let mut instrument = Instrument::new(symbol);
+            instrument.tick_size = Some(1.0);
             if symbol == "SHOWN" {
                 instrument.session = Some(Session::new([SessionWindow::new(
                     [
@@ -791,7 +375,7 @@ mod tests {
         terminal.chart_mut().set_timeframe(Timeframe::Min5);
         terminal.chart_mut().set_symbol("OTHER");
         frames(&mut terminal);
-        assert_eq!(feed.count("OTHER", Timeframe::Min5), 1);
+        assert_eq!(feed.count("OTHER", Timeframe::Min5), 2);
         assert_eq!(fired.lock().unwrap().len(), 3);
         terminal.chart_mut().set_symbol("ELSEWHERE");
         frames(&mut terminal);
@@ -861,23 +445,321 @@ mod tests {
         engine.tick(Utc::now() + chrono::TimeDelta::hours(2));
         frames(&mut terminal);
         assert_eq!(feed.count("THIRD", Timeframe::Min5), 0);
+
+        let mut failures = Vec::new();
+        for (name, period, start) in [
+            ("SMA", 2, None),
+            ("SMA", 2000, None),
+            ("Vol Profile FR", 0, Some(1440)),
+        ] {
+            let feed = Arc::new(Feed::default());
+            feed.history.lock().unwrap().insert(
+                ("THIRD".into(), Timeframe::Day1),
+                vec![bar(0, 10.0), bar(1440, 10.0), bar(2880, 10.0)],
+            );
+            feed.history.lock().unwrap().insert(
+                ("OTHER".into(), Timeframe::Min1),
+                (0..4320).map(|minute| bar(minute, 10.0)).collect(),
+            );
+            let engine = Arc::new(AlertEngine::new());
+            let mut terminal = Terminal::new(feed.clone())
+                .with_symbol("SHOWN")
+                .with_alerts(engine.clone());
+            frames(&mut terminal);
+            let factory = egui_charts::studies::IndicatorFactory::new();
+            let mut study =
+                egui_charts::studies::ConfiguredStudy::new(factory.create(name).unwrap());
+            use egui_charts::studies::Indicator;
+            if let Some(start) = start {
+                study
+                    .set_input(
+                        "source_interval",
+                        InputValue::Timeframe(Some(Timeframe::Min1)),
+                    )
+                    .unwrap();
+                study
+                    .set_input(
+                        "start_time",
+                        InputValue::Text(format!("1970-01-0{} 00:00:00", start / 1440 + 1)),
+                    )
+                    .unwrap();
+            } else {
+                study
+                    .set_input("period", InputValue::Length(period))
+                    .unwrap();
+                study
+                    .set_input("calculation_symbol", InputValue::Symbol("OTHER".into()))
+                    .unwrap();
+                study
+                    .set_input(
+                        "calculation_timeframe",
+                        InputValue::Timeframe(Some(Timeframe::Min1)),
+                    )
+                    .unwrap();
+            }
+            let id = terminal.chart_mut().add_indicator(Box::new(study));
+            let mut alert = Alert::new("THIRD", AlertCondition::Above(1.0));
+            alert.timeframe = Some(Timeframe::Day1);
+            alert.source = AlertSource::Study {
+                id: id.0.to_string(),
+                output: 0,
+            };
+            // The profile reads the member's own finer series.
+            if start.is_some() {
+                feed.history.lock().unwrap().insert(
+                    ("THIRD".into(), Timeframe::Min1),
+                    (0..4320).map(|minute| bar(minute, 10.0)).collect(),
+                );
+            }
+            *feed.page_size.lock().unwrap() = Some(700);
+            terminal.run(Action::AlertDialog(AlertDialogAction::Create(Box::new(
+                alert,
+            ))));
+            // A ready latest page is insufficient while the required older pages are pending.
+            for _ in 0..3 {
+                frame(&mut terminal, SIZE, vec![]);
+            }
+            if engine.alerts()[0].status != AlertStatus::Active {
+                failures.push(format!("{name} {period}: early evaluation"));
+            }
+            for _ in 0..15 {
+                frame(&mut terminal, SIZE, vec![]);
+            }
+            if start.is_none() && engine.alerts()[0].status != AlertStatus::Triggered {
+                failures.push(format!("{name} {period}: incomplete coverage"));
+            }
+            if let Some(start) = start {
+                let befores: Vec<_> = feed
+                    .requests
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|request| {
+                        request.symbol == "THIRD" && request.timeframe == Timeframe::Min1
+                    })
+                    .filter_map(|request| request.before)
+                    .collect();
+                if !befores
+                    .iter()
+                    .any(|before| *before <= bar(start + 700, 0.0).time)
+                    || befores.iter().any(|before| *before <= bar(start, 0.0).time)
+                {
+                    failures.push(format!("{name}: ignored data_start {befores:?}"));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "auxiliary inputs: {failures:?}");
     }
 
     #[test]
     fn restored_study_alert_does_not_borrow_a_chart_local_id() {
-        let feed = Arc::new(Feed::default());
-        let mut terminal = Terminal::new(feed).with_symbol("SHOWN");
-        let study = terminal.chart_mut().add_indicator(Box::new(SMA::new(2)));
-        let mut alert = Alert::new("OTHER", AlertCondition::Above(1.0));
-        alert.timeframe = Some(Timeframe::Min5);
-        alert.source = AlertSource::Study {
-            id: study.0.to_string(),
-            output: 0,
-        };
-        let engine = Arc::new(AlertEngine::new().with_alerts(vec![alert]));
-        terminal = terminal.with_alerts(engine.clone());
-        frames(&mut terminal);
-        assert_eq!(engine.alerts()[0].status, AlertStatus::Active);
+        let mut failures = Vec::new();
+        for path in [
+            "legacy",
+            "duplicate",
+            "edit",
+            "restore",
+            "events",
+            "history",
+            "visible",
+        ] {
+            let feed = Arc::new(Feed::default());
+            if matches!(path, "history" | "visible") {
+                feed.history.lock().unwrap().insert(
+                    ("OTHER".into(), Timeframe::Min5),
+                    (0..1100).map(|at| bar(at * 5, at as f64 + 1.0)).collect(),
+                );
+            }
+            let mut engine = Arc::new(AlertEngine::new());
+            let mut terminal = Terminal::new(feed.clone())
+                .with_symbol("OTHER")
+                .with_timeframe(Timeframe::Min5)
+                .with_alerts(engine.clone());
+            let study = if path == "visible" {
+                terminal
+                    .chart_mut()
+                    .add_indicator(Box::new(egui_charts::studies::VisibleAveragePrice::new()))
+            } else if path == "history" {
+                terminal
+                    .chart_mut()
+                    .add_indicator(Box::new(egui_charts::studies::EMA::new(1000)))
+            } else if path == "events" {
+                terminal.chart_mut().add_indicator(Box::new(
+                    egui_charts::studies::OrderFlowStudy::new(
+                        egui_charts::data::OrderFlowKind::Spread,
+                    ),
+                ))
+            } else {
+                terminal.chart_mut().add_indicator(Box::new(SMA::new(2)))
+            };
+            frames(&mut terminal);
+            if matches!(path, "history" | "visible") {
+                let bars = (800..1100).map(|at| bar(at * 5, at as f64 + 1.0)).collect();
+                terminal
+                    .chart_mut()
+                    .set_data(egui_charts::widget::SeriesId::MAIN, bars);
+                if path == "visible" {
+                    terminal.chart_mut().set_visible_logical_range(
+                        egui_charts::model::LogicalRange::new(0.0, 49.0),
+                    );
+                }
+                frames(&mut terminal);
+            }
+            let mut alert = Alert::new(
+                "OTHER",
+                AlertCondition::Above(if path == "history" { 0.0 } else { 25.0 }),
+            );
+            if path == "visible" {
+                alert.condition = AlertCondition::Below(900.0);
+                alert.status = AlertStatus::Disabled;
+            }
+            if path == "history" {
+                alert.frequency = AlertFrequency::EveryTime;
+            }
+            alert.timeframe = Some(Timeframe::Min5);
+            alert.source = AlertSource::Study {
+                id: study.0.to_string(),
+                output: 0,
+            };
+            if path == "events" {
+                let input = terminal
+                    .chart()
+                    .indicators()
+                    .find(|(id, _)| *id == study)
+                    .unwrap()
+                    .1
+                    .order_flow_inputs()[0]
+                    .clone();
+                input.push_quote(
+                    &egui_charts::model::BarClock::new(Timeframe::Min5),
+                    &egui_charts::model::Level1Quote {
+                        ts: bar(5, 40.0).time,
+                        symbol: "OTHER".into(),
+                        bid: 10.0,
+                        ask: 50.0,
+                        bid_size: 1.0,
+                        ask_size: 1.0,
+                    },
+                    1.0,
+                );
+            }
+            if path == "legacy" {
+                engine = Arc::new(AlertEngine::new().with_alerts(vec![alert]));
+                terminal = terminal.with_alerts(engine.clone());
+            } else {
+                terminal.run(Action::AlertDialog(AlertDialogAction::Create(Box::new(
+                    alert,
+                ))));
+            }
+            frames(&mut terminal);
+            if path == "events" && engine.alerts()[0].status != AlertStatus::Active {
+                failures.push("event source isolation");
+            }
+            if path == "visible" {
+                let mut alerts = engine.alerts();
+                alerts[0].status = AlertStatus::Active;
+                let json = serde_json::to_string(&alerts).unwrap();
+                let restored =
+                    Arc::new(AlertEngine::new().with_alerts(serde_json::from_str(&json).unwrap()));
+                terminal = Terminal::new(feed)
+                    .with_symbol("SHOWN")
+                    .with_alerts(restored.clone());
+                frames(&mut terminal);
+                if restored.alerts()[0].status != AlertStatus::Triggered {
+                    failures.push(path);
+                }
+                continue;
+            }
+            if path == "history" {
+                let before = terminal.alerts.panel.log().len();
+                terminal.chart_mut().set_symbol("SHOWN");
+                frames(&mut terminal);
+                terminal.chart_mut().set_symbol("OTHER");
+                frames(&mut terminal);
+                if before != 1 || terminal.alerts.panel.log().len() != before {
+                    failures.push(path);
+                }
+                continue;
+            }
+            if path != "events" {
+                terminal
+                    .chart_mut()
+                    .indicator_mut(study)
+                    .unwrap()
+                    .set_input("period", InputValue::Length(3))
+                    .unwrap();
+            }
+            let saved = engine.alerts()[0].clone();
+            match path {
+                "duplicate" | "edit" => {
+                    let action = if path == "duplicate" {
+                        let mut copy = saved;
+                        copy.id = None;
+                        egui_charts::ui::widget_bar::AlertPanelAction::DuplicateAlert(Box::new(
+                            copy,
+                        ))
+                    } else {
+                        egui_charts::ui::widget_bar::AlertPanelAction::EditAlert(Box::new(saved))
+                    };
+                    terminal.run(Action::Alerts(action));
+                    let edited = terminal.alerts.dialog.alert.clone();
+                    terminal.run(Action::AlertDialog(AlertDialogAction::Create(Box::new(
+                        edited,
+                    ))));
+                }
+                "restore" => {
+                    let json = serde_json::to_string(&engine.alerts()).unwrap();
+                    let restored = Arc::new(
+                        AlertEngine::new().with_alerts(serde_json::from_str(&json).unwrap()),
+                    );
+                    terminal = Terminal::new(feed.clone())
+                        .with_symbol("SHOWN")
+                        .with_alerts(restored);
+                }
+                _ => {}
+            }
+            terminal.chart_mut().set_symbol("SHOWN");
+            frames(&mut terminal);
+            feed.push("OTHER", Timeframe::Min5, bar(10, 40.0));
+            if path == "events" {
+                for subscription in feed
+                    .subscriptions
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|subscription| subscription.symbol == "OTHER")
+                {
+                    subscription
+                        .sink
+                        .push_quote(egui_charts::model::Level1Quote {
+                            ts: bar(10, 40.0).time,
+                            symbol: "OTHER".into(),
+                            bid: 10.0,
+                            ask: 40.0,
+                            bid_size: 1.0,
+                            ask_size: 1.0,
+                        });
+                }
+            }
+            frames(&mut terminal);
+            let alerts = terminal
+                .services
+                .alerts
+                .as_ref()
+                .unwrap()
+                .engine()
+                .unwrap()
+                .alerts();
+            let expected = if path == "legacy" {
+                AlertStatus::Active
+            } else {
+                AlertStatus::Triggered
+            };
+            if alerts.last().unwrap().status != expected {
+                failures.push(path);
+            }
+        }
+        assert!(failures.is_empty(), "creation inputs lost on {failures:?}");
     }
 
     #[test]
@@ -919,8 +801,8 @@ mod tests {
         frames(&mut terminal);
         assert_eq!(
             feed.count("OTHER", Timeframe::Min5),
-            2,
-            "only the matching session hands over to the chart"
+            3,
+            "chart navigation keeps the independent alert histories"
         );
     }
 
@@ -1042,6 +924,11 @@ mod tests {
                 "quick form at {size:?}, dark {dark}"
             );
             assert_eq!(engine.alerts()[1].symbol, "SHOWN");
+            assert_eq!(engine.alerts()[1].timeframe, terminal.chart().timeframe());
+            assert!(
+                serde_json::to_value(&engine.alerts()[1]).unwrap()["inputs"].is_object(),
+                "quick creation must save its inputs"
+            );
         }
     }
 
@@ -1149,7 +1036,15 @@ mod tests {
                 }
             }
             let source = engine.alerts().last().unwrap().source.clone();
-            let reader = terminal.alerts.feeds.values_mut().next().unwrap();
+            let mut reader = egui_charts::services::AlertFeed::new(
+                feed.clone(),
+                egui_charts::services::AlertFeed::history_request("OTHER", timeframe),
+                None,
+            );
+            reader.set_storage(storage);
+            for _ in 0..4 {
+                reader.poll(terminal.ctx.as_ref().unwrap(), Utc::now());
+            }
             assert_eq!(
                 reader.drawing_value(&source, 2, egui_charts::scales::PriceScaleMode::Normal),
                 Some(30.0)
