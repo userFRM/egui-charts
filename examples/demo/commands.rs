@@ -94,6 +94,7 @@ impl DemoApp {
     pub(super) fn show_showcase(&mut self, ui: &mut egui::Ui) {
         egui::TopBottomPanel::top("demo_showcase").show_inside(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
+                self.show_readout_controls(ui);
                 ui.menu_button("Showcase", |ui| {
                     ui.set_max_width(360.0);
                     ui.label("Explore the demo's synthetic data");

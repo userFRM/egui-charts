@@ -10,6 +10,8 @@
 mod audio;
 #[path = "commands.rs"]
 mod commands;
+#[path = "annotations.rs"]
+mod annotations;
 #[path = "images.rs"]
 mod images;
 #[path = "interval.rs"]

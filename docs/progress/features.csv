@@ -154,7 +154,7 @@ Chart,Crosshair and interaction,Drag or wheel on the price axis to zoom,done,lib
 Chart,Crosshair and interaction,Drag to pan,done,library,src/widget/pan_zoom/mod.rs;src/widget/frame/mod.rs,
 Chart,Crosshair and interaction,Go to date,done,library,src/widget/builder.rs;src/widget/pan_zoom/mod.rs;terminal/src/time.rs,
 Chart,Crosshair and interaction,Horizontal scroll,done,library,src/widget/pan_zoom/mod.rs;src/widget/frame/mod.rs,
-Chart,Crosshair and interaction,Hover tooltip and floating data window,done,library,src/chart/rendering/overlays/tooltip.rs;src/widget/readout.rs;src/scales/horizontal.rs;src/scales/time_formatter.rs;src/widget/frame/mod.rs,
+Chart,Crosshair and interaction,Hover tooltip and floating data window,done,library,src/chart/rendering/overlays/tooltip.rs;src/widget/readout.rs;src/scales/horizontal.rs;src/scales/time_formatter.rs;src/widget/frame/mod.rs;examples/demo/annotations.rs,1938
 Chart,Crosshair and interaction,Kinetic scroll,done,library,src/widget/pan_zoom/mod.rs;src/config/kinetic.rs;src/widget/mod.rs;src/widget/builder.rs,
 Chart,Crosshair and interaction,Magnet crosshair,done,library,src/widget/crosshair.rs;src/widget/series/options.rs;src/widget/series/paint.rs,
 Chart,Crosshair and interaction,Mouse wheel zoom anchored at the cursor,done,library,src/widget/pan_zoom/mod.rs;src/model/timescale.rs;src/widget/frame/mod.rs,
