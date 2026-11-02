@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'parse5';
 
@@ -34,7 +34,7 @@ export function checkLinks(root, api = join(root, 'api')) {
     const pathname = decodeURIComponent(url.pathname.slice(site.pathname.length));
     const fileRoot = pathname.startsWith('api/') ? api : root;
     let file = resolve(fileRoot, pathname.startsWith('api/') ? pathname.slice(4) : pathname);
-    if (file !== fileRoot && !file.startsWith(fileRoot + '/')) throw new Error('path escapes the site');
+    if (file !== fileRoot && !file.startsWith(fileRoot + sep)) throw new Error('path escapes the site');
     if (statSync(file).isDirectory()) file = join(file, 'index.html');
     if (!file.endsWith('.html')) return;
     const document = page(file);
