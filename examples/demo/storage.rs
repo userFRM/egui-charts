@@ -331,18 +331,18 @@ mod tests {
             let pane = app.chart.series_pane(rsi).unwrap();
             app.chart.move_pane(pane, 0);
             app.chart.set_pane_stretch_factor(pane, 2.25);
-            app.chart.price_scale_mut().mode = PriceScaleMode::Logarithmic;
+            app.handle_comparison(CompareAction::AddSymbol("AAPL".into(), Default::default()));
+            app.chart.price_scale_mut().options_mut().mode = PriceScaleMode::Logarithmic;
             app.chart.price_scale_mut().set_range(2.0, 6.0);
             app.chart
                 .set_crosshair_style(egui_charts::config::CrosshairStyle::Dot);
-            app.handle_comparison(CompareAction::AddSymbol("AAPL".into(), Default::default()));
             app.save(&mut storage);
             app = restart(&ctx, &storage);
             assert_eq!(app.layout.mode, mode);
             assert_eq!(app.layout_slot, mode.chart_count() - 1);
             assert_eq!(app.chart.chart_type(), ChartType::Line);
             assert_eq!(
-                app.chart.state().price_scale().mode,
+                app.chart.state().price_scale().options().mode,
                 PriceScaleMode::Logarithmic
             );
             assert_eq!(app.chart.state().price_scale().range().min, 2.0);
