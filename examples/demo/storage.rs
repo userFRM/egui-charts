@@ -3,6 +3,7 @@
 
 use egui_charts::data::Reply;
 use egui_charts::services::{Storage, StoreKind};
+use egui_charts::ui_kit::notifications::Toast;
 use egui_charts::widget::SavedLayout;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -128,7 +129,7 @@ impl super::DemoApp {
             }
         }
         if self.workspace_recovery.unreadable {
-            self.toasts.warning("Opened a default chart. The unreadable workspace was kept; save a named layout to keep new work.");
+            self.toasts.add(Toast::warning("Opened a default chart. The unreadable workspace was kept; save a named layout to keep new work.").permanent());
         }
     }
 
