@@ -505,7 +505,7 @@ impl Chart {
                                         item,
                                         self.primitive_view(
                                             *id,
-                                            crate::chart::renderers::study_mapping(
+                                            crate::chart::rendering::study_mapping(
                                                 study,
                                                 &pane_mapping,
                                             ),
@@ -598,7 +598,7 @@ impl Chart {
                 };
                 panel.price_map = Some(
                     if matches!(indicator.scale(), crate::studies::StudyScale::Shared(_)) {
-                        crate::chart::renderers::study_mapping(indicator, &pane_mapping).price
+                        crate::chart::rendering::study_mapping(indicator, &pane_mapping).price
                     } else {
                         map
                     },
@@ -675,7 +675,7 @@ impl Chart {
                     if let Some(pos) = &mut hover
                         && panel_rect.contains(*pos)
                         && let Some(bar) = panel.bar_index
-                        && let Some(value) = crate::chart::renderers::snap_to_values(
+                        && let Some(value) = crate::chart::rendering::snap_to_values(
                             pos.y,
                             &map,
                             self.pane_layout.panes[pane_idx]
@@ -794,7 +794,7 @@ impl Chart {
                     let settings_clicked = settings_response.as_ref().is_some_and(|r| r.clicked());
                     let control_clicked =
                         close_clicked || visibility_clicked || settings_clicked || menu.is_some();
-                    use crate::chart::renderers::StudyAction;
+                    use crate::chart::rendering::StudyAction;
                     match (study, id) {
                         (Some(idx), _) if close_clicked => {
                             pending_indicator_action = Some(StudyAction::Remove(idx));
@@ -879,7 +879,7 @@ impl Chart {
                                 let mut view = self.primitive_view(item.series, pane_coords);
                                 if let Some(study) = view.study {
                                     view.mapping =
-                                        crate::chart::renderers::study_mapping(study, &pane_coords);
+                                        crate::chart::rendering::study_mapping(study, &pane_coords);
                                 }
                                 (item, view)
                             })
@@ -1038,8 +1038,8 @@ impl Chart {
                     if let Some(index) = hovered {
                         pos.x = horizontal.idx_to_x(index);
                     }
-                    crate::chart::renderers::render_crosshair_lines(
-                        &crate::chart::renderers::RenderContext::new(&painter, chart_rect),
+                    crate::chart::rendering::render_crosshair_lines(
+                        &crate::chart::rendering::RenderContext::new(&painter, chart_rect),
                         pos,
                         &options,
                         chart_rect.bottom(),
@@ -1115,6 +1115,7 @@ impl Chart {
                     let mut cursors = std::mem::take(&mut self.cursor_modes);
                     let timescale = self.state.time_scale().clone();
                     let painter = ui.painter().clone();
+                    let time_formatter = self.build_time_formatter();
                     self.handle_pane_drawings(
                         ui,
                         &mut drawings,
@@ -1124,6 +1125,7 @@ impl Chart {
                         &map,
                         &painter,
                         &timescale,
+                        (time_formatter.as_ref(), self.time_label_seconds()),
                         Some(pane_id),
                     );
                     let drawing_hit = pane_response

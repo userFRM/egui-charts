@@ -7,7 +7,7 @@ use super::helpers::{
     OhlcYCoords, bar_color, draw_body_filled, draw_body_hollow, draw_wicks, prev_close,
 };
 use super::volume::render_volume_bars;
-use crate::chart::renderers::{self, BarRenderParams, RenderContext, StyleColors};
+use crate::chart::rendering::{self, BarRenderParams, RenderContext, StyleColors};
 use crate::model::{Bar, BarsStyle, CandlesStyle};
 use crate::scales::PriceMap;
 use egui::{Color32, Pos2, Rect};
@@ -36,12 +36,12 @@ pub(super) fn render_candles(
         } else {
             bar.is_bullish()
         };
-        renderers::render_candle(price_ctx, bar, rising, price_scale, colors, &params, style);
+        rendering::render_candle(price_ctx, bar, rising, price_scale, colors, &params, style);
 
         if show_volume {
             let pitch = (idx_to_coord(start_idx + i + 1, chart_rect_min_x) - x).abs();
             let volume_params = BarRenderParams::new(x, pitch * 0.8, 0.0);
-            renderers::render_volume_bar(volume_ctx, bar, max_volume, colors, &volume_params);
+            rendering::render_volume_bar(volume_ctx, bar, max_volume, colors, &volume_params);
         }
     }
 }
@@ -64,12 +64,12 @@ pub(super) fn render_ohlc_bars(
     for (i, bar) in visible_data.iter().enumerate() {
         let x = idx_to_coord(start_idx + i, chart_rect_min_x);
         let params = BarRenderParams::new(x, bar_width, wick_width);
-        renderers::render_ohlc_bar(price_ctx, bar, price_scale, colors, &params, style);
+        rendering::render_ohlc_bar(price_ctx, bar, price_scale, colors, &params, style);
 
         if show_volume {
             let pitch = (idx_to_coord(start_idx + i + 1, chart_rect_min_x) - x).abs();
             let volume_params = BarRenderParams::new(x, pitch * 0.8, 0.0);
-            renderers::render_volume_bar(volume_ctx, bar, max_volume, colors, &volume_params);
+            rendering::render_volume_bar(volume_ctx, bar, max_volume, colors, &volume_params);
         }
     }
 }
@@ -122,7 +122,7 @@ pub(super) fn render_hollow_candles(
         if show_volume {
             let pitch = (idx_to_coord(start_idx + i + 1, chart_rect_min_x) - x).abs();
             let volume_params = BarRenderParams::new(x, pitch * 0.8, 0.0);
-            renderers::render_volume_bar(volume_ctx, bar, max_volume, colors, &volume_params);
+            rendering::render_volume_bar(volume_ctx, bar, max_volume, colors, &volume_params);
         }
     }
 }

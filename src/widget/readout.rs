@@ -1,7 +1,7 @@
 //! Study readouts for host data windows and chart tooltips.
 
 use super::{Chart, SeriesId};
-use crate::chart::renderers::StudyValue;
+use crate::chart::rendering::StudyValue;
 
 impl Chart {
     /// Takes the source preselection requested by a study menu's Add indicator action.

@@ -460,11 +460,11 @@ mod tests {
                 false,
             );
             for start in [0, last] {
-                let coords = crate::chart::renderers::ChartMapping::new(
+                let coords = crate::chart::rendering::ChartMapping::new(
                     rect, 100.0, start, last, 5.0, price,
                 );
-                let (_, keys, axis) = crate::chart::renderers::time_axis_marks(
-                    &crate::chart::renderers::RenderContext::new(&painter, rect),
+                let (_, keys, axis) = crate::chart::rendering::time_axis_marks(
+                    &crate::chart::rendering::RenderContext::new(&painter, rect),
                     &chart.state.shown()[start..],
                     &coords,
                     &chart.build_time_formatter(),

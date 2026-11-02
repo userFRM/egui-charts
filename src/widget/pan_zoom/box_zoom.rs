@@ -1,6 +1,6 @@
 //! Box zoom selection rendering
 
-use crate::chart::state::BoxZoomState;
+use super::state::BoxZoomState;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, FontId, Painter, Pos2, Rect, Stroke, Vec2};

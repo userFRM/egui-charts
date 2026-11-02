@@ -5,7 +5,7 @@
 use crate::scales::PriceMap;
 use egui::Color32;
 
-use crate::chart::renderers::{RenderContext, StyleColors};
+use crate::chart::rendering::{RenderContext, StyleColors};
 use crate::model::{Bar, PriceSource};
 
 /// Core rendering contexts and data

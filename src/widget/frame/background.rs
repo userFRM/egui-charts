@@ -1,5 +1,5 @@
 use super::Chart;
-use crate::chart::renderers;
+use crate::chart::rendering;
 use crate::config::{BackgroundStyle, WatermarkPos};
 use egui::{Rect, Ui};
 
@@ -93,7 +93,7 @@ impl Chart {
         }
         let size = self.config.watermark_font_size;
         let line = |text: &str, size: f32| {
-            renderers::WatermarkLine::new(
+            rendering::WatermarkLine::new(
                 text,
                 crate::styles::typography::font_size(size),
                 self.config.watermark_color,
@@ -125,12 +125,12 @@ impl Chart {
             WatermarkPos::BottomLeft => egui::Align2::LEFT_BOTTOM,
             WatermarkPos::BottomRight => egui::Align2::RIGHT_BOTTOM,
         };
-        let watermark = renderers::Watermark {
+        let watermark = rendering::Watermark {
             lines,
             align,
             padding: 20.0,
             ..Default::default()
         };
-        renderers::render_watermark(ui, painter, rect, &watermark);
+        rendering::render_watermark(ui, painter, rect, &watermark);
     }
 }

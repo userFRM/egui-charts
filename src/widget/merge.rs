@@ -1,7 +1,7 @@
 //! Bars merged when several fall within one pixel, so a zoomed-out frame draws about one bar
 //! per pixel column however many bars are in view.
 
-use crate::chart::renderers::ChartMapping;
+use crate::chart::rendering::ChartMapping;
 use crate::model::{Bar, ChartType, PriceSource};
 use std::ops::Range;
 
