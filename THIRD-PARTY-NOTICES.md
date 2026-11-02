@@ -6,6 +6,10 @@ The guide built from `docs/site` ships Astro 7.4.0 and Starlight 0.42.6 styles a
 
 The generated API reference retains rustdoc's scripts and styles under the MIT or Apache License 2.0, Fira, Source Code Pro, Source Serif 4 and Nanum Barun Gothic under the SIL Open Font License 1.1, and the Rust Foundation's unmodified logos under Creative Commons Attribution 4.0 (terms also included in `docs/site/public/licenses.txt`). Their copyright notices and other license files ship in `/egui-charts/docs/api/static.files/` with rustdoc's generated filename suffixes.
 
+## Documentation logos
+
+`docs/images/logo-light.svg` and `logo-dark.svg`, also bundled by the guide and landing page, combine the egui icon and wordmark from [`egui-logo.svg`](https://github.com/emilk/egui/blob/main/crates/egui_demo_lib/data/egui-logo.svg) with original candlesticks and lettering. The egui artwork is recoloured and scaled. Its MIT terms and copyright notice, together with the project artwork's MIT terms, are in [`docs/site/public/licenses.txt`](docs/site/public/licenses.txt), published with the site.
+
 ## Original interface icons
 
 `src/ui/top_toolbar/menu.svg`, `download.svg`, `link.svg` and `open-new.svg` in the same directory, and `docs/site/public/favicon.svg`, are original project artwork, licensed under either the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at your option.

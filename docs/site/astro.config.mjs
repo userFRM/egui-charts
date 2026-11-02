@@ -12,8 +12,8 @@ export default defineConfig({
     starlight({
       title: 'egui-charts',
       logo: {
-        light: './src/assets/logo-light.svg',
-        dark: './src/assets/logo-dark.svg',
+        light: '../images/logo-light.svg',
+        dark: '../images/logo-dark.svg',
         replacesTitle: true,
       },
       description: 'Build financial charts with your own data, in Rust and egui.',
@@ -25,7 +25,6 @@ export default defineConfig({
       components: {
         Header: './src/components/Header.astro',
         Hero: './src/components/Hero.astro',
-        PageTitle: './src/components/PageTitle.astro',
         Footer: './src/components/Footer.astro',
       },
       expressiveCode: { themes: ['github-dark', 'github-light'] },

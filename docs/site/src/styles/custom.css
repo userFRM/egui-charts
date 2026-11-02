@@ -44,9 +44,6 @@
 .header-controls { margin-inline-start: auto; gap: 1rem; }
 .header-controls site-search button[data-open-modal] { width: 11rem; }
 .header-controls starlight-theme-select { font-size: 0.8125rem; }
-.article-context { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; justify-content: space-between; font-size: 0.8125rem; }
-.article-context nav { display: flex; flex-wrap: wrap; gap: 0.625rem; color: var(--sl-color-gray-3); }
-.article-context a { color: var(--sl-color-text-accent); text-decoration: none; }
 .version-label { display: inline-block; color: var(--sl-color-gray-2); font-size: 0.75rem; padding: 0.25rem 0.625rem; border: 1px solid var(--sl-color-gray-5); border-radius: 0.375rem; text-decoration: none; }
 .sl-markdown-content h2 { margin-top: 2.75rem; letter-spacing: -0.02em; }
 .sl-markdown-content h3 { margin-top: 2rem; }
