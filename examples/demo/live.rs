@@ -2056,13 +2056,20 @@ mod tests {
             bars,
             "resume must deliver executions"
         );
-        let midnight = (now + TimeDelta::days(1))
+        let filled = {
+            let mut sim = feed.state();
+            while sim.trades.len() < RETAINED_TRADES {
+                sim.trade();
+            }
+            sim.next_trade
+        };
+        let midnight = (filled + TimeDelta::days(1))
             .date_naive()
             .and_hms_opt(0, 0, 0)
             .unwrap()
             .and_utc();
         for time in [
-            now,
+            filled,
             midnight - TimeDelta::milliseconds(1),
             midnight + TimeDelta::seconds(2),
         ] {
@@ -2070,12 +2077,6 @@ mod tests {
                 let mut sim = feed.state();
                 sim.now = time;
                 sim.next_trade = time;
-                // Force whole-minute archival without simulating every intervening execution.
-                while sim.trades.len() < RETAINED_TRADES {
-                    let trade = sim.trades.back().unwrap().clone();
-                    *sim.volume_by_day.entry(trade.ts.date_naive()).or_default() += trade.size;
-                    sim.trades.push_back(trade);
-                }
                 sim.trade();
             }
             let expected = {
