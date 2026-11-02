@@ -215,7 +215,9 @@ mod tests {
     fn click(app: &mut DemoApp, ctx: &egui::Context, label: &str) {
         let point = render(app, ctx, Vec::new())
             .into_iter()
-            .find_map(|(text, point)| (text == label).then_some(point))
+            .find_map(|(text, point)| {
+                (text == label && point.y > ctx.content_rect().center().y).then_some(point)
+            })
             .unwrap_or_else(|| panic!("missing control: {label}"));
         render(
             app,
