@@ -548,6 +548,7 @@ impl DemoApp {
         let quotes = Arc::new(live::DemoQuotes::new(live.clone()));
         let mut chart = egui_charts::ChartBuilder::new()
             .with_feed(live.clone())
+            // The generated week of minutes, so the first reply holds the whole history.
             .with_initial_bars(10_080)
             .with_symbol(symbol)
             .with_timeframe(timeframe)
@@ -1490,16 +1491,8 @@ impl eframe::App for DemoApp {
             feed.advance(chrono::Utc::now());
         }
 
-        let visible = self.layout.mode.chart_count();
         for (index, extra) in self.extra_charts.iter_mut().enumerate() {
-            let slot = if index >= self.layout_slot {
-                index + 1
-            } else {
-                index
-            };
-            if slot >= visible
-                || (self.layout.mode == ChartLayoutMode::Tabs && !self.layout.is_detached(slot))
-            {
+            if !slot_shown(&self.layout, self.layout_slot, index) {
                 continue;
             }
             extra.live.set_symbol(extra.chart.symbol());
@@ -2834,14 +2827,7 @@ impl DemoApp {
                         .iter()
                         .any(|spread| spread.loading(&self.chart))
                     || self.extra_charts.iter().enumerate().any(|(index, extra)| {
-                        let slot = if index >= self.layout_slot {
-                            index + 1
-                        } else {
-                            index
-                        };
-                        slot < self.layout.mode.chart_count()
-                            && (self.layout.mode != ChartLayoutMode::Tabs
-                                || self.layout.is_detached(slot))
+                        slot_shown(&self.layout, self.layout_slot, index)
                             && (extra.live.loading()
                                 || extra.comparisons.iter().any(|(_, id, feed)| {
                                     extra.chart.series_order(*id).is_some() && feed.loading()
@@ -3635,6 +3621,14 @@ fn browser_download(bytes: &[u8], path: &std::path::Path) -> Result<(), String> 
         Url::revoke_object_url(&url)
     };
     download().map_err(|e| format!("Browser download failed: {e:?}"))
+}
+
+/// Whether the layout paints the extra chart at `index`: inside the arrangement, and among tabs
+/// only when detached.
+fn slot_shown(layout: &ChartLayout, active: usize, index: usize) -> bool {
+    let slot = if index >= active { index + 1 } else { index };
+    slot < layout.mode.chart_count()
+        && (layout.mode != ChartLayoutMode::Tabs || layout.is_detached(slot))
 }
 
 fn panel_frame(bg: egui::Color32) -> egui::Frame {
