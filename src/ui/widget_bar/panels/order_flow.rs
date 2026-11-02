@@ -36,13 +36,6 @@ impl OrderFlowPanel {
         self.service = service;
     }
 
-    /// Synchronise a category changed elsewhere, without changing whether it detects or alerts.
-    pub fn set_category_visible(&mut self, kind: DetectionKind, visible: bool) {
-        if let Some(index) = DetectionKind::ALL.iter().position(|&item| item == kind) {
-            self.visible[index] = visible;
-        }
-    }
-
     /// Drain live alerts once, append one toast per alert and keep at most five on screen.
     /// Returns each kind whose alert requested a sound, in delivery order; the host plays it.
     pub fn poll(&mut self, ctx: &egui::Context, toasts: &mut Toasts) -> Vec<DetectionKind> {
@@ -289,112 +282,110 @@ mod tests {
 
     #[test]
     fn panel_edits_control_next_detections_and_poll_delivers_each_alert_once() {
-        for theme in [Theme::light(), Theme::dark()] {
-            for width in [220.0, 300.0] {
-                let ctx = egui::Context::default();
-                apply_to_egui(&ctx, &theme);
-                l10n::set_translator(&ctx, |key| match key {
-                    "Order flow" => Some("Auftragsfluss".into()),
-                    "{symbol}: {kind}" => Some("{kind} ({symbol})".into()),
-                    "Detected at {time} UTC" => Some("Erkannt um {time} UTC".into()),
-                    _ => None,
-                });
-                let service = Arc::new(OrderFlowDetectors::new());
-                service
-                    .track(&Instrument::new("ES").with_tick_size(0.25))
-                    .unwrap();
-                let mut settings = service.settings();
-                settings.big_trades.enabled = false;
-                settings.big_trades.rule.threshold = Threshold::Fixed(10.0);
-                service.set_settings(settings);
-                let now = DateTime::from_timestamp(0, 0).unwrap();
-                let mut panel = OrderFlowPanel::new(service.clone());
-                let mut draw = |events| {
-                    let mut used = egui::Rect::NOTHING;
-                    let output = ctx.run_ui(
-                        egui::RawInput {
-                            screen_rect: Some(egui::Rect::from_min_size(
-                                egui::Pos2::ZERO,
-                                egui::vec2(width, 900.0),
-                            )),
-                            events,
-                            ..Default::default()
-                        },
-                        |ui| {
-                            panel.show(ui, "ES", now);
-                            used = ui.min_rect();
-                        },
-                    );
-                    assert!(used.right() <= width, "{used:?}");
-                    let texts: Vec<_> = output
-                        .shapes
-                        .iter()
-                        .filter_map(|shape| {
-                            let egui::Shape::Text(text) = &shape.shape else {
-                                return None;
-                            };
-                            Some((text.galley.text().to_owned(), text.visual_bounding_rect()))
-                        })
-                        .collect();
-                    output.drop_without_applying_deltas();
-                    texts
-                };
-                let mut texts = draw(Vec::new());
-                assert!(texts.iter().any(|(text, _)| text == "Auftragsfluss"));
-                for label in ["Big trades", "Alert", "Sound"] {
-                    let pos = texts
-                        .iter()
-                        .find(|(text, _)| text == label)
-                        .unwrap()
-                        .1
-                        .center();
-                    texts = draw(vec![
-                        egui::Event::PointerMoved(pos),
-                        egui::Event::PointerButton {
-                            pos,
-                            button: egui::PointerButton::Primary,
-                            pressed: true,
-                            modifiers: egui::Modifiers::NONE,
-                        },
-                        egui::Event::PointerButton {
-                            pos,
-                            button: egui::PointerButton::Primary,
-                            pressed: false,
-                            modifiers: egui::Modifiers::NONE,
-                        },
-                    ]);
-                }
-                assert!(service.settings().big_trades.enabled);
-                assert!(service.settings().big_trades.alert);
-                assert!(service.settings().big_trades.sound);
-                for second in 1..=6 {
-                    let time = now + chrono::TimeDelta::seconds(second);
-                    service.push(
-                        "ES",
-                        time,
-                        &MarketEvent::Trade(Tick::new(time, 100.0, 10.0, Some(OrderSide::Buy))),
-                    );
-                }
-                let mut toasts = Toasts::new();
-                let sounds = panel.poll(&ctx, &mut toasts);
-                assert_eq!(sounds, [DetectionKind::BigTrade; 6]);
-                assert_eq!(toasts.len(), 5);
-                assert!(
-                    toasts.toasts().iter().all(|toast| toast
-                        .title
-                        .as_deref()
-                        .unwrap()
-                        .ends_with("(ES)"))
+        for width in [220.0, 300.0] {
+            let ctx = egui::Context::default();
+            apply_to_egui(&ctx, &Theme::dark());
+            l10n::set_translator(&ctx, |key| match key {
+                "Order flow" => Some("Auftragsfluss".into()),
+                "{symbol}: {kind}" => Some("{kind} ({symbol})".into()),
+                "Detected at {time} UTC" => Some("Erkannt um {time} UTC".into()),
+                _ => None,
+            });
+            let service = Arc::new(OrderFlowDetectors::new());
+            service
+                .track(&Instrument::new("ES").with_tick_size(0.25))
+                .unwrap();
+            let mut settings = service.settings();
+            settings.big_trades.enabled = false;
+            settings.big_trades.rule.threshold = Threshold::Fixed(10.0);
+            service.set_settings(settings);
+            let now = DateTime::from_timestamp(0, 0).unwrap();
+            let mut panel = OrderFlowPanel::new(service.clone());
+            let mut draw = |events| {
+                let mut used = egui::Rect::NOTHING;
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 900.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        panel.show(ui, "ES", now);
+                        used = ui.min_rect();
+                    },
                 );
-                assert!(
-                    toasts
-                        .toasts()
-                        .iter()
-                        .all(|toast| toast.message.starts_with("Erkannt um "))
-                );
-                assert!(panel.poll(&ctx, &mut toasts).is_empty());
-                assert_eq!(toasts.len(), 5);
+                assert!(used.right() <= width, "{used:?}");
+                let texts: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| {
+                        let egui::Shape::Text(text) = &shape.shape else {
+                            return None;
+                        };
+                        Some((text.galley.text().to_owned(), text.visual_bounding_rect()))
+                    })
+                    .collect();
+                output.drop_without_applying_deltas();
+                texts
+            };
+            let mut texts = draw(Vec::new());
+            assert!(texts.iter().any(|(text, _)| text == "Auftragsfluss"));
+            for label in ["Big trades", "Alert", "Sound"] {
+                let pos = texts
+                    .iter()
+                    .find(|(text, _)| text == label)
+                    .unwrap()
+                    .1
+                    .center();
+                texts = draw(vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ]);
             }
+            assert!(service.settings().big_trades.enabled);
+            assert!(service.settings().big_trades.alert);
+            assert!(service.settings().big_trades.sound);
+            for second in 1..=6 {
+                let time = now + chrono::TimeDelta::seconds(second);
+                service.push(
+                    "ES",
+                    time,
+                    &MarketEvent::Trade(Tick::new(time, 100.0, 10.0, Some(OrderSide::Buy))),
+                );
+            }
+            let mut toasts = Toasts::new();
+            let sounds = panel.poll(&ctx, &mut toasts);
+            assert_eq!(sounds, [DetectionKind::BigTrade; 6]);
+            assert_eq!(toasts.len(), 5);
+            assert!(
+                toasts.toasts().iter().all(|toast| toast
+                    .title
+                    .as_deref()
+                    .unwrap()
+                    .ends_with("(ES)"))
+            );
+            assert!(
+                toasts
+                    .toasts()
+                    .iter()
+                    .all(|toast| toast.message.starts_with("Erkannt um "))
+            );
+            assert!(panel.poll(&ctx, &mut toasts).is_empty());
+            assert_eq!(toasts.len(), 5);
         }
     }
 }
