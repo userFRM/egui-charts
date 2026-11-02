@@ -207,11 +207,11 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 
 - [x] Typed `Alert` conditions model price crossings/comparisons, moves over a bar span, study plots, supported drawing levels, watchlists and multiple conditions.
 - [x] Shared creation/editing dialog validates conditions, name, message, frequency and expiry; presets use storage.
-- [x] Toolbar, context-menu, price-scale and keyboard entry points, plus draggable chart alert levels.
+- [x] The terminal wires toolbar, context-menu, price-scale and configurable keyboard entry points, plus draggable chart alert levels. Alert display, toast duration and host sound playback follow the Alerts settings tab.
 - [x] Strategy-run fill alerts carry execution prices and position messages, suppress repeated fill batches and run on the demo live feed.
 - [x] `AlertsPanel` uses `services::Alerts` to list, edit, pause/enable and remove alerts, and to show supplied trigger events in toasts and an exportable log.
-- [ ] Add user-controlled sorting and cloning to the alerts panel.
-- [ ] Offer inline creation and series-level alert settings alongside the shared dialog.
+- [x] The alerts panel sorts by name, symbol and status, and stages copies in the shared editor.
+- [x] Inline creation and series-level alert visibility, labels and colour work alongside the shared dialog.
 - [x] Drawing alerts follow fork, pitchfan and regression lines on linear and logarithmic scales, with entry, exit, inside and outside conditions resolving both moving boundaries.
 - [ ] Model persistent inside/outside-channel conditions and once-per-minute frequency.
 - [ ] Expose message placeholder and per-alert notification-schedule configuration for host processing.

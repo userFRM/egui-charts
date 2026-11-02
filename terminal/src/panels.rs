@@ -104,7 +104,7 @@ impl Default for MarketPanels {
 pub(super) struct State {
     /// Follows the terminal's control visibility, which the core applies to it.
     pub(super) widget_bar: WidgetBar,
-    market: MarketPanels,
+    pub(super) market: MarketPanels,
     profiles: Option<ProfileDirectory>,
     profile: Option<ProfileId>,
     wide_watchlist: bool,
