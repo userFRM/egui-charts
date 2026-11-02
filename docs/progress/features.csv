@@ -389,7 +389,7 @@ Order flow,Order flow,Absorption detection,done,library,src/services/detectors/a
 Options,Expected move,Expected move to an expiry from the at-the-money straddle or implied volatility,missing,host,
 Options,Gamma exposure,Call and put walls,missing,host,
 Options,Gamma exposure,Gamma exposure by strike,missing,host,
-Options,Gamma exposure,Gamma exposure computed from option chains or supplied by the feed,missing,host,
+Options,Gamma exposure,Gamma exposure computed from option chains or supplied by the feed,done,host,src/data/option_chain.rs;src/data/mod.rs;src/model/instrument.rs
 Options,Options profile,"Open interest by strike for calls, puts and net",missing,host,
 Options,Options profile,"Option expiry selection: nearest, one listed expiry or every expiry up to a date",partial,host,src/data/options_volume.rs;src/studies/builtin/options_volume_profile.rs
 Options,Options profile,Call and put volume by strike,done,host,src/data/options_volume.rs;src/studies/builtin/options_volume_profile.rs
@@ -450,7 +450,7 @@ Order flow,Order flow,Market structure meters,partial,library,src/data/order_flo
 Order flow,Order flow,Merge and split adjacent profiles,done,library,src/studies/builtin/trade_profile.rs;src/ui/context_menu/trade_profile.rs;src/widget/trade_profile.rs;src/widget/frame.rs;src/ui/context_menu/chart_menus/mod.rs;terminal/src/studies.rs
 Order flow,Order flow,Multi-column footprint,done,library,src/chart/overlays/footprint.rs;src/widget/frame.rs
 Order flow,Order flow,"On-chart order lines with drag to move entry, stop and target",done,host,src/ui/trading/mod.rs;src/ui/trading/view.rs;src/chart/renderers/trading_lines/mod.rs
-Order flow,Order flow,Options gamma exposure suite,missing,host,
+Order flow,Order flow,Options gamma exposure suite,partial,host,src/data/option_chain.rs;src/data/mod.rs;src/model/instrument.rs
 Order flow,Order flow,"Order book, heatmap and order-level replay",done,library,src/data/replay.rs;src/data/recording.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/widget/replay.rs;src/widget/feed/mod.rs;src/widget/feed/pump.rs
 Order flow,Order flow,Minimum traded volume for imbalances and stacked imbalance zones,missing,library,
 Order flow,Order flow,Order-flow entries offered only for symbols whose feed supplies their data,missing,host,
