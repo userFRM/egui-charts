@@ -44,7 +44,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Chart-wide time, price, percentage and volume formatters, plus per-series price formatters. Drawing prices and price changes use their pane's raw-price formatter, including measurements, forecasts, projections, position levels and rectangle heights.
 - [x] Locale-aware date names and configurable date patterns. Forecast dates use the chart's display time zone and crosshair time formatter, including host formatting and clock visibility.
 - [x] Chart-owned panes share the time axis and support resizing, reordering, stretch sizing, collapse and maximise controls.
-- [x] Studies and added series can use separate panes and independent scales.
+- [x] Studies and added series can use separate panes and independent scales. The demo Samples chooser opens synthetic strike and maturity charts with numeric crosshair readouts and preserves the price workspace on return.
 - [x] Scale settings control currency and unit labels, scale-mode and price-action buttons, price-to-bar ratio, label overlap and symbol, study and extended-session value colours.
 - [ ] Forward pan, wheel and pinch input to maximised study panes and support pane maximisation by double-click.
 - [ ] Apply the main-series-only autoscale quick setting and the left-axis scale-mode configuration field.
@@ -286,7 +286,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Optional per-series bar limits bound retained history; feed queues coalesce updates and bound pending trades/depth.
 - [x] Runtime symbol/interval changes reload the feed; explicit reload and reset paths invalidate old work.
 - [x] Public events report pointer, range, symbol, interval and data changes; custom menu entries and toolbar controls return application identifiers.
-- [x] Added price series, custom study-backed series and attached `Primitive` renderers support visibility, hit testing, scale participation and removal.
+- [x] Added price series, custom study-backed series and attached `Primitive` renderers support visibility, hit testing, scale participation and removal. The demo Samples chooser demonstrates toggleable session backgrounds, axis labels and a custom range pane with pointer feedback.
 - [ ] Reset a stale manual price range when changing symbols.
 - [ ] Accept locale, formatters, storage and saved state as builder inputs.
 - [ ] Add bounded time-range requests for trades/depth and page older trades during scroll-back.

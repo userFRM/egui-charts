@@ -10,6 +10,10 @@
 mod audio;
 #[path = "commands.rs"]
 mod commands;
+#[path = "numeric_scenes.rs"]
+mod numeric_scenes;
+#[path = "primitive_scene.rs"]
+mod primitive_scene;
 #[path = "images.rs"]
 mod images;
 #[path = "interval.rs"]
@@ -395,6 +399,7 @@ pub struct DemoApp {
     study_templates: TemplateDialog<StudyTemplateSet>,
     drawing_templates: TemplateDialog<DrawingTemplate>,
     quick_search: egui_charts::ui_kit::command_palette::CommandPaletteHandler,
+    sample_scene: Option<commands::SampleScene>,
     alert_dialog: AlertDialog,
     drawing_props: DrawingPropertiesDialog,
     keyboard_shortcuts: KeyboardShortcutsDialog,
@@ -673,6 +678,7 @@ impl DemoApp {
             quick_search: egui_charts::ui_kit::command_palette::CommandPaletteHandler::new(
                 commands::quick_search_commands(),
             ),
+            sample_scene: None,
             alert_dialog: AlertDialog::new(),
             drawing_props: DrawingPropertiesDialog::new(),
             keyboard_shortcuts: KeyboardShortcutsDialog::new(),
@@ -1507,6 +1513,10 @@ impl eframe::App for DemoApp {
         }
         if self.keyboard_dialog_open() {
             self.chart.suppress_shortcuts(&ctx);
+        }
+        if self.show_samples(ui) {
+            self.storage.flush(frame.storage_mut());
+            return;
         }
         self.show_layout_tabs(ui);
         self.refresh_layout_menu();
