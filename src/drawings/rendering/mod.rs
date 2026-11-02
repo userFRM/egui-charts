@@ -42,7 +42,10 @@ use std::rc::Rc;
 pub struct ChartView<'a> {
     /// Instrument metadata supplied by the host or feed, for tick and pip measurements.
     pub instrument: Option<&'a crate::model::Instrument>,
-    /// Price label formatter supplied by the chart; `None` uses instrument precision.
+    /// The host's raw-price formatter for the series the drawings belong to, from
+    /// [`Chart::set_series_formatter`](crate::Chart::set_series_formatter) or else
+    /// [`Chart::set_price_formatter`](crate::Chart::set_price_formatter). Drawing prices and
+    /// price changes use its `format`; `None` keeps their built-in decimals.
     pub price_formatter: Option<&'a dyn crate::scales::PriceFormatter>,
     /// The series that drawing anchors index into.
     pub bars: &'a [Bar],

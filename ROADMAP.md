@@ -41,7 +41,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 
 - [x] Linear, logarithmic, percentage, indexed-to-100 and inverted price scales, autoscale, manual ranges and scale options.
 - [x] Time-axis tick hierarchy, price marks that default to the instrument tick grid with host overrides, exchange time zones, session breaks and extended-hours shading.
-- [x] Chart-wide time, price, percentage and volume formatters, plus per-series price formatters.
+- [x] Chart-wide time, price, percentage and volume formatters, plus per-series price formatters. Drawing prices and price changes use their pane's raw-price formatter, including measurements, forecasts, projections, position levels and rectangle heights.
 - [x] Locale-aware date names and configurable date patterns.
 - [x] Chart-owned panes share the time axis and support resizing, reordering, stretch sizing, collapse and maximise controls.
 - [x] Studies and added series can use separate panes and independent scales.
