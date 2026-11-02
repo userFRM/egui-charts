@@ -398,6 +398,7 @@ mod tests {
             for autosave in [false, true] {
                 app = restart(&ctx, &storage);
                 app.poll_storage(&ctx);
+                app.activate_chart_slot(mode.chart_count() - 1);
                 assert_eq!(app.chart.chart_type(), ChartType::Area);
                 app.top_toolbar.layout_menu.autosave = autosave;
                 app.handle_top_toolbar(&ctx, TopToolbarAction::ChartStyleSelected(ChartType::Line));
@@ -416,6 +417,7 @@ mod tests {
                 app.save(&mut storage);
                 app = restart(&ctx, &storage);
                 app.poll_storage(&ctx);
+                app.activate_chart_slot(mode.chart_count() - 1);
                 assert_eq!(
                     app.chart.chart_type(),
                     if autosave {
