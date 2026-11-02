@@ -3,7 +3,7 @@
 use super::document::{Received, StoredDocument};
 use super::{ConflictChoice, Storage, StoreKind};
 use crate::config::DrawingToolType;
-use crate::model::{ReplaySession, Timeframe, Watchlist};
+use crate::model::{ChartType, ReplaySession, Timeframe, Watchlist};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -45,6 +45,12 @@ pub struct UserSettings {
     pub indicator_favorites: Vec<String>,
     /// The intervals starred in the interval menu, in order.
     pub interval_favorites: Vec<Timeframe>,
+    /// User-created intervals in menu order, including those temporarily unavailable from a source.
+    pub custom_intervals: Vec<Timeframe>,
+    /// Hidden interval entries, including those temporarily unavailable from a source.
+    pub hidden_intervals: Vec<Timeframe>,
+    /// The chart types starred in the chart type menu, in order.
+    pub chart_type_favorites: Vec<ChartType>,
     /// The properties each drawing tool starts with, keyed by tool, as the JSON of
     /// its `DrawingTemplate`. A tool without an entry starts with
     /// the built-in defaults.
