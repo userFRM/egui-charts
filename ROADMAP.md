@@ -138,7 +138,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [ ] Offer interval and wait-for-close inputs for OHLC-based studies as well as source-aware studies.
 - [ ] Expose every supported plot type in the Style editor.
 - [ ] Add a configurable per-chart study limit and rejection feedback.
-- [ ] Restore custom registered studies and remap study-source dependencies through a library-owned template operation.
+- [x] Restore custom registered studies and remap study-source dependencies through a library-owned template operation, including the terminal's indicator templates.
 - [ ] Provide a study editor surface with host callbacks for submitted content.
 
 ## Order Flow
@@ -264,7 +264,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Main-pane drawings synchronise between grouped charts by timestamp.
 - [x] `ChartSnapshot` saves symbol, interval, chart configuration, built-in studies, panes, scales, viewport and drawings in versioned documents.
 - [x] Layout menus create, copy, rename, list, save, open and delete layouts, with debounced autosave through supplied storage.
-- [x] Chart, study and drawing template catalogues support named save, replace, apply and delete operations.
+- [x] Chart, study and drawing template catalogues support named save, replace, apply and delete operations; the terminal wires indicator templates to host storage and applies their studies, links and shared panes as one undoable edit.
 - [x] `SettingsStore` persists preferences with debouncing, failed-write retry and error reporting.
 - [ ] Preserve added/custom series, markers, price lines and custom-study reconstruction in chart snapshots, with explicit reattachment of application services and formatters.
 - [ ] Add layout favourites to the catalogue and menu.
@@ -304,7 +304,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 
 The crate renders supplied data and exposes interfaces for application services. The application supplies market data, broker execution, accounts and durable storage. These interfaces also allow services to run remotely.
 
-- `Datafeed`, `SymbolSearch`, `Quotes` and `Marks` connect instrument discovery, history, live prices, executions, depth and chart events. Feed queries also supply metrics, options volume, listed option expiries and live or historical option chains with quotes, open interest, implied volatility and Greeks, analyst targets, symbol details, news, calendars, screeners, hotlists and market heatmaps. The headless `OptionChain` handle retains the latest validated snapshot and error; the host supplies all option data.
+- `Datafeed`, `SymbolSearch`, `Quotes` and `Marks` connect instrument discovery, history, live prices, executions, depth and chart events. Feed queries also supply metrics, options volume, listed option expiries and live or historical option chains with quotes, open interest, implied volatility and Greeks, analyst targets, symbol details, news, calendars, screeners, hotlists and market heatmaps. The headless `OptionChain` handle retains the latest validated snapshot and error; the host supplies all option data. `OptionExposure::gamma` computes exposure per 1% underlying move by expiry and strike, counting contracts with missing inputs and using positive call and negative put signs as a convention. `Datafeed::option_exposure` supplies gamma, delta, vanna or charm snapshots with their units and model label; `OptionExposureHandle` retains the latest valid observation and prefers it unchanged over computed gamma.
 - `Broker` supplies real or paper-account state, trading rules, execution and account updates. Trading components submit actions and render the reported orders, positions, fills and history.
 - `Storage` supplies layouts, drawings, settings and template documents; an application may use local or remote storage and manage accounts, synchronisation and sharing.
 - `Alerts` stores and evaluates alert conditions and reports changes and triggers. The crate edits models and draws levels, dialogs, logs and toasts; the application supplies sound, schedules and external delivery.
