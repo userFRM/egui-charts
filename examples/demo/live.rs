@@ -325,12 +325,17 @@ impl LiveFeed {
         bars
     }
 
-    pub(super) fn recording(&self) -> Vec<u8> {
+    pub(super) fn read_recording(&self, events: &mut Vec<egui_charts::data::ReplayEvent>) {
         let sim = self.state();
-        sim.streams
+        if let Some(feed) = sim
+            .streams
             .iter()
             .find(|feed| feed.state().symbol == sim.symbol)
-            .map_or_else(|| sim.capture.bytes(), Self::recording)
+        {
+            feed.read_recording(events);
+        } else {
+            sim.capture.read_into(events);
+        }
     }
 
     pub(super) fn instrument(&self) -> Instrument {
@@ -844,6 +849,17 @@ impl Simulation {
             && let Some(shown) = self.shown_trade(&trade, sub.extended_hours)
         {
             let price = (shown.price / self.tick_size).round() as i64;
+            if self.capture.needs_checkpoint(trade.ts)
+                && let Some(market) = &self.market
+            {
+                capture_book(
+                    &mut self.capture,
+                    &self.symbol,
+                    market,
+                    self.orders.as_ref(),
+                    trade.ts,
+                );
+            }
             self.capture.push(
                 &self.symbol,
                 shown.ts,
@@ -1412,14 +1428,48 @@ mod tests {
             }
             charts.push(chart);
         }
-        feed.advance(now + TimeDelta::seconds(2));
+        for second in 1..=420 {
+            feed.advance(now + TimeDelta::seconds(second));
+        }
         feed.set_paused(true);
         for (symbol, mut chart) in symbols.into_iter().zip(charts) {
             feed.set_symbol(symbol);
-            let bytes = feed.recording();
-            let mut reader = egui_charts::data::RecordingReader::new(bytes.as_slice()).unwrap();
+            let mut events = Vec::new();
+            feed.read_recording(&mut events);
+            assert!(matches!(
+                events[0].event,
+                egui_charts::data::MarketEvent::DepthSnapshot { .. }
+                    | egui_charts::data::MarketEvent::OrderSnapshot { .. }
+            ));
+            assert!(events[0].time > now, "expired chunks must be removed");
+            assert!(events.last().unwrap().time - events[0].time <= TimeDelta::minutes(5));
+            let mut encoded = egui_charts::data::RecordingWriter::new(Vec::new()).unwrap();
+            for event in &events {
+                encoded.write(event).unwrap();
+            }
+            assert!(encoded.get_ref().len() <= 8 * 1024 * 1024);
+            assert!(events.windows(2).all(|pair| (pair[0].time, pair[0].sequence) < (pair[1].time, pair[1].sequence)));
+            let driver = Arc::new(
+                egui_charts::data::ReplayDriver::new(events.clone(), vec![feed.instrument()])
+                    .unwrap(),
+            );
+            driver.seek(events[0].time);
+            let mut replay = ChartBuilder::new()
+                .with_feed(driver)
+                .with_symbol(symbol)
+                .build();
+            for _ in 0..4 {
+                ctx.run_ui(egui::RawInput::default(), |ui| {
+                    replay.show(ui);
+                })
+                .drop_without_applying_deltas();
+            }
+            let book = replay
+                .order_book(SeriesId::MAIN)
+                .expect("oldest retained point has a book");
+            assert!(!book.bids.is_empty() && !book.asks.is_empty());
             let mut newest = None;
-            while let Some(event) = reader.read().unwrap() {
+            for event in &events {
                 assert_eq!(event.symbol, symbol);
                 newest = Some(event.time);
             }
@@ -1428,9 +1478,10 @@ mod tests {
                 "{symbol} must include recorded live updates"
             );
             chart.set_replay_time(Some(now));
+            let mut retained = Vec::new();
+            feed.read_recording(&mut retained);
             assert_eq!(
-                feed.recording(),
-                bytes,
+                retained, events,
                 "{symbol} must retain its recording when replay unsubscribes"
             );
         }

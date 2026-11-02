@@ -6,13 +6,17 @@ use egui_charts::data::{MarketEvent, RecordingWriter, ReplayDriver, ReplayEvent}
 use egui_charts::model::{Bar, BarClock, Timeframe};
 use egui_charts::ui::replay::{ReplayAction, ReplayController, ReplayStartAction};
 use egui_charts::widget::SeriesId;
+use std::collections::VecDeque;
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
-/// The demo records its raw executions, quotes and sequenced book messages in memory.
-/// Native hosts can give the same writer a buffered file instead.
+/// Keep at most five minutes and 8 MiB of encoded events, in chunks beginning with a book
+/// snapshot. A checkpoint is taken before the next execution after one minute or 1 MiB.
+const CAPTURE_BYTES: usize = 8 * 1024 * 1024;
+
 pub(super) struct Capture {
-    writer: RecordingWriter<Vec<u8>>,
+    chunks: VecDeque<(DateTime<Utc>, RecordingWriter<Vec<u8>>)>,
+    bytes: usize,
     sequence: u64,
     pub(super) detectors: Option<Arc<egui_charts::services::OrderFlowDetectors>>,
 }
@@ -20,24 +24,60 @@ pub(super) struct Capture {
 impl Capture {
     pub(super) fn new() -> Self {
         Self {
-            writer: RecordingWriter::new(Vec::new()).expect("memory recording"),
+            chunks: VecDeque::new(),
+            bytes: 0,
             sequence: 0,
             detectors: None,
         }
+    }
+
+    pub(super) fn needs_checkpoint(&self, time: DateTime<Utc>) -> bool {
+        self.chunks.back().is_none_or(|(start, writer)| {
+            time - *start >= chrono::TimeDelta::minutes(1) || writer.get_ref().len() >= 1024 * 1024
+        })
     }
 
     pub(super) fn push(&mut self, symbol: &str, time: DateTime<Utc>, event: MarketEvent) {
         if let Some(detectors) = &self.detectors {
             detectors.push(symbol, time, &event);
         }
-        self.writer
+        if matches!(
+            event,
+            MarketEvent::DepthSnapshot { .. } | MarketEvent::OrderSnapshot { .. }
+        ) {
+            let writer = RecordingWriter::new(Vec::new()).expect("memory recording");
+            self.bytes += writer.get_ref().len();
+            self.chunks.push_back((time, writer));
+        }
+        // Executions from before subscription have no recorded book to replay with them.
+        let Some((_, writer)) = self.chunks.back_mut() else {
+            return;
+        };
+        let before = writer.get_ref().len();
+        writer
             .write(&ReplayEvent::new(symbol, time, self.sequence, event))
             .expect("generated market event");
+        self.bytes += writer.get_ref().len() - before;
         self.sequence += 1;
+        while self.chunks.len() > 1
+            && (self.bytes > CAPTURE_BYTES
+                || self
+                    .chunks
+                    .front()
+                    .is_some_and(|(start, _)| time - *start > chrono::TimeDelta::minutes(5)))
+        {
+            self.bytes -= self.chunks.pop_front().unwrap().1.get_ref().len();
+        }
     }
 
-    pub(super) fn bytes(&self) -> Vec<u8> {
-        self.writer.get_ref().clone()
+    pub(super) fn read_into(&self, events: &mut Vec<ReplayEvent>) {
+        for (_, writer) in &self.chunks {
+            let mut reader = egui_charts::data::RecordingReader::new(writer.get_ref().as_slice())
+                .expect("memory recording");
+            while let Some(event) = reader.read().expect("memory recording") {
+                events.push(event);
+            }
+        }
     }
 }
 
@@ -245,12 +285,58 @@ impl DemoApp {
         if self.replay.is_none() {
             return;
         }
-        let (bars, clock) = replay_source(&self.live, interval, &self.chart);
+        let (mut bars, clock) = replay_source(&self.live, interval, &self.chart);
         if bars.is_empty() {
             self.notify("No source history for that update interval");
             return;
         }
-        let cutoff = self.chart.replay_time();
+        let market_driver = if interval.is_trade_based() {
+            if let Some(driver) = self.chart.replay_driver().cloned() {
+                Some(driver)
+            } else {
+                let mut instruments = vec![self.live.instrument()];
+                let mut merged = Vec::new();
+                self.live.read_recording(&mut merged);
+                for (index, extra) in self.extra_charts.iter().enumerate() {
+                    let slot = if index >= self.layout_slot {
+                        index + 1
+                    } else {
+                        index
+                    };
+                    if !self.replay_slots.contains(&slot)
+                        || instruments
+                            .iter()
+                            .any(|instrument| instrument.symbol == extra.chart.symbol())
+                    {
+                        continue;
+                    }
+                    instruments.push(extra.live.instrument());
+                    extra.live.read_recording(&mut merged);
+                }
+                let driver =
+                    Arc::new(ReplayDriver::new(merged, instruments).expect("captured market data"));
+                Some(driver)
+            }
+        } else {
+            None
+        };
+        let mut cutoff = self.chart.replay_time();
+        if let Some(driver) = &market_driver {
+            let Some((from, to)) = driver.time_range() else {
+                self.notify("No recorded market events available yet");
+                return;
+            };
+            bars.retain(|bar| bar.time >= from && bar.time <= to);
+            if bars.is_empty() {
+                self.notify("No recorded executions available yet");
+                return;
+            }
+            let after = chrono::TimeDelta::nanoseconds(1);
+            cutoff = cutoff.map(|time| time.clamp(from + after, to + after));
+            if self.chart.replay_driver().is_none() {
+                self.notify(format!("Recorded market replay: {from} to {to}"));
+            }
+        }
         if !interval.is_trade_based() && self.chart.replay_driver().is_some() {
             self.chart.set_market_replay(None);
             self.chart.set_replay_time(cutoff);
@@ -280,43 +366,13 @@ impl DemoApp {
         // One-trade updates move the cutoff back only to just after the last trade before it.
         self.push_replay_window(matches!(interval, Timeframe::Ticks(count) if count.get() == 1));
         self.chart.set_replay_source(bars, clock);
-        if interval.is_trade_based() && self.chart.replay_driver().is_none() {
-            let mut instruments = vec![self.live.instrument()];
-            let mut events = self.live.recording();
-            // Concatenate decoded events, rather than binary streams with separate headers.
-            let mut reader = egui_charts::data::RecordingReader::new(events.as_slice())
-                .expect("memory recording");
-            let mut merged = Vec::new();
-            while let Some(event) = reader.read().expect("memory recording") {
-                merged.push(event);
-            }
-            for (index, extra) in self.extra_charts.iter().enumerate() {
-                let slot = if index >= self.layout_slot {
-                    index + 1
-                } else {
-                    index
-                };
-                if !self.replay_slots.contains(&slot)
-                    || instruments
-                        .iter()
-                        .any(|instrument| instrument.symbol == extra.chart.symbol())
-                {
-                    continue;
-                }
-                instruments.push(extra.live.instrument());
-                events = extra.live.recording();
-                let mut reader = egui_charts::data::RecordingReader::new(events.as_slice())
-                    .expect("memory recording");
-                while let Some(event) = reader.read().expect("memory recording") {
-                    merged.push(event);
-                }
-            }
-            let driver =
-                Arc::new(ReplayDriver::new(merged, instruments).expect("captured market data"));
+        if let Some(driver) = market_driver {
             if let Some(time) = self.chart.replay_time() {
                 driver.seek(time - chrono::TimeDelta::nanoseconds(1));
             }
-            self.chart.set_market_replay(Some(driver));
+            if self.chart.replay_driver().is_none() {
+                self.chart.set_market_replay(Some(driver));
+            }
         }
         let driver = self.chart.replay_driver().cloned();
         for (index, extra) in self.extra_charts.iter_mut().enumerate() {
@@ -588,6 +644,16 @@ mod tests {
 
         // One-trade updates move the cutoff back only to just after the last trade: no fill is undone.
         app.stop_replay();
+        for _ in 0..4 {
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                app.chart.show(ui);
+            })
+            .drop_without_applying_deltas();
+        }
+        app.live.set_paused(false);
+        app.live
+            .advance(app.live.now() + chrono::TimeDelta::seconds(2));
+        app.live.set_paused(true);
         let bars = app.live.snapshot(
             app.state.timeframe,
             app.chart.bar_clock(),
