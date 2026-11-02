@@ -2388,7 +2388,13 @@ impl DemoApp {
         }
         self.symbol_details
             .set_average_volume(self.live.daily_volume().1);
-        for request in self.symbol_details.take_market_requests() {
+        // Period returns and seasonality look back over the whole history, so wait for it.
+        let requests = if self.loading_bars {
+            Vec::new()
+        } else {
+            self.symbol_details.take_market_requests()
+        };
+        for request in requests {
             use egui_charts::ui::widget_bar::{MarketDetail, MarketDetailRequest};
             let bars = self.chart.bars(SeriesId::MAIN);
             match request {
@@ -3728,10 +3734,15 @@ mod tests {
         assert!(!app.live.loading());
     }
 
-    /// The initial history yields to input while the chart is paused, then finishes normally.
+    /// The initial history yields to input while the chart is paused, then finishes normally
+    /// and answers the symbol details from the complete history.
     #[test]
     fn initial_history_shows_loading_and_keeps_keyboard_input_responsive() {
-        fn frame(app: &mut DemoApp, ctx: &egui::Context, events: Vec<egui::Event>) -> bool {
+        fn texts(
+            app: &mut DemoApp,
+            ctx: &egui::Context,
+            events: Vec<egui::Event>,
+        ) -> Vec<(String, f32)> {
             let output = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
@@ -3743,11 +3754,21 @@ mod tests {
                 },
                 |ui| eframe::App::ui(app, ui, &mut eframe::Frame::_new_kittest()),
             );
-            let loading = output.shapes.iter().any(|shape| {
-                matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Loading chart data…")
-            });
+            let texts = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some((text.galley.text().to_owned(), text.pos.y)),
+                    _ => None,
+                })
+                .collect();
             output.drop_without_applying_deltas();
-            loading
+            texts
+        }
+        fn frame(app: &mut DemoApp, ctx: &egui::Context, events: Vec<egui::Event>) -> bool {
+            texts(app, ctx, events)
+                .iter()
+                .any(|(text, _)| text == "Loading chart data…")
         }
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
@@ -3775,6 +3796,18 @@ mod tests {
                         .last()
                         .is_some_and(|bar| bar.time >= now - chrono::TimeDelta::minutes(1)),
                     "the retained executions must reach the initial clock"
+                );
+                let texts = texts(&mut app, &ctx, Vec::new());
+                let week = texts
+                    .iter()
+                    .find(|(text, _)| text == "1W")
+                    .expect("the details panel shows performance")
+                    .1;
+                assert!(
+                    texts
+                        .iter()
+                        .any(|(text, y)| (y - week).abs() < 2.0 && text.ends_with('%')),
+                    "the weekly return must use the complete history"
                 );
                 return;
             }
