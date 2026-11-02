@@ -8,12 +8,8 @@
 //! rendering layer in [`rendering`](super::rendering).
 
 mod alert_levels;
-mod axis_currency;
 mod crosshair;
 mod indicator;
-mod study_scale;
-pub(crate) use study_scale::{render_study_axis, study_mapping};
-mod labels;
 mod legend;
 mod markers;
 mod session_breaks;
@@ -24,14 +20,11 @@ mod watermark;
 
 pub use super::rendering::{ChartMapping, RenderContext, StyleColors};
 pub use alert_levels::{alert_shortcut_price, render_alert_levels};
-pub use axis_currency::render_axis_currency;
 
 pub use crosshair::{render_crosshair_full, render_crosshair_with_options};
 pub(crate) use crosshair::{render_crosshair_lines, render_crosshair_price_tag, snap_to_values};
 pub use indicator::IndicatorRenderer;
 pub(crate) use indicator::paint_study_plot;
-pub(crate) use labels::{price_marks, render_time_grid, tick_decimals, time_axis_marks};
-pub use labels::{render_price_labels, render_price_labels_at_pos, render_time_labels};
 pub use legend::{Legend, LegendStatus, QuoteSide, StudyAction};
 pub(crate) use legend::{SeriesAction, study_controls};
 pub(crate) use markers::{render_change_mark, render_event_badges, render_event_breaks};
@@ -49,3 +42,10 @@ pub use trading_lines::{
 };
 pub(crate) use watermark::render_watermark;
 pub use watermark::{Watermark, WatermarkLine};
+
+pub(crate) use super::rendering::axes::{
+    price_marks, render_study_axis, render_time_grid, study_mapping, time_axis_marks,
+};
+pub use super::rendering::axes::{
+    render_axis_currency, render_price_labels, render_price_labels_at_pos, render_time_labels,
+};

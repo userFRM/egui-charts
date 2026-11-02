@@ -1,6 +1,6 @@
 //! Independent study mapping and its axis beside the price pane.
 
-use super::ChartMapping;
+use super::super::ChartMapping;
 use crate::scales::{PriceMap, PriceRange, PriceTransform};
 use crate::studies::{Indicator, PlotType, StudyScale};
 use crate::theme::ThemeExt;
@@ -50,7 +50,9 @@ pub(crate) fn study_mapping(study: &dyn Indicator, coords: &ChartMapping) -> Cha
             high = high.max(0.0);
         }
     }
-    for plot in study.volume_profiles(super::volume_profile::profile_range(coords)) {
+    for plot in study.volume_profiles(crate::chart::renderers::volume_profile::profile_range(
+        coords,
+    )) {
         low = low.min(plot.profile.low());
         high = high.max(plot.profile.high());
     }

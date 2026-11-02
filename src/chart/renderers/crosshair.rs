@@ -1,5 +1,5 @@
-use super::labels::tick_decimals;
 use super::{ChartMapping, RenderContext};
+use crate::chart::rendering::axes::tick_decimals;
 use crate::chart::rendering::axes::{axis_font, paint_crosshair_tag};
 use crate::config::{CrosshairMode, CrosshairOptions, CrosshairStyle};
 use crate::model::Bar;

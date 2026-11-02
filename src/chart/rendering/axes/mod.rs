@@ -1,11 +1,19 @@
 //! Price and time axis rendering
 
-use crate::chart::renderers::tick_decimals;
+mod currency;
+mod labels;
+mod study_scale;
+
 use crate::model::PriceLine;
 use crate::painting::dashed_line::draw_dashed_line;
 use crate::scales::PriceMap;
 use crate::theme::{ThemeExt, contrast};
+pub use currency::render_axis_currency;
 use egui::{Align2, Color32, CornerRadius, FontId, Painter, Pos2, Rect, Stroke, Vec2};
+pub(in crate::chart) use labels::semibold;
+pub(crate) use labels::{price_marks, render_time_grid, tick_decimals, time_axis_marks};
+pub use labels::{render_price_labels, render_price_labels_at_pos, render_time_labels};
+pub(crate) use study_scale::{render_study_axis, study_mapping};
 
 /// Gap between the plot's right edge and the start of the price axis labels.
 pub(crate) const PRICE_LABEL_GAP: f32 = 8.0;
@@ -382,7 +390,7 @@ pub fn price_axis_width(
     tag_labels: &[&str],
     formatter: Option<&dyn crate::scales::PriceFormatter>,
 ) -> f32 {
-    crate::chart::renderers::price_marks(price_map, formatter)
+    price_marks(price_map, formatter)
         .into_iter()
         .map(|mark| mark.label)
         .chain(tag_labels.iter().map(|label| (*label).to_owned()))

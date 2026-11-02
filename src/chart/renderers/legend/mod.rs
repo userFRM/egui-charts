@@ -7,8 +7,8 @@ pub(crate) use study_controls::study_controls;
 
 use quotes::paint_quotes;
 
-use super::labels::semibold;
 use crate::chart::renderers::StyleColors;
+use crate::chart::rendering::axes::semibold;
 use crate::localization as l10n;
 use crate::model::session::MarketSession;
 use crate::model::{Bar, DataStatus, Instrument, Level1Quote, percent_change};

@@ -1,4 +1,4 @@
-use super::{ChartMapping, RenderContext, StyleColors};
+use super::super::{ChartMapping, RenderContext, StyleColors};
 use crate::chart::rendering::axes::{PRICE_LABEL_GAP, axis_font};
 use crate::config::{PriceAxisOptions, TimeScaleOptions};
 use crate::model::Bar;
@@ -535,7 +535,7 @@ pub fn render_time_labels(
 }
 
 /// Formats text at weight 600 when the face has a weight axis.
-pub(super) fn semibold(font: FontId, color: Color32) -> egui::text::TextFormat {
+pub(in crate::chart) fn semibold(font: FontId, color: Color32) -> egui::text::TextFormat {
     let mut format = egui::text::TextFormat::simple(font, color);
     format.coords.push("wght", 600.0);
     format
