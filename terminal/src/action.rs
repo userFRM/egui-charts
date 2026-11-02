@@ -3,7 +3,7 @@
 use egui_charts::model::Instrument;
 use egui_charts::services::ConflictChoice;
 use egui_charts::ui::context_menu::ChartContextAction;
-use egui_charts::ui::dialogs::{AlertDialogAction, DrawingPropertiesAction};
+use egui_charts::ui::dialogs::{AlertDialogAction, DataTableAction, DrawingPropertiesAction};
 use egui_charts::ui::drawing_toolbar::DrawingToolbarAction;
 use egui_charts::ui::export::ExportResponse;
 use egui_charts::ui::floating_replay_control::ReplayControlAction;
@@ -28,6 +28,9 @@ use egui_charts::widget::{ImageRequest, ShortcutRequest};
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum Action {
+    /// The id of a quick search entry registered by
+    /// [`Terminal::add_command`](super::Terminal::add_command).
+    Command(String),
     /// The top toolbar.
     TopToolbar(TopToolbarAction),
     /// The drawing toolbar.
@@ -66,6 +69,8 @@ pub enum Action {
     AlertDialog(AlertDialogAction),
     /// The alerts panel.
     Alerts(AlertPanelAction),
+    /// The loaded chart data table.
+    DataTable(DataTableAction),
     /// The export dialog.
     Export(ExportResponse),
     /// The go-to-date picker.
