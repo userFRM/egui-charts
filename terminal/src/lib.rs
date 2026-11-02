@@ -47,7 +47,7 @@ pub use action::Action;
 pub use services::{ExportContents, ExportFile};
 
 use egui_charts::data::Datafeed;
-use egui_charts::model::{StrategyReport, Timeframe};
+use egui_charts::model::Timeframe;
 use egui_charts::services::{
     Alerts, Broker, Chats, Marks, Notification, Notifications, Quotes, SettingsStore, Signals,
     Storage, SymbolSearch,
@@ -107,23 +107,22 @@ pub struct Terminal {
     panel: Option<core::SidePanel>,
     /// Whether a replay is running, so a symbol change stops it.
     replay_active: bool,
-    strategy_report: Option<StrategyReport>,
     drawings: drawings::State,
     studies: studies::State,
-    #[expect(dead_code, reason = "the group keeps its state here")]
+    #[allow(dead_code, reason = "the group keeps its state here")]
     time: time::State,
-    #[expect(dead_code, reason = "the group keeps its state here")]
+    #[allow(dead_code, reason = "the group keeps its state here")]
     replay: replay::State,
     alerts: alerts::State,
-    #[expect(dead_code, reason = "the group keeps its state here")]
+    #[allow(dead_code, reason = "the group keeps its state here")]
     panels: panels::State,
-    #[expect(dead_code, reason = "the group keeps its state here")]
+    #[allow(dead_code, reason = "the group keeps its state here")]
     trading: trading::State,
-    #[expect(dead_code, reason = "the group keeps its state here")]
+    #[allow(dead_code, reason = "the group keeps its state here")]
     layouts: layouts::State,
-    #[expect(dead_code, reason = "the group keeps its state here")]
+    #[allow(dead_code, reason = "the group keeps its state here")]
     compare: compare::State,
-    #[expect(dead_code, reason = "the group keeps its state here")]
+    #[allow(dead_code, reason = "the group keeps its state here")]
     commands: commands::State,
 }
 
@@ -183,7 +182,6 @@ impl Terminal {
             chart_events: Vec::new(),
             panel: None,
             replay_active: false,
-            strategy_report: None,
             drawings: Default::default(),
             studies: Default::default(),
             time: Default::default(),
@@ -299,11 +297,12 @@ impl Terminal {
     }
 
     /// Offers `formats` in the export dialog and hands each finished export to `save`. Without
-    /// it, exports go to the clipboard only.
+    /// it, exports go to the clipboard only. The host returns an error message if saving or
+    /// opening the export fails, and opens the saved image when [`ExportFile::open`] is true.
     pub fn with_file_export(
         mut self,
         formats: &'static [ExportFormat],
-        save: impl FnMut(ExportFile) + 'static,
+        save: impl FnMut(ExportFile) -> Result<(), String> + 'static,
     ) -> Self {
         self.services.export_formats = formats;
         self.services.save = Some(Box::new(save));
@@ -366,11 +365,6 @@ impl Terminal {
     /// The top toolbar, to add host entries and a call to action.
     pub fn top_toolbar_mut(&mut self) -> &mut TopToolbar {
         &mut self.top_toolbar
-    }
-
-    /// Shows `report` in the strategy report panel, or closes it with `None`.
-    pub fn set_strategy_report(&mut self, report: Option<StrategyReport>) {
-        self.strategy_report = report;
     }
 
     /// Passes `action` along the groups until one performs it, and returns what is left.

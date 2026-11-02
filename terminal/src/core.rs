@@ -24,7 +24,7 @@ pub(super) enum Direction {
 }
 
 /// The side panels beside the chart.
-#[expect(dead_code, reason = "the side panels open these")]
+#[allow(dead_code, reason = "the side panels open these")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SidePanel {
     ObjectTree,
@@ -194,7 +194,9 @@ impl Terminal {
             name,
             path: None,
             contents,
-        });
+            open: false,
+        })
+        .unwrap_or_else(|error| self.toasts.error(format!("Export failed: {error}")));
         true
     }
 
@@ -206,13 +208,13 @@ impl Terminal {
     }
 
     /// Shows `message` briefly.
-    #[expect(dead_code, reason = "the groups report their results")]
+    #[allow(dead_code, reason = "the groups report their results")]
     pub(super) fn toast(&mut self, message: impl Into<String>) {
         self.toasts.info(message);
     }
 
     /// Shows `title` briefly and logs it in the notifications panel, about `symbol` if any.
-    #[expect(dead_code, reason = "alerts and trading notify the user")]
+    #[allow(dead_code, reason = "alerts and trading notify the user")]
     pub(super) fn notify(&mut self, title: impl Into<String>, symbol: Option<&str>) {
         let title = title.into();
         let mut entry = Notification::new(chrono::Utc::now(), title.clone());
