@@ -23,6 +23,7 @@ pub(super) fn volatility_smile() -> Chart {
     chart.set_horizontal_scale(Some(Arc::new(PriceHorizontalScale { precision: 0 })));
     chart.set_symbol("30-day IV, %");
     chart.config_mut().show_volume = false;
+    chart.config_mut().show_legend_volume = false;
     chart.set_visible_bars(60);
     let later = chart.add_series(SeriesOptions {
         name: "90-day IV, %".into(),
@@ -41,6 +42,7 @@ pub(super) fn yield_curve() -> Chart {
     chart.set_horizontal_scale(Some(Arc::new(scale)));
     chart.set_symbol("Yield, %");
     chart.config_mut().show_volume = false;
+    chart.config_mut().show_legend_volume = false;
     for (name, color, earlier) in [
         ("Today", egui::Color32::from_rgb(41, 98, 255), false),
         ("A year ago", egui::Color32::from_rgb(242, 54, 69), true),
