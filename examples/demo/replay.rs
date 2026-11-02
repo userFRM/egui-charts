@@ -376,7 +376,11 @@ impl DemoApp {
             let after = chrono::TimeDelta::nanoseconds(1);
             cutoff = cutoff.map(|time| time.clamp(bars[0].time + after, to + after));
             if self.chart.replay_driver().is_none() {
-                self.notify(format!("Recorded market replay: {from} to {to}"));
+                self.notify(format!(
+                    "Recorded market replay: {} to {} UTC",
+                    from.format("%H:%M:%S"),
+                    to.format("%H:%M:%S")
+                ));
             }
         }
         if !interval.is_trade_based() && self.chart.replay_driver().is_some() {
