@@ -573,7 +573,8 @@ mod tests {
             (ReplayClock::new(vec![event(t1)]).map(drop), "replay event of \"A\" at 2026-01-05 10:00:00 UTC with sequence 0 is invalid"),
             (ReplayClock::new(vec![event(t0), event(t0)]).map(drop), "replay events of \"A\" at 2026-01-05 10:00:00 UTC share sequence 0"),
             (ReplayClock::new(Vec::new()).unwrap().set_speed(-1.0), "replay speed must be finite and at least 0, got -1.0"),
-            (aggregate_trades(&[trade(t0, 100.0, 1.0), trade(t1, f64::NAN, 1.0)], Timeframe::Min1).map(drop), "trade 1 needs a finite price and a finite size of at least 0, got NaN and 1.0"),
+            (aggregate_trades(&[trade(t0, 100.0, 1.0), trade(t1, f64::NAN, 1.0)], Timeframe::Min1).map(drop), "trade 1 price must be finite, got NaN"),
+            (aggregate_trades(&[trade(t0, 100.0, 1.0), trade(t1, 100.0, -1.0)], Timeframe::Min1).map(drop), "trade 1 size must be finite and at least 0, got -1.0"),
             (aggregate_trades(&[trade(t1, 100.0, 1.0), trade(t0, 100.0, 1.0)], Timeframe::Min1).map(drop), "trade 1 at 2026-01-05 10:00:00 UTC is out of time order"),
         ];
         for (result, expected) in cases {

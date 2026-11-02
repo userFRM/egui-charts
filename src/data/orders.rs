@@ -419,8 +419,16 @@ impl OrderQueue {
             ))
         } else {
             orders.iter().find_map(|order| {
-                if !valid(order) {
-                    Some(format!("snapshot order {} needs a finite price and a size above zero, got {:?} and {:?}", order.id, order.price, order.size))
+                if !order.price.is_finite() {
+                    Some(format!(
+                        "snapshot order {} price must be finite, got {:?}",
+                        order.id, order.price
+                    ))
+                } else if !order.size.is_finite() || order.size <= 0.0 {
+                    Some(format!(
+                        "snapshot order {} size must be finite and above zero, got {:?}",
+                        order.id, order.size
+                    ))
                 } else if !ids.insert(order.id) {
                     Some(format!("snapshot holds order {} twice", order.id))
                 } else {
@@ -495,10 +503,16 @@ impl OrderQueue {
     fn change(&mut self, event: OrderEvent) -> Result<(), FeedError> {
         match event {
             OrderEvent::Add(order) => {
-                if !valid(&order) {
+                if !order.price.is_finite() {
                     return Err(FeedError::InvalidData(format!(
-                        "added order {} needs a finite price and a size above zero, got {:?} and {:?}",
-                        order.id, order.price, order.size
+                        "added order {} price must be finite, got {:?}",
+                        order.id, order.price
+                    )));
+                }
+                if !order.size.is_finite() || order.size <= 0.0 {
+                    return Err(FeedError::InvalidData(format!(
+                        "added order {} size must be finite and above zero, got {:?}",
+                        order.id, order.size
                     )));
                 }
                 if self.orders.iter().any(|o| o.id == order.id) {
@@ -537,10 +551,16 @@ impl OrderQueue {
                 if let Some(size) = size {
                     order.size = size;
                 }
-                if !order.price.is_finite() || !order.size.is_finite() || order.size < 0.0 {
+                if !order.price.is_finite() {
                     return Err(FeedError::InvalidData(format!(
-                        "modified order {id} needs a finite price and a size of at least 0, got {:?} and {:?}",
-                        order.price, order.size
+                        "modified order {id} price must be finite, got {:?}",
+                        order.price
+                    )));
+                }
+                if !order.size.is_finite() || order.size < 0.0 {
+                    return Err(FeedError::InvalidData(format!(
+                        "modified order {id} size must be finite and at least 0, got {:?}",
+                        order.size
                     )));
                 }
                 if order.size == 0.0 {
@@ -563,21 +583,42 @@ impl OrderQueue {
                     FeedError::InvalidData(format!("executed order {id} is not in the book"))
                 })?;
                 let order = &mut self.orders[at];
-                if !size.is_finite() || size <= 0.0 || !meets_threshold(order.size, size) {
+                if !size.is_finite() || size <= 0.0 {
+                    return Err(FeedError::InvalidData(format!(
+                        "execution of order {id} size must be finite and above zero, got {size:?}"
+                    )));
+                }
+                if !meets_threshold(order.size, size) {
                     return Err(FeedError::InvalidData(format!(
                         "execution of order {id} needs a size above zero and at most the resting {:?}, got {size:?}",
                         order.size
                     )));
                 }
-                if trade.as_ref().is_some_and(|t| {
-                    !super::trades::valid(t)
-                        || t.size != size
-                        || key(self.tick, t.price) != key(self.tick, order.price)
-                }) {
-                    return Err(FeedError::InvalidData(format!(
-                        "trade of the execution of order {id} must be valid, of size {size:?} and at the order's price {:?}",
-                        order.price
-                    )));
+                if let Some(trade) = &trade {
+                    if !trade.price.is_finite() {
+                        return Err(FeedError::InvalidData(format!(
+                            "trade of order {id} price must be finite, got {:?}",
+                            trade.price
+                        )));
+                    }
+                    if !trade.size.is_finite() || trade.size < 0.0 {
+                        return Err(FeedError::InvalidData(format!(
+                            "trade of order {id} size must be finite and at least 0, got {:?}",
+                            trade.size
+                        )));
+                    }
+                    if trade.size != size {
+                        return Err(FeedError::InvalidData(format!(
+                            "trade of order {id} size must equal execution size {size:?}, got {:?}",
+                            trade.size
+                        )));
+                    }
+                    if key(self.tick, trade.price) != key(self.tick, order.price) {
+                        return Err(FeedError::InvalidData(format!(
+                            "trade of order {id} price must share the grid level of {:?}, got {:?}",
+                            order.price, trade.price
+                        )));
+                    }
                 }
                 if let Some(mut trade) = trade {
                     trade.resting_order_id = Some(id);
@@ -609,10 +650,6 @@ impl OrderQueue {
     }
 }
 
-fn valid(order: &RestingOrder) -> bool {
-    order.price.is_finite() && order.size.is_finite() && order.size > 0.0
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -631,7 +668,18 @@ mod tests {
             ("price change", 8, OrderEvent::Modify { id: 1, price: Some(99.0), size: None, keep_priority: true }, vec![(100.0, 5.0, 1), (99.0, 3.0, 1)], vec![2], None),
             ("keeps priority", 8, OrderEvent::Modify { id: 1, price: None, size: Some(2.0), keep_priority: true }, vec![(100.0, 7.0, 2)], vec![1, 2], None),
             ("loses priority", 8, OrderEvent::Modify { id: 1, price: None, size: Some(4.0), keep_priority: false }, vec![(100.0, 9.0, 2)], vec![2, 1], None),
-            ("invalid zero-size modify", 8, OrderEvent::Modify { id: 1, price: Some(f64::NAN), size: Some(0.0), keep_priority: true }, vec![], vec![], Some("modified order 1 needs a finite price and a size of at least 0, got NaN and 0.0")),
+            ("invalid zero-size modify", 8, OrderEvent::Modify { id: 1, price: Some(f64::NAN), size: Some(0.0), keep_priority: true }, vec![], vec![], Some("modified order 1 price must be finite, got NaN")),
+            ("invalid add price", 8, OrderEvent::Add(RestingOrder::new(4, Buy, f64::NAN, 1.0)), vec![], vec![], Some("added order 4 price must be finite, got NaN")),
+            ("invalid add size", 8, OrderEvent::Add(RestingOrder::new(4, Buy, 100.0, 0.0)), vec![], vec![], Some("added order 4 size must be finite and above zero, got 0.0")),
+            ("duplicate add", 8, OrderEvent::Add(RestingOrder::new(1, Buy, 100.0, 1.0)), vec![], vec![], Some("added order 1 is already in the book")),
+            ("unknown modify", 8, OrderEvent::Modify { id: 99, price: None, size: Some(1.0), keep_priority: true }, vec![], vec![], Some("modified order 99 is not in the book")),
+            ("invalid modify size", 8, OrderEvent::Modify { id: 1, price: None, size: Some(-1.0), keep_priority: true }, vec![], vec![], Some("modified order 1 size must be finite and at least 0, got -1.0")),
+            ("unknown execution", 8, OrderEvent::Execute { id: 99, size: 1.0, trade: None }, vec![], vec![], Some("executed order 99 is not in the book")),
+            ("invalid execution size", 8, OrderEvent::Execute { id: 1, size: f64::NAN, trade: None }, vec![], vec![], Some("execution of order 1 size must be finite and above zero, got NaN")),
+            ("invalid trade price", 8, OrderEvent::Execute { id: 1, size: 1.0, trade: Some(Tick::new(DateTime::default(), f64::NAN, 1.0, None)) }, vec![], vec![], Some("trade of order 1 price must be finite, got NaN")),
+            ("invalid trade size", 8, OrderEvent::Execute { id: 1, size: 1.0, trade: Some(Tick::new(DateTime::default(), 100.0, -1.0, None)) }, vec![], vec![], Some("trade of order 1 size must be finite and at least 0, got -1.0")),
+            ("mismatched trade size", 8, OrderEvent::Execute { id: 1, size: 1.0, trade: Some(Tick::new(DateTime::default(), 100.0, 2.0, None)) }, vec![], vec![], Some("trade of order 1 size must equal execution size 1.0, got 2.0")),
+            ("mismatched trade price", 8, OrderEvent::Execute { id: 1, size: 1.0, trade: Some(Tick::new(DateTime::default(), 101.0, 1.0, None)) }, vec![], vec![], Some("trade of order 1 price must share the grid level of 100.0, got 101.0")),
             ("gap", 9, OrderEvent::Cancel { id: 1 }, vec![], vec![], Some("order book sequence 9 does not follow 7")),
             ("unknown cancel", 8, OrderEvent::Cancel { id: 99 }, vec![], vec![], Some("cancelled order 99 is not in the book")),
             ("oversized execution", 8, OrderEvent::Execute { id: 1, size: 4.0, trade: None }, vec![], vec![], Some("execution of order 1 needs a size above zero and at most the resting 3.0, got 4.0")),
@@ -665,6 +713,40 @@ mod tests {
             if !lost {
                 assert_eq!(levels.asks[0].size, 7.0);
             }
+        }
+        for (snapshot, message) in [
+            (
+                vec![RestingOrder::new(1, Buy, f64::NAN, 1.0)],
+                "snapshot order 1 price must be finite, got NaN",
+            ),
+            (
+                vec![RestingOrder::new(1, Buy, 100.0, 0.0)],
+                "snapshot order 1 size must be finite and above zero, got 0.0",
+            ),
+            (
+                vec![orders[0].clone(), orders[0].clone()],
+                "snapshot holds order 1 twice",
+            ),
+            (
+                vec![RestingOrder::new(1, Buy, 100.0, 1.0); MAX_LEVELS + 1],
+                "order book snapshot has 10001 bids, more than 10000",
+            ),
+            (
+                vec![RestingOrder::new(1, Sell, 100.0, 1.0); MAX_LEVELS + 1],
+                "order book snapshot has 10001 asks, more than 10000",
+            ),
+        ] {
+            let mut book = OrderQueue::new(None);
+            book.snapshot(7, DateTime::default(), orders.clone())
+                .unwrap();
+            assert_eq!(
+                book.snapshot(8, DateTime::default(), snapshot)
+                    .unwrap_err()
+                    .to_string(),
+                format!("invalid data: {message}")
+            );
+            assert_eq!(book.sequence(), None);
+            assert_eq!(book.orders().count(), 0);
         }
         let mut book = OrderQueue::new(None);
         book.snapshot(7, DateTime::default(), orders.clone())

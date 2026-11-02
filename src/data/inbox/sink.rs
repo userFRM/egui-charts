@@ -73,10 +73,15 @@ pub fn aggregate_trades_with_tick_size(
                 "is out of time order".to_owned()
             } else if live.updates.rejected == rejected {
                 continue;
-            } else if !trades::valid(trade) {
+            } else if !trade.price.is_finite() {
                 return Err(FeedError::InvalidData(format!(
-                    "trade {at} needs a finite price and a finite size of at least 0, got {:?} and {:?}",
-                    trade.price, trade.size
+                    "trade {at} price must be finite, got {:?}",
+                    trade.price
+                )));
+            } else if !trade.size.is_finite() || trade.size < 0.0 {
+                return Err(FeedError::InvalidData(format!(
+                    "trade {at} size must be finite and at least 0, got {:?}",
+                    trade.size
                 )));
             } else if trade.ts > last.ts {
                 format!("is later than the last trade, at {}", last.ts)
