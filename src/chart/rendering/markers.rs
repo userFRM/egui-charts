@@ -125,6 +125,7 @@ fn marker_anchor(marker: &Marker, bar: &Bar, map: &PriceMap) -> Option<(f64, f32
         MarkerPos::BelowBar => (bottom, 20.0),
         MarkerPos::AbsoluteUp => (top, -10.0),
         MarkerPos::AbsoluteDown => (bottom, 10.0),
+        // Offset by the shape's half size, 8 points at size 1.
         MarkerPos::AtPriceTop => (marker.price.unwrap_or(bar.close), -8.0),
         MarkerPos::AtPriceBottom => (marker.price.unwrap_or(bar.close), 8.0),
         MarkerPos::AtPriceMiddle => (marker.price.unwrap_or(bar.close), 0.0),
