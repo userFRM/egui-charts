@@ -473,9 +473,14 @@ impl DemoApp {
                 .and_then(|layout| Ok((layout, self.capture_comparisons()?)))
             {
                 Ok((layout, comparisons)) => {
+                    let groups = self.layout_groups();
                     self.new_layout(Some(name));
                     let name = self.layout_tabs[self.layout_tab].name.clone();
-                    if let Err(error) = self.storage.save_comparisons(&name, &comparisons) {
+                    if let Err(error) = self
+                        .storage
+                        .save_layout_groups(&name, &groups)
+                        .and_then(|()| self.storage.save_comparisons(&name, &comparisons))
+                    {
                         self.toasts.error(error);
                         return;
                     }
