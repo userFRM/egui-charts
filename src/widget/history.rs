@@ -1,6 +1,6 @@
 //! Chart history records UI actions, not ordinary host API calls.
 
-use super::price_series::{PriceSeries, SeriesOptions};
+use super::series::{PriceSeries, SeriesOptions};
 use super::{Chart, ChartElementId, ChartEvent, SeriesId};
 use crate::config::{ChartConfig, ChartOptions};
 #[cfg(feature = "drawings")]
@@ -1619,7 +1619,7 @@ mod tests {
     #[test]
     fn series_alert_styles_stay_distinct_through_undo_and_snapshot() {
         let mut chart = chart(&[1.0], &[2.0]);
-        let other = chart.add_series(crate::widget::price_series::SeriesOptions::default());
+        let other = chart.add_series(crate::widget::series::SeriesOptions::default());
         let main_alerts = SeriesAlerts {
             visible: false,
             labels: false,

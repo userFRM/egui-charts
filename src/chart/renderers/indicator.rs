@@ -617,7 +617,9 @@ impl IndicatorRenderer {
             ];
             painter.add(egui::Shape::convex_polygon(triangle, color, Stroke::NONE));
         }
-        crate::chart::indicators::plots::paint_labels(&painter, indicator, price_scale, coords);
+        if !indicator.labels_on_price() {
+            crate::chart::indicators::plots::paint_labels(&painter, indicator, price_scale, coords);
+        }
     }
 
     fn draw_line(
