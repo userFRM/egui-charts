@@ -2038,6 +2038,18 @@ impl Chart {
             }
             _ => {}
         }
+        for study in studies
+            .indicators()
+            .iter()
+            .filter(|study| study.is_visible() && study.labels_on_price())
+        {
+            crate::chart::indicators::plots::paint_labels(
+                &clipped_painter,
+                study.as_ref(),
+                &price_map,
+                &coords,
+            );
+        }
         self.paint_signals(ui, &coords);
         let target_lines = self
             .show_price_targets
@@ -2274,7 +2286,7 @@ impl Chart {
         }
 
         let style = &self.main_series_style;
-        if let Some(line) = super::price_series::base_line(&price_map)
+        if let Some(line) = super::series::base_line(&price_map)
             .filter(|_| self.main_series_visible && style.base_line_visible)
         {
             rendering::render_price_line(
@@ -3759,13 +3771,13 @@ mod tests {
             };
             // First bar: 13 buys, 3 sells, volume 16, delta 10, delta share 62.5%.
             for expected in [
-                "Vol 16",
-                "Bid 3",
-                "Ask 13",
-                "Delta 10",
-                "Delta % 62.5",
-                "Min -1",
-                "Max 10",
+                "16",
+                "3",
+                "13",
+                "10",
+                "62.5%",
+                "-1",
+                "4.33:1",
                 "Cluster",
                 "Single",
                 "Delta POC",
@@ -3776,10 +3788,18 @@ mod tests {
                 );
             }
             assert!(
-                text("Vol 16").unwrap().pos.y >= map.rect.bottom(),
+                text("16").unwrap().pos.y >= map.rect.bottom(),
                 "table overlaps prices"
             );
-            assert!(text(if revisited { "CVD 10" } else { "CVD 12" }).is_some());
+            assert!(
+                shapes
+                    .iter()
+                    .any(|shape| matches!(&shape.shape, Shape::Text(t)
+                if t.galley.text() == if revisited { "10" } else { "12" }
+                    && (t.pos.x + t.galley.size().x * 0.5 - map.idx_to_x(2)).abs() < 0.01
+                    && (t.pos.y - map.rect.bottom() - 72.0).abs() < 0.01)),
+                "cumulative delta updates in its row under the last bar"
+            );
             let stack_color = if revisited {
                 config.ask_color.gamma_multiply(0.45)
             } else {
@@ -5260,6 +5280,8 @@ mod tests {
             })
             .collect();
         let config = FootprintConfig {
+            // Keep price spines out of the candle-only geometry check.
+            ask_color: egui::Color32::from_rgb(12, 87, 104),
             color_by: FootprintColor::Volume,
             neutral_color: egui::Color32::from_rgb(21, 45, 78),
             ..Default::default()

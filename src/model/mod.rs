@@ -57,10 +57,6 @@ pub use alert::{
     Alert, AlertComparison, AlertCondition, AlertFrequency, AlertId, AlertRule, AlertSource,
     AlertStatus, NotificationSchedule, NotificationWindow,
 };
-#[cfg(feature = "widget")]
-pub(crate) use bar::SpanCache;
-#[cfg(feature = "drawings")]
-pub(crate) use bar::SpanFingerprint;
 pub use bar::{Bar, BarColors, BarData};
 #[cfg(feature = "widget")]
 pub(crate) use bar::{index_at, index_at_with_timeframe, time_at, time_at_with_timeframe};
@@ -75,8 +71,8 @@ pub use clock::BarClock;
 pub use color::ColorType;
 pub use date_range::DateRange;
 pub use instrument::{
-    DataStatus, Instrument, OverrideWindow, ProfileResolution, Session, SessionOverride,
-    SessionWindow, SymbolType,
+    DataStatus, FeedService, Instrument, OverrideWindow, ProfileResolution, Session,
+    SessionOverride, SessionWindow, SymbolType,
 };
 pub use kagi::{KagiConfig, KagiLine, KagiThickness, to_kagi_lines};
 pub use line_break::{

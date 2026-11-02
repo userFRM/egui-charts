@@ -1,6 +1,6 @@
 //! Retained history and a shared, exclusive replay cutoff.
 
-use super::price_series::PriceSeries;
+use super::series::PriceSeries;
 use super::{Chart, ChartLayout, SeriesId};
 use crate::data::ReplayDriver;
 use crate::data::merge::{Origin, fold, merge};
@@ -91,10 +91,12 @@ impl Chart {
                     .expect("existing depth history configuration")
             });
         let view = self.order_book_view();
+        let heatmap_config = self.liquidity_heatmap_config();
         self.set_replay_time(Some(driver.time()));
         let window = self.replay.take().expect("replay window");
         let feed = self.feed_link.take();
         self.attach_feed(driver.clone(), 1);
+        self.set_liquidity_heatmap_config(heatmap_config);
         if let (Some(live), Some(replay)) = (&feed, &mut self.feed_link) {
             replay.heatmap = live.heatmap.as_ref().map(|_| Default::default());
         }
@@ -777,6 +779,13 @@ mod tests {
             min_size_filter: Some(2.0),
             ..Default::default()
         }));
+        let heatmap_config = crate::chart::overlays::LiquidityHeatmapConfig {
+            brightness: 0.5,
+            lower_cutoff: 2.0,
+            full_intensity_size: Some(10.0),
+        };
+        chart.set_liquidity_heatmap_config(heatmap_config);
+        chart.set_liquidity_heatmap(true);
         chart.set_chart_type(crate::model::ChartType::VolumeFootprint);
         for _ in 0..4 {
             chart.pump(&ctx);
@@ -791,6 +800,7 @@ mod tests {
             chart.pump(&ctx);
         }
         assert_eq!(chart.bars(SeriesId::MAIN), &original[..1]);
+        assert_eq!(chart.liquidity_heatmap_config(), heatmap_config);
         assert_eq!(
             chart
                 .feed_link
@@ -837,6 +847,7 @@ mod tests {
         assert_eq!(chart.bars(SeriesId::MAIN), original);
         assert!(chart.replay_time().is_none());
         assert!(chart.replay_driver().is_none());
+        assert_eq!(chart.liquidity_heatmap_config(), heatmap_config);
 
         // A seek must also rebuild the coarser history that ordinary frames accumulated.
         let books = (0..8)

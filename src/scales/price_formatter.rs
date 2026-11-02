@@ -29,6 +29,22 @@ pub(super) fn format_decimal(value: f64, precision: usize) -> String {
     formatted
 }
 
+/// `value` as the whole multiple of `step` that `round` picks from `value / step`, written at the
+/// step's decimals.
+#[cfg(feature = "widget")]
+pub(crate) fn to_step(value: f64, step: f64, round: impl Fn(f64) -> f64) -> f64 {
+    let scale = 10f64.powi(decimals(step) as i32);
+    (round(value / step) * step * scale).round() / scale
+}
+
+/// Decimals needed to write `step`, such as 2 for 0.25.
+#[cfg(feature = "widget")]
+pub(crate) fn decimals(step: f64) -> usize {
+    let text = format!("{step}");
+    text.split_once('.')
+        .map_or(0, |(_, fraction)| fraction.len())
+}
+
 /// Writes `separator` between the groups of three digits of the integer part of `text`, its
 /// first run of ASCII digits: `-42541.77` becomes `-42,541.77` with `','`. Text whose integer
 /// part has three digits or fewer, text without digits (`NaN`, `inf`) and a `None` separator

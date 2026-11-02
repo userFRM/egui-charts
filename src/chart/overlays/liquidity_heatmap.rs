@@ -6,6 +6,7 @@ use crate::data::{DepthColumn, DepthHistory, OrderSizeTier};
 use crate::theme::ThemeExt;
 use chrono::{DateTime, Utc};
 use egui::{Color32, ColorImage, Painter, Rect, TextureHandle, TextureOptions, pos2};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -17,15 +18,68 @@ struct Column {
     rows: BTreeSet<i64>,
 }
 
+/// Brightness and resting-size range of the liquidity heatmap. Defaults retain logarithmic
+/// shading against each column's largest size, at 75% opacity. Does not change the sampled depth,
+/// best bid/ask lines or live book profile. Serializable for host chart settings.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LiquidityHeatmapConfig {
+    /// Multiplies cell opacity, including order tier marks, saturating at full opacity.
+    /// Defaults to 1. Negative values act as zero; non-finite values use the default.
+    pub brightness: f32,
+    /// Cells with total resting size at or below this value stay transparent, including marks.
+    /// Defaults to 0. Negative or non-finite values act as zero.
+    pub lower_cutoff: f64,
+    /// Size that reaches full intensity: `ln(1 + size) / ln(1 + full_intensity_size)`, capped at 1.
+    /// `None`, the default, uses each column's largest total. Non-positive or non-finite sizes
+    /// also use that per-column scale. The cutoff does not shift the logarithmic curve.
+    pub full_intensity_size: Option<f64>,
+}
+
+impl Default for LiquidityHeatmapConfig {
+    fn default() -> Self {
+        Self {
+            brightness: 1.0,
+            lower_cutoff: 0.0,
+            full_intensity_size: None,
+        }
+    }
+}
+
+impl LiquidityHeatmapConfig {
+    fn normalized(self) -> Self {
+        Self {
+            brightness: if self.brightness.is_finite() {
+                self.brightness.max(0.0)
+            } else {
+                1.0
+            },
+            lower_cutoff: if self.lower_cutoff.is_finite() {
+                self.lower_cutoff.max(0.0)
+            } else {
+                0.0
+            },
+            full_intensity_size: self
+                .full_intensity_size
+                .filter(|s| s.is_finite() && *s > 0.0),
+        }
+    }
+}
+
 /// A liquidity heatmap backed by bounded texture tiles. Retain it between frames.
 ///
-/// Each column uses logarithmic contrast against its largest resting size. A cell whose largest
-/// recorded order reaches a size tier of the [`OrderBookView`] takes that tier's colour over its
+/// Each column uses logarithmic contrast against its largest resting size unless [`Self::config`]
+/// sets a shared full-intensity size. A cell whose largest recorded order reaches a size tier of
+/// the [`OrderBookView`] takes that tier's colour over its
 /// shading. Empty prices and missing time periods stay transparent. Old columns release their
-/// atlas slots; new or changed columns upload only their own texels, and new colours or tiers
-/// upload every held column once. No texture side exceeds the backend's limit.
+/// atlas slots; new or changed columns upload only their own texels. Changed colours, tiers or
+/// appearance upload every held column once. No texture side exceeds the backend's limit.
 #[derive(Default)]
 pub struct LiquidityHeatmap {
+    /// Cell brightness and size range, applied on the next render. Unchanged effective settings
+    /// upload nothing; changed settings redraw every held column once.
+    pub config: LiquidityHeatmapConfig,
+    drawn_config: Option<LiquidityHeatmapConfig>,
     columns: BTreeMap<Key, Column>,
     tiles: BTreeMap<(usize, i64), TextureHandle>,
     size: usize,
@@ -67,8 +121,15 @@ impl LiquidityHeatmap {
                     .map(|tier| view.tier_color(tier, &theme)),
             )
         });
-        if self.size != size || self.colors != Some(colors) || self.marks != marks {
+        let config = self.config.normalized();
+        if self.size != size
+            || self.colors != Some(colors)
+            || self.marks != marks
+            || self.drawn_config != Some(config)
+        {
             *self = Self {
+                config: self.config,
+                drawn_config: Some(config),
                 size,
                 colors: Some(colors),
                 marks,
@@ -112,15 +173,20 @@ impl LiquidityHeatmap {
                     cell[2] = cell[2].max(largest.get(at).copied().unwrap_or(0.0));
                 }
             }
-            let max = volumes.values().map(|v| v[0] + v[1]).fold(0.0, f64::max);
+            let max = config
+                .full_intensity_size
+                .unwrap_or_else(|| volumes.values().map(|v| v[0] + v[1]).fold(0.0, f64::max));
             for (row, volume) in volumes {
                 let total = volume[0] + volume[1];
                 let tile = row.div_euclid(size as i64);
                 let pixels = pixels
                     .entry(tile)
                     .or_insert_with(|| vec![Color32::TRANSPARENT; size]);
+                if total <= config.lower_cutoff {
+                    continue;
+                }
                 let intensity = if max > 0.0 {
-                    (total.ln_1p() / max.ln_1p()) as f32
+                    (total.ln_1p() / max.ln_1p()).min(1.0) as f32
                 } else {
                     0.0
                 };
@@ -138,8 +204,9 @@ impl LiquidityHeatmap {
                     .tiers
                     .filter(|_| volume[2] > 0.0)
                     .and_then(|tiers| tiers.tier(volume[2]));
-                pixels[row.rem_euclid(size as i64) as usize] =
-                    tier.map_or(shaded, |tier| shaded.blend(view.tier_color(tier, &theme)));
+                pixels[row.rem_euclid(size as i64) as usize] = tier
+                    .map_or(shaded, |tier| shaded.blend(view.tier_color(tier, &theme)))
+                    .gamma_multiply(config.brightness);
             }
             let rows = pixels.keys().copied().collect();
             for (row, pixels) in pixels {
@@ -246,7 +313,7 @@ mod tests {
     use chrono::TimeDelta;
 
     #[test]
-    fn unchanged_history_uploads_nothing_and_new_columns_upload_only_their_texels() {
+    fn history_and_appearance_upload_only_changed_texels() {
         let ctx = egui::Context::default();
         let mut history = DepthHistory::new(Default::default()).unwrap();
         let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
@@ -266,16 +333,96 @@ mod tests {
             ),
         );
         let mut heatmap = LiquidityHeatmap::default();
-        for n in 0..3 {
-            if n != 1 {
+        let defaults = LiquidityHeatmapConfig::default();
+        let shared = LiquidityHeatmapConfig {
+            full_intensity_size: Some(999.0),
+            ..defaults
+        };
+        let dimmed = LiquidityHeatmapConfig {
+            brightness: 0.5,
+            lower_cutoff: 10.0,
+            ..shared
+        };
+        let invalid = LiquidityHeatmapConfig {
+            brightness: f32::NAN,
+            lower_cutoff: f64::INFINITY,
+            full_intensity_size: Some(f64::NAN),
+        };
+        // ln(10)/ln(100) = 1/2; ln(10)/ln(1000) = 1/3;
+        // ln(100)/ln(1000) = 2/3. Alpha is rounded from 255 * 0.75 * intensity.
+        // In the deep column, ln(1000)/ln(2001) = 0.90875, giving alpha 174.
+        for (append, config, expected) in [
+            (Some([9.0, 99.0]), defaults, vec![[96, 191]]),
+            (None, defaults, vec![]),
+            (Some([999.0, 2000.0]), defaults, vec![[174, 191]]),
+            (None, shared, vec![[64, 128], [191, 191]]),
+            (None, shared, vec![]),
+            (None, dimmed, vec![[0, 64], [96, 96]]),
+            (None, dimmed, vec![]),
+            (
+                None,
+                LiquidityHeatmapConfig {
+                    lower_cutoff: 99.0,
+                    ..dimmed
+                },
+                vec![[0, 0], [96, 96]],
+            ),
+            (
+                None,
+                LiquidityHeatmapConfig {
+                    brightness: 0.0,
+                    ..shared
+                },
+                vec![[0, 0], [0, 0]],
+            ),
+            (
+                None,
+                LiquidityHeatmapConfig {
+                    brightness: 2.0,
+                    ..shared
+                },
+                vec![[128, 255], [255, 255]],
+            ),
+            (None, invalid, vec![[96, 191], [174, 191]]),
+            (None, invalid, vec![]),
+            (None, defaults, vec![]),
+            (
+                None,
+                LiquidityHeatmapConfig {
+                    lower_cutoff: -1.0,
+                    full_intensity_size: Some(0.0),
+                    ..defaults
+                },
+                vec![],
+            ),
+            (
+                None,
+                LiquidityHeatmapConfig {
+                    full_intensity_size: Some(f64::INFINITY),
+                    ..defaults
+                },
+                vec![],
+            ),
+            (
+                None,
+                LiquidityHeatmapConfig {
+                    brightness: -1.0,
+                    ..defaults
+                },
+                vec![[0, 0], [0, 0]],
+            ),
+        ] {
+            if let Some([bid, ask]) = append {
+                let second = history.columns().count() as i64;
                 history.push(DepthColumn {
-                    time: start + TimeDelta::seconds(n),
+                    time: start + TimeDelta::seconds(second),
                     span: TimeDelta::seconds(1),
-                    bids: vec![(100, 15.0)],
-                    asks: vec![(101, 3.0)],
+                    bids: vec![(100, bid)],
+                    asks: vec![(101, ask)],
                     ..Default::default()
                 });
             }
+            heatmap.config = config;
             let mut output = ctx.run_ui(
                 egui::RawInput {
                     max_texture_side: Some(1024),
@@ -298,18 +445,23 @@ mod tests {
                 .set
                 .iter()
                 .filter(|(id, _)| heatmap.tiles.values().any(|t| t.id() == **id))
+                .flat_map(|(_, deltas)| deltas)
+                .filter(|delta| delta.pos.is_some())
                 .collect();
-            if n == 1 {
-                assert!(uploads.is_empty());
-            }
-            if n == 2 {
+            if append == Some([999.0, 2000.0]) {
                 assert_eq!(uploads.len(), 1);
-                assert_eq!(uploads[0].1[0].pos, Some([1, 0]));
-                assert_eq!(uploads[0].1[0].image.size(), [1, 256]);
-                let egui::ImageData::Color(pixels) = &uploads[0].1[0].image;
-                assert_eq!(pixels.pixels[101].a(), 96);
+                assert_eq!(uploads[0].pos, Some([1, 0]));
             }
+            let alphas: Vec<_> = uploads
+                .iter()
+                .map(|delta| {
+                    assert_eq!(delta.image.size(), [1, 256]);
+                    let egui::ImageData::Color(image) = &delta.image;
+                    [image.pixels[100].a(), image.pixels[101].a()]
+                })
+                .collect();
             output.textures_delta.clear();
+            assert_eq!(alphas, expected, "{config:?}");
         }
     }
 
@@ -362,25 +514,65 @@ mod tests {
         let shaded = [(0, 131, 0, 131), (0, 191, 0, 191), (138, 0, 0, 138)]
             .map(|(r, g, b, a)| Color32::from_rgba_premultiplied(r, g, b, a));
         let mut heatmap = LiquidityHeatmap::default();
-        for (theme, view, expected) in [
-            (&dark, OrderBookView::default(), vec![shaded, shaded]),
+        let defaults = LiquidityHeatmapConfig::default();
+        for (theme, view, config, expected) in [
+            (
+                &dark,
+                OrderBookView::default(),
+                defaults,
+                vec![shaded, shaded],
+            ),
             // Row 197 stays shaded: its total of 25 reaches a tier and its largest order of 5 none.
             (
                 &dark,
                 tiers(20.0, 40.0),
+                defaults,
                 vec![[shaded[0], dark_large, dark_notable], shaded],
             ),
             // The same tiers on another theme.
             (
                 &light,
                 tiers(20.0, 40.0),
+                defaults,
                 vec![[shaded[0], light_large, light_notable], shaded],
             ),
-            (&dark, tiers(0.0, 0.0), vec![[dark_large; 3], shaded]),
-            (&dark, tiers(f64::NAN, f64::NAN), vec![shaded, shaded]),
-            (&dark, tiers(f64::NAN, f64::NAN), vec![]),
+            (
+                &dark,
+                tiers(0.0, 0.0),
+                defaults,
+                vec![[dark_large; 3], shaded],
+            ),
+            (
+                &dark,
+                tiers(f64::NAN, f64::NAN),
+                defaults,
+                vec![shaded, shaded],
+            ),
+            (&dark, tiers(f64::NAN, f64::NAN), defaults, vec![]),
+            (
+                &dark,
+                tiers(20.0, 40.0),
+                LiquidityHeatmapConfig {
+                    brightness: 0.5,
+                    ..defaults
+                },
+                vec![
+                    [shaded[0], dark_large, dark_notable].map(|c| c.gamma_multiply(0.5)),
+                    shaded.map(|c| c.gamma_multiply(0.5)),
+                ],
+            ),
+            (
+                &dark,
+                tiers(20.0, 40.0),
+                LiquidityHeatmapConfig {
+                    lower_cutoff: 115.0,
+                    ..defaults
+                },
+                vec![[Color32::TRANSPARENT; 3]; 2],
+            ),
         ] {
             crate::theme::apply_to_egui(&ctx, theme);
+            heatmap.config = config;
             let mut output = ctx.run_ui(
                 egui::RawInput {
                     max_texture_side: Some(1024),
@@ -410,8 +602,8 @@ mod tests {
                     [image.pixels[197], image.pixels[198], image.pixels[199]]
                 })
                 .collect();
-            assert_eq!(uploads, expected);
             output.textures_delta.clear();
+            assert_eq!(uploads, expected);
         }
     }
 }

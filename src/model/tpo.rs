@@ -111,6 +111,10 @@ pub struct TPOConfig {
     pub show_value_area: bool,
     /// Show Initial Balance
     pub show_initial_balance: bool,
+    /// Draw one and two initial balance ranges above its high and below its low.
+    pub show_initial_balance_extensions: bool,
+    /// Mark the highest and lowest rows when they hold more than one TPO.
+    pub show_poor_highs_lows: bool,
     /// Show single prints
     pub show_single_prints: bool,
     /// Highlight opening range
@@ -144,6 +148,8 @@ impl Default for TPOConfig {
             show_poc: true,
             show_value_area: true,
             show_initial_balance: true,
+            show_initial_balance_extensions: false,
+            show_poor_highs_lows: false,
             show_single_prints: false,
             show_opening_range: true,
             split_sessions: false,

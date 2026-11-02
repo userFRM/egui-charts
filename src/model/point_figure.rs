@@ -8,6 +8,7 @@
 
 use super::PriceBuilder;
 use super::bar::Bar;
+use super::range_bar::calculate_atr;
 use chrono::{DateTime, Utc};
 
 /// Configuration for Point & Figure chart transformation.
@@ -301,34 +302,6 @@ fn box_count(start: f64, end: f64, size: f64) -> usize {
 /// Snap price to nearest box boundary
 fn snap_to_box(price: f64, box_size: f64) -> f64 {
     (price / box_size).floor() * box_size
-}
-
-/// Calculate ATR for box size
-fn calculate_atr(data: &[Bar], period: usize) -> f64 {
-    if data.len() < 2 {
-        return 1.0;
-    }
-
-    let mut tr_values = Vec::new();
-
-    for i in 1..data.len() {
-        let high = data[i].high;
-        let low = data[i].low;
-        let prev_close = data[i - 1].close;
-
-        let tr = (high - low)
-            .max((high - prev_close).abs())
-            .max((low - prev_close).abs());
-        tr_values.push(tr);
-    }
-
-    if tr_values.len() < period {
-        return tr_values.iter().sum::<f64>() / tr_values.len() as f64;
-    }
-
-    // Simple moving avg of TR
-    let sum: f64 = tr_values.iter().rev().take(period).sum();
-    sum / period as f64
 }
 
 #[cfg(test)]

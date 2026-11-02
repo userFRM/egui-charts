@@ -131,6 +131,137 @@ fn capabilities_arrive_before_the_symbol_resolves() {
     assert!(feed.capabilities.lock().unwrap().is_empty(), "asked again");
 }
 
+#[test]
+fn instrument_ticks_supply_default_marks_and_preserve_host_overrides() {
+    use crate::scales::{PriceScaleMode, PriceTransform};
+
+    let marks = |chart: &mut Chart, mode, height| {
+        let scale = chart.price_scale_mut();
+        let transform = PriceTransform { mode, base: 6100.0 };
+        let (min, max) = if mode == PriceScaleMode::Logarithmic {
+            (6104.0_f64.ln(), 6111.0_f64.ln())
+        } else {
+            (6104.0, 6111.0)
+        };
+        scale.set_range(min, max);
+        scale.map(transform, 0.0, height).marks()
+    };
+    for feed in [false, true] {
+        let ctx = egui::Context::default();
+        let script = Arc::new(Script::default());
+        let mut chart = if feed {
+            fed(&script, Some("A"))
+        } else {
+            Chart::new(BarData::default())
+        };
+        if feed {
+            chart.pump(&ctx);
+            script.resolve().send(Ok(Instrument::new("A")
+                .with_tick_size(0.25)
+                .with_price_decimals(2)));
+            chart.pump(&ctx);
+        } else {
+            chart.set_instrument(Some(
+                Instrument::new("A")
+                    .with_tick_size(0.25)
+                    .with_price_decimals(2),
+            ));
+        }
+        let prices: Vec<_> = marks(&mut chart, PriceScaleMode::Normal, 800.0)
+            .iter()
+            .map(|mark| mark.price)
+            .collect();
+        // A 0.4 nice step rounds up to two quarter ticks, starting at 6104.
+        assert_eq!(
+            prices,
+            (0..=14)
+                .map(|i| 6104.0 + i as f64 * 0.5)
+                .collect::<Vec<_>>(),
+            "feed: {feed}"
+        );
+        for mode in [PriceScaleMode::Normal, PriceScaleMode::Logarithmic] {
+            for height in [500.0, 800.0] {
+                let marks = marks(&mut chart, mode, height);
+                assert!(marks.len() >= 3, "feed: {feed}, {mode:?}, height: {height}");
+                for mark in marks {
+                    assert!((mark.price * 4.0 - (mark.price * 4.0).round()).abs() < 1e-8);
+                }
+            }
+        }
+        if feed {
+            // Feed metadata takes precedence over a later host update.
+            chart.set_instrument(Some(Instrument::new("A").with_tick_size(1.0)));
+            assert_eq!(marks(&mut chart, PriceScaleMode::Normal, 800.0).len(), 15);
+        }
+
+        #[cfg(feature = "ui")]
+        {
+            let mut saved = chart.snapshot().unwrap();
+            saved.price_scale = Some(crate::scales::PriceScale::new(Default::default()));
+            chart.restore(&saved).unwrap();
+            chart.pump(&ctx);
+            assert_eq!(marks(&mut chart, PriceScaleMode::Normal, 800.0).len(), 15);
+        }
+
+        for (override_before, step, count) in [(false, 0.2, 18), (true, 1.0, 8)] {
+            if override_before {
+                chart
+                    .price_scale_mut()
+                    .options_mut()
+                    .tick_marks
+                    .min_price_step = Some(step);
+            }
+            chart.set_instrument(Some(Instrument::new("A").with_tick_size(0.25)));
+            if !override_before {
+                chart
+                    .price_scale_mut()
+                    .options_mut()
+                    .tick_marks
+                    .min_price_step = Some(step);
+            }
+            assert_eq!(
+                marks(&mut chart, PriceScaleMode::Normal, 800.0).len(),
+                count
+            );
+            chart
+                .price_scale_mut()
+                .options_mut()
+                .tick_marks
+                .min_price_step = None;
+            assert_eq!(marks(&mut chart, PriceScaleMode::Normal, 800.0).len(), 15);
+        }
+
+        chart.set_instrument(None);
+        if !feed {
+            assert!(
+                marks(&mut chart, PriceScaleMode::Normal, 800.0)
+                    .iter()
+                    .any(|mark| (mark.price - 6104.4).abs() < 1e-8)
+            );
+            chart.set_instrument(Some(Instrument::new("A").with_tick_size(0.25)));
+        }
+        chart.set_symbol("B");
+        assert!(
+            marks(&mut chart, PriceScaleMode::Normal, 800.0)
+                .iter()
+                .any(|mark| (mark.price - 6104.4).abs() < 1e-8)
+        );
+        if feed {
+            chart.pump(&ctx);
+            script
+                .resolve()
+                .send(Ok(Instrument::new("B").with_tick_size(50.0)));
+            chart.pump(&ctx);
+        } else {
+            chart.set_instrument(Some(Instrument::new("B").with_tick_size(50.0)));
+        }
+        // Instrument price units must not constrain percentage or index units.
+        for mode in [PriceScaleMode::Percentage, PriceScaleMode::IndexedTo100] {
+            assert!(marks(&mut chart, mode, 800.0).len() >= 15);
+        }
+    }
+}
+
 /// An empty window names where older bars continue, and the next request starts there
 /// instead of repeating itself; a continuation that does not lie before the request stops
 /// paging with an error; without one the empty page ends history.
@@ -1060,6 +1191,73 @@ fn executions_link_existing_tape_fills_without_counting_twice() {
         assert_eq!(
             chart.combined_trades(SeriesId::MAIN)[0].aggressor_order_id,
             Some(9)
+        );
+    }
+}
+
+/// Appearance reaches the painter, survives visibility changes and image copies, and
+/// repeated enable or configuration calls keep the uploaded texels.
+#[test]
+fn heatmap_appearance_survives_visibility_and_frozen_images() {
+    use crate::chart::overlays::LiquidityHeatmapConfig;
+    use crate::data::DepthColumn;
+
+    let mut chart = fed(&Arc::new(Script::default()), None);
+    chart.set_instrument(Some(Instrument::new("TEST").with_tick_size(1.0)));
+    let config = LiquidityHeatmapConfig {
+        brightness: 0.5,
+        lower_cutoff: 10.0,
+        full_intensity_size: Some(999.0),
+    };
+    chart.set_liquidity_heatmap_config(config);
+    chart.set_liquidity_heatmap(true);
+    let mut history = DepthHistory::new(Default::default()).unwrap();
+    history.push(DepthColumn {
+        time: "2026-01-05T10:00:00Z".parse().unwrap(),
+        span: chrono::TimeDelta::seconds(1),
+        bids: vec![(100, 99.0)],
+        asks: vec![(101, 9.0)],
+        ..Default::default()
+    });
+    chart.set_depth_history(Some(history));
+    let ctx = egui::Context::default();
+    for frame in 0..5 {
+        match frame {
+            1 | 4 => {
+                chart.set_liquidity_heatmap(true);
+                chart.set_liquidity_heatmap_config(config);
+            }
+            2 => {
+                chart.set_liquidity_heatmap(false);
+                chart.set_liquidity_heatmap(true);
+            }
+            3 => chart.feed_link = Some(chart.feed_link.as_ref().unwrap().frozen()),
+            _ => {}
+        }
+        assert_eq!(chart.liquidity_heatmap_config(), config);
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            chart.paint_liquidity(ui.painter(), &chart.get_chart_mapping());
+        });
+        let alphas: Vec<_> = output
+            .textures_delta
+            .set
+            .values()
+            .flatten()
+            .filter(|delta| delta.pos.is_some() && delta.image.size() == [1, 256])
+            .map(|delta| {
+                let egui::ImageData::Color(image) = &delta.image;
+                [image.pixels[100].a(), image.pixels[101].a()]
+            })
+            .collect();
+        output.textures_delta.clear();
+        // 99 reaches 2/3 intensity: round(255 * 0.75 * 2/3) * 0.5 = 64.
+        assert_eq!(
+            alphas,
+            if frame == 1 || frame == 4 {
+                vec![]
+            } else {
+                vec![[64, 0]]
+            }
         );
     }
 }

@@ -464,7 +464,7 @@ impl Chart {
                     };
                     (
                         item.id,
-                        crate::widget::price_series::SeriesLegend::new(
+                        crate::widget::series::SeriesLegend::new(
                             item,
                             close,
                             self.series_label_formatter(

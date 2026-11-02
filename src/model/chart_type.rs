@@ -401,6 +401,12 @@ pub struct ChartTypeParams {
     pub columns_base: Option<f64>,
     /// TPO: minutes per period, raised to the bar interval when shorter.
     pub tpo_period_minutes: u32,
+    /// TPO: minutes from the session open included in the initial balance, 60 by default.
+    pub tpo_initial_balance_minutes: u32,
+    /// TPO: mark the highest and lowest rows when they hold more than one TPO.
+    pub tpo_poor_highs_lows: bool,
+    /// TPO: draw one and two initial balance ranges above its high and below its low.
+    pub tpo_initial_balance_extensions: bool,
     /// TPO: instrument ticks per price row. Zero, or an instrument without a tick size, fits
     /// about 40 rows to the visible price range, each a whole number of the instrument's ticks
     /// when it has a tick size.
@@ -440,6 +446,9 @@ impl Default for ChartTypeParams {
             baseline: BaselineLevel::PercentOfPane(50.0),
             columns_base: None,
             tpo_period_minutes: 30,
+            tpo_initial_balance_minutes: 60,
+            tpo_poor_highs_lows: false,
+            tpo_initial_balance_extensions: false,
             tpo_row_ticks: 0,
             tpo_value_area: 70.0,
             tpo_split_sessions: false,
@@ -458,6 +467,9 @@ impl ChartTypeParams {
             // A zero row lets the renderer fit the rows to the visible range.
             tick_size: tick_size.map_or(0.0, |tick| tick * f64::from(self.tpo_row_ticks)),
             period_minutes: self.tpo_period_minutes,
+            initial_balance_minutes: self.tpo_initial_balance_minutes,
+            show_poor_highs_lows: self.tpo_poor_highs_lows,
+            show_initial_balance_extensions: self.tpo_initial_balance_extensions,
             value_area_pct: self.tpo_value_area / 100.0,
             split_sessions: self.tpo_split_sessions,
             show_single_prints: self.tpo_single_prints,
@@ -546,6 +558,58 @@ impl ChartTypeParams {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saved_tpo_settings_apply_the_balance_window_and_keep_legacy_defaults() {
+        use crate::model::{Bar, Timeframe, to_tpo_profiles};
+        use chrono::{Duration, TimeZone, Utc};
+        let start = Utc.with_ymd_and_hms(2024, 3, 5, 9, 30, 0).unwrap();
+        let bars = [
+            Bar::new(start, 100.0, 102.0, 100.0, 102.0, 1.0),
+            Bar::new(
+                start + Duration::minutes(30),
+                101.0,
+                104.0,
+                101.0,
+                104.0,
+                1.0,
+            ),
+        ];
+        for (saved, minutes, high, enabled) in [
+            (
+                r#"{"tpo_initial_balance_minutes":30,"tpo_poor_highs_lows":true,"tpo_initial_balance_extensions":true}"#,
+                30,
+                102.0,
+                true,
+            ),
+            (
+                r#"{"tpo_period_minutes":30,"tpo_row_ticks":1}"#,
+                60,
+                104.0,
+                false,
+            ),
+        ] {
+            let params: ChartTypeParams = serde_json::from_str(saved).unwrap();
+            let config = params.tpo_config(Some(1.0));
+            assert_eq!(config.initial_balance_minutes, minutes);
+            let profiles = to_tpo_profiles(&bars, &config, &Timeframe::Min30.into());
+            assert_eq!(
+                (
+                    profiles[0].initial_balance_low,
+                    profiles[0].initial_balance_high
+                ),
+                (100.0, high)
+            );
+            let saved = serde_json::to_value(&params).unwrap();
+            assert_eq!(saved["tpo_initial_balance_minutes"], minutes);
+            assert_eq!(saved["tpo_poor_highs_lows"], enabled);
+            assert_eq!(saved["tpo_initial_balance_extensions"], enabled);
+            assert_eq!(
+                serde_json::from_value::<ChartTypeParams>(saved).unwrap(),
+                params
+            );
+        }
+    }
 
     #[test]
     fn test_default_is_candles() {

@@ -66,6 +66,46 @@ impl std::fmt::Display for SymbolType {
     }
 }
 
+/// An optional service of a [`Datafeed`](crate::data::Datafeed), listed in
+/// [`FeedCapabilities::services`](crate::data::FeedCapabilities::services) and [`Instrument::services`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum FeedService {
+    /// [`Datafeed::trades`](crate::data::Datafeed::trades).
+    Trades,
+    /// [`Datafeed::depth_history`](crate::data::Datafeed::depth_history).
+    DepthHistory,
+    /// [`Datafeed::options_volume`](crate::data::Datafeed::options_volume).
+    OptionsVolume,
+    /// [`Datafeed::metrics`](crate::data::Datafeed::metrics) and
+    /// [`Datafeed::metric_history`](crate::data::Datafeed::metric_history).
+    Metrics,
+    /// [`Datafeed::price_targets`](crate::data::Datafeed::price_targets).
+    PriceTargets,
+    /// [`Datafeed::symbol_details`](crate::data::Datafeed::symbol_details).
+    SymbolDetails,
+    /// [`Datafeed::news`](crate::data::Datafeed::news).
+    News,
+    /// [`Datafeed::calendar`](crate::data::Datafeed::calendar).
+    Calendar,
+    /// [`Datafeed::screen`](crate::data::Datafeed::screen).
+    Screener,
+    /// [`Datafeed::hotlist`](crate::data::Datafeed::hotlist).
+    Hotlist,
+    /// Live executions through [`Sink::push_tick`](crate::data::Sink::push_tick).
+    LiveTrades,
+    /// Aggressor classification in [`Tick::side`](super::Tick::side) of supplied executions.
+    TradeSides,
+    /// Best bid and ask through [`Sink::push_quote`](crate::data::Sink::push_quote).
+    BestBidAsk,
+    /// Price-level depth through [`Sink::push_depth_snapshot`](crate::data::Sink::push_depth_snapshot)
+    /// and [`Sink::push_depth_delta`](crate::data::Sink::push_depth_delta).
+    Depth,
+    /// Individual resting orders through [`Sink::push_order_snapshot`](crate::data::Sink::push_order_snapshot)
+    /// and [`Sink::push_order_event`](crate::data::Sink::push_order_event).
+    OrderDepth,
+}
+
 /// What a feed or a search service reports about a symbol. Build it with [`Instrument::new`] and the `with_` setters;
 /// fields left out stay unknown.
 #[derive(Clone, Debug, PartialEq)]
@@ -116,6 +156,11 @@ pub struct Instrument {
     /// interval. Pass the list to `ui::top_toolbar::TimeframeSelector::set_supported_timeframes`
     /// so that the interval picker offers only these.
     pub supported_timeframes: Option<Vec<Timeframe>>,
+    /// Optional services supplied for this symbol, narrowing the feed's
+    /// [`services`](crate::data::FeedCapabilities::services). `None` defers to the feed's list;
+    /// an empty list supplies none. Use [`FeedCapabilities::declares`](crate::data::FeedCapabilities::declares)
+    /// to require explicit confirmation from either list while respecting both.
+    pub services: Option<Vec<FeedService>>,
     /// How current the feed's data is. The legend marks delayed and end-of-day data.
     pub data_status: Option<DataStatus>,
     /// Bar intervals the feed suggests for volume profile studies and drawings, by profile
@@ -148,6 +193,7 @@ impl Instrument {
             session: None,
             native_timeframes: None,
             supported_timeframes: None,
+            services: None,
             data_status: None,
             profile_resolutions: Vec::new(),
         }
@@ -258,6 +304,12 @@ impl Instrument {
         timeframes: impl IntoIterator<Item = Timeframe>,
     ) -> Self {
         self.supported_timeframes = Some(timeframes.into_iter().collect());
+        self
+    }
+
+    /// Sets [`services`](Self::services).
+    pub fn with_services(mut self, services: impl IntoIterator<Item = FeedService>) -> Self {
+        self.services = Some(services.into_iter().collect());
         self
     }
 

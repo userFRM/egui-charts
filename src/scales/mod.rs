@@ -25,7 +25,7 @@ pub use price_formatter::{
     instrument_price_precision,
 };
 #[cfg(feature = "widget")]
-pub(crate) use price_formatter::{group_thousands, price_decimals};
+pub(crate) use price_formatter::{decimals, group_thousands, price_decimals, to_step};
 #[cfg(feature = "widget")]
 pub(crate) use pricescale::auto_scale_span;
 pub use pricescale::{
