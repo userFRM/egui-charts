@@ -46,7 +46,7 @@ pub enum DrawingContextMenuAction {
     None,
     /// Open the alert dialog on this alert, the price crossing the drawing's first visible level, for
     /// example with [`AlertDialog::edit`](crate::ui::dialogs::AlertDialog::edit),
-    /// listing the levels of [`Drawing::alert_levels`](crate::drawings::Drawing::alert_levels)
+    /// listing the levels of [`Drawing::alert_levels_with_bars`](crate::drawings::Drawing::alert_levels_with_bars)
     /// as its sources.
     AddAlert(Box<Alert>),
     /// Open drawing settings dialog
@@ -150,7 +150,14 @@ impl DrawingContextMenu {
             .filter(|_| !chart.symbol.is_empty())
             .and_then(|drawing| {
                 let (level, _, _) = drawing
-                    .alert_levels(0.0, chart.config().right_axis_scale_mode)
+                    .alert_levels_with_bars(
+                        chart
+                            .bars(crate::chart::series::SeriesId::MAIN)
+                            .len()
+                            .saturating_sub(1) as f64,
+                        chart.config().right_axis_scale_mode,
+                        chart.bars(crate::chart::series::SeriesId::MAIN),
+                    )
                     .into_iter()
                     .next()?;
                 Some(Alert::new(

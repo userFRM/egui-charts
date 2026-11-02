@@ -20,13 +20,13 @@ Builder API,Builder integration,Custom indicators from a downstream crate,done,l
 Builder API,Builder integration,Custom series types from a downstream crate,done,library,src/widget/primitives.rs;src/widget/pane/render/mod.rs;src/chart/primitives.rs
 Builder API,Builder integration,Desktop webview integration,missing,library,
 Builder API,Builder integration,Embedding with a data feed,done,host,src/widget/builder.rs;src/widget/frame.rs;src/widget/feed/mod.rs
-Builder API,Builder integration,Full trading-terminal UI around the chart,partial,library,src/ui/app_state.rs;src/ui/trading/mod.rs;terminal/src/lib.rs
+Builder API,Builder integration,Full trading-terminal UI around the chart,partial,library,src/ui/app_state.rs;src/ui/trading/mod.rs;terminal/src/lib.rs;terminal/src/core.rs;terminal/src/services.rs;terminal/src/layout.rs;terminal/src/trading.rs
 Builder API,Builder integration,Minimal embedding,done,library,src/widget/builder.rs;src/widget/frame.rs
 Builder API,Builder integration,Pluggable formatters and session rules,done,library,src/widget/frame.rs;src/widget/builder.rs;src/model/session/mod.rs
 Builder API,Builder integration,Public API surface and structure,done,library,src/prelude.rs;src/lib.rs;src/widget/mod.rs;src/model/mod.rs;src/widget/pan_zoom.rs;src/widget/interaction.rs;src/widget/builder.rs;src/styles/mod.rs
 Builder API,Builder integration,Threading model for feeding data,done,library,src/data/mod.rs;src/data/inbox/mod.rs;src/widget/feed/mod.rs;src/data/inbox/sink.rs
 Builder API,Builder integration,WebAssembly target,done,library,src/data/mod.rs
-Builder API,Datafeed API,"Option expiries and chain snapshots with open interest, quotes, implied volatility and Greeks",missing,host,
+Builder API,Datafeed API,"Option expiries and chain snapshots with open interest, quotes, implied volatility and Greeks",done,host,src/data/mod.rs;src/data/option_chain.rs;src/data/options_volume.rs;src/model/instrument.rs
 Builder API,Datafeed API,"Per-symbol order-flow data: trades, trade sides, quotes and depth",done,host,src/data/mod.rs;src/model/instrument.rs;src/data/inbox/sink.rs;
 Builder API,Datafeed API,Bar data model,done,library,src/model/bar/bar.rs;src/widget/builder.rs;src/chart/rendering/candles/mod.rs;src/widget/series/mod.rs
 Builder API,Datafeed API,Bar marks,done,host,src/services/marks.rs;src/widget/marks.rs;src/chart/renderers/markers.rs;src/model/markers.rs;src/widget/events.rs
@@ -82,7 +82,7 @@ Builder API,Widget API and customization,Context menu customisation,done,library
 Builder API,Widget API and customization,Create and edit drawings from code,done,library,src/widget/drawing_api.rs;src/widget/anchors.rs;src/drawings/manager/mod.rs;src/widget/mod.rs;src/drawings/manager/edit.rs
 Builder API,Widget API and customization,Create and remove studies,done,library,src/widget/series/mod.rs;src/widget/studies.rs;src/studies/settings.rs;src/widget/pane/mod.rs
 Builder API,Widget API and customization,Custom date and time formatters,done,library,src/widget/frame.rs;src/scales/time_formatter.rs
-Builder API,Widget API and customization,Custom price formatter,done,library,src/widget/frame.rs
+Builder API,Widget API and customization,Custom price formatter,done,library,src/widget/frame.rs;src/widget/tool_interaction/mod.rs;src/drawings/rendering/mod.rs
 Builder API,Widget API and customization,Export chart data,done,library,src/widget/export.rs;src/model/bar/io.rs
 Builder API,Widget API and customization,Hide or show the main series,done,library,src/widget/series/mod.rs;src/widget/frame.rs;src/widget/marks.rs
 Builder API,Widget API and customization,Locale-aware date formatting,done,library,src/widget/frame.rs;src/scales/time_formatter.rs;Cargo.toml
@@ -811,14 +811,14 @@ Studies,Strategy tester,Limit and stop orders,done,library,src/strategies/backte
 Studies,Strategy tester,List of trades,done,library,src/model/strategy.rs;src/ui/strategy_report/mod.rs
 Studies,Strategy tester,"Long and short positions, margin and leverage",done,library,src/strategies/backtest.rs;docs/strategy-report.md
 Studies,Strategy tester,Order fill model,done,library,src/strategies/backtest.rs;src/strategies/mod.rs;src/model/trading.rs;docs/strategy-report.md
-Studies,Strategy tester,Parameter optimisation,missing,library,
+Studies,Strategy tester,Parameter optimisation,done,library,src/ui/strategy_report/tester.rs;src/ui/strategy_report/optimisation.rs;src/strategies/backtest.rs;src/strategies/optimize.rs;src/strategies/mod.rs;src/model/strategy.rs
 Studies,Strategy tester,Performance summary,done,library,src/model/strategy.rs;src/ui/strategy_report/mod.rs
 Studies,Strategy tester,Position sizing,done,library,src/strategies/backtest.rs;src/strategies/mod.rs;docs/strategy-report.md
 Studies,Strategy tester,Pyramiding limit,done,library,src/strategies/backtest.rs;src/strategies/mod.rs;docs/strategy-report.md
 Studies,Strategy tester,Slippage models,done,library,src/strategies/backtest.rs;src/strategies/mod.rs;docs/strategy-report.md
-Studies,Strategy tester,Strategy properties,done,library,src/strategies/backtest.rs;src/model/strategy.rs;src/ui/strategy_report/mod.rs;docs/strategy-report.md
-Studies,Strategy tester,Strategy tester panel,done,library,src/ui/strategy_report/mod.rs
-Studies,Strategy tester,Trade markers on the chart,done,library,src/widget/signals.rs;src/widget/frame.rs
+Studies,Strategy tester,Strategy properties,done,library,src/strategies/backtest.rs;src/model/strategy.rs;src/ui/strategy_report/properties.rs;src/ui/strategy_report/mod.rs;docs/strategy-report.md
+Studies,Strategy tester,Strategy tester panel,done,library,src/ui/strategy_report/tester.rs;src/ui/strategy_report/inputs.rs;src/ui/strategy_report/properties.rs;src/ui/strategy_report/mod.rs;examples/demo/strategy.rs
+Studies,Strategy tester,Trade markers on the chart,done,library,src/model/strategy.rs;src/ui/strategy_report/tester.rs;src/widget/signals.rs;src/widget/frame.rs;examples/demo/strategy.rs
 Terminal,Alerts,"Alert editing, pause, resume and duplication",done,library,src/ui/widget_bar/panels/alerts_panel.rs;src/ui/dialogs/alert_dialog/dialog.rs;terminal/src/alerts.rs
 Terminal,Alerts,Alert evaluation engine,done,library,src/services/alerts.rs;src/services/alert_engine.rs;src/services/alert_evaluator.rs;src/services/alert_feed.rs;terminal/src/alerts.rs
 Terminal,Alerts,Alert expiration,done,library,src/ui/dialogs/alert_dialog/dialog.rs;src/services/alert_engine.rs;terminal/src/alerts.rs
@@ -828,10 +828,10 @@ Terminal,Alerts,Alert manager panel,done,library,src/ui/widget_bar/panels/alerts
 Terminal,Alerts,"Alert name, custom message and placeholders",partial,library,src/ui/dialogs/alert_dialog/dialog.rs;src/ui/widget_bar/panels/alerts_panel.rs;src/model/alert.rs
 Terminal,Alerts,Alert presets and per-alert notification schedule,done,library,src/ui/dialogs/alert_dialog/dialog.rs;src/model/alert.rs;src/services/alert_engine.rs
 Terminal,Alerts,Alerts tab in series settings,done,library,src/model/series_style.rs;src/chart/series/settings.rs;src/ui/dialogs/series_settings/tabs/scales.rs;src/widget/mod.rs;src/widget/snapshot.rs;src/widget/history.rs
-Terminal,Alerts,"Channel operators: entering, exiting, inside, outside a channel",done,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs;src/services/alert_engine.rs
+Terminal,Alerts,"Channel operators: entering, exiting, inside, outside a channel",done,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs;src/services/alert_engine.rs;src/drawings/domain/alert_levels.rs;src/widget/alerts.rs
 Terminal,Alerts,Create a price alert from the toolbar bell,done,library,src/ui/top_toolbar/toolbar.rs;src/ui/dialogs/alert_dialog/dialog.rs;src/services/alert_engine.rs;terminal/src/alerts.rs
 Terminal,Alerts,Demo alert sound playback,done,host,examples/demo/controller.rs;examples/demo/audio.rs
-Terminal,Alerts,Drawing alerts,done,library,src/ui/context_menu/drawing.rs;src/drawings/domain/drawing.rs;src/services/alert_engine.rs;terminal/src/alerts.rs
+Terminal,Alerts,Drawing alerts,done,library,src/ui/context_menu/drawing.rs;src/drawings/domain/drawing.rs;src/services/alert_engine.rs;terminal/src/alerts.rs;src/drawings/domain/alert_levels.rs;src/model/alert.rs;src/widget/alerts.rs;src/ui/dialogs/alert_dialog/dialog.rs;src/services/alert_evaluator.rs;src/services/alert_feed.rs
 Terminal,Alerts,Indicator alerts on study plots,done,library,src/ui/dialogs/alert_dialog/dialog.rs;src/services/alert_engine.rs;src/services/alert_evaluator.rs;src/services/alert_feed.rs;terminal/src/alerts.rs
 Terminal,Alerts,Inline alert creation forms in the alerts panel,done,library,src/ui/widget_bar/panels/alerts_panel.rs;src/ui/dialogs/alert_dialog/dialog.rs;src/model/alert.rs;src/services/alerts.rs;terminal/src/alerts.rs
 Terminal,Alerts,Moving up / moving down operators,done,library,src/ui/dialogs/alert_dialog/dialog.rs

@@ -268,6 +268,63 @@ pub struct StrategyExcursion {
 }
 
 impl StrategyReport {
+    /// Labelled entry and exit markers for the host's signals service. Invalid trades are skipped;
+    /// open trades have only an entry. Directions describe the fill side, including short exits.
+    /// Ids remain stable for this report's original trade indices. When replacing a run, remove
+    /// its old signals before publishing the replacement, including when it has no trades.
+    pub fn signals(&self) -> Vec<super::Signal> {
+        use super::{Direction, Signal, SignalId, SignalShape};
+        let mut signals = Vec::new();
+        for (index, trade) in self
+            .trades
+            .iter()
+            .enumerate()
+            .filter(|(_, trade)| trade.is_valid())
+        {
+            let entry = match trade.side {
+                OrderSide::Buy => Direction::Up,
+                OrderSide::Sell => Direction::Down,
+            };
+            let exit = match trade.side {
+                OrderSide::Buy => Direction::Down,
+                OrderSide::Sell => Direction::Up,
+            };
+            for (fill, time, price, direction) in
+                std::iter::once(("Entry", trade.entry_time, trade.entry_price, entry)).chain(
+                    trade
+                        .exit
+                        .as_ref()
+                        .map(|value| ("Exit", value.time, value.price, exit)),
+                )
+            {
+                let label = format!("{fill} {}", index + 1);
+                signals.push(Signal {
+                    id: SignalId(format!(
+                        "strategy:{}:{}:{}:{index}:{fill}",
+                        self.symbol, self.timeframe, self.name
+                    )),
+                    shape: SignalShape::Marker {
+                        time,
+                        price: Some(price),
+                        direction,
+                    },
+                    category: "Strategy trades".into(),
+                    label: Some(label.clone()),
+                    tooltip: Some(format!(
+                        "{} · {label} · {} units @ {price}{}",
+                        self.name,
+                        trade.quantity,
+                        trade
+                            .label
+                            .as_ref()
+                            .map_or_else(String::new, |label| format!(" · {label}"))
+                    )),
+                });
+            }
+        }
+        signals
+    }
+
     /// A report with no trades, no equity, no properties, no currency and a risk-free rate of 0.
     pub fn new(
         name: impl Into<String>,
@@ -718,6 +775,62 @@ impl StrategyExit {
 mod tests {
     use super::*;
     use chrono::{Datelike, TimeDelta, TimeZone, Weekday};
+
+    #[test]
+    fn report_signals_preserve_valid_fill_times_prices_indices_and_sides() {
+        use crate::model::{Direction, SignalShape};
+        let start = DateTime::UNIX_EPOCH + chrono::TimeDelta::nanoseconds(123);
+        let mut report = StrategyReport::new("Fills", "TEST", Timeframe::Min1, 1000.0);
+        for (side, exit) in [
+            (OrderSide::Buy, true),
+            (OrderSide::Sell, true),
+            (OrderSide::Sell, false),
+        ] {
+            let mut trade = StrategyTrade::new(side, 2.0, start, -0.00001234);
+            trade.label = Some("Rule / close".into());
+            if exit {
+                trade.exit = Some(StrategyExit::new(
+                    start + chrono::TimeDelta::milliseconds(250),
+                    0.25,
+                    0.0,
+                ));
+            }
+            report.trades.push(trade);
+        }
+        let mut invalid = report.trades[0].clone();
+        invalid.quantity = 0.0;
+        report.trades.insert(1, invalid);
+        let signals = report.signals();
+        assert_eq!(signals.len(), 5);
+        for (index, (signal, direction)) in signals
+            .iter()
+            .zip([
+                Direction::Up,
+                Direction::Down,
+                Direction::Down,
+                Direction::Up,
+                Direction::Down,
+            ])
+            .enumerate()
+        {
+            let entry = index == 0 || index == 2 || index == 4;
+            assert_eq!(
+                signal.shape,
+                SignalShape::Marker {
+                    time: if entry {
+                        start
+                    } else {
+                        start + chrono::TimeDelta::milliseconds(250)
+                    },
+                    price: Some(if entry { -0.00001234 } else { 0.25 }),
+                    direction,
+                }
+            );
+            assert!(signal.tooltip.as_ref().unwrap().contains("Rule / close"));
+        }
+        assert_eq!(signals.last().unwrap().label.as_deref(), Some("Entry 4"));
+        assert_eq!(signals, report.signals(), "stable marker ids");
+    }
 
     // Reference values below are computed independently from the definitions documented on
     // `StrategyPerformance` in double precision, not with this code.

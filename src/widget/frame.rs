@@ -212,7 +212,8 @@ impl Chart {
     /// Formats price scale labels in the normal and logarithmic modes: the crosshair label and
     /// price tags with [`PriceFormatter::format`], and the axis ticks with
     /// [`PriceFormatter::format_tick`]. The formatter receives prices and replaces the
-    /// instrument's decimals. It applies to every price scale; studies keep their own formats.
+    /// instrument's decimals. It applies to every price scale and to the prices drawings print;
+    /// studies keep their own formats.
     /// `None` restores the built-in labels.
     ///
     /// [`PriceFormatter::format`]: crate::scales::PriceFormatter::format
@@ -255,9 +256,10 @@ impl Chart {
     }
 
     /// Overrides raw-price formatting for one bar series, including `MAIN`. This affects
-    /// readouts, price tags and ticks; percentage and indexed scales retain the chart's
-    /// percentage formatter. `None` restores chart-wide formatting. Returns false for an
-    /// unknown series. A shared axis uses the first visible series' formatter.
+    /// readouts, price tags, ticks and the prices drawings in its pane print; percentage and
+    /// indexed scales retain the chart's percentage formatter. `None` restores chart-wide
+    /// formatting. Returns false for an unknown series. A shared axis uses the first visible
+    /// series' formatter.
     pub fn set_series_formatter(
         &mut self,
         id: super::SeriesId,
@@ -292,13 +294,20 @@ impl Chart {
         }
     }
 
+    /// The host's formatter for raw prices of series `id`: its own, else the chart's.
+    pub(super) fn series_price_formatter(
+        &self,
+        id: super::SeriesId,
+    ) -> Option<&dyn crate::scales::PriceFormatter> {
+        self.series_formatters
+            .get(&id)
+            .or(self.price_formatter.as_ref())
+            .map(|formatter| formatter.as_ref())
+    }
+
     pub(super) fn value_formatters(&self) -> renderers::ValueFormatters<'_> {
         renderers::ValueFormatters {
-            price: self
-                .series_formatters
-                .get(&super::SeriesId::MAIN)
-                .or(self.price_formatter.as_ref())
-                .map(|formatter| formatter.as_ref()),
+            price: self.series_price_formatter(super::SeriesId::MAIN),
             volume: self.volume_formatter.as_deref(),
             percentage: self.percentage_formatter.as_deref(),
         }

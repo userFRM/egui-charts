@@ -41,7 +41,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 
 - [x] Linear, logarithmic, percentage, indexed-to-100 and inverted price scales, autoscale, manual ranges and scale options.
 - [x] Time-axis tick hierarchy, price marks that default to the instrument tick grid with host overrides, exchange time zones, session breaks and extended-hours shading.
-- [x] Chart-wide time, price, percentage and volume formatters, plus per-series price formatters.
+- [x] Chart-wide time, price, percentage and volume formatters, plus per-series price formatters. Drawing prices and price changes use their pane's raw-price formatter, including measurements, forecasts, projections, position levels and rectangle heights.
 - [x] Locale-aware date names and configurable date patterns.
 - [x] Chart-owned panes share the time axis and support resizing, reordering, stretch sizing, collapse and maximise controls.
 - [x] Studies and added series can use separate panes and independent scales.
@@ -193,7 +193,10 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Account summary, positions, orders, history, executions, balance and journal tables, with CSV export.
 - [x] Execution markers, rejection/fill notifications and execution sound intents.
 - [x] `StrategyReportPanel` accepts `StrategyReport` data and shows trade lists, equity/drawdown plots, performance metrics, supplied properties and chart navigation; trades export as CSV.
+- [x] `StrategyTester` selects factory strategies, reuses the study input editor, edits account and execution settings, requests history from the host and displays runs with labelled fill signals. Edits mark the report stale.
+- [x] Parameter optimisation previews bounded numeric grids, yields between execution batches, sorts trial results and applies selected inputs on native and web builds.
 - [x] `StrategyFactory` lists and creates built-in and host strategies with editable study inputs, defaults and bounds.
+- [x] `strategies::optimise` lazily runs every input combination on a fresh strategy with the same bars and settings, yielding its inputs and report performance; dropping the iterator stops further trials.
 - [x] Ten price-action strategies trade gaps, consecutive closes, inside/outside bars, channels, confirmed pivots and ATR expansion, with fill-relative tick brackets where needed.
 - [x] Twelve study strategies use public indicator values for bands, momentum, averages, oscillators, trend flips and technical ratings; every built-in preserves its trades on historical prefixes.
 - [ ] Extend risk-percent sizing to limit, stop and stop-limit tickets.
@@ -207,7 +210,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] `AlertsPanel` uses `services::Alerts` to list, edit, pause/enable and remove alerts, and to show supplied trigger events in toasts and an exportable log.
 - [ ] Add user-controlled sorting and cloning to the alerts panel.
 - [ ] Offer inline creation and series-level alert settings alongside the shared dialog.
-- [ ] Add channel-drawing alert geometry.
+- [x] Drawing alerts follow fork, pitchfan and regression lines on linear and logarithmic scales, with entry, exit, inside and outside conditions resolving both moving boundaries.
 - [ ] Model persistent inside/outside-channel conditions and once-per-minute frequency.
 - [ ] Expose message placeholder and per-alert notification-schedule configuration for host processing.
 
@@ -250,7 +253,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 
 - [x] `Chart::export_csv` exports OHLCV and study values with timestamps and missing-value handling.
 - [x] `Chart::export_png` renders an isolated chart frame on the CPU after font initialisation; export controls include size, title, timestamp, crosshair and transparency.
-- [x] Export dialog and demo actions save images/data or copy images through application facilities.
+- [x] Export dialog and demo actions save images/data or copy images through application facilities. The terminal's file callback returns save errors and carries a host request to open an exported image.
 - [ ] Capture composed panels, trading overlays, external textures and feed-backed order-flow visuals in a complete terminal image.
 - [ ] Add an export watermark switch, vector image output and print/PDF output.
 - [ ] Integrate a native save-file chooser and provide an `Exportable` adapter for direct chart export.
@@ -292,6 +295,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Accessibility roles/states, keyboard focus and a textual bar/study readout.
 - [x] Reusable `ui_kit` buttons, inputs, colour pickers, dialogs, lists, tabs, panels, command palette and toast components.
 - [x] Native and browser examples and CI checks cover library, feature combinations and demo builds.
+- [x] The guide and site landing page share light and dark navigation, a working first-chart example and a live sample chart; the full demo stays at `/demo/`.
 - [ ] Route remaining direct English UI labels through the translation lookup.
 - [ ] Make session-quote/volume tags and marker outlines fully theme-configurable.
 - [ ] Add a runnable desktop-webview integration example.
@@ -300,7 +304,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 
 The crate renders supplied data and exposes interfaces for application services. The application supplies market data, broker execution, accounts and durable storage. These interfaces also allow services to run remotely.
 
-- `Datafeed`, `SymbolSearch`, `Quotes` and `Marks` connect instrument discovery, history, live prices, executions, depth and chart events. Feed queries also supply metrics, options volume, analyst targets, symbol details, news, calendars, screeners, hotlists and market heatmaps.
+- `Datafeed`, `SymbolSearch`, `Quotes` and `Marks` connect instrument discovery, history, live prices, executions, depth and chart events. Feed queries also supply metrics, options volume, listed option expiries and live or historical option chains with quotes, open interest, implied volatility and Greeks, analyst targets, symbol details, news, calendars, screeners, hotlists and market heatmaps. The headless `OptionChain` handle retains the latest validated snapshot and error; the host supplies all option data.
 - `Broker` supplies real or paper-account state, trading rules, execution and account updates. Trading components submit actions and render the reported orders, positions, fills and history.
 - `Storage` supplies layouts, drawings, settings and template documents; an application may use local or remote storage and manage accounts, synchronisation and sharing.
 - `Alerts` stores and evaluates alert conditions and reports changes and triggers. The crate edits models and draws levels, dialogs, logs and toasts; the application supplies sound, schedules and external delivery.

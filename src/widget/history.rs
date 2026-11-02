@@ -1637,11 +1637,14 @@ mod tests {
         });
         assert_eq!(chart.series_settings().alerts, main_alerts);
         assert_eq!(chart.series_style(other).unwrap().alerts, other_alerts);
-        let mut restored = super::super::Chart::new(BarData::default());
-        restored
-            .restore(&chart.snapshot().unwrap())
-            .expect("snapshot restores");
-        assert_eq!(restored.series_settings().alerts, main_alerts);
+        #[cfg(feature = "ui")]
+        {
+            let mut restored = super::super::Chart::new(BarData::default());
+            restored
+                .restore(&chart.snapshot().unwrap())
+                .expect("snapshot restores");
+            assert_eq!(restored.series_settings().alerts, main_alerts);
+        }
         assert!(chart.undo());
         assert_eq!(chart.series_settings().alerts, SeriesAlerts::default());
         assert_eq!(
