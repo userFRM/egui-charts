@@ -11,7 +11,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 `ChartType` offers 21 chart types, with the rendering limits listed below.
 
 - [x] Candles, OHLC bars, hollow candles and volume candles, with configurable rising and falling colours.
-- [x] Line, line with markers, step line, area, HLC area, baseline, columns and high-low charts; line and area charts accept a `PriceSource`.
+- [x] Line, line with markers, step line, area, HLC area, baseline, columns and high-low charts; line and area charts accept a `PriceSource`. Baseline fills accept independent colours at the pane edge and the base on each price side, including point overrides, while older settings keep flat fills.
 - [x] Heikin-Ashi, Renko, Kagi, line break, point and figure, and range-bar transformations and rendering.
 - [x] Renko box sizing and wicks, line-break lookback, and price-based chart parameters are configurable.
 - [x] Market Profile (TPO) uses exchange sessions or calendar days, with letters or blocks, initial balance, point of control, value area and composite profiles; autoscale fits the full displayed distributions and cropped profiles retain their session and central-level readouts. POC, value-area and midpoint captions keep a gutter at the first or offscreen session opening, separate nearby levels and reveal their prices on hover.
