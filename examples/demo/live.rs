@@ -14,6 +14,7 @@ use egui_charts::model::{
 };
 use egui_charts::model::{Direction, Signal, SignalId, SignalShape};
 use egui_charts::services::{Events, Quotes, SignalEvent, Signals};
+use egui_charts::widget::{Chart, SeriesId};
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -37,6 +38,18 @@ pub(super) const ORDER_LEVEL_SYMBOL: &str = "ESZ2026";
 /// Driven by the UI timer on both native and web; there is no background worker.
 pub(super) struct LiveFeed(Mutex<Simulation>);
 
+#[derive(PartialEq, Eq)]
+struct ComparisonSnapshot {
+    timeframe: Timeframe,
+    clock: BarClock,
+    extended_hours: bool,
+    continuous: bool,
+    adjusted: bool,
+    trade: u64,
+    open: DateTime<Utc>,
+    empty: bool,
+}
+
 struct Simulation {
     symbol: String,
     tick_size: f64,
@@ -53,6 +66,7 @@ struct Simulation {
     paused: bool,
     continuous: bool,
     adjusted: bool,
+    comparison_snapshot: Option<ComparisonSnapshot>,
     /// The ex-date and price factor stay fixed for the life of the feed.
     dividend: Option<(DateTime<Utc>, f64)>,
     subscription: Option<Subscription>,
@@ -92,6 +106,7 @@ impl LiveFeed {
             paused: false,
             continuous: true,
             adjusted: false,
+            comparison_snapshot: None,
             dividend: DemoSymbol::has_hours(symbol)
                 .then(|| (dividend_date(symbol, now), dividend_factor(symbol))),
             subscription: None,
@@ -132,6 +147,7 @@ impl LiveFeed {
             paused: sim.paused,
             continuous: sim.continuous,
             adjusted: sim.adjusted,
+            comparison_snapshot: None,
             dividend: sim.dividend,
             subscription: None,
             streams: Vec::new(),
@@ -187,6 +203,37 @@ impl LiveFeed {
                 feed.set_view(session, adjusted);
             }
         }
+    }
+
+    /// Each comparison owns a feed. Rebuild its history only when the source or view changes,
+    /// or when restoring the chart cleared previously loaded bars.
+    pub(super) fn refresh_comparison(&self, chart: &mut Chart, id: SeriesId) {
+        let timeframe = chart.timeframe().unwrap_or(Timeframe::Hour1);
+        let clock = chart.bar_clock();
+        let extended_hours = chart.extended_hours();
+        let sim = self.state();
+        let mut key = ComparisonSnapshot {
+            timeframe,
+            clock: clock.clone(),
+            extended_hours,
+            continuous: sim.continuous,
+            adjusted: sim.adjusted,
+            trade: sim.id,
+            open: if timeframe.is_trade_based() {
+                sim.trades.back().map_or(sim.now, |trade| trade.ts)
+            } else {
+                clock.bar_open(sim.now)
+            },
+            empty: chart.bars(id).is_empty(),
+        };
+        if sim.comparison_snapshot.as_ref() == Some(&key) {
+            return;
+        }
+        drop(sim);
+        let bars = self.snapshot(timeframe, clock, extended_hours);
+        chart.set_data(id, bars);
+        key.empty = chart.bars(id).is_empty();
+        self.state().comparison_snapshot = Some(key);
     }
 
     pub(super) fn snapshot(
