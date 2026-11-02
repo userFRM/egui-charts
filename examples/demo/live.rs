@@ -1165,9 +1165,12 @@ impl Datafeed for LiveFeed {
         } else {
             Vec::new()
         };
-        let end = bars.partition_point(|b| request.before.is_none_or(|before| b.time < before));
-        let start = end.saturating_sub(request.count);
-        reply.send(Ok(HistoryPage::new(bars[start..end].to_vec(), start == 0)));
+        reply.send(Ok(super::feeds::history_page(
+            &bars,
+            request.since,
+            request.before,
+            request.count,
+        )));
     }
 
     fn subscribe(&self, subscription: Subscription) {

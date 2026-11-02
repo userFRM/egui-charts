@@ -6,9 +6,9 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use egui_charts::data::{
-    CalendarEvent, CalendarKind, CalendarQuery, FeedError, HotlistEntry, HotlistQuery, Importance,
-    NewsQuery, NewsStory, Reply, ScreenerColumn, ScreenerColumnSet, ScreenerOp, ScreenerQuery,
-    ScreenerRow,
+    CalendarEvent, CalendarKind, CalendarQuery, FeedError, HistoryPage, HotlistEntry, HotlistQuery,
+    Importance, NewsQuery, NewsStory, Reply, ScreenerColumn, ScreenerColumnSet, ScreenerOp,
+    ScreenerQuery, ScreenerRow,
 };
 use egui_charts::model::Bar;
 use egui_charts::services::{ChatEvent, ChatMessage, Chats, Events, Notification, Notifications};
@@ -16,6 +16,19 @@ use egui_charts::services::{ChatEvent, ChatMessage, Chats, Events, Notification,
 use egui_charts::ui::widget_bar::{PeriodReturn, Seasonality, SeasonalityMonth};
 
 use crate::sampledata::DemoSymbol;
+
+/// The newest requested bars inside the inclusive start and exclusive end of a history range.
+pub(super) fn history_page(
+    bars: &[Bar],
+    since: Option<DateTime<Utc>>,
+    before: Option<DateTime<Utc>>,
+    count: usize,
+) -> HistoryPage {
+    let end = bars.partition_point(|bar| before.is_none_or(|before| bar.time < before));
+    let first = bars[..end].partition_point(|bar| since.is_some_and(|since| bar.time < since));
+    let start = end.saturating_sub(count).max(first);
+    HistoryPage::new(bars[start..end].to_vec(), start == 0)
+}
 
 /// Headlines and their text, with `{name}` and `{symbol}` filled in per symbol.
 const HEADLINES: &[(&str, &str)] = &[
@@ -627,4 +640,38 @@ pub(super) fn seasonality(bars: &[Bar]) -> Seasonality {
         })
         .collect();
     Seasonality::new(years as u32, summaries)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn history_range_selects_the_newest_bars_inside_both_bounds() {
+        let time = |minute| Utc.with_ymd_and_hms(2026, 10, 23, 12, minute, 0).unwrap();
+        let bars: Vec<_> = (0..6)
+            .map(|minute| Bar::new(time(minute), 1.0, 1.0, 1.0, 1.0, 1.0))
+            .collect();
+        // [02, 05) contains 02, 03, 04; its newest two are 03, 04.
+        for (since, before, count, expected, end_of_history) in [
+            (Some(2), Some(5), 10, vec![2, 3, 4], false),
+            (Some(2), Some(5), 2, vec![3, 4], false),
+            (Some(6), None, 10, vec![], false),
+            (Some(5), Some(2), 10, vec![], false),
+            (None, Some(0), 10, vec![], true),
+            (None, None, 10, vec![0, 1, 2, 3, 4, 5], true),
+            (Some(2), Some(5), 0, vec![], false),
+        ] {
+            let page = history_page(&bars, since.map(time), before.map(time), count);
+            assert_eq!(
+                page.bars.iter().map(|bar| bar.time).collect::<Vec<_>>(),
+                expected.into_iter().map(time).collect::<Vec<_>>(),
+                "since={since:?}, before={before:?}, count={count}"
+            );
+            assert_eq!(
+                page.end_of_history, end_of_history,
+                "since={since:?}, before={before:?}, count={count}"
+            );
+        }
+    }
 }
