@@ -384,9 +384,17 @@ impl Chart {
                 })
                 .and_then(|id| self.series_price_formatter(*id)),
         };
+        // Drawings write dates as the crosshair labels the same bar; a host horizontal scale has
+        // no dates.
+        let time_formatter = self
+            .horizontal_scale
+            .is_none()
+            .then(|| self.build_time_formatter());
         // Render existing drawings against the chart's bars
         let view = ChartView {
             price_formatter,
+            time_formatter: time_formatter.as_deref(),
+            bar_seconds: self.time_label_seconds(),
             instrument: self.instrument(),
             bars: self.state.shown(),
             revision: self.state.revision(),
@@ -572,6 +580,79 @@ mod tests {
                 2,
                 "measurement and forecast must each show {expected}"
             );
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// Forecast anchors use the crosshair's date format, display zone and bar duration.
+    #[test]
+    fn forecast_dates_follow_the_chart_time_zone_and_time_formatter() {
+        use crate::model::{Bar, BarData, TimezoneId};
+        use crate::scales::{TickMarkType, TimeFormatter, TimezoneMode};
+        use chrono::{DateTime, Duration, TimeZone, Utc};
+        use std::sync::Arc;
+
+        #[derive(Clone)]
+        struct Host;
+        impl TimeFormatter for Host {
+            fn format(&self, _: DateTime<Utc>, _: TickMarkType) -> String {
+                String::new()
+            }
+            fn format_crosshair(&self, time: DateTime<Utc>, bar_seconds: i64) -> String {
+                format!("host {} {bar_seconds}", time.format("%H:%M"))
+            }
+            fn clone_box(&self) -> Box<dyn TimeFormatter> {
+                Box::new(self.clone())
+            }
+        }
+
+        let start = Utc.with_ymd_and_hms(2024, 1, 10, 14, 0, 0).unwrap();
+        let bars = (0..100)
+            .map(|i| Bar::new(start + Duration::minutes(i), 95.0, 110.0, 90.0, 105.0, 1.0))
+            .collect();
+        let mut chart = crate::Chart::new(BarData::from_bars(bars));
+        let mut forecast = Drawing::new(1, DrawingToolType::Forecast);
+        forecast.chart_points = vec![ChartPoint::new(30.0, 100.0), ChartPoint::new(40.0, 105.0)];
+        forecast.completed = true;
+        chart.drawings_mut().drawings.push(forecast);
+        let ctx = Context::default();
+        let mut failures = Vec::new();
+        // Wednesday 10 January 2024: 14:00 + 30/40 one-minute bars, then minus five hours.
+        for (step, expected) in [
+            ["Wed 10 Jan '24 14:30", "Wed 10 Jan '24 14:40"],
+            ["Wed 10 Jan '24 09:30", "Wed 10 Jan '24 09:40"],
+            ["host 09:30 60", "host 09:40 60"],
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if step == 1 {
+                chart.chart_options.time_scale.timezone =
+                    TimezoneMode::Exchange(TimezoneId::fixed_offset(-5 * 3600).unwrap());
+                assert_eq!(
+                    chart.format_time(start + Duration::minutes(30)),
+                    expected[0]
+                );
+            } else if step == 2 {
+                chart.set_time_formatter(Some(Arc::new(Host)));
+            }
+            let texts: Vec<_> = shapes(&ctx, &mut chart, step as f64 * 0.1, vec![])
+                .into_iter()
+                .filter_map(|shape| match shape {
+                    Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            for date in expected {
+                if !texts
+                    .iter()
+                    .any(|text| text.ends_with(&format!("\n{date}")))
+                {
+                    failures.push(format!(
+                        "step {step}: missing forecast date {date}: {texts:?}"
+                    ));
+                }
+            }
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }

@@ -72,6 +72,8 @@ mod tests {
             let instrument = crate::model::Instrument::new("TEST").with_tick_size(0.25);
             let view = ChartView {
                 price_formatter: None,
+                time_formatter: None,
+                bar_seconds: 0,
                 instrument: Some(&instrument),
                 bars: &[],
                 revision: 0,

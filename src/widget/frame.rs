@@ -111,7 +111,7 @@ impl Chart {
     }
 
     // Source-bar cadence sets precision even when many elements share one time.
-    fn time_label_seconds(&self) -> i64 {
+    pub(super) fn time_label_seconds(&self) -> i64 {
         if let Some(timeframe) = self
             .timeframe
             .filter(|timeframe| !timeframe.is_trade_based())
@@ -175,8 +175,9 @@ impl Chart {
         builder.build()
     }
 
-    /// Names months and weekdays in time axis, crosshair and tooltip labels in `locale`'s
-    /// language, such as `"de-DE"` (see [`LocaleTimeFormatter`](crate::scales::LocaleTimeFormatter)).
+    /// Names months and weekdays in time axis, crosshair, tooltip and forecast date labels in
+    /// `locale`'s language, such as `"de-DE"` (see
+    /// [`LocaleTimeFormatter`](crate::scales::LocaleTimeFormatter)).
     /// `None` restores English names.
     ///
     /// The names need the `locales` cargo feature, on by default; without it they stay English.
@@ -184,16 +185,16 @@ impl Chart {
         self.locale = locale;
     }
 
-    /// Writes crosshair and tooltip dates with a `strftime` pattern, such as `"%d.%m.%Y"`, followed
-    /// by the clock for intraday bars. `None` restores the built-in dates, which an invalid pattern
-    /// also falls back to.
+    /// Writes crosshair, tooltip and forecast dates with a `strftime` pattern, such as
+    /// `"%d.%m.%Y"`, followed by the clock for intraday bars. `None` restores the built-in dates,
+    /// which an invalid pattern also falls back to.
     pub fn set_date_format(&mut self, date_format: Option<String>) {
         self.date_format = date_format;
     }
 
     /// Formats time axis marks with [`TimeFormatter::format`], which receives the
-    /// [`TickMarkType`](crate::scales::TickMarkType) of each mark, and crosshair, tooltip and
-    /// [`format_time`](Self::format_time) labels with [`TimeFormatter::format_crosshair`].
+    /// [`TickMarkType`](crate::scales::TickMarkType) of each mark, and crosshair, tooltip, forecast
+    /// date and [`format_time`](Self::format_time) labels with [`TimeFormatter::format_crosshair`].
     ///
     /// The formatter replaces the built-in one, the locale and the date format. It receives
     /// wall-clock times in the chart's time zone, and the time scale's

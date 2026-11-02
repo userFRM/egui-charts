@@ -976,6 +976,8 @@ mod tests {
                     pane,
                     &ChartView {
                         price_formatter: None,
+                        time_formatter: None,
+                        bar_seconds: 0,
                         instrument,
                         bars: &[],
                         revision: 0,
@@ -1010,6 +1012,8 @@ mod tests {
                     Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0)),
                     &ChartView {
                         price_formatter: None,
+                        time_formatter: None,
+                        bar_seconds: 0,
                         instrument: None,
                         bars: &[],
                         revision: 0,

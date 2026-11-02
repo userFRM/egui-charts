@@ -599,6 +599,8 @@ mod tests {
                 let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
                     let view = crate::drawings::rendering::ChartView {
                         price_formatter: None,
+                        time_formatter: None,
+                        bar_seconds: 0,
                         instrument: None,
                         bars: &[],
                         revision: 0,
