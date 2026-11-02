@@ -40,3 +40,234 @@ impl DemoApp {
         });
     }
 }
+
+impl DemoApp {
+    pub(super) fn show_annotation_editor(&mut self, ctx: &egui::Context) {
+        use egui_charts::model::{
+            LineStyle, Marker, MarkerPos, MarkerShape, MarkerZOrder, PriceLine,
+        };
+        use egui_charts::widget::SeriesId;
+        let mut open = self.annotation_editor;
+        egui::Window::new("Markers and price lines")
+            .open(&mut open)
+            .default_pos(egui::pos2(60.0, 120.0))
+            .default_width(340.0)
+            .vscroll(true)
+            .show(ctx, |ui| {
+                let mut series = vec![(SeriesId::MAIN, self.chart.symbol().to_owned())];
+                series.extend(
+                    self.chart
+                        .series()
+                        .map(|(id, options)| (id, options.name.clone())),
+                );
+                series.retain(|(id, _)| self.chart.series_scale(*id).is_some());
+                if !series.iter().any(|(id, _)| *id == self.annotation_series) {
+                    let Some((id, _)) = series.first() else {
+                        ui.label("Add a bar series to try annotations.");
+                        return;
+                    };
+                    self.annotation_series = *id;
+                }
+                egui::ComboBox::from_label("Series")
+                    .selected_text(
+                        series
+                            .iter()
+                            .find(|(id, _)| *id == self.annotation_series)
+                            .map(|(_, name)| name)
+                            .unwrap(),
+                    )
+                    .show_ui(ui, |ui| {
+                        for (id, name) in &series {
+                            ui.selectable_value(&mut self.annotation_series, *id, name);
+                        }
+                    });
+                let id = self.annotation_series;
+                let bars = self.chart.bars(id);
+                let Some(bar) = bars.get(bars.len().saturating_sub(12)).cloned() else {
+                    ui.label("Wait for series history to load.");
+                    return;
+                };
+                let existing = self
+                    .chart
+                    .markers(id)
+                    .iter()
+                    .find(|marker| marker.id.as_deref() == Some("demo-editor"))
+                    .cloned();
+                let mut marker = existing.clone().unwrap_or_else(|| {
+                    let mut marker = Marker::new(bar.time)
+                        .with_text("Sample")
+                        .with_color(self.theme.ui.info);
+                    marker.id = Some("demo-editor".into());
+                    marker
+                });
+                ui.separator();
+                ui.label("Marker");
+                let mut enabled = existing.is_some();
+                let mut changed = ui.checkbox(&mut enabled, "Show marker").changed();
+                egui::ComboBox::from_label("Shape")
+                    .selected_text(format!("{:?}", marker.shape))
+                    .show_ui(ui, |ui| {
+                        for shape in [
+                            MarkerShape::Circle,
+                            MarkerShape::Square,
+                            MarkerShape::ArrowUp,
+                            MarkerShape::ArrowDown,
+                            MarkerShape::TriangleUp,
+                            MarkerShape::TriangleDown,
+                            MarkerShape::Diamond,
+                            MarkerShape::Star,
+                            MarkerShape::Cross,
+                            MarkerShape::Flag,
+                        ] {
+                            changed |= ui
+                                .selectable_value(&mut marker.shape, shape, format!("{shape:?}"))
+                                .changed();
+                        }
+                    });
+                egui::ComboBox::from_label("Position")
+                    .selected_text(format!("{:?}", marker.position))
+                    .show_ui(ui, |ui| {
+                        for position in [
+                            MarkerPos::AboveBar,
+                            MarkerPos::BelowBar,
+                            MarkerPos::InBar,
+                            MarkerPos::Top,
+                            MarkerPos::Bottom,
+                            MarkerPos::Left,
+                            MarkerPos::Right,
+                            MarkerPos::AbsoluteUp,
+                            MarkerPos::AbsoluteDown,
+                            MarkerPos::Absolute,
+                            MarkerPos::AtPriceTop,
+                            MarkerPos::AtPriceBottom,
+                            MarkerPos::AtPriceMiddle,
+                        ] {
+                            changed |= ui
+                                .selectable_value(
+                                    &mut marker.position,
+                                    position,
+                                    format!("{position:?}"),
+                                )
+                                .changed();
+                        }
+                    });
+                if matches!(
+                    marker.position,
+                    MarkerPos::AtPriceTop | MarkerPos::AtPriceBottom | MarkerPos::AtPriceMiddle
+                ) {
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(marker.price.get_or_insert(bar.close))
+                                .prefix("Price ")
+                                .speed(bar.close.abs().max(1.0) * 0.001),
+                        )
+                        .changed();
+                }
+                changed |= ui
+                    .add(egui::Slider::new(&mut marker.size, 0.5..=4.0).text("Size"))
+                    .changed();
+                ui.label("Text");
+                changed |= ui
+                    .text_edit_singleline(marker.text.get_or_insert_with(String::new))
+                    .changed();
+                changed |= ui.color_edit_button_srgba(&mut marker.color).changed();
+                if changed {
+                    let mut markers = self.chart.markers(id).to_vec();
+                    markers.retain(|marker| marker.id.as_deref() != Some("demo-editor"));
+                    if enabled {
+                        markers.push(marker);
+                    }
+                    self.chart.set_markers(id, markers);
+                }
+                let mut options = self.chart.marker_options(id).unwrap_or_default();
+                let mut changed = ui
+                    .checkbox(
+                        &mut options.auto_scale,
+                        "Include explicit price in autoscale",
+                    )
+                    .changed();
+                egui::ComboBox::from_label("Layer")
+                    .selected_text(format!("{:?}", options.z_order))
+                    .show_ui(ui, |ui| {
+                        for layer in [
+                            MarkerZOrder::Normal,
+                            MarkerZOrder::AboveSeries,
+                            MarkerZOrder::Top,
+                        ] {
+                            changed |= ui
+                                .selectable_value(&mut options.z_order, layer, format!("{layer:?}"))
+                                .changed();
+                        }
+                    });
+                if changed {
+                    self.chart.set_marker_options(id, options);
+                }
+                ui.separator();
+                ui.label("Price line");
+                let existing = self
+                    .chart
+                    .price_lines(id)
+                    .find(|(_, line)| line.title.as_deref() == Some("Sample line"))
+                    .map(|(id, line)| (id, line.clone()));
+                let mut line = existing
+                    .as_ref()
+                    .map(|(_, line)| line.clone())
+                    .unwrap_or_else(|| {
+                        PriceLine::new(bar.close, self.theme.ui.warning).with_title("Sample line")
+                    });
+                let mut enabled = existing.is_some();
+                let mut changed = ui.checkbox(&mut enabled, "Show price line").changed();
+                changed |= ui
+                    .add(
+                        egui::DragValue::new(&mut line.price)
+                            .prefix("Price ")
+                            .speed(bar.close.abs().max(1.0) * 0.001),
+                    )
+                    .changed();
+                changed |= ui
+                    .add(egui::Slider::new(&mut line.width, 1.0..=5.0).text("Width"))
+                    .changed();
+                egui::ComboBox::from_label("Stroke")
+                    .selected_text(line.style.name())
+                    .show_ui(ui, |ui| {
+                        for &style in LineStyle::all() {
+                            changed |= ui
+                                .selectable_value(&mut line.style, style, style.name())
+                                .changed();
+                        }
+                    });
+                changed |= ui.checkbox(&mut line.axis_label, "Axis label").changed();
+                changed |= ui.color_edit_button_srgba(&mut line.color).changed();
+                if changed {
+                    match (existing, enabled) {
+                        (Some((handle, _)), true) => {
+                            self.chart.update_price_line(handle, line);
+                        }
+                        (Some((handle, _)), false) => {
+                            self.chart.remove_price_line(handle);
+                        }
+                        (None, true) => {
+                            self.chart.add_price_line(id, line);
+                        }
+                        (None, false) => {}
+                    }
+                }
+                ui.separator();
+                let previous = self.chart.change_markers(id);
+                let mut changes = previous.unwrap_or_default();
+                let mut enabled = previous.is_some();
+                let mut changed = ui.checkbox(&mut enabled, "Live change markers").changed();
+                let mut seconds = changes.duration.as_secs_f32();
+                changed |= ui
+                    .add(egui::Slider::new(&mut seconds, 0.2..=20.0).text("Duration (seconds)"))
+                    .changed();
+                if changed {
+                    changes.duration = std::time::Duration::from_secs_f32(seconds);
+                    self.chart
+                        .set_change_markers(id, enabled.then_some(changes));
+                }
+                ui.small("Resume live updates to see the close move. History is kept in place.");
+            });
+        self.annotation_editor = open;
+    }
+}

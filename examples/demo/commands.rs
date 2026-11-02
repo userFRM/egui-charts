@@ -259,6 +259,9 @@ impl DemoApp {
             }
             "tape" | "markers" | "signals" => {
                 self.enable_samples();
+                if id == "markers" {
+                    self.annotation_editor = true;
+                }
                 if id == "tape" {
                     self.open_panel = Some(super::SidePanel::TimeAndSales);
                 }

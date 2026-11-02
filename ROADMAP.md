@@ -296,7 +296,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Feature layers separate the engine, built-in studies, widget, drawings, icons and terminal UI; engine and study calculations need no egui.
 - [x] `Theme` provides editable palettes with dark, light and high-contrast presets; shared tokens cover sizing, spacing, corners and colours.
 - [x] Host translation lookup with English fallback, locale/date formatters and optional named time zones. The demo persists independent language and number-format samples and applies host formatting to its data window and exported chart. The demo selects light, dark, high contrast or system appearance, preserves explicit choices and follows later system changes.
-- [x] The demo exposes floating, tracking and magnifier readouts, hover or hold activation, lens size and zoom.
+- [x] The demo exposes floating, tracking and magnifier readouts, hover or hold activation, lens size and zoom. Its annotation editor creates, edits and removes series markers and price lines, controls marker fitting and layering, and configures live change-marker duration.
 - [x] Accessibility roles/states, keyboard focus and a textual bar/study readout.
 - [x] Reusable `ui_kit` buttons, inputs, colour pickers, dialogs, lists, tabs, panels, command palette and toast components.
 - [x] Native and browser examples and CI checks cover library, feature combinations and demo builds.

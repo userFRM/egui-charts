@@ -6,12 +6,12 @@
 //! actions. Layouts live in host memory; templates use application storage. Controls that need
 //! a trading account are hidden.
 
+#[path = "annotations.rs"]
+mod annotations;
 #[path = "audio.rs"]
 mod audio;
 #[path = "commands.rs"]
 mod commands;
-#[path = "annotations.rs"]
-mod annotations;
 #[path = "formatting.rs"]
 mod formatting;
 #[path = "images.rs"]
@@ -489,6 +489,8 @@ pub struct DemoApp {
     /// Whether the sample panels, markers, change marks, bar marks and demo level are on, from the
     /// quick search.
     api_samples: bool,
+    annotation_editor: bool,
+    annotation_series: SeriesId,
 }
 
 fn sample_widgets() -> [WidgetBarWidget; 2] {
@@ -794,6 +796,8 @@ impl DemoApp {
             toasts: Toasts::new(),
             demo_level: None,
             api_samples: false,
+            annotation_editor: false,
+            annotation_series: SeriesId::MAIN,
         };
         app.drawing_toolbar
             .set_control_visible(egui_charts::ui::Control::Trading, false);
@@ -1538,6 +1542,7 @@ impl eframe::App for DemoApp {
         }
         self.show_replay_control(&ctx);
         self.show_replay_start(&ctx);
+        self.show_annotation_editor(&ctx);
         self.show_dialogs(&ctx);
         self.show_watchlist_import(&ctx);
         self.show_wide_watchlist(&ctx);
