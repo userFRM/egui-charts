@@ -297,7 +297,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Accessibility roles/states, keyboard focus and a textual bar/study readout.
 - [x] Reusable `ui_kit` buttons, inputs, colour pickers, dialogs, lists, tabs, panels, command palette and toast components.
 - [x] Native and browser examples and CI checks cover library, feature combinations and demo builds.
-- [x] The guide and site landing page share light and dark navigation, a working first-chart example and a live sample chart with consistent text sizing and a compact readout at phone widths; the full demo stays at `/demo/`.
+- [x] The guide and site landing page share light and dark navigation, a working first-chart example and a live sample chart with consistent text sizing and a compact readout at phone widths; the full demo stays at `/demo/`. Version labels distinguish main (0.3 in development, egui 0.37) from published 0.2.0 (egui 0.33.3), with grouped topic navigation, integration recipes and a main rustdoc link.
 - [ ] Route remaining direct English UI labels through the translation lookup.
 - [ ] Make session-quote/volume tags and marker outlines fully theme-configurable.
 - [ ] Add a runnable desktop-webview integration example.
