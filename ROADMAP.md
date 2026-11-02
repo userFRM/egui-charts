@@ -269,7 +269,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 ## Data and Builder API
 
 - [x] `Chart::new` embeds static bars; `ChartBuilder` configures a chart, feed, symbol, interval, studies, theme and drawing registry.
-- [x] `Datafeed`, `Reply` and `Sink` provide asynchronous metadata/history and streaming bars, executions, quotes and depth, with stale-response rejection and subscription cancellation.
+- [x] `Datafeed`, `Reply` and `Sink` provide asynchronous metadata/history and streaming bars, executions, quotes and depth, with per-symbol service declarations, stale-response rejection and subscription cancellation.
 - [x] Scroll-back pages bar history; transient failures retry with bounded backoff and expose errors and status through `FeedState`.
 - [x] Shared validation sorts/deduplicates bars, rejects invalid OHLCV and counts rejected updates; out-of-order corrections update the affected history.
 - [x] Live trade aggregation supports time, execution-count, volume, delta and range intervals; resampling helpers accept session rules.
