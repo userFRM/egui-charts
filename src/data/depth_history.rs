@@ -106,12 +106,27 @@ pub struct DepthHistory {
 impl DepthHistory {
     /// An empty history, or an error if `config` breaks one of its limits.
     pub fn new(config: DepthHistoryConfig) -> Result<Self, FeedError> {
-        if config.cadence < TimeDelta::milliseconds(1)
-            || config.rows == 0
-            || config.ticks_per_row == 0
-            || config.columns < 2
-        {
-            return Err(FeedError::InvalidData("invalid depth history".into()));
+        if config.cadence < TimeDelta::milliseconds(1) {
+            return Err(FeedError::InvalidData(format!(
+                "depth history cadence must be at least one millisecond, got {}",
+                config.cadence
+            )));
+        }
+        if config.rows == 0 {
+            return Err(FeedError::InvalidData(
+                "depth history rows must be at least 1, got 0".into(),
+            ));
+        }
+        if config.ticks_per_row == 0 {
+            return Err(FeedError::InvalidData(
+                "depth history ticks_per_row must be at least 1, got 0".into(),
+            ));
+        }
+        if config.columns < 2 {
+            return Err(FeedError::InvalidData(format!(
+                "depth history columns must be at least 2, got {}",
+                config.columns
+            )));
         }
         Ok(Self {
             config,

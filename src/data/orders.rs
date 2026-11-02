@@ -367,8 +367,8 @@ impl OrderQueue {
         time: DateTime<Utc>,
         orders: Vec<RestingOrder>,
     ) -> Result<(), FeedError> {
-        self.set_snapshot(sequence, time, orders)
-            .map_err(|_| invalid())
+        self.load(sequence, time, orders)
+            .map_err(|(_, error)| error)
     }
 
     /// Applies exactly the next sequence. Repeated sequences are ignored. A gap clears the book
@@ -379,7 +379,7 @@ impl OrderQueue {
         time: DateTime<Utc>,
         event: OrderEvent,
     ) -> Result<(), FeedError> {
-        self.event(sequence, time, event).map_err(|_| invalid())
+        self.step(sequence, time, event).map_err(|(_, error)| error)
     }
 
     pub(crate) fn set_snapshot(
@@ -388,24 +388,7 @@ impl OrderQueue {
         time: DateTime<Utc>,
         orders: Vec<RestingOrder>,
     ) -> Result<(), Lost> {
-        let mut ids = HashSet::new();
-        let bids = orders.iter().filter(|o| o.side == OrderSide::Buy).count();
-        if bids > MAX_LEVELS
-            || orders.len() - bids > MAX_LEVELS
-            || orders.iter().any(|o| !valid(o) || !ids.insert(o.id))
-        {
-            return Err(self.lose(true));
-        }
-        self.orders = orders;
-        self.sequence = Some(sequence);
-        self.requested = false;
-        self.time = time;
-        let held = std::mem::take(&mut self.held);
-        let mut result = Ok(());
-        for (sequence, time, event) in held {
-            result = result.and(self.event(sequence, time, event));
-        }
-        result
+        self.load(sequence, time, orders).map_err(|(lost, _)| lost)
     }
 
     pub(crate) fn event(
@@ -414,16 +397,79 @@ impl OrderQueue {
         time: DateTime<Utc>,
         event: OrderEvent,
     ) -> Result<(), Lost> {
+        self.step(sequence, time, event).map_err(|(lost, _)| lost)
+    }
+
+    fn load(
+        &mut self,
+        sequence: u64,
+        time: DateTime<Utc>,
+        orders: Vec<RestingOrder>,
+    ) -> Result<(), (Lost, FeedError)> {
+        let mut ids = HashSet::new();
+        let bids = orders.iter().filter(|o| o.side == OrderSide::Buy).count();
+        let asks = orders.len() - bids;
+        let error = if bids > MAX_LEVELS {
+            Some(format!(
+                "order book snapshot has {bids} bids, more than {MAX_LEVELS}"
+            ))
+        } else if asks > MAX_LEVELS {
+            Some(format!(
+                "order book snapshot has {asks} asks, more than {MAX_LEVELS}"
+            ))
+        } else {
+            orders.iter().find_map(|order| {
+                if !valid(order) {
+                    Some(format!("snapshot order {} needs a finite price and a size above zero, got {:?} and {:?}", order.id, order.price, order.size))
+                } else if !ids.insert(order.id) {
+                    Some(format!("snapshot holds order {} twice", order.id))
+                } else {
+                    None
+                }
+            })
+        };
+        if let Some(error) = error {
+            return Err((self.lose(true), FeedError::InvalidData(error)));
+        }
+        self.orders = orders;
+        self.sequence = Some(sequence);
+        self.requested = false;
+        self.time = time;
+        let held = std::mem::take(&mut self.held);
+        let mut result = Ok(());
+        for (sequence, time, event) in held {
+            result = result.and(self.step(sequence, time, event));
+        }
+        result
+    }
+
+    fn step(
+        &mut self,
+        sequence: u64,
+        time: DateTime<Utc>,
+        event: OrderEvent,
+    ) -> Result<(), (Lost, FeedError)> {
         if self.sequence.is_some_and(|last| sequence <= last) {
             return Ok(());
         }
         if self.sequence.and_then(|s| s.checked_add(1)) != Some(sequence) {
             if self.held.iter().any(|(held, _, _)| *held == sequence) {
-                return Err(Lost {
-                    invalid: false,
-                    request: false,
-                });
+                return Err((
+                    Lost {
+                        invalid: false,
+                        request: false,
+                    },
+                    FeedError::InvalidData(format!(
+                        "order book sequence {sequence} is already held"
+                    )),
+                ));
             }
+            let reason = match self.sequence {
+                Some(last) => format!("order book sequence {sequence} does not follow {last}"),
+                None => format!(
+                    "order book has no snapshot; sequence {sequence} is held for the next one"
+                ),
+            };
             let lost = self.lose(false);
             if self
                 .held
@@ -436,10 +482,10 @@ impl OrderQueue {
             if self.held.len() > MAX_LEVELS {
                 self.held.pop_front();
             }
-            return Err(lost);
+            return Err((lost, FeedError::InvalidData(reason)));
         }
-        if self.change(event).is_err() {
-            return Err(self.lose(true));
+        if let Err(error) = self.change(event) {
+            return Err((self.lose(true), error));
         }
         self.sequence = Some(sequence);
         self.time = time;
@@ -449,11 +495,28 @@ impl OrderQueue {
     fn change(&mut self, event: OrderEvent) -> Result<(), FeedError> {
         match event {
             OrderEvent::Add(order) => {
-                if !valid(&order)
-                    || self.orders.iter().any(|o| o.id == order.id)
-                    || self.orders.iter().filter(|o| o.side == order.side).count() == MAX_LEVELS
-                {
-                    return Err(invalid());
+                if !valid(&order) {
+                    return Err(FeedError::InvalidData(format!(
+                        "added order {} needs a finite price and a size above zero, got {:?} and {:?}",
+                        order.id, order.price, order.size
+                    )));
+                }
+                if self.orders.iter().any(|o| o.id == order.id) {
+                    return Err(FeedError::InvalidData(format!(
+                        "added order {} is already in the book",
+                        order.id
+                    )));
+                }
+                if self.orders.iter().filter(|o| o.side == order.side).count() == MAX_LEVELS {
+                    let side = if order.side == OrderSide::Buy {
+                        "bid"
+                    } else {
+                        "ask"
+                    };
+                    return Err(FeedError::InvalidData(format!(
+                        "added order {} exceeds the limit of {MAX_LEVELS} {side} orders",
+                        order.id
+                    )));
                 }
                 self.orders.push(order);
             }
@@ -463,11 +526,9 @@ impl OrderQueue {
                 size,
                 keep_priority,
             } => {
-                let at = self
-                    .orders
-                    .iter()
-                    .position(|o| o.id == id)
-                    .ok_or_else(invalid)?;
+                let at = self.orders.iter().position(|o| o.id == id).ok_or_else(|| {
+                    FeedError::InvalidData(format!("modified order {id} is not in the book"))
+                })?;
                 let mut order = self.orders[at].clone();
                 let old_price = key(self.tick, order.price);
                 if let Some(price) = price {
@@ -477,7 +538,10 @@ impl OrderQueue {
                     order.size = size;
                 }
                 if !order.price.is_finite() || !order.size.is_finite() || order.size < 0.0 {
-                    return Err(invalid());
+                    return Err(FeedError::InvalidData(format!(
+                        "modified order {id} needs a finite price and a size of at least 0, got {:?} and {:?}",
+                        order.price, order.size
+                    )));
                 }
                 if order.size == 0.0 {
                     self.orders.remove(at);
@@ -489,30 +553,31 @@ impl OrderQueue {
                 }
             }
             OrderEvent::Cancel { id } => {
-                let at = self
-                    .orders
-                    .iter()
-                    .position(|o| o.id == id)
-                    .ok_or_else(invalid)?;
+                let at = self.orders.iter().position(|o| o.id == id).ok_or_else(|| {
+                    FeedError::InvalidData(format!("cancelled order {id} is not in the book"))
+                })?;
                 self.orders.remove(at);
             }
             OrderEvent::Execute { id, size, trade } => {
-                let at = self
-                    .orders
-                    .iter()
-                    .position(|o| o.id == id)
-                    .ok_or_else(invalid)?;
+                let at = self.orders.iter().position(|o| o.id == id).ok_or_else(|| {
+                    FeedError::InvalidData(format!("executed order {id} is not in the book"))
+                })?;
                 let order = &mut self.orders[at];
-                if !size.is_finite()
-                    || size <= 0.0
-                    || !meets_threshold(order.size, size)
-                    || trade.as_ref().is_some_and(|t| {
-                        !super::trades::valid(t)
-                            || t.size != size
-                            || key(self.tick, t.price) != key(self.tick, order.price)
-                    })
-                {
-                    return Err(invalid());
+                if !size.is_finite() || size <= 0.0 || !meets_threshold(order.size, size) {
+                    return Err(FeedError::InvalidData(format!(
+                        "execution of order {id} needs a size above zero and at most the resting {:?}, got {size:?}",
+                        order.size
+                    )));
+                }
+                if trade.as_ref().is_some_and(|t| {
+                    !super::trades::valid(t)
+                        || t.size != size
+                        || key(self.tick, t.price) != key(self.tick, order.price)
+                }) {
+                    return Err(FeedError::InvalidData(format!(
+                        "trade of the execution of order {id} must be valid, of size {size:?} and at the order's price {:?}",
+                        order.price
+                    )));
                 }
                 if let Some(mut trade) = trade {
                     trade.resting_order_id = Some(id);
@@ -547,9 +612,6 @@ impl OrderQueue {
 fn valid(order: &RestingOrder) -> bool {
     order.price.is_finite() && order.size.is_finite() && order.size > 0.0
 }
-fn invalid() -> FeedError {
-    FeedError::InvalidData("invalid or unsequenced order book".into())
-}
 
 #[cfg(test)]
 mod tests {
@@ -565,24 +627,29 @@ mod tests {
         ];
         #[rustfmt::skip]
         let cases = [
-            ("partial execution", 8, OrderEvent::Execute { id: 2, size: 2.0, trade: None }, vec![(100.0, 6.0, 2)], vec![1, 2], false),
-            ("price change", 8, OrderEvent::Modify { id: 1, price: Some(99.0), size: None, keep_priority: true }, vec![(100.0, 5.0, 1), (99.0, 3.0, 1)], vec![2], false),
-            ("keeps priority", 8, OrderEvent::Modify { id: 1, price: None, size: Some(2.0), keep_priority: true }, vec![(100.0, 7.0, 2)], vec![1, 2], false),
-            ("loses priority", 8, OrderEvent::Modify { id: 1, price: None, size: Some(4.0), keep_priority: false }, vec![(100.0, 9.0, 2)], vec![2, 1], false),
-            ("invalid zero-size modify", 8, OrderEvent::Modify { id: 1, price: Some(f64::NAN), size: Some(0.0), keep_priority: true }, vec![], vec![], true),
-            ("gap", 9, OrderEvent::Cancel { id: 1 }, vec![], vec![], true),
-            ("unknown cancel", 8, OrderEvent::Cancel { id: 99 }, vec![], vec![], true),
-            ("oversized execution", 8, OrderEvent::Execute { id: 1, size: 4.0, trade: None }, vec![], vec![], true),
+            ("partial execution", 8, OrderEvent::Execute { id: 2, size: 2.0, trade: None }, vec![(100.0, 6.0, 2)], vec![1, 2], None),
+            ("price change", 8, OrderEvent::Modify { id: 1, price: Some(99.0), size: None, keep_priority: true }, vec![(100.0, 5.0, 1), (99.0, 3.0, 1)], vec![2], None),
+            ("keeps priority", 8, OrderEvent::Modify { id: 1, price: None, size: Some(2.0), keep_priority: true }, vec![(100.0, 7.0, 2)], vec![1, 2], None),
+            ("loses priority", 8, OrderEvent::Modify { id: 1, price: None, size: Some(4.0), keep_priority: false }, vec![(100.0, 9.0, 2)], vec![2, 1], None),
+            ("invalid zero-size modify", 8, OrderEvent::Modify { id: 1, price: Some(f64::NAN), size: Some(0.0), keep_priority: true }, vec![], vec![], Some("modified order 1 needs a finite price and a size of at least 0, got NaN and 0.0")),
+            ("gap", 9, OrderEvent::Cancel { id: 1 }, vec![], vec![], Some("order book sequence 9 does not follow 7")),
+            ("unknown cancel", 8, OrderEvent::Cancel { id: 99 }, vec![], vec![], Some("cancelled order 99 is not in the book")),
+            ("oversized execution", 8, OrderEvent::Execute { id: 1, size: 4.0, trade: None }, vec![], vec![], Some("execution of order 1 needs a size above zero and at most the resting 3.0, got 4.0")),
         ];
-        for (name, seq, event, expected, queue, lost) in cases {
+        for (name, seq, event, expected, queue, error) in cases {
             let mut book = OrderQueue::new(Some(0.25));
             book.snapshot(7, DateTime::default(), orders.clone())
                 .unwrap();
+            let result = book
+                .apply(seq, DateTime::default(), event)
+                .err()
+                .map(|e| e.to_string());
             assert_eq!(
-                book.apply(seq, DateTime::default(), event).is_err(),
-                lost,
+                result,
+                error.map(|e| format!("invalid data: {e}")),
                 "{name}"
             );
+            let lost = error.is_some();
             let levels = book.aggregate("A", 0.0);
             let bids: Vec<_> = levels
                 .bids
@@ -617,13 +684,15 @@ mod tests {
             .map(|i| RestingOrder::new(i as u64, Buy, 100.0, 1.0))
             .collect();
         book.snapshot(10, DateTime::default(), full).unwrap();
-        assert!(
+        assert_eq!(
             book.apply(
                 11,
                 DateTime::default(),
                 OrderEvent::Add(RestingOrder::new(10_001, Buy, 99.0, 1.0))
             )
-            .is_err()
+            .unwrap_err()
+            .to_string(),
+            "invalid data: added order 10001 exceeds the limit of 10000 bid orders"
         );
         assert_eq!(book.orders().count(), 0);
     }

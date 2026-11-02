@@ -47,8 +47,16 @@ pub fn aggregate_trades_with_tick_size(
     let Some(last) = trades.last() else {
         return Ok(Vec::new());
     };
+    let clock: BarClock = clock.into();
+    if matches!(clock.timeframe(), Some(crate::model::Timeframe::Range(_)))
+        && !tick_size.is_some_and(|size| size.is_finite() && size > 0.0)
+    {
+        return Err(FeedError::InvalidData(format!(
+            "a range interval needs a finite tick size above zero, got {tick_size:?}"
+        )));
+    }
     let inbox = Arc::new(Inbox::default());
-    let sink = inbox.subscribe(String::new(), clock.into(), trades.len(), tick_size);
+    let sink = inbox.subscribe(String::new(), clock, trades.len(), tick_size);
     sink.set_server_time(last.ts);
     {
         // A finite historical batch owns its output; only live pushes need the pending limit.
@@ -58,16 +66,30 @@ pub fn aggregate_trades_with_tick_size(
             .get_mut(&sink.id)
             .expect("active subscription");
         let system = Utc::now();
-        for trade in trades {
+        for (at, trade) in trades.iter().enumerate() {
+            let (rejected, late) = (live.updates.rejected, live.updates.late_ticks);
             live.tick(trade.clone(), system);
+            let reason = if live.updates.late_ticks > late {
+                "is out of time order".to_owned()
+            } else if live.updates.rejected == rejected {
+                continue;
+            } else if !trades::valid(trade) {
+                return Err(FeedError::InvalidData(format!(
+                    "trade {at} needs a finite price and a finite size of at least 0, got {:?} and {:?}",
+                    trade.price, trade.size
+                )));
+            } else if trade.ts > last.ts {
+                format!("is later than the last trade, at {}", last.ts)
+            } else {
+                "does not fold into the bars of the interval".to_owned()
+            };
+            return Err(FeedError::InvalidData(format!(
+                "trade {at} at {} {reason}",
+                trade.ts
+            )));
         }
     }
     let (_, updates) = inbox.drain().updates.pop().expect("active subscription");
-    if updates.rejected > 0 || updates.late_ticks > 0 {
-        return Err(FeedError::InvalidData(
-            "invalid or unordered executions".into(),
-        ));
-    }
     Ok(updates.bars.into_values().map(|(bar, _)| bar).collect())
 }
 
