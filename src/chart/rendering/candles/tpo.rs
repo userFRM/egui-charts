@@ -620,9 +620,9 @@ pub(crate) fn profile_at(
             } else {
                 profile.tpo_count_at(row)
             };
-            // Level captions belong to the profile's context-menu target too.
+            // Keep the gutter beside occupied rows in the profile's context-menu target.
             let left = anchor - if labels { LABEL_ROOM_PX } else { 0.0 };
-            if pos.x >= left && pos.x < anchor + count as f32 * column {
+            if count > 0 && pos.x >= left && pos.x < anchor + count as f32 * column {
                 hit = Some(profile.session_date);
             }
         },
@@ -895,17 +895,19 @@ fn draw_session_profile(
                 price_rect.bottom() - half_height,
             );
             // Displace only the caption when levels coincide; the marker keeps its price.
-            let Some(label_y) = [0.0, -1.0, 1.0, -2.0, 2.0, -3.0, 3.0]
-                .into_iter()
-                .map(|offset| center + offset * spacing)
-                .find(|candidate| {
-                    *candidate >= price_rect.top() + half_height
-                        && *candidate <= price_rect.bottom() - half_height
-                        && label_rows.iter().all(|previous: &f32| {
-                            (candidate - previous).abs() >= galley.size().y + 1.0
-                        })
-                })
-            else {
+            // Each earlier caption can block two neighbouring candidates.
+            let Some(label_y) = [
+                0.0, -1.0, 1.0, -2.0, 2.0, -3.0, 3.0, -4.0, 4.0, -5.0, 5.0, -6.0, 6.0,
+            ]
+            .into_iter()
+            .map(|offset| center + offset * spacing)
+            .find(|candidate| {
+                *candidate >= price_rect.top() + half_height
+                    && *candidate <= price_rect.bottom() - half_height
+                    && label_rows
+                        .iter()
+                        .all(|previous: &f32| (candidate - previous).abs() >= galley.size().y + 1.0)
+            }) else {
                 continue;
             };
             label_rows.push(label_y);
@@ -1672,24 +1674,27 @@ mod tests {
                 ..Default::default()
             };
             let rect = Rect::from_x_y_ranges(0.0..=400.0, 0.0..=400.0);
-            let coords = PriceMap::new(
-                crate::scales::PriceTransform::default(),
-                crate::scales::PriceRange::new(90.0, 115.0),
-                rect.min.y,
-                rect.max.y,
-                false,
-            );
             // Labels include the first session, whether its opening bar is visible or offscreen.
-            for (spacing, expected, extremes, offset, end) in [
-                (30.0, 3, false, 0.0, 12),
-                (10.0, 0, false, 0.0, 12),
-                (30.0, 3, true, 0.0, 12),
-                (10.0, 0, true, 0.0, 12),
-                (10.0, 0, true, -4.0, 12),
-                (30.0, 3, true, -30.0, 12),
-                (30.0, 1, false, 0.0, 4),
-                (30.0, 1, false, -90.0, 4),
+            for (spacing, expected, extremes, offset, end, range, inverted) in [
+                (30.0, 3, false, 0.0, 12, (90.0, 115.0), false),
+                (10.0, 0, false, 0.0, 12, (90.0, 115.0), false),
+                (30.0, 3, true, 0.0, 12, (90.0, 115.0), false),
+                (10.0, 0, true, 0.0, 12, (90.0, 115.0), false),
+                (10.0, 0, true, -4.0, 12, (90.0, 115.0), false),
+                (30.0, 3, true, -30.0, 12, (90.0, 115.0), false),
+                (30.0, 1, false, 0.0, 4, (90.0, 115.0), false),
+                (30.0, 1, false, -90.0, 4, (90.0, 115.0), false),
+                // Nearby levels at either vertical edge must all keep a caption.
+                (30.0, 1, false, 0.0, 4, (99.0, 129.0), false),
+                (30.0, 1, false, 0.0, 4, (99.0, 129.0), true),
             ] {
+                let coords = PriceMap::new(
+                    crate::scales::PriceTransform::default(),
+                    crate::scales::PriceRange::new(range.0, range.1),
+                    rect.min.y,
+                    rect.max.y,
+                    inverted,
+                );
                 let config = TPOConfig {
                     show_poor_highs_lows: extremes,
                     show_initial_balance_extensions: extremes,
