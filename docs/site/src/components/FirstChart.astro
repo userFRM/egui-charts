@@ -11,11 +11,11 @@ const code = guide.split('```rust,no_run\n')[1].split('\n   ```')[0].replace(/^ 
     <p class="eyebrow">FROM BARS TO A CHART</p>
     <h2 id="first-chart-heading">A widget in your application.</h2>
     <p>Create a chart once, give it your bars, and show it on every egui frame. The same Rust code runs natively and in WebAssembly.</p>
-    <p>This guide follows <code>main</code>. Install the Git dependency for egui 0.37; <a href="https://docs.rs/egui-charts/0.2.0">release 0.2.0</a> has its own API.</p>
+    <p>This guide follows <code>main</code> (0.3 in development), using egui/eframe 0.37. Install the Git dependency below. Published <a href="https://docs.rs/egui-charts/0.2.0/egui_charts/">release 0.2.0 uses egui/eframe 0.33.3</a>.</p>
     <a href="/egui-charts/docs/first-chart/">Build your first chart <span aria-hidden="true">→</span></a>
   </div>
   <div class="first-chart-code">
-    <Code lang="sh" code={'cargo add egui-charts --git https://github.com/userFRM/egui-charts\ncargo add eframe@0.37 chrono@0.4'} />
+    <Code lang="sh" code={'cargo add egui-charts --git https://github.com/userFRM/egui-charts --branch main\ncargo add eframe@0.37 chrono@0.4'} />
     <Code lang="rust" title="src/main.rs" code={code} />
   </div>
 </section>
