@@ -11,26 +11,36 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 /// The eframe key of the map, where earlier releases of the demo kept templates.
 const KEY: &str = "templates";
+/// The key of the document that holds the unnamed workspace between sessions.
 const WORKSPACE: &str = "workspace";
 
+/// Progress of the unnamed workspace checkpoints.
 #[derive(Default)]
 pub(super) struct WorkspaceRecovery {
+    /// The time of the last checkpoint, in seconds of egui time.
     checked_at: Option<f64>,
+    /// Set when the stored workspace could not be opened; it is then kept as it is.
     unreadable: bool,
+    /// The last checkpoint failure, so a repeated one is reported once.
     save_error: Option<String>,
 }
 
+/// The unnamed workspace: a saved layout with what the layout document does not hold.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct SavedWorkspace {
     version: u32,
     #[serde(flatten)]
     layout: SavedLayout,
+    /// The comparisons and spreads of each chart.
     comparisons: Vec<Vec<super::comparison::SavedComparison>>,
+    /// The slot that was active.
     active_slot: usize,
+    /// Whether each chart's feed serves the continuous 24/7 session.
     continuous_sessions: Vec<bool>,
 }
 
 impl super::DemoApp {
+    /// Whether a layout of that name is in storage.
     pub(super) fn layout_is_saved(&self, name: &str) -> bool {
         self.storage
             .documents
@@ -39,6 +49,8 @@ impl super::DemoApp {
             .contains_key(&key(StoreKind::Layouts, name))
     }
 
+    /// Names the opening tab and shows the stored unnamed workspace in it; a document that cannot be
+    /// read stays in storage and a default chart opens with a notice.
     pub(super) fn restore_workspace(&mut self) {
         let mut name = "Unnamed".to_owned();
         let mut suffix = 2;
@@ -138,6 +150,8 @@ impl super::DemoApp {
         }
     }
 
+    /// Stores the unnamed workspace when it changed. A saved layout owns its tab, and an unreadable
+    /// document is never replaced.
     pub(super) fn checkpoint_workspace(&mut self) {
         if self.workspace_recovery.unreadable
             || self.layout_is_saved(&self.layout_tabs[self.layout_tab].name)
@@ -186,6 +200,7 @@ impl super::DemoApp {
         }
     }
 
+    /// Checkpoints the workspace once a second.
     pub(super) fn poll_workspace(&mut self, ctx: &egui::Context) {
         let now = ctx.input(|input| input.time);
         if self
