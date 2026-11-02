@@ -304,7 +304,6 @@ impl Terminal {
         self.studies_settings(settings, direction);
         self.time_settings(settings, direction);
         self.replay_settings(settings, direction);
-        self.alerts_settings(settings, direction);
         self.panels_settings(settings, direction);
         self.trading_settings(settings, direction);
         self.layouts_settings(settings, direction);

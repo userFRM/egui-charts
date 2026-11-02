@@ -1,12 +1,12 @@
 //! Alerts: the alerts panel, the alert dialog and headless evaluation on the host's feed.
 
-use super::core::{Direction, SidePanel};
+use super::core::SidePanel;
 use super::layout::Region;
 use super::{Action, ExportContents, Terminal};
 use chrono::Utc;
 use egui_charts::config::KeyboardAction;
-use egui_charts::model::{Alert, AlertCondition, Watchlist};
-use egui_charts::services::{AlertEvaluator, UserSettings};
+use egui_charts::model::{Alert, AlertCondition};
+use egui_charts::services::AlertEvaluator;
 use egui_charts::ui::Control;
 use egui_charts::ui::context_menu::{ChartContextAction, ContextMenuAction};
 use egui_charts::ui::dialogs::{
@@ -22,7 +22,6 @@ pub(super) struct State {
     panel: AlertsPanel,
     dialog: AlertDialog,
     evaluator: Option<AlertEvaluator>,
-    watchlists: Vec<Watchlist>,
 }
 
 impl Terminal {
@@ -42,6 +41,21 @@ impl Terminal {
         let Some(service) = self.services.alerts.clone() else {
             return;
         };
+        let lists = self.panels.market.watchlist.lists();
+        if let Some(engine) = service.engine() {
+            for (name, _) in &self.alerts.dialog.watchlists {
+                if !lists.iter().any(|list| &list.name == name) {
+                    engine.set_watchlist(name, Vec::new());
+                }
+            }
+            for list in lists {
+                engine.set_watchlist(&list.name, list.symbols().map(str::to_owned).collect());
+            }
+        }
+        self.alerts.dialog.watchlists = lists
+            .iter()
+            .map(|list| (list.name.clone(), list.name.clone()))
+            .collect();
         let settings = &self.studies.settings.alerts;
         self.alerts.panel.set_sound(settings.play_sound.then(|| {
             if settings.sound.is_empty() {
@@ -249,43 +263,6 @@ impl Terminal {
         None
     }
 
-    pub(super) fn alerts_settings(&mut self, settings: &mut UserSettings, direction: Direction) {
-        match direction {
-            Direction::Save => settings.watchlists.clone_from(&self.alerts.watchlists),
-            Direction::Load => {
-                if settings.watchlists == self.alerts.watchlists {
-                    return;
-                }
-                if let Some(engine) = self
-                    .services
-                    .alerts
-                    .as_ref()
-                    .and_then(|service| service.engine())
-                {
-                    for list in &self.alerts.watchlists {
-                        if !settings
-                            .watchlists
-                            .iter()
-                            .any(|current| current.name == list.name)
-                        {
-                            engine.set_watchlist(&list.name, Vec::new());
-                        }
-                    }
-                    for list in &settings.watchlists {
-                        engine
-                            .set_watchlist(&list.name, list.symbols().map(str::to_owned).collect());
-                    }
-                }
-                self.alerts.dialog.watchlists = settings
-                    .watchlists
-                    .iter()
-                    .map(|list| (list.name.clone(), list.name.clone()))
-                    .collect();
-                self.alerts.watchlists.clone_from(&settings.watchlists);
-            }
-        }
-    }
-
     pub(super) fn alerts_modal(&self) -> bool {
         self.alerts.dialog.is_open
     }
@@ -477,7 +454,7 @@ mod tests {
             "list",
             "OTHER,THIRD",
         )];
-        terminal.alerts_settings(&mut settings, super::Direction::Load);
+        terminal.panels_settings(&mut settings, crate::core::Direction::Load);
         terminal.run(Action::AlertDialog(AlertDialogAction::Create(Box::new(
             list,
         ))));
@@ -540,6 +517,46 @@ mod tests {
         frames(&mut terminal);
         assert_eq!(feed.count("OTHER", Timeframe::Min5), 0);
         assert_eq!(feed.count("THIRD", Timeframe::Min5), 0);
+    }
+
+    #[test]
+    fn alert_watchlists_follow_panel_edits_and_settings_replacement() {
+        use egui_charts::model::Watchlist;
+        use egui_charts::services::UserSettings;
+
+        let engine = Arc::new(AlertEngine::new());
+        let mut terminal = Terminal::new(Arc::new(Feed::default()))
+            .with_symbol("SHOWN")
+            .with_alerts(engine.clone());
+        frames(&mut terminal);
+        let mut settings = UserSettings::default();
+        settings.watchlists = vec![Watchlist::from_text("list", "OTHER")];
+        terminal.panels_settings(&mut settings, crate::core::Direction::Load);
+        let mut alert = Alert::new("", AlertCondition::Above(100.0));
+        alert.watchlist = Some("list".into());
+        terminal.run(Action::AlertDialog(AlertDialogAction::Create(Box::new(
+            alert,
+        ))));
+        frames(&mut terminal);
+        let id = engine.alerts()[0].id.clone().unwrap();
+        assert_eq!(engine.subjects(&id), ["OTHER"]);
+
+        terminal.panels_mut().watchlist.add_symbol_to(0, "THIRD");
+        frames(&mut terminal);
+        assert_eq!(engine.subjects(&id), ["OTHER", "THIRD"]);
+        assert_eq!(
+            terminal.user_settings().watchlists[0].to_text(),
+            "OTHER,THIRD"
+        );
+
+        settings.watchlists = vec![Watchlist::from_text("renamed", "THIRD")];
+        terminal.panels_settings(&mut settings, crate::core::Direction::Load);
+        frames(&mut terminal);
+        assert!(engine.subjects(&id).is_empty());
+        assert_eq!(
+            terminal.alerts.dialog.watchlists,
+            [("renamed".into(), "renamed".into())]
+        );
     }
 
     #[test]
