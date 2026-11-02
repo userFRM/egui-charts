@@ -313,7 +313,11 @@ impl Drawing {
 
     /// Render the centre guides and the size labels of a rectangle that is selected or being
     /// drawn. The optional persistent middle line is rendered separately.
-    pub(crate) fn render_rect_guides(&self, painter: &egui::Painter) {
+    pub(crate) fn render_rect_guides(
+        &self,
+        painter: &egui::Painter,
+        price_formatter: Option<&dyn crate::scales::PriceFormatter>,
+    ) {
         if self.points.len() < 2 {
             return;
         }
@@ -346,7 +350,7 @@ impl Drawing {
         let height = rect.height();
         let width = rect.width();
         let [width_label, height_label] =
-            <[String; 2]>::try_from(self.size_labels()).unwrap_or_default();
+            <[String; 2]>::try_from(self.size_labels(price_formatter)).unwrap_or_default();
         let chart = painter.ctx().active_theme().chart;
         let label_bg = chart.bg_axis;
 
@@ -994,7 +998,7 @@ mod tests {
         for (_, theme) in presets() {
             apply_to_egui(&ctx, &theme);
             let output = ctx.run_ui(Default::default(), |ui| {
-                drawing.render_rect_guides(ui.painter());
+                drawing.render_rect_guides(ui.painter(), None);
             });
             let labels: Vec<_> = output
                 .shapes
