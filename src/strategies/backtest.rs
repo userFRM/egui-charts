@@ -436,6 +436,7 @@ struct Lot {
 /// holds the initial capital one interval before the first bar, then the account value at each
 /// bar's close, stamped with the bar's time. With a start time it begins there and subsequent
 /// marks use chart-bar closing times. Fills use the times of their chart or finer bars.
+/// Close fills on trade-based bars use the last source time, which stays fixed as bars arrive.
 ///
 /// Bars are oldest first, in strictly increasing time order. A bar without finite prices, or
 /// whose high and low do not contain its open and close, fills no orders and has no equity value.
@@ -698,7 +699,10 @@ impl<'a> Run<'a> {
         self.history = &bars[..=index];
         self.decide(bar.close, false);
         if valid && self.settings.fill_on_close {
-            let close_time = if from < to || self.settings.start_time.is_some() {
+            // Execution bars have no fixed end; keep fill times stable as history grows.
+            let close_time = if timeframe.is_trade_based() {
+                last_price_time
+            } else if from < to || self.settings.start_time.is_some() {
                 end.unwrap_or(last_price_time)
             } else {
                 bar.time

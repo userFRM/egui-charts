@@ -348,7 +348,8 @@ impl AlertEngine {
 
     /// Delivers each new fill of `run` to matching strategy-fill alerts. Use a unique run id
     /// for each `Backtest` instance, retained for its lifetime, and forward its update batches.
-    /// Repeated batches are ignored by sequence, including multiple fills at the same time.
+    /// Repeated batches are ignored by sequence, including after edits or rearming an alert
+    /// on the same run and when multiple fills share a timestamp.
     /// `now` gates expiry and notification schedules; event times are the source fill times.
     /// Empty messages use the execution side, quantity, price and resulting signed position.
     /// Custom messages expand the usual placeholders using a flat bar at the fill price, with
@@ -482,7 +483,21 @@ impl State {
                 }
             }
         }
-        self.runs.retain(|(id, _), _| Some(id) != alert.id.as_ref());
+        let same_strategy = matches!(alert.condition, AlertCondition::StrategyFills(_))
+            && self
+                .alerts
+                .iter()
+                .any(|old| old.id == alert.id && old.condition == alert.condition);
+        self.runs.retain(|(id, _), run| {
+            if Some(id) != alert.id.as_ref() {
+                return true;
+            }
+            if same_strategy {
+                // Editing or rearming a run must not replay its executions.
+                run.done = false;
+            }
+            same_strategy
+        });
         match self.alerts.iter_mut().find(|a| a.id == alert.id) {
             Some(kept) => *kept = alert.clone(),
             None => self.alerts.push(alert.clone()),
@@ -505,7 +520,9 @@ impl State {
             expired.push(alert.clone());
         }
         for alert in expired {
-            self.runs.retain(|(id, _), _| Some(id) != alert.id.as_ref());
+            if !matches!(alert.condition, AlertCondition::StrategyFills(_)) {
+                self.runs.retain(|(id, _), _| Some(id) != alert.id.as_ref());
+            }
             self.push(AlertEvent::Upsert(alert));
         }
     }

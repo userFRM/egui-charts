@@ -193,9 +193,6 @@ impl Backtest {
             fills: Some(&mut fills),
             forming: false,
         };
-        if live.report.equity.is_empty() {
-            run.start_equity(self.timeframe, &bars[..closed], &mut live.report);
-        }
         let mut finer: Vec<_> = lower.iter().filter(|bar| valid_bar(bar)).collect();
         finer.sort_by_key(|bar| bar.time);
         finer.dedup_by_key(|bar| bar.time);
@@ -207,6 +204,9 @@ impl Backtest {
             && let Some(mark) = live.report.equity.last_mut()
         {
             mark.0 = bars[live.processed].time;
+        }
+        if live.report.equity.is_empty() {
+            run.start_equity(self.timeframe, &bars[..closed], &mut live.report);
         }
         for index in live.processed..closed {
             let bar = &bars[index];
@@ -352,6 +352,24 @@ mod tests {
             (
                 false,
                 Some(bars[0].time),
+                false,
+                Timeframe::Ticks(std::num::NonZeroU64::new(1).unwrap()),
+            ),
+            (
+                true,
+                Some(bars[0].time),
+                false,
+                Timeframe::Ticks(std::num::NonZeroU64::new(1).unwrap()),
+            ),
+            (
+                true,
+                None,
+                true,
+                Timeframe::Ticks(std::num::NonZeroU64::new(1).unwrap()),
+            ),
+            (
+                false,
+                Some(bars[2].time + TimeDelta::seconds(30)),
                 false,
                 Timeframe::Ticks(std::num::NonZeroU64::new(1).unwrap()),
             ),
@@ -600,6 +618,25 @@ mod tests {
         };
         assert_eq!(message, "Buy 2 at 187.50, position 4");
         drop(events);
+        // Saving edits and rearming keep the execution watermark for the same run.
+        use crate::data::inbox::Inbox;
+        use crate::services::Alerts;
+        let inbox = Arc::new(Inbox::default());
+        for status in [
+            crate::model::AlertStatus::Disabled,
+            crate::model::AlertStatus::Active,
+        ] {
+            let mut edited = alerts.alerts()[0].clone();
+            edited.name = "Renamed".into();
+            edited.status = status;
+            alerts.save(edited, inbox.reply(0));
+            alerts.strategy_fills("run-1", "SYM", Timeframe::Min1, &all, bars[4].time);
+            assert_eq!(delivered.lock().unwrap().len(), 4);
+        }
+        let mut next = all[0].clone();
+        next.sequence = 5;
+        alerts.strategy_fills("run-1", "SYM", Timeframe::Min1, &[next], bars[4].time);
+        assert_eq!(delivered.lock().unwrap().len(), 5);
         // Fill alerts obey the same lifecycle rules, without needing a price subscription.
         use crate::model::{
             AlertFrequency, AlertStatus, NotificationSchedule, NotificationWindow, TimezoneId,
