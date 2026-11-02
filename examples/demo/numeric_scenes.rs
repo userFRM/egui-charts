@@ -12,8 +12,8 @@ pub(super) fn volatility_smile() -> Chart {
                 let strike = 3800.0 + 25.0 * f64::from(step);
                 let m = (strike / 4500.0).ln();
                 let flattening = (30.0 / days).sqrt();
-                let iv = 16.0 + 4.0 * days / 365.0
-                    - 60.0 * m * flattening + 500.0 * m * m * flattening;
+                let iv =
+                    16.0 + 4.0 * days / 365.0 - 60.0 * m * flattening + 500.0 * m * m * flattening;
                 Bar::from_value(key_time(strike).expect("finite strike"), iv)
             })
             .collect()
@@ -46,20 +46,24 @@ pub(super) fn yield_curve() -> Chart {
         ("A year ago", egui::Color32::from_rgb(242, 54, 69), true),
     ] {
         let series = chart.add_series(SeriesOptions {
-            name: name.into(), color, ..Default::default()
+            name: name.into(),
+            color,
+            ..Default::default()
         });
-        let bars = [1.0, 2.0, 3.0, 4.0, 6.0, 12.0, 24.0, 36.0, 60.0, 84.0, 120.0, 240.0, 360.0]
-            .into_iter()
-            .map(|months| {
-                let years: f64 = months / 12.0;
-                let rate = if earlier {
-                    3.2 + 1.1 * (1.0 - (-years / 4.0).exp())
-                } else {
-                    3.9 + 1.4 * (-years / 1.5).exp() + 0.012 * years
-                };
-                Bar::from_value(key_time(months).expect("finite maturity"), rate)
-            })
-            .collect();
+        let bars = [
+            1.0, 2.0, 3.0, 4.0, 6.0, 12.0, 24.0, 36.0, 60.0, 84.0, 120.0, 240.0, 360.0,
+        ]
+        .into_iter()
+        .map(|months| {
+            let years: f64 = months / 12.0;
+            let rate = if earlier {
+                3.2 + 1.1 * (1.0 - (-years / 4.0).exp())
+            } else {
+                3.9 + 1.4 * (-years / 1.5).exp() + 0.012 * years
+            };
+            Bar::from_value(key_time(months).expect("finite maturity"), rate)
+        })
+        .collect();
         chart.set_data(series, bars);
     }
     chart.set_visible_bars(count + 3);

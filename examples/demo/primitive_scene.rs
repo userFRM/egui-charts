@@ -4,7 +4,9 @@ use chrono::{DateTime, Duration, TimeZone, Utc};
 use egui::{Color32, CursorIcon, Painter, Pos2, Rect, Stroke};
 use egui_charts::model::{Bar, BarData};
 use egui_charts::studies::{CustomIndicator, IndicatorValue};
-use egui_charts::widget::{Chart, Primitive, PrimitiveId, PrimitivePass, PrimitiveView, SeriesId, TimeAxisLabel};
+use egui_charts::widget::{
+    Chart, Primitive, PrimitiveId, PrimitivePass, PrimitiveView, SeriesId, TimeAxisLabel,
+};
 
 pub(super) struct PrimitiveScene {
     pub chart: Chart,
@@ -19,7 +21,11 @@ impl PrimitiveScene {
         chart.set_timeframe(egui_charts::model::Timeframe::Min15);
         chart.set_visible_bars(90);
         chart.config_mut().show_volume = false;
-        let mut scene = Self { chart, background: None, range: None };
+        let mut scene = Self {
+            chart,
+            background: None,
+            range: None,
+        };
         scene.set_background(true);
         scene.set_range(true);
         scene
@@ -30,11 +36,14 @@ impl PrimitiveScene {
             self.chart.detach_primitive(id);
         }
         if enabled {
-            self.background = self.chart.attach_primitive(SeriesId::MAIN, SessionHighlight {
-                open: Duration::minutes(14 * 60 + 30),
-                close: Duration::hours(21),
-                sessions: Vec::new(),
-            });
+            self.background = self.chart.attach_primitive(
+                SeriesId::MAIN,
+                SessionHighlight {
+                    open: Duration::minutes(14 * 60 + 30),
+                    close: Duration::hours(21),
+                    sessions: Vec::new(),
+                },
+            );
         }
     }
 
@@ -44,8 +53,12 @@ impl PrimitiveScene {
         }
         if enabled {
             let range = CustomIndicator::new("Bar range, price units", |bars| {
-                bars.iter().map(|bar| IndicatorValue::Single(bar.high - bar.low)).collect()
-            }).with_overlay(false).with_color(Color32::from_rgb(255, 152, 0));
+                bars.iter()
+                    .map(|bar| IndicatorValue::Single(bar.high - bar.low))
+                    .collect()
+            })
+            .with_overlay(false)
+            .with_color(Color32::from_rgb(255, 152, 0));
             self.range = Some(self.chart.add_custom_series(Box::new(range), Lollipops));
         }
     }
@@ -183,4 +196,3 @@ fn sample_bar(i: usize) -> Bar {
         1000.0 + 500.0 * (t / 3.0).cos(),
     )
 }
-

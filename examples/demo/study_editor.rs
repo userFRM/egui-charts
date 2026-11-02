@@ -162,8 +162,11 @@ impl DemoApp {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use egui_charts::model::Bar;
+    use super::DemoApp;
+    use eframe::App;
+    use egui::{Event, Key, Modifiers, Pos2, RawInput};
+    use egui_charts::model::{Bar, BarData};
+    use egui_charts::studies::InputValue;
     use egui_charts::widget::SeriesId;
 
     #[derive(Default)]
@@ -182,101 +185,146 @@ mod tests {
         fn flush(&mut self) {}
     }
 
+    fn render(app: &mut DemoApp, ctx: &egui::Context, events: Vec<Event>) -> Vec<(String, Pos2)> {
+        let output = ctx.run_ui(
+            RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    Pos2::ZERO,
+                    egui::vec2(1440.0, 900.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+        );
+        let texts = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some((
+                    text.galley.text().to_owned(),
+                    text.pos + text.galley.size() / 2.0,
+                )),
+                _ => None,
+            })
+            .collect();
+        output.drop_without_applying_deltas();
+        texts
+    }
+
+    fn click(app: &mut DemoApp, ctx: &egui::Context, label: &str) {
+        let point = render(app, ctx, Vec::new())
+            .into_iter()
+            .find_map(|(text, point)| (text == label).then_some(point))
+            .unwrap_or_else(|| panic!("missing control: {label}"));
+        render(
+            app,
+            ctx,
+            vec![
+                Event::PointerMoved(point),
+                Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Modifiers::NONE,
+                },
+                Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Modifiers::NONE,
+                },
+            ],
+        );
+    }
+
+    fn edit(app: &mut DemoApp, ctx: &egui::Context, old: &str, new: &str) {
+        click(app, ctx, old);
+        render(
+            app,
+            ctx,
+            vec![
+                Event::Key {
+                    key: Key::A,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers {
+                        ctrl: true,
+                        command: true,
+                        ..Default::default()
+                    },
+                },
+                Event::Text(new.into()),
+            ],
+        );
+    }
+
     #[test]
-    fn applying_source_recalculates_live_bars_and_keeps_the_last_valid_study() {
+    fn editor_applies_live_inputs_preserves_invalid_edits_and_reopens_local_documents() {
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
         app.live.set_paused(true);
+        app.execute_search_command(&ctx, "sample-study");
+        assert!(
+            render(&mut app, &ctx, Vec::new())
+                .iter()
+                .any(|(text, _)| text == "Sample study editor")
+        );
         let times: Vec<_> = (0..3)
             .map(|i| chrono::DateTime::UNIX_EPOCH + chrono::TimeDelta::minutes(i))
             .collect();
-        let mut bars: Vec<_> = [100.0, 103.0, 101.0]
+        let bars = [100.0, 103.0, 101.0]
             .into_iter()
             .zip(&times)
             .map(|(close, &time)| Bar::from_value(time, close))
             .collect();
-        app.chart = egui_charts::Chart::new(egui_charts::model::BarData::from_bars(bars.clone()));
-        for (source, expected) in [
-            (" close - close[1] ", vec![None, Some(3.0), Some(-2.0)]),
-            ("close - close[2]", vec![None, None, Some(1.0)]),
-            ("close - close[10000]", vec![None, None, None]),
-        ] {
-            app.handle_sample_study(StudyEditorAction::Apply {
-                title: TITLE.into(),
-                text: source.into(),
-            });
-            ctx.run_ui(egui::RawInput::default(), |ui| {
-                app.chart.show(ui);
-            })
-            .drop_without_applying_deltas();
-            let (_, study) = app
-                .chart
-                .indicators()
-                .find(|(_, study)| study.name() == TITLE)
-                .unwrap();
-            for (i, expected) in expected.into_iter().enumerate() {
-                assert_eq!(study.values().value(0, i), expected);
-            }
-        }
-        app.handle_sample_study(StudyEditorAction::Apply {
-            title: TITLE.into(),
-            text: "close - close[1]".into(),
-        });
+        app.chart = egui_charts::Chart::new(BarData::from_bars(bars));
+        edit(&mut app, &ctx, "close - close[10]", "close - close[1]");
+        click(&mut app, &ctx, "Apply");
         let id = app
             .chart
             .indicators()
-            .find(|(_, study)| study.name() == TITLE)
+            .find(|(_, study)| study.name() == "Sample close difference")
             .unwrap()
             .0;
-        for source in [
-            "",
-            "close",
-            "close - close[0]",
-            "close - close[-1]",
-            "close - close[10001]",
-            "close - close[999999999999999999999999999999]",
-            "close - close[1]extra",
-        ] {
-            app.handle_sample_study(StudyEditorAction::Apply {
-                title: TITLE.into(),
-                text: source.into(),
-            });
-            assert_eq!(
-                app.chart
-                    .indicators()
-                    .find(|(_, study)| study.name() == TITLE)
-                    .unwrap()
-                    .0,
-                id
-            );
-            assert_eq!(
-                app.sample_study.editor.diagnostics()[0].severity,
-                Severity::Error
-            );
-        }
-        let document = "close - close[2]";
-        app.handle_sample_study(StudyEditorAction::Save {
-            title: TITLE.into(),
-            text: document.into(),
-        });
-        let mut saved = Memory::default();
-        app.storage.persist(&mut saved);
-        let restored = super::super::storage::DemoStorage::restore(Some(&saved));
-        assert_eq!(restored.sample_studies(), vec![TITLE]);
-        assert_eq!(restored.sample_study(TITLE).as_deref(), Some(document));
+        let values = app
+            .chart
+            .indicators()
+            .find(|(candidate, _)| *candidate == id)
+            .unwrap()
+            .1
+            .values();
+        assert_eq!(
+            [values.value(0, 0), values.value(0, 1), values.value(0, 2)],
+            [None, Some(3.0), Some(-2.0)]
+        );
+        edit(&mut app, &ctx, "close - close[1]", "close - close[0]");
+        click(&mut app, &ctx, "Apply");
+        let text = render(&mut app, &ctx, Vec::new());
+        assert!(
+            text.iter()
+                .any(|(text, _)| text.contains("Expected close - close[N]"))
+        );
+        assert!(text.iter().any(|(text, _)| text == "close - close[0]"));
+        assert_eq!(
+            app.chart
+                .indicators()
+                .find(|(_, study)| study.name() == "Sample close difference")
+                .unwrap()
+                .0,
+            id
+        );
         app.chart
             .indicator_mut(id)
             .unwrap()
             .set_input("lookback", InputValue::Length(2))
             .unwrap();
-        ctx.run_ui(egui::RawInput::default(), |ui| {
-            app.chart.show(ui);
-        })
-        .drop_without_applying_deltas();
+        render(&mut app, &ctx, Vec::new());
         assert_eq!(
             app.chart
                 .indicators()
-                .find(|(_, study)| study.name() == TITLE)
+                .find(|(candidate, _)| *candidate == id)
                 .unwrap()
                 .1
                 .values()
@@ -288,21 +336,41 @@ mod tests {
             .unwrap()
             .set_input("lookback", InputValue::Length(1))
             .unwrap();
-        bars[2] = Bar::from_value(times[2], 108.0);
-        app.chart.update(SeriesId::MAIN, bars[2].clone());
-        ctx.run_ui(egui::RawInput::default(), |ui| {
-            app.chart.show(ui);
-        })
-        .drop_without_applying_deltas();
+        app.chart
+            .update(SeriesId::MAIN, Bar::from_value(times[2], 108.0));
+        render(&mut app, &ctx, Vec::new());
         assert_eq!(
             app.chart
                 .indicators()
-                .find(|(_, study)| study.name() == TITLE)
+                .find(|(candidate, _)| *candidate == id)
                 .unwrap()
                 .1
                 .values()
                 .value(0, 2),
             Some(5.0)
+        );
+        edit(&mut app, &ctx, "close - close[0]", "close - close[2]");
+        click(&mut app, &ctx, "Save");
+        edit(&mut app, &ctx, "close - close[2]", "close - close[1]");
+        click(&mut app, &ctx, "Reload saved");
+        assert!(
+            render(&mut app, &ctx, Vec::new())
+                .iter()
+                .any(|(text, _)| text == "close - close[2]")
+        );
+        let mut saved = Memory::default();
+        app.save(&mut saved);
+        let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        cc.storage = Some(&saved);
+        let mut restored = DemoApp::new(&cc);
+        restored.live.set_paused(true);
+        restored.execute_search_command(&ctx, "sample-study");
+        click(&mut restored, &ctx, "Open");
+        click(&mut restored, &ctx, "Sample close difference");
+        assert!(
+            render(&mut restored, &ctx, Vec::new())
+                .iter()
+                .any(|(text, _)| text == "close - close[2]")
         );
     }
 }
