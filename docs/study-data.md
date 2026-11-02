@@ -1,9 +1,9 @@
 # Calendar and viewport studies
 
-`IndicatorFactory` includes Performance, Seasonality, Visible Average Price and Up/Down Volume.
+[`IndicatorFactory`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/factory/struct.IndicatorFactory.html) includes Performance, Seasonality, Visible Average Price and Up/Down Volume.
 Performance compares the latest close with the last close on or before each calendar target in
 the instrument's trading calendar. On an interval shorter than a day it declares the chart
-symbol's daily bars in `data_requests` and reads each period's starting close from them, so the
+symbol's daily bars in [`data_requests`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#method.data_requests) and reads each period's starting close from them, so the
 longer periods fill without scrolling back. Where the chart's own bars hold a later close on or
 before the target, as when the daily bars stop earlier, that close counts. Daily and longer
 charts, and hosts that supply no daily bars, use the chart's loaded bars. Missing history and
@@ -12,13 +12,13 @@ and at least 300, so on a symbol that trades every day a chart of fewer than 366
 1Y at N/A.
 
 The chart supplies Visible Average Price with its visible source range before autoscaling.
-Direct callers use `set_visible_range(start..end)` before `calculate`. The end is exclusive;
+Direct callers use [`set_visible_range(start..end)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#method.set_visible_range) before [`calculate`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#tymethod.calculate). The end is exclusive;
 only finite prices in that range contribute to the arithmetic mean. The resulting horizontal
 price remains available to the legend and last-value label when the latest bar is outside
 the viewport.
 
 Up/Down Volume, Volume Delta and Cumulative Volume Delta need actual intrabars from the host.
-Their `data_requests` declaration uses one second on second charts, one minute on minute and
+Their [`data_requests`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#method.data_requests) declaration uses one second on second charts, one minute on minute and
 hour charts, five minutes on daily charts and one hour on longer intervals. A custom interval
 that cannot contain whole candles of that size uses one-second intrabars. The Lower interval
 input chooses another interval; one that is not shorter than the chart's or does not divide it
@@ -26,7 +26,7 @@ reads the automatic one. Subsecond and tick-count charts have no request. 24-hou
 requests the automatic interval only where chart bars cannot hold exactly 24 hours, on intervals
 longer than a day or that do not divide one, and sums chart bars until it is supplied. Its Units input sums the supplied volume (default) or, for
 volume in base units, an estimate of the quote amount: each candle's volume times its own close,
-labelled with `Instrument::currency`, which the host must set. Without it, or with a non-finite or
+labelled with [`Instrument::currency`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.Instrument.html#structfield.currency), which the host must set. Without it, or with a non-finite or
 negative value in the window, the quote amount is missing. Supply
 the same symbol and session as the chart. Read the request again after a symbol, interval or
 input change:
@@ -48,12 +48,12 @@ fn supply_snapshots(
 ```
 
 A response replaces the prior snapshot. The chart sorts, deduplicates and validates it through
-its shared study-data path; a connected `Datafeed` loads and subscribes automatically.
+its shared study-data path; a connected [`Datafeed`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/trait.Datafeed.html) loads and subscribes automatically.
 The fixed range and anchored volume profile drawings add the finer interval that
-`Instrument::profile_resolutions` suggests for their span to these requests. A connected feed
+[`Instrument::profile_resolutions`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.Instrument.html#structfield.profile_resolutions) suggests for their span to these requests. A connected feed
 loads it back to the first bar of the span. Profiles still estimate volume from those bars;
 a chart bar without finer inputs keeps its own estimate.
-Direct callers supply `StudyData` to `Indicator::update_data` with sorted, unique bars;
+Direct callers supply [`StudyData`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.StudyData.html) to [`Indicator::update_data`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#method.update_data) with sorted, unique bars;
 invalid prices, negative volume or unordered timestamps leave accepted values unchanged.
 Pass `from = 0` whenever a requested history changes. A nonzero `from` reuses those histories
 and updates the changed chart bars; the chart supplies this invalidation automatically.
@@ -63,10 +63,10 @@ summing chart bars; missing parent intervals remain unavailable, while supplied 
 produces zero. Accounts, feed selection, retrieval, subscriptions and retries belong to the
 host. No split is inferred from a parent candle's direction or total volume.
 
-`Indicator::table` exposes labelled percentages independently of plots, including Performance's
+[`Indicator::table`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#method.table) exposes labelled percentages independently of plots, including Performance's
 six periods and Seasonality's years and summary rows. The shared chart renderer paints them
 in the study pane and in image exports, with scrolling when the table exceeds the pane.
-`Indicator::projections` exposes fractional price boxes for future whitespace, included in
+[`Indicator::projections`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#method.projections) exposes fractional price boxes for future whitespace, included in
 selection and autoscaling; Seasonality ends its current projection at the next UTC month boundary,
 using the same interpolation and final observed bar spacing as the time axis. Its heatmap
 uses the latest available changes, while each price projection keeps the earlier-year statistics
