@@ -1,8 +1,14 @@
-//! Modern rendering pipeline for chart components.
+//! Chart painting grouped by concept.
 //!
-//! Provides standalone rendering functions (`axes`, `candles`, `grid`, `overlays`)
-//! that accept a context struct and paint directly to an egui `Painter`. These are
-//! the workhorse implementations the `Chart` widget calls during a frame.
+//! [`axes`] renders price and time labels, currency controls and study scales.
+//! [`candles`] renders every chart type and its per-bar primitives. [`overlays`]
+//! renders crosshairs, tooltips, box zoom and the realtime button; [`grid`] paints
+//! the grid. Supporting chart elements include legends, markers, session breaks,
+//! trading lines, alerts, watermarks and study plots.
+//!
+//! The shared [`RenderContext`] and [`ChartMapping`] carry painting and coordinate
+//! data. The chart widget composes these functions during a frame; shared profile
+//! geometry and painting live in `crate::painting`.
 
 pub mod axes;
 pub mod candles;

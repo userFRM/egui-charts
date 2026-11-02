@@ -4,6 +4,10 @@
 //! settings, [`overlays`] for order flow visualizations and [`primitives`] for custom
 //! rendering. For a chart that manages data, layout and interaction, use
 //! [`Chart`](crate::Chart).
+//!
+//! Internal painting lives in one `rendering` tree, grouped into axes, chart
+//! types, overlays and supporting chart elements. Interaction state belongs to
+//! the widget.
 
 pub mod coords;
 pub mod overlays;
