@@ -178,7 +178,7 @@ fn autoscale_includes_only_visible_overlay_values() {
                     .unwrap()
                     .1;
                 let map =
-                    crate::chart::renderers::study_mapping(study, &chart.get_chart_mapping()).price;
+                    crate::chart::rendering::study_mapping(study, &chart.get_chart_mapping()).price;
                 assert!(map.range().contains(map.transform().to_scale(120.0)));
             }
             let expected = if case == "main_hidden" {

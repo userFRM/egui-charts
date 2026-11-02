@@ -1,4 +1,4 @@
-use crate::chart::renderers::{ChartMapping, RenderContext};
+use crate::chart::rendering::{ChartMapping, RenderContext};
 use crate::model::Bar;
 use crate::model::LineStyle;
 use crate::painting::dashed_line::{draw_dashed_polyline, draw_dotted_polyline};
@@ -298,14 +298,14 @@ impl IndicatorRenderer {
             crate::chart::indicators::plots::paint_candles(context, indicator, price_scale, coords);
             return;
         }
-        let visible = super::volume_profile::profile_range(coords);
+        let visible = crate::chart::rendering::volume_profile::profile_range(coords);
         for plot in indicator.volume_profiles(visible) {
             crate::painting::volume_profile::paint_profile(
                 &context.painter.with_clip_rect(context.rect),
                 &plot.profile,
                 plot.config,
                 plot.color,
-                super::volume_profile::profile_span(&plot, coords),
+                crate::chart::rendering::volume_profile::profile_span(&plot, coords),
                 crate::painting::volume_profile::ProfileStyle::Study {
                     right_aligned: plot.right_aligned,
                 },

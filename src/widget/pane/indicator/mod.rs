@@ -436,7 +436,7 @@ impl IndicatorPane {
                 pos.x = mapping.idx_to_x(index);
                 if options.mode.snaps()
                     && chart_rect.contains(pos)
-                    && let Some(value) = crate::chart::renderers::snap_to_values(
+                    && let Some(value) = crate::chart::rendering::snap_to_values(
                         pos.y,
                         &mapping.price,
                         (0..indicator.line_count())
@@ -538,9 +538,9 @@ impl IndicatorPane {
                     }
                 }
             }
-            let context = crate::chart::renderers::RenderContext::new(painter, chart_rect);
+            let context = crate::chart::rendering::RenderContext::new(painter, chart_rect);
             let tag = crosshair.and_then(|(pos, options)| {
-                crate::chart::renderers::render_crosshair_lines(
+                crate::chart::rendering::render_crosshair_lines(
                     &context,
                     pos,
                     &options,
@@ -550,7 +550,7 @@ impl IndicatorPane {
                 if indicator.scale() == crate::studies::StudyScale::None {
                     return None;
                 }
-                crate::chart::renderers::render_crosshair_price_tag(
+                crate::chart::rendering::render_crosshair_price_tag(
                     &context,
                     pos,
                     &mapping.price.with_price_precision(Some(
@@ -581,8 +581,8 @@ impl IndicatorPane {
 
         if collapsed && let Some((pos, mut options)) = crosshair {
             options.horz_line_visible = false;
-            crate::chart::renderers::render_crosshair_lines(
-                &crate::chart::renderers::RenderContext::new(painter, chart_rect),
+            crate::chart::rendering::render_crosshair_lines(
+                &crate::chart::rendering::RenderContext::new(painter, chart_rect),
                 pos,
                 &options,
                 chart_rect.bottom(),
@@ -594,7 +594,7 @@ impl IndicatorPane {
                 chart_rect.min + egui::vec2(0.0, self.legend_offset),
                 controls.right_bottom(),
             );
-            crate::chart::renderers::study_controls(
+            crate::chart::rendering::study_controls(
                 ui,
                 row,
                 controls,

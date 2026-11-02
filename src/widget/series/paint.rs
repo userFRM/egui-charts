@@ -1,8 +1,8 @@
 //! Hit testing, painting, legends and axes for secondary bar series.
 
 use super::{PriceSeries, base_line};
-use crate::chart::renderers::{RenderContext, StyleColors};
 use crate::chart::rendering;
+use crate::chart::rendering::{RenderContext, StyleColors};
 use crate::localization as l10n;
 use crate::model::{Bar, ChartType, MarkerZOrder, PriceLine, PriceSource, SeriesScale};
 use crate::scales::{PriceMap, PriceScaleMode};
@@ -244,7 +244,7 @@ impl Chart {
                     time: marker.time,
                     ..bar.clone()
                 };
-                let hits = crate::chart::renderers::render_markers(
+                let hits = crate::chart::rendering::render_markers(
                     &RenderContext::new(plot, rect),
                     [(0, marker)],
                     &[bar],
@@ -481,12 +481,12 @@ impl Chart {
                 .find(|item| item.options.scale == key)
             else {
                 if let Some(study) = assigned.first() {
-                    let coords = crate::chart::renderers::ChartMapping {
+                    let coords = crate::chart::rendering::ChartMapping {
                         rect,
                         price: study.scale_mapping().unwrap_or(self.last_price_map),
                         ..self.get_chart_mapping()
                     };
-                    measured = measured.max(crate::chart::renderers::render_study_axis(
+                    measured = measured.max(crate::chart::rendering::render_study_axis(
                         painter,
                         &assigned,
                         &coords,
@@ -538,7 +538,7 @@ impl Chart {
                 }
             }
             let formatter = self.series_label_formatter(item.id, map.transform().mode);
-            crate::chart::renderers::render_price_labels_at_pos(
+            crate::chart::rendering::render_price_labels_at_pos(
                 &ctx,
                 &map,
                 colors,

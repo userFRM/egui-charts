@@ -1,7 +1,7 @@
 //! Animation and interaction state structs for the `Chart` widget.
 //!
 //! These structs hold ephemeral, per-frame interaction state used by the
-//! [`pan_zoom`](super::pan_zoom) module to implement smooth scrolling,
+//! [`pan_zoom`](super) module to implement smooth scrolling,
 //! box-zoom selection, and elastic edge bounce effects.
 
 use egui::Pos2;

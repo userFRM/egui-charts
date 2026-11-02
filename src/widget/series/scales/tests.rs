@@ -581,7 +581,7 @@ fn series_scales_fit_visible_members_and_reserve_their_axes() {
                 .find(|(study, _)| *study == id)
                 .unwrap()
                 .1;
-            crate::chart::renderers::study_mapping(study, &chart.get_chart_mapping()).price
+            crate::chart::rendering::study_mapping(study, &chart.get_chart_mapping()).price
         };
         let one = mapping(&chart, first);
         let two = mapping(&chart, second);

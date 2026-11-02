@@ -1,7 +1,7 @@
 //! Host notifications from chart setters, history loads and rendered interaction.
 
 use super::{Chart, ChartElementId, SeriesId, VisibleTimeRange};
-use crate::chart::renderers::StudyValue;
+use crate::chart::rendering::StudyValue;
 use crate::model::Bar;
 use chrono::{DateTime, Utc};
 use egui::{Modifiers, PointerButton, Pos2, Ui};
@@ -327,7 +327,7 @@ impl Chart {
         let bar_at = (index >= 0.0 && index < shown.len() as f64).then_some(index as usize);
         let magnet = |map: crate::scales::PriceMap, values: Vec<f64>| {
             if self.chart_options.crosshair.mode.snaps() {
-                crate::chart::renderers::snap_to_values(pos.y, &map, values)
+                crate::chart::rendering::snap_to_values(pos.y, &map, values)
                     .unwrap_or_else(|| map.y_to_price(pos.y))
             } else {
                 map.y_to_price(pos.y)
