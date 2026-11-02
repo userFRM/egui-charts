@@ -131,6 +131,7 @@ type ProfileUnits = Vec<(usize, usize, Rc<Vec<TPOProfile>>)>;
 
 struct CachedProfiles {
     span: SpanFingerprint,
+    last_time: Option<chrono::DateTime<chrono::Utc>>,
     config: TPOConfig,
     clock: BarClock,
     units: Rc<ProfileUnits>,
@@ -220,9 +221,13 @@ fn cached_profiles(
     sessions: &ExchangeSessionProvider,
 ) -> Rc<ProfileUnits> {
     let span = SpanFingerprint::of(start_idx, bars, revision);
+    let last_time = bars.last().map(|bar| bar.time);
     PROFILES_CACHE.with_borrow_mut(|cache| {
         if let Some(at) = cache.iter().position(|entry| {
-            entry.span == span && same_profiles(&entry.config, config) && entry.clock == *clock
+            entry.span == span
+                && entry.last_time == last_time
+                && same_profiles(&entry.config, config)
+                && entry.clock == *clock
         }) {
             let entry = cache.remove(at);
             let units = Rc::clone(&entry.units);
@@ -238,6 +243,7 @@ fn cached_profiles(
         }
         cache.push(CachedProfiles {
             span,
+            last_time,
             config: config.clone(),
             clock: clock.clone(),
             units: Rc::clone(&units),
@@ -1940,6 +1946,7 @@ mod tests {
             ("append", [true, false], [7, 4], 'A', 1.0),
             ("last bits", [true, false], [7, 4], 'A', 1.0),
             ("last time", [true, false], [7, 8], 'A', 1.0),
+            ("last fraction", [true, false], [7, 8], 'A', 1.0),
             ("steady NaN", [true, true], [7, 8], 'A', 1.0),
             ("period", [false, false], [4, 4], 'A', 1.0),
             ("letters", [false, false], [4, 4], 'x', 1.0),
@@ -1960,6 +1967,9 @@ mod tests {
                 "start index" => start_idx += 1,
                 "append" => bars.push(bars.last().unwrap().clone()),
                 "last time" => bars.last_mut().unwrap().time += chrono::Duration::minutes(30),
+                "last fraction" => {
+                    bars.last_mut().unwrap().time += chrono::Duration::nanoseconds(1);
+                }
                 "last bits" => bars.last_mut().unwrap().volume = f64::NAN,
                 "period" => config.period_minutes = 60,
                 "letters" => config.custom_letters = Some("xy".into()),
