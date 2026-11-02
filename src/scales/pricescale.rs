@@ -263,6 +263,8 @@ pub struct PriceScale {
     /// Larger magnitude of the data at the last fit, in scale units
     level: f64,
     price_precision: Option<u8>,
+    #[serde(default)]
+    tick_size: Option<f64>,
     bar_ratio: Option<f64>,
 }
 
@@ -276,6 +278,7 @@ impl PriceScale {
             manual: false,
             level: 0.0,
             price_precision: None,
+            tick_size: None,
             bar_ratio: None,
         }
     }
@@ -283,6 +286,12 @@ impl PriceScale {
     /// Sets the decimals used by price ticks and tags. `None` derives them from the tick step.
     pub fn set_price_precision(&mut self, decimals: Option<u8>) {
         self.price_precision = decimals;
+    }
+
+    /// The instrument's default price grid, separate from the host's tick-mark override.
+    #[cfg(feature = "widget")]
+    pub(crate) fn set_tick_size(&mut self, tick_size: Option<f64>) {
+        self.tick_size = tick_size.filter(|size| size.is_finite() && *size > 0.0);
     }
 
     /// Locks scale units per bar at the current bar spacing and pane height.
@@ -483,6 +492,13 @@ impl PriceScale {
 
     /// Mapping for one series for one frame, given the pane's vertical extent in points.
     pub fn map(&self, transform: PriceTransform, top: f32, bottom: f32) -> PriceMap {
+        let mut tick_marks = self.options.tick_marks;
+        if matches!(
+            transform.mode,
+            PriceScaleMode::Normal | PriceScaleMode::Logarithmic
+        ) {
+            tick_marks.min_price_step = tick_marks.min_price_step.or(self.tick_size);
+        }
         PriceMap::new(
             transform,
             self.range,
@@ -491,7 +507,7 @@ impl PriceScale {
             self.options.invert_scale,
         )
         .with_price_precision(self.price_precision)
-        .with_tick_marks(self.options.tick_marks)
+        .with_tick_marks(tick_marks)
     }
 }
 

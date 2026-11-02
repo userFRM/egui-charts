@@ -8,6 +8,7 @@ use egui::epaint::{ClippedShape, Mesh, TessellationOptions, Tessellator, emath::
 use egui::{Color32, Pos2, Rect, Shape};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 /// Shapes tessellated at a scale and with options, as what to paint in place of each shape: a
 /// run of geometry becomes one mesh in place of its first shape and nothing in place of the rest,
@@ -161,6 +162,26 @@ impl DrawingManager {
             .map(|d| d.id)
     }
 
+    /// Position and layout of the first upright text shape painting exactly `text` for `id`.
+    pub(crate) fn painted_text(&self, id: usize, text: &str) -> Option<(Pos2, Arc<egui::Galley>)> {
+        fn find(shape: &Shape, text: &str) -> Option<(Pos2, Arc<egui::Galley>)> {
+            match shape {
+                Shape::Vec(shapes) => shapes.iter().find_map(|s| find(s, text)),
+                Shape::Text(t) if t.angle == 0.0 && t.galley.text() == text => {
+                    Some((t.pos, Arc::clone(&t.galley)))
+                }
+                _ => None,
+            }
+        }
+        let painted = self.painted.lock().unwrap_or_else(|e| e.into_inner());
+        painted
+            .iter()
+            .find(|p| p.id == id)?
+            .shapes
+            .iter()
+            .find_map(|s| find(&s.shape, text))
+    }
+
     fn render_drawing(
         &self,
         drawing: &Drawing,
@@ -208,6 +229,12 @@ impl DrawingManager {
             .is_none();
         // Render completed drawings, bottom layer first
         for drawing in in_z_order(&self.drawings) {
+            let preview = self
+                .text_editor
+                .as_ref()
+                .filter(|editor| editor.inline && editor.id == drawing.id)
+                .map(|editor| editor.preview(drawing, painter.ctx()));
+            let drawing = preview.as_ref().unwrap_or(drawing);
             let off_pane = drawing.custom_tool.is_none()
                 && drawing
                     .paint_bounds()
