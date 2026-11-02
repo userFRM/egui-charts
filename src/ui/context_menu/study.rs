@@ -188,12 +188,7 @@ impl StudyContextMenu {
                         output,
                     }
                 };
-                (
-                    alert,
-                    chart
-                        .indicator_value_text(id, value)
-                        .unwrap_or_else(|| study.format_value(value)),
-                )
+                (alert, study.format_plot_value(output, value))
             });
         self.visible = study.is_visible();
         self.overlay = study.is_overlay();

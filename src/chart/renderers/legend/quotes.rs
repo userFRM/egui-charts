@@ -311,7 +311,13 @@ mod tests {
             ] {
                 assert!(values.iter().any(|value| value == text), "{text}");
             }
-            for text in ["BB", "2 2", "110.00", "100.00", "90.00"] {
+            for text in [
+                "BB",
+                "2 2",
+                "BB Upper(2, 2): 110.00",
+                "BB Middle(2, 2): 100.00",
+                "BB Lower(2, 2): 90.00",
+            ] {
                 assert!(b.iter().any(|value| value == text), "{text}");
             }
             for text in ["104.00", "106.00", "2.00", "SELL", "BUY"] {
