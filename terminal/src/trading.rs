@@ -152,16 +152,15 @@ impl Terminal {
 
     pub(super) fn trading_perform(&mut self, action: Action) -> Option<Action> {
         match action {
-            // Apply the drawing toolbar's visibility actions to the broker layers.
+            // Apply the drawing toolbar's visibility actions to the broker layers; the next poll
+            // hands the settings to the account.
             Action::DrawingToolbar(DrawingToolbarAction::HideAllPoss) => {
                 let show = &mut self.studies.settings.trading.show_positions;
                 *show = !*show;
-                self.trading.account.display.show_positions = *show;
             }
             Action::DrawingToolbar(DrawingToolbarAction::HideAllOrders) => {
                 let show = &mut self.studies.settings.trading.show_orders;
                 *show = !*show;
-                self.trading.account.display.show_orders = *show;
             }
             Action::StrategyReport(action) => return self.perform_report(action),
             action if !self.trading_enabled() => return Some(action),

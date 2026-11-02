@@ -114,7 +114,6 @@ pub struct Terminal {
     replay: replay::State,
     alerts: alerts::State,
     panels: panels::State,
-    #[allow(dead_code, reason = "the group keeps its state here")]
     trading: trading::State,
     #[allow(dead_code, reason = "the group keeps its state here")]
     layouts: layouts::State,
