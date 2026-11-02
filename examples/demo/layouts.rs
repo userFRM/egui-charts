@@ -376,7 +376,9 @@ impl DemoApp {
         let mut name = name.unwrap_or_else(|| "Unnamed".into());
         let base = name.clone();
         let mut suffix = 2;
-        while self.layout_tabs.iter().any(|t| t.name == name) {
+        while self.layout_tabs.iter().any(|t| t.name == name)
+            || (!duplicate && self.layout_is_saved(&name))
+        {
             name = format!("{base} {suffix}");
             suffix += 1;
         }

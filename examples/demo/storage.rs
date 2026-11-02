@@ -29,6 +29,14 @@ struct SavedWorkspace {
 }
 
 impl super::DemoApp {
+    pub(super) fn layout_is_saved(&self, name: &str) -> bool {
+        self.storage
+            .documents
+            .lock()
+            .unwrap()
+            .contains_key(&key(StoreKind::Layouts, name))
+    }
+
     pub(super) fn restore_workspace(&mut self) {
         let json = self
             .storage
@@ -49,7 +57,13 @@ impl super::DemoApp {
         })();
         match saved {
             Ok(saved) => {
-                if self.restore_layout("Unnamed".into(), saved.layout, Ok(saved.comparisons)) {
+                let mut name = "Unnamed".to_owned();
+                let mut suffix = 2;
+                while self.layout_is_saved(&name) {
+                    name = format!("Unnamed {suffix}");
+                    suffix += 1;
+                }
+                if self.restore_layout(name, saved.layout, Ok(saved.comparisons)) {
                     self.activate_chart_slot(saved.active_slot);
                 } else {
                     self.workspace_recovery.unreadable = true;
@@ -68,11 +82,7 @@ impl super::DemoApp {
 
     pub(super) fn checkpoint_workspace(&mut self) {
         if self.workspace_recovery.unreadable
-            || self
-                .top_toolbar
-                .layout_menu
-                .layouts
-                .contains(&self.layout_tabs[self.layout_tab].name)
+            || self.layout_is_saved(&self.layout_tabs[self.layout_tab].name)
         {
             return;
         }
@@ -425,6 +435,32 @@ mod tests {
                     } else {
                         ChartType::Area
                     }
+                );
+            }
+
+            let layout = app.capture_layout().unwrap();
+            app.top_toolbar.layout_menu.save("Unnamed 2", &layout);
+            app.poll_storage(&ctx);
+            app.handle_layout_action(
+                egui_charts::ui::top_toolbar::components::layout_menu::LayoutAction::CreateNew,
+            );
+            assert!(
+                !app.top_toolbar
+                    .layout_menu
+                    .layouts
+                    .contains(&app.layout_tabs[app.layout_tab].name)
+            );
+            app.handle_top_toolbar(&ctx, TopToolbarAction::ChartStyleSelected(ChartType::Area));
+            for _ in 0..2 {
+                app.save(&mut storage);
+                app = restart(&ctx, &storage);
+                app.poll_storage(&ctx);
+                assert_eq!(app.chart.chart_type(), ChartType::Area);
+                assert!(
+                    !app.top_toolbar
+                        .layout_menu
+                        .layouts
+                        .contains(&app.layout_tabs[app.layout_tab].name)
                 );
             }
         }
