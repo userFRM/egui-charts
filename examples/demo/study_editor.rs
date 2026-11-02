@@ -141,7 +141,9 @@ impl DemoApp {
                         for id in previous {
                             chart.remove_series(id);
                         }
-                        chart.add_indicator(Box::new(study));
+                        let inputs = super::study_input_summary(&study);
+                        let id = chart.add_indicator(Box::new(study));
+                        chart.set_indicator_inputs(id, inputs);
                     });
                     self.sample_study.editor.set_diagnostics(Vec::new());
                     self.sample_study.editor.apply_result(Ok(()));

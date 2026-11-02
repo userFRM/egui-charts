@@ -250,6 +250,7 @@ impl DemoApp {
         let Some(scene) = &mut self.sample_scene else {
             return false;
         };
+        let mut search = false;
         egui::CentralPanel::default().show(ui, |ui| {
             let chart = match scene {
                 SampleScene::Numeric(chart) => chart,
@@ -260,7 +261,22 @@ impl DemoApp {
             };
             chart.set_theme_override(Some(self.theme.clone()));
             chart.show(ui);
+            search = chart.take_shortcut_requests().iter().any(|request| {
+                matches!(
+                    request,
+                    egui_charts::widget::ShortcutRequest::Action(
+                        egui_charts::config::KeyboardAction::OpenQuickSearch
+                    )
+                )
+            });
         });
+        if search {
+            self.quick_search.open();
+        }
+        if let Some(id) = self.quick_search.show(ui.ctx()) {
+            self.sample_scene = None;
+            self.execute_search_edit(ui.ctx(), &id);
+        }
         true
     }
 }

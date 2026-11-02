@@ -1520,7 +1520,7 @@ impl eframe::App for DemoApp {
             .rect_filled(ui.max_rect(), 0.0, self.theme.ui.border);
 
         // Dialogs consume their keys before chart commands and the replay transport.
-        if !self.keyboard_dialog_open() {
+        if self.sample_scene.is_none() && !self.keyboard_dialog_open() {
             let action = self.replay_control.shortcut(&ctx);
             self.handle_replay_control(action);
             self.handle_keyboard(&ctx);
@@ -5136,6 +5136,37 @@ mod tests {
                         }
                     }
                     if query != "Sample study editor" {
+                        for (events, modifiers) in [
+                            (vec![key(Key::Home, Modifiers::NONE)], Modifiers::NONE),
+                            (vec![key(Key::K, Modifiers::COMMAND)], Modifiers::COMMAND),
+                            (
+                                vec![Event::Text("Return to price chart".into())],
+                                Modifiers::NONE,
+                            ),
+                            (vec![key(Key::Enter, Modifiers::NONE)], Modifiers::NONE),
+                        ] {
+                            ctx.run_ui(
+                                RawInput {
+                                    events: std::iter::once(Event::ModifiersChanged(modifiers))
+                                        .chain(events)
+                                        .collect(),
+                                    ..Default::default()
+                                },
+                                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+                            )
+                            .drop_without_applying_deltas();
+                            assert_eq!(
+                                app.chart.get_time_scale_state(),
+                                range,
+                                "sample keys must not move the hidden workspace"
+                            );
+                        }
+                        let output = ctx.run_ui(RawInput::default(), |ui| {
+                            app.ui(ui, &mut eframe::Frame::_new_kittest())
+                        });
+                        assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+                            egui::Shape::Text(text) if text.galley.text() == "Return to price chart")));
+                        output.drop_without_applying_deltas();
                         app.execute_search_command(&ctx, "price-workspace");
                         assert_eq!(app.chart.bars(SeriesId::MAIN), bars);
                         assert_eq!(
