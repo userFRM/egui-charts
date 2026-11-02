@@ -1175,7 +1175,14 @@ mod tests {
                     for _ in 0..20 {
                         t += 0.1;
                         frame(&ctx, &mut chart, t, vec![]);
+                        if !ctx.input(|input| input.is_scrolling()) {
+                            break;
+                        }
                     }
+                    assert!(
+                        !ctx.input(|input| input.is_scrolling()),
+                        "wheel smoothing must finish before toggling groups"
+                    );
                     let after = chart.get_time_scale_state();
                     let pan = horizontal || shift;
                     assert_eq!(after.0 != before.0, !pan && !price && scale && scale_wheel);
@@ -1717,6 +1724,8 @@ mod tests {
             (crate::theme::Theme::light(), 360.0),
             (crate::theme::Theme::dark(), 360.0),
         ] {
+            // Keep the font atlas across cases, as a host does across chart replacements.
+            let ctx = egui::Context::default();
             let frame = |ctx: &egui::Context, chart: &mut Chart, time, events| {
                 ctx.run_ui(
                     egui::RawInput {
@@ -1739,7 +1748,7 @@ mod tests {
             for price in [false, true] {
                 for plot in [false, true] {
                     for (axis, group_enabled) in [(true, true), (false, true), (true, false)] {
-                        let ctx = egui::Context::default();
+                        let time = ctx.input(|input| input.time) + 1.0;
                         let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
                         chart.set_theme(&ctx, &theme);
                         chart.chart_options.handle_scroll.pressed_mouse_move = plot;
@@ -1756,7 +1765,7 @@ mod tests {
                             .axis_pressed_mouse_move
                             .time = axis;
                         let axis = axis && group_enabled;
-                        frame(&ctx, &mut chart, 0.0, vec![]);
+                        frame(&ctx, &mut chart, time, vec![]);
                         let rect = chart.last_rendered_price_rect;
                         let start = if price {
                             Pos2::new(rect.right() + 10.0, rect.center().y)
@@ -1781,16 +1790,26 @@ mod tests {
                             pressed,
                             modifiers: Modifiers::NONE,
                         };
-                        frame(&ctx, &mut chart, 0.02, vec![Event::PointerMoved(start)]);
-                        frame(&ctx, &mut chart, 0.04, vec![button(start, true)]);
                         frame(
                             &ctx,
                             &mut chart,
-                            0.06,
+                            time + 0.02,
+                            vec![Event::PointerMoved(start)],
+                        );
+                        frame(&ctx, &mut chart, time + 0.04, vec![button(start, true)]);
+                        frame(
+                            &ctx,
+                            &mut chart,
+                            time + 0.06,
                             vec![Event::PointerMoved(start.lerp(end, 0.5))],
                         );
-                        frame(&ctx, &mut chart, 0.08, vec![Event::PointerMoved(end)]);
-                        frame(&ctx, &mut chart, 0.10, vec![button(end, false)]);
+                        frame(
+                            &ctx,
+                            &mut chart,
+                            time + 0.08,
+                            vec![Event::PointerMoved(end)],
+                        );
+                        frame(&ctx, &mut chart, time + 0.10, vec![button(end, false)]);
                         let expected_span = if price && axis {
                             before * (100.0 / rect.height() as f64).exp()
                         } else {
