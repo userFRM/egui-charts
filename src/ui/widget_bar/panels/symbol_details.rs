@@ -183,8 +183,8 @@ impl SymbolDetailsPanel {
         self.timezone = timezone;
     }
 
-    /// Shows or hides the Financials action, visible by default. Hide it when the host
-    /// cannot supply company financials.
+    /// Show or hide Financials in the More menu, shown by default. Hide it when the host cannot
+    /// supply company financials.
     pub fn set_financials_visible(&mut self, visible: bool) {
         self.hide_financials = !visible;
         if !visible {

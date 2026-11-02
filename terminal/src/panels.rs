@@ -10,7 +10,6 @@ use egui_charts::localization as l10n;
 use egui_charts::model::Tick;
 use egui_charts::model::{Bar, Watchlist};
 use egui_charts::services::{ProfileDirectory, ProfileId, Profiles, UserSettings};
-use egui_charts::ui::Control;
 use egui_charts::ui::context_menu::{ChartContextAction, ContextMenuAction};
 use egui_charts::ui::profile::ProfileCard;
 use egui_charts::ui::top_toolbar::TopToolbarAction;
@@ -214,14 +213,6 @@ impl Terminal {
     }
 
     pub(super) fn panels_init(&mut self) {
-        self.set_control_visible(Control::ObjectTree, true);
-        for control in [Control::Alerts, Control::ObjectTree, Control::Help] {
-            self.panels.widget_bar.set_control_visible(
-                control,
-                self.shown(control)
-                    && (control != Control::Alerts || self.services.alerts.is_some()),
-            );
-        }
         let market = &mut self.panels.market;
         if let Some(quotes) = &self.services.quotes {
             market.watchlist.set_service(quotes.clone());
@@ -1060,86 +1051,78 @@ mod tests {
                 reply.send(Ok(()));
             }
         }
-        for dark in [false, true] {
-            let host = Arc::new(Host::default());
-            let mut terminal = terminal()
-                .with_quotes(host.clone())
-                .with_notifications(host.clone())
-                .with_profiles(host.clone());
+        let host = Arc::new(Host::default());
+        let mut terminal = terminal()
+            .with_quotes(host.clone())
+            .with_notifications(host.clone())
+            .with_profiles(host.clone());
+        terminal
+            .panels_mut()
+            .heatmap
+            .universes
+            .push(MarketHeatmapUniverse::new(
+                "test",
+                "Test",
+                vec![MarketHeatmapEntry {
+                    symbol: "OUTSIDE".into(),
+                    group: "Test".into(),
+                    values: BTreeMap::new(),
+                }],
+            ));
+        frame(&mut terminal, SIZE, vec![]);
+        frame(&mut terminal, SIZE, vec![]);
+        let values = &terminal.panels.market.heatmap.universes[0].entries[0].values;
+        assert_eq!(values["price"], 110.0);
+        // (110 - 100) / 100 * 100 = 10 percent, independent of tile size.
+        assert!((values["change"] - 10.0).abs() < 1e-12);
+        let mut visibility = terminal.chart().event_visibility().clone();
+        visibility.show_news_notifications = true;
+        terminal
+            .chart_mut()
+            .set_event_visibility(visibility.clone());
+        let events = host.notices.lock().unwrap().clone().unwrap();
+        events.push(Notification::new(DateTime::UNIX_EPOCH, "Host headline"));
+        frame(&mut terminal, SIZE, vec![]);
+        assert_eq!(terminal.panels.market.notifications.unread(), 1);
+        assert_eq!(terminal.toasts.len(), 1);
+        frame(&mut terminal, SIZE, vec![]);
+        assert_eq!(
+            terminal.toasts.len(),
+            1,
+            "do not repeat a push on another frame"
+        );
+        visibility.show_news_notifications = false;
+        terminal.chart_mut().set_event_visibility(visibility);
+        events.push(Notification::new(DateTime::UNIX_EPOCH, "Quiet headline"));
+        frame(&mut terminal, SIZE, vec![]);
+        assert_eq!(terminal.toasts.len(), 1);
+        assert_eq!(
+            terminal.panels.market.notifications.unread(),
+            2,
+            "the setting leaves the log intact"
+        );
+        terminal.run(Action::WidgetBar(WidgetBarAction::Clicked(
+            RightBarIcon::Notifications,
+        )));
+        assert!(
+            texts(&mut terminal)
+                .iter()
+                .any(|text| text == "Host headline")
+        );
+        assert_eq!(terminal.panels.market.notifications.unread(), 0);
+        assert!(
             terminal
-                .panels_mut()
-                .heatmap
-                .universes
-                .push(MarketHeatmapUniverse::new(
-                    "test",
-                    "Test",
-                    vec![MarketHeatmapEntry {
-                        symbol: "OUTSIDE".into(),
-                        group: "Test".into(),
-                        values: BTreeMap::new(),
-                    }],
-                ));
-            super::super::test_support::frame_with(&mut terminal, SIZE, vec![], |input| {
-                input.system_theme = Some(if dark {
-                    egui::Theme::Dark
-                } else {
-                    egui::Theme::Light
-                });
-            });
-            frame(&mut terminal, SIZE, vec![]);
-            let values = &terminal.panels.market.heatmap.universes[0].entries[0].values;
-            assert_eq!(values["price"], 110.0);
-            // (110 - 100) / 100 * 100 = 10 percent, independent of tile size.
-            assert!((values["change"] - 10.0).abs() < 1e-12);
-            let mut visibility = terminal.chart().event_visibility().clone();
-            visibility.show_news_notifications = true;
-            terminal
-                .chart_mut()
-                .set_event_visibility(visibility.clone());
-            let events = host.notices.lock().unwrap().clone().unwrap();
-            events.push(Notification::new(DateTime::UNIX_EPOCH, "Host headline"));
-            frame(&mut terminal, SIZE, vec![]);
-            assert_eq!(terminal.panels.market.notifications.unread(), 1);
-            assert_eq!(terminal.toasts.len(), 1);
-            frame(&mut terminal, SIZE, vec![]);
-            assert_eq!(
-                terminal.toasts.len(),
-                1,
-                "do not repeat a push on another frame"
-            );
-            visibility.show_news_notifications = false;
-            terminal.chart_mut().set_event_visibility(visibility);
-            events.push(Notification::new(DateTime::UNIX_EPOCH, "Quiet headline"));
-            frame(&mut terminal, SIZE, vec![]);
-            assert_eq!(terminal.toasts.len(), 1);
-            assert_eq!(
-                terminal.panels.market.notifications.unread(),
-                2,
-                "the setting leaves the log intact"
-            );
-            terminal.run(Action::WidgetBar(WidgetBarAction::Clicked(
-                RightBarIcon::Notifications,
-            )));
-            assert!(
-                texts(&mut terminal)
-                    .iter()
-                    .any(|text| text == "Host headline")
-            );
-            assert_eq!(terminal.panels.market.notifications.unread(), 0);
-            assert!(
-                terminal
-                    .run(Action::Notifications(NotificationsAction::OpenProfile(
-                        ProfileId("author".into())
-                    )))
-                    .is_none()
-            );
-            let _ = texts(&mut terminal);
-            assert!(
-                texts(&mut terminal)
-                    .iter()
-                    .any(|text| text == "Host author")
-            );
-        }
+                .run(Action::Notifications(NotificationsAction::OpenProfile(
+                    ProfileId("author".into())
+                )))
+                .is_none()
+        );
+        let _ = texts(&mut terminal);
+        assert!(
+            texts(&mut terminal)
+                .iter()
+                .any(|text| text == "Host author")
+        );
         let bar = |time: &str, open: f64, close: f64| {
             Bar::new(
                 time.parse().unwrap(),

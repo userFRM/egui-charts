@@ -76,7 +76,7 @@ impl NotificationsPanel {
         self.unread
     }
 
-    /// Appends a local entry, such as a terminal alert, keeping the same bounded log.
+    /// Append a local entry, such as a terminal alert, to the same bounded log.
     pub fn push(&mut self, entry: Notification) {
         self.log.push_back(entry);
         if self.log.len() > KEPT {
@@ -85,9 +85,8 @@ impl NotificationsPanel {
         self.unread = (self.unread + 1).min(self.log.len());
     }
 
-    /// Receives the service's pushes and returns the new entries, for popup notifications.
-    /// Watches again after a lagged stream. Local entries added with [`push`](Self::push)
-    /// are already logged and are not returned.
+    /// Receive the service's pushes and return them, for popup notifications, and watch again
+    /// after a lagged stream. Entries added with [`push`](Self::push) are not returned.
     pub fn poll(&mut self, ctx: &egui::Context) -> Vec<Notification> {
         if self.listener.as_ref().is_some_and(|l| !l.is_active()) {
             self.watch();

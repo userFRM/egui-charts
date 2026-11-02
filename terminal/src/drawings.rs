@@ -766,6 +766,7 @@ mod tests {
     fn selected_toolbar_styles_and_more_menu_reach_the_chart() {
         use super::super::test_support::click;
         let mut terminal = ready();
+        // Close the watchlist, whose symbol details have a More button of their own.
         terminal.run(Action::WidgetBar(WidgetBarAction::Clicked(
             RightBarIcon::Watchlist,
         )));
@@ -917,6 +918,7 @@ mod tests {
             (DrawingToolType::TextLabel, false),
         ] {
             let mut terminal = ready();
+            // Close the watchlist, whose symbol details have a More button of their own.
             terminal.run(Action::WidgetBar(WidgetBarAction::Clicked(
                 RightBarIcon::Watchlist,
             )));
