@@ -17,6 +17,10 @@ pub(super) struct Spread {
 }
 
 impl Spread {
+    pub(super) fn loading(&self, chart: &Chart) -> bool {
+        chart.series_order(self.id).is_some() && self.feeds.iter().any(|feed| feed.loading())
+    }
+
     fn new(expression: SymbolExpression, id: SeriesId) -> Self {
         let now = chrono::Utc::now();
         let feeds = expression
@@ -272,6 +276,9 @@ pub(super) fn refresh_spreads(chart: &mut Chart, spreads: &mut [Spread], paused:
             feed.set_view(session, chart.conversion() == Some("adjusted"));
             feed.set_paused(paused);
             feed.advance(chrono::Utc::now());
+        }
+        if spread.loading(chart) {
+            continue;
         }
         let key: Vec<_> = spread
             .feeds
@@ -540,6 +547,7 @@ mod tests {
                 .map(|_| {
                     let id = chart.add_comparison("EURUSD", egui::Color32::BLUE);
                     let feed = LiveFeed::new("EURUSD", now);
+                    super::super::tests::finish_feed(&feed);
                     refresh(&mut chart, id, &feed);
                     assert!(!chart.bars(id).is_empty());
                     (id, feed)
@@ -632,6 +640,9 @@ mod tests {
             snapshot: None,
             replay_time: None,
         }];
+        for feed in &spreads[0].feeds {
+            super::super::tests::finish_feed(feed);
+        }
         refresh_spreads(&mut chart, &mut spreads, true);
         assert!(!chart.bars(id).is_empty());
         let instrument = Instrument::new("SAMPLE")
@@ -804,6 +815,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx));
         app.handle_comparison(CompareAction::AddSymbol("AAPL".into(), Default::default()));
+        super::super::tests::finish_feed(&app.comparisons[0].2);
         let id = app.comparisons[0].1;
         let colour = |app: &DemoApp, id| {
             app.chart

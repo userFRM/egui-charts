@@ -596,6 +596,7 @@ mod tests {
     fn paper_account_resets_on_replay_start_and_rewind_but_not_forward_steps() {
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        super::super::tests::settle(&mut app, &ctx);
         app.live.set_paused(true);
         for _ in 0..4 {
             ctx.run_ui(
@@ -708,6 +709,7 @@ mod tests {
             })
             .drop_without_applying_deltas();
         }
+        super::super::tests::finish_feed(&app.live);
         app.live.set_paused(false);
         app.live
             .advance(app.live.now() + chrono::TimeDelta::seconds(2));
@@ -770,6 +772,7 @@ mod tests {
             "returning to trade updates must retain the recording"
         );
         app.stop_replay();
+        super::super::tests::settle(&mut app, &ctx);
         assert!(signals(&mut app), "leaving replay restores host analytics");
     }
 
@@ -780,6 +783,7 @@ mod tests {
     fn trade_sources_leave_out_a_bar_the_feed_holds_in_part() {
         let time = |text: &str| text.parse::<chrono::DateTime<chrono::Utc>>().unwrap();
         let live = LiveFeed::new("SAMPLE", time("2024-03-15T16:30:00Z"));
+        super::super::tests::finish_feed(&live);
         let trade = Timeframe::Ticks(std::num::NonZeroU64::MIN);
         for (timeframe, from) in [
             (Timeframe::Hour1, time("2024-03-15T14:00:00Z")),
