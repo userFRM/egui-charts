@@ -43,9 +43,12 @@ where
         return None;
     }
 
-    if let Some(bar_idx) =
-        crate::painting::volume_profile::hit_profile(click_pos, indicator, coords, &price_to_y)
-    {
+    if let Some(bar_idx) = crate::chart::rendering::volume_profile::hit_profile(
+        click_pos,
+        indicator,
+        coords,
+        &price_to_y,
+    ) {
         return Some(IndicatorHitResult {
             indicator_idx,
             bar_idx,
@@ -257,11 +260,12 @@ pub fn hit_test_pane_indicator(
         return None;
     }
 
-    if let Some(bar_idx) =
-        crate::painting::volume_profile::hit_profile(click_pos, indicator, coords, &|price| {
-            coords.price_to_y(price)
-        })
-    {
+    if let Some(bar_idx) = crate::chart::rendering::volume_profile::hit_profile(
+        click_pos,
+        indicator,
+        coords,
+        &|price| coords.price_to_y(price),
+    ) {
         return Some(IndicatorHitResult {
             indicator_idx,
             bar_idx,

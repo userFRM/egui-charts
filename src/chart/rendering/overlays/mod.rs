@@ -1,11 +1,9 @@
-//! Overlay rendering (OHLC info, crosshair, box zoom, realtime button)
+//! Overlay rendering (OHLC info, crosshair, realtime button)
 
-mod box_zoom;
 mod crosshair;
 mod realtime_btn;
 mod tooltip;
 
-pub use box_zoom::render_box_zoom;
 pub(crate) use realtime_btn::{realtime_button, realtime_button_rect};
 
 pub use crosshair::{render_crosshair_full, render_crosshair_with_options};

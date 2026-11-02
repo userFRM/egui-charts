@@ -14,7 +14,10 @@
 //!   double-click on the price axis re-enables auto-scale.
 //! - **Timescale config** -- applies pending visible-bar and width settings.
 
+mod box_zoom;
 pub(super) mod state;
+
+pub(super) use box_zoom::render_box_zoom;
 
 use egui::{Event, MouseWheelUnit, Pos2, Rect, Response, Ui, Vec2, vec2};
 use web_time::Instant;

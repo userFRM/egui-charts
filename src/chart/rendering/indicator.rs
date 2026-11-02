@@ -298,14 +298,14 @@ impl IndicatorRenderer {
             crate::chart::indicators::plots::paint_candles(context, indicator, price_scale, coords);
             return;
         }
-        let visible = crate::painting::volume_profile::profile_range(coords);
+        let visible = crate::chart::rendering::volume_profile::profile_range(coords);
         for plot in indicator.volume_profiles(visible) {
             crate::painting::volume_profile::paint_profile(
                 &context.painter.with_clip_rect(context.rect),
                 &plot.profile,
                 plot.config,
                 plot.color,
-                crate::painting::volume_profile::profile_span(&plot, coords),
+                crate::chart::rendering::volume_profile::profile_span(&plot, coords),
                 crate::painting::volume_profile::ProfileStyle::Study {
                     right_aligned: plot.right_aligned,
                 },

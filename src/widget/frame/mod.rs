@@ -3272,7 +3272,7 @@ impl Chart {
         }
 
         // Draw box zoom rect
-        rendering::render_box_zoom(&painter, &self.box_zoom);
+        crate::widget::pan_zoom::render_box_zoom(&painter, &self.box_zoom);
 
         if let Some((nav, buttons)) = navigation {
             self.paint_navigation(ui, nav, buttons);

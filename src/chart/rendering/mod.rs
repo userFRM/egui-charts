@@ -2,13 +2,13 @@
 //!
 //! [`axes`] renders price and time labels, currency controls and study scales.
 //! [`candles`] renders every chart type and its per-bar primitives. [`overlays`]
-//! renders crosshairs, tooltips, box zoom and the realtime button; [`grid`] paints
+//! renders crosshairs, tooltips and the realtime button; [`grid`] paints
 //! the grid. Supporting chart elements include legends, markers, session breaks,
 //! trading lines, alerts, watermarks and study plots.
 //!
 //! The shared [`RenderContext`] and [`ChartMapping`] carry painting and coordinate
-//! data. The chart widget composes these functions during a frame; shared profile
-//! geometry and painting live in `crate::painting`.
+//! data. The chart widget composes these functions during a frame. Profile geometry
+//! lives here, while shared painting lives in `crate::painting`.
 
 pub mod axes;
 pub mod candles;
@@ -26,8 +26,8 @@ pub use candles::{
     render_chart_type,
 };
 pub use grid::{render_grid, render_vertical_grid};
+pub use overlays::render_crosshair_with_options;
 pub(crate) use overlays::{realtime_button, realtime_button_rect};
-pub use overlays::{render_box_zoom, render_crosshair_with_options};
 
 mod alert_levels;
 mod indicator;
@@ -35,6 +35,7 @@ mod legend;
 mod markers;
 mod session_breaks;
 mod trading_lines;
+pub(crate) mod volume_profile;
 mod watermark;
 
 pub use alert_levels::{alert_shortcut_price, render_alert_levels};
