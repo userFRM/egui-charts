@@ -249,7 +249,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Main-series studies recalculate against replayed bars and drawing anchors remain stable.
 - [x] Floating replay controls, keyboard shortcuts, saved replay sessions and synchronised layout replay are exercised by the demo.
 - [x] `ReplayClock` merges timestamped trades, quotes and depth events across symbols, supports speed and seek, and routes through normal sinks.
-- [x] `RecordingWriter` and `RecordingReader` encode/decode versioned trade and depth events through supplied I/O streams. The demo keeps at most five minutes and 8 MiB of recorded events from subscription onward, with book snapshots at retained boundaries, and shows the available market replay range.
+- [x] `RecordingWriter` and `RecordingReader` encode/decode versioned trade and depth events through supplied I/O streams. The demo keeps at most five minutes and 8 MiB of recorded events per symbol subscription, with book snapshots at retained boundaries, and shows the available market replay range.
 - [ ] Window additional-symbol/interval study histories to the replay cutoff.
 - [ ] Connect the standalone `ReplayToolbar` actions to the replay controller.
 

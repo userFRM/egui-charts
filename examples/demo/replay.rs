@@ -10,8 +10,8 @@ use std::collections::VecDeque;
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
-/// Keep at most five minutes and 8 MiB of encoded events, in chunks beginning with a book
-/// snapshot. A checkpoint is taken before the next execution after one minute or 1 MiB.
+/// Keep at most five minutes and 8 MiB of encoded events per symbol subscription, in chunks
+/// beginning with a book snapshot. Checkpoint before the next execution after a minute or 1 MiB.
 const CAPTURE_BYTES: usize = 8 * 1024 * 1024;
 
 pub(super) struct Capture {
