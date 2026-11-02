@@ -576,6 +576,8 @@ fn zoomed_out_bars_merge_per_pixel_and_keep_their_extremes() {
     let groups = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let ctx = egui::Context::default();
     let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+    // Axis value tags share candle colours but are not candle geometry.
+    chart.config_mut().show_right_axis = false;
     chart
         .attach_primitive(crate::widget::SeriesId::MAIN, MergeProbe(groups.clone()))
         .unwrap();
