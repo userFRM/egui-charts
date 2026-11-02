@@ -41,6 +41,11 @@ impl Capture {
         if let Some(detectors) = &self.detectors {
             detectors.push(symbol, time, &event);
         }
+        self.record(symbol, time, event);
+    }
+
+    /// A retention checkpoint repeats known book state without resetting live detectors.
+    pub(super) fn record(&mut self, symbol: &str, time: DateTime<Utc>, event: MarketEvent) {
         if matches!(
             event,
             MarketEvent::DepthSnapshot { .. } | MarketEvent::OrderSnapshot { .. }
@@ -726,14 +731,12 @@ mod tests {
     }
 }
 
-pub(super) fn capture_book(
-    capture: &mut Capture,
-    symbol: &str,
+pub(super) fn book_snapshot(
     market: &super::market::Market,
     orders: Option<&super::orders::Orders>,
     time: DateTime<Utc>,
-) {
-    let event = match orders {
+) -> MarketEvent {
+    match orders {
         Some(orders) => {
             let (sequence, orders) = orders.snapshot();
             MarketEvent::OrderSnapshot { sequence, orders }
@@ -742,6 +745,5 @@ pub(super) fn capture_book(
             let (sequence, book) = market.snapshot(time);
             MarketEvent::DepthSnapshot { sequence, book }
         }
-    };
-    capture.push(symbol, time, event);
+    }
 }

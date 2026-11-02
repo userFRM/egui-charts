@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use super::market::Market;
 use super::orders::Orders;
-use super::replay::capture_book;
+use super::replay::book_snapshot;
 use crate::sampledata::{
     DemoSymbol, SAMPLE_LOGO, dividend_date, dividend_factor, latest_open_end, session_bars,
     us_equity_hours, us_equity_session, us_equity_zone,
@@ -852,12 +852,10 @@ impl Simulation {
             if self.capture.needs_checkpoint(trade.ts)
                 && let Some(market) = &self.market
             {
-                capture_book(
-                    &mut self.capture,
+                self.capture.record(
                     &self.symbol,
-                    market,
-                    self.orders.as_ref(),
                     trade.ts,
+                    book_snapshot(market, self.orders.as_ref(), trade.ts),
                 );
             }
             self.capture.push(
@@ -872,12 +870,10 @@ impl Simulation {
                 self.orders =
                     order_level(&self.symbol, &market, trade.ts, self.tick_size, self.random);
                 push_snapshot(sub, &market, self.orders.as_ref(), trade.ts);
-                capture_book(
-                    &mut self.capture,
+                self.capture.push(
                     &self.symbol,
-                    &market,
-                    self.orders.as_ref(),
                     trade.ts,
+                    book_snapshot(&market, self.orders.as_ref(), trade.ts),
                 );
                 market
             });
@@ -1276,16 +1272,7 @@ impl Datafeed for LiveFeed {
             subscription.sink.push_quote(market.quote(sim.now));
             let symbol = sim.symbol.clone();
             let now = sim.now;
-            let orders = sim.orders.as_ref().map(Orders::snapshot);
-            let event = match orders {
-                Some((sequence, orders)) => {
-                    egui_charts::data::MarketEvent::OrderSnapshot { sequence, orders }
-                }
-                None => {
-                    let (sequence, book) = market.snapshot(now);
-                    egui_charts::data::MarketEvent::DepthSnapshot { sequence, book }
-                }
-            };
+            let event = book_snapshot(&market, sim.orders.as_ref(), now);
             sim.capture.push(&symbol, now, event);
             sim.capture.push(
                 &symbol,
@@ -1411,6 +1398,10 @@ mod tests {
     fn recordings_follow_symbols_and_survive_replay_pause() {
         let now = "2026-10-23T14:59:59Z".parse().unwrap();
         let feed = Arc::new(LiveFeed::new("SAMPLE", now));
+        let detectors = feed.detectors();
+        let mut settings = detectors.settings();
+        settings.liquidity.rule.threshold = egui_charts::services::Threshold::Fixed(10.0);
+        detectors.set_settings(settings);
         let ctx = egui::Context::default();
         let symbols = ["SAMPLE", ORDER_LEVEL_SYMBOL];
         let mut charts = Vec::new();
@@ -1427,6 +1418,20 @@ mod tests {
                 .drop_without_applying_deltas();
             }
             charts.push(chart);
+        }
+        for stream in &feed.state().streams {
+            let mut sim = stream.state();
+            let symbol = sim.symbol.clone();
+            let kind = egui_charts::services::DetectionKind::LargeLiquidity;
+            let before = detectors.counts(&symbol, kind, now);
+            assert!(before.total > 0);
+            let event = book_snapshot(sim.market.as_ref().unwrap(), sim.orders.as_ref(), now);
+            sim.capture.record(&symbol, now, event);
+            assert_eq!(
+                detectors.counts(&symbol, kind, now),
+                before,
+                "a recording checkpoint must not restart live liquidity detections"
+            );
         }
         for second in 1..=420 {
             feed.advance(now + TimeDelta::seconds(second));
