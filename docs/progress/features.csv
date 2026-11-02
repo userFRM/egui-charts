@@ -939,6 +939,7 @@ Terminal,Trading panel,Trading notifications,done,host,src/ui/trading/mod.rs;src
 Terminal,Watchlists and screeners,Add to watchlist from the chart context menu,done,library,src/ui/context_menu/mod.rs;src/ui/widget_bar/panels/watchlist.rs;terminal/src/panels.rs,
 Terminal,Watchlists and screeners,Advanced watchlist view,done,library,src/ui/widget_bar/panels/watchlist.rs;src/ui/widget_bar/panels/market_details.rs;src/ui/widget_bar/panels/symbol_details.rs;terminal/src/panels.rs,
 Terminal,Watchlists and screeners,Colour flags and the flagged list,done,library,src/ui/widget_bar/panels/watchlist.rs;src/model/watchlist.rs,
+Terminal,Watchlists and screeners,Company financials in place of the chart,done,host,src/data/financials.rs;src/data/mod.rs;src/ui/financials.rs;terminal/src/panels.rs;terminal/src/layout.rs,205;383
 Terminal,Watchlists and screeners,"ETF, bond, crypto coin, CEX pair and DEX pair screeners",done,host,src/ui/widget_bar/panels/screener.rs;src/data/market.rs;src/services/storage.rs;src/ui/dialogs/templates/store.rs;terminal/src/panels.rs,
 Terminal,Watchlists and screeners,Flip through list symbols on the chart,done,library,src/ui/widget_bar/panels/watchlist.rs;terminal/src/panels.rs,
 Terminal,Watchlists and screeners,Hotlists,done,host,src/ui/widget_bar/panels/hotlists.rs;terminal/src/panels.rs,
