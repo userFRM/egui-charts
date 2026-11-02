@@ -443,6 +443,22 @@ mod tests {
                 egui_charts::widget::settings::ChartSettingsState::from_chart(&app.chart);
             settings.timezone = "+05:45".into();
             app.apply_chart_settings(settings);
+            let studies = |app: &DemoApp| {
+                app.chart
+                    .indicators()
+                    .map(|(_, study)| {
+                        (
+                            study.name().to_owned(),
+                            study
+                                .inputs()
+                                .iter()
+                                .map(|input| input.value.clone())
+                                .collect::<Vec<_>>(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let saved_studies = studies(&app);
             app.save(&mut storage);
             app = restart(&ctx, &storage);
             assert_eq!(app.layout.mode, mode);
@@ -460,18 +476,7 @@ mod tests {
                 app.chart.chart_options().crosshair.style,
                 egui_charts::config::CrosshairStyle::Dot
             );
-            let studies: Vec<_> = app
-                .chart
-                .indicators()
-                .map(|(_, study)| (study.name().to_owned(), study.inputs()[0].value.clone()))
-                .collect();
-            assert_eq!(
-                studies,
-                [
-                    ("SMA".into(), egui_charts::studies::InputValue::Length(7)),
-                    ("RSI".into(), egui_charts::studies::InputValue::Length(5)),
-                ]
-            );
+            assert_eq!(studies(&app), saved_studies);
             let rsi = app
                 .chart
                 .indicators()
