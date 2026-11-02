@@ -36,7 +36,10 @@ const CHURN_PER_TRADE: usize = 6;
 pub(super) const ORDER_LEVEL_SYMBOL: &str = "ESZ2026";
 
 /// Driven by the UI timer on both native and web; there is no background worker.
-pub(super) struct LiveFeed(Mutex<Simulation>);
+pub(super) struct LiveFeed(
+    Mutex<Simulation>,
+    Arc<egui_charts::services::OrderFlowDetectors>,
+);
 
 /// The inputs of the last comparison history a feed loaded; an unchanged key skips the reload.
 #[derive(PartialEq, Eq)]
@@ -126,7 +129,11 @@ impl LiveFeed {
         while sim.next_trade <= now {
             sim.trade();
         }
-        Self(Mutex::new(sim))
+        Self(Mutex::new(sim), Arc::default())
+    }
+
+    pub(super) fn detectors(&self) -> Arc<egui_charts::services::OrderFlowDetectors> {
+        self.1.clone()
     }
 
     fn state(&self) -> MutexGuard<'_, Simulation> {
@@ -137,32 +144,35 @@ impl LiveFeed {
 
     pub(super) fn fork(&self) -> Self {
         let sim = self.state();
-        Self(Mutex::new(Simulation {
-            symbol: sim.symbol.clone(),
-            tick_size: sim.tick_size,
-            price_ticks: sim.price_ticks,
-            random: sim.random,
-            id: sim.id,
-            tape: sim.tape,
-            trades: sim.trades.clone(),
-            history: sim.history.clone(),
-            next_trade: sim.next_trade,
-            retain_from: sim.retain_from,
-            now: sim.now,
-            paused: sim.paused,
-            continuous: sim.continuous,
-            adjusted: sim.adjusted,
-            comparison_snapshot: None,
-            dividend: sim.dividend,
-            subscription: None,
-            streams: Vec::new(),
-            signals: Vec::new(),
-            options: Vec::new(),
-            metrics: Vec::new(),
-            market: None,
-            capture: super::replay::Capture::new(),
-            orders: None,
-        }))
+        Self(
+            Mutex::new(Simulation {
+                symbol: sim.symbol.clone(),
+                tick_size: sim.tick_size,
+                price_ticks: sim.price_ticks,
+                random: sim.random,
+                id: sim.id,
+                tape: sim.tape,
+                trades: sim.trades.clone(),
+                history: sim.history.clone(),
+                next_trade: sim.next_trade,
+                retain_from: sim.retain_from,
+                now: sim.now,
+                paused: sim.paused,
+                continuous: sim.continuous,
+                adjusted: sim.adjusted,
+                comparison_snapshot: None,
+                dividend: sim.dividend,
+                subscription: None,
+                streams: Vec::new(),
+                signals: Vec::new(),
+                options: Vec::new(),
+                metrics: Vec::new(),
+                market: None,
+                capture: super::replay::Capture::new(),
+                orders: None,
+            }),
+            Arc::default(),
+        )
     }
 
     pub(super) fn view(&self, extended_hours: bool) -> (SessionType, bool) {
@@ -767,7 +777,18 @@ impl Simulation {
     }
 
     fn trade(&mut self) {
-        let step = (self.random() % 11) as i64 - 5;
+        let random_step = (self.random() % 11) as i64 - 5;
+        // Six rapid fills periodically sweep the order-level symbol, alternating direction.
+        let sweep = self.symbol == ORDER_LEVEL_SYMBOL && self.id % 1_000 < 6;
+        let step = if sweep {
+            if (self.id / 1_000).is_multiple_of(2) {
+                1
+            } else {
+                -1
+            }
+        } else {
+            random_step
+        };
         self.price_ticks = (self.price_ticks + step).max(1);
         let u = (self.random() % 1000 + 1) as f64 / 1001.0;
         let size = (10.0 / u.sqrt()).round();
@@ -917,7 +938,11 @@ impl Simulation {
         let mut burst = (seconds.div_euclid(120) as u64).wrapping_mul(0x9e3779b97f4a7c15);
         burst = (burst ^ (burst >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
         let intensity = session * (0.25 + 3.0 * ((burst >> 32) as f64 / u32::MAX as f64).powi(3));
-        let delay = (delay as f64 / intensity).round().max(1.0) as i64;
+        let delay = if sweep {
+            10
+        } else {
+            (delay as f64 / intensity).round().max(1.0) as i64
+        };
         self.next_trade += TimeDelta::milliseconds(delay);
     }
 }
@@ -967,6 +992,7 @@ impl Signals for LiveFeed {
         if self.state().symbol != symbol {
             return;
         }
+        self.1.subscribe(symbol, timeframe, events.clone());
         let bars = self.snapshot(timeframe, BarClock::new(timeframe), false);
         if let Some(last) = bars.last() {
             events.push(SignalEvent::Upsert(live_signal(last.time, last.close)));
@@ -1166,6 +1192,9 @@ impl Datafeed for LiveFeed {
             subscription.conversion.as_deref() == Some("adjusted"),
         );
         feed.set_paused(false);
+        self.1
+            .track(&feed.instrument())
+            .expect("synthetic tick size");
         let mut sim = feed.state();
         subscription.sink.set_server_time(sim.now);
         sim.capture = super::replay::Capture::new();
@@ -1174,6 +1203,7 @@ impl Datafeed for LiveFeed {
             .iter()
             .filter_map(|trade| sim.shown_trade(trade, subscription.extended_hours))
             .collect();
+        self.1.push_history(&sim.symbol, &trades);
         for trade in trades {
             let symbol = sim.symbol.clone();
             sim.capture.push(
@@ -1183,6 +1213,7 @@ impl Datafeed for LiveFeed {
             );
             subscription.sink.push_tick(trade);
         }
+        sim.capture.detectors = Some(self.1.clone());
         if let Some(last) = sim.shown_ticks(sim.now, subscription.extended_hours) {
             let market = Market::new(&sim.symbol, sim.tick_size, last, sim.random);
             sim.orders = order_level(&sim.symbol, &market, sim.now, sim.tick_size, sim.random);
@@ -1748,6 +1779,12 @@ mod tests {
         let start: DateTime<Utc> = "2026-10-23T14:00:00Z".parse().unwrap();
         for (symbol, order_level) in [(ORDER_LEVEL_SYMBOL, true), ("BTCUSD", false)] {
             let feed = Arc::new(LiveFeed::new(symbol, start));
+            let detectors = feed.detectors();
+            let mut settings = detectors.settings();
+            settings.big_trades.rule.threshold = egui_charts::services::Threshold::Fixed(10.0);
+            settings.liquidity.rule.threshold = egui_charts::services::Threshold::Fixed(10.0);
+            settings.liquidity.alert = true;
+            detectors.set_settings(settings);
             let mut chart = ChartBuilder::new()
                 .with_feed(feed.clone())
                 .with_symbol(symbol)
@@ -1762,6 +1799,23 @@ mod tests {
                 .drop_without_applying_deltas();
             }
             let state = chart.feed_state(SeriesId::MAIN).unwrap();
+            for kind in [
+                egui_charts::services::DetectionKind::BigTrade,
+                egui_charts::services::DetectionKind::StopRun,
+                egui_charts::services::DetectionKind::LargeLiquidity,
+            ] {
+                if kind == egui_charts::services::DetectionKind::StopRun && !order_level {
+                    continue;
+                }
+                assert!(
+                    detectors.counts(symbol, kind, feed.now()).total > 0,
+                    "{symbol} {kind:?}"
+                );
+            }
+            assert!(
+                !detectors.take_alerts().is_empty(),
+                "live depth reaches the detector service"
+            );
             assert_eq!(state.rejected_depth, 0, "{symbol}");
             let queue = chart.order_queue(SeriesId::MAIN);
             assert_eq!(queue.is_some(), order_level, "{symbol}");

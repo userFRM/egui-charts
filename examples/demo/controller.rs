@@ -232,6 +232,7 @@ enum SidePanel {
     DataWindow,
     Watchlist,
     TimeAndSales,
+    OrderFlow,
     Highlights,
     Screener,
     Hotlists,
@@ -261,7 +262,7 @@ impl SidePanel {
     ];
 
     /// Panels the demo renders behind a host rail entry, with the entry's id.
-    const HOSTED: [(SidePanel, u64); 1] = [(SidePanel::TimeAndSales, 4)];
+    const HOSTED: [(SidePanel, u64); 2] = [(SidePanel::TimeAndSales, 4), (SidePanel::OrderFlow, 5)];
 
     fn icon(self) -> Option<RightBarIcon> {
         Self::BUILT_IN
@@ -444,6 +445,7 @@ pub struct DemoApp {
     // Symbol search is open for the watchlist's add button: the pick joins the list.
     watchlist_search: bool,
     time_and_sales: TimeAndSalesPanel,
+    order_flow: egui_charts::ui::widget_bar::OrderFlowPanel,
     // Below the watchlist: the chart symbol's synthetic details and notes kept in app storage.
     symbol_details: SymbolDetailsPanel,
     /// The chart symbol's financials, shown in place of the chart while they are open.
@@ -595,6 +597,12 @@ impl DemoApp {
             );
         });
         widget_bar.widgets.clear();
+        widget_bar.widgets.push(WidgetBarWidget {
+            id: 5,
+            icon: egui_charts::icons::icons::SETTINGS_EVENTS,
+            tooltip: "Order flow".into(),
+            section: WidgetBarSection::Bottom,
+        });
         if let Some(preferences) = cc
             .storage
             .and_then(|storage| eframe::get_value(storage, "interval_preferences"))
@@ -616,6 +624,7 @@ impl DemoApp {
         alert_live.set_view(SessionType::RTH, false);
         let mut app = Self {
             chart,
+            order_flow: egui_charts::ui::widget_bar::OrderFlowPanel::new(live.detectors()),
             live,
             layout: ChartLayout::default(),
             layout_slot: 0,
@@ -1446,6 +1455,18 @@ impl eframe::App for DemoApp {
                 ctx.request_repaint_after(delay);
             }
         }
+        self.order_flow.set_service(self.live.detectors());
+        self.notification_host
+            .watch_detectors(self.live.detectors());
+        let sounds = self.order_flow.poll(&ctx, &mut self.toasts);
+        if !sounds.is_empty() {
+            self.play_sound(
+                &ctx,
+                DEMO_SOUNDS[0],
+                self.settings_state.alerts.sound_volume,
+                false,
+            );
+        }
         self.feed_market_panels(&ctx);
 
         for (_, _, feed) in &self.comparisons {
@@ -1584,6 +1605,7 @@ impl DemoApp {
                                     ("Object Tree", SidePanel::ObjectTree),
                                     ("Data Window", SidePanel::DataWindow),
                                     ("Time and sales", SidePanel::TimeAndSales),
+                                    ("Order flow", SidePanel::OrderFlow),
                                 ]
                                 .into_iter()
                                 .filter(|(_, panel)| {
@@ -2104,6 +2126,15 @@ impl DemoApp {
                     self.show_watchlist(ui);
                 }
                 SidePanel::TimeAndSales => self.time_and_sales.show(ui),
+                SidePanel::OrderFlow => {
+                    for (kind, visible) in
+                        self.order_flow
+                            .show(ui, self.chart.symbol(), self.live.now())
+                    {
+                        self.chart
+                            .set_signal_category_visible(kind.category(), visible);
+                    }
+                }
                 SidePanel::Highlights => {
                     let action = self.highlights.show(ui);
                     self.handle_news(ui.ctx(), action);

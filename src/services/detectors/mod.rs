@@ -1,6 +1,7 @@
 //! A signal service that finds order-flow events in the executions and depth the host streams.
 
 mod absorption;
+mod alerts;
 mod big_trades;
 mod depth;
 mod icebergs;
@@ -18,6 +19,8 @@ use crate::data::{FeedError, MarketEvent, OrderQueue};
 use crate::model::{BarClock, Instrument, Signal, Tick, Timeframe, TimezoneId};
 use absorption::Absorption;
 pub use absorption::AbsorptionRule;
+pub use alerts::{CountAlert, CountWindow, DetectionAlert, DetectionCounts};
+use alerts::{Counting, Delivery};
 pub use big_trades::BigTradeRule;
 use big_trades::BigTrades;
 use depth::Depth;
@@ -115,6 +118,22 @@ pub enum DetectionKind {
 }
 
 impl DetectionKind {
+    /// Every detection category, in panel order.
+    pub const ALL: [Self; 12] = [
+        Self::BigTrade,
+        Self::BigTradeZone,
+        Self::StopRun,
+        Self::StopSweep,
+        Self::Iceberg,
+        Self::Absorption,
+        Self::LargeLiquidity,
+        Self::Wall,
+        Self::LiquiditySweep,
+        Self::PulledLiquidity,
+        Self::Spoofing,
+        Self::FreshLiquidity,
+    ];
+
     /// The signal category of the kind's detections.
     pub fn category(self) -> &'static str {
         match self {
@@ -150,6 +169,10 @@ pub struct DetectorSettings {
     pub absorption: Detector<AbsorptionRule>,
     /// Large resting levels, walls, sweeps, pulls and fresh size.
     pub liquidity: Detector<LiquidityRule>,
+    /// Optional rising-edge alert on the number of icebergs.
+    pub iceberg_count_alert: Option<CountAlert>,
+    /// Optional rising-edge alert on the number of stop runs.
+    pub stop_run_count_alert: Option<CountAlert>,
 }
 
 /// The settings of one detector.
@@ -194,6 +217,7 @@ struct State {
     symbols: HashMap<String, Tracked>,
     /// Subscriptions by symbol, tracked or not.
     subscriptions: HashMap<String, Subscription>,
+    delivery: Delivery,
 }
 
 struct Subscription {
@@ -219,6 +243,7 @@ struct Tracked {
     big_trades: BigTrades,
     stop_runs: StopRuns,
     stop_sweeps: StopSweeps,
+    counting: Counting,
 }
 
 impl Default for OrderFlowDetectors {
@@ -286,7 +311,7 @@ impl OrderFlowDetectors {
 
     /// Replaces the settings of every detector from the next event on. Completed detections
     /// stay; a disabled liquidity tracker drops its unfinished zones. Panics if a fixed
-    /// threshold is not positive and finite, or the refill count is zero.
+    /// threshold is not positive and finite, or a refill or count-alert minimum is zero.
     pub fn set_settings(&self, settings: DetectorSettings) {
         for threshold in [
             settings.big_trades.rule.threshold,
@@ -305,6 +330,12 @@ impl OrderFlowDetectors {
             settings.icebergs.rule.refills > 0,
             "iceberg refills must be positive"
         );
+        for alert in [settings.iceberg_count_alert, settings.stop_run_count_alert]
+            .into_iter()
+            .flatten()
+        {
+            assert!(alert.minimum > 0, "count alert minimum must be positive");
+        }
         self.lock().settings = settings;
     }
 
@@ -316,6 +347,7 @@ impl OrderFlowDetectors {
             settings,
             symbols,
             subscriptions,
+            delivery,
         } = &mut *state;
         let Some(tracked) = symbols.get_mut(symbol) else {
             return;
@@ -432,25 +464,43 @@ impl OrderFlowDetectors {
         tracked
             .stop_sweeps
             .advance(time, settings.stop_sweeps.enabled, &mut out);
+        tracked
+            .counting
+            .advance(time, settings, true, symbol, delivery);
+        tracked.record(&out, time, true, settings, delivery, &mut HashSet::new());
         deliver(Some(tracked), subscriptions.get_mut(symbol), out);
     }
 
     /// Detects on the loaded trade history of `symbol`, in time order, before the live trades
     /// that follow it. Its detections are made and pushed like live ones and warm the automatic
-    /// thresholds; trades with an id already seen are dropped.
+    /// thresholds and counts without raising alerts; trades with an id already seen are dropped.
     pub fn push_history(&self, symbol: &str, trades: &[Tick]) {
         let mut state = self.lock();
         let State {
             settings,
             symbols,
             subscriptions,
+            delivery,
         } = &mut *state;
         let Some(tracked) = symbols.get_mut(symbol) else {
             return;
         };
         let mut out = Vec::new();
+        let mut added = HashSet::new();
         for trade in trades {
+            let from = out.len();
             tracked.trade(trade, settings, false, &mut out);
+            tracked
+                .counting
+                .advance(trade.ts, settings, false, symbol, delivery);
+            tracked.record(
+                &out[from..],
+                trade.ts,
+                false,
+                settings,
+                delivery,
+                &mut added,
+            );
         }
         deliver(Some(tracked), subscriptions.get_mut(symbol), out);
     }
@@ -463,6 +513,7 @@ impl Signals for OrderFlowDetectors {
             symbols,
             subscriptions,
             settings,
+            ..
         } = &mut *state;
         let new = !subscriptions.contains_key(symbol);
         let subscription = subscriptions
@@ -519,6 +570,7 @@ impl State {
             big_trades: BigTrades::new(tick, instrument.volume_decimals),
             stop_runs: StopRuns::default(),
             stop_sweeps: StopSweeps::new(tick),
+            counting: Counting::default(),
         };
         let timeframe = subscription.as_ref().map(|s| s.timeframe);
         (tracked.big_trades).set_clock(timeframe.and_then(|tf| clock(instrument, tf)));
@@ -688,6 +740,169 @@ mod tests {
     use crate::model::{Direction, OrderBook, OrderBookLevel, OrderSide, SignalId, SignalShape};
     use crate::services::events::Listener;
     use std::sync::Arc;
+
+    #[test]
+    fn detection_counts_follow_feed_windows_without_alerting_loaded_history() {
+        use crate::services::{Notification, Notifications};
+
+        let host = Host::new(Some(10.0));
+        let mut settings = host.detectors.settings();
+        settings.big_trades.alert = true;
+        settings.big_trades.sound = true;
+        host.detectors.set_settings(settings);
+        let inbox = Arc::new(Inbox::default());
+        let (_listener, events) = Listener::new::<Notification>(&inbox, 1);
+        host.detectors.watch(events);
+        host.detectors.push_history(
+            "ES",
+            &[
+                fill(0, 100.0, 10.0, OrderSide::Buy, None),
+                fill(270, 100.0, 10.0, OrderSide::Buy, None),
+            ],
+        );
+        assert!(host.detectors.take_alerts().is_empty());
+        assert!(inbox.drain().answers.is_empty());
+        // At 299 both are within five minutes; at 300 the first and the 30-second
+        // boundary expire. These feed times are unrelated to the test's wall clock.
+        for (now, minutes, seconds) in [(299, 2, 1), (300, 1, 0), (570, 0, 0)] {
+            assert_eq!(
+                host.detectors
+                    .counts("ES", DetectionKind::BigTrade, time(now)),
+                DetectionCounts {
+                    total: 2,
+                    last_five_minutes: minutes,
+                    last_thirty_seconds: seconds
+                }
+            );
+        }
+        host.detectors.push(
+            "ES",
+            time(571),
+            &MarketEvent::Trade(fill(571, 100.0, 10.0, OrderSide::Buy, None).with_id(7)),
+        );
+        host.detectors.push(
+            "ES",
+            time(572),
+            &MarketEvent::Trade(fill(571, 100.0, 10.0, OrderSide::Buy, None).with_id(7)),
+        );
+        let alerts = host.detectors.take_alerts();
+        assert_eq!(
+            alerts.iter().map(|alert| alert.kind).collect::<Vec<_>>(),
+            [DetectionKind::BigTrade],
+            "a big trade alerts once, not again for its zone"
+        );
+        assert!(alerts.iter().all(|alert| alert.sound
+            && alert.notification.symbol.as_deref() == Some("ES")
+            && !alert.notification.title.is_empty()
+            && !alert.notification.body.is_empty()));
+        let notifications: Vec<_> = inbox
+            .drain()
+            .answers
+            .into_iter()
+            .map(|(_, event)| *event.downcast::<Notification>().unwrap())
+            .collect();
+        assert_eq!(
+            notifications,
+            alerts
+                .iter()
+                .map(|alert| alert.notification.clone())
+                .collect::<Vec<_>>()
+        );
+        assert!(host.detectors.take_alerts().is_empty());
+        let (_replay_listener, replay) = Listener::new::<Notification>(&inbox, 2);
+        host.detectors.watch(replay);
+        assert_eq!(
+            inbox.drain().answers.len(),
+            1,
+            "late subscribers receive the live log only"
+        );
+        assert_eq!(
+            host.detectors
+                .counts("ES", DetectionKind::BigTrade, time(572))
+                .total,
+            3
+        );
+        host.detectors.reset("ES");
+        assert_eq!(
+            host.detectors
+                .counts("ES", DetectionKind::BigTrade, time(572)),
+            DetectionCounts::default()
+        );
+    }
+
+    #[test]
+    fn stop_count_alerts_rearm_only_below_the_minimum_and_ignore_signal_updates() {
+        for window in [
+            CountWindow::ThirtySeconds,
+            CountWindow::FiveMinutes,
+            CountWindow::Total,
+        ] {
+            for history_bursts in [1, 2] {
+                let host = Host::new(Some(1_000.0));
+                let mut settings = host.detectors.settings();
+                settings.stop_runs.enabled = true;
+                settings.stop_run_count_alert = Some(CountAlert {
+                    window,
+                    minimum: 2,
+                    sound: true,
+                });
+                host.detectors.set_settings(settings);
+                let burst = |second| {
+                    (0..6)
+                        .map(|i| {
+                            Tick::new(
+                                time(second) + chrono::TimeDelta::milliseconds(i * 10),
+                                100.0 + i as f64 * 0.25,
+                                1.0,
+                                Some(OrderSide::Buy),
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                };
+                for second in 0..history_bursts {
+                    host.detectors.push_history("ES", &burst(second));
+                }
+                assert!(host.detectors.take_alerts().is_empty());
+                for second in [2, 3] {
+                    for trade in burst(second) {
+                        host.detectors
+                            .push("ES", trade.ts, &MarketEvent::Trade(trade));
+                    }
+                }
+                let alerts = host.detectors.take_alerts();
+                assert_eq!(alerts.len(), usize::from(history_bursts == 1), "{window:?}");
+                if let Some(alert) = alerts.first() {
+                    assert_eq!(alert.count, Some((window, 2)));
+                    assert!(alert.sound);
+                }
+                assert_eq!(
+                    host.detectors
+                        .counts("ES", DetectionKind::StopRun, time(4))
+                        .total,
+                    history_bursts as u64 + 2
+                );
+                // No events between the bursts: expiration must rearm before the next detection.
+                for second in [303, 304] {
+                    for trade in burst(second) {
+                        host.detectors
+                            .push("ES", trade.ts, &MarketEvent::Trade(trade));
+                    }
+                }
+                let alerts = host.detectors.take_alerts();
+                assert_eq!(
+                    alerts.len(),
+                    usize::from(window != CountWindow::Total),
+                    "{window:?}"
+                );
+                assert_eq!(
+                    host.detectors
+                        .counts("ES", DetectionKind::StopRun, time(305))
+                        .total,
+                    history_bursts as u64 + 4
+                );
+            }
+        }
+    }
 
     fn time(seconds: i64) -> DateTime<Utc> {
         DateTime::from_timestamp(seconds, 0).unwrap()
@@ -868,6 +1083,150 @@ mod tests {
 
     #[test]
     fn detections_past_the_retained_5000_leave_the_live_chart_too() {
+        for kind in [
+            DetectionKind::BigTrade,
+            DetectionKind::StopRun,
+            DetectionKind::Iceberg,
+        ] {
+            let host = Host::new(Some(10.0));
+            let mut settings = host.detectors.settings();
+            settings.stop_runs.enabled = kind == DetectionKind::StopRun;
+            settings.stop_runs.alert = true;
+            settings.icebergs.enabled = kind == DetectionKind::Iceberg;
+            settings.icebergs.alert = true;
+            settings.big_trades.alert = kind == DetectionKind::BigTrade;
+            settings.liquidity.enabled = kind == DetectionKind::BigTrade;
+            settings.liquidity.rule.threshold = Threshold::Fixed(f64::MAX);
+            settings.liquidity.rule.fresh_threshold = Threshold::Fixed(1.0);
+            host.detectors.set_settings(settings);
+            let push = |ms, event| {
+                host.detectors
+                    .push("ES", time(0) + chrono::TimeDelta::milliseconds(ms), &event)
+            };
+            if kind == DetectionKind::BigTrade {
+                push(
+                    0,
+                    MarketEvent::Trade(fill(0, 100.0, 10.0, OrderSide::Buy, Some(7))),
+                );
+            } else if kind == DetectionKind::StopRun {
+                for i in 0..5 {
+                    let ts = time(0) + chrono::TimeDelta::milliseconds(i * 10);
+                    push(
+                        i * 10,
+                        MarketEvent::Trade(Tick::new(
+                            ts,
+                            100.0 + i as f64 * 0.25,
+                            1.0,
+                            Some(OrderSide::Buy),
+                        )),
+                    );
+                }
+            } else {
+                push(
+                    0,
+                    MarketEvent::OrderSnapshot {
+                        sequence: 1,
+                        orders: vec![RestingOrder::new(1, OrderSide::Sell, 100.0, 10.0)],
+                    },
+                );
+                for i in 0..2 {
+                    push(
+                        i * 20,
+                        MarketEvent::Order {
+                            sequence: 2 + i as u64 * 2,
+                            event: OrderEvent::Execute {
+                                id: 1 + i as u64,
+                                size: 10.0,
+                                trade: None,
+                            },
+                        },
+                    );
+                    push(
+                        i * 20 + 10,
+                        MarketEvent::Order {
+                            sequence: 3 + i as u64 * 2,
+                            event: OrderEvent::Add(RestingOrder::new(
+                                2 + i as u64,
+                                OrderSide::Sell,
+                                100.0,
+                                10.0,
+                            )),
+                        },
+                    );
+                }
+            }
+            assert_eq!(host.detectors.take_alerts().len(), 1, "{kind:?}");
+            let ts = time(0) + chrono::TimeDelta::milliseconds(45);
+            if kind == DetectionKind::BigTrade {
+                // Depth detections evict the marker without ending its aggressor's fills.
+                for sequence in 1..=5001 {
+                    let book = OrderBook {
+                        ts,
+                        symbol: "ES".into(),
+                        bids: vec![OrderBookLevel {
+                            price: 99.0,
+                            size: sequence as f64,
+                            order_cnt: None,
+                        }],
+                        asks: Vec::new(),
+                    };
+                    push(
+                        45,
+                        if sequence == 1 {
+                            MarketEvent::DepthSnapshot { sequence, book }
+                        } else {
+                            MarketEvent::DepthDelta { sequence, book }
+                        },
+                    );
+                }
+                push(
+                    50,
+                    MarketEvent::Trade(fill(0, 100.0, 5.0, OrderSide::Buy, Some(7))),
+                );
+            } else {
+                host.detectors
+                    .push_history("ES", &vec![Tick::new(ts, 100.0, 10.0, None); 2501]);
+            }
+            if kind == DetectionKind::StopRun {
+                push(
+                    50,
+                    MarketEvent::Trade(Tick::new(
+                        time(0) + chrono::TimeDelta::milliseconds(50),
+                        101.25,
+                        1.0,
+                        Some(OrderSide::Buy),
+                    )),
+                );
+            } else if kind == DetectionKind::Iceberg {
+                push(
+                    50,
+                    MarketEvent::Order {
+                        sequence: 6,
+                        event: OrderEvent::Execute {
+                            id: 3,
+                            size: 10.0,
+                            trade: None,
+                        },
+                    },
+                );
+                push(
+                    60,
+                    MarketEvent::Order {
+                        sequence: 7,
+                        event: OrderEvent::Add(RestingOrder::new(4, OrderSide::Sell, 100.0, 10.0)),
+                    },
+                );
+            }
+            assert_eq!(
+                host.detectors.counts("ES", kind, time(1)).total,
+                1,
+                "an evicted {kind:?} keeps its detection identity"
+            );
+            assert!(
+                host.detectors.take_alerts().is_empty(),
+                "an update of an evicted {kind:?} stays silent"
+            );
+        }
         let mut host = Host::new(Some(10.0));
         let buy = |price| fill(1, price, 10.0, OrderSide::Buy, None);
         // One page evicts the first marker and zone, then ends all 2,501 zones.
@@ -905,6 +1264,13 @@ mod tests {
             })
             .collect();
         assert_eq!(live, replay);
+        for kind in [DetectionKind::BigTrade, DetectionKind::BigTradeZone] {
+            assert_eq!(
+                host.detectors.counts("ES", kind, time(2)).total,
+                2501,
+                "eviction and zone closure do not change running counts"
+            );
+        }
 
         let mut host = Host::new(Some(10.0));
         let buy = |price| fill(1, price, 10.0, OrderSide::Buy, None);
@@ -1380,6 +1746,8 @@ mod tests {
                 let host = Host::new(Some(1_000.0));
                 let mut settings = host.detectors.settings();
                 settings.icebergs.enabled = true;
+                settings.icebergs.alert = true;
+                settings.iceberg_count_alert = Some(CountAlert::default());
                 host.detectors.set_settings(settings);
                 let push = |ms, event| {
                     host.detectors.push(
@@ -1467,6 +1835,18 @@ mod tests {
                         })
                     );
                 }
+                assert_eq!(
+                    host.detectors
+                        .counts("ES", DetectionKind::Iceberg, time(1))
+                        .total,
+                    u64::from(!consumed),
+                    "refill updates count one iceberg"
+                );
+                assert_eq!(
+                    host.detectors.take_alerts().len(),
+                    if consumed { 0 } else { 2 },
+                    "one live alert and one count alert per iceberg"
+                );
             }
         }
 
