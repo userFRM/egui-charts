@@ -496,6 +496,24 @@ impl Default for AlertsSettings {
     }
 }
 
+/// Independent order-flow layers and their appearance. Missing saved fields keep layers off.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct OrderFlowSettings {
+    /// Draw sampled resting liquidity behind the price series.
+    pub show_heatmap: bool,
+    /// Brightness and resting-size range, retained while the heatmap is off.
+    pub heatmap: crate::chart::overlays::LiquidityHeatmapConfig,
+    /// Draw the live book's side profile independently of the heatmap.
+    pub show_order_book: bool,
+    /// Live book measure, order filter and size highlights.
+    pub order_book: crate::chart::overlays::OrderBookView,
+    /// Draw the supplied trades as volume bubbles.
+    pub show_volume_bubbles: bool,
+    /// Bubble grouping, colours and sizing, retained while bubbles are off.
+    pub volume_bubbles: crate::chart::overlays::VolumeBubblesConfig,
+}
+
 /// Serializable display settings shared by the chart and its settings dialog.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ChartSettingsState {
@@ -523,6 +541,11 @@ pub struct ChartSettingsState {
     /// adjusted history; [`from_chart`](Self::from_chart) leaves it off.
     #[serde(default)]
     pub adjust_for_dividends: bool,
+
+    // Order flow tab
+    /// Independent heatmap, live book and trade bubble settings; older documents keep them off.
+    #[serde(default)]
+    pub order_flow: OrderFlowSettings,
 
     // Status line tab
     /// Legend content and quote controls.
@@ -575,6 +598,8 @@ impl Default for ChartSettingsState {
             timezone: "UTC".to_string(),
             show_price_targets: false,
             adjust_for_dividends: false,
+
+            order_flow: OrderFlowSettings::default(),
 
             status_line: StatusLineOptions::default(),
 

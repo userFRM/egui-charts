@@ -317,6 +317,37 @@ mod tests {
             .unwrap_or_else(|| panic!("missing {label}"))
     }
 
+    fn fills_visible(
+        output: &FullOutput,
+        chart: &egui_charts::Chart,
+        trade: &StrategyTrade,
+    ) -> [bool; 2] {
+        let exit = trade.exit.as_ref().unwrap();
+        [
+            (trade.entry_time, trade.entry_price),
+            (exit.time, exit.price),
+        ]
+        .map(|(time, price)| {
+            let Some(index) = chart.time_to_index(time) else {
+                return false;
+            };
+            let Some(x) = chart.index_to_x(index.floor()) else {
+                return false;
+            };
+            let point = Pos2::new(x, chart.get_chart_mapping().price_to_y(price));
+            output.shapes.iter().any(|shape| {
+                let bounds = shape.shape.visual_bounding_rect();
+                matches!(&shape.shape, Shape::Path(marker)
+                    if marker.closed && marker.points.len() == 3
+                        && marker.stroke.width == 1.0
+                        && (marker.points[0].x - point.x).abs() < 0.1)
+                    && bounds.width() <= 16.0
+                    && bounds.height() <= 16.0
+                    && bounds.expand(0.1).contains(point)
+            })
+        })
+    }
+
     #[test]
     fn report_host_selects_navigates_exports_replaces_and_clears() {
         for theme in [super::super::Theme::light(), super::super::Theme::dark()] {
@@ -328,6 +359,12 @@ mod tests {
                 app.live.set_paused(true);
                 app.chart.set_feed_paused(true);
                 let bars = app.chart.bars(SeriesId::MAIN).to_vec();
+                let live_marker = |output: &FullOutput| {
+                    output.shapes.iter().any(|shape| {
+                        matches!(&shape.shape, Shape::Circle(circle)
+                        if circle.radius == 4.0 && circle.fill == theme.ui.accent)
+                    })
+                };
                 let frame = |app: &mut DemoApp, events| {
                     ctx.run_ui(
                         RawInput {
@@ -383,8 +420,8 @@ mod tests {
                 }
                 let output = frame(&mut app, vec![]);
                 let trades_tab = text_at(&output, "List of trades");
-                text_at(&output, "Entry 3");
-                text_at(&output, "Exit 3");
+                let last = report.trades.last().unwrap();
+                assert_eq!(fills_visible(&output, &app.chart, last), [true, true]);
                 output.drop_without_applying_deltas();
                 click(&mut app, trades_tab);
                 // Selection must restore the report scope after unrelated navigation.
@@ -395,11 +432,7 @@ mod tests {
                     frame(&mut app, vec![]).drop_without_applying_deltas();
                 }
                 let output = frame(&mut app, vec![]);
-                assert!(
-                    !output.shapes.iter().any(
-                        |s| matches!(&s.shape, Shape::Text(t) if t.galley.text() == "Entry 1")
-                    )
-                );
+                assert_eq!(fills_visible(&output, &app.chart, last), [false, false]);
                 let first = text_at(&output, "1");
                 output.drop_without_applying_deltas();
                 click(&mut app, first);
@@ -443,6 +476,8 @@ mod tests {
                 );
                 app.execute_search_command(&ctx, "backtest");
                 assert!(app.strategy_trade.is_none());
+                let replacement = app.strategy_report.report().unwrap().clone();
+                let last_trade = replacement.trades.last().unwrap();
                 app.execute_search_command(&ctx, "samples");
                 app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
                 app.chart.fit_content();
@@ -452,25 +487,31 @@ mod tests {
                 }
                 let output = frame(&mut app, vec![]);
                 assert_eq!(
-                    output
-                        .shapes
-                        .iter()
-                        .filter(|s| {
-                            matches!(&s.shape, Shape::Text(t) if t.galley.text() == "Exit 3")
-                        })
+                    std::iter::once(&app.chart)
+                        .chain(app.extra_charts.iter().map(|extra| &extra.chart))
+                        .filter(|chart| fills_visible(&output, chart, last_trade) == [true, true])
                         .count(),
                     2,
                     "new chart slots retain report fills"
                 );
-                text_at(&output, "Host tick");
+                assert!(live_marker(&output), "live analytics marker remains");
                 let clear = text_at(&output, "Clear report");
                 output.drop_without_applying_deltas();
                 click(&mut app, clear);
                 assert!(app.strategy_report.report().is_none());
                 let output = frame(&mut app, vec![]);
-                assert!(!output.shapes.iter().any(|s| matches!(&s.shape, Shape::Text(t)
-                    if matches!(t.galley.text(), "Entry 1" | "Exit 1" | "Clear report" | "Export trades CSV"))));
-                text_at(&output, "Host tick");
+                assert_eq!(
+                    fills_visible(&output, &app.chart, last_trade),
+                    [false, false]
+                );
+                assert!(
+                    !output
+                        .shapes
+                        .iter()
+                        .any(|s| matches!(&s.shape, Shape::Text(t)
+                    if matches!(t.galley.text(), "Clear report" | "Export trades CSV")))
+                );
+                assert!(live_marker(&output), "live analytics marker remains");
                 output.drop_without_applying_deltas();
                 std::fs::remove_file(std::env::temp_dir().join("strategy-trades.csv")).unwrap();
             }
