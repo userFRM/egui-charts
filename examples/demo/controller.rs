@@ -6,8 +6,6 @@
 //! actions. Layouts live in host memory; templates use application storage. Controls that need
 //! a trading account are hidden.
 
-#[path = "alert_monitor.rs"]
-mod alert_monitor;
 #[path = "audio.rs"]
 mod audio;
 #[path = "commands.rs"]
@@ -419,10 +417,8 @@ pub struct DemoApp {
     pub(crate) alerts: AlertsPanel,
     alert_host: Arc<crate::panel_alerts::DemoAlerts>,
     audio: audio::AudioPlayer,
-    alert_monitors: std::collections::HashMap<
-        (egui_charts::model::AlertId, String),
-        alert_monitor::AlertMonitor,
-    >,
+    alert_evaluator: egui_charts::services::AlertEvaluator,
+    alert_live: Arc<LiveFeed>,
 
     // Session-only paper account, connected from the broker picker and traded through the
     // library's order ticket and account panel.
@@ -610,6 +606,8 @@ impl DemoApp {
         timeframe_toolbar.state.timeframe = timeframe;
         timeframe_toolbar.set_session(SessionType::Full24x7);
 
+        let alert_live = Arc::new(live.fork());
+        alert_live.set_view(SessionType::RTH, false);
         let mut app = Self {
             chart,
             live,
@@ -692,7 +690,8 @@ impl DemoApp {
                 ))
             },
             audio: Default::default(),
-            alert_monitors: Default::default(),
+            alert_evaluator: egui_charts::services::AlertEvaluator::new(alert_live.clone()),
+            alert_live,
             trading: Default::default(),
             paper: Arc::new(
                 egui_charts::services::PaperAccount::new("USD", 100_000.0).leverage(10.0),
@@ -817,6 +816,7 @@ impl DemoApp {
         app.watchlist.set_selected(symbol);
         app.watchlist.set_service(app.quotes.clone());
         app.watchlist.set_mark("SAMPLE", SAMPLE_LOGO.into());
+        app.alert_evaluator.set_storage(app.storage.clone());
         app.alert_dialog.set_storage(app.alert_host.clone());
         app.symbol_details.set_feed(app.live.clone());
         app.symbol_details.set_storage(app.storage.clone());
@@ -981,6 +981,12 @@ impl DemoApp {
             self.timeframe_toolbar.state.session_type,
             self.timeframe_toolbar.state.adjust_for_dividends,
         );
+        self.chart.set_conversion(
+            self.timeframe_toolbar
+                .state
+                .adjust_for_dividends
+                .then_some("adjusted".to_owned()),
+        );
         self.chart.reload_feed();
         self.chart
             .set_extended_hours(self.timeframe_toolbar.state.session_type != SessionType::RTH);
@@ -1003,12 +1009,15 @@ impl DemoApp {
             .unwrap_or(0.0);
         self.alert_dialog.open(self.state.symbol.clone(), price);
         self.alert_dialog.alert.timeframe = Some(self.state.timeframe);
+        self.chart.prepare_alert(&mut self.alert_dialog.alert);
     }
 
     /// Offers the studies' outputs and every level of the drawings as alert sources.
     fn list_alert_sources(&mut self) {
-        self.alert_dialog.sources = self.chart.alert_sources();
-        self.alerts.set_sources(self.alert_dialog.sources.clone());
+        let inputs = self.chart.alert_inputs();
+        self.alert_dialog.sources = inputs.sources.clone();
+        self.alerts.set_sources(inputs.sources.clone());
+        self.alerts.set_inputs(inputs, self.chart.timeframe());
         self.alert_dialog.watchlists = self
             .watchlist
             .lists()
@@ -1020,7 +1029,40 @@ impl DemoApp {
     fn quick_price_alert(&mut self, symbol: String, price: f64) {
         let mut alert = Alert::new(symbol, AlertCondition::Crossing(price));
         alert.timeframe = Some(self.state.timeframe);
+        self.chart.prepare_alert(&mut alert);
         self.alerts.save(alert);
+    }
+
+    fn monitor_alerts(&mut self, ctx: &egui::Context) {
+        let now = chrono::Utc::now();
+        let paused = if self.replay.is_some() {
+            self.live_was_paused
+        } else {
+            self.live.paused()
+        };
+        self.alert_live.set_paused(paused);
+        let delay = self.alert_live.advance(now);
+        let engine = self.alert_host.engine();
+        for list in self.watchlist.lists() {
+            engine.set_watchlist(&list.name, list.symbols().map(str::to_owned).collect());
+        }
+        let live: Vec<_> = std::iter::once(&self.chart)
+            .chain(self.extra_charts.iter().map(|slot| &slot.chart))
+            .filter_map(Chart::alert_data)
+            .collect();
+        for error in
+            self.alert_evaluator
+                .poll(engine, self.indicator_dialog.factory(), &live, ctx, now)
+        {
+            self.toasts.error(format!("Alert data: {error}"));
+        }
+        if engine
+            .alerts()
+            .iter()
+            .any(|alert| alert.status == egui_charts::model::AlertStatus::Active)
+        {
+            ctx.request_repaint_after(delay.min(std::time::Duration::from_secs(1)));
+        }
     }
 
     // --- selection / context helpers --------------------------------------
@@ -1120,7 +1162,10 @@ impl DemoApp {
 
         // Alert creation.
         match self.alert_dialog.show(ctx) {
-            AlertDialogAction::Create(alert) => self.alerts.save(*alert),
+            AlertDialogAction::Create(mut alert) => {
+                self.chart.prepare_alert(&mut alert);
+                self.alerts.save(*alert);
+            }
             AlertDialogAction::Cancel | AlertDialogAction::None => {}
             _ => {}
         }
@@ -2462,12 +2507,10 @@ impl DemoApp {
         self.alerts.set_symbol(&self.state.symbol);
         match self.alerts.show(ui) {
             AlertPanelAction::CreateAlert => self.open_alert(None),
-            AlertPanelAction::EditAlert(alert) => {
-                self.open_alert(None);
-                self.alert_dialog.edit(*alert);
-            }
-            AlertPanelAction::DuplicateAlert(alert) => {
-                self.open_alert(None);
+            AlertPanelAction::EditAlert(mut alert)
+            | AlertPanelAction::DuplicateAlert(mut alert) => {
+                self.list_alert_sources();
+                self.chart.prepare_alert(&mut alert);
                 self.alert_dialog.edit(*alert);
             }
             AlertPanelAction::ExportLog(csv) => {
@@ -2976,7 +3019,10 @@ impl DemoApp {
         action: StudyContextMenuAction,
     ) {
         match action {
-            StudyContextMenuAction::AddAlert(alert) => self.alerts.save(*alert),
+            StudyContextMenuAction::AddAlert(mut alert) => {
+                self.chart.prepare_alert(&mut alert);
+                self.alerts.save(*alert);
+            }
             StudyContextMenuAction::AddIndicator => {
                 let source = self
                     .chart
@@ -3088,8 +3134,9 @@ impl DemoApp {
             DrawingContextMenuAction::MoveTo(pane) => {
                 self.chart.move_drawing_to_pane(id, pane);
             }
-            DrawingContextMenuAction::AddAlert(alert) => {
+            DrawingContextMenuAction::AddAlert(mut alert) => {
                 self.list_alert_sources();
+                self.chart.prepare_alert(&mut alert);
                 self.alert_dialog.edit(*alert);
             }
             DrawingContextMenuAction::None => {}
@@ -3514,7 +3561,7 @@ fn apply_settings_state(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use egui_charts::model::LineStyle;
+    use egui_charts::model::{AlertSource, LineStyle};
     use egui_charts::ui::dialogs::DrawingProps;
     use egui_charts::ui::timeframe_toolbar::DateRange;
 
@@ -7316,6 +7363,7 @@ mod tests {
                         alert.frequency = egui_charts::model::AlertFrequency::OncePerBarClose;
                     }
                 }
+                app.chart.prepare_alert(&mut alert);
                 app.alerts.save(alert);
                 app.alerts.poll(&ctx, &mut app.toasts);
                 app.switch_symbol("EURUSD");
@@ -7355,9 +7403,14 @@ mod tests {
                 assert_eq!(app.alerts.log().len(), if watchlist { 3 } else { 1 });
                 if watchlist && !replay {
                     let feed = LiveFeed::new("MSFT", app.live.now());
+                    feed.set_view(SessionType::RTH, false);
                     let bars = feed.snapshot(
                         Timeframe::Hour1,
-                        egui_charts::model::BarClock::new(Timeframe::Hour1),
+                        egui_charts::model::BarClock::new(Timeframe::Hour1).with_session(
+                            crate::sampledata::us_equity_zone(),
+                            crate::sampledata::us_equity_session(),
+                            false,
+                        ),
                         false,
                     );
                     let trigger = app
@@ -7369,7 +7422,7 @@ mod tests {
                     assert_eq!(
                         trigger.price,
                         Some(bars[bars.len() - 2].close),
-                        "new watchlist members keep the alert's original interval"
+                        "new watchlist members keep the alert's original interval and session"
                     );
                 }
 
@@ -7397,6 +7450,7 @@ mod tests {
                     id: child.0.to_string(),
                     output: 0,
                 };
+                app.chart.prepare_alert(&mut missing);
                 app.alerts.save(missing);
                 for _ in 0..2 {
                     ctx.run_ui(Default::default(), |ui| {
@@ -7414,6 +7468,7 @@ mod tests {
                     id: replacement.0.to_string(),
                     output: 0,
                 };
+                app.chart.prepare_alert(&mut edited);
                 app.alerts.save(edited);
                 for _ in 0..2 {
                     ctx.run_ui(Default::default(), |ui| {
@@ -7453,6 +7508,81 @@ mod tests {
                     "expiry must not depend on a subscribed watchlist member"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn replay_preserves_alert_pause_state() {
+        for paused in [false, true] {
+            let ctx = egui::Context::default();
+            let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+            app.live.set_paused(paused);
+            let mut alert = Alert::new(app.chart.symbol(), AlertCondition::Above(0.0));
+            app.chart.prepare_alert(&mut alert);
+            app.alerts.save(alert);
+            app.alerts.poll(&ctx, &mut app.toasts);
+            app.start_replay();
+            assert!(app.replay.is_some());
+            app.monitor_alerts(&ctx);
+            assert_eq!(app.alert_live.paused(), paused);
+        }
+    }
+
+    /// Alerts sharing a study id retain different parameters and do not repeat unchanged bars.
+    #[test]
+    fn alerts_on_one_symbol_see_one_series() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.open_alert(None);
+        let mut price = app.alert_dialog.alert.clone();
+        price.condition = AlertCondition::Above(0.0);
+        price.frequency = egui_charts::model::AlertFrequency::EveryTime;
+        app.alerts.save(price);
+        for _ in 0..4 {
+            app.alerts.poll(&ctx, &mut app.toasts);
+            app.monitor_alerts(&ctx);
+        }
+        let study = app
+            .chart
+            .add_indicator(Box::new(egui_charts::studies::SMA::new(2)));
+        let bars = app.chart.bars(SeriesId::MAIN);
+        let closes: Vec<_> = bars.iter().rev().take(3).map(|bar| bar.close).collect();
+        let short = (closes[0] + closes[1]) / 2.0;
+        let long = closes.iter().sum::<f64>() / 3.0;
+        assert_ne!(short, long);
+        let level = (short + long) / 2.0;
+        for period in [2, 3] {
+            app.chart
+                .indicator_mut(study)
+                .unwrap()
+                .set_input("period", egui_charts::studies::InputValue::Length(period))
+                .unwrap();
+            let mut average = Alert::new(
+                app.chart.symbol(),
+                if short > long {
+                    AlertCondition::Above(level)
+                } else {
+                    AlertCondition::Below(level)
+                },
+            );
+            average.timeframe = Some(app.state.timeframe);
+            average.frequency = egui_charts::model::AlertFrequency::EveryTime;
+            average.source = AlertSource::Study {
+                id: study.0.to_string(),
+                output: 0,
+            };
+            app.handle_study_context(
+                &ctx,
+                study,
+                egui_charts::ui::dialogs::StudyContextMenuAction::AddAlert(Box::new(average)),
+            );
+            for _ in 0..6 {
+                app.alerts.poll(&ctx, &mut app.toasts);
+                app.monitor_alerts(&ctx);
+            }
+            app.alerts.poll(&ctx, &mut app.toasts);
+            assert_eq!(app.alerts.log().len(), 2, "period {period}");
         }
     }
 }

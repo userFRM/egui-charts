@@ -122,7 +122,7 @@ pub(crate) fn render_study_axis(
                 let label = if relative {
                     transform.label(transform.to_scale(value), 2, relative_formatter)
                 } else {
-                    member.format_value(value)
+                    member.format_plot_value(line, value)
                 };
                 labels.push((
                     coords.price_to_y(value),

@@ -181,7 +181,7 @@ impl Inbox {
     }
 
     /// Connects active stream studies before their inputs are coalesced for the frame.
-    #[cfg(feature = "widget")]
+    #[cfg(any(feature = "widget", feature = "alert-engine"))]
     pub(crate) fn study_inputs(
         &self,
         id: SubscriptionId,

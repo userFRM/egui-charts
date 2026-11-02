@@ -28,10 +28,10 @@ use crate::model::{Alert, AlertId};
 /// entering and exiting hold only on the evaluation that crosses a boundary.
 /// [`AlertFrequency::OncePerMinute`](crate::model::AlertFrequency::OncePerMinute) allows one
 /// trigger per UTC clock minute, from `hh:mm:00` up to but excluding the next minute, whatever the
-/// chart's interval. An alert's [`schedule`](crate::model::Alert::schedule) limits notifications
-/// only: evaluate and trigger the alert as usual, and deliver the notification when
+/// chart's interval. An alert's [`schedule`](crate::model::Alert::schedule) allows triggers only when
 /// [`NotificationSchedule::allows`](crate::model::NotificationSchedule::allows) accepts the
-/// trigger time.
+/// trigger time. Outside it, keep observing values for crossings without consuming an occurrence
+/// or disarming an alert that fires once.
 ///
 /// These methods are called on the UI thread, while the terminal shows a frame or runs a command,
 /// and must return at once. Do the work elsewhere and answer through the [`Reply`] or push through
@@ -94,6 +94,14 @@ use crate::model::{Alert, AlertId};
 /// # let _ = alerts;
 /// ```
 pub trait Alerts: MaybeSend + 'static {
+    /// The local evaluator, when this service uses one. The assembled terminal feeds it from
+    /// its datafeed, including subjects that no live chart shows. Server-backed services keep
+    /// the default so evaluation remains on the server.
+    #[cfg(feature = "alert-engine")]
+    fn engine(&self) -> Option<&super::AlertEngine> {
+        None
+    }
+
     /// Pushes the host's alerts, then every change and trigger. Called when the terminal starts and
     /// again after a lagged stream, each time with a new stream that starts from no alerts: push
     /// the current list first, then keep pushing until `events` is inactive. On the first call,
@@ -105,7 +113,9 @@ pub trait Alerts: MaybeSend + 'static {
     /// triggers), or the stream lags on every call and no alert shows.
     fn watch(&self, events: Events<AlertEvent>);
 
-    /// Creates (`alert.id` is `None`) or replaces an alert. Answer `Ok` once the change is kept;
+    /// Creates (`alert.id` is `None`) or replaces an alert. Keep `alert.inputs` with the alert:
+    /// its independent study parameters and source view must survive copies and restoration.
+    /// Answer `Ok` once the change is kept;
     /// the alert appears when `watch` pushes it, so push the saved alert, with its id, as
     /// [`AlertEvent::Upsert`].
     fn save(&self, alert: Alert, reply: Reply<()>);
