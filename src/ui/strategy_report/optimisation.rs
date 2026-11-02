@@ -114,10 +114,13 @@ pub(super) fn grid(ranges: &[Range]) -> Result<(usize, Vec<Axis>), &'static str>
     Ok((count, axes))
 }
 
-pub(super) fn show(ui: &mut egui::Ui, ranges: &mut [Range]) {
+pub(super) fn show(ui: &mut egui::Ui, ranges: &mut [Range]) -> bool {
+    let mut changed = false;
     for range in ranges {
         ui.push_id(&range.input.id, |ui| {
-            ui.checkbox(&mut range.enabled, &range.input.label);
+            changed |= ui
+                .checkbox(&mut range.enabled, &range.input.label)
+                .changed();
             if range.enabled {
                 crate::ui_kit::FormGrid::new("range").show(ui, |ui| {
                     for (label, value) in [
@@ -136,11 +139,12 @@ pub(super) fn show(ui: &mut egui::Ui, ranges: &mut [Range]) {
                                 _ => InputKind::Number(0.0f64.next_up(), f64::MAX),
                             };
                         }
-                        super::inputs::show_input(ui, &mut input, &[]);
+                        changed |= super::inputs::show_input(ui, &mut input, &[]);
                         *value = input.value;
                     }
                 });
             }
         });
     }
+    changed
 }

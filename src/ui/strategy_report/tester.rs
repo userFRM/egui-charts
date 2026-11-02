@@ -83,6 +83,7 @@ impl TabLabel for Tab {
 
 struct Trial {
     inputs: Vec<StudyInput>,
+    label: String,
     profit: f64,
     drawdown: Option<f64>,
     trades: usize,
@@ -325,6 +326,12 @@ impl StrategyTester {
                 for input in &inputs {
                     strategy.set_input(&input.id, input.value.clone())?;
                 }
+                let label = strategy
+                    .inputs()
+                    .iter()
+                    .map(|(name, value)| format!("{name}: {value}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 let report = engine.run_async(strategy.as_mut(), &bars, &lower).await;
                 completed.set(ordinal + 1);
                 if !optimise {
@@ -333,6 +340,7 @@ impl StrategyTester {
                 let performance = report.performance();
                 trials.push(Trial {
                     inputs,
+                    label,
                     profit: performance.net_profit,
                     drawdown: performance.max_drawdown,
                     trades: performance.closed_trades,
@@ -449,6 +457,9 @@ impl StrategyTester {
                 }
             }
         });
+        if let Some(error) = &self.error {
+            ui.colored_label(ui.active_theme().ui.error, l10n::text(ui.ctx(), error));
+        }
         TabBar::new(
             &[Tab::Inputs, Tab::Properties, Tab::Optimisation, Tab::Report],
             &mut self.tab,
@@ -489,7 +500,11 @@ impl StrategyTester {
                             );
                         }
                         Tab::Optimisation => {
-                            optimisation::show(ui, &mut self.ranges);
+                            if optimisation::show(ui, &mut self.ranges) {
+                                let stale = self.stale;
+                                self.changed();
+                                self.stale = stale;
+                            }
                             match optimisation::grid(&self.ranges) {
                                 Ok((count, _)) => {
                                     ui.label(format!("{count} trials"));
@@ -554,7 +569,12 @@ impl StrategyTester {
                                 timeframe: report.timeframe,
                                 signals: report.signals(),
                             });
-                            self.report.set_report(Some(report), &bars);
+                            let from = bars.partition_point(|bar| {
+                                self.settings
+                                    .start_time
+                                    .is_some_and(|start| bar.time < start)
+                            });
+                            self.report.set_report(Some(report), &bars[from..]);
                             self.stale = false;
                             self.tab = Tab::Report;
                         }
@@ -568,9 +588,6 @@ impl StrategyTester {
                 }
             }
         }
-        if let Some(error) = &self.error {
-            ui.colored_label(ui.active_theme().ui.error, l10n::text(ui.ctx(), error));
-        }
         actions
     }
 
@@ -583,7 +600,7 @@ impl StrategyTester {
                     .partial_cmp(&b.drawdown)
                     .unwrap_or(std::cmp::Ordering::Equal),
                 3 => a.trades.cmp(&b.trades),
-                _ => format_inputs(&a.inputs).cmp(&format_inputs(&b.inputs)),
+                _ => a.label.cmp(&b.label),
             };
             if self.ascending {
                 order
@@ -621,7 +638,7 @@ impl StrategyTester {
                     let index = row.index();
                     let trial = &self.trials[index];
                     row.col(|ui| {
-                        ui.label(format_inputs(&trial.inputs));
+                        ui.label(&trial.label);
                     });
                     row.col(|ui| {
                         ui.label(super::number(Some(trial.profit)));
@@ -655,30 +672,6 @@ impl StrategyTester {
         }
         false
     }
-}
-
-fn format_inputs(inputs: &[StudyInput]) -> String {
-    inputs
-        .iter()
-        .map(|input| {
-            let value = match &input.value {
-                InputValue::Length(value) => value.to_string(),
-                InputValue::Integer(value) => value.to_string(),
-                InputValue::Number(value) => value.to_string(),
-                InputValue::Toggle(value) => value.to_string(),
-                InputValue::Text(value) | InputValue::Symbol(value) => value.clone(),
-                InputValue::Choice(value) => match &input.kind {
-                    crate::studies::InputKind::Choice(choices) => {
-                        choices.get(*value).cloned().unwrap_or_default()
-                    }
-                    _ => value.to_string(),
-                },
-                _ => String::new(),
-            };
-            format!("{}: {value}", input.label)
-        })
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 #[cfg(test)]

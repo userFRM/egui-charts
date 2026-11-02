@@ -776,6 +776,62 @@ mod tests {
     use super::*;
     use chrono::{Datelike, TimeDelta, TimeZone, Weekday};
 
+    #[test]
+    fn report_signals_preserve_valid_fill_times_prices_indices_and_sides() {
+        use crate::model::{Direction, SignalShape};
+        let start = DateTime::UNIX_EPOCH + chrono::TimeDelta::nanoseconds(123);
+        let mut report = StrategyReport::new("Fills", "TEST", Timeframe::Min1, 1000.0);
+        for (side, exit) in [
+            (OrderSide::Buy, true),
+            (OrderSide::Sell, true),
+            (OrderSide::Sell, false),
+        ] {
+            let mut trade = StrategyTrade::new(side, 2.0, start, -0.00001234);
+            trade.label = Some("Rule / close".into());
+            if exit {
+                trade.exit = Some(StrategyExit::new(
+                    start + chrono::TimeDelta::milliseconds(250),
+                    0.25,
+                    0.0,
+                ));
+            }
+            report.trades.push(trade);
+        }
+        let mut invalid = report.trades[0].clone();
+        invalid.quantity = 0.0;
+        report.trades.insert(1, invalid);
+        let signals = report.signals();
+        assert_eq!(signals.len(), 5);
+        for (index, (signal, direction)) in signals
+            .iter()
+            .zip([
+                Direction::Up,
+                Direction::Down,
+                Direction::Down,
+                Direction::Up,
+                Direction::Down,
+            ])
+            .enumerate()
+        {
+            let entry = index == 0 || index == 2 || index == 4;
+            assert_eq!(
+                signal.shape,
+                SignalShape::Marker {
+                    time: if entry {
+                        start
+                    } else {
+                        start + chrono::TimeDelta::milliseconds(250)
+                    },
+                    price: Some(if entry { -0.00001234 } else { 0.25 }),
+                    direction,
+                }
+            );
+            assert!(signal.tooltip.as_ref().unwrap().contains("Rule / close"));
+        }
+        assert_eq!(signals.last().unwrap().label.as_deref(), Some("Entry 4"));
+        assert_eq!(signals, report.signals(), "stable marker ids");
+    }
+
     // Reference values below are computed independently from the definitions documented on
     // `StrategyPerformance` in double precision, not with this code.
 

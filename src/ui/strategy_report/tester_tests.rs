@@ -26,64 +26,122 @@ fn bars() -> Vec<Bar> {
 #[test]
 fn built_in_run_edits_costs_and_inputs_and_replaces_fill_signals() {
     for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
-        let mut tester = StrategyTester::default();
-        tester.select_strategy("Consecutive Up/Down").unwrap();
-        let mut h = Harness::builder()
-            .with_size(Vec2::new(1440.0, 900.0))
-            .with_context_setup(move |ctx| crate::theme::apply_to_egui(ctx, &theme))
-            .build_ui_state(
-                |ui, (tester, actions): &mut (StrategyTester, Vec<StrategyTesterAction>)| {
-                    actions.extend(tester.show(ui, "TEST", Timeframe::Min1, &bars()));
-                },
-                (tester, Vec::new()),
+        for width in [320.0, 640.0, 1440.0] {
+            let mut tester = StrategyTester::default();
+            tester.select_strategy("Consecutive Up/Down").unwrap();
+            let mut h = Harness::builder()
+                .with_size(Vec2::new(width, 900.0))
+                .with_context_setup({
+                    let theme = theme.clone();
+                    move |ctx| crate::theme::apply_to_egui(ctx, &theme)
+                })
+                .build_ui_state(
+                    |ui, (tester, actions): &mut (StrategyTester, Vec<StrategyTesterAction>)| {
+                        let right = ui.max_rect().right();
+                        actions.extend(tester.show(ui, "TEST", Timeframe::Min1, &bars()));
+                        assert!(
+                            ui.min_rect().right() <= right + 1.0,
+                            "tester widened its host"
+                        );
+                    },
+                    (tester, Vec::new()),
+                );
+            h.get_by_role_and_label(Role::Button, "Run").click();
+            h.run();
+            let report = h.state().0.report().unwrap();
+            // Three rising closes place the long at bar 3, filled at bar 4's open of 100.
+            // Three falling closes reverse it at bar 7's open of 101: one unit earns 1.
+            assert_eq!(report.performance().net_profit, 1.0);
+            assert_eq!(report.trades[0].entry_time, bars()[4].time);
+            assert_eq!(report.trades[0].exit.as_ref().unwrap().time, bars()[7].time);
+            assert!(!h.state().0.is_stale());
+            let Some(StrategyTesterAction::Signals { signals, .. }) = h.state().1.last() else {
+                panic!("missing fill replacement");
+            };
+            assert_eq!(signals.len(), 3, "closed long and open short");
+            assert!(matches!(
+                signals[2].shape,
+                SignalShape::Marker {
+                    direction: Direction::Down,
+                    ..
+                }
+            ));
+            let previous = report.clone();
+            let mut settings = h.state().0.settings().clone();
+            settings.commission = Commission::PerUnit(1.0);
+            h.state_mut().0.set_settings(settings).unwrap();
+            assert!(h.state().0.is_stale());
+            assert_eq!(h.state().0.report(), Some(&previous));
+            h.run();
+            h.get_by_role_and_label(Role::Button, "Run").click();
+            h.run();
+            assert_eq!(h.state().0.report().unwrap().performance().net_profit, -1.0);
+            assert!(!h.state().0.is_stale());
+            h.state_mut()
+                .0
+                .set_input("length", InputValue::Length(1))
+                .unwrap();
+            assert!(h.state().0.is_stale());
+            h.run();
+            h.get_by_role_and_label(Role::Button, "Run").click();
+            h.run();
+            let report = h.state().0.report().unwrap();
+            assert_eq!(report.trades[0].side, OrderSide::Buy);
+            assert_eq!(report.trades[0].entry_time, bars()[2].time);
+            assert_eq!(
+                report.performance().net_profit,
+                -5.0,
+                "102 to 99, less two unit fees"
             );
-        h.get_by_role_and_label(Role::Button, "Run").click();
-        h.run();
-        let report = h.state().0.report().unwrap();
-        // Three rising closes place the long at bar 3, filled at bar 4's open of 100.
-        // Three falling closes reverse it at bar 7's open of 101: one unit earns 1.
-        assert_eq!(report.performance().net_profit, 1.0);
-        assert_eq!(report.trades[0].entry_time, bars()[4].time);
-        assert_eq!(report.trades[0].exit.as_ref().unwrap().time, bars()[7].time);
-        assert!(!h.state().0.is_stale());
-        let Some(StrategyTesterAction::Signals { signals, .. }) = h.state().1.last() else {
-            panic!("missing fill replacement");
-        };
-        assert_eq!(signals.len(), 3, "closed long and open short");
-        assert!(matches!(
-            signals[2].shape,
-            SignalShape::Marker {
-                direction: Direction::Down,
-                ..
-            }
-        ));
-        let previous = report.clone();
-        let mut settings = h.state().0.settings().clone();
-        settings.commission = Commission::PerUnit(1.0);
-        h.state_mut().0.set_settings(settings).unwrap();
-        assert!(h.state().0.is_stale());
-        assert_eq!(h.state().0.report(), Some(&previous));
-        h.run();
-        h.get_by_role_and_label(Role::Button, "Run").click();
-        h.run();
-        assert_eq!(h.state().0.report().unwrap().performance().net_profit, -1.0);
-        assert!(!h.state().0.is_stale());
-        h.state_mut()
-            .0
-            .set_input("length", InputValue::Length(1))
-            .unwrap();
-        assert!(h.state().0.is_stale());
-        h.run();
-        h.get_by_role_and_label(Role::Button, "Run").click();
-        h.run();
-        let report = h.state().0.report().unwrap();
-        assert_eq!(report.trades[0].side, OrderSide::Buy);
-        assert_eq!(report.trades[0].entry_time, bars()[2].time);
-        assert_eq!(
-            report.performance().net_profit,
-            -5.0,
-            "102 to 99, less two unit fees"
-        );
+            h.get_by_role_and_label(Role::Tab, "Backtest settings")
+                .click();
+            h.run();
+            h.get_by_role_and_label(Role::CheckBox, "Fill on close")
+                .click();
+            h.run();
+            assert!(h.state().0.is_stale());
+            h.get_by_role_and_label(Role::Button, "Run").click();
+            h.run();
+            assert_eq!(
+                h.state().0.report().unwrap().trades[0].entry_time,
+                bars()[1].time
+            );
+        }
+    }
+}
+
+#[test]
+fn run_failures_remain_visible_above_scrolling_content() {
+    for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+        for tab in [Tab::Report, Tab::Properties, Tab::Optimisation] {
+            let mut tester = StrategyTester::default();
+            tester.set_report(
+                Some(StrategyReport::new(
+                    "Previous",
+                    "TEST",
+                    Timeframe::Min1,
+                    1000.0,
+                )),
+                &bars(),
+            );
+            tester.scope = Some(("TEST".into(), Timeframe::Min1));
+            tester.tab = tab;
+            tester.error = Some("History unavailable".into());
+            let mut h = Harness::builder()
+                .with_size(Vec2::new(640.0, 330.0))
+                .with_context_setup({
+                    let theme = theme.clone();
+                    move |ctx| crate::theme::apply_to_egui(ctx, &theme)
+                })
+                .build_ui_state(
+                    |ui, tester: &mut StrategyTester| {
+                        tester.show(ui, "TEST", Timeframe::Min1, &bars());
+                    },
+                    tester,
+                );
+            h.run();
+            assert!(h.get_by_label("History unavailable").rect().bottom() <= 330.0);
+        }
     }
 }
 
@@ -91,7 +149,9 @@ fn built_in_run_edits_costs_and_inputs_and_replaces_fill_signals() {
 fn requested_history_is_scoped_and_superseded_by_edits_and_chart_changes() {
     let source = bars();
     let mut tester = StrategyTester::default();
-    tester.settings.start_time = Some(source[2].time);
+    let mut settings = tester.settings().clone();
+    settings.start_time = Some(source[2].time);
+    tester.set_settings(settings).unwrap();
     tester.lower = true;
     tester.lower_timeframe = Timeframe::Sec30;
     let request = match tester
@@ -155,6 +215,29 @@ fn requested_history_is_scoped_and_superseded_by_edits_and_chart_changes() {
         tester.report().is_none(),
         "old scope must not publish after navigation"
     );
+    let mut h = Harness::builder().with_max_steps(32).build_ui_state(
+        |ui, tester: &mut StrategyTester| {
+            tester.show(ui, "TEST", Timeframe::Min1, &bars());
+        },
+        tester,
+    );
+    let Some(StrategyTesterAction::RequestHistory(request)) = h
+        .state_mut()
+        .request_run("TEST", Timeframe::Min1, &source, false)
+        .unwrap()
+    else {
+        panic!("missing history request");
+    };
+    h.state_mut()
+        .set_history(&request, source.clone(), source)
+        .unwrap();
+    h.run();
+    let comparison = &h.state().report.data.as_ref().unwrap().comparison;
+    assert_eq!(
+        comparison.buy_and_hold_equity.first().unwrap().0,
+        bars()[2].time
+    );
+    assert!((comparison.buy_and_hold_return.unwrap() - (101.0 / 102.0 - 1.0)).abs() < 1e-12);
 }
 
 #[test]
@@ -295,4 +378,17 @@ fn optimisation_counts_decimal_grid_yields_sorts_and_applies_inputs() {
     assert_eq!(h.state().inputs[0].value, InputValue::Length(2));
     assert!(h.state().is_stale());
     assert!(h.state().trials.is_empty());
+    h.state_mut().tab = Tab::Optimisation;
+    h.run();
+    h.get_by_role_and_label(Role::Button, "Run optimisation")
+        .click();
+    h.run();
+    assert_eq!(h.state().trials.len(), 3);
+    h.get_by_role_and_label(Role::CheckBox, "Consecutive closes")
+        .click();
+    h.run();
+    assert!(
+        h.state().trials.is_empty(),
+        "range edits discard previous trials"
+    );
 }
