@@ -988,6 +988,9 @@ impl Indicator for ConfiguredStudy {
             self.study.labels()
         }
     }
+    fn labels_on_price(&self) -> bool {
+        self.study.labels_on_price()
+    }
     fn set_label_precision(&mut self, precision: Option<usize>) {
         self.study.set_label_precision(precision);
     }

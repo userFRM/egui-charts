@@ -579,6 +579,12 @@ pub trait Indicator: Send {
         &[]
     }
 
+    /// Draw [`labels`](Self::labels) on the main price chart, even when the study has its
+    /// own pane. Label prices use the main series' scale. Off by default.
+    fn labels_on_price(&self) -> bool {
+        false
+    }
+
     /// The decimal places the study's presentation settings set for the prices in
     /// [`labels`](Self::labels), `None` when they set none and the instrument's decimals apply.
     /// The text is written when the study calculates, so calculate again afterwards, as a chart

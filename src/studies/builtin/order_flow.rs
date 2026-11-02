@@ -1,6 +1,7 @@
 //! Fixed aggregations of executions, quotes and synchronized depth, never estimates from bars.
 
 use super::anchor_period::AnchorPeriod;
+use super::trade_delta::CvdMarkers;
 use crate::data::{OrderFilter, OrderFlowInput, OrderFlowKind};
 use crate::model::{Bar, BarClock};
 use crate::studies::{
@@ -23,8 +24,8 @@ const ANCHORS: [Option<AnchorPeriod>; 8] = [
 /// An order-flow study in a separate pane. Use the factory titles or [`Self::new`].
 ///
 /// Changing an aggregation input starts a fresh source: the host must replay historical events
-/// if it needs values before that change. Reset period and representation reuse the held source.
-/// Book size is the last synchronized snapshot in the bar; spread
+/// if it needs values before that change. Reset period, representation and marker settings reuse
+/// the held source. Book size is the last synchronized snapshot in the bar; spread
 /// averages every accepted quote equally. Bars without the relevant stream remain gaps.
 #[derive(Clone)]
 pub struct OrderFlowStudy {
@@ -44,6 +45,7 @@ pub struct OrderFlowStudy {
     candles: Vec<StudyCandle>,
     anchor: Option<AnchorPeriod>,
     volume_precision: Option<usize>,
+    markers: CvdMarkers,
 }
 
 impl OrderFlowStudy {
@@ -69,6 +71,7 @@ impl OrderFlowStudy {
             candles: Vec::new(),
             anchor: None,
             volume_precision: None,
+            markers: CvdMarkers::default(),
         }
     }
 
@@ -78,6 +81,16 @@ impl OrderFlowStudy {
     /// range and candles or a cumulative line / per-bar histogram. No volume is inferred from
     /// price bars. The chart connects the same source as Size-Filtered CVD, including its
     /// historical coverage, retention and replay cutoff.
+    ///
+    /// Cumulative mode offers `divergence` and `exhaustion`, both off by default. `swing_bars`
+    /// (3) requires strictly lower highs or higher lows on both sides of a price pivot.
+    /// `exhaustion_bars` (3) requires consecutive new extremes with shrinking same-side bar
+    /// delta. Labels sit at price extremes; a live bar never confirms a marker. When enabled,
+    /// outputs 3..=6 are bullish/bearish divergence and bullish/bearish exhaustion: 1 on the
+    /// closed confirmation bar, 0 on other closed bars. Use bar-close study alerts on these
+    /// outputs. Resets and missing executions between the swings prevent comparison; a
+    /// boundary after the second swing still permits its price confirmation. Invalid prices
+    /// break price windows and comparisons. Exhaustion follows per-bar delta across resets.
     pub fn execution_delta(cumulative: bool) -> Self {
         Self {
             delta: Some(cumulative),
@@ -192,6 +205,19 @@ impl OrderFlowStudy {
                 }
             }
         }
+        if self.delta == Some(true) && self.markers.enabled() {
+            let start = self.markers.start(data.len(), from);
+            let rows = self.rows(data, start);
+            let sessions = self.clock.sessions();
+            let period = |at: usize| {
+                self.anchor
+                    .map(|a| a.key(sessions.trading_date(data[at].time)))
+            };
+            self.markers
+                .refresh(data, start, &rows, &mut self.values, |at| {
+                    at > 0 && period(at) != period(at - 1)
+                });
+        }
     }
 
     /// Book size over the individual orders `filter` accepts: a minimum size, a minimum and a
@@ -209,6 +235,7 @@ impl OrderFlowStudy {
         self.input = OrderFlowInput::new(self.kind).with_order_filter(self.filter.clone());
         self.values = IndicatorValues::new();
         self.candles.clear();
+        self.markers.labels.clear();
         self.reset_revision = 0;
     }
 }
@@ -263,6 +290,12 @@ impl Indicator for OrderFlowStudy {
     }
     fn candles(&self) -> &[StudyCandle] {
         &self.candles
+    }
+    fn labels(&self) -> &[crate::studies::StudyLabel] {
+        &self.markers.labels
+    }
+    fn labels_on_price(&self) -> bool {
+        self.delta == Some(true)
     }
     fn value_format(&self) -> crate::scales::StudyFormat {
         use crate::scales::StudyFormat;
@@ -320,7 +353,7 @@ impl Indicator for OrderFlowStudy {
         self.format_value(value)
     }
     fn legend_visible(&self, line: usize) -> bool {
-        line < self.line_count()
+        line < self.line_count() && (self.plot_style(line).visible || line == 0)
     }
     fn colors(&self) -> Vec<Color32> {
         self.colors.clone()
@@ -344,7 +377,7 @@ impl Indicator for OrderFlowStudy {
     }
     fn line_count(&self) -> usize {
         if self.delta.is_some() {
-            return 3;
+            return if self.markers.enabled() { 7 } else { 3 };
         }
         match self.kind {
             OrderFlowKind::FlowSum { .. } => 2,
@@ -354,7 +387,19 @@ impl Indicator for OrderFlowStudy {
     }
     fn line_names(&self) -> Vec<String> {
         if self.delta.is_some() {
-            return ["Delta", "Up", "Down"].map(String::from).to_vec();
+            let mut names = ["Delta", "Up", "Down"].map(String::from).to_vec();
+            if self.markers.enabled() {
+                names.extend(
+                    [
+                        "Bull divergence",
+                        "Bear divergence",
+                        "Bull exhaustion",
+                        "Bear exhaustion",
+                    ]
+                    .map(String::from),
+                );
+            }
+            return names;
         }
         let names: &[&str] = match self.kind {
             OrderFlowKind::TradeRate {
@@ -401,6 +446,9 @@ impl Indicator for OrderFlowStudy {
         };
         names.iter().map(|name| (*name).to_owned()).collect()
     }
+    fn plot_tagged(&self, line: usize) -> bool {
+        line < 3
+    }
     fn plot_style(&self, line: usize) -> PlotStyle {
         PlotStyle {
             color: self.colors[line.min(2)],
@@ -414,11 +462,12 @@ impl Indicator for OrderFlowStudy {
             },
             width: 1.0,
             pattern: crate::model::LineStyle::Solid,
-            visible: !(line == 0
-                && matches!(
-                    self.kind,
-                    OrderFlowKind::TradeRate { .. } | OrderFlowKind::AggressorRate { .. }
-                )),
+            visible: (self.delta != Some(true) || line < 3)
+                && !(line == 0
+                    && matches!(
+                        self.kind,
+                        OrderFlowKind::TradeRate { .. } | OrderFlowKind::AggressorRate { .. }
+                    )),
         }
     }
     fn inputs(&self) -> Vec<StudyInput> {
@@ -563,6 +612,40 @@ impl Indicator for OrderFlowStudy {
                         .with_default(InputValue::Choice(0)),
                     );
                 }
+                if self.delta == Some(true) {
+                    inputs.extend([
+                        StudyInput::new(
+                            "divergence",
+                            "Divergence",
+                            InputValue::Toggle(self.markers.divergence),
+                            InputKind::Toggle,
+                        )
+                        .with_default(InputValue::Toggle(false)),
+                        length(
+                            "swing_bars",
+                            "Swing bars on each side",
+                            self.markers.swing_bars,
+                            1,
+                            10_000,
+                        )
+                        .with_default(InputValue::Length(3)),
+                        StudyInput::new(
+                            "exhaustion",
+                            "Exhaustion",
+                            InputValue::Toggle(self.markers.exhaustion),
+                            InputKind::Toggle,
+                        )
+                        .with_default(InputValue::Toggle(false)),
+                        length(
+                            "exhaustion_bars",
+                            "Exhaustion consecutive bars",
+                            self.markers.exhaustion_bars,
+                            2,
+                            10_000,
+                        )
+                        .with_default(InputValue::Length(3)),
+                    ]);
+                }
                 inputs
             }
             OrderFlowKind::AggressorRate { seconds, instant } => vec![
@@ -595,6 +678,22 @@ impl Indicator for OrderFlowStudy {
         {
             return Err("invalid order flow input");
         }
+        match (id, &value) {
+            ("divergence", InputValue::Toggle(on)) => self.markers.divergence = *on,
+            ("exhaustion", InputValue::Toggle(on)) => self.markers.exhaustion = *on,
+            ("swing_bars", InputValue::Length(n)) => self.markers.swing_bars = *n,
+            ("exhaustion_bars", InputValue::Length(n)) => self.markers.exhaustion_bars = *n,
+            _ => {}
+        }
+        if matches!(
+            id,
+            "divergence" | "exhaustion" | "swing_bars" | "exhaustion_bars"
+        ) {
+            self.values = IndicatorValues::new();
+            self.candles.clear();
+            self.markers.labels.clear();
+            return Ok(());
+        }
         let before = self.kind;
         if let InputValue::Choice(at) = &value {
             match id {
@@ -604,6 +703,7 @@ impl Indicator for OrderFlowStudy {
             }
             self.values = IndicatorValues::new();
             self.candles.clear();
+            self.markers.labels.clear();
             return Ok(());
         }
         if let ("histogram", InputValue::Toggle(on)) = (id, &value) {
@@ -1009,6 +1109,366 @@ mod tests {
                 format!("{:?}", lines(&study)),
                 format!("{:?}", lines(&full))
             );
+        }
+    }
+
+    /// Two symmetric three-bar pivots: highs 101/103 with CVD 20/12, or lows
+    /// 99/97 with CVD -20/-12. Only the close of the third right bar confirms.
+    /// Boundaries either separate the swings or follow the second before it confirms.
+    #[test]
+    fn cvd_divergence_confirms_closed_swings_without_crossing_resets_or_gaps() {
+        for bullish in [false, true] {
+            for boundary in [
+                "none",
+                "reset",
+                "gap",
+                "combined",
+                "confirm_reset",
+                "confirm_gap",
+            ] {
+                let mut study = OrderFlowStudy::execution_delta(true);
+                assert!(study.labels().is_empty());
+                study
+                    .set_input("divergence", InputValue::Toggle(true))
+                    .unwrap();
+                let configured = crate::studies::ConfiguredStudy::new(Box::new(study.clone()));
+                for line in 0..configured.line_count() {
+                    assert_eq!(configured.plot_style(line).visible, line < 3);
+                    assert_eq!(configured.legend_visible(line), line < 3);
+                    assert_eq!(configured.plot_tagged(line), line < 3);
+                }
+                let highs = [
+                    97., 98., 99., 101., 99., 98., 97., 96., 95., 96., 100., 101., 103., 101.,
+                    100., 99., 98., 97.,
+                ];
+                let mut deltas: [f64; 18] = [
+                    1., 1., 1., 17., -1., -1., -1., 1., -1., 1., -1., -1., -4., 1., 1., 1., 1., 1.,
+                ];
+                if boundary == "combined" {
+                    study
+                        .set_input("exhaustion", InputValue::Toggle(true))
+                        .unwrap();
+                    // -11 + 12 + 8 + 3 = 12 at the second high, with exhaustion there too.
+                    deltas[9..13].copy_from_slice(&[-28., 12., 8., 3.]);
+                }
+                let data: Vec<_> = highs
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &high)| {
+                        let time = start()
+                            + TimeDelta::minutes(i as i64)
+                            + if (boundary == "reset" && i >= 7)
+                                || (boundary == "confirm_reset" && i >= 14)
+                            {
+                                TimeDelta::days(1)
+                            } else {
+                                TimeDelta::zero()
+                            };
+                        let (high, low) = if bullish {
+                            (202. - high, 200. - high)
+                        } else {
+                            (high, high - 2.)
+                        };
+                        Bar::new(time, low, high, low, high, 1.)
+                    })
+                    .collect();
+                let input = study.order_flow_inputs()[0].clone();
+                for (i, (bar, &delta)) in data.iter().zip(&deltas).enumerate() {
+                    if (boundary == "gap" && i == 7) || (boundary == "confirm_gap" && i == 14) {
+                        continue;
+                    }
+                    let delta = if bullish { -delta } else { delta };
+                    input.push_trade(
+                        &study.clock,
+                        &Tick::new(
+                            bar.time,
+                            100.,
+                            delta.abs(),
+                            Some(if delta > 0. {
+                                OrderSide::Buy
+                            } else {
+                                OrderSide::Sell
+                            }),
+                        ),
+                    );
+                }
+                study.calculate(&data[..16]);
+                let diverges = matches!(
+                    boundary,
+                    "none" | "combined" | "confirm_reset" | "confirm_gap"
+                );
+                if diverges {
+                    let sign = if bullish { -1.0 } else { 1.0 };
+                    assert_eq!(
+                        (study.values().value(0, 3), study.values().value(0, 12)),
+                        (Some(sign * 20.0), Some(sign * 12.0))
+                    );
+                }
+                assert!(
+                    study
+                        .labels()
+                        .iter()
+                        .all(|m| !m.text.contains("divergence")),
+                    "the third right bar is still live"
+                );
+                study.update(&data[..17], 16);
+                let expected: Vec<_> = if diverges {
+                    vec![(12, if bullish { 97. } else { 103. })]
+                } else {
+                    vec![]
+                };
+                assert_eq!(
+                    study
+                        .labels()
+                        .iter()
+                        .map(|m| (m.bar, m.price))
+                        .collect::<Vec<_>>(),
+                    expected,
+                    "{bullish} {boundary}"
+                );
+                let line = if bullish { 3 } else { 4 };
+                assert_eq!(
+                    study.values().value(line, 15),
+                    Some(if diverges { 1. } else { 0. })
+                );
+                #[cfg(feature = "alert-engine")]
+                {
+                    use crate::model::{
+                        Alert, AlertCondition, AlertFrequency, AlertSource, Timeframe,
+                    };
+                    use std::sync::{
+                        Arc,
+                        atomic::{AtomicUsize, Ordering},
+                    };
+                    let fired = Arc::new(AtomicUsize::new(0));
+                    let count = fired.clone();
+                    let mut alert = Alert::new("SYM", AlertCondition::CrossingUp(0.5));
+                    alert.source = AlertSource::Study {
+                        id: "cvd".into(),
+                        output: line,
+                    };
+                    alert.frequency = AlertFrequency::OncePerBarClose;
+                    alert.timeframe = Some(Timeframe::Min1);
+                    let engine = crate::services::AlertEngine::new()
+                        .with_alerts(vec![alert])
+                        .on_trigger(move |_, _| {
+                            count.fetch_add(1, Ordering::Relaxed);
+                        });
+                    for len in [16, 17, 17] {
+                        engine.update(
+                            "SYM",
+                            Timeframe::Min1,
+                            &data[..len],
+                            data[len - 1].time,
+                            |_, at| study.values().value(line, at),
+                        );
+                    }
+                    assert_eq!(fired.load(Ordering::Relaxed), usize::from(diverges));
+                }
+                #[cfg(feature = "widget")]
+                if matches!(boundary, "none" | "combined") {
+                    use crate::model::{BarData, LogicalRange, Timeframe};
+                    use crate::theme::Theme;
+                    use crate::widget::Chart;
+                    for theme in [Theme::light(), Theme::dark()] {
+                        for size in [egui::vec2(1440., 900.), egui::vec2(360., 480.)] {
+                            let mut shown = data.to_vec();
+                            let live = shown.last_mut().unwrap();
+                            (live.low, live.high) = if bullish { (96., 98.) } else { (102., 104.) };
+                            live.open = live.low + 0.5;
+                            live.close = live.high - 0.5;
+                            let mut chart = Chart::new(BarData::from_bars(shown));
+                            chart.set_timeframe(Timeframe::Min1);
+                            chart.set_theme_override(Some(theme.clone()));
+                            chart.add_indicator(Box::new(study.clone()));
+                            let ctx = egui::Context::default();
+                            crate::theme::apply_to_egui(&ctx, &theme);
+                            let frame = |chart: &mut Chart| {
+                                ctx.run_ui(
+                                    egui::RawInput {
+                                        screen_rect: Some(egui::Rect::from_min_size(
+                                            egui::Pos2::ZERO,
+                                            size,
+                                        )),
+                                        ..Default::default()
+                                    },
+                                    |ui| {
+                                        chart.show(ui);
+                                    },
+                                )
+                            };
+                            frame(&mut chart).drop_without_applying_deltas();
+                            chart.set_visible_logical_range(LogicalRange::new(-2., 20.));
+                            let output = frame(&mut chart);
+                            let text_rect = |text: &egui::epaint::TextShape| {
+                                egui::Rect::from_min_size(text.pos, text.galley.size())
+                            };
+                            let marks: Vec<_> = output
+                                .shapes
+                                .iter()
+                                .filter_map(|shape| match &shape.shape {
+                                    egui::Shape::Text(text)
+                                        if text.galley.text().contains("divergence") =>
+                                    {
+                                        Some(text_rect(text))
+                                    }
+                                    _ => None,
+                                })
+                                .collect();
+                            assert_eq!(
+                                marks.len(),
+                                1,
+                                "the configured study paints its marker once"
+                            );
+                            assert!(
+                                chart.get_rendered_price_rect().contains_rect(marks[0]),
+                                "the whole caption belongs to the price pane"
+                            );
+                            let title = output
+                                .shapes
+                                .iter()
+                                .find_map(|shape| match &shape.shape {
+                                    egui::Shape::Text(text) if text.galley.text() == "1min" => {
+                                        Some(text_rect(text))
+                                    }
+                                    _ => None,
+                                })
+                                .unwrap();
+                            let legend_row = output
+                                .shapes
+                                .iter()
+                                .filter_map(|shape| match &shape.shape {
+                                    egui::Shape::Rect(rect)
+                                        if rect.fill == theme.chart.bg
+                                            && rect.rect.contains_rect(title) =>
+                                    {
+                                        Some(rect.rect)
+                                    }
+                                    _ => None,
+                                })
+                                .min_by(|a, b| a.area().total_cmp(&b.area()))
+                                .unwrap();
+                            assert!(
+                                !marks[0].intersects(legend_row),
+                                "caption under the price legend: {size:?} {boundary}"
+                            );
+                            output.drop_without_applying_deltas();
+                        }
+                    }
+                }
+                if boundary == "combined" {
+                    assert_eq!(
+                        study.labels()[0].text,
+                        if bullish {
+                            "Bull exhaustion, Bull divergence"
+                        } else {
+                            "Bear exhaustion, Bear divergence"
+                        }
+                    );
+                }
+                let confirmed = study.labels().to_vec();
+                study.update(&data, 17);
+                assert_eq!(study.labels(), confirmed);
+                let mut batch = study.clone();
+                batch.calculate(&data);
+                assert_eq!(study.labels(), batch.labels());
+                assert_eq!(
+                    format!("{:?}", lines(&study)),
+                    format!("{:?}", lines(&batch))
+                );
+                // A correction or replay rewind discards confirmations beyond the new end.
+                study.update(&data[..16], 15);
+                assert!(
+                    study
+                        .labels()
+                        .iter()
+                        .all(|m| !m.text.contains("divergence"))
+                );
+            }
+        }
+    }
+
+    /// A bar before the run establishes the extreme: 12 > 8 > 3 fades through three
+    /// new extremes; 12 > 8 < 9 does not. Negating deltas mirrors the rule at lows.
+    #[test]
+    fn cvd_exhaustion_requires_consecutive_closed_extremes_and_fading_signed_delta() {
+        for bullish in [false, true] {
+            for (last, boundary, expected) in [
+                (3., "none", true),
+                (9., "none", false),
+                (3., "gap", false),
+                (3., "before", true),
+                (3., "reset", true),
+                (0., "none", false),
+                (-3., "none", false),
+            ] {
+                let mut study = OrderFlowStudy::execution_delta(true);
+                study
+                    .set_input("exhaustion", InputValue::Toggle(true))
+                    .unwrap();
+                let data: Vec<_> = (0..6)
+                    .map(|i| {
+                        let p = if bullish {
+                            100. - i as f64
+                        } else {
+                            100. + i as f64
+                        };
+                        let time = start()
+                            + TimeDelta::minutes(i)
+                            + if boundary == "reset" && i >= 2 {
+                                TimeDelta::days(1)
+                            } else {
+                                TimeDelta::zero()
+                            };
+                        Bar::new(time, p, p, p, p, 1.)
+                    })
+                    .collect();
+                let input = study.order_flow_inputs()[0].clone();
+                for (i, delta) in [20., 12., 8., last, 2., 1.].into_iter().enumerate() {
+                    if (boundary == "gap" && i == 2) || (boundary == "before" && i == 0) {
+                        continue;
+                    }
+                    let delta: f64 = if bullish { -delta } else { delta };
+                    input.push_trade(
+                        &study.clock,
+                        &Tick::new(
+                            data[i].time,
+                            data[i].close,
+                            delta.abs(),
+                            Some(if delta > 0. {
+                                OrderSide::Buy
+                            } else {
+                                OrderSide::Sell
+                            }),
+                        ),
+                    );
+                }
+                study.calculate(&data[..1]);
+                assert_eq!(study.values().columns().len(), study.line_count());
+                for len in 2..=4 {
+                    study.update(&data[..len], len - 1);
+                    assert!(study.labels().is_empty());
+                }
+                study.update(&data[..5], 4);
+                assert_eq!(
+                    study.labels().len(),
+                    usize::from(expected),
+                    "{bullish} {last} {boundary}"
+                );
+                if expected {
+                    assert_eq!(
+                        (study.labels()[0].bar, study.labels()[0].price),
+                        (3, if bullish { 97. } else { 103. })
+                    );
+                }
+                assert_eq!(
+                    study.values().value(if bullish { 5 } else { 6 }, 3),
+                    Some(if expected { 1.0 } else { 0.0 })
+                );
+                let mut batch = study.clone();
+                batch.calculate(&data[..5]);
+                assert_eq!(study.labels(), batch.labels());
+            }
         }
     }
 
