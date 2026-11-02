@@ -143,10 +143,53 @@ impl Bar {
         }
     }
 
+    /// Creates a daily OHLCV bar from a calendar date, at midnight UTC, matching date-only
+    /// JSON and CSV imports. The date is independent of the exchange's time zone. The chart
+    /// formats this UTC instant in its display time zone, which can show a different date
+    /// (for example, the previous day at UTC-05:00).
+    ///
+    /// # Example
+    /// ```
+    /// use chrono::NaiveDate;
+    /// use egui_charts::model::Bar;
+    ///
+    /// let date = NaiveDate::from_ymd_opt(2024, 2, 29).unwrap();
+    /// let bar = Bar::from_date(date, 100.0, 105.0, 98.0, 103.0, 1000.0);
+    /// let point = Bar::from_value_on_date(date, 103.0);
+    /// let gap = Bar::whitespace_on_date(date);
+    /// assert_eq!(bar.time.to_rfc3339(), "2024-02-29T00:00:00+00:00");
+    /// assert_eq!(point.time, bar.time);
+    /// assert_eq!(gap.time, bar.time);
+    /// assert!(gap.is_whitespace());
+    /// ```
+    pub fn from_date(
+        date: NaiveDate,
+        open: f64,
+        high: f64,
+        low: f64,
+        close: f64,
+        volume: f64,
+    ) -> Self {
+        Self::new(
+            date.and_time(NaiveTime::MIN).and_utc(),
+            open,
+            high,
+            low,
+            close,
+            volume,
+        )
+    }
+
     /// A bar of a single value, such as a point of a line, area, baseline or column series: its
     /// open, high, low and close are `value`, its volume zero.
     pub fn from_value(time: DateTime<Utc>, value: f64) -> Self {
         Self::new(time, value, value, value, value, 0.0)
+    }
+
+    /// A [`from_value`](Self::from_value) bar on a calendar date, at midnight UTC.
+    /// Date and display time zone conventions are those of [`from_date`](Self::from_date).
+    pub fn from_value_on_date(date: NaiveDate, value: f64) -> Self {
+        Self::from_value(date.and_time(NaiveTime::MIN).and_utc(), value)
     }
 
     /// A bar without a value: it holds its slot on the time axis, so a gap such as a halted
@@ -154,6 +197,12 @@ impl Bar {
     /// and studies take it as a bar without a value. Its open, high, low, close and volume are NaN.
     pub fn whitespace(time: DateTime<Utc>) -> Self {
         Self::new(time, f64::NAN, f64::NAN, f64::NAN, f64::NAN, f64::NAN)
+    }
+
+    /// A [`whitespace`](Self::whitespace) bar on a calendar date, at midnight UTC.
+    /// Date and display time zone conventions are those of [`from_date`](Self::from_date).
+    pub fn whitespace_on_date(date: NaiveDate) -> Self {
+        Self::whitespace(date.and_time(NaiveTime::MIN).and_utc())
     }
 
     /// Whether this is a [`whitespace`](Self::whitespace) bar: open, high, low, close and volume
