@@ -10,11 +10,14 @@ use egui_charts::data::{
     Importance, NewsQuery, NewsStory, Reply, ScreenerColumn, ScreenerColumnSet, ScreenerOp,
     ScreenerQuery, ScreenerRow,
 };
-use egui_charts::model::Bar;
-use egui_charts::services::{ChatEvent, ChatMessage, Chats, Events, Notification, Notifications};
+use egui_charts::model::{Bar, Quote};
+use egui_charts::services::{
+    ChatEvent, ChatMessage, Chats, Events, Notification, Notifications, Quotes,
+};
 
 use egui_charts::ui::widget_bar::{PeriodReturn, Seasonality, SeasonalityMonth};
 
+use super::live::LiveFeed;
 use crate::sampledata::DemoSymbol;
 
 /// The newest requested bars inside the inclusive start and exclusive end of a history range.
@@ -28,6 +31,147 @@ pub(super) fn history_page(
     let first = bars[..end].partition_point(|bar| since.is_some_and(|since| bar.time < since));
     let start = end.saturating_sub(count).max(first);
     HistoryPage::new(bars[start..end].to_vec(), start == 0)
+}
+
+/// Retained symbol timelines shared by a demo's chart slots and market panels.
+/// Each symbol generates its archive once; subsequent samples advance only its live executions.
+pub(super) struct DemoMarket {
+    start: DateTime<Utc>,
+    feeds: BTreeMap<String, LiveFeed>,
+    quotes: BTreeMap<String, (DateTime<Utc>, Quote)>,
+}
+
+impl DemoMarket {
+    pub(super) fn new(start: DateTime<Utc>, source: LiveFeed) -> Self {
+        Self {
+            start,
+            feeds: [(source.instrument().symbol, source)].into(),
+            quotes: BTreeMap::new(),
+        }
+    }
+
+    /// Keep retained executions moving even while their panels are hidden.
+    pub(super) fn advance(&mut self, now: DateTime<Utc>) {
+        for feed in self.feeds.values() {
+            feed.advance(now);
+        }
+    }
+
+    fn source(&mut self, symbol: &str, now: DateTime<Utc>) -> &LiveFeed {
+        let feed = self
+            .feeds
+            .entry(symbol.to_owned())
+            .or_insert_with(|| LiveFeed::generate(symbol, self.start));
+        feed.advance(now);
+        feed
+    }
+
+    pub(super) fn feed(&mut self, symbol: &str, now: DateTime<Utc>) -> LiveFeed {
+        self.source(symbol, now).fork()
+    }
+
+    pub(super) fn quote(&mut self, symbol: &str, now: DateTime<Utc>) -> Option<Quote> {
+        let symbol = DemoSymbol::catalog()
+            .iter()
+            .find(|spec| spec.symbol.eq_ignore_ascii_case(symbol))?
+            .symbol;
+        if let Some((at, quote)) = self.quotes.get(symbol)
+            && *at == now
+        {
+            return Some(quote.clone());
+        }
+        let quote = self.source(symbol, now).quote(now)?;
+        self.quotes.insert(symbol.to_owned(), (now, quote.clone()));
+        Some(quote)
+    }
+}
+
+type QuoteStream = (Vec<String>, Events<(String, Quote)>);
+
+/// The watchlist's quote service: the chart symbol's quote from the live feed, with its regular
+/// and extended-hours prices, session volume and best bid and ask, and retained executions for
+/// other catalog symbols. The quotes follow the feed's simulation clock, which the pause freezes.
+/// The demo has no background worker, so the controller publishes once per frame. Repeating a
+/// quote only wakes the UI, so it is pushed again only when a displayed value changes.
+pub(super) struct DemoQuotes {
+    live: Mutex<Arc<LiveFeed>>,
+    stream: Mutex<Option<QuoteStream>>,
+    /// The last quote pushed per symbol, with times at display precision.
+    last_pushed: Mutex<BTreeMap<String, Quote>>,
+}
+
+impl DemoQuotes {
+    pub(super) fn new(live: Arc<LiveFeed>) -> Self {
+        Self {
+            live: Mutex::new(live),
+            stream: Mutex::default(),
+            last_pushed: Mutex::default(),
+        }
+    }
+
+    /// Follows the selected chart slot and reports a changed feed so query panels can follow it.
+    pub(super) fn set_live(&self, live: Arc<LiveFeed>) -> bool {
+        let mut current = self.live.lock().unwrap_or_else(|e| e.into_inner());
+        let changed = !Arc::ptr_eq(&current, &live);
+        *current = live;
+        changed
+    }
+
+    /// Pushes the current quote of every subscribed symbol.
+    pub(super) fn publish(&self, now: DateTime<Utc>) {
+        let stream = self.stream.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((symbols, events)) = stream.as_ref().filter(|(_, e)| e.is_active()) {
+            self.push(symbols, events, now);
+        }
+    }
+
+    fn push(&self, symbols: &[String], events: &Events<(String, Quote)>, now: DateTime<Utc>) {
+        let live = self.live.lock().unwrap_or_else(|e| e.into_inner());
+        let mut last_pushed = self.last_pushed.lock().unwrap_or_else(|e| e.into_inner());
+        for symbol in symbols {
+            let Some(quote) = live.market_quote(symbol, now) else {
+                continue;
+            };
+            // Panels use the whole quote, but details shows both update times only to the minute.
+            let mut pushed = quote.clone();
+            pushed.time = pushed.time.duration_trunc(TimeDelta::minutes(1)).unwrap();
+            if let Some(extended) = &mut pushed.extended {
+                extended.time = extended.time.duration_trunc(TimeDelta::minutes(1)).unwrap();
+            }
+            if last_pushed.get(symbol) == Some(&pushed) {
+                continue;
+            }
+            last_pushed.insert(symbol.clone(), pushed);
+            events.push((symbol.clone(), quote));
+        }
+    }
+}
+
+impl Quotes for DemoQuotes {
+    fn subscribe(&self, symbols: &[String], events: Events<(String, Quote)>) {
+        // A new stream starts from the current quotes, whatever was pushed to the one before.
+        self.last_pushed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        let now = self.live.lock().unwrap_or_else(|e| e.into_inner()).now();
+        self.push(symbols, &events, now);
+        *self.stream.lock().unwrap_or_else(|e| e.into_inner()) = Some((symbols.to_vec(), events));
+    }
+}
+
+impl super::DemoApp {
+    /// Price every demo instrument independently of chart focus and watchlist membership.
+    pub(super) fn feed_paper_prices(&self) {
+        if self.replay.is_none() {
+            for spec in DemoSymbol::catalog() {
+                if let Some(quote) = self.live.market_quote(spec.symbol, self.live.now()) {
+                    self.paper
+                        .set_price(spec.symbol, quote.extended.map_or(quote.last, |q| q.last));
+                }
+            }
+        }
+    }
 }
 
 /// Headlines and their text, with `{name}` and `{symbol}` filled in per symbol.
@@ -117,7 +261,7 @@ pub(super) fn news(query: &NewsQuery, now: DateTime<Utc>) -> Vec<NewsStory> {
                 })
         })
         .collect();
-    stories.sort_by(|a, b| b.time.cmp(&a.time));
+    stories.sort_by_key(|story| std::cmp::Reverse(story.time));
     stories.truncate(query.limit);
     stories
 }
@@ -206,7 +350,7 @@ pub(super) fn calendar(query: &CalendarQuery, now: DateTime<Utc>) -> Vec<Calenda
                     }
                     events.push(event);
                 }
-                CalendarKind::Ipos if n % 2 == 0 => {
+                CalendarKind::Ipos if n.is_multiple_of(2) => {
                     let (symbol, name, price) = OFFERINGS[n / 2 % OFFERINGS.len()];
                     let mut event = CalendarEvent::new(id("ipo", 0), query.kind, at(14), name);
                     event.country = "US".into();
@@ -249,13 +393,13 @@ pub(super) fn screener_sets() -> Vec<ScreenerColumnSet> {
     ]
 }
 
-/// The catalog symbols that pass `query`, from their synthetic quotes at `now`.
+/// The catalog symbols that pass `query`, from their shared execution quotes.
 pub(super) fn screen(
     query: &ScreenerQuery,
-    now: DateTime<Utc>,
+    live: &LiveFeed,
 ) -> Result<Vec<ScreenerRow>, FeedError> {
     let value = |spec: &DemoSymbol, column: &str| {
-        let quote = super::live::watchlist_quote(spec.symbol, now)?;
+        let quote = live.market_quote(spec.symbol, live.now())?;
         Some(match column {
             "price" => quote.last,
             "change_percent" => quote.change_percent(),
@@ -328,12 +472,12 @@ fn compact(value: f64) -> String {
 /// The demo's hotlists.
 pub(super) const HOTLISTS: [&str; 3] = ["Top gainers", "Top losers", "Most volatile"];
 
-/// The catalog symbols ranked for `query.list` on their synthetic quotes at `now`.
-pub(super) fn hotlist(query: &HotlistQuery, now: DateTime<Utc>) -> Vec<HotlistEntry> {
+/// The catalog symbols ranked for `query.list` on their shared execution quotes.
+pub(super) fn hotlist(query: &HotlistQuery, live: &LiveFeed) -> Vec<HotlistEntry> {
     let mut entries: Vec<HotlistEntry> = DemoSymbol::catalog()
         .iter()
         .filter_map(|spec| {
-            let quote = super::live::watchlist_quote(spec.symbol, now)?;
+            let quote = live.market_quote(spec.symbol, live.now())?;
             let change = quote.change_percent();
             let mut entry = HotlistEntry::new(spec.symbol, quote.last, change);
             entry.price_decimals = super::live::price_decimals(spec.symbol);
@@ -645,6 +789,335 @@ pub(super) fn seasonality(bars: &[Bar]) -> Seasonality {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn demo_frame(
+        app: &mut super::super::DemoApp,
+        ctx: &egui::Context,
+        events: Vec<egui::Event>,
+    ) -> Vec<(String, egui::Rect)> {
+        app.feed_market_panels(ctx);
+        app.trading.poll(ctx, &mut app.toasts);
+        let output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1440.0, 900.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                app.trading.show_ticket(ui, &app.chart);
+                egui::Panel::right("feed_test_details")
+                    .exact_size(340.0)
+                    .show(ui, |ui| {
+                        app.symbol_details.show(ui);
+                    });
+                app.chart.show(ui);
+            },
+        );
+        let texts = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some((
+                    text.galley.text().to_owned(),
+                    text.galley.rect.translate(text.pos.to_vec2()),
+                )),
+                _ => None,
+            })
+            .collect();
+        output.drop_without_applying_deltas();
+        texts
+    }
+
+    #[test]
+    fn chart_quotes_follow_slots_tabs_and_symbols_outside_the_watchlist() {
+        use egui_charts::ui::top_toolbar::LayoutAction;
+        use egui_charts::ui::widget_bar::{Watchlist, WatchlistPanel};
+        let ctx = egui::Context::default();
+        let now = "2026-10-23T15:00:00Z".parse().unwrap();
+        let mut app = super::super::DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            now,
+            true,
+        );
+        app.handle_layout_action(LayoutAction::SelectGrid(
+            egui_charts::widget::ChartLayoutMode::TwoHorizontal,
+        ));
+        app.activate_chart_slot(1);
+        app.switch_symbol("MSFT");
+        for slot in [1, 0, 1] {
+            app.activate_chart_slot(slot);
+            app.live.set_paused(true);
+            for _ in 0..4 {
+                demo_frame(&mut app, &ctx, vec![]);
+            }
+            let expected = app.live.quote(app.live.now()).unwrap();
+            assert_eq!(app.watchlist.quote(app.chart.symbol()), Some(&expected));
+            app.live.advance(now + TimeDelta::seconds(2));
+            demo_frame(&mut app, &ctx, vec![]);
+            assert_eq!(
+                app.watchlist.quote(app.chart.symbol()),
+                Some(&expected),
+                "the selected pause freezes its quote"
+            );
+        }
+        let frozen = app.live.quote(app.live.now()).unwrap();
+        app.activate_chart_slot(0);
+        app.live.set_paused(false);
+        (1..=40)
+            .find(|step| {
+                app.live.advance(now + TimeDelta::milliseconds(step * 100));
+                app.live.market_quote("MSFT", app.live.now()).unwrap().last != frozen.last
+            })
+            .expect("the other slot advances the market beyond the paused quote");
+        for _ in 0..4 {
+            demo_frame(&mut app, &ctx, vec![]);
+        }
+        assert_ne!(app.watchlist.quote("MSFT").unwrap().last, frozen.last);
+        app.activate_chart_slot(1);
+        let texts = demo_frame(&mut app, &ctx, vec![]);
+        assert!(
+            texts.iter().any(|(text, rect)| rect.left() >= 1100.0
+                && text.starts_with(&format!("{:.2}", frozen.last))),
+            "a paused slot must retain its own quote even when the list holds a newer quote"
+        );
+        app.activate_chart_slot(0);
+        app.live.set_paused(true);
+        let now = app.live.now();
+        app.handle_layout_action(LayoutAction::CreateNew);
+        app.switch_symbol("EURUSD");
+        app.watchlist = WatchlistPanel::new(vec![Watchlist::from_text("Other", "AAPL")]);
+        app.watchlist.set_service(app.quotes.clone());
+        let before = app.live.quote(app.live.now()).unwrap();
+        for _ in 0..4 {
+            demo_frame(&mut app, &ctx, vec![]);
+        }
+        let texts = demo_frame(&mut app, &ctx, vec![]);
+        assert_eq!(
+            app.watchlist.quote("EURUSD"),
+            app.live.quote(app.live.now()).as_ref()
+        );
+        assert!(
+            texts.iter().any(|(text, rect)| rect.left() >= 1100.0
+                && text.starts_with(&format!("{:.4}", before.last))),
+            "details must quote an unlisted chart symbol: {texts:?}"
+        );
+        app.live.set_paused(false);
+        let after = (1..=40)
+            .find_map(|step| {
+                app.live.advance(now + TimeDelta::milliseconds(step * 100));
+                let quote = app.live.quote(app.live.now()).unwrap();
+                (quote.last != before.last).then_some(quote)
+            })
+            .expect("the unlisted symbol receives another execution price");
+        let texts = demo_frame(&mut app, &ctx, vec![]);
+        assert!(
+            texts.iter().any(|(text, rect)| rect.left() >= 1100.0
+                && text.starts_with(&format!("{:.4}", after.last)))
+        );
+        app.screener.refresh();
+        app.screener.poll(&ctx);
+        let sample = app.live.market_quote("SAMPLE", app.live.now()).unwrap();
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.screener.show(ui);
+        });
+        assert!(
+            output.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(text) if text.galley.text() == format!("{:.2}", sample.last))),
+            "the screener must follow the selected layout's market clock"
+        );
+        output.drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn market_panel_prices_do_not_change_when_the_symbol_opens() {
+        for at in [
+            "2026-10-23T14:59:59Z",
+            "2026-10-23T13:00:00Z",
+            "2026-10-23T15:00:00Z",
+            "2026-10-23T22:00:00Z",
+        ] {
+            let start = at.parse().unwrap();
+            let live = Arc::new(LiveFeed::new("SAMPLE", start));
+            let now = start + TimeDelta::seconds(2);
+            live.advance(now);
+            live.set_view(egui_charts::ui::timeframe_toolbar::SessionType::RTH, false);
+            for symbol in ["MSFT", "BTCUSD"] {
+                let before = live.market_quote(symbol, now).unwrap();
+                live.set_symbol(symbol);
+                let after = live.quote(now).unwrap();
+                assert_eq!(
+                    (before.last, before.prev_close, before.extended),
+                    (after.last, after.prev_close, after.extended),
+                    "{symbol} at {at}"
+                );
+                let bars = live.snapshot(
+                    egui_charts::model::Timeframe::Min1,
+                    egui_charts::model::BarClock::new(egui_charts::model::Timeframe::Min1),
+                    false,
+                );
+                assert_eq!(
+                    bars.last().unwrap().close,
+                    after.last,
+                    "the regular chart close must price the panel"
+                );
+                let ctx = egui::Context::default();
+                let mut panel = egui_charts::ui::widget_bar::ScreenerPanel::new(screener_sets());
+                panel.set_feed(live.clone());
+                let mut displayed = false;
+                for _ in 0..2 {
+                    panel.poll(&ctx);
+                    let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                        panel.show(ui);
+                    });
+                    displayed |= output.shapes.iter().any(|shape| matches!(&shape.shape,
+                        egui::Shape::Text(text) if text.galley.text() == format!("{:.2}", after.last)));
+                    output.drop_without_applying_deltas();
+                }
+                assert!(displayed, "the screener must share {symbol}'s price basis");
+                if symbol == "MSFT" {
+                    assert_eq!(
+                        after.extended.is_some(),
+                        at == "2026-10-23T13:00:00Z" || at == "2026-10-23T22:00:00Z"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn paper_orders_fill_after_switching_away_and_stay_frozen_during_replay() {
+        use egui_charts::model::{OrderRequest, OrderSide, OrderType};
+        use egui_charts::ui::widget_bar::{Watchlist, WatchlistPanel};
+        let ctx = egui::Context::default();
+        let now = "2026-10-23T15:00:00Z".parse().unwrap();
+        let mut app = super::super::DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            now,
+            true,
+        );
+        app.switch_symbol("BTCUSD");
+        app.trading.set_service(app.paper.clone());
+        app.trading.display.instant_orders = true;
+        demo_frame(&mut app, &ctx, vec![]);
+        let price = app.live.quote(now).unwrap().last;
+        app.paper.set_price("BTCUSD", price);
+        let reference = LiveFeed::new("BTCUSD", now);
+        reference.set_paused(false);
+        let (at, trigger) = (1..=40)
+            .find_map(|step| {
+                let at = now + TimeDelta::milliseconds(step * 100);
+                reference.advance(at);
+                let next = reference.quote(at)?.last;
+                (next != price).then_some((at, next))
+            })
+            .expect("the execution price moves");
+        let kind = if trigger > price {
+            OrderType::Stop(trigger)
+        } else {
+            OrderType::Limit(trigger)
+        };
+        app.trading
+            .open_ticket(OrderRequest::new("BTCUSD", OrderSide::Buy, 1.0, kind));
+        let mut texts = Vec::new();
+        for _ in 0..3 {
+            texts = demo_frame(&mut app, &ctx, vec![]);
+        }
+        let point = texts
+            .iter()
+            .find(|(text, _)| {
+                text.contains("BTCUSD @") && (text.contains("STOP") || text.contains("LIMIT"))
+            })
+            .expect("the pending order submit button")
+            .1
+            .center();
+        let click = [true, false].map(|pressed| egui::Event::PointerButton {
+            pos: point,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        });
+        demo_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(point)]);
+        demo_frame(&mut app, &ctx, click.to_vec());
+        demo_frame(&mut app, &ctx, vec![]);
+        assert!(
+            !app.toasts
+                .toasts()
+                .iter()
+                .any(|toast| toast.message.starts_with("Filled:"))
+        );
+        app.switch_symbol("MSFT");
+        app.watchlist = WatchlistPanel::new(vec![Watchlist::from_text("Other", "AAPL")]);
+        app.watchlist.set_service(app.quotes.clone());
+        app.live.set_paused(false);
+        app.live.advance(at);
+        demo_frame(&mut app, &ctx, vec![]);
+        assert!(
+            app.toasts
+                .toasts()
+                .iter()
+                .any(|toast| toast.message.starts_with("Filled: Buy 1 BTCUSD")),
+            "the off-chart order must fill: {:?}",
+            app.toasts.toasts()
+        );
+        let (next_time, next_price) = (1..=40)
+            .find_map(|step| {
+                let time = at + TimeDelta::milliseconds(step * 100);
+                reference.advance(time);
+                let next = reference.quote(time)?.last;
+                (next != trigger).then_some((time, next))
+            })
+            .expect("the position price moves again");
+        app.live.advance(next_time);
+        demo_frame(&mut app, &ctx, vec![]);
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let _ = app.trading.show_account_panel(ui, "MSFT");
+        });
+        // One unit bought at the trigger has unrealized P&L = current price - trigger.
+        let pnl = format!("{:+.2}", next_price - trigger);
+        assert!(
+            output.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(text) if text.galley.text().replace(',', "") == pnl)),
+            "the off-chart position must be revalued to {pnl}"
+        );
+        output.drop_without_applying_deltas();
+        // A known replay close must survive the catalog's unrelated live price sample.
+        app.chart.set_data(
+            egui_charts::widget::SeriesId::MAIN,
+            [100.0, 80.0, 110.0]
+                .into_iter()
+                .enumerate()
+                .map(|(i, price)| {
+                    Bar::new(
+                        now - TimeDelta::minutes(10 - i as i64),
+                        price,
+                        price,
+                        price,
+                        price,
+                        1.0,
+                    )
+                })
+                .collect(),
+        );
+        app.start_replay();
+        assert!(app.replay.is_some());
+        app.feed_market_panels(&ctx);
+        app.trading.poll(&ctx, &mut app.toasts);
+        for _ in 0..2 {
+            app.trading.trade("MSFT".into(), OrderSide::Buy);
+            app.trading.poll(&ctx, &mut app.toasts);
+        }
+        assert!(
+            app.toasts
+                .toasts()
+                .iter()
+                .any(|toast| toast.message == "Filled: Buy 1 MSFT at 100.00"),
+            "the broker must keep the replay price: {:?}",
+            app.toasts.toasts()
+        );
+    }
 
     #[test]
     fn history_range_selects_the_newest_bars_inside_both_bounds() {

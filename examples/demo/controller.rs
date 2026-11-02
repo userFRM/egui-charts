@@ -2323,7 +2323,7 @@ impl DemoApp {
             .iter_mut()
             .flat_map(|universe| &mut universe.entries)
         {
-            if let Some(quote) = live::watchlist_quote(&entry.symbol, now) {
+            if let Some(quote) = self.live.market_quote(&entry.symbol, now) {
                 let change = (quote.last - quote.prev_close) / quote.prev_close * 100.0;
                 entry.values.insert("change".into(), change);
                 entry.values.insert("price".into(), quote.last);
@@ -2341,6 +2341,11 @@ impl DemoApp {
             }
         }
         self.watchlist.set_selected(&selected);
+        self.feed_paper_prices();
+        if self.quotes.set_live(self.live.clone()) {
+            self.screener.set_feed(self.live.clone());
+            self.hotlists.set_feed(self.live.clone());
+        }
         self.quotes.publish(now);
         self.watchlist.poll(ctx);
         self.symbol_details.set_instrument(
@@ -2350,10 +2355,7 @@ impl DemoApp {
                 .cloned()
                 .unwrap_or_else(|| egui_charts::model::Instrument::new(&chart_symbol)),
         );
-        let quoted = (self.watchlist.symbols())
-            .find(|symbol| symbol.eq_ignore_ascii_case(&chart_symbol))
-            .unwrap_or(&chart_symbol);
-        if let Some(quote) = self.watchlist.quote(quoted).cloned() {
+        if let Some(quote) = self.live.quote(now) {
             self.symbol_details.set_quote(quote.clone());
             self.trading.set_quote(&chart_symbol, quote);
         }
@@ -2840,20 +2842,19 @@ impl DemoApp {
                 if self.chart.take_event_click().is_some() {
                     self.notify("Synthetic session: generated example data");
                 }
-                if let Some(bar) = self
-                    .chart
-                    .bars(SeriesId::MAIN)
-                    .iter()
-                    .rfind(|bar| !bar.is_whitespace())
+                if self.replay.is_some()
+                    && let Some(bar) = self
+                        .chart
+                        .bars(SeriesId::MAIN)
+                        .iter()
+                        .rfind(|bar| !bar.is_whitespace())
                 {
                     self.paper.set_price(self.chart.symbol(), bar.close);
-                    if self.replay.is_some() {
-                        // Replay has no historical spread; its close prices both broker and ticket.
-                        self.trading.set_quote(
-                            self.chart.symbol(),
-                            egui_charts::model::Quote::new(bar.close, bar.close, bar.time),
-                        );
-                    }
+                    // Replay has no historical spread; its close prices both broker and ticket.
+                    self.trading.set_quote(
+                        self.chart.symbol(),
+                        egui_charts::model::Quote::new(bar.close, bar.close, bar.time),
+                    );
                 }
                 if let Some(side) = self.chart.take_quote_action() {
                     if !self.trading.has_broker() {
