@@ -204,9 +204,7 @@ pub(super) fn refresh(chart: &mut Chart, id: SeriesId, feed: &LiveFeed) {
     if chart.series_order(id).is_none() {
         return;
     }
-    let timeframe = chart.timeframe().unwrap_or(Timeframe::Hour1);
-    let bars = feed.snapshot(timeframe, chart.bar_clock(), chart.extended_hours());
-    chart.set_data(id, bars);
+    feed.refresh_comparison(chart, id);
 }
 
 pub(super) fn copy(
@@ -464,6 +462,94 @@ impl DemoApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Pointer frames keep loaded comparisons intact; trades and view changes still refresh
+    /// their bars, and a history restore that cleared the bars loads them again.
+    #[test]
+    fn unchanged_comparisons_do_not_reload_history() {
+        use chrono::{DateTime, TimeDelta};
+        use egui_charts::model::BarData;
+        use egui_charts::widget::ChartEvent;
+
+        let now = DateTime::parse_from_rfc3339("2026-10-23T14:30:00Z")
+            .unwrap()
+            .to_utc();
+        for count in [1, 2, 5] {
+            let mut chart = Chart::new(BarData::new());
+            chart.set_timeframe(Timeframe::Min1);
+            let feeds: Vec<_> = (0..count)
+                .map(|_| {
+                    let id = chart.add_comparison("EURUSD", egui::Color32::BLUE);
+                    let feed = LiveFeed::new("EURUSD", now);
+                    refresh(&mut chart, id, &feed);
+                    assert!(!chart.bars(id).is_empty());
+                    (id, feed)
+                })
+                .collect();
+            chart.drain_events().for_each(drop);
+            for (id, feed) in &feeds {
+                feed.advance(now + TimeDelta::nanoseconds(1));
+                refresh(&mut chart, *id, feed);
+            }
+            assert!(
+                !chart
+                    .drain_events()
+                    .any(|event| matches!(event, ChartEvent::DataLoaded { .. })),
+                "{count} comparisons must not reload on an unchanged frame"
+            );
+            for (id, feed) in &feeds {
+                feed.advance(now + TimeDelta::seconds(2));
+                refresh(&mut chart, *id, feed);
+                assert_eq!(
+                    chart.bars(*id),
+                    feed.snapshot(Timeframe::Min1, chart.bar_clock(), false)
+                );
+            }
+            chart.set_timeframe(Timeframe::Min5);
+            for (id, feed) in &feeds {
+                refresh(&mut chart, *id, feed);
+                assert_eq!(
+                    chart.bars(*id),
+                    feed.snapshot(Timeframe::Min5, chart.bar_clock(), false)
+                );
+                chart.set_data(*id, Vec::new());
+                refresh(&mut chart, *id, feed);
+                assert!(!chart.bars(*id).is_empty());
+            }
+            chart.drain_events().for_each(drop);
+            chart.set_extended_hours(true);
+            for (id, feed) in &feeds {
+                refresh(&mut chart, *id, feed);
+                assert_eq!(
+                    chart.bars(*id),
+                    feed.snapshot(Timeframe::Min5, chart.bar_clock(), true)
+                );
+            }
+            assert_eq!(
+                chart
+                    .drain_events()
+                    .filter(|event| matches!(event, ChartEvent::DataLoaded { .. }))
+                    .count(),
+                count,
+                "a session change reloads each comparison"
+            );
+            chart.set_replay_time(Some(DateTime::UNIX_EPOCH));
+            for (id, feed) in &feeds {
+                refresh(&mut chart, *id, feed);
+                assert!(chart.bars(*id).is_empty());
+            }
+            chart.drain_events().for_each(drop);
+            for (id, feed) in &feeds {
+                refresh(&mut chart, *id, feed);
+            }
+            assert!(
+                !chart
+                    .drain_events()
+                    .any(|event| matches!(event, ChartEvent::DataLoaded { .. })),
+                "an empty replay window must not reload retained history"
+            );
+        }
+    }
 
     fn listed(app: &DemoApp) -> Vec<&str> {
         app.compare_dialog
