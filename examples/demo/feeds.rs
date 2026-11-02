@@ -3,7 +3,7 @@
 
 use chrono::{DateTime, Datelike, DurationRound, NaiveTime, TimeDelta, TimeZone, Utc, Weekday};
 use std::collections::BTreeMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use egui_charts::data::{
     CalendarEvent, CalendarKind, CalendarQuery, FeedError, HotlistEntry, HotlistQuery, Importance,
@@ -344,9 +344,28 @@ pub(super) fn hotlist(query: &HotlistQuery, now: DateTime<Utc>) -> Vec<HotlistEn
 
 /// The demo's event log: what it reported to the user, newest last, kept for a new stream.
 #[derive(Default)]
-pub(super) struct DemoNotifications(Mutex<(Vec<Notification>, Option<Events<Notification>>)>);
+pub(super) struct DemoNotifications(
+    Mutex<(Vec<Notification>, Option<Events<Notification>>)>,
+    Mutex<Vec<std::sync::Weak<egui_charts::services::OrderFlowDetectors>>>,
+);
 
 impl DemoNotifications {
+    /// Include the chart's detector notifications in the shared log.
+    pub(super) fn watch_detectors(
+        &self,
+        detectors: Arc<egui_charts::services::OrderFlowDetectors>,
+    ) {
+        let mut sources = self.1.lock().unwrap();
+        sources.retain(|source| source.strong_count() > 0);
+        let source = Arc::downgrade(&detectors);
+        if sources.iter().any(|kept| kept.ptr_eq(&source)) {
+            return;
+        }
+        if let Some(events) = &self.0.lock().unwrap().1 {
+            detectors.watch(events.clone());
+        }
+        sources.push(source);
+    }
     /// Logs `title` about `symbol`, if any, and pushes it to the panel.
     pub(super) fn notify(&self, title: impl Into<String>, symbol: Option<&str>) {
         let mut entry = Notification::new(Utc::now(), title);
@@ -378,6 +397,15 @@ impl DemoNotifications {
 
 impl Notifications for DemoNotifications {
     fn watch(&self, events: Events<Notification>) {
+        for detectors in self
+            .1
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(std::sync::Weak::upgrade)
+        {
+            detectors.watch(events.clone());
+        }
         let mut state = self.0.lock().unwrap();
         for entry in &state.0 {
             events.push(entry.clone());

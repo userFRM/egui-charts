@@ -311,7 +311,7 @@ impl OrderFlowDetectors {
 
     /// Replaces the settings of every detector from the next event on. Completed detections
     /// stay; a disabled liquidity tracker drops its unfinished zones. Panics if a fixed
-    /// threshold is not positive and finite, or the refill count is zero.
+    /// threshold is not positive and finite, or a refill or count-alert minimum is zero.
     pub fn set_settings(&self, settings: DetectorSettings) {
         for threshold in [
             settings.big_trades.rule.threshold,
@@ -473,7 +473,7 @@ impl OrderFlowDetectors {
 
     /// Detects on the loaded trade history of `symbol`, in time order, before the live trades
     /// that follow it. Its detections are made and pushed like live ones and warm the automatic
-    /// thresholds; trades with an id already seen are dropped.
+    /// thresholds and counts without raising alerts; trades with an id already seen are dropped.
     pub fn push_history(&self, symbol: &str, trades: &[Tick]) {
         let mut state = self.lock();
         let State {
