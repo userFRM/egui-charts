@@ -710,6 +710,12 @@ impl DemoApp {
             .filter(|name| menu.layouts.contains(name));
         settings.layout_autosave = menu.autosave;
         settings.layout_favorites = menu.favorites.clone();
+        settings.indicator_favorites = self
+            .indicator_dialog
+            .preferences()
+            .favorites
+            .into_iter()
+            .collect();
         settings.market_heatmap = self.market_heatmap.selection.clone();
         settings
     }
@@ -739,6 +745,11 @@ impl DemoApp {
         toolbar.magnet_hint_dismissed |= settings.magnet_hint_dismissed;
         self.top_toolbar.layout_menu.autosave = settings.layout_autosave;
         self.top_toolbar.layout_menu.favorites = settings.layout_favorites;
+        self.indicator_dialog.set_preferences(
+            egui_charts::ui::top_toolbar::components::indicator_dialog::IndicatorPreferences {
+                favorites: settings.indicator_favorites.into_iter().collect(),
+            },
+        );
         self.market_heatmap.selection = settings.market_heatmap;
         if let Some(layout) = settings.layout {
             self.top_toolbar.layout_menu.open(&layout);

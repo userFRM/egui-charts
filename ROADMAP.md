@@ -235,7 +235,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [ ] Assemble a terminal that owns component state, handles all actions and lets the application intercept them. `Terminal` also runs the widget bar and side panels, persists watchlists, routes panel symbol selections, derives performance and seasonality from chart bars, and opens host-fed profile cards. It also handles time controls, comparisons, spread selection and host-supplied dividend adjustment, and runs multi-chart grids, layout tabs, saved layouts, favourites, autosave and Ctrl+S. Remaining action groups and the demo migration are unfinished.
 - [ ] Provide a shared docked tab container for account, strategy report, study editor and replay-trading surfaces.
 - [ ] Open the drawing toolbar's colour popup from a visible control and render its saved favourites bar.
-- [ ] Persist and restore indicator favourites in the assembled UI.
+- [x] The terminal and demo persist indicator favourites, restore them in the browser and toolbar, and retain stars for temporarily unavailable studies.
 - [ ] Show and route the standalone floating selection toolbar's settings, duplicate, lock, visibility, delete and colour actions.
 - [ ] Connect the standalone quick settings menu, its scale-settings action and all of its configuration fields.
 - [ ] Handle the series context menu's Copy price action.

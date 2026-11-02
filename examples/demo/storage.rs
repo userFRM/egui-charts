@@ -133,3 +133,72 @@ impl Storage for DemoStorage {
         reply.send(Ok(()));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::controller::DemoApp;
+    use eframe::App;
+    use egui_charts::ui::dialogs::StudyContextMenuAction;
+    use egui_charts::widget::SeriesId;
+
+    #[derive(Default)]
+    struct AppStorage(HashMap<String, String>);
+
+    impl eframe::Storage for AppStorage {
+        fn get_string(&self, key: &str) -> Option<String> {
+            self.0.get(key).cloned()
+        }
+        fn set_string(&mut self, key: &str, value: String) {
+            self.0.insert(key.into(), value);
+        }
+        fn remove_string(&mut self, key: &str) {
+            self.0.remove(key);
+        }
+        fn flush(&mut self) {}
+    }
+
+    fn restart(ctx: &egui::Context, storage: &AppStorage) -> DemoApp {
+        let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        cc.storage = Some(storage);
+        DemoApp::new_at(&cc, "2026-10-27T19:29:50Z".parse().unwrap(), true)
+    }
+
+    #[test]
+    fn study_favorites_survive_restart_and_removal_with_legacy_settings() {
+        let ctx = egui::Context::default();
+        let mut storage = AppStorage::default();
+        eframe::set_value(
+            &mut storage,
+            KEY,
+            &HashMap::from([("Settings/settings", r#"{"version":1,"interval":"Min5"}"#)]),
+        );
+        let mut app = restart(&ctx, &storage);
+        assert!(app.indicator_dialog.favorites.is_empty());
+        assert_eq!(app.state.timeframe, egui_charts::model::Timeframe::Min5);
+        app.indicator_dialog.favorites.insert("RSI".into());
+        app.handle_study_context(
+            &ctx,
+            SeriesId::MAIN,
+            StudyContextMenuAction::AddToFavorites("SMA".into()),
+        );
+        // Keep stars for host studies that are temporarily absent from the catalogue.
+        app.indicator_dialog.favorites.insert("Host study".into());
+        for expected in [["RSI", "SMA"].as_slice(), ["SMA"].as_slice()] {
+            app.save(&mut storage);
+            app = restart(&ctx, &storage);
+            ctx.run_ui(Default::default(), |_| app.show_templates(&ctx))
+                .drop_without_applying_deltas();
+            let mut favorites: Vec<_> = app
+                .top_toolbar
+                .favorite_indicators
+                .iter()
+                .map(|(id, _)| id.as_str())
+                .collect();
+            favorites.sort_unstable();
+            assert_eq!(favorites, expected);
+            assert!(app.indicator_dialog.favorites.contains("Host study"));
+            app.indicator_dialog.favorites.remove("RSI");
+        }
+    }
+}
