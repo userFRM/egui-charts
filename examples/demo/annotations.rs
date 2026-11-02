@@ -106,84 +106,86 @@ impl DemoApp {
                 ui.label("Marker");
                 let mut enabled = existing.is_some();
                 let mut changed = ui.checkbox(&mut enabled, "Show marker").changed();
-                let shapes = [
-                    (MarkerShape::Circle, "Circle"),
-                    (MarkerShape::Square, "Square"),
-                    (MarkerShape::ArrowUp, "Arrow up"),
-                    (MarkerShape::ArrowDown, "Arrow down"),
-                    (MarkerShape::TriangleUp, "Triangle up"),
-                    (MarkerShape::TriangleDown, "Triangle down"),
-                    (MarkerShape::Diamond, "Diamond"),
-                    (MarkerShape::Star, "Star"),
-                    (MarkerShape::Cross, "Cross"),
-                    (MarkerShape::Flag, "Flag"),
-                ];
-                egui::ComboBox::from_label("Shape")
-                    .selected_text(
-                        shapes
-                            .iter()
-                            .find(|(shape, _)| *shape == marker.shape)
-                            .unwrap()
-                            .1,
-                    )
-                    .show_ui(ui, |ui| {
-                        for (shape, label) in shapes {
-                            changed |= ui
-                                .selectable_value(&mut marker.shape, shape, label)
-                                .changed();
-                        }
-                    });
-                let positions = [
-                    (MarkerPos::AboveBar, "Above bar"),
-                    (MarkerPos::BelowBar, "Below bar"),
-                    (MarkerPos::InBar, "In bar"),
-                    (MarkerPos::Top, "Pane top"),
-                    (MarkerPos::Bottom, "Pane bottom"),
-                    (MarkerPos::Left, "Pane left"),
-                    (MarkerPos::Right, "Pane right"),
-                    (MarkerPos::AbsoluteUp, "Absolute up"),
-                    (MarkerPos::AbsoluteDown, "Absolute down"),
-                    (MarkerPos::Absolute, "Absolute"),
-                    (MarkerPos::AtPriceTop, "Above explicit price"),
-                    (MarkerPos::AtPriceBottom, "Below explicit price"),
-                    (MarkerPos::AtPriceMiddle, "On explicit price"),
-                ];
-                egui::ComboBox::from_label("Position")
-                    .selected_text(
-                        positions
-                            .iter()
-                            .find(|(position, _)| *position == marker.position)
-                            .unwrap()
-                            .1,
-                    )
-                    .show_ui(ui, |ui| {
-                        for (position, label) in positions {
-                            changed |= ui
-                                .selectable_value(&mut marker.position, position, label)
-                                .changed();
-                        }
-                    });
-                if matches!(
-                    marker.position,
-                    MarkerPos::AtPriceTop | MarkerPos::AtPriceBottom | MarkerPos::AtPriceMiddle
-                ) {
-                    changed |= ui
-                        .add(
-                            egui::DragValue::new(marker.price.get_or_insert(bar.close))
-                                .prefix("Price ")
-                                .speed(bar.close.abs().max(1.0) * 0.001),
+                ui.add_enabled_ui(enabled, |ui| {
+                    let shapes = [
+                        (MarkerShape::Circle, "Circle"),
+                        (MarkerShape::Square, "Square"),
+                        (MarkerShape::ArrowUp, "Arrow up"),
+                        (MarkerShape::ArrowDown, "Arrow down"),
+                        (MarkerShape::TriangleUp, "Triangle up"),
+                        (MarkerShape::TriangleDown, "Triangle down"),
+                        (MarkerShape::Diamond, "Diamond"),
+                        (MarkerShape::Star, "Star"),
+                        (MarkerShape::Cross, "Cross"),
+                        (MarkerShape::Flag, "Flag"),
+                    ];
+                    egui::ComboBox::from_label("Shape")
+                        .selected_text(
+                            shapes
+                                .iter()
+                                .find(|(shape, _)| *shape == marker.shape)
+                                .unwrap()
+                                .1,
                         )
+                        .show_ui(ui, |ui| {
+                            for (shape, label) in shapes {
+                                changed |= ui
+                                    .selectable_value(&mut marker.shape, shape, label)
+                                    .changed();
+                            }
+                        });
+                    let positions = [
+                        (MarkerPos::AboveBar, "Above bar"),
+                        (MarkerPos::BelowBar, "Below bar"),
+                        (MarkerPos::InBar, "In bar"),
+                        (MarkerPos::Top, "Pane top"),
+                        (MarkerPos::Bottom, "Pane bottom"),
+                        (MarkerPos::Left, "Pane left"),
+                        (MarkerPos::Right, "Pane right"),
+                        (MarkerPos::AbsoluteUp, "Absolute up"),
+                        (MarkerPos::AbsoluteDown, "Absolute down"),
+                        (MarkerPos::Absolute, "Absolute"),
+                        (MarkerPos::AtPriceTop, "Above explicit price"),
+                        (MarkerPos::AtPriceBottom, "Below explicit price"),
+                        (MarkerPos::AtPriceMiddle, "On explicit price"),
+                    ];
+                    egui::ComboBox::from_label("Position")
+                        .selected_text(
+                            positions
+                                .iter()
+                                .find(|(position, _)| *position == marker.position)
+                                .unwrap()
+                                .1,
+                        )
+                        .show_ui(ui, |ui| {
+                            for (position, label) in positions {
+                                changed |= ui
+                                    .selectable_value(&mut marker.position, position, label)
+                                    .changed();
+                            }
+                        });
+                    if matches!(
+                        marker.position,
+                        MarkerPos::AtPriceTop | MarkerPos::AtPriceBottom | MarkerPos::AtPriceMiddle
+                    ) {
+                        changed |= ui
+                            .add(
+                                egui::DragValue::new(marker.price.get_or_insert(bar.close))
+                                    .prefix("Price ")
+                                    .speed(bar.close.abs().max(1.0) * 0.001),
+                            )
+                            .changed();
+                    }
+                    changed |= ui
+                        .add(egui::Slider::new(&mut marker.size, 0.5..=4.0).text("Size"))
                         .changed();
-                }
-                changed |= ui
-                    .add(egui::Slider::new(&mut marker.size, 0.5..=4.0).text("Size"))
-                    .changed();
-                let label = ui.label("Text");
-                let text = ui
-                    .text_edit_singleline(marker.text.get_or_insert_with(String::new))
-                    .labelled_by(label.id);
-                changed |= text.changed();
-                changed |= ui.color_edit_button_srgba(&mut marker.color).changed();
+                    let label = ui.label("Text");
+                    let text = ui
+                        .text_edit_singleline(marker.text.get_or_insert_with(String::new))
+                        .labelled_by(label.id);
+                    changed |= text.changed();
+                    changed |= ui.color_edit_button_srgba(&mut marker.color).changed();
+                });
                 if changed {
                     let mut markers = self.chart.markers(id).to_vec();
                     markers.retain(|marker| marker.id.as_deref() != Some("demo-editor"));
@@ -237,27 +239,29 @@ impl DemoApp {
                     });
                 let mut enabled = existing.is_some();
                 let mut changed = ui.checkbox(&mut enabled, "Show price line").changed();
-                changed |= ui
-                    .add(
-                        egui::DragValue::new(&mut line.price)
-                            .prefix("Price ")
-                            .speed(bar.close.abs().max(1.0) * 0.001),
-                    )
-                    .changed();
-                changed |= ui
-                    .add(egui::Slider::new(&mut line.width, 1.0..=5.0).text("Width"))
-                    .changed();
-                egui::ComboBox::from_label("Stroke")
-                    .selected_text(line.style.name())
-                    .show_ui(ui, |ui| {
-                        for &style in LineStyle::all() {
-                            changed |= ui
-                                .selectable_value(&mut line.style, style, style.name())
-                                .changed();
-                        }
-                    });
-                changed |= ui.checkbox(&mut line.axis_label, "Axis label").changed();
-                changed |= ui.color_edit_button_srgba(&mut line.color).changed();
+                ui.add_enabled_ui(enabled, |ui| {
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut line.price)
+                                .prefix("Price ")
+                                .speed(bar.close.abs().max(1.0) * 0.001),
+                        )
+                        .changed();
+                    changed |= ui
+                        .add(egui::Slider::new(&mut line.width, 1.0..=5.0).text("Width"))
+                        .changed();
+                    egui::ComboBox::from_label("Stroke")
+                        .selected_text(line.style.name())
+                        .show_ui(ui, |ui| {
+                            for &style in LineStyle::all() {
+                                changed |= ui
+                                    .selectable_value(&mut line.style, style, style.name())
+                                    .changed();
+                            }
+                        });
+                    changed |= ui.checkbox(&mut line.axis_label, "Axis label").changed();
+                    changed |= ui.color_edit_button_srgba(&mut line.color).changed();
+                });
                 if changed {
                     match (existing, enabled) {
                         (Some((handle, _)), true) => {
