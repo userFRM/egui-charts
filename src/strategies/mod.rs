@@ -12,11 +12,16 @@
 //! a run. Gap and inside/outside strategies take the host instrument's `tick_size` input; their
 //! exits are distances from the actual position fill price. The engine's settings supply size
 //! and pyramiding. Built-ins ignore fill callbacks and trade only at closed-bar decisions.
+//!
+//! [`optimise`] runs a lazy grid of input combinations on fresh strategies and yields each
+//! combination's [`StrategyTrial`], using the same bars and backtest settings throughout.
 
 mod backtest;
 mod library;
+mod optimize;
 
 pub use library::StrategyFactory;
+pub use optimize::{StrategyTrial, optimise};
 
 pub use backtest::{
     Backtest, BacktestSettings, Commission, OrderSize, Slippage, Strategy, StrategyContext,

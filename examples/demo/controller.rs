@@ -36,6 +36,9 @@ use egui_charts::studies::StudyTemplateSet;
 use egui_charts::ui::dialogs::templates::{DrawingTemplate, TemplateDialog};
 #[path = "feeds.rs"]
 mod feeds;
+#[cfg(target_arch = "wasm32")]
+#[path = "landing.rs"]
+pub(crate) mod landing;
 #[path = "live.rs"]
 mod live;
 #[path = "market.rs"]
@@ -404,7 +407,7 @@ pub struct DemoApp {
     date_picker: DatePicker,
 
     // A finished host-run sample, independent of subsequent chart navigation.
-    strategy_report: egui_charts::ui::strategy_report::StrategyReportPanel,
+    strategy_report: egui_charts::ui::strategy_report::StrategyTester,
     strategy_trade: Option<usize>,
     strategy_session: SessionType,
 

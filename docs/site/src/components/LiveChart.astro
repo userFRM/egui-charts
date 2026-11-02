@@ -1,0 +1,19 @@
+<figure class="live-chart">
+  <figcaption>
+    <span><strong>SAMPLE</strong> <span class="sample-label">Synthetic data</span></span>
+    <a href="/egui-charts/demo/">Open full demo</a>
+  </figcaption>
+  <iframe src="/egui-charts/demo/chart.html" title="Interactive candlestick chart with synthetic sample data" loading="eager"></iframe>
+  <p>Pan, zoom, explore. Your application supplies the real data.</p>
+</figure>
+
+<script>
+  const frame = document.querySelector<HTMLIFrameElement>('.live-chart iframe');
+  const syncTheme = () => {
+    const root = frame?.contentDocument?.documentElement;
+    if (root) root.dataset.theme = document.documentElement.dataset.theme;
+  };
+  frame?.addEventListener('load', syncTheme);
+  syncTheme();
+  new MutationObserver(syncTheme).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+</script>
