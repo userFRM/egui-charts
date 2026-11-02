@@ -262,10 +262,20 @@ impl Footprint {
     /// downwards, including negative prices. Grouping never changes trade-side totals.
     pub fn new(clock: BarClock, tick_size: f64, ticks_per_row: u32) -> Result<Self, FeedError> {
         let step = tick_size * ticks_per_row as f64;
-        if !tick_size.is_finite() || tick_size <= 0.0 || ticks_per_row == 0 || !step.is_finite() {
+        if !tick_size.is_finite() || tick_size <= 0.0 {
+            return Err(FeedError::InvalidData(format!(
+                "footprint tick_size must be finite and above zero, got {tick_size:?}"
+            )));
+        }
+        if ticks_per_row == 0 {
             return Err(FeedError::InvalidData(
-                "invalid footprint price step".into(),
+                "footprint ticks_per_row must be at least 1, got 0".into(),
             ));
+        }
+        if !step.is_finite() {
+            return Err(FeedError::InvalidData(format!(
+                "footprint price step of tick_size {tick_size:?} times ticks_per_row {ticks_per_row} is not finite"
+            )));
         }
         Ok(Self {
             clock,
@@ -375,10 +385,25 @@ impl Footprint {
     /// Restricts executions to this inclusive size range, before aggregation.
     /// Must be called before adding trades. Invalid ranges return an error without changing it.
     pub fn set_size_filter(&mut self, min: f64, max: f64) -> Result<(), FeedError> {
-        if self.last.is_some() || !min.is_finite() || !max.is_finite() || min < 0.0 || max < min {
+        if self.last.is_some() {
             return Err(FeedError::InvalidData(
-                "invalid or late footprint size filter".into(),
+                "footprint size filter must be set before the first trade".into(),
             ));
+        }
+        if !min.is_finite() || min < 0.0 {
+            return Err(FeedError::InvalidData(format!(
+                "footprint size filter min must be finite and at least 0, got {min:?}"
+            )));
+        }
+        if !max.is_finite() {
+            return Err(FeedError::InvalidData(format!(
+                "footprint size filter max must be finite, got {max:?}"
+            )));
+        }
+        if max < min {
+            return Err(FeedError::InvalidData(format!(
+                "footprint size filter max {max:?} is below min {min:?}"
+            )));
         }
         self.min_size = min;
         self.max_size = max;
@@ -433,13 +458,30 @@ impl Footprint {
     /// or overflowing input returns an error and changes nothing. Unknown side stays unknown.
     /// Zero-sized executions are ignored.
     pub fn push(&mut self, trade: &Tick) -> Result<bool, FeedError> {
-        let Some(level) = self.level_of(trade.price).filter(|_| {
-            super::trades::valid(trade) && self.last.is_none_or(|last| trade.ts >= last)
-        }) else {
-            return Err(FeedError::InvalidData(
-                "invalid or out-of-order footprint trade".into(),
-            ));
+        if !trade.price.is_finite() {
+            return Err(FeedError::InvalidData(format!(
+                "footprint trade price must be finite, got {:?}",
+                trade.price
+            )));
+        }
+        if !trade.size.is_finite() || trade.size < 0.0 {
+            return Err(FeedError::InvalidData(format!(
+                "footprint trade size must be finite and at least 0, got {:?}",
+                trade.size
+            )));
+        }
+        let Some(level) = self.level_of(trade.price) else {
+            return Err(FeedError::InvalidData(format!(
+                "footprint trade price {:?} is outside the grid of step {:?}",
+                trade.price, self.step
+            )));
         };
+        if let Some(last) = self.last.filter(|last| trade.ts < *last) {
+            return Err(FeedError::InvalidData(format!(
+                "footprint trade at {} precedes the last trade at {last}",
+                trade.ts
+            )));
+        }
         if trade.size < self.min_size || trade.size > self.max_size || trade.size == 0.0 {
             return Ok(false);
         }
@@ -494,6 +536,54 @@ mod tests {
     use super::*;
     use crate::model::Timeframe;
     use chrono::TimeDelta;
+
+    #[test]
+    fn argument_errors_name_the_argument_and_its_value() {
+        use crate::data::{
+            DepthHistory, DepthHistoryConfig, MarketEvent, ReplayClock, ReplayEvent,
+            aggregate_trades,
+        };
+        let t0: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let t1 = t0 + TimeDelta::seconds(1);
+        let clock = || BarClock::new(Timeframe::Min1);
+        let trade = |ts, price, size| Tick::new(ts, price, size, None);
+        let base = DepthHistoryConfig::default();
+        let depth = |config| DepthHistory::new(config).map(drop);
+        let fresh = || Footprint::new(clock(), 1.0, 1).unwrap();
+        let mut started = fresh();
+        started.push(&trade(t1, 100.0, 1.0)).unwrap();
+        let event = |ts| ReplayEvent::new("A", t0, 0, MarketEvent::Trade(trade(ts, 100.0, 1.0)));
+        #[rustfmt::skip]
+        let cases = [
+            (depth(DepthHistoryConfig { cadence: TimeDelta::zero(), ..base.clone() }), "depth history cadence must be at least one millisecond, got P0D"),
+            (depth(DepthHistoryConfig { rows: 0, ..base.clone() }), "depth history rows must be at least 1, got 0"),
+            (depth(DepthHistoryConfig { ticks_per_row: 0, ..base.clone() }), "depth history ticks_per_row must be at least 1, got 0"),
+            (depth(DepthHistoryConfig { columns: 1, ..base.clone() }), "depth history columns must be at least 2, got 1"),
+            (Footprint::new(clock(), f64::NAN, 1).map(drop), "footprint tick_size must be finite and above zero, got NaN"),
+            (Footprint::new(clock(), 1.0, 0).map(drop), "footprint ticks_per_row must be at least 1, got 0"),
+            (Footprint::new(clock(), 1e300, u32::MAX).map(drop), "footprint price step of tick_size 1e300 times ticks_per_row 4294967295 is not finite"),
+            (started.clone().set_size_filter(0.0, 1.0), "footprint size filter must be set before the first trade"),
+            (fresh().set_size_filter(-1.0, 1.0), "footprint size filter min must be finite and at least 0, got -1.0"),
+            (fresh().set_size_filter(0.0, f64::NAN), "footprint size filter max must be finite, got NaN"),
+            (fresh().set_size_filter(5.0, 1.0), "footprint size filter max 1.0 is below min 5.0"),
+            (started.clone().push(&trade(t1, f64::NAN, 1.0)).map(drop), "footprint trade price must be finite, got NaN"),
+            (started.clone().push(&trade(t1, 100.0, -1.0)).map(drop), "footprint trade size must be finite and at least 0, got -1.0"),
+            (Footprint::new(clock(), 1e-300, u32::MAX).unwrap().push(&trade(t1, 1e6, 1.0)).map(drop), "footprint trade price 1000000.0 is outside the grid of step 4.294967295e-291"),
+            (started.clone().push(&trade(t0, 100.0, 1.0)).map(drop), "footprint trade at 2026-01-05 10:00:00 UTC precedes the last trade at 2026-01-05 10:00:01 UTC"),
+            (ReplayClock::new(vec![event(t1)]).map(drop), "replay event of \"A\" at 2026-01-05 10:00:00 UTC with sequence 0 is invalid"),
+            (ReplayClock::new(vec![event(t0), event(t0)]).map(drop), "replay events of \"A\" at 2026-01-05 10:00:00 UTC share sequence 0"),
+            (ReplayClock::new(Vec::new()).unwrap().set_speed(-1.0), "replay speed must be finite and at least 0, got -1.0"),
+            (aggregate_trades(&[trade(t0, 100.0, 1.0), trade(t1, f64::NAN, 1.0)], Timeframe::Min1).map(drop), "trade 1 price must be finite, got NaN"),
+            (aggregate_trades(&[trade(t0, 100.0, 1.0), trade(t1, 100.0, -1.0)], Timeframe::Min1).map(drop), "trade 1 size must be finite and at least 0, got -1.0"),
+            (aggregate_trades(&[trade(t1, 100.0, 1.0), trade(t0, 100.0, 1.0)], Timeframe::Min1).map(drop), "trade 1 at 2026-01-05 10:00:00 UTC is out of time order"),
+        ];
+        for (result, expected) in cases {
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                format!("invalid data: {expected}")
+            );
+        }
+    }
 
     #[test]
     fn trades_keep_side_path_grouping_and_value_area() {

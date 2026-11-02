@@ -397,7 +397,7 @@ impl Indicator for AutoDrawing {
     /// an applied set; an input of a level past the last has nothing to edit and is accepted
     /// unchanged. Levels added take the kind's default level at their place, or 100% in the
     /// study's colour, as the drawing properties add one.
-    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), &'static str> {
+    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), crate::studies::StudyError> {
         if matches!(id, "deviation_percent" | "depth") {
             self.zigzag.set_input(id, value)?;
             self.calculate(&[]);
@@ -413,9 +413,9 @@ impl Indicator for AutoDrawing {
             .inputs()
             .into_iter()
             .find(|input| input.id == id)
-            .ok_or("unknown study input")?;
+            .ok_or_else(|| crate::studies::StudyError::UnknownInput(id.into()))?;
         if !schema.accepts(&value) {
-            return Err("study input is outside its accepted values");
+            return Err(crate::studies::StudyError::invalid_input(id));
         }
         let config = &mut self.fibonacci;
         match (id, value) {
@@ -455,7 +455,8 @@ impl Indicator for AutoDrawing {
                 }
             }
             (id, value) => {
-                let level = &mut config.levels[level_slot(id).ok_or("unknown study input")?];
+                let level = &mut config.levels[level_slot(id)
+                    .ok_or_else(|| crate::studies::StudyError::UnknownInput(id.into()))?];
                 match (id.rsplit_once('_').map(|(field, _)| field), value) {
                     (Some("fib_visible"), InputValue::Toggle(on)) => level.visible = on,
                     (Some("fib_ratio"), InputValue::Number(ratio)) => level.value = ratio as f32,
@@ -464,7 +465,7 @@ impl Indicator for AutoDrawing {
                         level.color = color.to_srgba_unmultiplied();
                     }
                     (Some("fib_price"), InputValue::Toggle(on)) => level.show_price = on,
-                    _ => return Err("unknown study input"),
+                    _ => return Err(crate::studies::StudyError::UnknownInput(id.into())),
                 }
             }
         }

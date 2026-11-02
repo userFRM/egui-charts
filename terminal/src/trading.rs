@@ -3,12 +3,20 @@
 use super::core::Direction;
 use super::layout::Region;
 use super::{Action, Terminal};
+use egui_charts::model::StrategyReport;
 use egui_charts::services::UserSettings;
 
 #[derive(Default)]
-pub(super) struct State {}
+pub(super) struct State {
+    strategy_report: Option<StrategyReport>,
+}
 
 impl Terminal {
+    /// Shows `report` in the strategy report panel, or closes it with `None`.
+    pub fn set_strategy_report(&mut self, report: Option<StrategyReport>) {
+        self.trading.strategy_report = report;
+    }
+
     pub(super) fn trading_init(&mut self) {}
 
     pub(super) fn trading_poll(&mut self, _ctx: &egui::Context) {}

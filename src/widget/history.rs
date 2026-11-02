@@ -940,7 +940,11 @@ mod tests {
             fn inputs(&self) -> Vec<crate::studies::StudyInput> {
                 self.0.inputs()
             }
-            fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), &'static str> {
+            fn set_input(
+                &mut self,
+                id: &str,
+                value: InputValue,
+            ) -> Result<(), crate::studies::StudyError> {
                 self.0.set_input(id, value)
             }
             fn clone_box(&self) -> Box<dyn Indicator> {
@@ -1637,11 +1641,14 @@ mod tests {
         });
         assert_eq!(chart.series_settings().alerts, main_alerts);
         assert_eq!(chart.series_style(other).unwrap().alerts, other_alerts);
-        let mut restored = super::super::Chart::new(BarData::default());
-        restored
-            .restore(&chart.snapshot().unwrap())
-            .expect("snapshot restores");
-        assert_eq!(restored.series_settings().alerts, main_alerts);
+        #[cfg(feature = "ui")]
+        {
+            let mut restored = super::super::Chart::new(BarData::default());
+            restored
+                .restore(&chart.snapshot().unwrap())
+                .expect("snapshot restores");
+            assert_eq!(restored.series_settings().alerts, main_alerts);
+        }
         assert!(chart.undo());
         assert_eq!(chart.series_settings().alerts, SeriesAlerts::default());
         assert_eq!(

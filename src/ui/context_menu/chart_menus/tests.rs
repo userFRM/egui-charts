@@ -683,6 +683,13 @@ fn tpo_profile_menu_merges_and_splits_sessions() {
         assert_eq!(counts(&chart), [12, 4]);
         // Pan the composite's opening offscreen; its displayed anchor still opens its menu.
         chart.set_visible_logical_range(crate::model::LogicalRange::new(3.0, 18.0));
+        frame(&mut chart, &mut menus, vec![]);
+        let map = chart.get_chart_mapping();
+        for price in [99.9, 102.1] {
+            let pos = Pos2::new(map.rect.left() + 4.0, map.price_to_y(price));
+            assert!(map.rect.contains(pos));
+            assert!(super::super::tpo::TpoMenu::open(&chart, pos).is_none());
+        }
         pick(&mut chart, &mut menus, 0, "Split profile");
         assert_eq!(counts(&chart), [4, 4, 4, 4]);
         assert_eq!(chart.chart_type_params().tpo_composites, [day(3)..=day(4)]);

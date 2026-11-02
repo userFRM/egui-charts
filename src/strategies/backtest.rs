@@ -461,6 +461,38 @@ impl Backtest {
     ///
     /// Panics if the starting capital is not finite.
     pub fn run(&self, strategy: &mut dyn Strategy, bars: &[Bar], lower: &[Bar]) -> StrategyReport {
+        let mut future = std::pin::pin!(self.run_inner(strategy, bars, lower, false));
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        match std::future::Future::poll(future.as_mut(), &mut context) {
+            std::task::Poll::Ready(report) => report,
+            std::task::Poll::Pending => unreachable!("synchronous run never yields"),
+        }
+    }
+
+    /// Runs the same fills as [`Self::run`], yielding between batches of 256 chart or finer bars.
+    ///
+    /// Poll from an executor or once per frame. Dropping the future cancels the run. Strategy
+    /// preparation and individual callbacks remain synchronous, so hosts should keep them bounded.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the starting capital is not finite.
+    pub async fn run_async(
+        &self,
+        strategy: &mut dyn Strategy,
+        bars: &[Bar],
+        lower: &[Bar],
+    ) -> StrategyReport {
+        self.run_inner(strategy, bars, lower, true).await
+    }
+
+    async fn run_inner(
+        &self,
+        strategy: &mut dyn Strategy,
+        bars: &[Bar],
+        lower: &[Bar],
+        cooperative: bool,
+    ) -> StrategyReport {
         let settings = &self.settings;
         assert!(
             settings.initial_capital.is_finite(),
@@ -546,7 +578,12 @@ impl Backtest {
                 settings.initial_capital,
             ));
         }
+        let mut processed = 0usize;
         for (index, bar) in bars.iter().enumerate() {
+            if cooperative && processed.is_multiple_of(256) {
+                yield_now().await;
+            }
+            processed += 1;
             run.trading = settings.start_time.is_none_or(|start| bar.time >= start);
             if !run.trading {
                 run.history = &bars[..=index];
@@ -566,6 +603,10 @@ impl Backtest {
             if valid {
                 if from < to {
                     for lower in &lower[from..to] {
+                        if cooperative && processed.is_multiple_of(256) {
+                            yield_now().await;
+                        }
+                        processed += 1;
                         run.fill_bar(lower);
                     }
                 } else {
@@ -612,6 +653,20 @@ impl Backtest {
         }));
         report
     }
+}
+
+async fn yield_now() {
+    let mut yielded = false;
+    std::future::poll_fn(|context| {
+        if yielded {
+            std::task::Poll::Ready(())
+        } else {
+            yielded = true;
+            context.waker().wake_by_ref();
+            std::task::Poll::Pending
+        }
+    })
+    .await;
 }
 
 /// Calendar months have calendar boundaries; execution bars end at the next chart open.
@@ -2350,6 +2405,23 @@ mod tests {
                 Backtest::new("Terms", "TEST", Timeframe::Hour1, settings.initial_capital);
             engine.settings = settings;
             let report = engine.run(&mut Script(script), &source, &[]);
+            let mut asynchronous_strategy = Script(script);
+            let mut future =
+                std::pin::pin!(engine.run_async(&mut asynchronous_strategy, &source, &[]));
+            let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+            let mut batches = 0;
+            let asynchronous = loop {
+                match std::future::Future::poll(future.as_mut(), &mut context) {
+                    std::task::Poll::Ready(report) => break report,
+                    std::task::Poll::Pending => batches += 1,
+                }
+            };
+            assert!(batches > 0, "asynchronous fills must yield");
+            assert_eq!(
+                serde_json::to_value(&asynchronous).unwrap(),
+                serde_json::to_value(&report).unwrap()
+            );
+
             assert_eq!(report.currency, Some("USD".into()), "{name}");
             assert_eq!(report.risk_free_rate, 0.02, "{name}");
             assert!(
@@ -2541,6 +2613,16 @@ mod tests {
             let report = engine.run(&mut strategy, &source, &lower);
             assert_eq!(strategy.prepared, source.len(), "{name}");
             assert_eq!(strategy.decisions, decisions, "{name}");
+            strategy.decisions.clear();
+            let mut future = std::pin::pin!(engine.run_async(&mut strategy, &source, &lower));
+            let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+            assert!(std::future::Future::poll(future.as_mut(), &mut context).is_pending());
+            let std::task::Poll::Ready(asynchronous) =
+                std::future::Future::poll(future.as_mut(), &mut context)
+            else {
+                panic!("{name}: these chart and finer bars fit in one execution batch");
+            };
+            assert_eq!(asynchronous, report, "{name}");
             assert_eq!(report.trades, expected, "{name}");
             assert_eq!(
                 report

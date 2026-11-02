@@ -63,7 +63,7 @@ pub struct IndicatorDialog {
     metric_names: Vec<String>,
     metric_error: Option<FeedError>,
     source: Option<StudySource>,
-    source_error: Option<&'static str>,
+    source_error: Option<StudyError>,
     full: bool,
     /// Available indicators, one per factory name
     indicators: Vec<IndicatorInfo>,
@@ -315,8 +315,8 @@ impl IndicatorDialog {
                 &[("error", format!("{}", error))],
             ));
         }
-        if let Some(error) = self.source_error {
-            ui.colored_label(theme.ui.error, l10n::text(ui.ctx(), error));
+        if let Some(error) = &self.source_error {
+            ui.colored_label(theme.ui.error, l10n::text(ui.ctx(), error.to_string()));
         }
         if self.full {
             ui.colored_label(
@@ -1044,8 +1044,32 @@ mod tests {
             dialog.add("Host source").is_none(),
             "the host's source validation must be retained"
         );
-        assert!(dialog.source_error.is_some());
+        assert!(
+            matches!(dialog.source_error, Some(StudyError::InvalidInput { ref id, .. }) if id == "source")
+        );
         assert!(dialog.is_open());
+        let message = dialog.source_error.as_ref().unwrap().to_string();
+        for theme in [Theme::light(), Theme::dark()] {
+            for width in [320.0, 640.0] {
+                use egui_kittest::{Harness, kittest::Queryable};
+                let style = theme.clone();
+                let mut harness = Harness::builder()
+                    .with_size(Vec2::new(width, 640.0))
+                    .with_context_setup(move |ctx| {
+                        egui_extras::install_image_loaders(ctx);
+                        crate::theme::apply_to_egui(ctx, &style);
+                    })
+                    .build_ui(|ui| {
+                        dialog.show(ui.ctx(), &theme);
+                    });
+                harness.run();
+                let error = harness.get_by_label(&message);
+                assert!(
+                    harness.ctx.content_rect().contains_rect(error.rect()),
+                    "source error at width {width}"
+                );
+            }
+        }
         assert!(dialog.open_for_chart(&chart, Some(StudySource::Price(PriceSource::Open))));
         let Some(IndicatorDialogAction::AddIndicator(study)) = dialog.add("Host source") else {
             panic!("a compatible price source is accepted");
