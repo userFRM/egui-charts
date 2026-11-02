@@ -95,7 +95,7 @@ impl DemoApp {
             .size_range(100.0..=(ui.available_height() * 0.7).max(100.0))
             .frame(panel_frame(bg))
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     clear = ui.button("Clear report").clicked();
                     if self.live_strategy.is_some() {
                         if ui.button("Stop forward test").clicked() {

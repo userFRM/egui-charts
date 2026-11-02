@@ -450,6 +450,11 @@ impl AlertDialog {
                         (AlertFrequency::OncePerBarClose, "Once per bar close"),
                         (AlertFrequency::OncePerMinute, "Once per minute"),
                     ] {
+                        if matches!(self.alert.condition, AlertCondition::StrategyFills(_))
+                            && !matches!(value, AlertFrequency::Once | AlertFrequency::EveryTime)
+                        {
+                            continue;
+                        }
                         ui.selectable_value(
                             &mut self.alert.frequency,
                             value,
@@ -545,10 +550,12 @@ impl AlertDialog {
             ui.end_row();
         });
         ui.separator();
-        ui.label(l10n::text(
-            ui.ctx(),
-            "All conditions must hold on the same bar",
-        ));
+        if !matches!(self.alert.condition, AlertCondition::StrategyFills(_)) {
+            ui.label(l10n::text(
+                ui.ctx(),
+                "All conditions must hold on the same bar",
+            ));
+        }
         ui.push_id("first", |ui| {
             rule_form(
                 ui,
@@ -573,7 +580,9 @@ impl AlertDialog {
         if let Some(index) = remove {
             self.alert.additional_conditions.remove(index);
         }
-        if ui.button(l10n::text(ui.ctx(), "Add condition")).clicked() {
+        if !matches!(self.alert.condition, AlertCondition::StrategyFills(_))
+            && ui.button(l10n::text(ui.ctx(), "Add condition")).clicked()
+        {
             self.alert.additional_conditions.push(AlertRule {
                 source: self.alert.source.clone(),
                 condition: self.alert.condition.clone(),
@@ -863,26 +872,43 @@ mod tests {
 
     #[test]
     fn form_controls_fill_the_dialog_width_for_each_source() {
-        for source in [
-            AlertSource::Price,
-            AlertSource::Study {
-                id: "study".into(),
-                output: 0,
-            },
-            AlertSource::Volume,
+        for (source, condition) in [
+            (AlertSource::Price, AlertCondition::Above(100.0)),
+            (
+                AlertSource::Study {
+                    id: "study".into(),
+                    output: 0,
+                },
+                AlertCondition::Above(100.0),
+            ),
+            (AlertSource::Volume, AlertCondition::Above(100.0)),
+            (
+                AlertSource::Price,
+                AlertCondition::StrategyFills("run".into()),
+            ),
         ] {
             for width in [360.0, 560.0] {
                 let ctx = Context::default();
                 let mut dialog = AlertDialog::new();
+                dialog.alert = Alert::new("SAMPLE", condition.clone());
                 dialog.alert.source = source.clone();
                 let mut form_width = 0.0;
                 for _ in 0..3 {
-                    ctx.run_ui(Default::default(), |ui| {
+                    let output = ctx.run_ui(Default::default(), |ui| {
                         ui.set_width(width);
                         let form = ui.vertical(|ui| dialog.form(ui));
                         form_width = form.response.rect.width();
-                    })
-                    .drop_without_applying_deltas();
+                    });
+                    if matches!(condition, AlertCondition::StrategyFills(_)) {
+                        assert!(
+                            !output.shapes.iter().any(|shape| matches!(
+                                &shape.shape, egui::Shape::Text(text)
+                                    if text.galley.text() == "Add condition"
+                            )),
+                            "fill alerts cannot add bar conditions"
+                        );
+                    }
+                    output.drop_without_applying_deltas();
                 }
                 assert!(
                     (form_width - width).abs() < 16.0,
@@ -894,7 +920,7 @@ mod tests {
 
     #[test]
     fn alert_form_and_actions_fit_narrow_windows_in_both_themes() {
-        for dark in [false, true] {
+        for (dark, fills) in [(false, false), (true, false), (false, true), (true, true)] {
             let ctx = Context::default();
             ctx.set_visuals(if dark {
                 egui::Visuals::dark()
@@ -927,6 +953,9 @@ mod tests {
                     comparison: AlertComparison::Crossing,
                 },
             });
+            if fills {
+                dialog.alert = Alert::new("SAMPLE", AlertCondition::StrategyFills("run".into()));
+            }
             for size in [
                 egui::vec2(1440.0, 900.0),
                 egui::vec2(600.0, 360.0),
