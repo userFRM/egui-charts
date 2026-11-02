@@ -1135,6 +1135,7 @@ impl Chart {
         let (time_marks, time_points, axis_coords) = if time_grid || self.config.show_time_labels {
             // Resolved once: a fixed-offset zone allocates on every clone.
             let calendar = self.calendar_timezone();
+            let numeric = time_coords.numeric_positions.is_some();
             rendering::time_axis_marks(
                 &RenderContext::new(&painter, chart_rect),
                 time_data,
@@ -1143,12 +1144,17 @@ impl Chart {
                 &self.chart_options.time_scale,
                 calendar.as_ref(),
                 |index| {
-                    crate::model::time_at_with_timeframe(
-                        self.state.shown(),
-                        index * factor as f64,
-                        self.timeframe(),
-                        calendar.as_ref(),
-                    )
+                    let index = index * factor as f64;
+                    if numeric {
+                        crate::model::time_at(self.state.shown(), index)
+                    } else {
+                        crate::model::time_at_with_timeframe(
+                            self.state.shown(),
+                            index,
+                            self.timeframe(),
+                            calendar.as_ref(),
+                        )
+                    }
                 },
             )
         } else {

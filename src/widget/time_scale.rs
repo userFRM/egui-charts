@@ -697,6 +697,28 @@ mod tests {
                         panic!("missing numeric tick {label}");
                     }
                 }
+                if keys[0] == 100.0 && keys.len() == 3 {
+                    for key in [90.0, 150.0] {
+                        let label = scale.format_crosshair(key_time(key).unwrap(), 0);
+                        let x = painted
+                            .iter()
+                            .find_map(|shape| match shape {
+                                egui::Shape::Text(text)
+                                    if text.galley.text() == label
+                                        && text.pos.y >= plot.bottom() =>
+                                {
+                                    Some(text.pos.x + text.galley.size().x / 2.0)
+                                }
+                                _ => None,
+                            })
+                            .unwrap_or_else(|| panic!("numeric whitespace tick {label}"));
+                        assert_close(
+                            x.into(),
+                            expected_x(key).into(),
+                            "numeric whitespace position",
+                        );
+                    }
+                }
                 for key in samples {
                     let index = chart.time_to_index(key_time(key).unwrap()).unwrap();
                     let actual = chart.index_to_x(index).unwrap();

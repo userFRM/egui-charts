@@ -8,6 +8,8 @@
 //! [`LogicalRange`] represents a floating-point range of bar indices, which
 //! can be converted to a strict integer range for data-array slicing.
 
+#[cfg(feature = "widget")]
+use chrono::{DateTime, Utc};
 use std::sync::Arc;
 
 /// A snapshot of numeric sample positions, shared by the chart's coordinate mappings.
@@ -21,15 +23,25 @@ pub struct NumericPositions {
     points: Arc<[f64]>,
     #[cfg(feature = "widget")]
     pub(crate) unit: f64,
+    #[cfg(feature = "widget")]
+    origin: DateTime<Utc>,
 }
 
 impl NumericPositions {
     #[cfg(feature = "widget")]
-    pub(crate) fn new(points: Vec<f64>, unit: f64) -> Self {
+    pub(crate) fn new(points: Vec<f64>, unit: f64, origin: DateTime<Utc>) -> Self {
         Self {
             points: points.into(),
             unit,
+            origin,
         }
+    }
+
+    #[cfg(feature = "widget")]
+    pub(crate) fn index_at(&self, time: DateTime<Utc>) -> f64 {
+        let elapsed = time - self.origin;
+        let seconds = elapsed.num_seconds() as f64 + f64::from(elapsed.subsec_nanos()) / 1e9;
+        self.index(seconds / self.unit)
     }
 
     pub(crate) fn position(&self, index: f64) -> f64 {

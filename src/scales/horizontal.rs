@@ -44,7 +44,7 @@ pub trait HorizontalScale: Send + Sync {
     /// order, extended into whitespace on both sides using the chart's full-history time
     /// mapping. When the keys reach before the first bar, every index is shifted by the same
     /// number of slots, so only the order of the indices and their differences carry meaning.
-    /// Numeric scales receive actual samples with their row indices.
+    /// Numeric scales receive the same bounded whitespace extension as time scales.
     /// The renderer places each mark at its key and skips labels that would overlap.
     fn tick_marks(
         &self,
