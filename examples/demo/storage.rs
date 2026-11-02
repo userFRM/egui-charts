@@ -85,6 +85,34 @@ impl DemoStorage {
             )
     }
 
+    pub(super) fn save_sample_study(&self, title: &str, text: &str) {
+        self.documents
+            .lock()
+            .unwrap()
+            .insert(format!("sample-studies/{title}"), text.to_owned());
+        self.changed.store(true, Ordering::Relaxed);
+    }
+
+    pub(super) fn sample_study(&self, title: &str) -> Option<String> {
+        self.documents
+            .lock()
+            .unwrap()
+            .get(&format!("sample-studies/{title}"))
+            .cloned()
+    }
+
+    pub(super) fn sample_studies(&self) -> Vec<String> {
+        let mut names: Vec<_> = self
+            .documents
+            .lock()
+            .unwrap()
+            .keys()
+            .filter_map(|key| key.strip_prefix("sample-studies/").map(str::to_owned))
+            .collect();
+        names.sort();
+        names
+    }
+
     fn write(&self, kind: StoreKind, name: &str, document: Option<String>) {
         let mut documents = self.documents.lock().unwrap();
         match document {

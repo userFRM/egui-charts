@@ -29,6 +29,7 @@ pub(super) fn quick_search_commands() -> Vec<Command> {
         ("yield", "Yield curve", "Samples"),
         ("primitives", "Primitives and custom series", "Samples"),
         ("price-workspace", "Return to price chart", "Samples"),
+        ("sample-study", "Sample study editor", "Samples"),
     ]
     .into_iter()
     .map(|(id, label, category)| Command::new(id, label).category(category))
@@ -79,12 +80,21 @@ impl DemoApp {
             return;
         }
         if let Some(scene) = match id {
-            "smile" => Some(SampleScene::Numeric(super::numeric_scenes::volatility_smile())),
+            "smile" => Some(SampleScene::Numeric(
+                super::numeric_scenes::volatility_smile(),
+            )),
             "yield" => Some(SampleScene::Numeric(super::numeric_scenes::yield_curve())),
-            "primitives" => Some(SampleScene::Extensions(super::primitive_scene::PrimitiveScene::new())),
+            "primitives" => Some(SampleScene::Extensions(
+                super::primitive_scene::PrimitiveScene::new(),
+            )),
             _ => None,
         } {
             self.sample_scene = Some(scene);
+            return;
+        }
+        if id == "sample-study" {
+            self.sample_scene = None;
+            self.sample_study.open = true;
             return;
         }
         if id == "price-workspace" {
@@ -203,7 +213,6 @@ impl DemoApp {
     }
 }
 
-
 pub(super) enum SampleScene {
     Numeric(egui_charts::Chart),
     Extensions(super::primitive_scene::PrimitiveScene),
@@ -219,6 +228,7 @@ impl DemoApp {
                         ("smile", "Volatility smile"),
                         ("yield", "Yield curve"),
                         ("primitives", "Primitives and custom series"),
+                        ("sample-study", "Sample study editor"),
                     ] {
                         if ui.button(label).clicked() {
                             command = Some(id);
@@ -237,7 +247,9 @@ impl DemoApp {
         if let Some(command) = command {
             self.execute_search_edit(ui.ctx(), command);
         }
-        let Some(scene) = &mut self.sample_scene else { return false; };
+        let Some(scene) = &mut self.sample_scene else {
+            return false;
+        };
         egui::CentralPanel::default().show(ui, |ui| {
             let chart = match scene {
                 SampleScene::Numeric(chart) => chart,
@@ -250,44 +262,5 @@ impl DemoApp {
             chart.show(ui);
         });
         true
-    }
-}
-
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use eframe::App;
-
-    #[test]
-    fn named_samples_render_without_replacing_the_price_workspace() {
-        for (command, label) in [
-            ("smile", "30-day IV, %"),
-            ("yield", "Today"),
-            ("primitives", "Bar range, price units"),
-        ] {
-            let ctx = egui::Context::default();
-            let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
-            app.live.set_paused(true);
-            let bars = app.chart.bars(egui_charts::widget::SeriesId::MAIN).to_vec();
-            let studies: Vec<_> = app.chart.indicators().map(|(id, _)| id).collect();
-            let range = app.chart.get_time_scale_state();
-            app.execute_search_command(&ctx, command);
-            let mut found = false;
-            for _ in 0..3 {
-                let output = ctx.run_ui(egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0))),
-                    ..Default::default()
-                }, |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()));
-                found |= output.shapes.iter().any(|shape| matches!(&shape.shape,
-                    egui::Shape::Text(text) if text.galley.text().contains(label)));
-                output.drop_without_applying_deltas();
-            }
-            assert!(found, "{command} must show {label}");
-            app.execute_search_command(&ctx, "price-workspace");
-            assert_eq!(app.chart.bars(egui_charts::widget::SeriesId::MAIN), bars);
-            assert_eq!(app.chart.indicators().map(|(id, _)| id).collect::<Vec<_>>(), studies);
-            assert_eq!(app.chart.get_time_scale_state(), range);
-        }
     }
 }

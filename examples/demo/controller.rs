@@ -10,16 +10,16 @@
 mod audio;
 #[path = "commands.rs"]
 mod commands;
-#[path = "numeric_scenes.rs"]
-mod numeric_scenes;
-#[path = "primitive_scene.rs"]
-mod primitive_scene;
 #[path = "images.rs"]
 mod images;
 #[path = "interval.rs"]
 mod interval;
 #[path = "layouts.rs"]
 mod layouts;
+#[path = "numeric_scenes.rs"]
+mod numeric_scenes;
+#[path = "primitive_scene.rs"]
+mod primitive_scene;
 use egui_charts::widget::ChartLayout;
 use layouts::{DemoChart, LayoutTab};
 
@@ -35,6 +35,8 @@ mod storage;
 mod strategy;
 #[path = "strategy_live.rs"]
 mod strategy_live;
+#[path = "study_editor.rs"]
+mod study_editor;
 #[path = "templates.rs"]
 mod templates;
 use egui_charts::services::StoreKind;
@@ -400,6 +402,7 @@ pub struct DemoApp {
     drawing_templates: TemplateDialog<DrawingTemplate>,
     quick_search: egui_charts::ui_kit::command_palette::CommandPaletteHandler,
     sample_scene: Option<commands::SampleScene>,
+    sample_study: study_editor::SampleStudyEditor,
     alert_dialog: AlertDialog,
     drawing_props: DrawingPropertiesDialog,
     keyboard_shortcuts: KeyboardShortcutsDialog,
@@ -679,6 +682,7 @@ impl DemoApp {
                 commands::quick_search_commands(),
             ),
             sample_scene: None,
+            sample_study: Default::default(),
             alert_dialog: AlertDialog::new(),
             drawing_props: DrawingPropertiesDialog::new(),
             keyboard_shortcuts: KeyboardShortcutsDialog::new(),
@@ -1534,6 +1538,7 @@ impl eframe::App for DemoApp {
             self.show_account_panel(ui, panel_bg);
         }
         self.show_strategy_report(ui, panel_bg);
+        self.show_sample_study(ui);
         self.show_bottom_toolbar(ui, panel_bg);
         self.show_chart(ui, panel_bg);
         self.show_replay_control(&ctx);
@@ -4869,6 +4874,10 @@ mod tests {
             "Chart settings",
             "Sample backtest",
             "Export chart",
+            "Volatility smile",
+            "Yield curve",
+            "Primitives and custom series",
+            "Sample study editor",
         ]
         .into_iter()
         .flat_map(|query| {
@@ -5002,6 +5011,48 @@ mod tests {
                     assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
                         egui::Shape::Text(text) if text.galley.text().starts_with("Error:"))));
                     output.drop_without_applying_deltas();
+                }
+                "Volatility smile"
+                | "Yield curve"
+                | "Primitives and custom series"
+                | "Sample study editor" => {
+                    let label = match query {
+                        "Volatility smile" => "30-day IV, %",
+                        "Yield curve" => "Today",
+                        "Primitives and custom series" => "Bar range, price units",
+                        _ => "Sample study editor",
+                    };
+                    let bars = app.chart.bars(SeriesId::MAIN).to_vec();
+                    let studies: Vec<_> = app.chart.indicators().map(|(id, _)| id).collect();
+                    let range = app.chart.get_time_scale_state();
+                    let mut found = false;
+                    for _ in 0..3 {
+                        let output = ctx.run_ui(
+                            RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(
+                                    egui::Pos2::ZERO,
+                                    egui::vec2(1440.0, 900.0),
+                                )),
+                                ..Default::default()
+                            },
+                            |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+                        );
+                        found |= output.shapes.iter().any(|shape| {
+                            matches!(&shape.shape,
+                            egui::Shape::Text(text) if text.galley.text().contains(label))
+                        });
+                        output.drop_without_applying_deltas();
+                    }
+                    assert!(found, "{query} must show {label}");
+                    if query != "Sample study editor" {
+                        app.execute_search_command(&ctx, "price-workspace");
+                        assert_eq!(app.chart.bars(SeriesId::MAIN), bars);
+                        assert_eq!(
+                            app.chart.indicators().map(|(id, _)| id).collect::<Vec<_>>(),
+                            studies
+                        );
+                        assert_eq!(app.chart.get_time_scale_state(), range);
+                    }
                 }
                 _ => assert!(app.settings_dialog.is_open),
             }

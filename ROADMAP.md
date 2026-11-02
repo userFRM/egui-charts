@@ -139,7 +139,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [ ] Expose every supported plot type in the Style editor.
 - [ ] Add a configurable per-chart study limit and rejection feedback.
 - [x] Restore custom registered studies and remap study-source dependencies through a library-owned template operation, including the terminal's indicator templates.
-- [ ] Provide a study editor surface with host callbacks for submitted content.
+- [x] `StudyEditor` sends open, save and apply requests to the host and displays diagnostics. The demo applies the documented `close - close[N]` sample to live bars, keeps the last valid study on errors and stores named source documents locally.
 
 ## Order Flow
 
