@@ -9,7 +9,7 @@ publish = false
 [workspace]
 
 [dependencies]
-egui-charts = { path = "..", features = ["ui"] }
+egui-charts = { path = "..", features = ["ui", "alert-engine"] }
 egui = "0.37.0"
 chrono = "0.4.43"
 egui_extras = { version = "0.37.0", default-features = false }

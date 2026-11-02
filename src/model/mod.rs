@@ -45,6 +45,7 @@ mod series_style;
 pub mod session;
 mod signal;
 mod strategy;
+mod study;
 mod time_scale_event;
 mod timeframe;
 mod timescale;
@@ -54,8 +55,8 @@ mod trading;
 mod watchlist;
 
 pub use alert::{
-    Alert, AlertComparison, AlertCondition, AlertFrequency, AlertId, AlertRule, AlertSource,
-    AlertStatus, NotificationSchedule, NotificationWindow,
+    Alert, AlertCalendar, AlertComparison, AlertCondition, AlertFrequency, AlertId, AlertInputs,
+    AlertRule, AlertSource, AlertStatus, AlertStudy, NotificationSchedule, NotificationWindow,
 };
 pub use bar::{Bar, BarColors, BarData};
 #[cfg(feature = "widget")]
@@ -108,6 +109,7 @@ pub use strategy::{
     StrategyComparison, StrategyExcursion, StrategyExit, StrategyPerformance, StrategyReport,
     StrategyTrade,
 };
+pub use study::{InputValue, StudySource};
 pub use time_scale_event::{EventKind, EventVisibility, TimeScaleEvent};
 pub use timeframe::{Timeframe, TimeframeUnit};
 pub use timescale::{LogicalRange, TimeScale};
