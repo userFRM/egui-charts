@@ -33,6 +33,7 @@ pub struct AlertFeed {
     stored: Option<crate::drawings::persistence::DrawingStorage>,
     inputs: Vec<crate::data::OrderFlowInput>,
     end: bool,
+    start: Option<DateTime<Utc>>,
 }
 
 impl AlertFeed {
@@ -93,6 +94,7 @@ impl AlertFeed {
             stored: None,
             inputs: Vec::new(),
             end: false,
+            start: None,
         }
     }
 
@@ -129,7 +131,7 @@ impl AlertFeed {
 
     /// Extend coverage to `start`, even when it needs more than the initial bar count.
     pub fn require_start(&mut self, start: DateTime<Utc>) {
-        self.request.since = Some(self.request.since.map_or(start, |held| held.min(start)));
+        self.start = Some(self.start.map_or(start, |held| held.min(start)));
         if !self.end && self.bars.first().is_none_or(|bar| bar.time > start) {
             self.ready = false;
         }
@@ -298,7 +300,7 @@ impl AlertFeed {
                     );
                     self.end = end || before.is_none();
                     self.ready = self.end
-                        || self.request.since.map_or_else(
+                        || self.start.map_or_else(
                             || self.bars.len() >= self.request.count,
                             |start| self.bars.first().is_some_and(|bar| bar.time <= start),
                         );
@@ -419,9 +421,7 @@ impl AlertFeed {
                         self.inbox.reply(2),
                     );
                 } else {
-                    let mut request = self.request.clone();
-                    request.since = None;
-                    self.feed.history(request, self.inbox.reply(2));
+                    self.feed.history(self.request.clone(), self.inbox.reply(2));
                 }
             }
         }

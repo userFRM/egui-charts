@@ -248,7 +248,10 @@ mod tests {
             } else {
                 let bars: Vec<_> = bars
                     .into_iter()
-                    .filter(|bar| request.before.is_none_or(|before| bar.time < before))
+                    .filter(|bar| {
+                        request.before.is_none_or(|before| bar.time < before)
+                            && request.since.is_none_or(|since| bar.time >= since)
+                    })
                     .collect();
                 let count = self.page_size.lock().unwrap().unwrap_or(request.count);
                 let start = bars.len().saturating_sub(count);
@@ -818,14 +821,17 @@ mod tests {
         ] {
             let host = Arc::new(Feed::default());
             let ctx = egui::Context::default();
-            let mut reader = AlertFeed::new(
-                host.clone(),
-                AlertFeed::history_request("OTHER", Timeframe::Min5),
-                None,
-            );
+            let mut request = AlertFeed::history_request("OTHER", Timeframe::Min5);
+            request.since = Some(bar(5, 0.0).time);
+            let mut reader = AlertFeed::new(host.clone(), request, None);
             for _ in 0..3 {
                 assert!(reader.poll(&ctx, Utc::now()).is_empty());
             }
+            assert_eq!(
+                reader.bars().first().unwrap().time,
+                bar(5, 0.0).time,
+                "a coverage goal must not erase an explicit history bound"
+            );
             let old = host.subscriptions.lock().unwrap()[0].sink.clone();
             old.report_error(error.clone());
             assert_eq!(
