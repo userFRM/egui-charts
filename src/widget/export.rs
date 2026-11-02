@@ -495,7 +495,7 @@ impl Chart {
         chart.price_series = self
             .price_series
             .iter()
-            .map(|series| super::price_series::PriceSeries {
+            .map(|series| super::series::PriceSeries {
                 id: series.id,
                 options: series.options.clone(),
                 visible: series.visible,

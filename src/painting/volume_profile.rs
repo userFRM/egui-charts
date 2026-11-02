@@ -7,7 +7,7 @@ use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke};
 use std::ops::Range;
 
-/// Studies show their rows alone; drawings tint their span and leave the measured candles visible.
+/// Study rows leave candles visible; drawings also tint their span.
 pub(crate) enum ProfileStyle {
     Study {
         right_aligned: bool,
@@ -78,7 +78,13 @@ pub(crate) fn paint_profile(
             Color32::from_rgba_unmultiplied(color[0], color[1], color[2], 80)
         };
 
-        let paint = |start, width, color| {
+        let paint = |start, width, color: Color32| {
+            // Studies can sit above price bars, also with opaque colours from saved styles.
+            let color = if drawing {
+                color
+            } else {
+                color.gamma_multiply(0.35)
+            };
             let start = if right_aligned {
                 row_right - (start - left) - width
             } else {
@@ -267,27 +273,48 @@ mod tests {
     use egui::{Color32, Context, Pos2, RawInput, Rect, Shape, Stroke};
 
     /// A study's rows alone show its extent, 2 px apart, with its point of control a 1 px line in
-    /// the profile's colour and no label. A drawing keeps 1 px gaps and its stronger line.
+    /// the profile's colour and no label. Study fills stay translucent in every display mode;
+    /// a drawing keeps its colours, 1 px gaps and stronger line.
     #[test]
     fn studies_mark_the_point_of_control_without_a_box_or_label() {
-        let bars = [Bar::new(
-            Utc.timestamp_opt(0, 0).unwrap(),
-            100.0,
-            110.0,
-            100.0,
-            110.0,
-            1.0,
-        )];
+        let bars = [
+            Bar::new(
+                Utc.timestamp_opt(0, 0).unwrap(),
+                100.0,
+                110.0,
+                100.0,
+                110.0,
+                30.0,
+            ),
+            Bar::new(
+                Utc.timestamp_opt(60, 0).unwrap(),
+                110.0,
+                110.0,
+                100.0,
+                100.0,
+                10.0,
+            ),
+        ];
         let mut config = VolumeProfileConfig::new(10, 0.7).unwrap();
-        config.display = ProfileDisplay::UpDown;
+        config.up_color = [51, 74, 212, 89];
+        config.down_color = [214, 140, 35, 89];
+        config.value_area_colors = Some([[51, 74, 212, 255], [214, 140, 35, 255]]);
         let profile = VolumeProfile::from_bars(&bars, config).unwrap();
         let color = [51, 74, 212, 255];
         let tone = Color32::from_rgb(51, 74, 212);
-        // (a drawing, gap between rows, width of the point of control line)
-        for (drawing, row_gap, poc_width) in [(false, 2.0, 1.0), (true, 1.0, 2.0)] {
+        // Drawing, row gap, point of control line width and volume display.
+        for (drawing, row_gap, poc_width, display) in [
+            (false, 2.0, 1.0, ProfileDisplay::Total),
+            (false, 2.0, 1.0, ProfileDisplay::UpDown),
+            (false, 2.0, 1.0, ProfileDisplay::Delta),
+            (true, 1.0, 2.0, ProfileDisplay::Total),
+            (true, 1.0, 2.0, ProfileDisplay::UpDown),
+            (true, 1.0, 2.0, ProfileDisplay::Delta),
+        ] {
+            config.display = display;
             let ctx = Context::default();
             let text = ctx.active_theme().ui.text;
-            let output = ctx.run_ui(RawInput::default(), |ui| {
+            let mut output = ctx.run_ui(RawInput::default(), |ui| {
                 paint_profile(
                     ui.painter(),
                     &profile,
@@ -304,28 +331,48 @@ mod tests {
                     &|price| (price - 100.0) as f32 * 10.0,
                 );
             });
-            let rows = output.shapes.iter().find_map(|s| match &s.shape {
-                Shape::Rect(row)
-                    if row.fill
-                        == Color32::from_rgba_unmultiplied(
-                            config.up_color[0],
-                            config.up_color[1],
-                            config.up_color[2],
-                            config.up_color[3],
-                        ) =>
-                {
-                    Some(row.rect.height())
+            let shapes = std::mem::take(&mut output.shapes);
+            output.drop_without_applying_deltas();
+            let rows: Vec<_> = shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    Shape::Rect(row) if (row.rect.height() - (10.0 - row_gap)).abs() < 0.01 => {
+                        Some(row)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert!(!rows.is_empty());
+            if !drawing {
+                assert!(rows.iter().all(|row| row.fill.a() <= 89), "{display:?}");
+            } else {
+                assert!(rows.iter().any(|row| row.fill.a() == 255), "{display:?}");
+            }
+            if display != ProfileDisplay::Total {
+                // 35% of 89 and 255 rounds to 31 and 89; drawings only halve outside rows.
+                for alpha in if drawing { [44, 255] } else { [31, 89] } {
+                    assert!(
+                        rows.iter().any(|row| row.fill.a() == alpha),
+                        "{display:?}: {alpha}"
+                    );
                 }
-                _ => None,
-            });
-            assert_eq!(rows, Some(10.0 - row_gap));
-            assert!(output.shapes.iter().all(|s| match &s.shape {
+            }
+            // Each row holds 3 up and 1 down: 3/4 and 1/4 widths, or a delta of 2/4.
+            let max_width = if drawing { 100.0 } else { 270.0 };
+            let widths = match display {
+                ProfileDisplay::Total => vec![max_width],
+                ProfileDisplay::UpDown => vec![max_width * 0.75, max_width * 0.25],
+                ProfileDisplay::Delta => vec![max_width * 0.5],
+            };
+            for (row, width) in rows.iter().zip(widths.iter().cycle()) {
+                assert!((row.rect.width() - width).abs() < 0.01);
+            }
+            assert!(shapes.iter().all(|s| match &s.shape {
                 Shape::Rect(rect) => rect.stroke == Stroke::NONE,
                 Shape::Text(label) => label.galley.text() != "POC",
                 _ => true,
             }));
-            let poc: Vec<_> = output
-                .shapes
+            let poc: Vec<_> = shapes
                 .iter()
                 .filter_map(|s| match &s.shape {
                     Shape::Path(line) => Some(line.stroke.clone()),
@@ -338,7 +385,6 @@ mod tests {
                 poc[0].color,
                 egui::epaint::ColorMode::Solid(if drawing { text } else { tone })
             );
-            output.drop_without_applying_deltas();
         }
     }
 

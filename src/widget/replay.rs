@@ -1,6 +1,6 @@
 //! Retained history and a shared, exclusive replay cutoff.
 
-use super::price_series::PriceSeries;
+use super::series::PriceSeries;
 use super::{Chart, ChartLayout, SeriesId};
 use crate::data::ReplayDriver;
 use crate::data::merge::{Origin, fold, merge};

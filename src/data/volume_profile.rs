@@ -882,9 +882,11 @@ mod tests {
                     display: ProfileDisplay::UpDown,
                     ..VolumeProfileConfig::default()
                 };
-                let rgba =
-                    |c: [u8; 4]| egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
-                let output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                let rgba = |c: [u8; 4]| {
+                    egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3])
+                        .gamma_multiply(0.35)
+                };
+                let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
                     let painter = egui::Painter::new(
                         ui.ctx().clone(),
                         egui::LayerId::background(),
@@ -900,8 +902,9 @@ mod tests {
                         &|price| price as f32 * direction,
                     );
                 });
-                let rows: Vec<_> = output
-                    .shapes
+                let shapes = std::mem::take(&mut output.shapes);
+                output.drop_without_applying_deltas();
+                let rows: Vec<_> = shapes
                     .iter()
                     .filter_map(|shape| match &shape.shape {
                         egui::Shape::Rect(r)
@@ -938,7 +941,6 @@ mod tests {
                         assert!((puts.rect.left() - calls.rect.right()).abs() < 1e-4);
                     }
                 }
-                output.drop_without_applying_deltas();
             }
         }
         // Exact and decimal strikes stay at row centers; half-row boundaries go up.

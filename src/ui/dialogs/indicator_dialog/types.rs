@@ -12,6 +12,8 @@ pub enum IndicatorTab {
     Profiles,
     /// Pattern detectors, in [`IndicatorFactory::PATTERNS`](crate::studies::IndicatorFactory::PATTERNS)
     Patterns,
+    /// Stream-based studies, in [`IndicatorFactory::ORDER_FLOW`](crate::studies::IndicatorFactory::ORDER_FLOW)
+    OrderFlow,
 }
 
 impl IndicatorTab {
@@ -21,6 +23,7 @@ impl IndicatorTab {
             IndicatorTab::Indicators,
             IndicatorTab::Profiles,
             IndicatorTab::Patterns,
+            IndicatorTab::OrderFlow,
         ]
     }
 
@@ -30,6 +33,7 @@ impl IndicatorTab {
             IndicatorTab::Indicators => "Indicators",
             IndicatorTab::Profiles => "Profiles",
             IndicatorTab::Patterns => "Patterns",
+            IndicatorTab::OrderFlow => "Order flow",
         }
     }
 }

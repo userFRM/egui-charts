@@ -405,6 +405,7 @@ impl Chart {
             self.event_click = None;
             self.axis_hover = None;
             self.state.price_scale_mut().set_price_precision(None);
+            self.state.price_scale_mut().set_tick_size(None);
         }
         self.symbol = symbol;
     }
@@ -557,11 +558,12 @@ impl Chart {
         crate::data::combine_trades(self.trades(series))
     }
 
-    /// Draws the trades the feed sends as bubbles, grouped and coloured as the config says (by
-    /// default one per bar and price level), from the next frame, or stops with `None`. A chart
-    /// without a feed holds no trades and draws none, and Renko, Kagi, line break, point and
-    /// figure and range charts draw none, since their x axis is not time. Sums every held trade
-    /// again: call it when the settings change, not every frame.
+    /// Draws the trades the feed sends as bubbles, grouped and coloured as the config says,
+    /// from the next frame, or stops with `None`. By default, nearby bars and price levels merge
+    /// when crowded, and diameters adapt to the available screen space. A chart without a feed
+    /// holds no trades and draws none, and Renko, Kagi, line break, point and figure and range
+    /// charts draw none, since their x axis is not time. Sums every held trade again: call it
+    /// when the settings change, not every frame.
     pub fn set_volume_bubbles(&mut self, config: Option<VolumeBubblesConfig>) {
         if let Some(link) = &mut self.feed_link {
             link.bubbles = config.map(|config| link.bubbles(config));

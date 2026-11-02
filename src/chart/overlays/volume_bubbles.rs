@@ -1,8 +1,9 @@
 //! # Volume Bubbles Overlay
 //!
 //! Draws the trades of the chart's series as bubbles, grouped as [`BubbleGrouping`] says, by
-//! default one per bar and price level: the diameter grows with the volume traded there and the
-//! colour shows the aggressor side or the delta, as [`BubbleColor`] says.
+//! default one per bar and price level, merging nearby screen cells when crowded. The diameter
+//! grows with volume within the available space, and the colour shows the aggressor side or
+//! the delta, as [`BubbleColor`] says.
 //! Turn them on with [`Chart::set_volume_bubbles`](crate::widget::Chart::set_volume_bubbles).
 
 use crate::model::{Bar, BarClock, OrderSide, Tick};
@@ -18,9 +19,9 @@ use std::sync::{Arc, Mutex};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct VolumeBubblesConfig {
-    /// Minimum bubble diameter
+    /// Minimum bubble diameter, reduced in crowded automatic views.
     pub min_diameter: f32,
-    /// Maximum bubble diameter
+    /// Maximum bubble diameter, limited by screen density with automatic grouping.
     pub max_diameter: f32,
     /// Opacity for bubbles
     pub opacity: u8,
@@ -38,7 +39,7 @@ pub struct VolumeBubblesConfig {
     /// draw at the maximum diameter, so one large print does not shrink the rest. Infinity
     /// turns the clamp off.
     pub clamp_std_devs: f64,
-    /// Show border around bubbles
+    /// Show border around bubbles, fainter in crowded automatic views.
     pub show_border: bool,
     /// Border color
     pub border_color: Color32,
@@ -73,8 +74,9 @@ impl Default for VolumeBubblesConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum BubbleGrouping {
     /// One bubble per bar and price level, the level being the instrument's tick size, or every
-    /// traded price when the feed reports none. Levels of a bar that fall on one pixel row draw
-    /// as one bubble, so the shapes are bounded by the visible bars times the pane height.
+    /// traded price when the feed reports none. Crowded views merge nearby bars and levels into
+    /// screen cells, retaining total volume and aggressor sides. Diameters leave space between
+    /// cells and crowded bubbles use fainter borders; spacious views keep the configured sizes.
     Automatic,
     /// One bubble per execution, at its own time and price, so fills of one price and instant
     /// stay separate bubbles even when they land on one pixel. Draws every visible execution,
@@ -85,8 +87,7 @@ pub enum BubbleGrouping {
     /// below a millisecond counts as one millisecond.
     TimeWindow(TimeDelta),
     /// One bubble per bar and price level of this height, which must be finite and positive,
-    /// else every traded price has its own bubble. Levels on one pixel row merge as with
-    /// [`Automatic`](Self::Automatic).
+    /// else every traded price has its own bubble. Levels of a bar on one pixel row merge.
     PriceStep(f64),
     /// One bubble per this many consecutive executions, at the time of the last of them and the
     /// volume-weighted price of all of them. The newest group grows until it is full. Groups
@@ -436,19 +437,34 @@ impl VolumeBubbles {
                 _ => shown.push((x, y, bubble)),
             }
         }
+        let max_diameter = if self.config.grouping == BubbleGrouping::Automatic {
+            group_on_screen(&mut shown, spacing).min(self.config.max_diameter)
+        } else {
+            self.config.max_diameter
+        };
         shown.retain(|(_, _, bubble)| bubble.volume >= min_size);
-        let scale = Scale::new(
+        let mut scale = Scale::new(
             &self.config,
             shown.iter().flat_map(|(_, _, b)| {
                 let (discs, n) = self.discs(b, 0.0);
                 discs.into_iter().take(n).map(|(volume, _)| volume)
             }),
         );
+        scale.max_diameter = max_diameter;
+        if max_diameter < self.config.max_diameter {
+            scale.min_diameter = scale.min_diameter.min(max_diameter / 4.0);
+        }
         let max_delta = shown
             .iter()
             .map(|(_, _, b)| (b.buy - b.sell).abs())
             .fold(0.0, f64::max);
-        let border = self.config.show_border.then_some(self.config.border_color);
+        let border = self.config.show_border.then(|| {
+            if max_diameter < self.config.max_diameter {
+                self.config.border_color.gamma_multiply(0.5)
+            } else {
+                self.config.border_color
+            }
+        });
         // One mesh for every bubble: the tessellator takes far longer over a circle shape per
         // bubble than over copying these vertices, and a fresh mesh of this size every frame
         // costs about as much again in page faults.
@@ -533,6 +549,34 @@ impl VolumeBubbles {
         };
         with_opacity(base, opacity)
     }
+}
+
+/// Merges crowded automatic bubbles on a 12-point grid and returns the diameter that leaves a
+/// quarter of the available spacing clear. Sparse bars and levels keep their exact positions.
+fn group_on_screen(shown: &mut Vec<(f32, f32, Bubble)>, spacing: f32) -> f32 {
+    let gap = shown
+        .windows(2)
+        .filter(|pair| pair[0].0 == pair[1].0)
+        .map(|pair| (pair[0].1 - pair[1].1).abs())
+        .fold(f32::INFINITY, f32::min);
+    let width = spacing.max(12.0);
+    let merge_x = spacing < 12.0;
+    let merge_y = gap < 12.0 || merge_x;
+    if merge_y {
+        let mut cells: BTreeMap<_, (f32, f32, Bubble)> = BTreeMap::new();
+        for (mut x, mut y, bubble) in shown.drain(..) {
+            if merge_x {
+                x = ((x / width).floor() + 0.5) * width;
+            }
+            y = (y / 12.0).round() * 12.0;
+            cells
+                .entry((x.to_bits(), y.to_bits()))
+                .and_modify(|(_, _, merged)| merged.merge(&bubble))
+                .or_insert((x, y, bubble));
+        }
+        shown.extend(cells.into_values());
+    }
+    0.75 * width.min(if merge_y { 12.0 } else { gap })
 }
 
 fn with_opacity(color: Color32, opacity: u8) -> Color32 {
@@ -892,6 +936,123 @@ mod tests {
                 VolumeBubbles::new(config(mode), BarClock::new(Timeframe::Min1), None, []);
             let (discs, n) = bubbles.discs(&bubble, max_delta);
             assert_eq!(discs[..n], expected[..], "{mode:?} {bubble:?}");
+        }
+    }
+
+    /// Guards automatic screen density in both directions, conservation of volume and side
+    /// through grouping and filtering, and the original sizes and borders where space permits
+    /// or the grouping is explicit. Expected centres, totals and linear diameters are by hand.
+    #[test]
+    fn automatic_bubbles_leave_space_and_preserve_the_summarized_executions() {
+        let (buy, sell) = (Some(OrderSide::Buy), Some(OrderSide::Sell));
+        let tape = vec![
+            trade(1, 100.0, 2.0, buy),
+            trade(61, 99.0, 3.0, sell),
+            trade(121, 100.0, 1.0, None),
+            trade(181, 80.0, 12.0, buy),
+            trade(241, 60.0, 9.0, sell),
+        ];
+        let config = VolumeBubblesConfig {
+            scaling_mode: BubbleScalingMode::Linear,
+            clamp_std_devs: f64::INFINITY,
+            ..VolumeBubblesConfig::default()
+        };
+        let (green, red) = (
+            with_opacity(config.buy_color, config.opacity),
+            with_opacity(config.sell_color, config.opacity),
+        );
+        let [r, g, b, a] = config
+            .border_color
+            .to_array()
+            .map(|channel| channel.div_ceil(2));
+        let soft_border = Some(Color32::from_rgba_premultiplied(r, g, b, a));
+        let border = Some(config.border_color);
+        #[rustfmt::skip]
+        let cases = [
+            // A 12-point screen cell sums 2 buy + 3 sell + 1 unknown = 6 lots.
+            // Diameters span 2.25..9 points for 6..12 lots, with half-opacity borders.
+            ("session", Automatic, 3.0, None, tape.clone(),
+                vec![(102.0, 96.0, 2.25, red, soft_border), (114.0, 120.0, 9.0, green, soft_border),
+                     (114.0, 144.0, 5.625, red, soft_border)]),
+            ("filter after screen grouping", Automatic, 3.0, Some(5.0), tape.clone(),
+                vec![(102.0, 96.0, 2.25, red, soft_border), (114.0, 120.0, 9.0, green, soft_border),
+                     (114.0, 144.0, 5.625, red, soft_border)]),
+            ("vertical stack", Automatic, 80.0, None,
+                vec![trade(1, 100.0, 2.0, buy), trade(2, 99.0, 3.0, sell), trade(61, 80.0, 12.0, buy), trade(121, 60.0, 8.5, sell)],
+                vec![(100.0, 96.0, 2.25, red, soft_border), (180.0, 120.0, 9.0, green, soft_border),
+                     (260.0, 144.0, 5.625, red, soft_border)]),
+            ("spacious detail", Automatic, 80.0, None,
+                vec![trade(1, 100.0, 2.0, buy), trade(61, 20.0, 12.0, sell)],
+                vec![(100.0, 100.0, 4.0, green, border), (180.0, 180.0, 40.0, red, border)]),
+            ("explicit grouping", PriceStep(1.0), 3.0, None, tape,
+                vec![(100.0, 100.0, 4.0 + 36.0 / 11.0, green, border),
+                     (103.0, 101.0, 4.0 + 72.0 / 11.0, red, border),
+                     (106.0, 100.0, 4.0, with_opacity(config.neutral_color, config.opacity), border),
+                     (109.0, 120.0, 40.0, green, border),
+                     (112.0, 140.0, 4.0 + 288.0 / 11.0, red, border)]),
+        ];
+        for (name, grouping, spacing, min_size_filter, trades, expected) in cases {
+            let clock = BarClock::new(Timeframe::Min1);
+            let bars: Vec<_> = (0..5)
+                .map(|i| {
+                    Bar::new(
+                        trade(i * 60, 0.0, 0.0, None).ts,
+                        100.0,
+                        101.0,
+                        20.0,
+                        80.0,
+                        1.0,
+                    )
+                })
+                .collect();
+            let bubbles = VolumeBubbles::new(
+                VolumeBubblesConfig {
+                    grouping,
+                    min_size_filter,
+                    ..config.clone()
+                },
+                clock,
+                Some(1.0),
+                &trades,
+            );
+            let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                bubbles.render(
+                    ui.painter(),
+                    &bars,
+                    spacing,
+                    |i| 100.0 + spacing * i as f32,
+                    |p| 200.0 - p as f32,
+                );
+            });
+            output.textures_delta.clear();
+            let mesh = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    Shape::Mesh(mesh) => Some(mesh),
+                    _ => None,
+                })
+                .unwrap();
+            let mut wanted = Mesh::default();
+            for (x, y, diameter, color, border) in expected {
+                add_disc(
+                    &mut wanted,
+                    Pos2::new(x, y),
+                    diameter / 2.0,
+                    color,
+                    border,
+                    1.0,
+                );
+            }
+            assert_eq!(mesh.vertices.len(), wanted.vertices.len(), "{name}");
+            assert_eq!(mesh.indices, wanted.indices, "{name}");
+            for (got, expected) in mesh.vertices.iter().zip(&wanted.vertices) {
+                assert!(
+                    (got.pos - expected.pos).length() < 1e-4,
+                    "{name}: {got:?} vs {expected:?}"
+                );
+                assert_eq!(got.color, expected.color, "{name}");
+            }
         }
     }
 

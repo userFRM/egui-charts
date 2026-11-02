@@ -40,7 +40,7 @@ pub struct PriceMarkGeneratorConfig {
     pub target_density: f32,
 
     /// Minimum price tick size. Normal and logarithmic marks lie on its multiples;
-    /// invalid sizes are ignored.
+    /// invalid sizes are ignored. `None` uses the chart instrument's tick size when available.
     pub min_price_step: Option<f64>,
 }
 
