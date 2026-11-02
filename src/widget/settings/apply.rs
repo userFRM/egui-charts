@@ -49,6 +49,63 @@ fn navigation_buttons(visibility: ButtonVisibility) -> NavigationButtons {
     }
 }
 
+/// Why [`ChartSettingsState::apply_to_chart`] left the chart unchanged. Its text is the one
+/// the settings dialog shows.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum ChartSettingsError {
+    /// `timezone` names no time zone this build knows.
+    Timezone(crate::model::ParseError),
+    /// The margins are not finite, are negative or leave no room for prices.
+    Margins {
+        /// The top margin in percent.
+        top: f32,
+        /// The bottom margin in percent.
+        bottom: f32,
+    },
+    /// The crosshair line width is not finite or not above zero.
+    CrosshairWidth(f32),
+    /// The axis font size is zero.
+    FontSize(u8),
+    /// The locked price-to-bar ratio is not finite or not above zero.
+    PriceToBarRatio(f64),
+    /// The trading execution sound volume is outside 0 to 1.
+    ExecutionSoundVolume(f32),
+    /// The alert sound volume is outside 0 to 1.
+    AlertSoundVolume(f32),
+    /// The chart type parameters do not fit the chart type.
+    ChartTypeParams {
+        /// The chart type they were checked against.
+        chart_type: crate::model::ChartType,
+        /// Why they were refused.
+        reason: &'static str,
+    },
+}
+
+impl std::fmt::Display for ChartSettingsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Timezone(_) => "Invalid timezone",
+            Self::Margins { .. } => "Margins must leave room for prices",
+            Self::CrosshairWidth(_) => "Crosshair width must be above zero",
+            Self::FontSize(_) => "Font sizes must be between 1 and 256",
+            Self::PriceToBarRatio(_) => "Price-to-bar ratio must be positive and finite",
+            Self::ExecutionSoundVolume(_) | Self::AlertSoundVolume(_) => {
+                "Sound volume must be between zero and one"
+            }
+            Self::ChartTypeParams { reason, .. } => reason,
+        })
+    }
+}
+impl std::error::Error for ChartSettingsError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Timezone(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
 impl ChartSettingsState {
     /// Read the chart's current display settings. Host-managed trading and alert groups
     /// retain defaults; hosts preserve their current values when refreshing chart settings.
@@ -225,15 +282,15 @@ impl ChartSettingsState {
         settings
     }
 
-    pub(crate) fn validate(&self) -> Result<TimezoneMode, &'static str> {
+    pub(crate) fn validate(&self) -> Result<TimezoneMode, ChartSettingsError> {
         let timezone = match self.timezone.as_str() {
             "UTC" => TimezoneMode::Utc,
             "Local" => TimezoneMode::Local,
             name => {
                 if let Some(name) = name.strip_prefix("Exchange:") {
-                    TimezoneMode::Exchange(name.parse().map_err(|_| "Invalid timezone")?)
+                    TimezoneMode::Exchange(name.parse().map_err(ChartSettingsError::Timezone)?)
                 } else {
-                    TimezoneMode::Timezone(name.parse().map_err(|_| "Invalid timezone")?)
+                    TimezoneMode::Timezone(name.parse().map_err(ChartSettingsError::Timezone)?)
                 }
             }
         };
@@ -245,32 +302,41 @@ impl ChartSettingsState {
             || bottom < 0.0
             || top + bottom >= 100.0
         {
-            return Err("Margins must leave room for prices");
+            return Err(ChartSettingsError::Margins { top, bottom });
         }
         if !self.crosshair.line_width.is_finite() || self.crosshair.line_width <= 0.0 {
-            return Err("Crosshair width must be above zero");
+            return Err(ChartSettingsError::CrosshairWidth(
+                self.crosshair.line_width,
+            ));
         }
         if self.scales_appearance.font_size == 0 {
-            return Err("Font sizes must be between 1 and 256");
+            return Err(ChartSettingsError::FontSize(
+                self.scales_appearance.font_size,
+            ));
         }
         if self.scales_and_lines.lock_price_to_bar_ratio
             && (!self.scales_and_lines.price_to_bar_ratio.is_finite()
                 || self.scales_and_lines.price_to_bar_ratio <= 0.0)
         {
-            return Err("Price-to-bar ratio must be positive and finite");
+            return Err(ChartSettingsError::PriceToBarRatio(
+                self.scales_and_lines.price_to_bar_ratio,
+            ));
         }
-        for volume in [
-            self.trading.execution_sound_volume,
-            self.alerts.sound_volume,
-        ] {
-            if !volume.is_finite() || !(0.0..=1.0).contains(&volume) {
-                return Err("Sound volume must be between zero and one");
-            }
+        let volume = self.trading.execution_sound_volume;
+        if !volume.is_finite() || !(0.0..=1.0).contains(&volume) {
+            return Err(ChartSettingsError::ExecutionSoundVolume(volume));
+        }
+        let volume = self.alerts.sound_volume;
+        if !volume.is_finite() || !(0.0..=1.0).contains(&volume) {
+            return Err(ChartSettingsError::AlertSoundVolume(volume));
         }
         if let Some(params) = &self.chart_type_params
             && let Some(error) = params.invalid(self.chart_type)
         {
-            return Err(error);
+            return Err(ChartSettingsError::ChartTypeParams {
+                chart_type: self.chart_type,
+                reason: error,
+            });
         }
         Ok(timezone)
     }
@@ -278,11 +344,14 @@ impl ChartSettingsState {
     /// Apply the display controls offered by the dialog without rebuilding the chart or feed.
     /// Host-owned trading and alerts are left to their providers. Invalid timezone,
     /// margins or crosshair width returns an error before changing the chart.
-    pub fn apply_to_chart(&self, chart: &mut Chart) -> Result<(), &'static str> {
+    pub fn apply_to_chart(&self, chart: &mut Chart) -> Result<(), ChartSettingsError> {
         let timezone = self.validate()?;
         if let Some(params) = &self.chart_type_params {
             if let Some(error) = params.invalid(chart.chart_type()) {
-                return Err(error);
+                return Err(ChartSettingsError::ChartTypeParams {
+                    chart_type: chart.chart_type(),
+                    reason: error,
+                });
             }
             chart.set_chart_type_params(params.clone());
         }

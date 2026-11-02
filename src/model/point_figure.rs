@@ -94,6 +94,42 @@ pub struct PnfColumn {
     pub box_cnt: usize,
 }
 
+/// Why [`PnfColumn::boxes`] did not list a column's box prices.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PnfBoxesError {
+    /// The start or end price is NaN or infinite.
+    NonFiniteEndpoint,
+    /// The box size is not a finite number above zero.
+    InvalidBoxSize,
+    /// The column holds this many boxes, more than the 2,000,000 it lists.
+    TooManyBoxes(usize),
+    /// The box prices could not be allocated.
+    Allocation(std::collections::TryReserveError),
+}
+
+impl std::fmt::Display for PnfBoxesError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NonFiniteEndpoint => f.write_str("box prices need finite column endpoints"),
+            Self::InvalidBoxSize => f.write_str("box prices need a finite box size above zero"),
+            Self::TooManyBoxes(count) => write!(
+                f,
+                "column of {count} boxes exceeds the expansion limit of 2,000,000 boxes"
+            ),
+            Self::Allocation(error) => error.fmt(f),
+        }
+    }
+}
+impl std::error::Error for PnfBoxesError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Allocation(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
 impl PnfColumn {
     /// Get the low price of the column
     pub fn low(&self) -> f64 {
@@ -110,25 +146,22 @@ impl PnfColumn {
     /// # Errors
     /// Returns an error for non-finite endpoints, an invalid box size, more than two million
     /// boxes, or an allocation failure. The column endpoints remain available without expansion.
-    pub fn boxes(&self) -> Result<Vec<f64>, String> {
-        if !(self.start_price.is_finite()
-            && self.end_price.is_finite()
-            && self.box_size > 0.0
-            && self.box_size.is_finite())
-        {
-            return Err(
-                "Box prices require finite endpoints and a positive finite box size".into(),
-            );
+    pub fn boxes(&self) -> Result<Vec<f64>, PnfBoxesError> {
+        if !self.start_price.is_finite() || !self.end_price.is_finite() {
+            return Err(PnfBoxesError::NonFiniteEndpoint);
+        }
+        if !(self.box_size > 0.0 && self.box_size.is_finite()) {
+            return Err(PnfBoxesError::InvalidBoxSize);
         }
         let count = box_count(self.start_price, self.end_price, self.box_size);
         const MAX_BOXES: usize = 2_000_000;
         if count > MAX_BOXES {
-            return Err("Column exceeds the two-million-box expansion limit".into());
+            return Err(PnfBoxesError::TooManyBoxes(count));
         }
         let mut prices = Vec::new();
         prices
             .try_reserve_exact(count)
-            .map_err(|error| error.to_string())?;
+            .map_err(PnfBoxesError::Allocation)?;
         let low = self.low();
         prices.extend((0..count).map(|i| low + i as f64 * self.box_size));
         Ok(prices)
