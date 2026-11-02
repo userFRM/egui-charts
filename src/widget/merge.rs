@@ -1,19 +1,27 @@
-//! Bars merged when several fall within one pixel, so a zoomed-out frame draws about one bar
-//! per pixel column however many bars are in view.
+//! Bars merged at a configurable physical-pixel spacing so dense views keep their extremes.
 
 use crate::chart::rendering::ChartMapping;
 use crate::model::{Bar, ChartType, PriceSource};
 use std::ops::Range;
 
 /// Consecutive bars drawn as one at `bar_spacing` points: the smallest power of two that spans
-/// a physical pixel, or 1 while bars are at least a pixel apart. Groups start at multiples of
-/// the factor, so panning keeps them and zooming splits or joins them in pairs.
-pub(super) fn factor(bar_spacing: f32, pixels_per_point: f32) -> usize {
-    let pixels = f64::from(bar_spacing * pixels_per_point);
-    if pixels >= 1.0 || pixels.is_nan() || pixels <= 0.0 {
+/// the physical-pixel `threshold`, or 1 while disabled or bars are at least that far apart.
+/// Groups start at multiples of the factor, so panning keeps them and zooming splits or joins
+/// them in pairs.
+pub(super) fn factor(bar_spacing: f32, pixels_per_point: f32, threshold: Option<f32>) -> usize {
+    let Some(threshold) = threshold else {
+        return 1;
+    };
+    let threshold = if threshold.is_finite() && threshold > 0.0 {
+        f64::from(threshold)
+    } else {
+        1.0
+    };
+    let pixels = f64::from(bar_spacing) * f64::from(pixels_per_point);
+    if pixels >= threshold || pixels.is_nan() || pixels <= 0.0 {
         return 1;
     }
-    1 << (1.0 / pixels).log2().ceil().min(30.0) as u32
+    1 << (threshold / pixels).log2().ceil().min(30.0) as u32
 }
 
 /// Whether `chart_type` merges as a line, `Some(true)`, or as bars, `Some(false)`; `None` for
@@ -94,6 +102,8 @@ pub(super) struct Group {
 #[derive(Default)]
 pub(super) struct Groups {
     key: Option<(u64, usize, PriceSource)>,
+    len: usize,
+    tail: Option<Bar>,
     /// Group `g` holds bars `g * factor` up to the next multiple; none at a factor of 1.
     pub groups: Vec<Group>,
 }
@@ -101,12 +111,31 @@ pub(super) struct Groups {
 impl Groups {
     /// The groups of `factor` bars of `bars`, at `revision`, with extremes of `source`.
     pub fn update(&mut self, bars: &[Bar], revision: u64, factor: usize, source: PriceSource) {
+        if self.key == Some((revision, factor, source))
+            && self.len == bars.len()
+            && match (self.tail.as_ref(), bars.last()) {
+                (None, None) => true,
+                (Some(old), Some(last)) => {
+                    old.time == last.time
+                        && [old.open, old.high, old.low, old.close, old.volume].map(f64::to_bits)
+                            == [last.open, last.high, last.low, last.close, last.volume]
+                                .map(f64::to_bits)
+                        && old.colors == last.colors
+                        && old.payload == last.payload
+                }
+                _ => false,
+            }
+        {
+            return;
+        }
         let kept = if self.key == Some((revision, factor, source)) {
             self.groups.len().saturating_sub(1)
         } else {
             0
         };
         self.key = Some((revision, factor, source));
+        self.len = bars.len();
+        self.tail = bars.last().cloned();
         self.groups.truncate(kept);
         if factor == 1 {
             return;
@@ -279,6 +308,30 @@ impl Merged {
 mod tests {
     use super::*;
     use crate::model::BarColors;
+
+    #[test]
+    fn grouping_uses_the_configured_physical_pixel_threshold() {
+        for (spacing, scale, threshold, expected) in [
+            (0.25, 1.0, Some(1.0), 4),
+            (0.25, 2.0, Some(1.0), 2),
+            (0.25, 2.0, Some(2.0), 4),
+            (0.25, 2.0, Some(0.5), 1),
+            (0.25, 2.0, Some(0.6), 2),
+            (0.25, 2.0, None, 1),
+            (0.25, 2.0, Some(0.0), 2),
+            (0.25, 2.0, Some(-1.0), 2),
+            (0.25, 2.0, Some(f32::NAN), 2),
+            (0.25, 2.0, Some(f32::INFINITY), 2),
+            (0.0, 2.0, Some(1.0), 1),
+            (-0.25, 2.0, Some(1.0), 1),
+            (f32::NAN, 2.0, Some(1.0), 1),
+            (f32::INFINITY, 2.0, Some(1.0), 1),
+            (0.25, 0.0, Some(1.0), 1),
+            (f32::MIN_POSITIVE, 1.0, Some(1.0), 1 << 30),
+        ] {
+            assert_eq!(factor(spacing, scale, threshold), expected);
+        }
+    }
 
     #[test]
     fn pixel_groups_keep_gaps_and_bar_colours() {
