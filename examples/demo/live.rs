@@ -461,12 +461,19 @@ impl LiveFeed {
         let sim = self.state();
         let date = sim.now.date_naive();
         let today = sim.volume_by_day.get(&date).copied().unwrap_or(0.0);
-        // The first day starts mid-day.
+        let first = sim
+            .history
+            .first()
+            .map(|bar| bar.time)
+            .or_else(|| sim.trades.front().map(|trade| trade.ts));
+        // Leave out an incomplete first day.
+        let skip_partial =
+            usize::from(first.is_some_and(|first| first.time() != chrono::NaiveTime::MIN));
         let (sum, count) = sim
             .volume_by_day
             .iter()
             .filter(|(day, _)| **day != date)
-            .skip(1)
+            .skip(skip_partial)
             .fold((0.0, 0_usize), |(sum, count), (_, volume)| {
                 (sum + volume, count + 1)
             });
@@ -2105,6 +2112,13 @@ mod tests {
             assert_eq!(feed.daily_volume(), expected);
             assert_eq!(feed.quote(time).unwrap().volume, Some(expected.0));
         }
+        let whole = LiveFeed::new("BTCUSD", "2026-10-24T02:00:00Z".parse().unwrap());
+        {
+            let sim = whole.state();
+            assert_eq!(sim.history.len(), 7 * 24 * 60);
+            assert_eq!(sim.history[0].time.time(), chrono::NaiveTime::MIN);
+        }
+        assert_eq!(whole.daily_volume().1, 81_007_148.0 / 7.0);
     }
 
     /// The controller publishes the subscribed quotes once per frame, and the first push after a
