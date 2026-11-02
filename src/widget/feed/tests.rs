@@ -3209,3 +3209,52 @@ fn dividend_adjustment_is_requested_for_the_chart_and_its_comparisons() {
         );
     }
 }
+
+/// A volume profile study on a chart with a feed builds its rows from the executions the feed
+/// streams, by the chart's bar clock.
+#[cfg(feature = "studies")]
+#[test]
+fn volume_profile_studies_read_the_chart_executions() {
+    use crate::data::ProfileSource;
+    use crate::model::OrderSide::{Buy, Sell};
+    let feed = Arc::new(Script::default());
+    let mut chart = fed(&feed, Some("A"));
+    chart.chart_options.time_scale.timezone = crate::scales::TimezoneMode::Timezone(
+        crate::model::TimezoneId::fixed_offset(3600).unwrap(),
+    );
+    let factory = crate::studies::IndicatorFactory::new();
+    let id = chart.add_indicator(factory.create("Vol Profile FR").unwrap());
+    let mut frames = Frames::new();
+    frames.run(&mut chart);
+    feed.resolve()
+        .send(Ok(Instrument::new("A").with_tick_size(0.25)));
+    feed.page().send(page(bars(2), true));
+    frames.run(&mut chart);
+    let start = bars(1)[0].time;
+    let at = |second| start + TimeDelta::seconds(second);
+    let sink = feed.sink();
+    for (second, price, size, side) in [
+        (10, 100.0, 2.0, Some(Buy)),
+        (70, 100.25, 1.0, Some(Sell)),
+        (80, 100.5, 3.0, None),
+    ] {
+        sink.push_tick(Tick::new(at(second), price, size, side));
+    }
+    for _ in 0..8 {
+        frames.run(&mut chart);
+    }
+    // Past the wait before a study's next full recompute.
+    frames.time += 1.0;
+    frames.run(&mut chart);
+    let (_, study) = chart.indicators().find(|(seen, _)| *seen == id).unwrap();
+    let profiles = study.volume_profiles(0..2);
+    let profile = &profiles[0].profile;
+    assert_eq!(
+        profile.source(),
+        ProfileSource::Executions { complete: true }
+    );
+    assert_eq!((profile.low(), profile.row_height()), (99.875, 0.25));
+    assert_eq!(profile.volume(), [2.0, 1.0, 3.0]);
+    assert_eq!(profile.up(), [2.0, 0.0, 0.0]);
+    assert_eq!(profile.down(), [0.0, 1.0, 0.0]);
+}
