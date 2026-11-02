@@ -810,7 +810,7 @@ Studies,Strategy tester,Limit and stop orders,done,library,src/strategies/backte
 Studies,Strategy tester,List of trades,done,library,src/model/strategy.rs;src/ui/strategy_report/mod.rs
 Studies,Strategy tester,"Long and short positions, margin and leverage",done,library,src/strategies/backtest.rs;docs/strategy-report.md
 Studies,Strategy tester,Order fill model,done,library,src/strategies/backtest.rs;src/strategies/mod.rs;src/model/trading.rs;docs/strategy-report.md
-Studies,Strategy tester,Parameter optimisation,missing,library,
+Studies,Strategy tester,Parameter optimisation,done,library,src/strategies/optimize.rs;src/strategies/mod.rs;src/strategies/backtest.rs;src/model/strategy.rs
 Studies,Strategy tester,Performance summary,done,library,src/model/strategy.rs;src/ui/strategy_report/mod.rs
 Studies,Strategy tester,Position sizing,done,library,src/strategies/backtest.rs;src/strategies/mod.rs;docs/strategy-report.md
 Studies,Strategy tester,Pyramiding limit,done,library,src/strategies/backtest.rs;src/strategies/mod.rs;docs/strategy-report.md
