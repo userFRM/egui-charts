@@ -236,7 +236,9 @@ impl Chart {
             if let Some(bar) = item.bars.get(at) {
                 let coords = crate::chart::coords::ChartMapping {
                     start_idx: 0,
-                    right_offset: self.get_chart_mapping().right_offset - index,
+                    numeric_positions: None,
+                    right_offset: self.get_chart_mapping().right_offset
+                        - self.state.time_scale().position(index),
                     price: map,
                     ..self.get_chart_mapping()
                 };

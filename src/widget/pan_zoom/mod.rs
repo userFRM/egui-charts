@@ -591,13 +591,14 @@ impl Chart {
         let time_scale = self.state.time_scale_mut();
         let center_idx =
             time_scale.coord_to_idx_precise((min_x + max_x) / 2.0, chart_rect.min.x, chart_width);
+        let center = time_scale.position(center_idx);
         let old = time_scale.bar_spacing();
         time_scale.set_bar_spacing((old * chart_width / (max_x - min_x)).min(chart_width.max(old)));
         // The inverse of `coord_to_idx` at the middle of the width.
         let spacing = time_scale.bar_spacing();
         let base_idx = time_scale.base_idx() as f64;
         time_scale.set_right_offset(
-            center_idx - base_idx + (f64::from(chart_width) / 2.0 - 1.0) / f64::from(spacing) - 0.5,
+            center - base_idx + (f64::from(chart_width) / 2.0 - 1.0) / f64::from(spacing) - 0.5,
         );
 
         // Vertical zoom: the box's prices, in the units of the window it selects, whose first
@@ -701,7 +702,9 @@ impl Chart {
                     .is_some_and(|link| !link.paging_stopped);
             let scale = self.state.time_scale_mut();
             let half_window = (chart_width / scale.bar_spacing() - 1.0) / 2.0;
-            scale.set_right_offset(index as f64 - scale.base_idx() as f64 + f64::from(half_window));
+            scale.set_right_offset(
+                scale.position(index as f64) - scale.base_idx() as f64 + f64::from(half_window),
+            );
             if !needs_history {
                 self.pending_scroll_time = None;
             }
@@ -713,7 +716,9 @@ impl Chart {
             if bar_spacing > 0.0 {
                 let visible_len = chart_width / bar_spacing;
                 let base_idx = self.state.time_scale().base_idx() as f64;
-                let desired_right_border = target_start as f64 + f64::from(visible_len) - 1.0;
+                let desired_right_border = self.state.time_scale().position(target_start as f64)
+                    + f64::from(visible_len)
+                    - 1.0;
                 let desired_offset = desired_right_border - base_idx;
                 self.state.time_scale_mut().set_right_offset(desired_offset);
             }

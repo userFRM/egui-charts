@@ -593,18 +593,6 @@ pub fn render_magnifier_tooltip(
     let price_to_mag_y =
         |price: f64| center.y + (price_scale.price_to_y(price) - hover_pos.y) * zoom;
 
-    // Calculate bar indices visible in magnifier. Degenerate bar spacing maps
-    // every pixel onto the same bar rather than dividing by zero.
-    let bars_per_pixel = if coords.bar_spacing.abs() < f32::EPSILON {
-        0.0
-    } else {
-        1.0 / coords.bar_spacing
-    };
-    let center_bars_from_right =
-        f64::from((context.rect.max.x - hover_pos.x) * bars_per_pixel) - 0.5 - coords.right_offset;
-    let src_bars = (src_width * bars_per_pixel) as isize;
-    let half_bars = src_bars / 2;
-
     // Render candles within the magnifier clip region
     // Use clip rect to constrain drawing to the circle
     let clip_rect = Rect::from_center_size(center, Vec2::splat(size));
@@ -614,27 +602,19 @@ pub fn render_magnifier_tooltip(
     let candle_width = zoomed_bar_spacing * 0.7;
 
     // Only bars of `visible_data` can be drawn, so the loop never visits more than that many.
-    let last = (coords.base_idx as f64 - center_bars_from_right - coords.start_idx as f64).floor()
-        as isize;
-    let first = last
-        .saturating_add(1)
-        .saturating_sub(visible_data.len() as isize);
-    for i in (-half_bars).max(first)..=half_bars.min(last) {
-        let bar_offset = center_bars_from_right + i as f64;
-        let global_idx = (coords.base_idx as f64 - bar_offset).floor() as isize;
-
-        if global_idx < coords.start_idx as isize {
-            continue;
-        }
-        let local_idx = (global_idx as usize).saturating_sub(coords.start_idx);
-        if local_idx >= visible_data.len() {
-            continue;
-        }
-
-        let bar = &visible_data[local_idx];
-
-        // Calculate position within magnifier
-        let bar_x = center.x - (i as f32 * zoomed_bar_spacing);
+    let first = coords
+        .x_to_idx(hover_pos.x - src_width / 2.0)
+        .saturating_sub(1);
+    let end = coords
+        .x_to_idx(hover_pos.x + src_width / 2.0)
+        .saturating_add(2);
+    let first = first
+        .saturating_sub(coords.start_idx)
+        .min(visible_data.len());
+    let end = end.saturating_sub(coords.start_idx).min(visible_data.len());
+    for (local, bar) in visible_data[first..end].iter().enumerate() {
+        let bar_x =
+            center.x + (coords.idx_to_x(coords.start_idx + first + local) - hover_pos.x) * zoom;
 
         // Skip if outside magnifier bounds
         if bar_x < clip_rect.min.x - candle_width || bar_x > clip_rect.max.x + candle_width {

@@ -32,7 +32,7 @@ pub fn render_markers<'a>(
         if let Some(index) = crate::model::index_at(visible_data, marker.time) {
             let bar_idx = index.round().clamp(0.0, (visible_data.len() - 1) as f64) as usize;
             let bar = &visible_data[bar_idx];
-            let x = coords.idx_to_x(coords.start_idx) + index as f32 * coords.bar_spacing;
+            let x = coords.index_to_x(coords.start_idx as f64 + index);
             if x < context.rect.left() || x > context.rect.right() {
                 continue;
             }
@@ -162,7 +162,7 @@ pub(crate) fn render_event_breaks(
         let Some(at) = crate::model::index_at(visible_data, time) else {
             continue;
         };
-        let x = coords.idx_to_x(coords.start_idx) + at.ceil() as f32 * coords.bar_spacing;
+        let x = coords.index_to_x(coords.start_idx as f64 + at.ceil());
         painter.extend(Shape::dashed_line(
             &[
                 Pos2::new(x, coords.rect.top()),
@@ -211,7 +211,7 @@ pub(crate) fn render_event_badges<'a>(
     let theme = ui.ctx().active_theme().chart;
     for (index, event) in events {
         let at = crate::model::index_at(visible_data, event.time)?.ceil();
-        let x = coords.idx_to_x(coords.start_idx) + at as f32 * coords.bar_spacing;
+        let x = coords.index_to_x(coords.start_idx as f64 + at);
         let mut rect = Rect::from_center_size(Pos2::new(x, baseline - 11.0), Vec2::splat(22.0));
         while placed.iter().any(|other| other.intersects(rect)) {
             rect = rect.translate(Vec2::new(0.0, -24.0));

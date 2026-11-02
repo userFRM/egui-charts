@@ -41,8 +41,11 @@ fn seen(revision: u64, bars: &[Bar]) -> Seen {
 
 impl Attached {
     pub(super) fn draw(&self, painter: &Painter, view: &PrimitiveView<'_>, pass: PrimitivePass) {
-        let factor =
-            super::merge::factor(view.mapping.bar_spacing, painter.ctx().pixels_per_point());
+        let factor = if view.mapping.numeric_positions.is_some() {
+            1
+        } else {
+            super::merge::factor(view.mapping.bar_spacing, painter.ctx().pixels_per_point())
+        };
         self.get().draw_merged(painter, view, pass, factor);
     }
 
@@ -201,11 +204,11 @@ impl Chart {
             return None;
         }
         let mapping = if series == SeriesId::MAIN {
-            self.main_series_visible.then_some(*coords)?
+            self.main_series_visible.then_some(coords.clone())?
         } else if let Some(item) = self.price_series.iter().find(|item| item.id == series) {
             item.visible.then(|| ChartMapping {
                 price: self.series_map(item, coords.rect),
-                ..*coords
+                ..coords.clone()
             })?
         } else {
             let idx = self.study_ids.iter().position(|id| *id == series)?;
@@ -238,7 +241,7 @@ impl Chart {
         self.primitives.iter().filter_map(move |item| {
             let view = self.main_view(item.series, coords).or_else(|| {
                 self.is_series_visible(item.series)
-                    .then(|| self.primitive_view(item.series, *coords))
+                    .then(|| self.primitive_view(item.series, coords.clone()))
             })?;
             Some((item, view))
         })

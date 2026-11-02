@@ -222,6 +222,20 @@ pub(crate) fn time_axis_marks(
     calendar: Option<&crate::model::TimezoneId>,
     time_at: impl Fn(f64) -> Option<chrono::DateTime<chrono::Utc>>,
 ) -> (Vec<TickMark>, TimeAxisPoints, ChartMapping) {
+    if let Some(positions) = &coords.numeric_positions {
+        let points: Vec<_> = visible_data
+            .iter()
+            .enumerate()
+            .map(|(i, bar)| (bar.time, coords.start_idx + i))
+            .collect();
+        let layout = TickMarkLayout {
+            width: context.rect.width(),
+            bar_spacing: (f64::from(coords.bar_spacing) / positions.unit) as f32,
+            min_spacing: min_time_label_spacing(options),
+            uniform_distribution: options.uniform_distribution,
+        };
+        return (scale.tick_marks(&points, &layout), points, coords.clone());
+    }
     // The logical indices at the right and left edges of the plot; the left one is negative
     // when the view reaches before the first bar.
     let right = coords.base_idx as f64 + coords.right_offset;
@@ -311,7 +325,7 @@ pub(crate) fn time_axis_marks(
     let mapping = ChartMapping {
         start_idx: coords.start_idx + shift,
         base_idx: coords.base_idx + shift,
-        ..*coords
+        ..coords.clone()
     };
     (scale.tick_marks(&bars, &layout), bars, mapping)
 }
@@ -402,10 +416,7 @@ pub(crate) fn render_time_grid(
 ) {
     let lines = marks.iter().filter_map(|mark| {
         let index = time_to_idx(mark.time, points);
-        let delta = (coords.base_idx as f64 - index) + coords.right_offset;
-        let x = (f64::from(context.rect.right())
-            - (delta + 0.5) * f64::from(coords.bar_spacing)
-            - 1.0) as f32;
+        let x = coords.index_to_x(index);
         (x >= context.rect.left() && x <= context.rect.right()).then_some([
             Pos2::new(x, context.rect.top()),
             Pos2::new(x, context.rect.bottom()),
@@ -482,11 +493,7 @@ pub fn render_time_labels(
     for mark in marks {
         // Use fractional index for smooth label movement during pan
         let index = time_to_idx(mark.time, points);
-        // Calculate x using same formula as candle rendering
-        let delta_from_right = (coords.base_idx as f64 - index) + coords.right_offset;
-        let x = (f64::from(context.rect.min.x) + f64::from(context.rect.width())
-            - (delta_from_right + 0.5) * f64::from(coords.bar_spacing)
-            - 1.0) as f32;
+        let x = coords.index_to_x(index);
 
         if x < context.rect.min.x || x > context.rect.max.x {
             continue;

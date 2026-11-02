@@ -825,7 +825,13 @@ impl Chart {
             self.state.time_scale().bar_spacing(),
             ui.ctx().pixels_per_point(),
         )
-        .min(if time_based { usize::MAX } else { 1 });
+        .min(
+            if time_based && self.state.time_scale().numeric_positions().is_none() {
+                usize::MAX
+            } else {
+                1
+            },
+        );
         self.merge_groups.update(
             self.state.shown(),
             self.state.revision(),
@@ -1093,7 +1099,7 @@ impl Chart {
         let bar_spacing = self.state.time_scale().bar_spacing();
         let bar_width = bar_spacing * self.config.candle_width;
         let price_ctx = RenderContext::new(&painter, price_rect);
-        let coords = ChartMapping::new(
+        let mut coords = ChartMapping::new(
             price_rect,
             bar_spacing,
             start_idx,
@@ -1101,12 +1107,13 @@ impl Chart {
             self.state.time_scale().right_offset_precise(),
             price_map,
         );
+        coords.numeric_positions = self.state.time_scale().numeric_positions().cloned();
         let (time_data, time_coords) = match (&time_bars, groups) {
             (Some(bars), Some((start, _))) => (
                 bars.as_slice(),
                 super::merge::group_mapping(&coords, factor, start),
             ),
-            _ => (visible_data, coords),
+            _ => (visible_data, coords.clone()),
         };
         let colors = StyleColors {
             bullish: self.config.bullish_color,
@@ -1145,7 +1152,7 @@ impl Chart {
                 },
             )
         } else {
-            (Vec::new(), Vec::new(), time_coords)
+            (Vec::new(), Vec::new(), time_coords.clone())
         };
 
         if self.config.show_grid && self.config.show_vertical_grid {

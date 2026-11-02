@@ -244,12 +244,13 @@ impl Chart {
 
         // Get coordinate parameters from time scale for x-axis alignment
         let time_scale = self.state.time_scale();
-        let coords = IndicatorCoordParams::new(
+        let mut coords = IndicatorCoordParams::new(
             time_scale.bar_spacing(),
             time_scale.right_offset_precise(),
             self.state.shown().len().saturating_sub(1),
             start_idx,
         );
+        coords.numeric_positions = time_scale.numeric_positions().cloned();
 
         let horizontal = coords.to_mapping(plot, 0.0, 1.0);
         let displayed_range =
@@ -725,7 +726,7 @@ impl Chart {
                     &mut child,
                     indicator,
                     self.state.shown(),
-                    coords,
+                    coords.clone(),
                     Some(plot.x_range()),
                     collapsed,
                     if matches!(
@@ -762,7 +763,7 @@ impl Chart {
                             .painter()
                             .with_clip_rect(interaction.chart_rect.intersect(ui.clip_rect()));
                         self.paint_series(&painter, interaction.chart_rect, item, map);
-                        let view = self.primitive_view(item.id, pane_mapping);
+                        let view = self.primitive_view(item.id, pane_mapping.clone());
                         for primitive in self.primitives_of(item.id) {
                             primitive.draw(&painter, &view, crate::widget::PrimitivePass::Series);
                         }
@@ -876,7 +877,8 @@ impl Chart {
                                     && self.is_series_visible(item.series)
                             })
                             .map(|item| {
-                                let mut view = self.primitive_view(item.series, pane_coords);
+                                let mut view =
+                                    self.primitive_view(item.series, pane_coords.clone());
                                 if let Some(study) = view.study {
                                     view.mapping =
                                         crate::chart::rendering::study_mapping(study, &pane_coords);
@@ -1005,7 +1007,7 @@ impl Chart {
                         }
                     }
 
-                    drawing_response = Some((pane_response, chart_rect, pane_coords));
+                    drawing_response = Some((pane_response, chart_rect, pane_coords.clone()));
                     // Store the pane info for hit testing by platform
                     if let Some(idx) = study {
                         self.last_rendered_indicator_panes
@@ -1015,7 +1017,7 @@ impl Chart {
                                 chart_rect,
                                 y_min,
                                 y_max,
-                                coords,
+                                coords: coords.clone(),
                                 mapping: pane_coords,
                             });
                     }
@@ -1186,7 +1188,7 @@ impl Chart {
                         .contains(&item.series)
                         && self.is_series_visible(item.series)
                 }) {
-                    let view = self.primitive_view(item.series, pane_coords);
+                    let view = self.primitive_view(item.series, pane_coords.clone());
                     item.draw(&painter, &view, crate::widget::PrimitivePass::Above);
                 }
             }

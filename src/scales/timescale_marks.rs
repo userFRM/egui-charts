@@ -789,13 +789,25 @@ impl TickMarkGenerator {
 /// The heaviest of `marks` that lie `min_bars` bars apart: lighter marks give way, and with a
 /// `uniform` distribution a weight that does not fit everywhere is left out with every lighter
 /// one.
-pub(super) fn keep_spaced(mut marks: Vec<TickMark>, min_bars: f32, uniform: bool) -> Vec<TickMark> {
+pub(super) fn keep_spaced(marks: Vec<TickMark>, min_bars: f32, uniform: bool) -> Vec<TickMark> {
+    keep_spaced_by(marks, f64::from(min_bars), uniform, |mark| {
+        mark.index as f64
+    })
+}
+
+/// Keeps marks separated in the same units as their horizontal positions.
+pub(super) fn keep_spaced_by(
+    mut marks: Vec<TickMark>,
+    minimum: f64,
+    uniform: bool,
+    position: impl Fn(&TickMark) -> f64,
+) -> Vec<TickMark> {
     marks.sort_by(|a, b| b.weight.cmp(&a.weight).then_with(|| a.index.cmp(&b.index)));
     let mut kept: Vec<TickMark> = Vec::new();
     for mark in marks {
         if kept
             .iter()
-            .all(|other| mark.index.abs_diff(other.index) as f32 >= min_bars)
+            .all(|other| (position(&mark) - position(other)).abs() >= minimum)
         {
             kept.push(mark);
         } else if uniform {
