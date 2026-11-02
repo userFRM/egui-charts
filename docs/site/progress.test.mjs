@@ -8,6 +8,25 @@ const svg = readFileSync(new URL('./dist/progress/areas.svg', import.meta.url), 
 const escape = (value) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 const sections = [...page.matchAll(/<section\b[^>]*>(.*?)<\/section>/gs)].map((match) => match[1]);
 
+test('map labels end at word boundaries and retain their full group tooltip', () => {
+  const map = readFileSync(new URL('./dist/progress/progress.svg', import.meta.url), 'utf8');
+  const groups = [...map.matchAll(/<g><title>(.*?)<\/title>(.*?)<\/g>/gs)];
+  const names = areas.flatMap((area) => [...new Set(features.filter((feature) => feature.area === area).map((feature) => feature.group))]);
+  assert.deepEqual(groups.map((group) => group[1].split(':')[0]).sort(), names.map(escape).sort());
+  let labels = 0;
+  for (const group of groups) {
+    const name = group[1].split(':')[0];
+    const label = group[2].match(/<text\b[^>]*>(.*?)<\/text>/)?.[1];
+    if (label) {
+      labels++;
+      assert.ok(label === name || (label.endsWith('…') && name.startsWith(`${label.slice(0, -1)} `)), `${name}: ${label}`);
+    }
+  }
+  assert.ok(labels > 0);
+  assert.equal([...map.matchAll(/<text\b/g)].length, labels + areas.length);
+  assert.ok(page.includes(map), 'the inline map exposes cell tooltips on the status page');
+});
+
 test('published area bars and group tables count every CSV status', () => {
   assert.equal(sections.length, areas.length);
   const bars = [...svg.matchAll(/<g>(.*?)<\/g>/gs)].map((match) => match[1]);

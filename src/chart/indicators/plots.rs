@@ -62,7 +62,7 @@ pub(crate) fn candle_geometry(
 }
 
 pub(crate) fn paint_candles(
-    context: &crate::chart::renderers::RenderContext,
+    context: &crate::chart::rendering::RenderContext,
     study: &dyn crate::studies::Indicator,
     price: &crate::scales::PriceMap,
     coords: &crate::chart::coords::ChartMapping,
@@ -202,7 +202,7 @@ pub(crate) fn mapped_drawings(
 
 #[cfg(feature = "drawings")]
 pub(crate) fn paint_drawings(
-    context: &crate::chart::renderers::RenderContext,
+    context: &crate::chart::rendering::RenderContext,
     study: &dyn crate::studies::Indicator,
     price: &crate::scales::PriceMap,
     coords: &crate::chart::coords::ChartMapping,

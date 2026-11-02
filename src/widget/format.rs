@@ -1,5 +1,5 @@
 use super::Chart;
-use crate::chart::renderers;
+use crate::chart::rendering;
 use crate::scales::TimeFormatterBuilder;
 
 impl Chart {
@@ -43,7 +43,7 @@ impl Chart {
         let now = self
             .chart_time()
             .or_else(|| self.quote.as_ref().map(|quote| quote.ts))?;
-        let session = renderers::exchange_session(
+        let session = rendering::exchange_session(
             self.instrument(),
             self.config.session_config.as_ref(),
             &self.display_timezone(),
@@ -286,8 +286,8 @@ impl Chart {
             .map(|formatter| formatter.as_ref())
     }
 
-    pub(super) fn value_formatters(&self) -> renderers::ValueFormatters<'_> {
-        renderers::ValueFormatters {
+    pub(super) fn value_formatters(&self) -> rendering::ValueFormatters<'_> {
+        rendering::ValueFormatters {
             price: self.series_price_formatter(super::SeriesId::MAIN),
             volume: self.volume_formatter.as_deref(),
             percentage: self.percentage_formatter.as_deref(),

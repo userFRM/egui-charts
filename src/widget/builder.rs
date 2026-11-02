@@ -34,8 +34,6 @@
 //! # }
 //! ```
 
-#[cfg(feature = "drawings")]
-use crate::chart::cursor_modes::CursorModeState;
 use crate::chart::selection::SelectionState;
 use crate::config::{ChartConfig, ChartOptions, RealtimeButtonPos};
 use crate::data::{Datafeed, FeedState};
@@ -47,6 +45,8 @@ use crate::scales::{PriceMap, PriceRange, PriceTransform};
 use crate::studies::ChartState;
 use crate::studies::IndicatorRegistry;
 use crate::theme::Theme;
+#[cfg(feature = "drawings")]
+use crate::widget::tool_interaction::cursor_modes::CursorModeState;
 
 use super::Chart;
 use super::state::{BoxZoomState, KineticScrollState};

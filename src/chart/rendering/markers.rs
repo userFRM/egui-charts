@@ -1,6 +1,6 @@
 //! Marker renderer for chart annotations
 
-use super::context::{ChartMapping, RenderContext};
+use super::{ChartMapping, RenderContext};
 use crate::model::{Bar, Marker, MarkerPos, MarkerShape};
 use crate::scales::PriceMap;
 use crate::theme::ThemeExt;

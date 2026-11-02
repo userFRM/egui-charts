@@ -1,7 +1,9 @@
 //! Volume rendering helpers
 
-use crate::chart::renderers::{self, BarRenderParams, RenderContext, StyleColors};
+use super::super::context::{BarRenderParams, RenderContext, StyleColors};
 use crate::model::Bar;
+use crate::theme::ThemeExt;
+use egui::{Pos2, Rect, Vec2};
 
 /// Render volume bars for chart types that show volume
 pub(crate) fn render_volume_bars(
@@ -17,6 +19,37 @@ pub(crate) fn render_volume_bars(
         let x = idx_to_coord(start_idx + i, chart_rect_min_x);
         let pitch = (idx_to_coord(start_idx + i + 1, chart_rect_min_x) - x).abs();
         let volume_params = BarRenderParams::new(x, pitch * 0.8, 0.0);
-        renderers::render_volume_bar(volume_ctx, bar, max_volume, colors, &volume_params);
+        render_volume_bar(volume_ctx, bar, max_volume, colors, &volume_params);
     }
+}
+
+/// Renders a volume bar with the active theme's volume colour and opacity.
+pub fn render_volume_bar(
+    context: &RenderContext,
+    candle: &Bar,
+    max_volume: f64,
+    _colors: &StyleColors,
+    params: &BarRenderParams,
+) {
+    if candle.is_whitespace() {
+        return;
+    }
+    let theme = context.painter.ctx().active_theme();
+    let color = if candle.is_bullish() {
+        theme.chart.volume_up()
+    } else {
+        theme.chart.volume_down()
+    };
+
+    let bar_height = (candle.volume / max_volume) as f32 * context.rect.height();
+    let bar_bottom = context.rect.max.y;
+
+    context.painter.rect_filled(
+        Rect::from_min_size(
+            Pos2::new(params.x - params.width / 2.0, bar_bottom - bar_height),
+            Vec2::new(params.width, bar_height),
+        ),
+        0.0,
+        color,
+    );
 }
