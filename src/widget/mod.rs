@@ -87,6 +87,7 @@ mod targets;
 pub use events::ImageRequest;
 pub use events::{ChartEvent, ChartPointer, PointerKind, PointerTarget};
 mod export;
+mod format;
 mod frame;
 mod history;
 pub(crate) mod interaction;
