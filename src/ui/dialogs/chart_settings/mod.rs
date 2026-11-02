@@ -65,6 +65,8 @@ pub struct SettingsDialog {
     /// Without any, the tab offers no choice.
     pub execution_sounds: Vec<String>,
     sound_preview: Option<(String, f32)>,
+    /// Heatmap, book, individual orders and bubbles offered by the host.
+    order_flow_layers: [bool; 4],
 }
 
 #[derive(Clone, Default)]
@@ -171,6 +173,7 @@ impl SettingsDialog {
             hidden: HashSet::new(),
             execution_sounds: Vec::new(),
             sound_preview: None,
+            order_flow_layers: [true; 4],
         }
     }
 
@@ -180,6 +183,41 @@ impl SettingsDialog {
         crate::ui::app_state::set_control_visible(&mut self.hidden, control, visible);
         if control == Control::Templates && !visible {
             self.template_menu_open = false;
+        }
+    }
+
+    /// Restrict Order flow controls to services explicitly declared for the chart's instrument.
+    /// Pass [`Chart::feed_capabilities`](crate::Chart::feed_capabilities) and
+    /// [`Chart::instrument`](crate::Chart::instrument) again when they change. A missing instrument
+    /// or a non-positive, non-finite or missing tick size hides the tab. Before the first call,
+    /// all layers are offered. Hidden controls retain their saved values.
+    pub fn set_feed_capabilities(
+        &mut self,
+        capabilities: Option<&crate::data::FeedCapabilities>,
+        instrument: Option<&crate::model::Instrument>,
+    ) {
+        use crate::model::FeedService;
+        let declares = |service| {
+            instrument.is_some_and(|instrument| {
+                instrument
+                    .tick_size
+                    .is_some_and(|tick| tick.is_finite() && tick > 0.0)
+                    && capabilities
+                        .unwrap_or(&crate::data::FeedCapabilities::default())
+                        .declares(service, instrument)
+            })
+        };
+        let depth = declares(FeedService::Depth);
+        self.order_flow_layers = [
+            depth || declares(FeedService::DepthHistory),
+            depth,
+            depth && declares(FeedService::OrderDepth),
+            declares(FeedService::Trades) || declares(FeedService::LiveTrades),
+        ];
+        if !self.order_flow_layers.iter().any(|available| *available)
+            && self.active_tab == SettingsTab::OrderFlow
+        {
+            self.active_tab = SettingsTab::Symbol;
         }
     }
 
@@ -341,6 +379,7 @@ impl SettingsDialog {
 
         let sidebar_width = SIDEBAR_WIDTH.min(ui.available_width() * 0.4);
         let mut active = self.active_tab;
+        let order_flow_available = self.order_flow_layers.iter().any(|available| *available);
         ui.allocate_ui(Vec2::new(ui.available_width(), content_height), |ui| {
             SidebarLayout::new(sidebar_width).show(
                 ui,
@@ -349,6 +388,9 @@ impl SettingsDialog {
                         .id_salt("settings_tabs")
                         .show(ui, |ui| {
                             for tab in SettingsTab::all() {
+                                if *tab == SettingsTab::OrderFlow && !order_flow_available {
+                                    continue;
+                                }
                                 if SidebarTab::new(tab.name(), active == *tab)
                                     .icon(tab.icon())
                                     .show(ui)
@@ -367,6 +409,7 @@ impl SettingsDialog {
                             ui.spacing_mut().item_spacing = Vec2::splat(theme.spacing.lg);
                             match self.active_tab {
                                 SettingsTab::Symbol => self.draw_symbol_tab(ui, theme),
+                                SettingsTab::OrderFlow => self.draw_order_flow_tab(ui, theme),
                                 SettingsTab::StatusLine => self.draw_status_line_tab(ui, theme),
                                 SettingsTab::ScalesAndLines => {
                                     self.draw_scales_and_lines_tab(ui, theme)
@@ -1087,6 +1130,198 @@ mod tests {
                 ),
                 expected
             );
+        }
+    }
+
+    #[test]
+    fn order_flow_controls_follow_declared_services_and_tick_size() {
+        use crate::data::FeedCapabilities;
+        use crate::model::{FeedService::*, Instrument};
+        let feed = FeedCapabilities::new().with_services([
+            Trades,
+            LiveTrades,
+            Depth,
+            DepthHistory,
+            OrderDepth,
+        ]);
+        for (services, tick, expected) in [
+            (None, Some(0.25), [true, true, true, true]),
+            (
+                Some(vec![LiveTrades]),
+                Some(0.25),
+                [false, false, false, true],
+            ),
+            (Some(vec![Trades]), Some(0.25), [false, false, false, true]),
+            (Some(vec![Depth]), Some(0.25), [true, true, false, false]),
+            (
+                Some(vec![DepthHistory]),
+                Some(0.25),
+                [true, false, false, false],
+            ),
+            (
+                Some(vec![Depth, OrderDepth]),
+                Some(0.25),
+                [true, true, true, false],
+            ),
+            (Some(vec![OrderDepth]), Some(0.25), [false; 4]),
+            (Some(vec![]), Some(0.25), [false; 4]),
+            (Some(vec![Depth]), None, [false; 4]),
+            (Some(vec![Depth]), Some(0.0), [false; 4]),
+            (Some(vec![Depth]), Some(f64::NAN), [false; 4]),
+        ] {
+            let ctx = Context::default();
+            let theme = Theme::light();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut dialog = SettingsDialog::new();
+            dialog.open(ChartSettingsState::default());
+            let mut instrument = Instrument::new("A");
+            instrument.services = services;
+            instrument.tick_size = tick;
+            dialog.set_feed_capabilities(Some(&feed), Some(&instrument));
+            assert_eq!(dialog.order_flow_layers, expected);
+            for pass in 0..3 {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            Pos2::ZERO,
+                            Vec2::new(1440.0, 900.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        dialog.show(ui.ctx(), &theme);
+                    },
+                );
+                let tab = output.shapes.iter().any(|shape| {
+                    matches!(&shape.shape,
+                    egui::Shape::Text(text) if text.galley.text() == "Order flow")
+                });
+                output.drop_without_applying_deltas();
+                if pass == 2 {
+                    assert_eq!(tab, expected.iter().any(|available| *available));
+                }
+            }
+            // Existing overlay configs define fallback behaviour for these values.
+            dialog.settings.order_flow.heatmap.full_intensity_size = Some(0.0);
+            dialog.settings.order_flow.volume_bubbles.grouping =
+                crate::chart::overlays::BubbleGrouping::Executions(0);
+            let before = dialog.settings.clone();
+            let output = ctx.run_ui(Default::default(), |ui| {
+                dialog.draw_order_flow_tab(ui, &theme);
+            });
+            for (label, shown) in [
+                ("Market depth heatmap", expected[0]),
+                ("Order book", expected[1]),
+                ("Volume bubbles", expected[3]),
+            ] {
+                assert_eq!(
+                    output.shapes.iter().any(|shape| matches!(&shape.shape,
+                    egui::Shape::Text(text) if text.galley.text() == label)),
+                    shown,
+                    "{label}"
+                );
+            }
+            output.drop_without_applying_deltas();
+            assert_eq!(
+                dialog.settings, before,
+                "viewing controls must preserve host preferences"
+            );
+            dialog.active_tab = SettingsTab::OrderFlow;
+            dialog.set_feed_capabilities(Some(&feed), None);
+            assert_eq!(dialog.active_tab, SettingsTab::Symbol);
+        }
+        let mut dialog = SettingsDialog::new();
+        assert_eq!(dialog.order_flow_layers, [true; 4]);
+        let instrument = Instrument::new("A")
+            .with_tick_size(0.25)
+            .with_services([Depth]);
+        dialog.set_feed_capabilities(None, Some(&instrument));
+        assert_eq!(dialog.order_flow_layers, [true, true, false, false]);
+        dialog.set_feed_capabilities(
+            Some(&FeedCapabilities::new().with_services([])),
+            Some(&instrument),
+        );
+        assert_eq!(dialog.order_flow_layers, [false; 4]);
+        dialog.set_feed_capabilities(None, Some(&Instrument::new("A").with_tick_size(0.25)));
+        assert_eq!(dialog.order_flow_layers, [false; 4]);
+    }
+
+    #[test]
+    fn order_flow_heatmap_switch_applies_without_enabling_other_layers() {
+        let ctx = Context::default();
+        let theme = Theme::light();
+        crate::theme::apply_to_egui(&ctx, &theme);
+        let mut dialog = SettingsDialog::new();
+        let mut settings = ChartSettingsState::default();
+        settings.order_flow.heatmap.lower_cutoff = 0.00000001;
+        settings.order_flow.heatmap.full_intensity_size = Some(0.00000002);
+        dialog.open(settings);
+        dialog.active_tab = SettingsTab::OrderFlow;
+        let mut frame = |events| {
+            let mut action = SettingsAction::None;
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1440.0, 900.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    action = dialog.show(ui.ctx(), &theme);
+                },
+            );
+            let positions = ["Market depth heatmap", "Ok"].map(|label| {
+                output.shapes.iter().find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == label => {
+                        Some(text.pos + text.galley.size() / 2.0)
+                    }
+                    _ => None,
+                })
+            });
+            let sizes_visible = [0.00000001, 0.00000002].map(|value| {
+                output.shapes.iter().any(|shape| {
+                    matches!(&shape.shape,
+                egui::Shape::Text(text) if text.galley.text().parse::<f64>() == Ok(value))
+                })
+            });
+            output.drop_without_applying_deltas();
+            (action, positions, sizes_visible)
+        };
+        frame(vec![]);
+        frame(vec![]);
+        for index in [0, 1] {
+            let pos = frame(vec![]).1[index].unwrap();
+            frame(vec![egui::Event::PointerMoved(pos)]);
+            frame(vec![egui::Event::PointerButton {
+                pos,
+                pressed: true,
+                button: egui::PointerButton::Primary,
+                modifiers: Default::default(),
+            }]);
+            let (action, _, _) = frame(vec![egui::Event::PointerButton {
+                pos,
+                pressed: false,
+                button: egui::PointerButton::Primary,
+                modifiers: Default::default(),
+            }]);
+            if index == 0 {
+                assert_eq!(
+                    frame(vec![]).2,
+                    [true; 2],
+                    "small sizes must remain legible"
+                );
+            }
+            if index == 1 {
+                let SettingsAction::Apply(saved) = action else {
+                    panic!("expected Apply")
+                };
+                assert!(saved.order_flow.show_heatmap);
+                assert!(!saved.order_flow.show_volume_bubbles);
+                assert!(!saved.order_flow.show_order_book);
+                dialog.open(*saved);
+                assert!(dialog.settings().order_flow.show_heatmap);
+                assert!(!dialog.settings().order_flow.show_volume_bubbles);
+                break;
+            }
         }
     }
 

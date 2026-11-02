@@ -4,6 +4,7 @@
 //! keeping the main dialog module focused on core structure.
 
 mod canvas;
+mod order_flow;
 mod scales;
 mod symbol;
 mod trading;

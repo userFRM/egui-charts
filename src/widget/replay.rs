@@ -99,6 +99,8 @@ impl Chart {
         self.set_liquidity_heatmap_config(heatmap_config);
         if let (Some(live), Some(replay)) = (&feed, &mut self.feed_link) {
             replay.heatmap = live.heatmap.as_ref().map(|_| Default::default());
+            replay.book_visible = live.book_visible;
+            replay.bubbles_config = live.bubbles_config.clone();
         }
         self.set_volume_bubbles(
             feed.as_ref()
