@@ -219,7 +219,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 ### Toolbars, Dialogs and Panels
 
 - [x] Top toolbar with symbol search, comparison, interval/type selection, study, alert, replay, history, settings, save and layout actions.
-- [x] Symbol search supports text, type, exchange and source filters, pagination, keyboard navigation and host results; comparisons use shared percentage scales, separate scales or panes. The demo refreshes comparison histories when their feed or view inputs change; pointer frames redraw the loaded data.
+- [x] Symbol search supports text, type, exchange and source filters, pagination, keyboard navigation and host results; comparisons use shared percentage scales, separate scales or panes.
 - [x] Timeframe toolbar provides range presets, go-to-date, time zone, regular/extended session and adjustment requests.
 - [x] Drawing toolbar categories, cursor modes, snapping, repeated placement, locking and template actions; favourites can be stored.
 - [x] Chart settings apply backgrounds, grids, candle parts and colours, previous-close colouring, crosshair styling, session shading and watermarks.

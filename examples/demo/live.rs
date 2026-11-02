@@ -38,6 +38,7 @@ pub(super) const ORDER_LEVEL_SYMBOL: &str = "ESZ2026";
 /// Driven by the UI timer on both native and web; there is no background worker.
 pub(super) struct LiveFeed(Mutex<Simulation>);
 
+/// The inputs of the last comparison history a feed loaded; an unchanged key skips the reload.
 #[derive(PartialEq, Eq)]
 struct ComparisonSnapshot {
     timeframe: Timeframe,
@@ -45,8 +46,11 @@ struct ComparisonSnapshot {
     extended_hours: bool,
     continuous: bool,
     adjusted: bool,
+    /// The latest execution id.
     trade: u64,
+    /// The open of the latest bar, or the time of the latest execution on trade-based intervals.
     open: DateTime<Utc>,
+    /// The series held no bars, as after a restore or a replay window before the first bar.
     empty: bool,
 }
 
@@ -66,6 +70,7 @@ struct Simulation {
     paused: bool,
     continuous: bool,
     adjusted: bool,
+    /// What this feed last loaded into its comparison series.
     comparison_snapshot: Option<ComparisonSnapshot>,
     /// The ex-date and price factor stay fixed for the life of the feed.
     dividend: Option<(DateTime<Utc>, f64)>,
