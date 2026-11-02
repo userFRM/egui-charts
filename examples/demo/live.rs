@@ -587,8 +587,6 @@ pub(super) fn price_decimals(symbol: &str) -> Option<u8> {
     })
 }
 
-pub(super) use super::feeds::DemoQuotes;
-
 impl Simulation {
     /// The displayed symbol's session, also when this is the host rather than its stream.
     fn extended_hours(&self) -> Option<bool> {
@@ -1315,6 +1313,7 @@ impl Datafeed for LiveFeed {
 
 #[cfg(test)]
 mod tests {
+    use super::super::feeds::DemoQuotes;
     use super::*;
     use egui_charts::ChartBuilder;
     use egui_charts::widget::SeriesId;

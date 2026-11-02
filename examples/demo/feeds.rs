@@ -50,7 +50,7 @@ impl DemoMarket {
         }
     }
 
-    /// Keep retained executions moving even while their panels are hidden.
+    /// Keeps retained executions moving even while their panels are hidden.
     pub(super) fn advance(&mut self, now: DateTime<Utc>) {
         for feed in self.feeds.values() {
             feed.advance(now);
@@ -86,8 +86,6 @@ impl DemoMarket {
     }
 }
 
-type QuoteStream = (Vec<String>, Events<(String, Quote)>);
-
 /// The watchlist's quote service: the chart symbol's quote from the live feed, with its regular
 /// and extended-hours prices, session volume and best bid and ask, and retained executions for
 /// other catalog symbols. The quotes follow the feed's simulation clock, which the pause freezes.
@@ -95,7 +93,7 @@ type QuoteStream = (Vec<String>, Events<(String, Quote)>);
 /// quote only wakes the UI, so it is pushed again only when a displayed value changes.
 pub(super) struct DemoQuotes {
     live: Mutex<Arc<LiveFeed>>,
-    stream: Mutex<Option<QuoteStream>>,
+    stream: Mutex<Option<(Vec<String>, Events<(String, Quote)>)>>,
     /// The last quote pushed per symbol, with times at display precision.
     last_pushed: Mutex<BTreeMap<String, Quote>>,
 }
@@ -161,7 +159,7 @@ impl Quotes for DemoQuotes {
 }
 
 impl super::DemoApp {
-    /// Price every demo instrument independently of chart focus and watchlist membership.
+    /// Prices every demo instrument independently of chart focus and watchlist membership.
     pub(super) fn feed_paper_prices(&self) {
         if self.replay.is_none() {
             for spec in DemoSymbol::catalog() {
@@ -261,7 +259,7 @@ pub(super) fn news(query: &NewsQuery, now: DateTime<Utc>) -> Vec<NewsStory> {
                 })
         })
         .collect();
-    stories.sort_by_key(|story| std::cmp::Reverse(story.time));
+    stories.sort_by(|a, b| b.time.cmp(&a.time));
     stories.truncate(query.limit);
     stories
 }
@@ -350,7 +348,7 @@ pub(super) fn calendar(query: &CalendarQuery, now: DateTime<Utc>) -> Vec<Calenda
                     }
                     events.push(event);
                 }
-                CalendarKind::Ipos if n.is_multiple_of(2) => {
+                CalendarKind::Ipos if n % 2 == 0 => {
                     let (symbol, name, price) = OFFERINGS[n / 2 % OFFERINGS.len()];
                     let mut event = CalendarEvent::new(id("ipo", 0), query.kind, at(14), name);
                     event.country = "US".into();

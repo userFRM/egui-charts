@@ -437,7 +437,7 @@ pub struct DemoApp {
     paper_reset: bool,
     // Watchlists and time and sales, fed by synthetic quotes and the live feed's executions.
     watchlist: WatchlistPanel,
-    quotes: Arc<live::DemoQuotes>,
+    quotes: Arc<feeds::DemoQuotes>,
     // Text pasted for a watchlist import, while its window is open.
     watchlist_import: Option<String>,
     /// Whether the wide watchlist window is open.
@@ -544,7 +544,7 @@ impl DemoApp {
         options.time_scale.seconds_visible = true;
         let live = Arc::new(LiveFeed::new(symbol, now));
         live.set_paused(paused);
-        let quotes = Arc::new(live::DemoQuotes::new(live.clone()));
+        let quotes = Arc::new(feeds::DemoQuotes::new(live.clone()));
         let mut chart = egui_charts::ChartBuilder::new()
             .with_feed(live.clone())
             .with_symbol(symbol)

@@ -107,7 +107,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Momentum and trend studies include RSI, MACD, Stochastic, ADX, SuperTrend, Ichimoku and Parabolic SAR.
 - [x] Volatility and channel studies include Bollinger Bands, ATR, Keltner, Donchian and historical volatility.
 - [x] Volume studies include OBV, MFI, accumulation/distribution and VWAP; VWAP supports calendar/session and supplied event anchors with deviation or percentage bands.
-- [x] Visible, fixed, session, periodic, anchored and auto-anchored volume profiles render chart-bar volume estimates with translucent rows that keep candles readable, point of control and value area.
+- [x] Visible, fixed, session, periodic, anchored and auto-anchored volume profiles sum supplied executions in whole-tick rows, mark incomplete spans and fall back to finer-bar or chart-bar estimates, with translucent rows that keep candles readable, point of control and value area.
 - [x] Regression, rank correlation, pivot levels, ZigZag, candlestick patterns, seasonality and market-structure studies.
 - [x] Majority Rule reports +1, -1 or zero from the majority of rising versus falling closes over its lookback.
 - [x] Automatic trend-line, channel, Fibonacci and pitchfork studies use ZigZag pivots with the `drawings` feature.
@@ -203,7 +203,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Ten price-action strategies trade gaps, consecutive closes, inside/outside bars, channels, confirmed pivots and ATR expansion, with fill-relative tick brackets where needed.
 - [x] Twelve study strategies use public indicator values for bands, momentum, averages, oscillators, trend flips and technical ratings; every built-in preserves its trades on historical prefixes.
 - [ ] Extend risk-percent sizing to limit, stop and stop-limit tickets.
-- [ ] Add performance-summary CSV or spreadsheet export to strategy reports.
+- [x] Export strategy report performance summaries and run properties as CSV.
 
 ## Alerts
 
@@ -231,9 +231,10 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Object tree supports selection, filtering, visibility, locks, ordering, rename, duplication, pane moves and bulk actions; a data window shows OHLCV and study values.
 - [x] Editable shortcut bindings are shared by chart input, help and menu hints; quick search uses a command palette.
 - [x] Watchlists support named lists, sections, sorting, row reordering, flags, symbol navigation and text import/export.
-- [x] Feed-backed panels render symbol details, news, calendars, hotlists, screener tables and grouped market heatmaps; `FinancialsPanel` charts and tabulates supplied financial figures. The demo shares retained execution prices across charts, watchlists, screeners, hotlists and heatmaps; details and the ticket follow the active slot independently of list membership.
-- [ ] Assemble a terminal that owns component state, handles all actions and lets the application intercept them. `Terminal` also runs the widget bar and side panels, persists watchlists, routes panel symbol selections, derives performance and seasonality from chart bars, and opens host-fed profile cards. It also handles time controls, comparisons, spread selection and host-supplied dividend adjustment, and runs multi-chart grids, layout tabs, saved layouts, favourites, autosave and Ctrl+S. Remaining action groups and the demo migration are unfinished.
-- [ ] Provide a shared docked tab container for account, strategy report, study editor and replay-trading surfaces.
+- [x] Feed-backed panels render symbol details, news, calendars, hotlists, screener tables and grouped market heatmaps; `FinancialsPanel` charts and tabulates supplied financial figures.
+- [ ] Assemble a terminal that owns component state, handles all actions and lets the application intercept them. `Terminal` also runs the widget bar and side panels, persists watchlists, routes panel symbol selections, derives performance and seasonality from chart bars, opens host-fed profile cards, trades through the supplied brokers and docks the account and strategy report. It also handles time controls, comparisons, spread selection and host-supplied dividend adjustment, and runs multi-chart grids, layout tabs, saved layouts, favourites, autosave and Ctrl+S. Remaining action groups and the demo migration are unfinished.
+- [x] Dock the supplied broker account and host strategy report in shared bottom tabs, with collapse, restore and maximise controls.
+- [ ] Open the study editor and replay-trading surfaces as tabs of the same bottom dock.
 - [ ] Open the drawing toolbar's colour popup from a visible control and render its saved favourites bar.
 - [ ] Persist and restore indicator favourites in the assembled UI.
 - [ ] Show and route the standalone floating selection toolbar's settings, duplicate, lock, visibility, delete and colour actions.
@@ -279,7 +280,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 ## Data and Builder API
 
 - [x] `Chart::new` embeds static bars; `ChartBuilder` configures a chart, feed, symbol, interval, studies, theme and drawing registry.
-- [x] `Datafeed`, `Reply` and `Sink` provide asynchronous metadata/history and streaming bars, executions, quotes and depth, with per-symbol service declarations, stale-response rejection and subscription cancellation. The demo history feed returns the newest requested bars inside inclusive start and exclusive end bounds.
+- [x] `Datafeed`, `Reply` and `Sink` provide asynchronous metadata/history and streaming bars, executions, quotes and depth, with per-symbol service declarations, stale-response rejection and subscription cancellation.
 - [x] Scroll-back pages bar history; transient failures retry with bounded backoff and expose errors and status through `FeedState`.
 - [x] Shared validation sorts/deduplicates bars, rejects invalid OHLCV and counts rejected updates; out-of-order corrections update the affected history.
 - [x] Live trade aggregation supports time, execution-count, volume, delta and range intervals; resampling helpers accept session rules.
@@ -299,7 +300,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Accessibility roles/states, keyboard focus and a textual bar/study readout.
 - [x] Reusable `ui_kit` buttons, inputs, colour pickers, dialogs, lists, tabs, panels, command palette and toast components.
 - [x] Native and browser examples and CI checks cover library, feature combinations and demo builds.
-- [x] The guide and site landing page share light and dark navigation, a working first-chart example and a live sample chart with consistent text sizing and a compact readout at phone widths; the full demo stays at `/demo/`.
+- [x] The guide and site landing page share light and dark navigation and a live sample chart with consistent text sizing and a compact readout at phone widths. The first-chart guide embeds an isolated widget scene beside its compiled setup source, with theme synchronization, keyboard exit and a loading fallback; the full demo stays at `/demo/`. Version labels distinguish main (0.3 in development, egui 0.37) from published 0.2.0 (egui 0.33.3), with grouped topic navigation, integration recipes and a main rustdoc link.
 - [ ] Route remaining direct English UI labels through the translation lookup.
 - [ ] Make session-quote/volume tags and marker outlines fully theme-configurable.
 - [ ] Add a runnable desktop-webview integration example.
@@ -309,7 +310,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 The crate renders supplied data and exposes interfaces for application services. The application supplies market data, broker execution, accounts and durable storage. These interfaces also allow services to run remotely.
 
 - `Datafeed`, `SymbolSearch`, `Quotes` and `Marks` connect instrument discovery, history, live prices, executions, depth and chart events. Feed queries also supply metrics, options volume, listed option expiries and live or historical option chains with quotes, open interest, implied volatility and Greeks, analyst targets, symbol details, news, calendars, screeners, hotlists and market heatmaps. The headless `OptionChain` handle retains the latest validated snapshot and error; the host supplies all option data. `OptionExposure::gamma` computes exposure per 1% underlying move by expiry and strike, counting contracts with missing inputs and using positive call and negative put signs as a convention. `Datafeed::option_exposure` supplies gamma, delta, vanna or charm snapshots with their units and model label; `OptionExposureHandle` retains the latest valid observation and prefers it unchanged over computed gamma.
-- `Broker` supplies real or paper-account state, trading rules, execution and account updates. Trading components submit actions and render the reported orders, positions, fills and history. The demo keeps paper prices current for every catalog symbol while another chart is selected, and isolates live prices from replay.
+- `Broker` supplies real or paper-account state, trading rules, execution and account updates. Trading components submit actions and render the reported orders, positions, fills and history.
 - `Storage` supplies layouts, drawings, settings and template documents; an application may use local or remote storage and manage accounts, synchronisation and sharing.
 - `Alerts` stores and evaluates alert conditions and reports changes and triggers. The crate edits models and draws levels, dialogs, logs and toasts; the application supplies sound, schedules and external delivery.
 - `Signals` supplies markers, levels and zones with category visibility and click callbacks. Captions yield to price bars, signal borders and other captions, prioritising recent markers; hover retains the labels and details of coincident events. Applications can deliver iceberg, absorption, spoofing, large-order and other interpreted order-flow events through it.
