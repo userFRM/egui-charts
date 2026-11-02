@@ -60,6 +60,7 @@ impl DemoApp {
             .open(&mut open)
             .default_pos(egui::pos2(60.0, 120.0))
             .default_width(340.0)
+            .default_height(640.0)
             .vscroll(true)
             .show(ctx, |ui| {
                 let mut series = vec![(SeriesId::MAIN, self.chart.symbol().to_owned())];
