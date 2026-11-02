@@ -605,7 +605,15 @@ fn zoomed_out_bars_merge_per_pixel_and_keep_their_extremes() {
     }
     let color = chart.config().bullish_color;
     let painted_ys = |chart: &mut crate::widget::Chart, t| -> Vec<f32> {
-        candle_ys(&shapes(&ctx, chart, t, Vec::new()), color)
+        let painted = shapes(&ctx, chart, t, Vec::new())
+            .into_iter()
+            .filter(|shape| {
+                shape
+                    .visual_bounding_rect()
+                    .intersects(chart.get_rendered_price_rect())
+            })
+            .collect::<Vec<_>>();
+        candle_ys(&painted, color)
     };
     let ys = painted_ys(&mut chart, 0.2);
     // About one bar per pixel column, each still reaching the highest and lowest price.

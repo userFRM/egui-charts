@@ -85,13 +85,13 @@ Builder API,Widget API and customization,Create and edit drawings from code,done
 Builder API,Widget API and customization,Create and remove studies,done,library,src/widget/series/mod.rs;src/widget/studies.rs;src/studies/settings.rs;src/widget/pane/mod.rs,
 Builder API,Widget API and customization,Custom date and time formatters,done,library,src/scales/time_formatter.rs;src/widget/format.rs;src/widget/tool_interaction/mod.rs;src/drawings/rendering/trading/forecast.rs,
 Builder API,Widget API and customization,Custom price formatter,done,library,src/widget/tool_interaction/mod.rs;src/drawings/rendering/mod.rs;src/widget/format.rs,
-Builder API,Widget API and customization,Export chart data,done,library,src/widget/export.rs;src/model/bar/io.rs,
+Builder API,Widget API and customization,Export chart data,done,library,src/widget/export.rs;src/model/bar/io.rs;Cargo.toml,1963
 Builder API,Widget API and customization,Hide or show the main series,done,library,src/widget/series/mod.rs;src/widget/marks.rs;src/widget/frame/mod.rs,
 Builder API,Widget API and customization,Locale-aware date formatting,done,library,src/scales/time_formatter.rs;Cargo.toml;src/widget/format.rs,
 Builder API,Widget API and customization,Localisation of UI text,partial,library,src/localization.rs;src/ui/top_toolbar/components/layout_menu.rs;src/chart/rendering/trading_lines/mod.rs;src/chart/rendering/legend/mod.rs;src/ui/context_menu/mod.rs;src/ui/context_menu/series.rs;src/ui/context_menu/study.rs;src/ui/context_menu/drawing.rs;src/ui/trading/view.rs;src/ui/trading/events.rs;src/ui/trading/account_panel/mod.rs;src/ui_kit/notifications/panel.rs;src/chart/rendering/overlays/tooltip.rs;src/chart/rendering/alert_levels.rs;src/chart/rendering/axes/mod.rs;src/drawings/rendering/trading/position.rs;src/ui/timeframe_toolbar/date_picker.rs;src/ui/timeframe_toolbar/toolbar.rs;src/ui/dialogs/indicator_dialog/dialog.rs;src/ui/export.rs;src/ui/widget_bar/panels/alerts_panel.rs;src/ui/widget_bar/panels/calendar.rs;src/ui/widget_bar/panels/chats.rs;src/ui/widget_bar/panels/hotlists.rs;src/ui/widget_bar/panels/news.rs;src/ui/widget_bar/panels/screener.rs;src/ui/widget_bar/panels/symbol_details.rs;src/ui/dialogs/indicator_dialog/templates.rs;src/ui/trading/ticket/form.rs;src/widget/stored_drawings.rs;src/ui_kit/status_message/mod.rs,
 Builder API,Widget API and customization,Multiple charts per widget,done,library,src/widget/layout.rs;src/ui/multi_chart.rs,
 Builder API,Widget API and customization,Price scale API,done,library,src/scales/pricescale.rs;src/widget/mod.rs;src/widget/series/options.rs;src/widget/series/scales/mod.rs;src/widget/frame/mod.rs,
-Builder API,Widget API and customization,Screenshots,done,library,src/widget/export.rs;src/widget/raster.rs;src/widget/svg.rs;src/widget/feed/mod.rs,
+Builder API,Widget API and customization,Screenshots,done,library,src/widget/export.rs;src/widget/raster.rs;src/widget/svg.rs;src/widget/feed/mod.rs;Cargo.toml,1963
 Builder API,Widget API and customization,Series and scale API facade,done,library,src/widget/series/options.rs;src/widget/series/scales/mod.rs;src/widget/time_scale.rs;src/widget/series/mod.rs,
 Builder API,Widget API and customization,Style overrides,partial,library,src/widget/mod.rs;src/widget/builder.rs;src/config/chart.rs;src/widget/frame/mod.rs,
 Builder API,Widget API and customization,Themes and custom colour schemes,done,library,src/widget/mod.rs;src/theme/context.rs;src/chart/rendering/markers.rs;src/config/chart.rs;src/widget/palette.rs;src/model/markers.rs;src/theme/presets.rs;src/theme/style.rs;src/widget/frame/mod.rs,
@@ -807,7 +807,7 @@ Studies,Strategy tester,Built-in volatility expansion close strategy,done,librar
 Studies,Strategy tester,Commission models,done,library,src/strategies/backtest.rs;src/strategies/mod.rs;docs/strategy-report.md,
 Studies,Strategy tester,Deep backtesting and bar magnifier,done,library,src/strategies/backtest.rs;src/strategies/mod.rs;docs/strategy-report.md,
 Studies,Strategy tester,Equity curve and drawdown chart,done,library,src/model/strategy.rs;src/ui/strategy_report/mod.rs;src/ui/strategy_report/plot.rs,
-Studies,Strategy tester,Export trades and report,done,library,src/model/strategy.rs;src/ui/strategy_report/mod.rs;terminal/src/trading.rs,
+Studies,Strategy tester,Export trades and report,done,library,src/model/strategy.rs;src/ui/strategy_report/mod.rs;terminal/src/trading.rs;Cargo.toml,1963
 Studies,Strategy tester,Limit and stop orders,done,library,src/strategies/backtest.rs;src/strategies/mod.rs;src/model/trading.rs,
 Studies,Strategy tester,List of trades,done,library,src/model/strategy.rs;src/ui/strategy_report/mod.rs,
 Studies,Strategy tester,"Long and short positions, margin and leverage",done,library,src/strategies/backtest.rs;docs/strategy-report.md,
@@ -882,7 +882,7 @@ Terminal,Templates and layouts,Cloud sync of layouts and settings across devices
 Terminal,Templates and layouts,"Create new, rename and make a copy of a layout",done,library,src/ui/top_toolbar/components/layout_menu.rs;terminal/src/layouts.rs,
 Terminal,Templates and layouts,Drawing serialisation for saved layouts,done,library,src/widget/anchors.rs;src/widget/snapshot.rs,
 Terminal,Templates and layouts,Drawing templates,done,library,src/drawings/domain/template.rs;src/ui/dialogs/templates/dialog.rs;src/ui/dialogs/drawing_properties/dialog.rs,
-Terminal,Templates and layouts,Export chart data to CSV,done,library,src/widget/export.rs,
+Terminal,Templates and layouts,Export chart data to CSV,done,library,src/widget/export.rs;Cargo.toml,1963
 Terminal,Templates and layouts,Export dialog image options,done,library,src/ui/export.rs;src/widget/export.rs;src/widget/svg.rs,
 Terminal,Templates and layouts,"Image sharing, hosted links and social posting",done,host,src/ui/top_toolbar/toolbar.rs;src/widget/export.rs,
 Terminal,Templates and layouts,Indicator templates,done,library,src/studies/template.rs;src/ui/dialogs/templates/dialog.rs;src/ui/top_toolbar/toolbar.rs;src/widget/study_templates.rs;terminal/src/compare.rs,
@@ -892,7 +892,7 @@ Terminal,Templates and layouts,Persist preferences,partial,library,src/services/
 Terminal,Templates and layouts,Save chart layout,done,library,src/widget/snapshot.rs;src/ui/top_toolbar/components/layout_menu.rs;src/ui/top_toolbar/toolbar.rs;src/ui/top_toolbar/buttons.rs;src/widget/series/options.rs;terminal/src/layouts.rs,
 Terminal,Templates and layouts,Share a layout by link,done,host,src/services/sharing.rs;src/ui/share_controls.rs;src/ui/top_toolbar/components/layout_menu.rs,
 Terminal,Templates and layouts,Snapshot: copy image to clipboard,done,library,src/ui/export.rs;src/ui/top_toolbar/toolbar.rs,
-Terminal,Templates and layouts,Snapshot: download the chart image,done,library,src/widget/export.rs;src/ui/top_toolbar/toolbar.rs,
+Terminal,Templates and layouts,Snapshot: download the chart image,done,library,src/widget/export.rs;src/ui/top_toolbar/toolbar.rs;Cargo.toml,1963
 Terminal,Templates and layouts,Sync between charts,done,library,src/widget/layout.rs;src/widget/layout/drawings.rs;src/widget/sync.rs;src/model/timescale.rs;src/widget/frame/mod.rs,
 Terminal,Toolbars and panels,Bottom time bar,done,library,src/ui/timeframe_toolbar/toolbar.rs;src/ui/top_toolbar/buttons.rs;src/theme/mod.rs;terminal/src/time.rs;src/model/date_range.rs;src/ui/timeframe_toolbar/range_switcher.rs;terminal/src/compare.rs;src/widget/feed/mod.rs;src/data/mod.rs;src/model/instrument.rs,
 Terminal,Toolbars and panels,Chart settings button and applying the dialog,done,library,src/ui/top_toolbar/toolbar.rs;src/widget/settings/apply.rs,

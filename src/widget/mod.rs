@@ -102,6 +102,7 @@ pub use pane::{ChartLayoutRects, PaneId, PaneOptions, RenderedIndicatorPane};
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 mod posts;
 mod primitives;
+#[cfg(feature = "png-export")]
 mod raster;
 mod readout;
 mod replay;

@@ -1,8 +1,10 @@
 //! Vector output of exported chart frames, from the shapes before tessellation.
 
+#[cfg(feature = "png-export")]
 use super::raster::{Texture, png, textures};
 use egui::epaint::{ClippedShape, Mesh, PathStroke, Shape, StrokeKind, TextShape, Vertex};
 use egui::{Color32, Pos2, Rect, Stroke, TextureId, TexturesDelta, emath::TSTransform};
+#[cfg(feature = "png-export")]
 use std::collections::HashSet;
 use std::fmt::Write;
 
@@ -13,12 +15,14 @@ use std::fmt::Write;
 pub(super) fn svg(
     size: [u32; 2],
     shapes: &[ClippedShape],
-    delta: &TexturesDelta,
+    _delta: &TexturesDelta,
 ) -> Result<String, String> {
     let mut out = Svg {
-        textures: textures(delta),
+        #[cfg(feature = "png-export")]
+        textures: textures(_delta),
         defs: String::new(),
         body: String::new(),
+        #[cfg(feature = "png-export")]
         embedded: HashSet::new(),
         ids: 0,
     };
@@ -68,9 +72,11 @@ struct Run {
 }
 
 struct Svg {
+    #[cfg(feature = "png-export")]
     textures: std::collections::HashMap<TextureId, Texture>,
     defs: String,
     body: String,
+    #[cfg(feature = "png-export")]
     embedded: HashSet<(TextureId, Color32)>,
     ids: usize,
 }
@@ -529,6 +535,7 @@ impl Svg {
     }
 
     /// The `uv` part of a frame texture in `pos`, multiplied by `tint`.
+    #[cfg(feature = "png-export")]
     fn image(&mut self, key: TextureId, pos: Rect, uv: Rect, tint: Color32) -> Result<(), String> {
         let Some(texture) = self.textures.get(&key) else {
             return Err(format!(
@@ -582,7 +589,21 @@ impl Svg {
         Ok(())
     }
 
+    #[cfg(not(feature = "png-export"))]
+    fn image(
+        &mut self,
+        key: TextureId,
+        _pos: Rect,
+        _uv: Rect,
+        _tint: Color32,
+    ) -> Result<(), String> {
+        Err(format!(
+            "SVG image texture {key:?} requires the png-export feature"
+        ))
+    }
+
     /// Keep managed and user ids distinct, including user ids with their highest bit set.
+    #[cfg(feature = "png-export")]
     fn texture_ids(&self, id: TextureId) -> String {
         match id {
             TextureId::Managed(n) => format!("m{n}"),
@@ -595,6 +616,7 @@ fn dist(a: &[f32; 4], b: &[f32; 4]) -> f32 {
     (0..4).map(|i| (a[i] - b[i]).powi(2)).sum()
 }
 
+#[cfg(feature = "png-export")]
 fn base64(data: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);

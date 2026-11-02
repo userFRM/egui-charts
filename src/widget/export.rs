@@ -27,10 +27,11 @@ pub struct ImageExportOptions {
     /// [`Chart::set_crosshair_position`] or a synchronized chart placed it since.
     pub include_crosshair: bool,
     /// Pixels of the textures the host binds itself, by the id its images use, so
-    /// [`Chart::export_png`] and [`Chart::export_svg`] can draw them. Without an entry, an image
-    /// of such a texture fails the export. Supplied textures use linear filtering and clamp to
-    /// their edges. Prefer [`egui::TextureId::User`]: ids that collide with the offscreen frame's
-    /// own textures return an error. [`ChartImage`] frames include the supplied pixels too.
+    /// `Chart::export_png` and [`Chart::export_svg`] can draw them with `png-export`.
+    /// Without an entry, an image of such a texture fails the export. Supplied textures use
+    /// linear filtering and clamp to their edges. Prefer [`egui::TextureId::User`]: ids that
+    /// collide with the offscreen frame's own textures return an error. [`ChartImage`] frames
+    /// include the supplied pixels too.
     pub textures: HashMap<egui::TextureId, Arc<egui::ColorImage>>,
 }
 
@@ -66,7 +67,7 @@ pub struct ChartImage {
 }
 
 /// The loaded bars and visible study plots as text, aligned by chart time: what
-/// [`Chart::export_csv`] writes and the chart data table lists.
+/// `Chart::export_csv` (with `csv`) writes and the chart data table lists.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct DataTable {
@@ -78,6 +79,8 @@ pub struct DataTable {
 
 impl DataTable {
     /// CSV text of the `columns` (indices into [`Self::headers`]) in the given order.
+    #[cfg(feature = "csv")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "csv")))]
     pub fn csv(
         &self,
         columns: &[usize],
@@ -140,7 +143,8 @@ fn add_host_textures(
     Ok(())
 }
 
-/// Why [`Chart::export_image`], [`Chart::export_png`] or [`Chart::export_svg`] made no image.
+/// Why [`Chart::export_image`], `Chart::export_png` (with `png-export`) or
+/// [`Chart::export_svg`] made no image.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ExportError {
@@ -196,14 +200,16 @@ impl Chart {
     /// label does.
     /// Prices inherit instrument precision (two decimals without metadata); study overrides and
     /// non-price units retain their precision. Missing/non-finite values are empty cells.
+    #[cfg(feature = "csv")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "csv")))]
     pub fn export_csv(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let table = self.data_table();
         table.csv(&(0..table.headers.len()).collect::<Vec<_>>())
     }
 
-    /// The cells of [`Self::export_csv`] as a table, with the same bars, study plots, times and
-    /// precision. During replay it holds the bars the replay cutoff has completed, and on
-    /// price-based chart types still the source bars. Loads nothing: only loaded bars are listed.
+    /// The cells of `Self::export_csv` (with `csv`) as a table, with the same bars, study plots,
+    /// times and precision. During replay it holds the bars the replay cutoff has completed,
+    /// and on price-based chart types still the source bars. Loads nothing: only loaded bars are listed.
     pub fn data_table(&self) -> DataTable {
         let bars = &self.state.data().bars;
         let price_precision = self
@@ -327,7 +333,7 @@ impl Chart {
     /// ```no_run
     /// # fn capture(chart: &egui_charts::Chart, ctx: &egui::Context) -> Result<(), egui_charts::widget::ExportError> {
     /// let options = egui_charts::widget::ImageExportOptions::default();
-    /// let png = chart.export_layout_png(ctx, &options, |ui, snapshot| {
+    /// let image = chart.export_layout_image(ctx, &options, |ui, snapshot| {
     ///     ui.horizontal(|ui| {
     ///         ui.label(snapshot.symbol());
     ///         ui.label("1m");
@@ -465,6 +471,8 @@ impl Chart {
     /// # Errors
     /// Returns the errors of [`Self::export_image`], [`ExportError::Unsupported`] for content
     /// that cannot be drawn, or [`ExportError::Encode`] if the PNG encoder fails.
+    #[cfg(feature = "png-export")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "png-export")))]
     pub fn export_png(
         &self,
         ctx: &egui::Context,
@@ -477,6 +485,8 @@ impl Chart {
 
     /// Like [`Self::export_png`] for a layout of library widgets, drawn by `layout` as
     /// [`Self::export_layout_image`] describes.
+    #[cfg(feature = "png-export")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "png-export")))]
     pub fn export_layout_png(
         &self,
         ctx: &egui::Context,
@@ -493,13 +503,14 @@ impl Chart {
     /// Renders the frame of [`Self::export_image`] as an SVG document of the options' size, with
     /// the same title, timestamp, watermark and background. Text stays text, in the font family
     /// class of the on-screen font, and the frame's textures, such as legend icons, are embedded
-    /// as PNG, with the host's [`ImageExportOptions::textures`]. Fails with the reason for content
-    /// SVG cannot take over unchanged, such as host paint callbacks and textures the host binds
-    /// itself without supplying their pixels, instead of leaving it out.
+    /// as PNG with `png-export` enabled, with the host's [`ImageExportOptions::textures`].
+    /// Fails with the reason for content SVG cannot take over unchanged, such as host paint
+    /// callbacks and textures the host binds itself without supplying their pixels, instead of
+    /// leaving it out.
     ///
     /// # Errors
     /// Returns the errors of [`Self::export_image`] or [`ExportError::Unsupported`] for content
-    /// the format cannot take over unchanged.
+    /// the format cannot take over unchanged, including image textures when `png-export` is off.
     pub fn export_svg(
         &self,
         ctx: &egui::Context,
@@ -652,11 +663,18 @@ impl Chart {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Bar, BarData, Instrument, Timeframe};
-    use crate::studies::{CustomIndicator, IndicatorValue};
+    #[cfg(feature = "csv")]
+    use crate::model::Instrument;
+    #[cfg(any(feature = "csv", feature = "drawings"))]
+    use crate::model::{Bar, BarData, Timeframe};
+    #[cfg(any(feature = "csv", feature = "drawings"))]
+    use crate::studies::CustomIndicator;
+    #[cfg(feature = "csv")]
+    use crate::studies::IndicatorValue;
     use crate::widget::SeriesId;
 
     #[test]
+    #[cfg(feature = "csv")]
     fn csv_aligns_fresh_visible_plots_and_formats_chart_times_and_prices() {
         let times: Vec<_> = [
             "2024-11-03T05:30:00.125Z",
@@ -1052,11 +1070,13 @@ mod tests {
                 vec!["t1".into(), "2.50".into(), "2.00".into()],
             ],
         };
+        #[cfg(feature = "csv")]
         assert_eq!(table.csv(&[0, 2]).unwrap(), "time,SMA: 5\nt0,\nt1,2.00\n");
         assert_eq!(table.tsv(&[2, 1]), "SMA: 5\tclose\n\t1.50\n2.00\t2.50");
     }
 
     #[test]
+    #[cfg(feature = "png-export")]
     fn svg_images_apply_the_options_and_report_what_they_cannot_hold() {
         use crate::widget::test_frames::{chart, frame};
         let ctx = egui::Context::default();
@@ -1078,6 +1098,7 @@ mod tests {
         let opaque = svg(&base);
         assert!(opaque.starts_with("<svg") && opaque.contains(r#"width="480" height="320""#));
         assert!(opaque.contains("WATERMARK"), "watermark was dropped");
+        #[cfg(feature = "icons")]
         assert!(
             opaque.contains("data:image/png;base64,"),
             "frame textures were dropped"
@@ -1292,6 +1313,45 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "png-export"))]
+    fn svg_exports_vectors_and_refuses_textures_without_png_export() {
+        use crate::widget::test_frames::{chart, frame};
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[10.0, 12.0], &[14.0, 13.0]);
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let options = ImageExportOptions {
+            size: [480, 320],
+            include_timestamp: false,
+            ..Default::default()
+        };
+        assert!(
+            chart
+                .export_layout_svg(&ctx, &options, |ui, _| {
+                    ui.label("Vector text");
+                })
+                .unwrap()
+                .contains("Vector text")
+        );
+        let id = egui::TextureId::User(7);
+        let options = ImageExportOptions {
+            textures: HashMap::from([(
+                id,
+                Arc::new(egui::ColorImage::filled([1, 1], egui::Color32::RED)),
+            )]),
+            ..options
+        };
+        assert_eq!(
+            chart.export_layout_svg(&ctx, &options, |ui, _| {
+                ui.image((id, egui::vec2(32.0, 32.0)));
+            }),
+            Err(ExportError::Unsupported(
+                "SVG image texture User(7) requires the png-export feature".into()
+            ))
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "png-export")]
     fn png_images_rasterise_the_chart_with_the_last_crosshair_on_request() {
         use crate::widget::test_frames::{chart, frame};
         use egui::{Event, Pos2};
