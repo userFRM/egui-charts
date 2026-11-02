@@ -260,6 +260,9 @@ impl DemoApp {
                 }
             };
             chart.set_theme_override(Some(self.theme.clone()));
+            if self.quick_search.is_open() {
+                chart.suppress_shortcuts(ui.ctx());
+            }
             chart.show(ui);
             search = chart.take_shortcut_requests().iter().any(|request| {
                 matches!(

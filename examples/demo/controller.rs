@@ -1525,7 +1525,7 @@ impl eframe::App for DemoApp {
             self.handle_replay_control(action);
             self.handle_keyboard(&ctx);
         }
-        if self.keyboard_dialog_open() {
+        if self.sample_scene.is_none() && self.keyboard_dialog_open() {
             self.chart.suppress_shortcuts(&ctx);
         }
         if self.show_samples(ui) {
@@ -5141,6 +5141,9 @@ mod tests {
                         }
                     }
                     if query != "Sample study editor" {
+                        if query == "Volatility smile" && same_frame && toolbar {
+                            app.keyboard_shortcuts.open();
+                        }
                         for (events, modifiers) in [
                             (vec![key(Key::Home, Modifiers::NONE)], Modifiers::NONE),
                             (vec![key(Key::K, Modifiers::COMMAND)], Modifiers::COMMAND),
