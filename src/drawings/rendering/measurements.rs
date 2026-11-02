@@ -179,8 +179,8 @@ impl Drawing {
     /// Label of the measuring tools: the price change from the first anchor to the second in
     /// `price_formatter`'s text, else the instrument's price decimals (by magnitude without them),
     /// its percentage and its whole number of pips, or else ticks, the bars between them and,
-    /// on a `time_axis`, the time they
-    /// span, the volume traded over them, and for the info line the angle of the line on screen.
+    /// on a `time_axis`, the time they span, the volume traded over them, and for the info line
+    /// the angle of the line on screen.
     /// Volume drops trailing zeros. Each anchor counts at its nearest bar: anchors N bars apart
     /// span N bars of time and the volume of the N + 1 bars from one to the other, both included.
     pub(crate) fn measurement_label(
@@ -198,7 +198,11 @@ impl Drawing {
         let decimals = change_decimals(instrument, a.price, change);
         let built_in = DefaultPriceFormatter::with_precision(decimals);
         let text = price_formatter.unwrap_or(&built_in).format(change);
-        let sign = if text.starts_with('-') { "" } else { "+" };
+        let sign = if text.starts_with(['-', '+']) || (price_formatter.is_some() && change < 0.0) {
+            ""
+        } else {
+            "+"
+        };
         let mut change = format!("{sign}{text} ({pct:+.2}%)");
         // Pips where the instrument quotes them, else ticks. Past 2^53 an f64 no longer holds
         // every whole number, so such a count is left out.

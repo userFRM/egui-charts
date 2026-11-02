@@ -42,7 +42,9 @@ impl Drawing {
         };
         let change = to.price - from.price;
         let change_text = formatter.format(change);
-        let sign = if change_text.starts_with('-') {
+        let sign = if change_text.starts_with(['-', '+'])
+            || (view.price_formatter.is_some() && change < 0.0)
+        {
             ""
         } else {
             "+"

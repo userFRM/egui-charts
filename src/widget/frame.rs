@@ -258,8 +258,8 @@ impl Chart {
     /// Overrides raw-price formatting for one bar series, including `MAIN`. This affects
     /// readouts, price tags, ticks and the prices drawings in its pane print; percentage and
     /// indexed scales retain the chart's percentage formatter. `None` restores chart-wide
-    /// formatting. Returns false for an
-    /// unknown series. A shared axis uses the first visible series' formatter.
+    /// formatting. Returns false for an unknown series. A shared axis uses the first visible
+    /// series' formatter.
     pub fn set_series_formatter(
         &mut self,
         id: super::SeriesId,

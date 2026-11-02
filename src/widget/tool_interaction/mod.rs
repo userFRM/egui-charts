@@ -545,6 +545,34 @@ mod tests {
                 failures.push(format!("missing {expected}"));
             }
         }
+        // A host may supply its own sign or put a currency before a negative number.
+        chart.set_series_formatter(SeriesId::MAIN, None);
+        for (prefix, change, expected) in [
+            (false, 5.0, "+5.0 pts (+5.00%)"),
+            (false, -5.0, "-5.0 pts (-5.00%)"),
+            (true, 5.0, "+USD 5.0 (+5.00%)"),
+            (true, -5.0, "USD -5.0 (-5.00%)"),
+        ] {
+            chart.set_price_formatter(Some(Arc::new(CustomPriceFormatter::new(move |price| {
+                if prefix {
+                    format!("USD {price:.1}")
+                } else {
+                    format!("{price:+.1} pts")
+                }
+            }))));
+            for drawing in &mut chart.drawings_mut().drawings[..2] {
+                drawing.chart_points[1].price = 100.0 + change;
+            }
+            let formatted = texts(&mut chart, 0.4);
+            assert_eq!(
+                formatted
+                    .iter()
+                    .filter(|text| text.starts_with(expected))
+                    .count(),
+                2,
+                "measurement and forecast must each show {expected}"
+            );
+        }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
