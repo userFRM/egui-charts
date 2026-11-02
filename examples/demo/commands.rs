@@ -298,21 +298,23 @@ impl DemoApp {
                 self.trading.export_png(&self.chart, ctx, options)
             };
         }
-        let mut extra: Vec<_> = self
-            .extra_charts
-            .iter()
-            .map(|slot| slot.chart.export_snapshot(ctx, options))
-            .collect();
+        let mut snapshots = std::collections::BTreeMap::new();
         let draw = |ui: &mut egui::Ui, active: &mut egui_charts::Chart| {
-            let mut charts: Vec<_> = extra.iter_mut().collect();
-            charts.insert(self.layout_slot, active);
             for (slot, rect) in self
                 .layout
-                .visible_chart_rects(ui.available_rect_before_wrap(), charts.len())
+                .visible_chart_rects(ui.available_rect_before_wrap(), self.extra_charts.len() + 1)
             {
+                let chart = if slot == self.layout_slot {
+                    &mut *active
+                } else {
+                    let index = slot - usize::from(slot > self.layout_slot);
+                    snapshots.entry(slot).or_insert_with(|| {
+                        self.extra_charts[index].chart.export_snapshot(ctx, options)
+                    })
+                };
                 ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                     ui.set_clip_rect(rect.intersect(ui.clip_rect()));
-                    self.trading.draw_export(ui, charts[slot]);
+                    self.trading.draw_export(ui, chart);
                 });
             }
         };
@@ -380,15 +382,18 @@ mod tests {
 
     #[test]
     fn arrangement_exports_keep_slot_order_backgrounds_and_the_active_chart_scope() {
-        for (mode, count) in [
+        for (mode, count, active) in [
             (ChartLayoutMode::TwoHorizontal, 2),
             (ChartLayoutMode::Four, 4),
-        ] {
+        ]
+        .into_iter()
+        .flat_map(|(mode, count)| [0, count - 1].map(|active| (mode, count, active)))
+        {
             let ctx = egui::Context::default();
             let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
             app.live.set_paused(true);
             app.ensure_chart_slots(mode);
-            app.activate_chart_slot(count - 1);
+            app.activate_chart_slot(active);
             let colors = [[30, 50, 70], [60, 80, 100], [90, 110, 130], [120, 140, 160]];
             {
                 let mut charts: Vec<_> = app
@@ -398,7 +403,15 @@ mod tests {
                     .collect();
                 charts.insert(app.layout_slot, &mut app.chart);
                 for (slot, chart) in charts.into_iter().enumerate().take(count) {
-                    *chart = Chart::new(Default::default());
+                    let bars = (0..3)
+                        .map(|i| {
+                            egui_charts::model::Bar::from_value(
+                                chrono::DateTime::UNIX_EPOCH + chrono::TimeDelta::minutes(i),
+                                100.0 + i as f64,
+                            )
+                        })
+                        .collect();
+                    *chart = Chart::new(egui_charts::model::BarData::from_bars(bars));
                     chart.set_symbol(format!("SLOT{}", slot + 1));
                     let mut theme = app.theme.clone();
                     let [r, g, b] = colors[slot];
@@ -458,8 +471,8 @@ mod tests {
             let path = std::env::temp_dir().join(format!("demo-active-{count}.svg"));
             app.export_svg(&ctx, &ImageExportOptions::default(), Some(path.clone()));
             let svg = std::fs::read_to_string(&path).unwrap();
-            assert!(svg.contains(&format!("SLOT{count}")));
-            for slot in 1..count {
+            assert!(svg.contains(&format!("SLOT{}", active + 1)));
+            for slot in (1..=count).filter(|slot| *slot != active + 1) {
                 assert!(!svg.contains(&format!("SLOT{slot}")));
             }
             std::fs::remove_file(path).unwrap();
