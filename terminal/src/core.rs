@@ -134,6 +134,7 @@ impl Terminal {
         self.top_toolbar.set_control_visible(control, visible);
         self.menus.set_control_visible(control, visible);
         self.panels.widget_bar.set_control_visible(control, visible);
+        self.time.bar.set_control_visible(control, visible);
     }
 
     /// Whether the host left `control` visible.
@@ -304,7 +305,6 @@ impl Terminal {
         self.studies_settings(settings, direction);
         self.time_settings(settings, direction);
         self.replay_settings(settings, direction);
-        self.alerts_settings(settings, direction);
         self.panels_settings(settings, direction);
         self.trading_settings(settings, direction);
         self.layouts_settings(settings, direction);
