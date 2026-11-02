@@ -1046,9 +1046,13 @@ impl DemoApp {
         for list in self.watchlist.lists() {
             engine.set_watchlist(&list.name, list.symbols().map(str::to_owned).collect());
         }
-        for error in self
-            .alert_evaluator
-            .poll(engine, self.indicator_dialog.factory(), ctx, now)
+        let live: Vec<_> = std::iter::once(&self.chart)
+            .chain(self.extra_charts.iter().map(|slot| &slot.chart))
+            .filter_map(Chart::alert_data)
+            .collect();
+        for error in
+            self.alert_evaluator
+                .poll(engine, self.indicator_dialog.factory(), &live, ctx, now)
         {
             self.toasts.error(format!("Alert data: {error}"));
         }
@@ -3557,7 +3561,7 @@ fn apply_settings_state(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use egui_charts::model::LineStyle;
+    use egui_charts::model::{AlertSource, LineStyle};
     use egui_charts::ui::dialogs::DrawingProps;
     use egui_charts::ui::timeframe_toolbar::DateRange;
 
@@ -7506,12 +7510,6 @@ mod tests {
             }
         }
     }
-}
-
-#[cfg(test)]
-mod alert_tests {
-    use super::*;
-    use egui_charts::model::AlertSource;
 
     #[test]
     fn replay_preserves_alert_pause_state() {

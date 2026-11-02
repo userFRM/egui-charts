@@ -56,7 +56,18 @@ impl Terminal {
         if let Some(storage) = &self.services.storage {
             evaluator.set_storage(storage.clone());
         }
-        for error in evaluator.poll(engine, self.studies.indicators.factory(), ctx, Utc::now()) {
+        let live: Vec<_> = self
+            .charts
+            .iter()
+            .filter_map(|chart| chart.alert_data())
+            .collect();
+        for error in evaluator.poll(
+            engine,
+            self.studies.indicators.factory(),
+            &live,
+            ctx,
+            Utc::now(),
+        ) {
             self.toasts.error(format!("Alert data: {error}"));
         }
         self.alerts.panel.poll(ctx, &mut self.toasts);
@@ -193,6 +204,7 @@ mod tests {
         held: Mutex<Option<Reply<HistoryPage>>>,
         page_size: Mutex<Option<usize>>,
         requests: Mutex<Vec<HistoryRequest>>,
+        snapshots: Mutex<Vec<SubscriptionId>>,
     }
 
     fn bar(minute: i64, close: f64) -> Bar {
@@ -260,6 +272,9 @@ mod tests {
         }
         fn subscribe(&self, subscription: Subscription) {
             self.subscriptions.lock().unwrap().push(subscription);
+        }
+        fn request_depth_snapshot(&self, id: SubscriptionId) {
+            self.snapshots.lock().unwrap().push(id);
         }
         fn unsubscribe(&self, id: SubscriptionId) {
             self.subscriptions
@@ -378,7 +393,7 @@ mod tests {
         terminal.chart_mut().set_timeframe(Timeframe::Min5);
         terminal.chart_mut().set_symbol("OTHER");
         frames(&mut terminal);
-        assert_eq!(feed.count("OTHER", Timeframe::Min5), 2);
+        assert_eq!(feed.count("OTHER", Timeframe::Min5), 1);
         assert_eq!(fired.lock().unwrap().len(), 3);
         terminal.chart_mut().set_symbol("ELSEWHERE");
         frames(&mut terminal);
@@ -563,6 +578,7 @@ mod tests {
             "edit",
             "restore",
             "events",
+            "reset",
             "history",
             "visible",
         ] {
@@ -586,7 +602,7 @@ mod tests {
                 terminal
                     .chart_mut()
                     .add_indicator(Box::new(egui_charts::studies::EMA::new(1000)))
-            } else if path == "events" {
+            } else if matches!(path, "events" | "reset") {
                 terminal.chart_mut().add_indicator(Box::new(
                     egui_charts::studies::OrderFlowStudy::new(
                         egui_charts::data::OrderFlowKind::Spread,
@@ -624,7 +640,7 @@ mod tests {
                 id: study.0.to_string(),
                 output: 0,
             };
-            if path == "events" {
+            if matches!(path, "events" | "reset") {
                 let input = terminal
                     .chart()
                     .indicators()
@@ -655,7 +671,9 @@ mod tests {
                 ))));
             }
             frames(&mut terminal);
-            if path == "events" && engine.alerts()[0].status != AlertStatus::Active {
+            if matches!(path, "events" | "reset")
+                && engine.alerts()[0].status != AlertStatus::Active
+            {
                 failures.push("event source isolation");
             }
             if path == "visible" {
@@ -684,7 +702,7 @@ mod tests {
                 }
                 continue;
             }
-            if path != "events" {
+            if !matches!(path, "events" | "reset") {
                 terminal
                     .chart_mut()
                     .indicator_mut(study)
@@ -723,8 +741,19 @@ mod tests {
             }
             terminal.chart_mut().set_symbol("SHOWN");
             frames(&mut terminal);
+            if path == "reset" {
+                for subscription in feed
+                    .subscriptions
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|subscription| subscription.symbol == "OTHER")
+                {
+                    subscription.sink.reset_replay(bar(10, 40.0).time);
+                }
+            }
             feed.push("OTHER", Timeframe::Min5, bar(10, 40.0));
-            if path == "events" {
+            if matches!(path, "events" | "reset") {
                 for subscription in feed
                     .subscriptions
                     .lock()
@@ -804,8 +833,29 @@ mod tests {
         frames(&mut terminal);
         assert_eq!(
             feed.count("OTHER", Timeframe::Min5),
-            3,
-            "chart navigation keeps the independent alert histories"
+            2,
+            "only the matching session hands off to the live chart"
+        );
+
+        // An always-open creation symbol must not erase another member's trading windows.
+        let feed = Arc::new(Feed::default());
+        let mut terminal = Terminal::new(feed.clone())
+            .with_symbol("OTHER")
+            .with_timeframe(Timeframe::Min5)
+            .with_alerts(Arc::new(AlertEngine::new()));
+        frames(&mut terminal);
+        terminal.run(Action::AlertDialog(AlertDialogAction::Create(Box::new(
+            Alert::new("SHOWN", AlertCondition::Above(1000.0)),
+        ))));
+        frames(&mut terminal);
+        let requests = feed.requests.lock().unwrap();
+        let request = requests
+            .iter()
+            .find(|request| request.symbol == "SHOWN")
+            .unwrap();
+        assert!(
+            request.clock.has_session(),
+            "members retain their own exchange calendar"
         );
     }
 
@@ -832,7 +882,24 @@ mod tests {
                 bar(5, 0.0).time,
                 "a coverage goal must not erase an explicit history bound"
             );
-            let old = host.subscriptions.lock().unwrap()[0].sink.clone();
+            let (id, old) = {
+                let subscriptions = host.subscriptions.lock().unwrap();
+                (subscriptions[0].id, subscriptions[0].sink.clone())
+            };
+            let book = egui_charts::model::OrderBook {
+                symbol: "OTHER".into(),
+                ts: bar(5, 0.0).time,
+                bids: vec![],
+                asks: vec![],
+            };
+            old.push_depth_snapshot(1, book.clone());
+            old.push_depth_delta(3, &book);
+            assert!(reader.poll(&ctx, Utc::now()).is_empty());
+            assert_eq!(
+                *host.snapshots.lock().unwrap(),
+                [id],
+                "a lost book must request a replacement snapshot"
+            );
             old.report_error(error.clone());
             assert_eq!(
                 reader.poll(&ctx, Utc::now()).as_slice(),
@@ -1062,6 +1129,29 @@ mod tests {
             assert_eq!(
                 reader.drawing_value(&source, 2, egui_charts::scales::PriceScaleMode::Normal),
                 None
+            );
+
+            // A shown drawing works without storage, including edits still local to the chart.
+            let engine = Arc::new(AlertEngine::new());
+            let mut terminal = Terminal::new(feed)
+                .with_symbol("OTHER")
+                .with_timeframe(timeframe)
+                .with_alerts(engine.clone());
+            frames(&mut terminal);
+            let mut line = Drawing::new(9, DrawingToolType::HorizontalLine);
+            line.completed = true;
+            line.chart_points = vec![ChartPoint::new(0.0, 30.0)];
+            let mut alert = Alert::new("OTHER", AlertCondition::Above(25.0));
+            alert.source = line.alert_source(0);
+            terminal.chart_mut().drawings_mut().drawings.push(line);
+            terminal.run(Action::AlertDialog(AlertDialogAction::Create(Box::new(
+                alert,
+            ))));
+            frames(&mut terminal);
+            assert_eq!(
+                engine.alerts()[0].status,
+                AlertStatus::Triggered,
+                "live drawings need no storage service"
             );
         }
     }

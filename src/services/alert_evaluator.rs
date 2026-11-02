@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 
-use super::{AlertEngine, AlertFeed};
+use super::{AlertData, AlertEngine, AlertFeed};
 use crate::data::{Datafeed, FeedError, HistoryRequest};
 use crate::model::{
     Alert, AlertId, AlertInputs, AlertSource, Bar, BarClock, Instrument, Timeframe,
@@ -16,7 +16,7 @@ use crate::studies::{
 
 /// History, subscriptions and independent study state for the alert service. Both interactive
 /// hosts and headless hosts poll this evaluator with the same saved definitions. Chart navigation
-/// and replay never supply its inputs. Dropping it releases all subscriptions.
+/// and replay never replace its saved study definitions. Dropping it releases all subscriptions.
 pub struct AlertEvaluator {
     feed: Arc<dyn Datafeed>,
     runs: HashMap<(AlertId, String), Evaluation>,
@@ -46,6 +46,7 @@ struct Evaluation {
     studies: Vec<(usize, Box<dyn Indicator>)>,
     error: Option<String>,
     initialized: bool,
+    start: Option<DateTime<Utc>>,
 }
 
 impl Evaluation {
@@ -76,6 +77,7 @@ impl Evaluation {
         }
         let mut result = Self {
             alert: alert.clone(),
+            start: inputs.start,
             inputs,
             studies: Vec::new(),
             error: None,
@@ -253,12 +255,14 @@ impl AlertEvaluator {
     }
 
     /// Poll live inputs and evaluate ready alerts. With `ui`, `ctx` wakes the host on new data
-    /// and follows stored drawings; a headless build takes only the engine, factory and time.
+    /// and follows stored drawings. Headless hosts pass an empty `live` slice.
+    /// `live` lends compatible loaded chart data; event studies retain independent streams.
     /// Errors leave affected sources unavailable and are returned for the host to report.
     pub fn poll(
         &mut self,
         engine: &AlertEngine,
         factory: &IndicatorFactory,
+        live: &[AlertData<'_>],
         #[cfg(feature = "ui")] ctx: &egui::Context,
         now: DateTime<Utc>,
     ) -> Vec<FeedError> {
@@ -296,6 +300,9 @@ impl AlertEvaluator {
                 }
                 reader
             });
+            if let Some(start) = run.start {
+                reader.require_start(start);
+            }
             reader.set_inputs(run.event_inputs(None));
             #[cfg(feature = "ui")]
             if run
@@ -307,7 +314,16 @@ impl AlertEvaluator {
                 reader.set_storage(storage.clone());
             }
         }
-        for reader in self.feeds.values_mut() {
+        #[cfg(feature = "ui")]
+        let mut shown = HashMap::new();
+        for (subject, reader) in &mut self.feeds {
+            let at = reader.follow(if subject.owner.is_none() { live } else { &[] });
+            #[cfg(feature = "ui")]
+            if let Some(at) = at {
+                shown.insert(subject.clone(), at);
+            }
+            #[cfg(not(feature = "ui"))]
+            let _ = at;
             errors.extend(reader.poll(
                 #[cfg(feature = "ui")]
                 ctx,
@@ -318,11 +334,12 @@ impl AlertEvaluator {
             let subject = run.subject(symbol, None);
             let reader = &self.feeds[&subject];
             let all = reader.bars();
-            let bars = &all[all
-                .partition_point(|bar| run.inputs.start.is_some_and(|start| bar.time < start))..];
+            let bars =
+                &all[all.partition_point(|bar| run.start.is_some_and(|start| bar.time < start))..];
             let Some(first) = bars.first() else {
                 continue;
             };
+            run.start.get_or_insert(first.time);
             if !run.initialized {
                 // Establish the main span for data_start; these outputs are never evaluated.
                 run.calculate(bars, reader.clock(), reader.instrument(), &[]);
@@ -350,8 +367,8 @@ impl AlertEvaluator {
             }
             let reader = &self.feeds[&subject];
             let all = reader.bars();
-            let bars = &all[all
-                .partition_point(|bar| run.inputs.start.is_some_and(|start| bar.time < start))..];
+            let bars =
+                &all[all.partition_point(|bar| run.start.is_some_and(|start| bar.time < start))..];
             let data: Vec<_> = requests
                 .iter()
                 .map(|(request, _)| {
@@ -383,8 +400,7 @@ impl AlertEvaluator {
             }
             let reader = &self.feeds[&subject];
             let all = reader.bars();
-            let from =
-                all.partition_point(|bar| run.inputs.start.is_some_and(|start| bar.time < start));
+            let from = all.partition_point(|bar| run.start.is_some_and(|start| bar.time < start));
             let bars = &all[from..];
             engine.update_alert(
                 id,
@@ -399,15 +415,24 @@ impl AlertEvaluator {
                         .find(|(key, _)| key.to_string() == *id)
                         .and_then(|(_, study)| study.plot_value(*output, at)),
                     #[cfg(feature = "ui")]
-                    AlertSource::Drawing(_) => reader.drawing_value(
-                        source,
-                        from + at,
-                        if run.inputs.logarithmic {
+                    AlertSource::Drawing(_) => {
+                        let scale = if run.inputs.logarithmic {
                             crate::scales::PriceScaleMode::Logarithmic
                         } else {
                             crate::scales::PriceScaleMode::Normal
-                        },
-                    ),
+                        };
+                        match shown.get(&subject) {
+                            Some(index) => live[*index].drawings.iter().find_map(|drawing| {
+                                let level = drawing.alert_level(source)?;
+                                drawing
+                                    .alert_levels((from + at) as f64, scale)
+                                    .into_iter()
+                                    .find(|(index, ..)| *index == level)
+                                    .map(|(.., value)| value)
+                            }),
+                            None => reader.drawing_value(source, from + at, scale),
+                        }
+                    }
                     _ => None,
                 },
             );

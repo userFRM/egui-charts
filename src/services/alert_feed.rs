@@ -6,6 +6,20 @@ use crate::model::AlertSource;
 use crate::model::{Bar, Timeframe};
 use chrono::{DateTime, Utc};
 
+/// Loaded live bars a host can lend to alerts with the same feed view.
+/// Supply only current, unpaused data, never replay bars or incomplete history.
+pub struct AlertData<'a> {
+    /// The symbol, interval, calendar, session and conversion of these bars.
+    pub request: crate::data::HistoryRequest,
+    /// Sorted bars with unique opening times.
+    pub bars: &'a [Bar],
+    /// Whether the feed has no older history.
+    pub history_complete: bool,
+    /// Current drawings in the same bar coordinates, including edits not yet stored.
+    #[cfg(feature = "ui")]
+    pub drawings: &'a [crate::drawings::Drawing],
+}
+
 /// Historical and streaming inputs for an alert without a rendered chart. Uses the same
 /// validation, trade aggregation and history/live merge rules as a chart. Dropping it stops
 /// its subscription and discards late replies. Available with `alert-engine`.
@@ -33,6 +47,8 @@ pub struct AlertFeed {
     stored: Option<crate::drawings::persistence::DrawingStorage>,
     inputs: Vec<crate::data::OrderFlowInput>,
     end: bool,
+    #[cfg(feature = "studies")]
+    live: bool,
     start: Option<DateTime<Utc>>,
 }
 
@@ -94,6 +110,8 @@ impl AlertFeed {
             stored: None,
             inputs: Vec::new(),
             end: false,
+            #[cfg(feature = "studies")]
+            live: false,
             start: None,
         }
     }
@@ -143,6 +161,55 @@ impl AlertFeed {
         if let Some(id) = self.subscription {
             self.inbox.study_inputs(id, self.inputs.clone());
         }
+    }
+
+    #[cfg(feature = "studies")]
+    pub(super) fn follow(&mut self, live: &[AlertData<'_>]) -> Option<usize> {
+        let found = live.iter().position(|data| {
+            self.metric.is_none()
+                && self.inputs.is_empty()
+                && self.instrument.is_some()
+                && data.request.symbol == self.request.symbol
+                && data.request.timeframe == self.request.timeframe
+                && data.request.clock == self.request.clock
+                && data.request.extended_hours == self.request.extended_hours
+                && data.request.conversion == self.request.conversion
+                && data.bars.first().is_some_and(|first| {
+                    self.start
+                        .or_else(|| self.bars.first().map(|bar| bar.time))
+                        .map_or(
+                            data.history_complete || data.bars.len() >= self.request.count,
+                            |start| first.time <= start,
+                        )
+                })
+                && self
+                    .bars
+                    .last()
+                    .is_none_or(|last| data.bars.last().is_some_and(|bar| bar.time >= last.time))
+        });
+        if let Some(at) = found {
+            let data = &live[at];
+            if !self.live {
+                self.unsubscribe();
+                self.inbox = std::sync::Arc::default();
+                self.pending = false;
+                self.origins.clear();
+            }
+            self.live = true;
+            self.ready = true;
+            self.bars.clear();
+            self.bars.extend_from_slice(data.bars);
+        } else if self.live {
+            self.live = false;
+            self.ready = false;
+            self.end = false;
+            self.stopped = false;
+            self.retry = None;
+            self.request.before = None;
+            self.bars.clear();
+            self.wake.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        found
     }
 
     #[cfg(feature = "studies")]
@@ -237,13 +304,11 @@ impl AlertFeed {
                     .downcast::<Result<crate::model::Instrument, FeedError>>()
                     .expect("alert instrument");
                 result.map(|mut instrument| {
-                    if let Some(calendar) = &self.calendar {
-                        if calendar.symbol == self.request.symbol {
-                            instrument.time_zone = calendar.timezone.clone();
-                            instrument.session = calendar.session.clone();
-                        } else if calendar.session.is_none() {
-                            instrument.session = None;
-                        }
+                    if let Some(calendar) = &self.calendar
+                        && calendar.symbol == self.request.symbol
+                    {
+                        instrument.time_zone = calendar.timezone.clone();
+                        instrument.session = calendar.session.clone();
                     }
                     if let Some(session) = &instrument.session
                         && self.metric.is_none()
@@ -316,11 +381,11 @@ impl AlertFeed {
                 errors.push(error);
             }
         }
-        for (_, updates) in drained.updates {
+        for (id, updates) in drained.updates {
+            if updates.resnapshot {
+                self.feed.request_depth_snapshot(id);
+            }
             if updates.reset {
-                for input in &self.inputs {
-                    input.clear();
-                }
                 self.bars.clear();
                 self.origins.clear();
                 self.ready = false;

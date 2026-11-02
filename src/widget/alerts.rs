@@ -5,6 +5,33 @@ use crate::chart::series::SeriesId;
 use crate::model::AlertSource;
 
 impl Chart {
+    /// Lend loaded live bars to the alert evaluator. A paused or replaying chart cannot take
+    /// over an alert's live subscription, and loading history keeps its background reader.
+    #[cfg(feature = "alert-engine")]
+    pub fn alert_data(&self) -> Option<crate::services::AlertData<'_>> {
+        let link = self.feed_link.as_ref()?;
+        if link.paused
+            || self.replay.is_some()
+            || self.feed.loading_history
+            || self.feed.last_error.is_some()
+            || self.bars(SeriesId::MAIN).is_empty()
+        {
+            return None;
+        }
+        let mut request =
+            crate::services::AlertFeed::history_request(self.symbol(), self.timeframe()?);
+        request.clock = self.bar_clock();
+        request.extended_hours = self.extended_hours();
+        request.conversion = self.conversion().map(str::to_owned);
+        Some(crate::services::AlertData {
+            request,
+            bars: self.bars(SeriesId::MAIN),
+            history_complete: self.feed.history_complete,
+            #[cfg(feature = "ui")]
+            drawings: &self.drawings().drawings,
+        })
+    }
+
     /// Capture calculation inputs for alert creation, independently of later chart changes.
     /// Copies and edits retain the inputs already carried by the alert.
     pub fn prepare_alert(&self, alert: &mut crate::model::Alert) {
