@@ -559,6 +559,29 @@ mod tests {
             for _ in 0..2 {
                 show_charts(&mut app, &ctx);
                 app.save(&mut storage);
+                let documents: HashMap<String, String> = eframe::get_value(&storage, KEY).unwrap();
+                assert_eq!(
+                    egui_charts::services::UserSettings::from_json(&documents["Settings/settings"])
+                        .unwrap()
+                        .layout,
+                    None,
+                    "current tab: {}, menu: {:?}",
+                    app.layout_tabs[app.layout_tab].name,
+                    app.top_toolbar.layout_menu.curr_layout,
+                );
+                assert_eq!(
+                    SavedLayout::from_json(&documents["workspace"])
+                        .unwrap()
+                        .charts[0]
+                        .chart_type,
+                    ChartType::Area,
+                    "checkpoint notices: {:?}",
+                    app.toasts
+                        .toasts()
+                        .iter()
+                        .map(|toast| &toast.message)
+                        .collect::<Vec<_>>(),
+                );
                 app = restart(&ctx, &storage);
                 app.poll_storage(&ctx);
                 assert_eq!(app.chart.chart_type(), ChartType::Area);
