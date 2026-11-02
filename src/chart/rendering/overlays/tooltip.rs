@@ -641,18 +641,6 @@ pub fn render_magnifier_tooltip(
     let price_to_mag_y =
         |price: f64| center.y + (price_scale.price_to_y(price) - hover_pos.y) * zoom;
 
-    // Calculate bar indices visible in magnifier. Degenerate bar spacing maps
-    // every pixel onto the same bar rather than dividing by zero.
-    let bars_per_pixel = if coords.bar_spacing.abs() < f32::EPSILON {
-        0.0
-    } else {
-        1.0 / coords.bar_spacing
-    };
-    let center_bars_from_right =
-        f64::from((context.rect.max.x - hover_pos.x) * bars_per_pixel) - 0.5 - coords.right_offset;
-    let src_bars = (src_width * bars_per_pixel) as isize;
-    let half_bars = src_bars / 2;
-
     // The painter clips rectangles only; clip candle geometry to the lens as well.
     let clip_rect = Rect::from_center_size(center, Vec2::splat(size));
     let painter = context.painter.with_clip_rect(clip_rect);
@@ -668,28 +656,17 @@ pub fn render_magnifier_tooltip(
     let zoomed_bar_spacing = coords.bar_spacing * zoom;
     let candle_width = zoomed_bar_spacing * 0.7;
 
-    // Only bars of `visible_data` can be drawn, so the loop never visits more than that many.
-    let last = (coords.base_idx as f64 - center_bars_from_right - coords.start_idx as f64).floor()
-        as isize;
-    let first = last
+    let first = coords
+        .x_to_idx(hover_pos.x - src_width / 2.0 - coords.bar_spacing)
+        .saturating_sub(coords.start_idx)
+        .min(visible_data.len());
+    let end = coords
+        .x_to_idx(hover_pos.x + src_width / 2.0 + coords.bar_spacing)
         .saturating_add(1)
-        .saturating_sub(visible_data.len() as isize);
-    for i in (-half_bars).max(first)..=half_bars.min(last) {
-        let bar_offset = center_bars_from_right + i as f64;
-        let global_idx = (coords.base_idx as f64 - bar_offset).floor() as isize;
-
-        if global_idx < coords.start_idx as isize {
-            continue;
-        }
-        let local_idx = (global_idx as usize).saturating_sub(coords.start_idx);
-        if local_idx >= visible_data.len() {
-            continue;
-        }
-
-        let bar = &visible_data[local_idx];
-
-        // Calculate position within magnifier
-        let bar_x = center.x - (i as f32 * zoomed_bar_spacing);
+        .saturating_sub(coords.start_idx)
+        .min(visible_data.len());
+    for (local_idx, bar) in visible_data.iter().enumerate().take(end).skip(first) {
+        let bar_x = center.x + (coords.idx_to_x(coords.start_idx + local_idx) - hover_pos.x) * zoom;
 
         // Skip if outside magnifier bounds
         if bar_x < clip_rect.min.x - candle_width || bar_x > clip_rect.max.x + candle_width {
@@ -1343,13 +1320,14 @@ mod tests {
                 magnifier_zoom: zoom,
                 ..Default::default()
             });
-            // Longer than the lens crosshair, so only a candle wick matches.
+            // Bar 40 is at 800 - (79 - 40 + 0.5) * 10 - 1 = 404.
+            let wick_x = HOVER.x + 4.0 * zoom;
             let wick = shapes
                 .iter()
                 .find_map(|c| match &c.shape {
                     egui::Shape::LineSegment { points, .. }
-                        if points[0].x == HOVER.x
-                            && points[1].x == HOVER.x
+                        if points[0].x == wick_x
+                            && points[1].x == wick_x
                             && (points[0].y - points[1].y).abs() > 50.0 =>
                     {
                         Some(*points)
@@ -1360,8 +1338,9 @@ mod tests {
             let mid = (wick[0].y + wick[1].y) / 2.0;
             assert!((mid - HOVER.y).abs() < 0.5, "wick {wick:?}");
             // log(2) / log(1000) * 500 * zoom exceeds either lens radius.
-            // At its centre the clipped wick therefore reaches both circle poles.
-            let extent = size / 2.0 - DESIGN_TOKENS.stroke.hairline / 2.0;
+            // The circle equation gives the wick endpoints at its offset from the cursor.
+            let radius = size / 2.0 - DESIGN_TOKENS.stroke.hairline / 2.0;
+            let extent = (radius * radius - (4.0 * zoom).powi(2)).sqrt();
             assert!((wick[0].y - (HOVER.y - extent)).abs() < 0.01);
             assert!((wick[1].y - (HOVER.y + extent)).abs() < 0.01);
             for shape in &shapes {
