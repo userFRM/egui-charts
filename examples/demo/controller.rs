@@ -92,7 +92,7 @@ use egui_charts::ui::widget_bar::{
 };
 use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBar, WidgetBarAction};
 use egui_charts::ui_kit::notifications::{NotificationPanel, Toasts};
-use egui_charts::widget::SeriesId;
+use egui_charts::widget::{ChartLayoutMode, SeriesId};
 use egui_charts::widget::settings::ChartSettingsState;
 use live::LiveFeed;
 use std::sync::Arc;
@@ -1474,7 +1474,18 @@ impl eframe::App for DemoApp {
             feed.advance(chrono::Utc::now());
         }
 
-        for extra in &mut self.extra_charts {
+        let visible = self.layout.mode.chart_count();
+        for (index, extra) in self.extra_charts.iter_mut().enumerate() {
+            let slot = if index >= self.layout_slot {
+                index + 1
+            } else {
+                index
+            };
+            if (self.layout.mode == ChartLayoutMode::Tabs || slot >= visible)
+                && !self.layout.is_detached(slot)
+            {
+                continue;
+            }
             extra.live.set_symbol(extra.chart.symbol());
             let delay = extra.live.advance(chrono::Utc::now());
             for (_, id, feed) in &extra.comparisons {
@@ -7249,6 +7260,20 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
         app.live.set_paused(true);
+        app.handle_comparison(CompareAction::AddSymbol(
+            "EURUSD".into(),
+            Default::default(),
+        ));
+        app.ensure_chart_slots(ChartLayoutMode::Eight);
+        for extra in &app.extra_charts {
+            extra.live.set_paused(false);
+        }
+        app.ensure_chart_slots(ChartLayoutMode::Single);
+        let hidden: Vec<_> = app
+            .extra_charts
+            .iter()
+            .map(|extra| extra.live.now())
+            .collect();
         // The startup toast lives on the wall clock and paints while it is up; it is not what
         // this test measures.
         app.toasts.toasts_mut().clear();
@@ -7268,6 +7293,14 @@ mod tests {
                 },
                 |ui| app.ui(ui, &mut frame),
             );
+            assert_eq!(
+                app.extra_charts
+                    .iter()
+                    .map(|extra| extra.live.now())
+                    .collect::<Vec<_>>(),
+                hidden,
+                "hidden feeds must not advance while the visible chart is paused"
+            );
             delays.push(out.viewport_output[&egui::ViewportId::ROOT].repaint_delay);
             out.drop_without_applying_deltas();
         }
@@ -7282,6 +7315,24 @@ mod tests {
                 "frame {index} asked for {delay:?}, more than the countdown's second"
             );
         }
+        app.ensure_chart_slots(ChartLayoutMode::Eight);
+        for _ in 0..3 {
+            ctx.run_ui(egui::RawInput::default(), |ui| app.ui(ui, &mut frame))
+                .drop_without_applying_deltas();
+        }
+        assert!(
+            app.extra_charts
+                .iter()
+                .zip(&hidden)
+                .all(|(extra, previous)| extra.live.now() > *previous),
+            "restored slots must resume their feeds"
+        );
+        assert!(
+            app.extra_charts
+                .iter()
+                .all(|extra| extra.comparisons.len() == 1),
+            "restoring slots keeps their comparison bindings"
+        );
     }
 
     #[test]
