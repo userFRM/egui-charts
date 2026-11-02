@@ -421,6 +421,23 @@ mod tests {
         use InputValue::{Choice, Length, Number, Text, Toggle};
         let rows = [
             (
+                "Vol Profile Session",
+                vec![
+                    (
+                        "calculation_timeframe",
+                        InputValue::Timeframe(Some(crate::model::Timeframe::Min5)),
+                    ),
+                    ("wait_for_close", Toggle(false)),
+                ],
+                vec![
+                    (
+                        "calculation_timeframe",
+                        InputValue::Timeframe(Some(crate::model::Timeframe::Min5)),
+                    ),
+                    ("wait_for_close", Toggle(false)),
+                ],
+            ),
+            (
                 "SMA",
                 vec![("period", Length(20))],
                 vec![("period", Length(20))],

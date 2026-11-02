@@ -123,9 +123,11 @@ impl DemoApp {
             .build();
         chart.set_main_series_visible(source.is_main_series_visible());
         chart.set_price_targets_visible(source.price_targets_visible());
-        if self.api_samples {
-            chart.set_signal_source(Some(live.clone()));
-        }
+        chart.set_signal_source(Some(if self.api_samples {
+            live.clone() as Arc<dyn egui_charts::services::Signals>
+        } else {
+            live.detectors()
+        }));
         chart.set_data(SeriesId::MAIN, source.state().data().bars.clone());
         chart.set_event_visibility(source.event_visibility().clone());
         chart.set_mark_source(Some(Arc::new(super::marks::DemoMarks {
@@ -793,15 +795,27 @@ mod tests {
             let ctx = egui::Context::default();
             let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
             app.live.set_paused(true);
-            assert!(
-                app.widget_bar.widgets.is_empty(),
-                "sample panels start hidden"
+            assert_eq!(
+                app.widget_bar
+                    .widgets
+                    .iter()
+                    .map(|widget| widget.id)
+                    .collect::<Vec<_>>(),
+                [5],
+                "order flow is available while sample panels start hidden"
             );
             app.execute_search_command(&ctx, "samples");
-            assert_eq!(app.widget_bar.widgets.len(), 2);
+            assert_eq!(app.widget_bar.widgets.len(), 3);
             app.widget_bar.active_widget = Some(2);
             app.execute_search_command(&ctx, "samples");
-            assert!(app.widget_bar.widgets.is_empty());
+            assert_eq!(
+                app.widget_bar
+                    .widgets
+                    .iter()
+                    .map(|widget| widget.id)
+                    .collect::<Vec<_>>(),
+                [5]
+            );
             assert_eq!(app.widget_bar.active_widget, None);
             app.execute_search_command(&ctx, "samples");
 

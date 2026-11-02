@@ -7,10 +7,12 @@
 
 Financial charts for Rust applications built with egui 0.37.
 
+This README and the [guide](https://userfrm.github.io/egui-charts/docs/) follow **main (0.3 in development)**, using **egui/eframe 0.37**. Browse the [main API (rustdoc and symbol search)](https://userfrm.github.io/egui-charts/docs/api/egui_charts/index.html). The published **0.2.0** crate uses **egui/eframe 0.33.3** and has separate [release API documentation](https://docs.rs/egui-charts/0.2.0/egui_charts/).
+
 <p>
   <a href="https://userfrm.github.io/egui-charts/demo/"><img src="https://img.shields.io/badge/Live_demo-0969da?style=flat-square" alt="Live demo"></a>
   <a href="https://userfrm.github.io/egui-charts/docs/"><img src="https://img.shields.io/badge/Guide-0969da?style=flat-square" alt="Guide"></a>
-  <a href="https://docs.rs/egui-charts"><img src="https://img.shields.io/docsrs/egui-charts?style=flat-square&amp;logo=rust" alt="docs.rs"></a>
+  <a href="https://docs.rs/egui-charts/0.2.0/egui_charts/"><img src="https://img.shields.io/docsrs/egui-charts/0.2.0?style=flat-square&amp;logo=rust&amp;label=API%200.2.0" alt="Released 0.2.0 API, egui 0.33.3"></a>
   <a href="https://crates.io/crates/egui-charts"><img src="https://img.shields.io/crates/v/egui-charts?style=flat-square&amp;logo=rust" alt="crates.io"></a>
   <a href="https://github.com/userFRM/egui-charts/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/userFRM/egui-charts/ci.yml?branch=main&amp;style=flat-square&amp;logo=github&amp;label=CI" alt="CI"></a>
   <a href="https://github.com/emilk/egui"><img src="https://img.shields.io/badge/egui-0.37-555?style=flat-square" alt="egui 0.37"></a>
@@ -145,11 +147,11 @@ Counts come from [docs/progress/features.csv](docs/progress/features.csv), and t
 
 ## Start with a chart
 
-Requires Rust 1.95 or newer. Use egui and eframe 0.37 throughout your application so their types match.
+For main (0.3 in development), use the Git dependency and Rust 1.95 or newer. Use egui and eframe 0.37 throughout your application so their types match.
 
 ```toml
 [dependencies]
-egui-charts = "0.3"
+egui-charts = { git = "https://github.com/userFRM/egui-charts", branch = "main" }
 eframe = "0.37"
 ```
 
@@ -219,7 +221,7 @@ The [`terminal`](terminal) package assembles the toolbars, menus and charts on y
 
 `ChartLayout` arranges charts in grids or tabs and can synchronize symbols, intervals, crosshairs, time ranges and drawings.
 
-Choose a chart style with `Chart::set_chart_type`: candles, OHLC bars, line, area, baseline, Heikin-Ashi, Renko, Kagi, line break, point and figure, or range bars. See [`ChartType`](https://docs.rs/egui-charts/latest/egui_charts/model/enum.ChartType.html) for the full set.
+Choose a chart style with `Chart::set_chart_type`: candles, OHLC bars, line, area, baseline, Heikin-Ashi, Renko, Kagi, line break, point and figure, or range bars. See [`ChartType` in the main API](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/enum.ChartType.html) for the full set.
 
 The UI components also include replay controls, an order ticket, a depth ladder and an account panel. Connect trading UI to your `Broker` implementation; the demo uses `PaperAccount` for simulated execution.
 
@@ -242,7 +244,7 @@ The default build includes the chart, studies, drawings and UI components, plus 
 For example:
 
 ```toml
-egui-charts = { version = "0.3", default-features = false, features = ["widget", "studies"] }
+egui-charts = { git = "https://github.com/userFRM/egui-charts", branch = "main", default-features = false, features = ["widget", "studies"] }
 ```
 
 `Theme::dark()`, `Theme::light()` and `Theme::high_contrast()` provide starting palettes. A `Theme` exposes its UI colours, chart colours, typography, spacing and corner radii as public fields. Apply it at startup and after a theme change:
