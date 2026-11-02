@@ -282,9 +282,6 @@ impl ChartTypeSelector {
             .auto_shrink([false, true])
             .show(ui, |ui| {
                 for chart_type in ChartType::all() {
-                    if !self.offers(*chart_type) {
-                        continue;
-                    }
                     if matches!(
                         chart_type,
                         ChartType::Line
@@ -294,6 +291,9 @@ impl ChartTypeSelector {
                             | ChartType::Heikin
                     ) {
                         ui.add(egui::Separator::default().spacing(GROUP_GAP));
+                    }
+                    if !self.offers(*chart_type) {
+                        continue;
                     }
                     let mut toggle_favorite = false;
                     let content = ChartTypeRow {
@@ -540,6 +540,15 @@ mod tests {
                     "{name}"
                 );
             }
+            let gap = harness
+                .get_by_label(ChartType::TimePriceOpportunity.name())
+                .rect()
+                .top()
+                - harness
+                    .get_by_label(ChartType::HighLow.name())
+                    .rect()
+                    .bottom();
+            assert_eq!(gap, GROUP_GAP + if offered { ROW_H } else { 0.0 });
             assert_eq!(harness.state().preferences(), saved);
             harness.key_press(egui::Key::Escape);
             harness.run();
