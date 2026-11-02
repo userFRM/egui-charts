@@ -382,32 +382,6 @@ struct State {
 pub struct OrderFlowInput(Arc<Mutex<State>>);
 
 impl OrderFlowInput {
-    /// Feed services read by this source. Book size with an order filter needs individual
-    /// orders; executions need trade-side classification only for side-dependent outputs.
-    pub fn services(&self) -> &'static [crate::model::FeedService] {
-        use crate::model::FeedService::*;
-        let state = self.state();
-        match state.source {
-            Source::Fixed(OrderFlowKind::Spread | OrderFlowKind::LevelsTradedThrough { .. }) => {
-                &[BestBidAsk]
-            }
-            Source::Fixed(OrderFlowKind::BookSize { .. }) if state.filter.is_some() => {
-                &[OrderDepth]
-            }
-            Source::Fixed(OrderFlowKind::BookSize { .. }) | Source::Book(_) => &[Depth],
-            Source::Footprint
-            | Source::Fixed(
-                OrderFlowKind::TradeRate { .. } | OrderFlowKind::AggressorRate { .. },
-            ) => &[LiveTrades],
-            Source::Fixed(
-                OrderFlowKind::LevelsExecuted { .. }
-                | OrderFlowKind::SizeDelta { .. }
-                | OrderFlowKind::FlowSum { .. }
-                | OrderFlowKind::FilteredCvd { .. },
-            ) => &[LiveTrades, TradeSides],
-        }
-    }
-
     /// An empty source for this fixed aggregation.
     pub fn new(kind: OrderFlowKind) -> Self {
         Self::of(Source::Fixed(kind.normalized()))
@@ -445,6 +419,32 @@ impl OrderFlowInput {
     pub fn with_order_filter(self, filter: OrderFilter) -> Self {
         self.state().filter = (filter != OrderFilter::default()).then_some(filter);
         self
+    }
+
+    /// Feed services read by this source. Book size with an order filter needs individual
+    /// orders; executions need trade-side classification only for side-dependent outputs.
+    pub fn services(&self) -> &'static [crate::model::FeedService] {
+        use crate::model::FeedService::*;
+        let state = self.state();
+        match state.source {
+            Source::Fixed(OrderFlowKind::Spread | OrderFlowKind::LevelsTradedThrough { .. }) => {
+                &[BestBidAsk]
+            }
+            Source::Fixed(OrderFlowKind::BookSize { .. }) if state.filter.is_some() => {
+                &[OrderDepth]
+            }
+            Source::Fixed(OrderFlowKind::BookSize { .. }) | Source::Book(_) => &[Depth],
+            Source::Footprint
+            | Source::Fixed(
+                OrderFlowKind::TradeRate { .. } | OrderFlowKind::AggressorRate { .. },
+            ) => &[LiveTrades],
+            Source::Fixed(
+                OrderFlowKind::LevelsExecuted { .. }
+                | OrderFlowKind::SizeDelta { .. }
+                | OrderFlowKind::FlowSum { .. }
+                | OrderFlowKind::FilteredCvd { .. },
+            ) => &[LiveTrades, TradeSides],
+        }
     }
 
     /// The filter of book size, if it has one.

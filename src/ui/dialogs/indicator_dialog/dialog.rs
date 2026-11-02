@@ -39,10 +39,10 @@ const SIDEBAR_WIDTH: f32 = 200.0;
 /// Indicator Dialog
 ///
 /// Modal dialog for searching and adding indicators. It lists studies from its
-/// [`IndicatorFactory`], filtered by the supplied source and feed capabilities;
-/// a click or Enter on a row adds that study with its
-/// default inputs and leaves the dialog open for the next one. Edit the inputs of an added
-/// study with [`IndicatorSettingsDialog`](super::IndicatorSettingsDialog).
+/// [`IndicatorFactory`], filtered by the supplied source and feed capabilities; a click or
+/// Enter on a row adds that study with its default inputs and leaves the dialog open for the
+/// next one. Edit the inputs of an added study with
+/// [`IndicatorSettingsDialog`](super::IndicatorSettingsDialog).
 pub struct IndicatorDialog {
     /// Is dialog open
     pub is_open: bool,

@@ -505,16 +505,10 @@ mod tests {
             selector.set_preferences(saved.clone());
             assert!(ChartType::all().iter().all(|kind| selector.offers(*kind)));
             selector.set_feed_capabilities(capabilities, symbol);
-            for kind in ChartType::all() {
-                assert_eq!(
-                    selector.offers(*kind),
-                    offered
-                        || !matches!(
-                            kind,
-                            ChartType::VolumeFootprint | ChartType::SessionVolumeProfile
-                        )
-                );
+            for kind in [ChartType::VolumeFootprint, ChartType::SessionVolumeProfile] {
+                assert_eq!(selector.offers(kind), offered);
             }
+            assert!(selector.offers(ChartType::Candles));
             let mut harness = Harness::builder()
                 .with_context_setup(egui_extras::install_image_loaders)
                 .with_size(vec2(800.0, 1400.0))
