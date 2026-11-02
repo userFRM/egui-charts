@@ -1,6 +1,6 @@
 //! Synthetic executions delivered through the same feed contract as host market data.
 
-use chrono::{DateTime, DurationRound, TimeDelta, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use egui_charts::data::{
     CalendarEvent, CalendarQuery, Datafeed, FeedError, FeedStatus, HistoryPage, HistoryRequest,
     HotlistEntry, HotlistQuery, MetricPage, MetricPoint, MetricRequest, MetricSeries,
@@ -13,7 +13,7 @@ use egui_charts::model::{
     OrderSide, Quote, Tick, Timeframe,
 };
 use egui_charts::model::{Direction, Signal, SignalId, SignalShape};
-use egui_charts::services::{Events, Quotes, SignalEvent, Signals};
+use egui_charts::services::{Events, SignalEvent, Signals};
 use egui_charts::widget::{Chart, SeriesId};
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -39,6 +39,7 @@ pub(super) const ORDER_LEVEL_SYMBOL: &str = "ESZ2026";
 pub(super) struct LiveFeed(
     Mutex<Simulation>,
     Arc<egui_charts::services::OrderFlowDetectors>,
+    Option<Arc<Mutex<super::feeds::DemoMarket>>>,
 );
 
 /// The inputs of the last comparison history a feed loaded; an unchanged key skips the reload.
@@ -92,6 +93,14 @@ struct Simulation {
 
 impl LiveFeed {
     pub(super) fn new(symbol: &str, now: DateTime<Utc>) -> Self {
+        let mut feed = Self::generate(symbol, now);
+        let market = super::feeds::DemoMarket::new(now, feed.fork());
+        feed.2 = Some(Arc::new(Mutex::new(market)));
+        feed
+    }
+
+    /// Builds an execution source without recursively owning another market.
+    pub(super) fn generate(symbol: &str, now: DateTime<Utc>) -> Self {
         let spec = DemoSymbol::find(symbol);
         let tick_size = if spec.start_price < 10.0 {
             0.0001
@@ -129,7 +138,7 @@ impl LiveFeed {
         while sim.next_trade <= now {
             sim.trade();
         }
-        Self(Mutex::new(sim), Arc::default())
+        Self(Mutex::new(sim), Arc::default(), None)
     }
 
     pub(super) fn detectors(&self) -> Arc<egui_charts::services::OrderFlowDetectors> {
@@ -172,6 +181,7 @@ impl LiveFeed {
                 orders: None,
             }),
             Arc::default(),
+            self.2.clone(),
         )
     }
 
@@ -192,7 +202,17 @@ impl LiveFeed {
                 .iter()
                 .find(|feed| feed.state().symbol == symbol)
                 .map(LiveFeed::fork)
-                .unwrap_or_else(|| Self::new(symbol, sim.now));
+                .unwrap_or_else(|| {
+                    self.2.as_ref().map_or_else(
+                        || Self::generate(symbol, sim.now),
+                        |market| {
+                            market
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .feed(symbol, sim.now)
+                        },
+                    )
+                });
             let streams = std::mem::take(&mut sim.streams);
             *sim = source
                 .0
@@ -351,7 +371,7 @@ impl LiveFeed {
     /// The last displayed trade and previous session close, on the chart's session and price basis.
     pub(super) fn day_change(&self) -> Option<(f64, f64)> {
         let sim = self.state();
-        let extended = sim.extended_hours()?;
+        let extended = sim.extended_hours().unwrap_or(false);
         let latest =
             sim.trades.back().map_or(sim.now, |trade| trade.ts) + TimeDelta::nanoseconds(1);
         let (time, last) = sim.newest_shown(latest, extended)?;
@@ -405,7 +425,14 @@ impl LiveFeed {
     /// or for a symbol with trading hours its regular-hours price and the extended-hours trade
     /// after it, with the session volume and the book's best bid and ask.
     pub(super) fn quote(&self, now: DateTime<Utc>) -> Option<Quote> {
-        let mut quote = watchlist_quote(&self.state().symbol, now)?;
+        let mut quote = {
+            let sim = self.state();
+            Quote::new(
+                sim.price_ticks as f64 * sim.tick_size,
+                catalog(&sim.symbol)?.start_price,
+                now,
+            )
+        };
         if let Some((last, prev_close)) = self.day_change() {
             (quote.last, quote.prev_close) = (last, prev_close);
         }
@@ -418,6 +445,19 @@ impl LiveFeed {
             quote = quote.with_bid_ask(book.bid, book.ask);
         }
         Some(quote)
+    }
+
+    /// The same retained execution timeline used when a catalog symbol opens in a chart.
+    pub(super) fn market_quote(&self, symbol: &str, now: DateTime<Utc>) -> Option<Quote> {
+        let active = self.state().symbol.eq_ignore_ascii_case(symbol);
+        if active {
+            return self.quote(now);
+        }
+        self.2
+            .as_ref()?
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .quote(symbol, now)
     }
 
     /// The volume traded since midnight UTC and the average volume of the earlier whole days.
@@ -458,6 +498,12 @@ impl LiveFeed {
         let mut sim = self.state();
         if sim.paused {
             return std::time::Duration::from_secs(1);
+        }
+        if let Some(market) = &self.2 {
+            market
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .advance(now);
         }
         sim.streams.retain(|feed| {
             feed.state()
@@ -539,90 +585,6 @@ pub(super) fn price_decimals(symbol: &str) -> Option<u8> {
     } else {
         2
     })
-}
-
-/// A synthetic watchlist quote: a slow deterministic swing around the catalog price of `symbol`,
-/// which stands for the previous close. `None` for symbols outside the catalog.
-pub(super) fn watchlist_quote(symbol: &str, now: DateTime<Utc>) -> Option<Quote> {
-    let spec = catalog(symbol)?;
-    let tick_size = if spec.start_price < 10.0 {
-        0.0001
-    } else {
-        0.01
-    };
-    let t = now.timestamp_millis() as f64 / 1000.0;
-    let phase = spec.seed as f64;
-    let swing = 0.02 * (t / 900.0 + phase).sin() + 0.002 * (t / 7.0 + 2.0 * phase).sin();
-    let last = (spec.start_price * (1.0 + swing) / tick_size).round() * tick_size;
-    Some(Quote::new(last, spec.start_price, now))
-}
-
-/// The watchlist's quote service: the chart symbol's quote from the live feed, with its regular
-/// and extended-hours prices, session volume and best bid and ask, and a synthetic swing for the
-/// other catalog symbols. The quotes follow the feed's simulation clock, which the pause freezes.
-/// The demo has no background worker, so the controller publishes once per frame. Repeating a
-/// quote only wakes the UI, so it is pushed again only when a displayed value changes.
-pub(super) struct DemoQuotes {
-    live: Arc<LiveFeed>,
-    stream: Mutex<Option<(Vec<String>, Events<(String, Quote)>)>>,
-    /// The last quote pushed per symbol, with times at display precision.
-    last_pushed: Mutex<BTreeMap<String, Quote>>,
-}
-
-impl DemoQuotes {
-    pub(super) fn new(live: Arc<LiveFeed>) -> Self {
-        Self {
-            live,
-            stream: Mutex::default(),
-            last_pushed: Mutex::default(),
-        }
-    }
-
-    /// Pushes the current quote of every subscribed symbol.
-    pub(super) fn publish(&self, now: DateTime<Utc>) {
-        let stream = self.stream.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((symbols, events)) = stream.as_ref().filter(|(_, e)| e.is_active()) {
-            self.push(symbols, events, now);
-        }
-    }
-
-    fn push(&self, symbols: &[String], events: &Events<(String, Quote)>, now: DateTime<Utc>) {
-        let chart = self.live.state().symbol.clone();
-        let mut last_pushed = self.last_pushed.lock().unwrap_or_else(|e| e.into_inner());
-        for symbol in symbols {
-            let quote = if symbol.eq_ignore_ascii_case(&chart) {
-                self.live.quote(now)
-            } else {
-                watchlist_quote(symbol, now)
-            };
-            let Some(quote) = quote else {
-                continue;
-            };
-            // Panels use the whole quote, but details shows both update times only to the minute.
-            let mut pushed = quote.clone();
-            pushed.time = pushed.time.duration_trunc(TimeDelta::minutes(1)).unwrap();
-            if let Some(extended) = &mut pushed.extended {
-                extended.time = extended.time.duration_trunc(TimeDelta::minutes(1)).unwrap();
-            }
-            if last_pushed.get(symbol) == Some(&pushed) {
-                continue;
-            }
-            last_pushed.insert(symbol.clone(), pushed);
-            events.push((symbol.clone(), quote));
-        }
-    }
-}
-
-impl Quotes for DemoQuotes {
-    fn subscribe(&self, symbols: &[String], events: Events<(String, Quote)>) {
-        // A new stream starts from the current quotes, whatever was pushed to the one before.
-        self.last_pushed
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clear();
-        self.push(symbols, &events, self.live.now());
-        *self.stream.lock().unwrap_or_else(|e| e.into_inner()) = Some((symbols.to_vec(), events));
-    }
 }
 
 impl Simulation {
@@ -1165,9 +1127,12 @@ impl Datafeed for LiveFeed {
         } else {
             Vec::new()
         };
-        let end = bars.partition_point(|b| request.before.is_none_or(|before| b.time < before));
-        let start = end.saturating_sub(request.count);
-        reply.send(Ok(HistoryPage::new(bars[start..end].to_vec(), start == 0)));
+        reply.send(Ok(super::feeds::history_page(
+            &bars,
+            request.since,
+            request.before,
+            request.count,
+        )));
     }
 
     fn subscribe(&self, subscription: Subscription) {
@@ -1293,12 +1258,12 @@ impl Datafeed for LiveFeed {
 
     /// The catalog symbols ranked on their synthetic quotes.
     fn hotlist(&self, query: HotlistQuery, reply: Reply<Vec<HotlistEntry>>) {
-        reply.send(Ok(super::feeds::hotlist(&query, Utc::now())));
+        reply.send(Ok(super::feeds::hotlist(&query, self)));
     }
 
     /// The catalog symbols screened on their synthetic quotes.
     fn screen(&self, query: ScreenerQuery, reply: Reply<Vec<ScreenerRow>>) {
-        reply.send(super::feeds::screen(&query, Utc::now()));
+        reply.send(super::feeds::screen(&query, self));
     }
 
     /// Synthetic releases, earnings, dividends and offerings.
@@ -1348,6 +1313,7 @@ impl Datafeed for LiveFeed {
 
 #[cfg(test)]
 mod tests {
+    use super::super::feeds::DemoQuotes;
     use super::*;
     use egui_charts::ChartBuilder;
     use egui_charts::widget::SeriesId;
@@ -2062,8 +2028,8 @@ mod tests {
             .map(|seconds| now + chrono::Duration::seconds(seconds))
             .find_map(|at| {
                 ["MSFT", "BTCUSD"].iter().find_map(|symbol| {
-                    (watchlist_quote(symbol, now).map(|q| q.last)
-                        != watchlist_quote(symbol, at).map(|q| q.last))
+                    (live.market_quote(symbol, now).map(|q| q.last)
+                        != live.market_quote(symbol, at).map(|q| q.last))
                     .then_some((at, *symbol))
                 })
             })
@@ -2074,7 +2040,7 @@ mod tests {
         );
         assert_eq!(
             panel.quote(symbol).map(|quote| quote.last),
-            watchlist_quote(symbol, moved).map(|quote| quote.last),
+            live.market_quote(symbol, moved).map(|quote| quote.last),
             "the panel shows the price that woke it"
         );
 
