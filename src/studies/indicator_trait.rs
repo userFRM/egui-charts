@@ -295,7 +295,7 @@ pub trait Indicator: Send {
     fn restore_settings(
         &mut self,
         snapshot: &super::StudySettingsSnapshot,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), crate::studies::StudyError> {
         snapshot.restore(self)
     }
 
@@ -305,9 +305,9 @@ pub trait Indicator: Send {
         &mut self,
         inputs: &[(String, super::InputValue)],
         settings: super::StudySettings,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), crate::studies::StudyError> {
         let _ = (inputs, settings);
-        Err("wrap the study in ConfiguredStudy to edit its presentation")
+        Err(super::StudyError::NotConfigured)
     }
 
     /// Visible source bars, end exclusive, supplied after pan, zoom and resize and before
@@ -450,11 +450,16 @@ pub trait Indicator: Send {
         Vec::new()
     }
 
-    /// Change a calculation input, rejecting unknown ids, wrong types and invalid values.
+    /// Change a calculation input, rejecting unknown ids with [`super::StudyError::UnknownInput`]
+    /// and wrong types and invalid values with [`super::StudyError::InvalidInput`].
     /// On success cached values are cleared; calculate again or let the chart refresh.
-    fn set_input(&mut self, id: &str, value: super::InputValue) -> Result<(), &'static str> {
-        let _ = (id, value);
-        Err("study has no editable inputs")
+    fn set_input(
+        &mut self,
+        id: &str,
+        value: super::InputValue,
+    ) -> Result<(), crate::studies::StudyError> {
+        let _ = value;
+        Err(super::StudyError::UnknownInput(id.into()))
     }
 
     /// Return the short display name of this indicator (e.g. `"SMA"`, `"RSI"`, `"MACD"`).

@@ -140,6 +140,43 @@ fn add_host_textures(
     Ok(())
 }
 
+/// Why [`Chart::export_image`], [`Chart::export_png`] or [`Chart::export_svg`] made no image.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ExportError {
+    /// A side is outside 100 to 7680 pixels, or the image has more than 33,177,600 pixels.
+    InvalidSize {
+        /// The requested width in pixels.
+        width: u32,
+        /// The requested height in pixels.
+        height: u32,
+    },
+    /// The egui context has not run its first frame, so it has no fonts to lay the chart out.
+    NoFrame,
+    /// The frame holds content the format cannot take over unchanged, such as a host paint
+    /// callback or a texture the host binds itself; the text names it.
+    Unsupported(String),
+    /// The PNG encoder failed; the text is its message.
+    Encode(String),
+}
+
+impl std::fmt::Display for ExportError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidSize { width, height } => write!(
+                f,
+                "Image size {width} by {height} must be 100 to 7680 pixels per side and at most 33,177,600 pixels"
+            ),
+            Self::NoFrame => {
+                f.write_str("Run the egui context's first frame before exporting an image")
+            }
+            Self::Unsupported(reason) => f.write_str(reason),
+            Self::Encode(message) => write!(f, "PNG encoding failed: {message}"),
+        }
+    }
+}
+impl std::error::Error for ExportError {}
+
 impl Chart {
     fn export_time(&self, time: DateTime<Utc>) -> String {
         match self.display_timezone() {
@@ -265,11 +302,16 @@ impl Chart {
     /// `ctx` supplies the host's fonts and style after its first frame. Images use one pixel per point and dimensions
     /// between 100 and 7680 on each axis, with at most 33,177,600 pixels.
     /// Pass the returned frame to an egui renderer; see [`ChartImage`] for delivery responsibilities.
+    ///
+    /// # Errors
+    /// Returns [`ExportError::InvalidSize`] for dimensions outside the limits,
+    /// [`ExportError::NoFrame`] before the first frame, or [`ExportError::Unsupported`]
+    /// for invalid host textures.
     pub fn export_image(
         &self,
         ctx: &egui::Context,
         options: &ImageExportOptions,
-    ) -> Result<ChartImage, String> {
+    ) -> Result<ChartImage, ExportError> {
         self.export_layout_image(ctx, options, |ui, chart| {
             chart.show(ui);
         })
@@ -283,7 +325,7 @@ impl Chart {
     /// requested, sit above it.
     ///
     /// ```no_run
-    /// # fn capture(chart: &egui_charts::Chart, ctx: &egui::Context) -> Result<(), String> {
+    /// # fn capture(chart: &egui_charts::Chart, ctx: &egui::Context) -> Result<(), egui_charts::widget::ExportError> {
     /// let options = egui_charts::widget::ImageExportOptions::default();
     /// let png = chart.export_layout_png(ctx, &options, |ui, snapshot| {
     ///     ui.horizontal(|ui| {
@@ -300,7 +342,7 @@ impl Chart {
         ctx: &egui::Context,
         options: &ImageExportOptions,
         layout: impl FnMut(&mut egui::Ui, &mut Chart),
-    ) -> Result<ChartImage, String> {
+    ) -> Result<ChartImage, ExportError> {
         let (shapes, textures_delta, image_ctx) = self.export_shapes(ctx, options, layout)?;
         Ok(ChartImage {
             size: options.size,
@@ -322,18 +364,19 @@ impl Chart {
             egui::TexturesDelta,
             egui::Context,
         ),
-        String,
+        ExportError,
     > {
         let size = options.size;
         if size.iter().any(|&side| !(100..=7680).contains(&side))
             || u64::from(size[0]) * u64::from(size[1]) > 33_177_600
         {
-            return Err(
-                "Image size must be 100-7680 pixels per side and at most 33,177,600 pixels".into(),
-            );
+            return Err(ExportError::InvalidSize {
+                width: size[0],
+                height: size[1],
+            });
         }
         if ctx.cumulative_pass_nr() == 0 {
-            return Err("Run the egui context's first frame before exporting an image".into());
+            return Err(ExportError::NoFrame);
         }
         let mut chart = self.export_snapshot();
         chart.config.skip_background = options.transparent_background;
@@ -408,7 +451,7 @@ impl Chart {
         }
         if let Err(error) = add_host_textures(&mut textures_delta, options) {
             textures_delta.clear();
-            return Err(error);
+            return Err(ExportError::Unsupported(error));
         }
         Ok((shapes, textures_delta, image_ctx))
     }
@@ -418,11 +461,15 @@ impl Chart {
     /// paint callbacks and images of textures the host binds itself, such as a legend badge from a
     /// user texture, unless [`ImageExportOptions::textures`] holds their pixels, instead of
     /// leaving it out.
+    ///
+    /// # Errors
+    /// Returns the errors of [`Self::export_image`], [`ExportError::Unsupported`] for content
+    /// that cannot be drawn, or [`ExportError::Encode`] if the PNG encoder fails.
     pub fn export_png(
         &self,
         ctx: &egui::Context,
         options: &ImageExportOptions,
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<Vec<u8>, ExportError> {
         self.export_layout_png(ctx, options, |ui, chart| {
             chart.show(ui);
         })
@@ -435,11 +482,12 @@ impl Chart {
         ctx: &egui::Context,
         options: &ImageExportOptions,
         layout: impl FnMut(&mut egui::Ui, &mut Chart),
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<Vec<u8>, ExportError> {
         let mut image = self.export_layout_image(ctx, options, layout)?;
         let pixels = super::raster::rasterize(image.size, &image.primitives, &image.textures_delta);
         image.textures_delta.clear();
-        super::raster::png(image.size, &pixels?)
+        super::raster::png(image.size, &pixels.map_err(ExportError::Unsupported)?)
+            .map_err(ExportError::Encode)
     }
 
     /// Renders the frame of [`Self::export_image`] as an SVG document of the options' size, with
@@ -448,11 +496,15 @@ impl Chart {
     /// as PNG, with the host's [`ImageExportOptions::textures`]. Fails with the reason for content
     /// SVG cannot take over unchanged, such as host paint callbacks and textures the host binds
     /// itself without supplying their pixels, instead of leaving it out.
+    ///
+    /// # Errors
+    /// Returns the errors of [`Self::export_image`] or [`ExportError::Unsupported`] for content
+    /// the format cannot take over unchanged.
     pub fn export_svg(
         &self,
         ctx: &egui::Context,
         options: &ImageExportOptions,
-    ) -> Result<String, String> {
+    ) -> Result<String, ExportError> {
         self.export_layout_svg(ctx, options, |ui, chart| {
             chart.show(ui);
         })
@@ -465,11 +517,12 @@ impl Chart {
         ctx: &egui::Context,
         options: &ImageExportOptions,
         layout: impl FnMut(&mut egui::Ui, &mut Chart),
-    ) -> Result<String, String> {
+    ) -> Result<String, ExportError> {
         let (shapes, mut textures_delta, _) = self.export_shapes(ctx, options, layout)?;
         let svg = super::svg::svg(options.size, &shapes, &textures_delta);
         textures_delta.clear();
-        svg
+        // shortcut: an encoder failure while embedding a texture arrives as Unsupported; split it when svg.rs returns ExportError.
+        svg.map_err(ExportError::Unsupported)
     }
 
     fn export_snapshot(&self) -> Self {
@@ -973,17 +1026,18 @@ mod tests {
                 }), visible, "drawing visibility at {timeframe:?}");
             }
         }
-        for size in [[0, 320], [480, u32::MAX], [7680, 7680]] {
-            assert!(
+        for [width, height] in [[0, 320], [480, u32::MAX], [7680, 7680]] {
+            assert_eq!(
                 chart
                     .export_image(
                         &ctx,
                         &ImageExportOptions {
-                            size,
+                            size: [width, height],
                             ..base.clone()
                         }
                     )
-                    .is_err()
+                    .err(),
+                Some(ExportError::InvalidSize { width, height })
             );
         }
     }
@@ -1075,7 +1129,9 @@ mod tests {
                 "host textures",
             ),
         ] {
-            let error = error.unwrap_err();
+            let Err(ExportError::Unsupported(error)) = error else {
+                panic!("{reason}")
+            };
             assert!(error.contains(reason), "{error}");
         }
         let red = egui::Color32::from_rgb(200, 30, 30);
@@ -1104,6 +1160,9 @@ mod tests {
         let error = chart
             .export_layout_svg(&ctx, &additive, host_texture)
             .unwrap_err();
+        let ExportError::Unsupported(error) = error else {
+            panic!("expected an unsupported texture")
+        };
         assert!(error.contains("Additive texture User(7)"), "{error}");
         let layout = |ui: &mut egui::Ui, chart: &mut Chart| {
             let (rect, _) = ui.allocate_exact_size(egui::vec2(128.0, 32.0), egui::Sense::hover());
@@ -1220,6 +1279,9 @@ mod tests {
                 chart.export_svg(&ctx, &options).unwrap_err(),
                 chart.export_png(&ctx, &options).unwrap_err(),
             ] {
+                let ExportError::Unsupported(error) = error else {
+                    panic!("{reason}")
+                };
                 assert!(
                     error.contains(reason) && error.contains(&format!("{id:?}")),
                     "{error}"

@@ -284,7 +284,7 @@ impl Terminal {
                 .map(drop)
         });
         if let Err(error) = added {
-            self.toasts.error(error);
+            self.toasts.error(format!("Study not added: {error}"));
         }
     }
 
@@ -326,7 +326,7 @@ impl Terminal {
         let applied = self.user_action(|terminal| state.apply_to_chart(terminal.chart_mut()));
         match applied {
             Ok(()) => self.studies.settings = state,
-            Err(error) => self.toasts.error(error),
+            Err(error) => self.toasts.error(error.to_string()),
         }
     }
 
@@ -425,13 +425,15 @@ impl Terminal {
         &mut self,
         edit: egui_charts::ui::top_toolbar::components::indicator_dialog::StudyEdit,
     ) {
-        let result: Result<(), &'static str> = self.user_action(|terminal| {
+        let result: Result<(), String> = self.user_action(|terminal| {
             let chart = terminal.chart_mut();
             let inputs = chart
                 .indicator_mut(edit.id)
-                .ok_or("Study was removed")
+                .ok_or_else(|| "Study was removed".to_owned())
                 .and_then(|study| {
-                    study.apply_settings(&edit.inputs, edit.settings)?;
+                    study
+                        .apply_settings(&edit.inputs, edit.settings)
+                        .map_err(|error| format!("Study settings not applied: {error}"))?;
                     Ok(study_input_summary(study))
                 })?;
             chart.set_indicator_inputs(edit.id, inputs);

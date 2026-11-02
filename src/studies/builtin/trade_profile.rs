@@ -12,12 +12,19 @@ impl TradeProfileRanges {
     /// Creates ordered, non-overlapping ranges. The host supplies exchange session boundaries,
     /// including any extended-hours splits, rather than inferring sessions from missing trades.
     pub fn new(ranges: Vec<Range<DateTime<Utc>>>) -> Result<Self, FeedError> {
-        if ranges.iter().any(|r| r.start >= r.end)
-            || ranges.windows(2).any(|r| r[0].end > r[1].start)
-        {
-            return Err(FeedError::InvalidData(
-                "invalid trade profile ranges".into(),
-            ));
+        if let Some(i) = ranges.iter().position(|r| r.start >= r.end) {
+            return Err(FeedError::InvalidData(format!(
+                "trade profile range {i} must end after it starts, got {} to {}",
+                ranges[i].start, ranges[i].end
+            )));
+        }
+        if let Some(i) = ranges.windows(2).position(|r| r[0].end > r[1].start) {
+            return Err(FeedError::InvalidData(format!(
+                "trade profile range {} starts at {} before range {i} ends at {}",
+                i + 1,
+                ranges[i + 1].start,
+                ranges[i].end
+            )));
         }
         Ok(Self(ranges))
     }
@@ -208,6 +215,21 @@ mod tests {
         assert_eq!(restored[0].volume, split[0].volume);
         assert_eq!(restored[1].volume, split[1].volume);
         assert!(!ranges.split(0, start));
+        for (ranges, expected) in [
+            (
+                vec![start..start],
+                "trade profile range 0 must end after it starts, got 2026-01-05 10:00:00 UTC to 2026-01-05 10:00:00 UTC",
+            ),
+            (
+                vec![start..end, middle..end],
+                "trade profile range 1 starts at 2026-01-05 10:01:00 UTC before range 0 ends at 2026-01-05 10:02:00 UTC",
+            ),
+        ] {
+            assert_eq!(
+                TradeProfileRanges::new(ranges).unwrap_err().to_string(),
+                format!("invalid data: {expected}")
+            );
+        }
     }
 
     /// Expected nodes were worked out by hand from the volumes by level, with untraded levels
