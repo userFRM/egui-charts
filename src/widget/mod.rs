@@ -100,7 +100,6 @@ pub use pane::{ChartLayoutRects, PaneId, PaneOptions, RenderedIndicatorPane};
 #[cfg(feature = "drawings")]
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 mod posts;
-mod price_series;
 mod primitives;
 mod raster;
 mod readout;
@@ -130,7 +129,7 @@ pub use crate::chart::primitives::{
     PriceAxisLabel, Primitive, PrimitiveId, PrimitivePass, PrimitiveView, TimeAxisLabel,
 };
 pub use pane::VisualOrder;
-pub use price_series::SeriesOptions;
+pub use series::SeriesOptions;
 pub use series::{BarsInRange, MismatchDirection, PriceLineId};
 #[cfg(feature = "ui")]
 #[cfg_attr(docsrs, doc(cfg(feature = "ui")))]
@@ -216,7 +215,7 @@ pub struct Chart {
     pub(crate) main_series_visible: bool,
     main_series_present: bool,
     main_series_scale: crate::model::SeriesScale,
-    price_series: Vec<price_series::PriceSeries>,
+    price_series: Vec<series::PriceSeries>,
     heikin_ashi: crate::chart::rendering::candles::HeikinAshiCache,
     series_scales: std::collections::HashMap<crate::model::SeriesScale, PriceScale>,
     /// Chart behavior options (bar spacing, scroll/zoom constraints, time scale settings).
@@ -507,14 +506,20 @@ pub enum RightClickTarget {
 }
 
 impl Chart {
-    /// Supplies instrument metadata for a chart without a feed, including price precision.
+    /// Supplies instrument metadata for a chart without a feed, including price precision
+    /// and the default tick-mark grid. An explicit `tick_marks.min_price_step` takes precedence.
     /// Pass `None` to clear the metadata. Feed metadata takes precedence when available.
     pub fn set_instrument(&mut self, instrument: Option<crate::model::Instrument>) {
         self.legend_instrument = instrument;
         let precision = self
             .instrument()
             .and_then(crate::scales::instrument_price_precision);
-        self.state.price_scale_mut().set_price_precision(precision);
+        let tick_size = self
+            .instrument()
+            .and_then(|instrument| instrument.tick_size);
+        let scale = self.state.price_scale_mut();
+        scale.set_price_precision(precision);
+        scale.set_tick_size(tick_size);
     }
 
     /// Supplies currencies the host can convert the chart into. Choosing one emits an intent;

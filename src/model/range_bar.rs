@@ -369,7 +369,7 @@ pub(crate) fn work_start(bars: &[Bar], size: f64) -> usize {
 }
 
 /// Calculate ATR for range size
-fn calculate_atr(data: &[Bar], period: usize) -> f64 {
+pub(super) fn calculate_atr(data: &[Bar], period: usize) -> f64 {
     if data.len() < 2 {
         return 1.0;
     }
