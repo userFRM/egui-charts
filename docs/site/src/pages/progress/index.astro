@@ -1,15 +1,16 @@
 ---
-import { areas, counts, features, percentage } from '../../lib/progress';
+import { areas, counts, features, percentage, slug } from '../../lib/progress';
 
 const repo = 'https://github.com/userFRM/egui-charts/blob/main';
 const tables = areas.map((area) => {
   const rows = features.filter((row) => row.area === area);
   const groups = [...new Set(rows.map((row) => row.group))].map((name) => {
     const members = rows.filter((row) => row.group === name);
-    const done = counts(members).done;
-    return { name, done, total: members.length, share: Math.round(done / members.length * 100) };
+    const summary = counts(members);
+    return { name, ...summary, share: Math.round(summary.done / members.length * 100),
+      incomplete: members.filter((feature) => feature.status !== 'done') };
   });
-  return { area, groups, done: counts(rows).done, total: rows.length, share: percentage(rows) };
+  return { area, groups, ...counts(rows), share: percentage(rows) };
 });
 ---
 <!DOCTYPE html>
@@ -18,7 +19,18 @@ const tables = areas.map((area) => {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>egui-charts progress</title>
-<style is:inline>body{font-family:sans-serif;max-width:1000px;margin:auto;padding:16px}img{max-width:100%}table{border-collapse:collapse}th,td{border:1px solid #ccc;padding:2px 8px}td+td,th+th{text-align:right}</style>
+<style is:inline>
+  :root{color-scheme:light dark;background:#fff;color:#1f2328}
+  body{font-family:sans-serif;max-width:1000px;margin:auto;padding:16px;line-height:1.5}
+  a{color:#0969da}img{max-width:100%;height:auto}
+  table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
+  th,td{border:1px solid #8c959f;padding:4px 8px;text-align:left}
+  td,th+th{text-align:right}tbody th{font-weight:normal}tfoot{font-weight:bold}
+  .table{overflow-x:auto}details{margin-top:8px}summary{cursor:pointer}
+  li{overflow-wrap:anywhere}section{margin-top:32px}
+  @media(prefers-color-scheme:dark){:root{background:#0d1117;color:#f0f6fc}a{color:#58a6ff}}
+  @media(max-width:480px){table{font-size:12px}th,td{padding:4px}}
+</style>
 </head>
 <body>
 <h1>Progress</h1>
@@ -26,14 +38,22 @@ const tables = areas.map((area) => {
 <p>Generated from <a href={`${repo}/docs/progress/features.csv`}>docs/progress/features.csv</a> by <a href={`${repo}/docs/site/src/lib/progress-svg.ts`}>docs/site/src/lib/progress-svg.ts</a> on every push to <code>main</code>.</p>
 <p>In the map, green features are done, yellow ones partial and grey ones missing. A feature is done when its whole behaviour works; partial and missing features count as not done. A host feature is done when the library provides its interface and UI; the application supplies the data, account or storage behind it. <a href={`${repo}/CONTRIBUTING.md#feature-status`}>Counting rules</a>.</p>
 {tables.map((table) => (
-  <Fragment>
-    <h2>{table.area}</h2>
-    <table>
-      <tr><th>Group</th><th>Done</th><th>Total</th><th>%</th></tr>
-      {table.groups.map((group) => <tr><td>{group.name}</td><td>{group.done}</td><td>{group.total}</td><td>{group.share}%</td></tr>)}
-      <tr><th>Total</th><th>{table.done}</th><th>{table.total}</th><th>{table.share}%</th></tr>
-    </table>
-  </Fragment>
+  <section aria-labelledby={slug(table.area)}>
+    <h2 id={slug(table.area)}>{table.area}</h2>
+    <div class="table">
+      <table aria-labelledby={slug(table.area)}>
+        <thead><tr><th scope="col">Group</th><th scope="col">Done</th><th scope="col">Partial</th><th scope="col">Missing</th><th scope="col">Total</th><th scope="col">%</th></tr></thead>
+        <tbody>{table.groups.map((group) => <tr><th scope="row">{group.name}</th><td>{group.done}</td><td>{group.partial}</td><td>{group.missing}</td><td>{group.total}</td><td>{group.share}%</td></tr>)}</tbody>
+        <tfoot><tr><th scope="row">Total</th><td>{table.done}</td><td>{table.partial}</td><td>{table.missing}</td><td>{table.total}</td><td>{table.share}%</td></tr></tfoot>
+      </table>
+    </div>
+    {table.groups.filter((group) => group.incomplete.length).map((group) => (
+      <details>
+        <summary>{group.name}: {group.partial} partial, {group.missing} missing</summary>
+        <ul>{group.incomplete.map((feature) => <li>{feature.feature} ({feature.status}){feature.issues && <>: {feature.issues.split(';').map((issue, index) => <>{index > 0 && ', '}<a href={`https://github.com/userFRM/egui-charts/issues/${issue}`}>#{issue}</a></>)}</>}</li>)}</ul>
+      </details>
+    ))}
+  </section>
 ))}
 </body>
 </html>

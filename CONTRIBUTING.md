@@ -199,6 +199,8 @@ CI runs clippy with warnings denied. Its `stable` toolchain is current stable, w
 
 When a change completes or advances a planned feature, update its row in [`docs/progress/features.csv`](docs/progress/features.csv) in the same commit. Use `done` for complete behaviour, `partial` for remaining gaps and `missing` for unavailable behaviour. Keep names short, use `library` or `host` for `provided_by`, and list existing implementation paths without line numbers, separated by semicolons. Missing rows have an empty source field. Keep rows unique and sorted by area, group and feature.
 
+List related issue numbers in `issues`, separated by semicolons, or leave it empty when none exists. The status page links these from partial and missing features.
+
 The [status page](https://userfrm.github.io/egui-charts/docs/progress/) and its badges are computed from this file; partial features do not count as done. Host features describe the interfaces and UI supplied by the library, while the application supplies data, accounts and storage. Run `npm run build` in `docs/site` to check the list and page.
 
 ## Code style

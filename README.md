@@ -137,6 +137,10 @@ The [`terminal`](terminal) package assembles them on your `Datafeed` and perform
 
 [![chart](https://userfrm.github.io/egui-charts/docs/progress/badge-chart.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![drawings](https://userfrm.github.io/egui-charts/docs/progress/badge-drawings.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![studies](https://userfrm.github.io/egui-charts/docs/progress/badge-studies.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![order flow](https://userfrm.github.io/egui-charts/docs/progress/badge-order-flow.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![options](https://userfrm.github.io/egui-charts/docs/progress/badge-options.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![terminal](https://userfrm.github.io/egui-charts/docs/progress/badge-terminal.svg)](https://userfrm.github.io/egui-charts/docs/progress/) [![builder api](https://userfrm.github.io/egui-charts/docs/progress/badge-builder-api.svg)](https://userfrm.github.io/egui-charts/docs/progress/)
 
+[![Feature counts by area: done, partial and missing](https://userfrm.github.io/egui-charts/docs/progress/areas.svg)](https://userfrm.github.io/egui-charts/docs/progress/)
+
+Counts come from [docs/progress/features.csv](docs/progress/features.csv), and the [status page](https://userfrm.github.io/egui-charts/docs/progress/) lists each group's partial and missing features.
+
 [![progress map](https://userfrm.github.io/egui-charts/docs/progress/progress.svg)](https://userfrm.github.io/egui-charts/docs/progress/)
 
 ## Start with a chart
