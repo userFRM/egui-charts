@@ -295,18 +295,6 @@ impl ComparisonSettings {
                             self.scale.set_range(range.min, range.max);
                         }
                     }
-                    if !automatic {
-                        let mut range = self.scale.range();
-                        ui.horizontal(|ui| {
-                            ui.label("Range");
-                            ui.add(egui::DragValue::new(&mut range.min));
-                            ui.add(egui::DragValue::new(&mut range.max));
-                        });
-                        if range.min.is_finite() && range.max.is_finite() && range.min < range.max {
-                            self.scale.set_range(range.min, range.max);
-                        }
-                    }
-
                     ui.weak("Series on the same price scale share its mode and direction.");
                 });
             let (ok, cancel) = DialogFooter::new("Ok").secondary("Cancel").show(ui);
@@ -841,17 +829,9 @@ impl DemoApp {
                     || (draft.scale.is_manual()
                         && draft.scale.range() != draft.original_scale.range())
                 {
-                    let scale = chart
+                    *chart
                         .series_price_scale_mut(draft.id)
-                        .expect("edited comparison");
-                    let mode_changed = scale.options().mode != draft.scale.options().mode;
-                    *scale.options_mut() = *draft.scale.options();
-                    if draft.scale.is_manual() && !mode_changed {
-                        let range = draft.scale.range();
-                        scale.set_range(range.min, range.max);
-                    } else {
-                        scale.reset();
-                    }
+                        .expect("edited comparison") = draft.scale;
                 }
             });
         } else if open {
@@ -1009,6 +989,7 @@ mod tests {
         draft.options.style.price_line_color = Some(egui::Color32::RED);
         draft.options.style.price_line_style = LineStyle::Dotted;
         draft.options.style.price_line_width = 3.0;
+        draft.scale.set_range(100.0, 200.0);
         draft.scale.options_mut().mode = PriceScaleMode::Logarithmic;
         draft.scale.options_mut().invert_scale = true;
         let edited = draft.options.clone();
@@ -1032,6 +1013,16 @@ mod tests {
             app.chart.series_price_scale(id).unwrap().options().mode,
             PriceScaleMode::Logarithmic
         );
+        assert!(app.chart.series_price_scale(id).unwrap().is_manual());
+        for _ in 0..3 {
+            ui_frame(&ctx, size, vec![], |ui| {
+                app.chart.show(ui);
+            });
+        }
+        let range = app.chart.series_price_scale(id).unwrap().range();
+        // ln(100) = 2 ln(10), ln(200) = ln(2) + 2 ln(10).
+        assert!((range.min - 4.605170185988092).abs() < 1e-12);
+        assert!((range.max - 5.298317366548036).abs() < 1e-12);
         assert_eq!(app.chart.chart_type(), main.chart_type);
         assert_eq!(
             app.chart.state().price_scale().options().mode,
