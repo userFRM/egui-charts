@@ -287,11 +287,20 @@ fn paint_exposure(
             point.unwrap(),
         )
         .show(|ui| {
-            ui.label(format!("Strike {}", row.strike));
+            let ctx = ui.ctx().clone();
+            ui.label(crate::localization::format_text(
+                &ctx,
+                "Strike {0}",
+                &[("0", row.strike.to_string())],
+            ));
             for (label, value) in [("Calls", row.calls), ("Puts", row.puts), ("Net", row.net)] {
                 ui.label(format!(
-                    "{label}: {}",
-                    value.map_or_else(|| "Unavailable".into(), |value| format!("{value:+.2}"))
+                    "{}: {}",
+                    crate::localization::text(&ctx, label),
+                    value.map_or_else(
+                        || crate::localization::text(&ctx, "Unavailable"),
+                        |value| format!("{value:+.2}")
+                    )
                 ));
             }
             ui.label(&snapshot.note);

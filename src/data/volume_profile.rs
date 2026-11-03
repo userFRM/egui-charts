@@ -386,13 +386,6 @@ impl VolumeProfile {
             })
     }
 
-    /// Signed option exposures when this is an exposure overlay. Its ordinary volume
-    /// columns hold normalized magnitudes for the price span; these rows retain the signed figures.
-    #[cfg(any(feature = "studies", feature = "widget"))]
-    pub fn exposure(&self) -> Option<&super::OptionExposure> {
-        self.exposure.as_ref().map(|profile| &profile.snapshot)
-    }
-
     /// Bottom edge of the first row.
     pub fn low(&self) -> f64 {
         self.low

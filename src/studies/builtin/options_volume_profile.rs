@@ -954,7 +954,7 @@ mod tests {
                 for consumer in [&study as &dyn Indicator, &*clone] {
                     let plot = consumer.volume_profiles(0..1).remove(0);
                     assert_eq!(plot.config.display, ProfileDisplay::Delta);
-                    let exposure = plot.profile.exposure().unwrap();
+                    let exposure = &plot.profile.exposure.as_ref().unwrap().snapshot;
                     assert_eq!(exposure.rows.len(), if replace { 1 } else { 2 });
                     for (row, expected) in exposure.rows.iter().zip([5.0, -6.0]) {
                         assert!((row.net.unwrap() - expected).abs() < 1e-10);
@@ -1034,8 +1034,10 @@ mod tests {
                     assert_eq!(
                         study.volume_profiles(0..1)[0]
                             .profile
-                            .exposure()
+                            .exposure
+                            .as_ref()
                             .unwrap()
+                            .snapshot
                             .rows
                             .len(),
                         2
@@ -1055,8 +1057,10 @@ mod tests {
                 assert_eq!(
                     study.volume_profiles(0..1)[0]
                         .profile
-                        .exposure()
+                        .exposure
+                        .as_ref()
                         .unwrap()
+                        .snapshot
                         .rows[0]
                         .net,
                     Some(13.0)
@@ -1093,7 +1097,10 @@ mod tests {
                     sink.push(selected).unwrap();
                     study.set_input("expiry", InputValue::Choice(3)).unwrap();
                     let plot = study.volume_profiles(0..1).remove(0);
-                    assert_eq!(plot.profile.exposure().unwrap().rows.len(), 2);
+                    assert_eq!(
+                        plot.profile.exposure.as_ref().unwrap().snapshot.rows.len(),
+                        2
+                    );
                     let strikes = &plot.profile.exposure.as_ref().unwrap().rows;
                     assert_eq!(strikes.len(), 1);
                     for (actual, expected) in [
