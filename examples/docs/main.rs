@@ -19,6 +19,7 @@ enum Scene {
     TimeScale,
     Theme(scenes::theme::Presentation),
     Panes(scenes::panes::Panes),
+    Live(scenes::studies::LiveData),
 }
 
 impl ExampleApp {
@@ -55,6 +56,13 @@ impl ExampleApp {
             "panes" => {
                 let mut chart = first_chart::first_chart();
                 scene = Scene::Panes(scenes::panes::Panes::new(&mut chart));
+                chart
+            }
+            "studies" => scenes::studies::builtins(),
+            "custom-study" => scenes::studies::custom(),
+            "live-data" => {
+                let (chart, live) = scenes::studies::LiveData::new();
+                scene = Scene::Live(live);
                 chart
             }
             _ => return None,
@@ -111,6 +119,7 @@ impl eframe::App for ExampleApp {
                 Scene::TimeScale => scenes::time_scale::show(ui, &mut self.chart),
                 Scene::Theme(scene) => scene.show(ui, &mut self.chart),
                 Scene::Panes(scene) => scene.show(ui, &mut self.chart),
+                Scene::Live(scene) => scene.show(ui, &mut self.chart),
             }
             self.chart.show(ui);
         });
@@ -201,6 +210,9 @@ mod tests {
             "time-scale",
             "theme",
             "panes",
+            "studies",
+            "custom-study",
+            "live-data",
             "volatility-smile",
             "yield-curve",
             "primitives",
