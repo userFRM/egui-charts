@@ -1,0 +1,53 @@
+---
+title: Add a second series
+---
+
+import Example from '../../../components/Example.astro';
+import source from '../../../../../../examples/docs/scenes/recipes.rs?raw';
+
+Continue from [your first chart](../first-chart.mdx). Keep its candles and add a
+line from another host-supplied sequence. A series has its own identity, data,
+style and scale assignment; adding it does not fetch a symbol's history.
+
+## Add and populate the line
+
+Call this setup once with your existing chart and keep the returned
+[`SeriesId`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/series/selection/struct.SeriesId.html).
+The synthetic reference is exactly one price unit above each main close, so
+sharing the right price scale is appropriate here.
+
+<Example scene="second-series" title="Candles with a host-fed reference line"
+  task="Hover the line and candles to compare their values. The reference is one unit above each stored close."
+  code={source.match(/pub fn second_series\b[^]*?\n\}/)[0]} />
+
+[`add_series`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.add_series)
+returns the handle.
+[`SeriesOptions`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.SeriesOptions.html)
+names and styles the added series; the default renderer is a line.
+[`set_data`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_data)
+loads its history and
+[`Bar::from_value`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.Bar.html#method.from_value)
+stores each scalar at its timestamp. In the shared sample, slot 10 closes at
+101.8, so the line there is `101.8 + 1.0 = 102.8`. Real comparison data comes
+from your own historical and streaming source.
+
+## Stream, hide or remove it
+
+Keep the id beside the chart. Send the complete latest scalar with
+[`update(id, bar)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.update):
+the same timestamp replaces a value and a later one appends. Updating
+`SeriesId::MAIN` does not update added series automatically. Preserve missing
+observations with [whitespace](../data-model.mdx#bars-and-series).
+
+[`set_series_visible`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_series_visible)
+hides a series while retaining its data and id.
+[`remove_series`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.remove_series)
+removes it; stop its host subscription when it leaves the chart. Keep host data
+available if your UI supports undo restoring that id. The
+[interaction guide](../interaction.mdx#drain-events-once-per-frame) describes
+series lifecycle notifications.
+
+For unrelated units, assign an independent scale or use the
+[price and volume recipe](/egui-charts/docs/recipes/price-volume/) to place a second series
+in another pane. Continue with [host readouts](/egui-charts/docs/recipes/host-readout/) to
+read both series at the cursor, or browse the [series lifecycle](../series.mdx#lifecycle).

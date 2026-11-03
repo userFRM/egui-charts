@@ -1,6 +1,6 @@
 //! Host control of the time scale: fitting, scrolling, logical ranges and coordinate conversions.
 
-use super::Chart;
+use super::{Chart, MismatchDirection};
 use crate::model::LogicalRange;
 use chrono::{DateTime, Utc};
 use egui::{Ui, Vec2};
@@ -150,6 +150,30 @@ impl Chart {
         )
     }
 
+    /// The stored UTC time at a whole logical index of the horizontal scale, including
+    /// whitespace points, or `None` outside the loaded scale. On price-based charts the index
+    /// addresses a displayed element. Unlike [`index_to_time`](Self::index_to_time), this never
+    /// interpolates or extrapolates.
+    pub fn time_at_index(&self, index: usize) -> Option<DateTime<Utc>> {
+        self.state.shown().get(index).map(|bar| bar.time)
+    }
+
+    /// The whole logical index of a stored horizontal-scale point at `time`, or of its nearest
+    /// neighbour in `direction`. An exact match returns its first index when displayed elements
+    /// share a timestamp. Includes whitespace points and returns `None` for an empty scale or
+    /// when no point lies in the requested direction.
+    ///
+    /// Unlike [`time_to_index`](Self::time_to_index), this never interpolates or extrapolates;
+    /// unlike [`bar_index_at`](Self::bar_index_at), it addresses the shared scale, not a series'
+    /// stored rows.
+    pub fn time_index_at(
+        &self,
+        time: DateTime<Utc>,
+        direction: MismatchDirection,
+    ) -> Option<usize> {
+        super::series::index_at_time(self.state.shown(), time, direction)
+    }
+
     /// Gives the horizontal axis a meaning other than time, such as option strikes or bond
     /// maturities. The [`time`](crate::model::Bar::time) of each bar, marker and drawing then
     /// holds a key of `scale`, which labels the axis and the crosshair; everything placed by
@@ -217,6 +241,26 @@ impl Chart {
                 .time_scale()
                 .coord_to_idx_precise(x, plot.left(), plot.width())
         })
+    }
+
+    /// The screen x of the first horizontal-scale point stored at `time` in the last frame.
+    /// Includes whitespace points. `None` for an absent timestamp or before the chart is shown;
+    /// loaded points outside the visible range still have coordinates.
+    pub fn time_to_x(&self, time: DateTime<Utc>) -> Option<f32> {
+        self.index_to_x(self.time_index_at(time, MismatchDirection::Exact)? as f64)
+    }
+
+    /// The stored UTC time of the horizontal-scale point nearest to a screen x in the last
+    /// frame, including whitespace points. Halfway between points selects the one on the right.
+    /// `None` before the chart is shown, for a non-finite x or when the rounded logical index
+    /// lies outside the loaded scale. Use [`x_to_index`](Self::x_to_index) and
+    /// [`index_to_time`](Self::index_to_time) for continuous interpolation and extrapolation.
+    pub fn x_to_time(&self, x: f32) -> Option<DateTime<Utc>> {
+        let index = (self.x_to_index(x)? + 0.5).floor();
+        if !(0.0..self.state.shown().len() as f64).contains(&index) {
+            return None;
+        }
+        self.time_at_index(index as usize)
     }
 
     /// The size of the time axis below the plots in the last frame, in points.
@@ -303,7 +347,7 @@ mod tests {
     use crate::model::{Bar, BarData, LogicalRange};
     use crate::scales::{PriceHorizontalScale, key_time};
     use crate::widget::test_frames::{chart, frame, shapes};
-    use crate::widget::{Chart, ChartEvent, SeriesId};
+    use crate::widget::{Chart, ChartEvent, MismatchDirection, SeriesId};
     use chrono::Duration;
 
     fn assert_close(actual: f64, expected: f64, what: &str) {
@@ -588,6 +632,18 @@ mod tests {
         assert_eq!(chart.get_chart_mapping().idx_to_x(499_999), x);
         chart.state.time_scale_mut().scroll_pixels(1.0);
         assert!((chart.index_to_x(499_999.0).unwrap() - x - 1.0).abs() < 1e-4);
+
+        // 1 ns / 60 s is below the precision of a floating-point index near one million.
+        let time = chart.time_at_index(999_997).unwrap() + Duration::nanoseconds(1);
+        let near = Bar::from_value(time, 10.0);
+        chart.set_data(added, vec![near.clone()]);
+        for (direction, expected) in [
+            (MismatchDirection::Exact, None),
+            (MismatchDirection::NearestLeft, None),
+            (MismatchDirection::NearestRight, Some(&near)),
+        ] {
+            assert_eq!(chart.bar_at_index(added, 999_997.0, direction), expected);
+        }
     }
 
     /// Expected values follow from the time scale's definition on 100 daily bars: a logical
@@ -799,6 +855,13 @@ mod tests {
                     let pane = &chart.get_rendered_indicator_panes()[0];
                     assert_close(pane.mapping.idx_to_x(i).into(), x.into(), "pane mapping");
                     assert_eq!(chart.index_to_time(i as f64), key_time(keys[i]));
+                    assert_eq!(chart.time_at_index(i), key_time(keys[i]));
+                    assert_eq!(
+                        chart.time_index_at(key_time(keys[i]).unwrap(), MismatchDirection::Exact),
+                        Some(i)
+                    );
+                    assert_eq!(chart.time_to_x(key_time(keys[i]).unwrap()), Some(x));
+                    assert_eq!(chart.x_to_time(x), key_time(keys[i]));
                 }
                 if keys.len() >= 3 {
                     let expected = (keys[2] - keys[1]) / (keys[1] - keys[0]);

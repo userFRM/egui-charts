@@ -3114,28 +3114,38 @@ impl Chart {
                 );
                 if let Some(index) = index
                     .filter(|_| crosshair_options.style != crate::config::CrosshairStyle::Hidden)
-                    .filter(|_| self.main_series_visible)
                 {
-                    let bar = &self.state.shown()[index];
-                    let value = self
-                        .config
-                        .price_source
-                        .compute(bar.open, bar.high, bar.low, bar.close);
-                    if let Some(color) = rendering::candles::line_color_at(
-                        self.chart_type,
-                        &self.chart_type_params.styles,
-                        self.chart_type_params.baseline,
-                        &price_map,
-                        price_rect,
-                        value,
-                        bar,
-                    ) {
-                        rendering::candles::render_crosshair_marker(
-                            &painter.with_clip_rect(price_rect),
-                            Pos2::new(coords.idx_to_x(index), price_map.price_to_y(value)),
-                            self.chart_type_params.styles.crosshair_marker_radius,
-                            color,
-                            self.config.background_color,
+                    if self.main_series_visible {
+                        let bar = &self.state.shown()[index];
+                        let value = self
+                            .config
+                            .price_source
+                            .compute(bar.open, bar.high, bar.low, bar.close);
+                        if let Some(color) = rendering::candles::line_color_at(
+                            self.chart_type,
+                            &self.chart_type_params.styles,
+                            self.chart_type_params.baseline,
+                            &price_map,
+                            price_rect,
+                            value,
+                            bar,
+                        ) {
+                            rendering::candles::render_crosshair_marker(
+                                &painter.with_clip_rect(price_rect),
+                                Pos2::new(coords.idx_to_x(index), price_map.price_to_y(value)),
+                                &self.chart_type_params.styles,
+                                color,
+                                self.config.background_color,
+                            );
+                        }
+                    }
+                    for item in self.main_pane_series() {
+                        self.paint_series_crosshair_marker(
+                            &painter,
+                            price_rect,
+                            item,
+                            self.series_map(item, price_rect),
+                            index,
                         );
                     }
                 }
