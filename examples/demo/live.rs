@@ -73,6 +73,8 @@ struct Simulation {
     trades: VecDeque<Tick>,
     /// Native UTC minutes, including the executions still retained above.
     history: Vec<Bar>,
+    /// Daily OHLCV before the retained minute window, without raw executions.
+    daily_history: Vec<Bar>,
     volume_by_day: BTreeMap<chrono::NaiveDate, f64>,
     next_trade: DateTime<Utc>,
     retain_from: DateTime<Utc>,
@@ -129,6 +131,7 @@ impl LiveFeed {
             tape: 0,
             trades: VecDeque::new(),
             history: Vec::new(),
+            daily_history: crate::sampledata::daily_history(symbol, start - TimeDelta::days(7)),
             volume_by_day: BTreeMap::new(),
             next_trade: start,
             retain_from: start,
@@ -199,6 +202,7 @@ impl LiveFeed {
                 tape: sim.tape,
                 trades: sim.trades.clone(),
                 history: sim.history.clone(),
+                daily_history: sim.daily_history.clone(),
                 volume_by_day: sim.volume_by_day.clone(),
                 next_trade: sim.next_trade,
                 retain_from: sim.retain_from,
@@ -367,7 +371,7 @@ impl LiveFeed {
             if let Some(time) = before {
                 bars.retain(|bar| bar.time + TimeDelta::minutes(1) <= time);
             }
-            resample(&bars, Timeframe::Min1, clock.clone()).expect("nested minute history")
+            sim.resampled_history(&bars, timeframe, clock.clone(), sim.adjusted, before)
         } else {
             let trades: Vec<_> = sim
                 .trades
@@ -384,7 +388,7 @@ impl LiveFeed {
                 bars.extend(
                     aggregate_trades(&trades, Timeframe::Min1).expect("generated executions"),
                 );
-                resample(&bars, Timeframe::Min1, clock.clone()).expect("nested minute history")
+                sim.resampled_history(&bars, timeframe, clock.clone(), sim.adjusted, before)
             } else {
                 egui_charts::data::aggregate_trades_with_tick_size(
                     &trades,
@@ -436,7 +440,7 @@ impl LiveFeed {
             .with_currency("USD")
             .with_price_decimals(if sim.tick_size < 0.01 { 4 } else { 2 })
             .with_tick_size(sim.tick_size)
-            .with_native_timeframes([Timeframe::Min1]);
+            .with_native_timeframes([Timeframe::Min1, Timeframe::Day1]);
         if sim.cents {
             instrument.currency = None;
             instrument.unit = Some("US cents".into());
@@ -655,7 +659,10 @@ impl LiveFeed {
         {
             let sub = sim.subscription.take().expect("initializing subscription");
             if start == 0 {
-                // Initialization can archive executions before the retained tick window.
+                // Keep complete boundary bars when pruning moved the minute archive's edge.
+                let since = sim.history.first().map_or(sim.now, |bar| {
+                    sub.clock.bar_open(bar.time - TimeDelta::days(1))
+                });
                 for bar in sim.archived_bars(
                     sub.timeframe,
                     sub.clock.clone(),
@@ -665,7 +672,9 @@ impl LiveFeed {
                         Some("adjusted" | "cents-adjusted")
                     ),
                 ) {
-                    sub.sink.push_bar(bar);
+                    if bar.time >= since {
+                        sub.sink.push_bar(bar);
+                    }
                 }
             }
             let end = (start + LOAD_BATCH).min(sim.trades.len());
@@ -799,7 +808,7 @@ impl Simulation {
         let factor = if cents { 100.0 } else { 0.01 };
         self.cents = cents;
         self.tick_size *= factor;
-        for bar in &mut self.history {
+        for bar in self.history.iter_mut().chain(&mut self.daily_history) {
             bar.open *= factor;
             bar.high *= factor;
             bar.low *= factor;
@@ -864,7 +873,49 @@ impl Simulation {
         } else {
             source.to_vec()
         };
-        resample(&shown, Timeframe::Min1, clock).expect("nested minute history")
+        self.resampled_history(&shown, timeframe, clock, adjusted, None)
+    }
+
+    fn resampled_history(
+        &self,
+        minutes: &[Bar],
+        timeframe: Timeframe,
+        clock: BarClock,
+        adjusted: bool,
+        before: Option<DateTime<Utc>>,
+    ) -> Vec<Bar> {
+        if timeframe.duration_ms() < Timeframe::Day1.duration_ms() {
+            return resample(minutes, Timeframe::Min1, clock).expect("nested minute history");
+        }
+        let days: Vec<_> = self
+            .daily_history
+            .iter()
+            .filter(|bar| {
+                before.is_none_or(|time| {
+                    bar.time
+                        .date_naive()
+                        .and_hms_opt(0, 0, 0)
+                        .unwrap()
+                        .and_utc()
+                        + TimeDelta::days(1)
+                        <= time
+                })
+            })
+            .cloned()
+            .map(|mut bar| {
+                if adjusted
+                    && let Some((dividend, factor)) = self.dividend
+                    && bar.time < dividend
+                {
+                    bar.open *= factor;
+                    bar.high *= factor;
+                    bar.low *= factor;
+                    bar.close *= factor;
+                }
+                bar
+            })
+            .collect();
+        crate::sampledata::calendar_history(&days, minutes, clock)
     }
 
     /// The displayed symbol's session, also when this is the host rather than its stream.
@@ -1180,6 +1231,18 @@ impl Simulation {
             let archived = self.archived_end();
             if archived > 10_000 {
                 for bar in self.history.drain(..archived - 10_000) {
+                    let dividend = self.dividend.map(|(time, _)| time);
+                    if let Some(day) = self.daily_history.last_mut().filter(|day| {
+                        day.time.date_naive() == bar.time.date_naive()
+                            && dividend.is_none_or(|time| (day.time < time) == (bar.time < time))
+                    }) {
+                        day.high = day.high.max(bar.high);
+                        day.low = day.low.min(bar.low);
+                        day.close = bar.close;
+                        day.volume += bar.volume;
+                    } else {
+                        self.daily_history.push(bar.clone());
+                    }
                     let day = bar.time.date_naive();
                     if let Some(volume) = self.volume_by_day.get_mut(&day) {
                         *volume -= bar.volume;
@@ -1607,6 +1670,41 @@ mod tests {
     }
 
     #[test]
+    fn price_unit_changes_include_the_daily_archive() {
+        let now = "2026-11-03T15:00:00Z".parse().unwrap();
+        let feed = LiveFeed::generate("SAMPLE", now);
+        let histories: Vec<_> = [Timeframe::Day1, Timeframe::Week1, Timeframe::Month1]
+            .into_iter()
+            .map(|timeframe| {
+                let bars = feed.snapshot(timeframe, BarClock::new(timeframe), false);
+                assert!(bars.len() > 300);
+                (timeframe, bars)
+            })
+            .collect();
+        for cents in [true, false] {
+            feed.set_price_unit(cents);
+            let factor = if cents { 100.0 } else { 1.0 };
+            for (timeframe, raw) in &histories {
+                let bars = feed.snapshot(*timeframe, BarClock::new(*timeframe), false);
+                assert_eq!(raw.len(), bars.len());
+                for (usd, converted) in raw.iter().zip(&bars) {
+                    assert_eq!((usd.time, usd.volume), (converted.time, converted.volume));
+                    for (usd, converted) in
+                        [usd.open, usd.high, usd.low, usd.close].into_iter().zip([
+                            converted.open,
+                            converted.high,
+                            converted.low,
+                            converted.close,
+                        ])
+                    {
+                        assert!((usd * factor - converted).abs() < 1e-7);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn cached_archive_is_visible_before_bootstrap_and_joins_retained_ticks() {
         use egui_charts::services::AlertFeed;
 
@@ -1652,7 +1750,12 @@ mod tests {
             let actual = chart.bars(SeriesId::MAIN);
             assert_eq!(&actual[actual.len() - expected.len()..], expected);
             assert_eq!(chart.bars(comparison), expected);
-            assert_eq!(alerts.bars(), expected);
+            // Alert history requests 1,000 bars; subscription bootstrap must not add older days.
+            let alerts = alerts.bars();
+            assert_eq!(
+                &alerts[alerts.len().saturating_sub(1000)..],
+                &expected[expected.len().saturating_sub(1000)..]
+            );
             let sim = feed.state();
             assert!(sim.trades.front().unwrap().ts > sim.retain_from);
         }
