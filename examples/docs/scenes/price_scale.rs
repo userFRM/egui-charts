@@ -57,10 +57,8 @@ impl PriceScale {
                 });
             ui.checkbox(&mut options.invert_scale, "Invert");
         });
-        ui.horizontal_wrapped(|ui| {
-            ui.add(egui::Slider::new(&mut options.scale_margins.top, 0.0..=0.4).text("Top"));
-            ui.add(egui::Slider::new(&mut options.scale_margins.bottom, 0.0..=0.4).text("Bottom"));
-        });
+        ui.add(egui::Slider::new(&mut options.scale_margins.top, 0.0..=0.4).text("Top"));
+        ui.add(egui::Slider::new(&mut options.scale_margins.bottom, 0.0..=0.4).text("Bottom"));
         // A manual range uses the previous mode's units; refit after an option edit.
         if *options != previous {
             scale.reset();
