@@ -81,9 +81,9 @@ pub enum MarkerZOrder {
 /// How the markers of one series are fitted and layered; see `Chart::set_marker_options`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MarkerOptions {
-    /// Whether the prices of the [`MarkerPos::AtPriceTop`], [`AtPriceBottom`](MarkerPos::AtPriceBottom)
-    /// and [`AtPriceMiddle`](MarkerPos::AtPriceMiddle) markers in view widen the autoscaled price
-    /// range, so that they are not cut off. Default true.
+    /// Whether visible price-relative markers widen the autoscaled range to fit their shapes
+    /// and text at the configured size, when the pane has enough height. Pane-edge positions
+    /// and manual ranges are unchanged. Default true.
     pub auto_scale: bool,
     /// Default [`MarkerZOrder::Normal`].
     pub z_order: MarkerZOrder,
