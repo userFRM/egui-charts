@@ -1539,6 +1539,13 @@ impl Chart {
             });
 
         self.paint_primitives(&painter, &coords, PrimitivePass::Below);
+        let series_backgrounds = primitives::backgrounds(
+            &clipped_painter,
+            self.main_pass_primitives(&coords),
+            PrimitivePass::Series,
+            factor,
+        );
+        let grouped_primitives = !series_backgrounds.is_empty();
         let studies = if self.chart_type.is_time_independent() {
             &self.element_studies.studies
         } else {
@@ -1593,20 +1600,32 @@ impl Chart {
             .input(|input| input.pointer.interact_pos())
             .filter(|pos| chart_rect.contains(*pos));
         let primitive_hit = pointer.and_then(|pos| {
-            primitives::primitive_at(
-                self.main_primitives(&coords)
-                    .filter(|(item, _)| !item.replaces),
-                pos,
-            )
-        });
-        let renderer_hit = pointer.and_then(|pos| {
-            self.pane_layout.main.iter().rev().find_map(|id| {
+            if grouped_primitives {
+                primitives::primitive_at(self.main_pass_primitives(&coords), pos)
+            } else {
                 primitives::primitive_at(
                     self.main_primitives(&coords)
-                        .filter(|(item, _)| item.replaces && item.series == *id),
+                        .filter(|(item, _)| !item.replaces),
                     pos,
                 )
-            })
+            }
+        });
+        let renderer_hit = pointer.and_then(|pos| {
+            if grouped_primitives {
+                primitives::primitive_at(
+                    self.main_pass_primitives(&coords)
+                        .filter(|(item, _)| item.replaces),
+                    pos,
+                )
+            } else {
+                self.pane_layout.main.iter().rev().find_map(|id| {
+                    primitives::primitive_at(
+                        self.main_primitives(&coords)
+                            .filter(|(item, _)| item.replaces && item.series == *id),
+                        pos,
+                    )
+                })
+            }
         });
         let rendered: Vec<_> = self
             .study_ids
@@ -1673,6 +1692,9 @@ impl Chart {
                 .iter()
                 .flatten()
                 .find_map(|(at, hit)| (*at == pos).then_some(*hit).flatten());
+            if grouped_primitives && renderer.is_some() {
+                return renderer;
+            }
             hit.into_iter()
                 .chain(secondary)
                 .chain(renderer)
@@ -1753,12 +1775,14 @@ impl Chart {
                 );
             }
             if self.has_renderer(*id) {
-                let view = self.primitive_view(
-                    *id,
-                    crate::chart::rendering::study_mapping(study.as_ref(), &coords),
-                );
-                for item in self.primitives_of(*id).filter(|item| item.replaces) {
-                    item.draw(&clipped_painter, &view, PrimitivePass::Series, factor);
+                if !grouped_primitives {
+                    let view = self.primitive_view(
+                        *id,
+                        crate::chart::rendering::study_mapping(study.as_ref(), &coords),
+                    );
+                    for item in self.primitives_of(*id).filter(|item| item.replaces) {
+                        item.draw(&clipped_painter, &view, PrimitivePass::Series, factor);
+                    }
                 }
             } else {
                 rendering::IndicatorRenderer::render(
@@ -1981,7 +2005,19 @@ impl Chart {
             .show_price_targets
             .then(|| painter.add(egui::Shape::Noop));
 
-        self.paint_primitives(&painter, &coords, PrimitivePass::Series);
+        primitives::paint_backgrounds(&clipped_painter, series_backgrounds);
+        if grouped_primitives {
+            for (item, view) in self.main_pass_primitives(&coords) {
+                item.draw(&clipped_painter, &view, PrimitivePass::Series, factor);
+            }
+        } else {
+            for (item, view) in self
+                .main_primitives(&coords)
+                .filter(|(item, _)| !item.replaces)
+            {
+                item.draw(&clipped_painter, &view, PrimitivePass::Series, factor);
+            }
+        }
 
         // Resolve a click on the main chart area into a selection. Overlay
         // indicators take priority over the series beneath them; an empty-area
