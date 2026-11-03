@@ -404,6 +404,18 @@ pub struct TradeProfileSettings {
     pub mode: FootprintMode,
     /// Trace the total-volume POC after each complete execution bar.
     pub developing_poc: bool,
+    /// Trace the outer value area edges after each complete execution bar; hidden without
+    /// `value_area`. Uses that share and the same row selection as the final profile.
+    pub developing_value_area: bool,
+    /// Extend a completed session's POC until the first later bar whose low-to-high range
+    /// reaches its row, or the viewport's right edge while untouched.
+    pub extend_poc: bool,
+    /// Extend a completed session's value area high, as for `extend_poc`; hidden without
+    /// `value_area`.
+    pub extend_vah: bool,
+    /// Extend a completed session's value area low, as for `extend_poc`; hidden without
+    /// `value_area`.
+    pub extend_val: bool,
     /// Volume-node smoothing and prominence; `None` hides the node labels.
     pub nodes: Option<NodeSensitivity>,
     /// Share of total volume shaded as the contiguous value area; `None` hides it.
@@ -417,6 +429,10 @@ impl Default for TradeProfileSettings {
         Self {
             mode: FootprintMode::BidAsk,
             developing_poc: false,
+            developing_value_area: false,
+            extend_poc: false,
+            extend_vah: false,
+            extend_val: false,
             nodes: None,
             value_area: Some(0.7),
             value_area_guides: false,
@@ -782,6 +798,8 @@ mod tests {
             "footprint_statistics": true, "footprint_statistics_rows": ["Volume", "Delta"],
             "footprint_colors": [[12, 34, 56, 255], null, null, null],
             "profile": {"mode": "Volume", "value_area": 0.5, "developing_poc": true,
+                "developing_value_area": true, "extend_poc": true, "extend_vah": true,
+                "extend_val": true,
                 "nodes": {"smoothing": 2, "prominence": 0.1}}
         });
         let params: ChartTypeParams = serde_json::from_value(settings.clone()).unwrap();
@@ -801,20 +819,22 @@ mod tests {
         );
         #[cfg(feature = "ui")]
         {
-            let mut series = crate::chart::series::SeriesSettings {
-                chart_type: ChartType::VolumeFootprint,
-                chart_type_params: params.clone(),
-                ..Default::default()
-            };
-            egui::Context::default()
-                .run_ui(egui::RawInput::default(), |ui| {
-                    crate::ui::dialogs::series_settings::SymbolTab::show(ui, &mut series);
-                })
-                .drop_without_applying_deltas();
-            assert_eq!(
-                series.chart_type_params, params,
-                "opening settings keeps saved values"
-            );
+            for chart_type in [ChartType::VolumeFootprint, ChartType::SessionVolumeProfile] {
+                let mut series = crate::chart::series::SeriesSettings {
+                    chart_type,
+                    chart_type_params: params.clone(),
+                    ..Default::default()
+                };
+                egui::Context::default()
+                    .run_ui(egui::RawInput::default(), |ui| {
+                        crate::ui::dialogs::series_settings::SymbolTab::show(ui, &mut series);
+                    })
+                    .drop_without_applying_deltas();
+                assert_eq!(
+                    series.chart_type_params, params,
+                    "opening settings keeps saved values"
+                );
+            }
         }
         let legacy: ChartTypeParams = serde_json::from_str(r#"{"tpo_row_ticks":2}"#).unwrap();
         let legacy = serde_json::to_value(legacy).unwrap();
@@ -835,6 +855,14 @@ mod tests {
             assert_eq!(legacy[field], false);
         }
         assert_eq!(legacy["profile"]["value_area"], 0.7);
+        for field in [
+            "developing_value_area",
+            "extend_poc",
+            "extend_vah",
+            "extend_val",
+        ] {
+            assert_eq!(legacy["profile"][field], false);
+        }
     }
 
     #[test]

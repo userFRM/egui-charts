@@ -1238,15 +1238,17 @@ impl Chart {
                     });
                 }
                 // The last pass of the pane's primitives, above its drawings.
-                let painter = ui
-                    .painter()
-                    .with_clip_rect(chart_rect.intersect(ui.clip_rect()));
-                crate::widget::primitives::paint_pass(
-                    &painter,
-                    self.pane_primitives(&members, &pane_mapping),
-                    crate::widget::PrimitivePass::Above,
-                    self.merge_groups.factor(),
-                );
+                if !self.hide_foreground {
+                    let painter = ui
+                        .painter()
+                        .with_clip_rect(chart_rect.intersect(ui.clip_rect()));
+                    crate::widget::primitives::paint_pass(
+                        &painter,
+                        self.pane_primitives(&members, &pane_mapping),
+                        crate::widget::PrimitivePass::Above,
+                        self.merge_groups.factor(),
+                    );
+                }
             }
             if !collapsed {
                 let mut table_rect = plot;
