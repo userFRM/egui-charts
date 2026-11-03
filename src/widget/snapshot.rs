@@ -126,7 +126,8 @@ pub struct ChartSnapshot {
     /// The studies in the order they were added, including the volume study.
     pub studies: Vec<SavedStudy>,
     /// The bar series added to the chart in draw order, `None` in layouts saved before version
-    /// 3, which leave the chart's added series in place.
+    /// 3, which leave the chart's added series in place. When omitted, their saved main-pane
+    /// order references are ignored; the host retains ownership of those series.
     #[serde(default)]
     pub series: Option<Vec<SavedSeries>>,
     /// The markers and price lines of the main series, `None` in layouts saved before version 3.
@@ -463,11 +464,11 @@ impl Chart {
                 self.pane_layout.main = saved
                     .members
                     .iter()
-                    .map(|id| {
+                    .filter_map(|id| {
                         if *id == super::SeriesId::MAIN.0 {
-                            super::SeriesId::MAIN
+                            Some(super::SeriesId::MAIN)
                         } else {
-                            super::SeriesId(self.restored_studies[id])
+                            self.restored_studies.get(id).copied().map(super::SeriesId)
                         }
                     })
                     .collect();
@@ -547,7 +548,14 @@ fn check(snapshot: &ChartSnapshot, factory: &IndicatorFactory) -> Result<Checked
             )
             .collect();
         let actual: std::collections::HashSet<_> = pane.members.iter().copied().collect();
-        if actual != expected || actual.len() != pane.members.len() {
+        if !expected.is_subset(&actual)
+            || (snapshot.series.is_some() && actual != expected)
+            || actual.len() != pane.members.len()
+            || snapshot
+                .studies
+                .iter()
+                .any(|study| study.pane != at && actual.contains(&study.id))
+        {
             return Err(RestoreError::Layout("Invalid price pane draw order"));
         }
     }

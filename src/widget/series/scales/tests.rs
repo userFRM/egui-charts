@@ -923,10 +923,20 @@ fn main_series_order_controls_paint_and_selection() {
             Some(ChartElementId::Series(ids[expected[2]])),
             "selection at step {step}"
         );
-        #[cfg(feature = "drawings")]
+        #[cfg(feature = "ui")]
         {
             let json = serde_json::to_string(&chart.snapshot().unwrap()).unwrap();
-            let snapshot = serde_json::from_str(&json).unwrap();
+            let snapshot: crate::widget::ChartSnapshot = serde_json::from_str(&json).unwrap();
+            if step == 0 {
+                let mut host_owned = snapshot.clone();
+                host_owned.series = None;
+                let mut preserved = Chart::new(BarData::from_bars(data.clone()));
+                let kept = preserved.add_series(SeriesOptions::default());
+                preserved.set_data(kept, data.clone());
+                preserved.restore(&host_owned).unwrap();
+                assert_eq!(preserved.series().count(), 1);
+                assert_eq!(preserved.bars(kept), data);
+            }
             chart.restore(&snapshot).unwrap();
             for id in &mut ids[1..] {
                 *id = chart.restored_series_id(id.0).unwrap();
