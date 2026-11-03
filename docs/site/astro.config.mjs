@@ -40,11 +40,11 @@ export default defineConfig({
           label: 'Chart concepts',
           items: [
             'chart-types',
-            { label: 'Price scale', link: '/scales/#choose-a-price-scale' },
-            { label: 'Time scale and whitespace', link: '/scales/#exchange-time-not-bar-indices' },
-            { label: 'Panes', link: '/api-reference/#panes' },
-            { label: 'Markers', link: '/api-reference/#markers' },
             { slug: 'scales', label: 'Scales and interaction overview' },
+            'price-scale',
+            'time-scale',
+            'panes',
+            { label: 'Markers', link: '/api-reference/#markers' },
           ],
         },
         {
