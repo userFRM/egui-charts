@@ -4,12 +4,182 @@
 //! through the chart's shared, configurable shortcut map.
 //! These methods are called by the main widget paint loop.
 
-use egui::{Response, Ui};
+use egui::{Event, Id, Pos2, Rect, Response, TouchDeviceId, TouchId, TouchPhase, Ui};
 
 use crate::widget::Chart;
 use crate::widget::pan_zoom::raw_wheel_delta;
 
+#[derive(Clone)]
+struct TouchContact {
+    id: (TouchDeviceId, TouchId),
+    origin: Pos2,
+    position: Pos2,
+    started: f64,
+    tracking: bool,
+}
+
+/// UI state belongs to the chart response, like egui's own pointer gesture state.
+#[derive(Clone, Default)]
+pub(super) struct TouchCrosshair {
+    contact: Option<TouchContact>,
+    pub(super) position: Option<Pos2>,
+    pub(super) touch_input: bool,
+}
+
+pub(super) fn touch_crosshair(ui: &Ui, id: Id) -> TouchCrosshair {
+    ui.ctx().data(|data| {
+        data.get_temp::<TouchCrosshair>(id.with("touch_crosshair"))
+            .unwrap_or_default()
+    })
+}
+
 impl Chart {
+    /// Returns whether a held readout owns this frame's drag, including its release.
+    pub(super) fn handle_touch_crosshair(
+        &mut self,
+        ui: &Ui,
+        id: Id,
+        plot: Rect,
+        blocked: bool,
+    ) -> bool {
+        use crate::config::TouchTrackingExitMode;
+
+        let options = &self.chart_options.tooltip;
+        let mut state = touch_crosshair(ui, id);
+        let was_active = state.position.is_some();
+        let pointer_in_plot = ui.rect_contains_pointer(plot);
+        let mut repaint_after = None;
+        let slop = ui
+            .ctx()
+            .options(|options| options.input_options.max_click_dist);
+        ui.input(|input| {
+            let touch_event = input
+                .events
+                .iter()
+                .any(|event| matches!(event, Event::Touch { .. }));
+            if touch_event {
+                state.touch_input = true;
+            } else if !input.any_touches()
+                && input.events.iter().any(|event| {
+                    matches!(
+                        event,
+                        Event::PointerMoved(_) | Event::PointerButton { pressed: true, .. }
+                    )
+                })
+            {
+                state = TouchCrosshair::default();
+            }
+            if !options.enabled
+                || !options.on_long_press
+                || blocked
+                || !input.focused
+                || input.multi_touch().is_some()
+            {
+                state.contact = None;
+                state.position = None;
+                return;
+            }
+            if options.touch_exit_mode == TouchTrackingExitMode::OnTouchEnd
+                && state.contact.is_none()
+            {
+                state.position = None;
+            }
+            for event in &input.events {
+                let Event::Touch {
+                    device_id,
+                    id,
+                    phase,
+                    pos,
+                    ..
+                } = event
+                else {
+                    continue;
+                };
+                let contact_id = (*device_id, *id);
+                match phase {
+                    TouchPhase::Start => {
+                        if plot.contains(*pos) && pointer_in_plot {
+                            state.contact = Some(TouchContact {
+                                id: contact_id,
+                                origin: *pos,
+                                position: *pos,
+                                started: input.time,
+                                tracking: false,
+                            });
+                        } else {
+                            state.contact = None;
+                            state.position = None;
+                        }
+                    }
+                    TouchPhase::Move => {
+                        if let Some(contact) = &mut state.contact
+                            && contact.id == contact_id
+                        {
+                            if !contact.tracking && contact.origin.distance(*pos) > slop {
+                                if state.position.is_some() {
+                                    contact.tracking = true;
+                                } else {
+                                    state.contact = None;
+                                    continue;
+                                }
+                            }
+                            contact.position = plot.clamp(*pos);
+                            if contact.tracking {
+                                state.position = Some(contact.position);
+                            }
+                        }
+                    }
+                    TouchPhase::End => {
+                        if let Some(contact) = &state.contact
+                            && contact.id == contact_id
+                        {
+                            if !contact.tracking
+                                || options.touch_exit_mode == TouchTrackingExitMode::OnTouchEnd
+                            {
+                                state.position = None;
+                            } else {
+                                state.position = Some(plot.clamp(*pos));
+                            }
+                            state.contact = None;
+                        }
+                    }
+                    TouchPhase::Cancel => {
+                        state.contact = None;
+                        state.position = None;
+                    }
+                }
+            }
+            if let Some(contact) = &mut state.contact {
+                if !input.any_touches() {
+                    state.contact = None;
+                    state.position = None;
+                } else if !contact.tracking {
+                    let elapsed =
+                        std::time::Duration::try_from_secs_f64(input.time - contact.started)
+                            .unwrap_or_default();
+                    let remaining = options.long_press_delay.saturating_sub(elapsed);
+                    if remaining.is_zero() {
+                        contact.tracking = true;
+                        state.position = Some(contact.position);
+                    } else {
+                        repaint_after = Some(remaining);
+                    }
+                }
+            }
+        });
+        if let Some(delay) = repaint_after {
+            ui.ctx().request_repaint_after(delay);
+        }
+        let owns_drag = state.touch_input
+            && (was_active || state.position.is_some() || state.contact.is_some());
+        if owns_drag {
+            self.kinetic_scroll.is_active = false;
+        }
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(id.with("touch_crosshair"), state));
+        owns_drag
+    }
+
     /// Manage tracking mode: auto-scroll to the latest bar while active.
     ///
     /// Tracking mode keeps the chart viewport anchored to real-time data.
