@@ -983,8 +983,10 @@ impl ChartBuilder {
             self.config = self.config.with_theme(theme);
         }
 
-        let mut chart =
-            Chart::with_config(BarData::new(), self.config).with_chart_options(self.chart_options);
+        // Configure in place to avoid stacking full chart values in nested constructors.
+        let mut chart = Chart::new(BarData::new());
+        chart.update_config(self.config);
+        chart.set_chart_options(self.chart_options);
 
         chart.theme_override = self.theme;
         chart.set_locale(self.locale);

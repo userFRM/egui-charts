@@ -1007,8 +1007,12 @@ impl Indicator for ConfiguredStudy {
         }
     }
     fn legend_visible(&self, line: usize) -> bool {
-        self.plot_style(line).visible
-            || (self.study.legend_visible(line) && !self.study.plot_style(line).visible)
+        let (shown, own) = (
+            self.study.legend_visible(line),
+            self.study.plot_style(line).visible,
+        );
+        // The study may add a readout for a hidden plot or withhold one for a drawn plot.
+        (self.plot_style(line).visible || (shown && !own)) && (shown || !own)
     }
     fn value_format(&self) -> crate::scales::StudyFormat {
         self.study.value_format()
