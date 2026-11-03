@@ -2,10 +2,12 @@
 
 use super::{Chart, ChartElementId, PointerTarget, SeriesId};
 use crate::chart::coords::ChartMapping;
-use crate::chart::primitives::{Primitive, PrimitiveId, PrimitivePass, PrimitiveView};
+use crate::chart::primitives::{
+    Primitive, PrimitiveHit, PrimitiveId, PrimitivePass, PrimitiveView,
+};
 use crate::model::Bar;
 use crate::studies::Indicator;
-use egui::{CursorIcon, Painter, Pos2};
+use egui::{Painter, Pos2};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 /// A primitive and the series it is attached to.
@@ -40,6 +42,17 @@ fn seen(revision: u64, bars: &[Bar]) -> Seen {
 }
 
 impl Attached {
+    pub(super) fn draw_background(
+        &self,
+        painter: &Painter,
+        view: &PrimitiveView<'_>,
+        pass: PrimitivePass,
+        factor: usize,
+    ) {
+        self.get()
+            .draw_background_merged(painter, view, pass, factor);
+    }
+
     pub(super) fn draw(
         &self,
         painter: &Painter,
@@ -59,11 +72,11 @@ impl Attached {
 }
 
 /// A primitive under the pointer and the cursor it asks for.
-#[derive(Clone, Copy)]
-pub(super) struct PrimitiveHit {
+#[derive(Clone)]
+pub(super) struct Hit {
     /// The custom series a renderer draws, or the primitive itself.
     pub(super) target: PointerTarget,
-    pub(super) cursor: CursorIcon,
+    pub(super) result: PrimitiveHit,
 }
 
 impl Chart {
@@ -227,7 +240,7 @@ impl Chart {
     pub(super) fn main_primitives<'a>(
         &'a self,
         coords: &'a ChartMapping,
-    ) -> impl DoubleEndedIterator<Item = (&'a Attached, PrimitiveView<'a>)> {
+    ) -> impl DoubleEndedIterator<Item = (&'a Attached, PrimitiveView<'a>)> + Clone {
         self.primitives
             .iter()
             .filter_map(move |item| Some((item, self.main_view(item.series, coords)?)))
@@ -301,30 +314,168 @@ impl Chart {
         pass: PrimitivePass,
     ) {
         let painter = painter.with_clip_rect(painter.clip_rect().intersect(coords.rect));
-        for (item, view) in self
-            .main_primitives(coords)
-            .filter(|(item, _)| pass != PrimitivePass::Series || !item.replaces)
-        {
-            item.draw(&painter, &view, pass, self.merge_groups.factor());
+        let shapes = backgrounds(
+            &painter,
+            self.main_pass_primitives(coords),
+            pass,
+            self.merge_groups.factor(),
+        );
+        let grouped = !shapes.is_empty();
+        paint_backgrounds(&painter, shapes);
+        if grouped {
+            for (item, view) in self.main_pass_primitives(coords) {
+                item.draw(&painter, &view, pass, self.merge_groups.factor());
+            }
+        } else {
+            for (item, view) in self.main_primitives(coords) {
+                item.draw(&painter, &view, pass, self.merge_groups.factor());
+            }
         }
+    }
+
+    /// Includes renderers of volume overlays, whose foregrounds normally draw with the series.
+    pub(super) fn main_pass_primitives<'a>(
+        &'a self,
+        coords: &'a ChartMapping,
+    ) -> impl DoubleEndedIterator<Item = (&'a Attached, PrimitiveView<'a>)> + Clone {
+        self.primitives.iter().filter_map(move |item| {
+            let view = self.main_view(item.series, coords).or_else(|| {
+                if !item.replaces || self.in_pane(item.series) {
+                    return None;
+                }
+                let mut view = self.primitive_view(item.series, coords.clone());
+                let study = view.study?;
+                if !study.is_visible() || !study.is_overlay() {
+                    return None;
+                }
+                view.mapping = crate::chart::rendering::study_mapping(study, coords);
+                Some(view)
+            })?;
+            Some((item, view))
+        })
+    }
+
+    /// The visible primitives of a secondary pane, in attachment order, on their own scales.
+    pub(super) fn pane_primitives<'a>(
+        &'a self,
+        members: &'a [SeriesId],
+        coords: &'a ChartMapping,
+    ) -> impl DoubleEndedIterator<Item = (&'a Attached, PrimitiveView<'a>)> + Clone {
+        self.primitives.iter().filter_map(move |item| {
+            if !members.contains(&item.series) || !self.is_series_visible(item.series) {
+                return None;
+            }
+            let mut view = self.primitive_view(item.series, coords.clone());
+            if let Some(series) = self
+                .price_series
+                .iter()
+                .find(|series| series.id == item.series)
+            {
+                view.mapping.price = self.series_map(series, coords.rect);
+            } else if let Some(study) = view.study
+                && matches!(study.scale(), crate::studies::StudyScale::Shared(_))
+            {
+                view.mapping = crate::chart::rendering::study_mapping(study, coords);
+            }
+            Some((item, view))
+        })
     }
 }
 
-/// The latest attached primitive under `pos`.
+/// Defers background shapes until the series have drawn, retaining their clip rectangles.
+/// An empty result keeps the existing series foreground order.
+pub(super) fn backgrounds<'a>(
+    painter: &Painter,
+    primitives: impl Iterator<Item = (&'a Attached, PrimitiveView<'a>)>,
+    pass: PrimitivePass,
+    factor: usize,
+) -> Vec<egui::epaint::ClippedShape> {
+    let start = painter
+        .ctx()
+        .graphics_mut(|graphics| graphics.entry(painter.layer_id()).next_idx());
+    for (item, view) in primitives {
+        item.draw_background(painter, &view, pass, factor);
+    }
+    painter.ctx().graphics_mut(|graphics| {
+        let list = graphics.entry(painter.layer_id());
+        let end = list.next_idx();
+        let mut shapes = Vec::new();
+        for index in start.0..end.0 {
+            list.mutate_shape(egui::layers::ShapeIdx(index), |shape| {
+                let empty = egui::epaint::ClippedShape::new(shape.clip_rect, egui::Shape::Noop);
+                shapes.push(std::mem::replace(shape, empty));
+            });
+        }
+        shapes
+    })
+}
+
+/// Inserts deferred backgrounds without applying the painter's opacity a second time.
+pub(super) fn paint_backgrounds(painter: &Painter, shapes: Vec<egui::epaint::ClippedShape>) {
+    painter.ctx().graphics_mut(|graphics| {
+        let list = graphics.entry(painter.layer_id());
+        for shape in shapes {
+            let index = list.add(shape.clip_rect, egui::Shape::Noop);
+            list.mutate_shape(index, |entry| *entry = shape);
+        }
+    });
+}
+
+/// Draws one complete pane pass, with every background before any foreground.
+pub(super) fn paint_pass<'a>(
+    painter: &Painter,
+    primitives: impl Iterator<Item = (&'a Attached, PrimitiveView<'a>)> + Clone,
+    pass: PrimitivePass,
+    factor: usize,
+) {
+    for (item, view) in primitives.clone() {
+        item.draw_background(painter, &view, pass, factor);
+    }
+    for (item, view) in primitives {
+        item.draw(painter, &view, pass, factor);
+    }
+}
+
+/// Chooses by pass, then distance, keeping `first` on a tie.
+pub(super) fn best_hit(first: Option<Hit>, second: Option<Hit>) -> Option<Hit> {
+    match (first, second) {
+        (Some(first), Some(second)) => {
+            if second.result.pass > first.result.pass
+                || (second.result.pass == first.result.pass
+                    && second.result.distance < first.result.distance)
+            {
+                Some(second)
+            } else {
+                Some(first)
+            }
+        }
+        (first, second) => first.or(second),
+    }
+}
+
+/// The best hit under `pos`, with the latest attached primitive winning ties.
 pub(super) fn primitive_at<'a>(
     primitives: impl DoubleEndedIterator<Item = (&'a Attached, PrimitiveView<'a>)>,
     pos: Pos2,
-) -> Option<PrimitiveHit> {
-    primitives.rev().find_map(|(item, view)| {
-        let cursor = item.get().hit_test(pos, &view)?;
-        Some(PrimitiveHit {
-            target: if item.replaces {
-                PointerTarget::Element(ChartElementId::Indicator(item.series))
-            } else {
-                PointerTarget::Primitive(item.id)
-            },
-            cursor,
-        })
+) -> Option<Hit> {
+    primitives.rev().fold(None, |best, (item, view)| {
+        let Some(result) = item.get().hit_test_result(pos, &view) else {
+            return best;
+        };
+        if !result.distance.is_finite() || result.distance < 0.0 {
+            return best;
+        }
+        best_hit(
+            best,
+            Some(Hit {
+                target: if item.replaces {
+                    PointerTarget::Element(ChartElementId::Indicator(item.series))
+                } else {
+                    PointerTarget::Primitive(item.id)
+                },
+                result,
+            }),
+        )
     })
 }
 
@@ -336,7 +487,7 @@ mod tests {
     use crate::studies::{CustomIndicator, IndicatorValue};
     use crate::widget::test_frames::{chart, frame, shapes};
     use crate::widget::{ChartEvent, SeriesOptions};
-    use egui::{Color32, Event, Shape};
+    use egui::{Color32, CursorIcon, Event, Shape};
 
     type Log = Arc<Mutex<Vec<String>>>;
 
@@ -406,6 +557,180 @@ mod tests {
     const BELOW: Color32 = Color32::from_rgb(1, 2, 3);
     const SERIES: Color32 = Color32::from_rgb(4, 5, 6);
     const ABOVE: Color32 = Color32::from_rgb(7, 8, 9);
+
+    #[test]
+    fn backgrounds_precede_foregrounds_in_every_pass_and_pane() {
+        struct Ordered {
+            id: u8,
+            merged: bool,
+            log: Log,
+        }
+        impl Ordered {
+            fn record(
+                &self,
+                painter: &Painter,
+                view: &PrimitiveView<'_>,
+                pass: PrimitivePass,
+                background: bool,
+            ) {
+                self.log
+                    .lock()
+                    .unwrap()
+                    .push(format!("{pass:?} {background} {}", self.id));
+                painter.rect_filled(
+                    egui::Rect::from_min_size(view.mapping.rect.min, egui::vec2(8.0, 8.0)),
+                    0.0,
+                    Color32::from_rgb(self.id, background as u8, pass as u8),
+                );
+            }
+        }
+        impl Primitive for Ordered {
+            fn draw_background(
+                &self,
+                painter: &Painter,
+                view: &PrimitiveView<'_>,
+                pass: PrimitivePass,
+            ) {
+                self.record(painter, view, pass, true);
+            }
+            fn draw(&self, painter: &Painter, view: &PrimitiveView<'_>, pass: PrimitivePass) {
+                self.record(painter, view, pass, false);
+            }
+            fn draw_background_merged(
+                &self,
+                painter: &Painter,
+                view: &PrimitiveView<'_>,
+                pass: PrimitivePass,
+                factor: usize,
+            ) {
+                if self.merged {
+                    assert_eq!(factor, 4);
+                    self.record(painter, view, pass, true);
+                } else {
+                    self.draw_background(painter, view, pass);
+                }
+            }
+            fn draw_merged(
+                &self,
+                painter: &Painter,
+                view: &PrimitiveView<'_>,
+                pass: PrimitivePass,
+                factor: usize,
+            ) {
+                if self.merged {
+                    assert_eq!(factor, 4);
+                    self.record(painter, view, pass, false);
+                } else {
+                    self.draw(painter, view, pass);
+                }
+            }
+        }
+        for pane in [false, true] {
+            for kind in ["main", "bars", "study", "custom", "custom_volume"] {
+                for merged in [false, true] {
+                    if (pane && kind == "main")
+                        || (kind == "custom_volume" && !cfg!(feature = "studies"))
+                    {
+                        continue;
+                    }
+                    let ctx = egui::Context::default();
+                    let mut chart = chart(&[10.0], &[20.0]);
+                    let other = chart.add_indicator(Box::new(
+                        CustomIndicator::new("Other", |bars| {
+                            vec![IndicatorValue::Single(15.0); bars.len()]
+                        })
+                        .with_overlay(!pane),
+                    ));
+                    let log = Log::default();
+                    let probe = |id| Ordered {
+                        id,
+                        merged,
+                        log: log.clone(),
+                    };
+                    let study = || -> Box<dyn Indicator> {
+                        #[cfg(feature = "studies")]
+                        if kind == "custom_volume" {
+                            let mut volume = crate::studies::Volume::default();
+                            volume.set_overlay(!pane);
+                            return Box::new(volume);
+                        }
+                        Box::new(
+                            CustomIndicator::new("Ordered", |bars| {
+                                bars.iter()
+                                    .map(|bar| IndicatorValue::Single(bar.close))
+                                    .collect()
+                            })
+                            .with_overlay(!pane),
+                        )
+                    };
+                    let id = match kind {
+                        "main" => SeriesId::MAIN,
+                        "bars" => {
+                            let id = chart.add_series(SeriesOptions::default());
+                            chart.set_data(id, chart.bars(SeriesId::MAIN).to_vec());
+                            if pane {
+                                let destination = chart.add_pane();
+                                chart.move_series_to_pane(id, destination);
+                            }
+                            id
+                        }
+                        "study" => chart.add_indicator(study()),
+                        "custom" | "custom_volume" => chart.add_custom_series(study(), probe(1)),
+                        _ => unreachable!(),
+                    };
+                    if !kind.starts_with("custom") {
+                        chart.attach_primitive(id, probe(1));
+                    }
+                    if pane {
+                        let destination = chart.series_pane(id).unwrap();
+                        assert!(chart.move_series_to_pane(other, destination));
+                    }
+                    chart.attach_primitive(other, probe(2));
+                    if merged {
+                        let mut options = chart.chart_options().clone();
+                        options.time_scale.min_bar_spacing = 0.0;
+                        chart.set_chart_options(options);
+                        chart.apply_synced_time_scale(0.25, 0.0);
+                    }
+                    frame(&ctx, &mut chart, 0.0, vec![]);
+                    log.lock().unwrap().clear();
+                    let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+                    let mut expected = Vec::new();
+                    let mut colors = Vec::new();
+                    for pass in [
+                        PrimitivePass::Below,
+                        PrimitivePass::Series,
+                        PrimitivePass::Above,
+                    ] {
+                        for background in [true, false] {
+                            for id in [1, 2] {
+                                expected.push(format!("{pass:?} {background} {id}"));
+                                colors.push(Color32::from_rgb(id, background as u8, pass as u8));
+                            }
+                        }
+                    }
+                    assert_eq!(
+                        *log.lock().unwrap(),
+                        expected,
+                        "{kind}, pane={pane}, merged={merged}"
+                    );
+                    let actual: Vec<_> = painted
+                        .iter()
+                        .filter_map(|shape| match shape {
+                            Shape::Rect(rect) if colors.contains(&rect.fill) => Some(rect.fill),
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(actual, colors, "paint order: {kind}, pane={pane}");
+                    chart.set_series_visible(id, false);
+                    chart.set_series_visible(other, false);
+                    log.lock().unwrap().clear();
+                    frame(&ctx, &mut chart, 0.2, vec![]);
+                    assert!(log.lock().unwrap().is_empty(), "hidden {kind}");
+                }
+            }
+        }
+    }
 
     /// Fills a corner of the plot in each pass and asks for prices 0 to 500.
     struct Layers;
@@ -601,6 +926,235 @@ mod tests {
     }
 
     #[test]
+    fn object_hits_rank_by_pass_distance_and_paint_order_in_every_pane() {
+        struct Objects(Arc<Mutex<Vec<(egui::Vec2, PrimitiveHit)>>>, bool);
+        impl Primitive for Objects {
+            fn draw_background(
+                &self,
+                painter: &Painter,
+                view: &PrimitiveView<'_>,
+                pass: PrimitivePass,
+            ) {
+                if self.1 && pass == PrimitivePass::Series {
+                    painter.rect_filled(view.mapping.rect, 0.0, BELOW);
+                }
+            }
+            fn hit_test_result(&self, pos: Pos2, view: &PrimitiveView<'_>) -> Option<PrimitiveHit> {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|(offset, hit)| {
+                        let mut hit = hit.clone();
+                        hit.distance = pos.distance(view.mapping.rect.center() + *offset);
+                        hit
+                    })
+                    .filter(|hit| hit.distance <= 20.0)
+                    .max_by(|left, right| {
+                        left.pass
+                            .cmp(&right.pass)
+                            .then_with(|| right.distance.total_cmp(&left.distance))
+                    })
+            }
+        }
+        struct Invalid(f32);
+        impl Primitive for Invalid {
+            fn hit_test_result(&self, _: Pos2, _: &PrimitiveView<'_>) -> Option<PrimitiveHit> {
+                Some(PrimitiveHit {
+                    distance: self.0,
+                    pass: PrimitivePass::Above,
+                    ..PrimitiveHit::new(CursorIcon::Wait)
+                })
+            }
+        }
+        let object = |id: &str, cursor, offset| {
+            (
+                offset,
+                PrimitiveHit {
+                    object_id: Some(id.into()),
+                    data: Some(Arc::new(serde_json::json!({ "object": id }))),
+                    ..PrimitiveHit::new(cursor)
+                },
+            )
+        };
+        for (secondary, backgrounds) in [false, true]
+            .into_iter()
+            .flat_map(|secondary| [false, true].map(|backgrounds| (secondary, backgrounds)))
+        {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[10.0], &[20.0]);
+            chart.config.show_volume = false;
+            let objects = Arc::new(Mutex::new(vec![
+                object("upper", CursorIcon::ResizeVertical, egui::vec2(0.0, -8.0)),
+                object("lower", CursorIcon::Grab, egui::vec2(0.0, 8.0)),
+            ]));
+            let series = chart.add_custom_series(
+                Box::new(
+                    CustomIndicator::new("Objects", |bars| {
+                        vec![IndicatorValue::Single(15.0); bars.len()]
+                    })
+                    .with_overlay(!secondary),
+                ),
+                Objects(objects.clone(), backgrounds),
+            );
+            let first = Arc::new(Mutex::new(vec![object(
+                "first",
+                CursorIcon::Crosshair,
+                egui::vec2(3.0, 4.0),
+            )]));
+            let second = Arc::new(Mutex::new(vec![object(
+                "second",
+                CursorIcon::PointingHand,
+                egui::vec2(0.0, 6.0),
+            )]));
+            let first_id = chart
+                .attach_primitive(series, Objects(first.clone(), backgrounds))
+                .unwrap();
+            let second_id = chart
+                .attach_primitive(series, Objects(second.clone(), backgrounds))
+                .unwrap();
+            for time in [0.0, 0.1, 0.2] {
+                frame(&ctx, &mut chart, time, vec![]);
+            }
+            let plot = if secondary {
+                chart.last_rendered_indicator_panes[0].chart_rect
+            } else {
+                chart.last_rendered_price_rect
+            };
+            let renderer = PointerTarget::Element(ChartElementId::Indicator(series));
+            let mut pos = plot.center();
+            // At the centre, sqrt(3^2 + 4^2) = 5 beats 6; both renderer objects are 8 away.
+            for (step, (target, id, distance, cursor)) in [
+                (
+                    PointerTarget::Primitive(first_id),
+                    "first",
+                    5.0,
+                    CursorIcon::Crosshair,
+                ),
+                (
+                    PointerTarget::Primitive(second_id),
+                    "second",
+                    5.0,
+                    CursorIcon::PointingHand,
+                ),
+                (
+                    PointerTarget::Primitive(first_id),
+                    "first",
+                    5.0,
+                    CursorIcon::Crosshair,
+                ),
+                (renderer, "lower", 8.0, CursorIcon::Grab),
+                (
+                    PointerTarget::Primitive(second_id),
+                    "second",
+                    5.0,
+                    CursorIcon::PointingHand,
+                ),
+                (renderer, "upper", 8.0, CursorIcon::ResizeVertical),
+                (renderer, "lower", 0.0, CursorIcon::Grab),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                match step {
+                    1 => second.lock().unwrap()[0].0.y = 5.0,
+                    2 => second.lock().unwrap()[0].1.pass = PrimitivePass::Below,
+                    3 => first.lock().unwrap()[0].1.pass = PrimitivePass::Below,
+                    4 => {
+                        for (_, hit) in objects.lock().unwrap().iter_mut() {
+                            hit.pass = PrimitivePass::Above;
+                        }
+                        second.lock().unwrap()[0].1.pass = PrimitivePass::Above;
+                    }
+                    5 => {
+                        second.lock().unwrap()[0].1.pass = PrimitivePass::Below;
+                        objects.lock().unwrap()[1].1.pass = PrimitivePass::Below;
+                    }
+                    6 => {
+                        pos.y += 8.0;
+                        objects.lock().unwrap()[1].1.pass = PrimitivePass::Above;
+                    }
+                    _ => {}
+                }
+                chart.drain_events().for_each(drop);
+                let time = 1.0 + step as f64;
+                let actual_cursor = frame(&ctx, &mut chart, time, vec![Event::PointerMoved(pos)]);
+                let pointer = chart
+                    .drain_events()
+                    .find_map(|event| match event {
+                        ChartEvent::CrosshairMoved(Some(pointer)) => Some(pointer),
+                        _ => None,
+                    })
+                    .unwrap();
+                assert_eq!(
+                    pointer.target,
+                    Some(target),
+                    "secondary={secondary}, step={step}"
+                );
+                let hit = pointer.primitive_hit.as_ref().unwrap();
+                assert_eq!(hit.object_id.as_deref(), Some(id));
+                assert_eq!(
+                    hit.data.as_deref(),
+                    Some(&serde_json::json!({ "object": id }))
+                );
+                assert_eq!((hit.distance, hit.cursor), (distance, cursor));
+                assert_eq!(actual_cursor, cursor);
+                frame(&ctx, &mut chart, time + 0.1, vec![]);
+                assert!(
+                    !chart
+                        .drain_events()
+                        .any(|event| matches!(event, ChartEvent::CrosshairMoved(_)))
+                );
+                for pressed in [true, false] {
+                    frame(
+                        &ctx,
+                        &mut chart,
+                        time + 0.2,
+                        vec![Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        }],
+                    );
+                }
+                assert!(chart.drain_events().any(|event| matches!(event,
+                    ChartEvent::Click { position, .. }
+                        if position.target == pointer.target && position.primitive_hit == pointer.primitive_hit
+                )));
+            }
+            // Payload changes under a stationary pointer still reach the host.
+            objects.lock().unwrap()[1].1.data =
+                Some(Arc::new(serde_json::json!({ "updated": true })));
+            frame(&ctx, &mut chart, 9.0, vec![]);
+            assert!(chart.drain_events().any(|event| matches!(event,
+                ChartEvent::CrosshairMoved(Some(pointer))
+                    if pointer.primitive_hit.as_ref().unwrap().data.as_deref() == Some(&serde_json::json!({ "updated": true }))
+            )));
+            // Legacy hits retain their cursor and the latest attachment wins a tie.
+            chart.attach_primitive(series, Dots);
+            let latest = chart.attach_primitive(series, Dots).unwrap();
+            objects.lock().unwrap().clear();
+            for distance in [f32::NAN, f32::INFINITY, -1.0] {
+                let invalid = chart.attach_primitive(series, Invalid(distance)).unwrap();
+                frame(&ctx, &mut chart, 9.05, vec![]);
+                assert_eq!(
+                    chart.host_events.target,
+                    Some(PointerTarget::Primitive(latest))
+                );
+                assert_eq!(
+                    chart.host_events.primitive_hit,
+                    Some(PrimitiveHit::new(CursorIcon::PointingHand))
+                );
+                chart.detach_primitive(invalid);
+            }
+            chart.set_series_visible(series, false);
+            frame(&ctx, &mut chart, 9.1, vec![]);
+            assert!(chart.host_events.primitive_hit.is_none());
+        }
+    }
+
+    #[test]
     fn custom_series_draws_and_hit_tests_in_place_of_its_plots() {
         let ctx = egui::Context::default();
         let mut chart = chart(&[10.0], &[20.0]);
@@ -682,6 +1236,10 @@ mod tests {
         assert_eq!(
             pointer.target,
             Some(PointerTarget::Element(ChartElementId::Indicator(id)))
+        );
+        assert_eq!(
+            pointer.primitive_hit,
+            Some(PrimitiveHit::new(CursorIcon::PointingHand))
         );
         let click = |pressed| Event::PointerButton {
             pos,

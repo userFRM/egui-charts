@@ -320,7 +320,7 @@ impl IndicatorPane {
             None,
             &[],
             false,
-            1,
+            |_, _| {},
         )?;
         if let Some(table) = indicator.table() {
             crate::studies::table::paint(
@@ -347,7 +347,7 @@ impl IndicatorPane {
         hover: Option<(Pos2, crate::config::CrosshairOptions)>,
         primitives: &[&crate::widget::primitives::Attached],
         bar_series: bool,
-        factor: usize,
+        mut draw_primitives: impl FnMut(&egui::Painter, crate::chart::primitives::PrimitivePass),
     ) -> Option<PaneInteraction> {
         if !indicator.is_visible() {
             return None;
@@ -428,13 +428,6 @@ impl IndicatorPane {
                 bars,
                 visible: displayed_range.clone(),
             });
-        let draw = |painter: &egui::Painter, pass| {
-            if let Some(view) = &view {
-                for item in primitives {
-                    item.draw(painter, view, pass, factor);
-                }
-            }
-        };
         let crosshair = hover.map(|(mut pos, options)| {
             if let Some(index) = self.bar_index {
                 pos.x = mapping.idx_to_x(index);
@@ -484,7 +477,7 @@ impl IndicatorPane {
             }
 
             use crate::chart::primitives::PrimitivePass;
-            draw(plot_painter, PrimitivePass::Below);
+            draw_primitives(plot_painter, PrimitivePass::Below);
             // Draw indicator lines with aligned coordinates, unless a renderer draws them
             if !primitives.iter().any(|item| item.replaces) {
                 self.draw_indicator_lines_aligned(
@@ -498,7 +491,7 @@ impl IndicatorPane {
                 );
             }
             if !bar_series {
-                draw(plot_painter, PrimitivePass::Series);
+                draw_primitives(plot_painter, PrimitivePass::Series);
             }
 
             if let (Some(view), Some(side)) = (&view, axis)

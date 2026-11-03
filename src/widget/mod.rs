@@ -133,7 +133,8 @@ mod drawing_api;
 pub use drawing_api::DrawingError;
 mod studies_data;
 pub use crate::chart::primitives::{
-    PriceAxisLabel, Primitive, PrimitiveId, PrimitivePass, PrimitiveView, TimeAxisLabel,
+    PriceAxisLabel, Primitive, PrimitiveHit, PrimitiveId, PrimitivePass, PrimitiveView,
+    TimeAxisLabel,
 };
 pub use pane::VisualOrder;
 pub use series::SeriesOptions;

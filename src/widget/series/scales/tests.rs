@@ -26,6 +26,350 @@ fn bars(prices: &[f64]) -> Vec<Bar> {
         .collect()
 }
 
+/// Tick hooks see each axis separately in displayed units, while value labels keep
+/// using the individual hook. A move from 100 to 200 or 1000 to 2000 is +100%, index 200.
+#[test]
+fn tick_formatters_receive_complete_axis_lists() {
+    use crate::scales::PriceFormatter;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone, Default)]
+    struct Recording {
+        lists: Arc<Mutex<Vec<Vec<f64>>>>,
+        label_delta: i8,
+    }
+    impl PriceFormatter for Recording {
+        fn format(&self, price: f64) -> String {
+            format!("value {price:.2}")
+        }
+        fn format_tick(&self, price: f64) -> String {
+            format!("tick {price:.2}")
+        }
+        fn format_ticks(&self, prices: &[f64]) -> Vec<String> {
+            self.lists.lock().unwrap().push(prices.to_vec());
+            let mut labels: Vec<_> = prices
+                .iter()
+                .map(|price| format!("batch {} {price:.2}", prices.len()))
+                .collect();
+            if self.label_delta < 0 {
+                let _ = labels.pop();
+            } else if self.label_delta > 0 {
+                labels.push("extra".into());
+            }
+            labels
+        }
+        fn clone_box(&self) -> Box<dyn PriceFormatter> {
+            Box::new(self.clone())
+        }
+    }
+
+    for mode in [
+        PriceScaleMode::Normal,
+        PriceScaleMode::Logarithmic,
+        PriceScaleMode::Percentage,
+        PriceScaleMode::IndexedTo100,
+    ] {
+        for edges in [false, true] {
+            let ctx = egui::Context::default();
+            let mut chart = Chart::new(BarData::from_bars(bars(&[100.0, 200.0])));
+            chart.config.show_volume = false;
+            chart.config.price_axis.edge_ticks_visible = edges;
+            chart.chart_options.crosshair.mode = crate::config::CrosshairMode::Normal;
+            let other = chart.add_series(SeriesOptions {
+                scale: SeriesScale::Left,
+                ..Default::default()
+            });
+            chart.set_data(other, bars(&[1000.0, 2000.0]));
+            let raw = Arc::new(Recording::default());
+            let series = Arc::new(Recording::default());
+            let percentage = Arc::new(Recording::default());
+            chart.set_price_formatter(Some(raw.clone()));
+            chart.set_series_formatter(other, Some(series.clone()));
+            chart.set_percentage_formatter(Some(percentage.clone()));
+            for id in [SeriesId::MAIN, other] {
+                chart.series_price_scale_mut(id).unwrap().options_mut().mode = mode;
+            }
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let relative = matches!(
+                mode,
+                PriceScaleMode::Percentage | PriceScaleMode::IndexedTo100
+            );
+            for (id, low, high) in [
+                (SeriesId::MAIN, 100.0_f64, 200.0_f64),
+                (other, 1000.0, 2000.0),
+            ] {
+                let (low, high) = match mode {
+                    PriceScaleMode::Normal => (low, high),
+                    PriceScaleMode::Logarithmic => (low.ln(), high.ln()),
+                    PriceScaleMode::Percentage => (0.0, 100.0),
+                    PriceScaleMode::IndexedTo100 => (100.0, 200.0),
+                };
+                chart
+                    .series_price_scale_mut(id)
+                    .unwrap()
+                    .set_range(low, high);
+            }
+            for recorder in [&raw, &series, &percentage] {
+                recorder.lists.lock().unwrap().clear();
+            }
+            let pos = chart.last_rendered_price_rect.center();
+            let painted = crate::widget::test_frames::shapes(
+                &ctx,
+                &mut chart,
+                0.1,
+                vec![egui::Event::PointerMoved(pos)],
+            );
+            for (id, recorder, low, high) in [
+                (
+                    SeriesId::MAIN,
+                    if relative { &percentage } else { &raw },
+                    100.0,
+                    200.0,
+                ),
+                (
+                    other,
+                    if relative { &percentage } else { &series },
+                    1000.0,
+                    2000.0,
+                ),
+            ] {
+                let map = chart.series_price_map(id).unwrap();
+                let expected: Vec<_> = map.marks().iter().map(|mark| mark.price).collect();
+                let calls = recorder.lists.lock().unwrap();
+                assert!(calls.contains(&expected), "{mode:?}: {id:?}: {calls:?}");
+                let bounds = match mode {
+                    PriceScaleMode::Percentage => (0.0, 100.0),
+                    PriceScaleMode::IndexedTo100 => (100.0, 200.0),
+                    _ => (low, high),
+                };
+                for values in calls.iter() {
+                    assert!(
+                        values.windows(2).all(|pair| pair[0] < pair[1]),
+                        "{values:?}"
+                    );
+                    assert!(
+                        values
+                            .iter()
+                            .all(|&value| value >= bounds.0 - 1e-8 && value <= bounds.1 + 1e-8),
+                        "{mode:?}: {values:?}"
+                    );
+                    assert!(
+                        values.len() > 2,
+                        "edge ticks must share the axis list: {values:?}"
+                    );
+                }
+                if edges {
+                    assert!(
+                        calls.iter().any(|values| values != &expected),
+                        "edge ticks are included"
+                    );
+                } else {
+                    assert!(calls.iter().all(|values| values == &expected));
+                }
+            }
+            if relative {
+                assert!(raw.lists.lock().unwrap().is_empty());
+                assert!(series.lists.lock().unwrap().is_empty());
+            } else {
+                assert!(percentage.lists.lock().unwrap().is_empty());
+            }
+            let labels: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    egui::Shape::Text(text) => Some(text.galley.text()),
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                labels.iter().any(|label| label.starts_with("batch ")),
+                "{labels:?}"
+            );
+            assert!(!labels.iter().any(|label| label.starts_with("tick ")));
+            let value = if mode == PriceScaleMode::Percentage {
+                100.0
+            } else {
+                200.0
+            };
+            assert_eq!(
+                chart.format_series_price(SeriesId::MAIN, 200.0),
+                Some(format!("value {value:.2}"))
+            );
+            assert!(
+                labels.iter().any(|label| label.starts_with("value ")),
+                "value tags stay individual"
+            );
+            let map = chart.series_price_map(SeriesId::MAIN).unwrap();
+            let hover = chart
+                .format_series_price(SeriesId::MAIN, map.y_to_price(pos.y))
+                .unwrap();
+            assert!(
+                labels.contains(&hover.as_str()),
+                "crosshair stays individual"
+            );
+            if relative {
+                let study = chart.add_indicator(Box::new(crate::studies::CustomIndicator::new(
+                    "Relative study",
+                    |_| {
+                        vec![
+                            crate::studies::IndicatorValue::Single(200.0),
+                            crate::studies::IndicatorValue::Single(240.0),
+                        ]
+                    },
+                )));
+                assert!(chart.set_indicator_scale(
+                    study,
+                    crate::studies::StudyScale::Shared(SeriesScale::Separate(9))
+                ));
+                chart
+                    .series_scales
+                    .get_mut(&SeriesScale::Separate(9))
+                    .unwrap()
+                    .options_mut()
+                    .mode = mode;
+                percentage.lists.lock().unwrap().clear();
+                frame(&ctx, &mut chart, 0.2, vec![]);
+                let map = chart
+                    .indicators()
+                    .find(|(id, _)| *id == study)
+                    .unwrap()
+                    .1
+                    .scale_mapping()
+                    .unwrap();
+                let expected: Vec<_> = map.marks().iter().map(|mark| mark.price).collect();
+                assert!(
+                    percentage.lists.lock().unwrap().contains(&expected),
+                    "study axis ticks share one list"
+                );
+            }
+        }
+    }
+    // A host returning too few or too many labels cannot drop ticks or mislabel them.
+    let map = PriceMap::new(
+        Default::default(),
+        crate::scales::PriceRange::new(100.0, 200.0),
+        0.0,
+        400.0,
+        false,
+    );
+    for label_delta in [-1, 1] {
+        let formatter = Recording {
+            label_delta,
+            ..Default::default()
+        };
+        let marks = crate::chart::rendering::axes::price_marks(&map, Some(&formatter));
+        assert_eq!(marks.len(), map.marks().len());
+        for mark in marks {
+            assert_eq!(mark.label, formatter.format_tick(mark.price));
+        }
+    }
+}
+
+/// Added candles keep independent body, wick and inside-border colours in either pane.
+/// A zero width suppresses the border even when the bar supplies its colour.
+#[test]
+fn added_candle_borders_preserve_per_bar_colours_and_body_bounds() {
+    use crate::model::BarColors;
+
+    let mut legacy = serde_json::to_value(SeriesOptions::default()).unwrap();
+    legacy
+        .as_object_mut()
+        .unwrap()
+        .remove("candle_border_width");
+    assert_eq!(
+        serde_json::from_value::<SeriesOptions>(legacy)
+            .unwrap()
+            .candle_border_width,
+        0.0
+    );
+    for own_pane in [false, true] {
+        let ctx = egui::Context::default();
+        let mut chart = Chart::new(BarData::from_bars(bars(&[10.0, 20.0])));
+        let colours = [
+            [Color32::GREEN, Color32::BLUE, Color32::MAGENTA],
+            [Color32::RED, Color32::CYAN, Color32::GOLD],
+        ];
+        let data = bars(&[20.0, 10.0])
+            .into_iter()
+            .zip(colours)
+            .map(|(mut bar, [body, wick, border])| {
+                bar.open = 30.0 - bar.close;
+                bar.high = 25.0;
+                bar.low = 5.0;
+                bar.colors = Some(Box::new(BarColors {
+                    color: Some(body),
+                    wick: Some(wick),
+                    border: Some(border),
+                    ..Default::default()
+                }));
+                bar
+            })
+            .collect();
+        let id = chart.add_series(SeriesOptions {
+            chart_type: ChartType::Candles,
+            ..Default::default()
+        });
+        chart.set_data(id, data);
+        if own_pane {
+            let pane = chart.add_pane();
+            assert!(chart.move_series_to_pane(id, pane));
+        }
+        for (at, width) in [2.0, 0.0, -1.0, f32::NAN, f32::INFINITY]
+            .into_iter()
+            .enumerate()
+        {
+            let mut options = chart.series().next().unwrap().1.clone();
+            options.candle_border_width = width;
+            assert!(chart.set_series_options(id, options));
+            let painted =
+                crate::widget::test_frames::shapes(&ctx, &mut chart, at as f64 * 0.1, vec![]);
+            let map = chart.series_price_map(id).unwrap();
+            let body_width = chart.state.time_scale().bar_spacing() * chart.config.candle_width;
+            for (index, [body, wick, border]) in colours.into_iter().enumerate() {
+                let x = chart.index_to_x(index as f64).unwrap();
+                // Both 10 -> 20 and 20 -> 10 occupy the same price interval.
+                let expected = Rect::from_min_max(
+                    egui::pos2(x - body_width / 2.0, map.price_to_y(20.0)),
+                    egui::pos2(x + body_width / 2.0, map.price_to_y(10.0)),
+                );
+                assert!(
+                    painted.iter().any(|shape| matches!(shape,
+                        egui::Shape::Rect(rect) if rect.fill == body && rect.rect == expected
+                    )),
+                    "pane={own_pane}, width={width}: body {index}"
+                );
+                assert!(
+                    painted.iter().any(|shape| matches!(shape,
+                        egui::Shape::LineSegment { points, stroke }
+                            if stroke.color == wick && stroke.width == chart.config.wick_width
+                                && *points == [
+                                    egui::pos2(x, map.price_to_y(25.0)),
+                                    egui::pos2(x, map.price_to_y(5.0)),
+                                ]
+                    )),
+                    "pane={own_pane}, width={width}: wick {index}"
+                );
+                let borders: Vec<_> = painted
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        egui::Shape::Rect(rect) if rect.stroke.color == border => Some(rect),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    borders.len(),
+                    usize::from(width.is_finite() && width > 0.0),
+                    "pane={own_pane}, width={width}: border {index}"
+                );
+                for rect in borders {
+                    assert_eq!(rect.rect, expected);
+                    assert_eq!(rect.stroke.width, width);
+                    assert_eq!(rect.stroke_kind, egui::StrokeKind::Inside);
+                }
+            }
+        }
+    }
+}
+
 /// Saved display formats label raw units on shared and independent axes without transforming
 /// the data. A quarter-unit movement rounds 12.62 to 12.50, and 1500 / 1000 is 1.50K.
 #[test]
@@ -1434,7 +1778,8 @@ fn main_series_order_controls_paint_and_selection() {
 }
 
 /// Bars can be popped from, and looked up in, any bar series; live changes are reported
-/// once per series in a row; the draw order can be changed.
+/// once per series in a row; the draw order can be changed. Discrete lookups distinguish shared
+/// logical indices from stored rows and preserve gaps through time-coordinate round trips.
 #[test]
 fn series_data_is_queried_popped_and_reported() {
     use crate::model::LogicalRange;
@@ -1446,17 +1791,147 @@ fn series_data_is_queried_popped_and_reported() {
     chart.set_data(id, vec![data[0].clone(), data[2].clone(), data[4].clone()]);
     let minute = |index| data[0].time + TimeDelta::minutes(index);
     for (time, direction, expected) in [
+        (minute(0), MismatchDirection::Exact, Some(0)),
         (minute(2), MismatchDirection::Exact, Some(1)),
+        (minute(4), MismatchDirection::Exact, Some(2)),
+        (minute(2), MismatchDirection::NearestLeft, Some(1)),
+        (minute(2), MismatchDirection::NearestRight, Some(1)),
         (minute(1), MismatchDirection::Exact, None),
         (minute(1), MismatchDirection::NearestLeft, Some(0)),
         (minute(1), MismatchDirection::NearestRight, Some(1)),
+        (minute(-1), MismatchDirection::Exact, None),
         (minute(-1), MismatchDirection::NearestLeft, None),
+        (minute(-1), MismatchDirection::NearestRight, Some(0)),
+        (minute(5), MismatchDirection::Exact, None),
+        (minute(5), MismatchDirection::NearestLeft, Some(2)),
         (minute(5), MismatchDirection::NearestRight, None),
     ] {
         assert_eq!(
             chart.bar_index_at(id, time, direction),
             expected,
             "{time} {direction:?}"
+        );
+        let index = (time - minute(0)).num_minutes() as f64;
+        assert_eq!(
+            chart.bar_at_index(id, index, direction),
+            expected.map(|row| &data[row * 2]),
+            "logical {index} {direction:?}"
+        );
+    }
+    for (index, left, right) in [
+        (-0.25, None, Some(0)),
+        (1.25, Some(0), Some(2)),
+        (3.75, Some(2), Some(4)),
+        (4.25, Some(4), None),
+        (-f64::MAX, None, Some(0)),
+        (f64::MAX, Some(4), None),
+        (f64::NAN, None, None),
+        (f64::NEG_INFINITY, None, None),
+        (f64::INFINITY, None, None),
+    ] {
+        for (direction, expected) in [
+            (MismatchDirection::Exact, None),
+            (MismatchDirection::NearestLeft, left),
+            (MismatchDirection::NearestRight, right),
+        ] {
+            assert_eq!(
+                chart.bar_at_index(id, index, direction),
+                expected.map(|row| &data[row]),
+                "logical {index} {direction:?}"
+            );
+        }
+    }
+    for (time, direction, expected) in [
+        (minute(0), MismatchDirection::Exact, Some(0)),
+        (minute(2), MismatchDirection::Exact, Some(2)),
+        (minute(4), MismatchDirection::Exact, Some(4)),
+        (minute(2), MismatchDirection::NearestLeft, Some(2)),
+        (minute(2), MismatchDirection::NearestRight, Some(2)),
+        (
+            minute(1) + TimeDelta::seconds(30),
+            MismatchDirection::Exact,
+            None,
+        ),
+        (
+            minute(1) + TimeDelta::seconds(30),
+            MismatchDirection::NearestLeft,
+            Some(1),
+        ),
+        (
+            minute(1) + TimeDelta::seconds(30),
+            MismatchDirection::NearestRight,
+            Some(2),
+        ),
+        (minute(-1), MismatchDirection::Exact, None),
+        (minute(-1), MismatchDirection::NearestLeft, None),
+        (minute(-1), MismatchDirection::NearestRight, Some(0)),
+        (minute(5), MismatchDirection::Exact, None),
+        (minute(5), MismatchDirection::NearestLeft, Some(4)),
+        (minute(5), MismatchDirection::NearestRight, None),
+    ] {
+        assert_eq!(
+            chart.time_index_at(time, direction),
+            expected,
+            "{time} {direction:?}"
+        );
+    }
+    for index in 0..5 {
+        assert_eq!(chart.time_at_index(index), Some(minute(index as i64)));
+        assert_eq!(chart.time_to_x(minute(index as i64)), None, "before layout");
+    }
+    assert_eq!(chart.time_at_index(5), None);
+    assert_eq!(chart.time_at_index(usize::MAX), None);
+    assert_eq!(chart.x_to_time(0.0), None, "before layout");
+
+    // A five-slot range places each centre one spacing apart, including sparse gaps.
+    let ctx = egui::Context::default();
+    frame(&ctx, &mut chart, 0.0, vec![]);
+    assert!(chart.set_visible_logical_range(LogicalRange::new(0.0, 4.0)));
+    frame(&ctx, &mut chart, 0.1, vec![]);
+    let plot = chart.get_rendered_price_rect();
+    let spacing = plot.width() / 5.0;
+    for index in 0..5 {
+        let time = minute(index);
+        let x = chart.time_to_x(time).unwrap();
+        let expected = plot.left() + (index as f32 + 0.5) * spacing - 1.0;
+        assert!(
+            (x - expected).abs() < 0.001,
+            "centre {index}: {x} != {expected}"
+        );
+        assert_eq!(chart.x_to_time(x), Some(time));
+        assert_eq!(chart.x_to_time(x + spacing * 0.25), Some(time));
+        assert_eq!(
+            chart.bar_at_index(id, index as f64, MismatchDirection::Exact),
+            (index % 2 == 0).then(|| &data[index as usize])
+        );
+    }
+    for time in [minute(-1), minute(5), minute(1) + TimeDelta::seconds(30)] {
+        assert_eq!(chart.time_to_x(time), None);
+        assert!(
+            chart.time_to_index(time).is_some(),
+            "continuous mapping stays available"
+        );
+    }
+    for index in [-1.0, 5.0] {
+        assert_eq!(chart.x_to_time(chart.index_to_x(index).unwrap()), None);
+    }
+    for x in [f32::NAN, f32::NEG_INFINITY, f32::INFINITY] {
+        assert_eq!(chart.x_to_time(x), None);
+    }
+    // Binary-exact spacing makes half-slot boundary expectations independent of pixel rounding.
+    chart.state.time_scale_mut().set_bar_spacing(128.0);
+    chart.state.time_scale_mut().set_right_offset(0.0);
+    for (index, expected) in [
+        (-0.75, None),
+        (-0.5, Some(minute(0))),
+        (0.5, Some(minute(1))),
+        (3.5, Some(minute(4))),
+        (4.5, None),
+    ] {
+        assert_eq!(
+            chart.x_to_time(chart.index_to_x(index).unwrap()),
+            expected,
+            "nearest {index}"
         );
     }
     for (series, (left, right), bars, bars_before, bars_after) in [
@@ -1526,6 +2001,15 @@ fn series_data_is_queried_popped_and_reported() {
     );
 
     let other = chart.add_series(SeriesOptions::default());
+    for series in [other, SeriesId(99), SeriesId::VOLUME] {
+        for direction in [
+            MismatchDirection::Exact,
+            MismatchDirection::NearestLeft,
+            MismatchDirection::NearestRight,
+        ] {
+            assert_eq!(chart.bar_at_index(series, 2.0, direction), None);
+        }
+    }
     assert!(chart.set_series_order(other, 0));
     assert_eq!(
         chart.series().map(|(id, _)| id).collect::<Vec<_>>(),
@@ -1536,7 +2020,37 @@ fn series_data_is_queried_popped_and_reported() {
     let range = LogicalRange::new(0.0, 4.0);
     assert_eq!(chart.bars_in_logical_range(other, range), None);
     assert_eq!(chart.bars_in_logical_range(SeriesId(99), range), None);
+    chart.set_data(other, vec![Bar::whitespace(minute(1))]);
+    assert!(
+        chart
+            .bar_at_index(other, 1.0, MismatchDirection::Exact)
+            .unwrap()
+            .is_whitespace()
+    );
     chart.set_data(SeriesId::MAIN, Vec::new());
     assert_eq!(chart.bars_in_logical_range(SeriesId::MAIN, range), None);
     assert_eq!(chart.bars_in_logical_range(id, range), None);
+    for direction in [
+        MismatchDirection::Exact,
+        MismatchDirection::NearestLeft,
+        MismatchDirection::NearestRight,
+    ] {
+        assert_eq!(chart.time_index_at(minute(0), direction), None);
+        assert_eq!(chart.bar_at_index(id, 0.0, direction), None);
+    }
+    assert_eq!(chart.time_at_index(0), None);
+    assert_eq!(chart.time_to_x(minute(0)), None);
+    assert_eq!(chart.x_to_time(plot.center().x), None);
+
+    chart.set_data(SeriesId::MAIN, vec![Bar::whitespace(minute(2))]);
+    assert_eq!(chart.time_at_index(0), Some(minute(2)));
+    assert_eq!(chart.time_at_index(1), None);
+    let x = chart.time_to_x(minute(2)).unwrap();
+    assert_eq!(chart.x_to_time(x), Some(minute(2)));
+    assert!(
+        chart
+            .bar_at_index(SeriesId::MAIN, 0.0, MismatchDirection::Exact)
+            .unwrap()
+            .is_whitespace()
+    );
 }
