@@ -3856,6 +3856,7 @@ mod tests {
         }
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.open_panel = Some(SidePanel::Watchlist);
         let now = app.live.now();
         app.live.set_paused(true);
         assert!(

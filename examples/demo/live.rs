@@ -1516,6 +1516,7 @@ mod tests {
         let feed = Arc::new(ready_feed("SAMPLE", now));
         let detectors = feed.detectors();
         let mut settings = detectors.settings();
+        settings.liquidity.enabled = true;
         settings.liquidity.rule.threshold = egui_charts::services::Threshold::Fixed(10.0);
         detectors.set_settings(settings);
         let ctx = egui::Context::default();
@@ -1999,7 +2000,7 @@ mod tests {
 
         let start: DateTime<Utc> = "2026-10-23T14:00:00Z".parse().unwrap();
         for (symbol, order_level) in [(ORDER_LEVEL_SYMBOL, true), ("BTCUSD", false)] {
-            let feed = Arc::new(ready_feed(symbol, start));
+            let feed = Arc::new(LiveFeed::new(symbol, start));
             let detectors = feed.detectors();
             let mut settings = detectors.settings();
             settings.big_trades.enabled = true;
@@ -2015,6 +2016,12 @@ mod tests {
                 .with_initial_bars(100)
                 .build();
             let ctx = egui::Context::default();
+            // Subscribe before generating history so it includes the enabled stop-run bursts.
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                chart.show(ui);
+            })
+            .drop_without_applying_deltas();
+            load_chart(&feed, &mut chart, &ctx);
             for step in 0..=240 {
                 feed.advance(start + TimeDelta::milliseconds(500 * step));
                 ctx.run_ui(egui::RawInput::default(), |ui| {
