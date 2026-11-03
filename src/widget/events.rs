@@ -11,7 +11,8 @@ use egui::{Modifiers, PointerButton, Pos2, Ui};
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct ChartPointer {
-    /// Nearest slot's timestamp, extrapolated into whitespace as in `visible_time_range`.
+    /// Nearest eligible slot's timestamp, respecting the time-scale index filters.
+    /// With both filters off, extrapolated into whitespace as in `visible_time_range`.
     pub time: DateTime<Utc>,
     /// Price on the main pane, or the value on the scale of the hovered pane or volume.
     pub price: f64,
@@ -125,7 +126,8 @@ pub enum ChartEvent {
     /// first non-zero size.
     TimeScaleResized(egui::Vec2),
     /// The local cursor moved or anything its pointer carries changed, such as the bar under a
-    /// stationary cursor or a held modifier; `None` means it left the plots.
+    /// stationary cursor or a held modifier; `None` means it left the plots or no eligible
+    /// crosshair index remains in view.
     /// Programmatically synchronized cursors do not emit this event.
     CrosshairMoved(Option<ChartPointer>),
     /// A primary or secondary click in a plot, including clicks selecting drawings or studies.
@@ -317,12 +319,11 @@ impl Chart {
     }
 
     fn pointer_at(&self, ui: &Ui, pos: Pos2) -> Option<ChartPointer> {
-        let scale = self.state.time_scale();
         let plot = self.last_rendered_price_rect;
         let shown = self.state.shown();
-        let index = scale
-            .coord_to_idx_precise(pos.x, plot.left(), plot.width())
-            .round();
+        let coords = self.get_chart_mapping();
+        let selected = self.crosshair_position(pos, &coords)?;
+        let index = coords.x_to_idx_f64(selected.x).round();
         let time = crate::model::time_at(shown, index)?;
         let bar_at = (index >= 0.0 && index < shown.len() as f64).then_some(index as usize);
         let magnet = |map: crate::scales::PriceMap, values: Vec<f64>| {

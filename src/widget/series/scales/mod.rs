@@ -6,9 +6,9 @@ use crate::model::{
 };
 use crate::scales::{PriceMap, PriceScale, PriceScaleMode, PriceScaleOptions, PriceTransform};
 use crate::studies::{Indicator, PlotType};
-use crate::widget::{Chart, PaneId};
+use crate::widget::{Chart, PaneId, SeriesId};
 use chrono::{DateTime, Utc};
-use egui::{Color32, Rect};
+use egui::{Color32, Painter, Rect};
 
 /// A price on a series axis, its tag colours, the map it is drawn on and its tag text.
 type AxisValue = (f64, (Color32, Color32), PriceMap, String);
@@ -102,7 +102,7 @@ impl Chart {
 
     /// The prices of price-anchored markers of `markers` and `more` in view, when `options` fit them.
     pub(in crate::widget) fn marker_prices<'a>(
-        &self,
+        &'a self,
         markers: &'a crate::widget::marks::TimeOrdered<Marker>,
         more: &'a [Marker],
         options: MarkerOptions,
@@ -121,12 +121,178 @@ impl Chart {
                     )
             })
             .filter(|marker| {
+                marker.size.is_finite() && marker.size > 0.0 && self.marker_in_view(marker)
+            })
+            .filter(|marker| {
                 matches!(
                     marker.position,
                     MarkerPos::AtPriceTop | MarkerPos::AtPriceBottom | MarkerPos::AtPriceMiddle
                 )
             })
             .filter_map(|marker| marker.price)
+    }
+
+    /// Whether the marker's centre is in the horizontal plot, using the renderer's mapping.
+    fn marker_in_view(&self, marker: &Marker) -> bool {
+        let time = self.state.time_scale();
+        crate::model::index_at(self.state.shown(), marker.time).is_some_and(|index| {
+            let x = time.idx_to_coord_precise(index, 0.0, time.width());
+            (0.0..=time.width()).contains(&x)
+        })
+    }
+
+    /// Price anchors in scale units, with the shape and text's screen-space extents.
+    pub(in crate::widget) fn series_marker_bounds(
+        &self,
+        painter: &Painter,
+        id: SeriesId,
+        map: PriceMap,
+    ) -> Vec<(f64, f32, f32)> {
+        let (marks, source, options, bars) = if id == SeriesId::MAIN {
+            if !self.main_series_visible {
+                return Vec::new();
+            }
+            (
+                &self.marks,
+                self.mark_source
+                    .as_ref()
+                    .map_or(&[][..], |s| &s.page.bar_marks),
+                self.marker_options,
+                self.state.shown(),
+            )
+        } else {
+            let Some(item) = self
+                .price_series
+                .iter()
+                .find(|item| item.id == id && item.visible)
+            else {
+                return Vec::new();
+            };
+            (&item.markers, &[][..], item.marker_options, &item.bars[..])
+        };
+        if !options.auto_scale || bars.is_empty() {
+            return Vec::new();
+        }
+        let rect = Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(self.state.time_scale().width(), 1.0),
+        );
+        let coords = self.get_chart_mapping().with_rect(rect);
+        let (from, to) = crate::widget::marks::window(self.state.shown(), &coords, rect);
+        let markers = marks
+            .within(from, to)
+            .into_iter()
+            .map(|at| &marks[at])
+            .chain(source);
+        let bounds = |marker: &Marker| {
+            if !self.marker_in_view(marker) {
+                return None;
+            }
+            let at = if id == SeriesId::MAIN {
+                crate::model::index_at(bars, marker.time)?
+                    .round()
+                    .clamp(0.0, (bars.len() - 1) as f64) as usize
+            } else {
+                bars.partition_point(|bar| bar.time <= marker.time)
+                    .saturating_sub(1)
+            };
+            let (price, top, bottom) =
+                crate::chart::rendering::marker_bounds(painter, marker, &bars[at], &map)?;
+            let value = map.transform().to_scale(price);
+            (value.is_finite() && top.is_finite() && bottom.is_finite())
+                .then_some((value, top, bottom))
+        };
+        if id == SeriesId::MAIN && self.chart_type.is_time_independent() {
+            crate::chart::rendering::candles::price_based::markers(
+                markers.enumerate(),
+                &self.state,
+                self.chart_type,
+                &self.chart_type_params,
+                self.older_bars_drawn,
+            )
+            .iter()
+            .filter_map(|(_, marker)| bounds(marker))
+            .collect()
+        } else {
+            markers.filter_map(bounds).collect()
+        }
+    }
+
+    /// Adds screen-space room to an automatically fitted range. The data span occupies the
+    /// height left after the largest marker extents at each edge, so padding cannot compound
+    /// across frames. Manual ranges and panes too short for the extents keep their range.
+    pub(in crate::widget) fn fit_marker_bounds(
+        scale: &mut PriceScale,
+        rect: Rect,
+        bounds: impl IntoIterator<Item = (f64, f32, f32)>,
+    ) {
+        if scale.is_manual() || rect.height() <= 0.0 {
+            return;
+        }
+        let map = scale.map(scale.transform(), rect.top(), rect.bottom());
+        let range = scale.range();
+        let (mut low, mut high) = (range.min, range.max);
+        let (mut top, mut bottom) = (0.0_f32, 0.0_f32);
+        let mut clipped = false;
+        for (anchor, above, below) in bounds {
+            let y = map.scale_to_y(anchor);
+            clipped |= y - above < rect.top() || y + below > rect.bottom();
+            low = low.min(anchor);
+            high = high.max(anchor);
+            top = top.max(above);
+            bottom = bottom.max(below);
+        }
+        let height = rect.height();
+        if !clipped || top + bottom >= height {
+            return;
+        }
+        if low == high {
+            let half_span = scale.min_span() * 0.5;
+            low -= half_span;
+            high += half_span;
+        }
+        let span = (high - low) / f64::from(1.0 - (top + bottom) / height);
+        let (lower, upper) = if scale.options().invert_scale {
+            (top, bottom)
+        } else {
+            (bottom, top)
+        };
+        let margins = scale.options().scale_margins;
+        // The existing range already includes the host's margins.
+        scale.options_mut().scale_margins = crate::scales::PriceScaleMargins {
+            top: 0.0,
+            bottom: 0.0,
+        };
+        scale.autoscale(
+            low - span * f64::from(lower / height),
+            high + span * f64::from(upper / height),
+        );
+        scale.options_mut().scale_margins = margins;
+    }
+
+    /// Fits the main pane's markers after every series has fitted its own price scale.
+    pub(in crate::widget) fn fit_marker_scales(&mut self, painter: &Painter, rect: Rect) {
+        let map = self.state.price_scale().map(
+            self.state.price_scale().transform(),
+            rect.top(),
+            rect.bottom(),
+        );
+        let mut main = self.series_marker_bounds(painter, SeriesId::MAIN, map);
+        let mut other = std::collections::HashMap::<SeriesScale, Vec<_>>::new();
+        for item in self.main_pane_series() {
+            let bounds = self.series_marker_bounds(painter, item.id, self.series_map(item, rect));
+            if item.options.scale == self.main_series_scale {
+                main.extend(bounds);
+            } else {
+                other.entry(item.options.scale).or_default().extend(bounds);
+            }
+        }
+        Self::fit_marker_bounds(self.state.price_scale_mut(), rect, main);
+        for (key, bounds) in other {
+            if let Some(scale) = self.series_scales.get_mut(&key) {
+                Self::fit_marker_bounds(scale, rect, bounds);
+            }
+        }
     }
 
     fn series_transform(&self, item: &PriceSeries) -> PriceTransform {

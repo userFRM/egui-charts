@@ -35,11 +35,13 @@ pub enum MismatchDirection {
 pub struct BarsInRange {
     /// Indices into [`Chart::bars`] of the bars inside the range, empty when none is.
     pub bars: std::ops::Range<usize>,
-    /// The number of bars before the range. When there are none, the logical distance from
-    /// the range's left edge to the first bar, negated: zero or less.
+    /// The logical distance from the series' first bar to the first selected bar. If no bars
+    /// are selected, or the series' first bar is selected, measured to the unrounded left
+    /// edge instead. Negative when that edge lies before the first bar.
     pub bars_before: f64,
-    /// The number of bars after the range. When there are none, the logical distance from the
-    /// last bar to the range's right edge, negated: zero or less.
+    /// The logical distance from the last selected bar to the series' last bar. If no bars
+    /// are selected, or the series' last bar is selected, measured from the unrounded right
+    /// edge instead. Negative when that edge lies after the last bar.
     pub bars_after: f64,
 }
 
@@ -356,10 +358,14 @@ impl Chart {
     }
 
     /// The bars of `series` inside `range`, a range of logical indices of the time scale such as
-    /// [`visible_logical_range`](Self::visible_logical_range) returns, with the bars before and
-    /// after it, for example to request older history before the user scrolls to its start. The range's edges are rounded to whole indices; a bar's logical index is
-    /// the position of its open time on the time scale. `None` for a series without bars or a
-    /// chart without a time scale.
+    /// [`visible_logical_range`](Self::visible_logical_range) returns, with the distances to the
+    /// ends of the series, for example to request older history before the user scrolls to its
+    /// start. A bar's logical index is the position of its open time on the time scale, so a
+    /// series that skips positions counts them. The range's edges are rounded to whole indices
+    /// to select the bars. An empty intersection returns an empty slice at the insertion point,
+    /// with `bars_before = range.left - first_index` and `bars_after = last_index - range.right`.
+    /// Distances at either end of the series also retain the unrounded requested edge.
+    /// `None` for a series without bars or a chart without a time scale.
     pub fn bars_in_logical_range(
         &self,
         series: SeriesId,
@@ -369,23 +375,26 @@ impl Chart {
         let shown = self.state.shown();
         let (first, last) = (bars.first()?, bars.last()?);
         let index = |bar: &Bar| crate::model::index_at(shown, bar.time).unwrap_or(f64::NAN);
-        let left = f64::from(range.left).round();
-        let right = f64::from(range.right).round();
+        let (left, right) = (f64::from(range.left), f64::from(range.right));
         shown.first()?;
-        let start = bars.partition_point(|bar| index(bar) < left);
-        let end = bars.partition_point(|bar| index(bar) <= right).max(start);
+        let start = bars.partition_point(|bar| index(bar) < left.round());
+        let end = bars
+            .partition_point(|bar| index(bar) <= right.round())
+            .max(start);
+        let from = if start > 0 && start < end {
+            index(&bars[start])
+        } else {
+            left
+        };
+        let to = if end < bars.len() && start < end {
+            index(&bars[end - 1])
+        } else {
+            right
+        };
         Some(BarsInRange {
             bars: start..end,
-            bars_before: if start > 0 {
-                start as f64
-            } else {
-                left - index(first)
-            },
-            bars_after: if end < bars.len() {
-                (bars.len() - end) as f64
-            } else {
-                index(last) - right
-            },
+            bars_before: from - index(first),
+            bars_after: index(last) - to,
         })
     }
 
@@ -409,6 +418,17 @@ impl Chart {
             &self.marks
         } else {
             &[]
+        }
+    }
+
+    /// Marker fitting and layering of a bar series, or `None` for an absent series.
+    pub fn marker_options(&self, series: SeriesId) -> Option<MarkerOptions> {
+        if let Some(item) = self.price_series.iter().find(|item| item.id == series) {
+            Some(item.marker_options)
+        } else if series == SeriesId::MAIN && self.main_series_present {
+            Some(self.marker_options)
+        } else {
+            None
         }
     }
 
@@ -447,6 +467,22 @@ impl Chart {
             .push((id, line));
         self.next_price_line += 1;
         Some(id)
+    }
+
+    /// Price lines of a bar series in drawing order, with their handles for editing.
+    /// Unknown ids and study ids yield no lines.
+    pub fn price_lines(&self, series: SeriesId) -> impl Iterator<Item = (PriceLineId, &PriceLine)> {
+        let lines = self
+            .price_series
+            .iter()
+            .find(|item| item.id == series)
+            .map(|item| item.lines.as_slice())
+            .or_else(|| {
+                (series == SeriesId::MAIN && self.main_series_present)
+                    .then_some(self.price_lines.as_slice())
+            })
+            .unwrap_or_default();
+        lines.iter().map(|(id, line)| (*id, line))
     }
 
     /// The price line of `id`, or `None` once it is removed, replaced by
