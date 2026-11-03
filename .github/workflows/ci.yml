@@ -228,8 +228,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         if: needs.changes.outputs.docs == 'true'
         with:
-          # Reuse the platform test job's warm cache; OS and compiler stay in its key.
-          shared-key: test
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Run library tests (no default features)
         if: needs.changes.outputs.rust == 'true'
@@ -275,7 +273,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         if: needs.changes.outputs.rust == 'true'
         with:
-          shared-key: test
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Run library tests (UI without named time zones)
         if: needs.changes.outputs.rust == 'true'
