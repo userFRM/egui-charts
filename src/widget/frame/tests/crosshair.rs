@@ -1,6 +1,55 @@
 use crate::widget::test_frames::{chart, frame, shapes};
 use egui::{Event, Pos2, Shape};
 
+#[test]
+fn synced_crosshair_filters_numeric_gaps_by_screen_distance() {
+    use crate::model::{Bar, BarData, LineStyle, LogicalRange};
+    use crate::scales::{PriceHorizontalScale, key_time};
+    use crate::widget::{Chart, SeriesOptions};
+    use std::sync::Arc;
+
+    let bars = vec![
+        Bar::from_value(key_time(100.0).unwrap(), 10.0),
+        Bar::whitespace(key_time(110.0).unwrap()),
+        Bar::from_value(key_time(140.0).unwrap(), 12.0),
+    ];
+    let ctx = egui::Context::default();
+    let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+    chart.set_horizontal_scale(Some(Arc::new(PriceHorizontalScale::default())));
+    chart.config_mut().show_volume = false;
+    chart.chart_options.time_scale.ignore_whitespace_indices = true;
+    chart.chart_options.time_scale.ignore_hidden_indices = true;
+    chart.chart_options.crosshair.vert_line_color = egui::Color32::MAGENTA;
+    chart.chart_options.crosshair.vert_line_style = LineStyle::Solid;
+    let added = chart.add_series(SeriesOptions::default());
+    let pane = chart.add_pane();
+    assert!(chart.move_series_to_pane(added, pane));
+    chart.set_data(added, bars);
+    frame(&ctx, &mut chart, 0.0, vec![]);
+    assert!(chart.set_visible_logical_range(LogicalRange::new(-0.5, 2.5)));
+    // Index 1.4 is key 122: key 140 is closer than key 100, across the empty key 110.
+    chart.set_synced_crosshair_bar_idx(Some(1.4));
+    let painted = shapes(&ctx, &mut chart, 0.1, vec![Event::PointerGone]);
+    let expected = chart.index_to_x(2.0).unwrap();
+    assert_eq!(chart.last_crosshair.map(|(time, _)| time), key_time(140.0));
+    let lines: Vec<_> = painted
+        .iter()
+        .filter_map(|shape| match shape {
+            Shape::LineSegment { points, stroke }
+                if stroke.color == egui::Color32::MAGENTA && points[0].x == points[1].x =>
+            {
+                Some(points[0].x)
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(
+        lines.len() >= 2,
+        "main and added pane crosshairs: {lines:?}"
+    );
+    assert!(lines.iter().all(|x| (*x - expected).abs() < 0.01));
+}
+
 /// Main prices 0..100 and added prices 0..2000 share screen heights: the added close
 /// of 1000 sits at main price 50. Only closes compete, with main then draw-order ties.
 #[test]

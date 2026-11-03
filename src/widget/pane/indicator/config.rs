@@ -141,9 +141,11 @@ pub use crate::chart::coords::ChartMapping;
 /// indicator data points are drawn at the same x-positions as their
 /// corresponding bars in the main chart. Obtained from the chart's time scale
 /// after rendering.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct IndicatorCoordParams {
-    /// Bar spacing in egui logical points.
+    /// Numeric positions shared with the main chart; `None` keeps ordinal spacing.
+    pub numeric_positions: Option<crate::model::NumericPositions>,
+    /// Points per ordinal slot, or per mean numeric key gap.
     pub bar_spacing: f32,
     /// Right offset (bars to the right of last data point)
     pub right_offset: f64,
@@ -165,6 +167,7 @@ impl IndicatorCoordParams {
         start_idx: usize,
     ) -> Self {
         Self {
+            numeric_positions: None,
             bar_spacing,
             right_offset: right_offset.into(),
             base_idx,
@@ -177,7 +180,7 @@ impl IndicatorCoordParams {
     /// The resulting mapping converts bar indices and price/indicator values to
     /// screen positions in egui logical points within the given rect.
     pub fn to_mapping(&self, rect: Rect, y_min: f64, y_max: f64) -> ChartMapping {
-        ChartMapping::new(
+        let mut mapping = ChartMapping::new(
             rect,
             self.bar_spacing,
             self.start_idx,
@@ -190,7 +193,9 @@ impl IndicatorCoordParams {
                 rect.max.y,
                 false,
             ),
-        )
+        );
+        mapping.numeric_positions = self.numeric_positions.clone();
+        mapping
     }
 }
 
