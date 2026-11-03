@@ -235,7 +235,7 @@ fn broker_facts(id: &str) -> Vec<(String, egui_charts::ui::trading::BrokerFact)>
 }
 
 /// Which right-hand side panel is open, if any.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum SidePanel {
     ObjectTree,
     Alerts,
@@ -566,6 +566,17 @@ impl DemoApp {
         chart.config_mut().candle_width = 0.75;
         chart.config_mut().right_axis_width = 59.0;
         chart.config_mut().skip_background = true;
+        chart.set_event_visibility(
+            cc.storage
+                .and_then(|storage| eframe::get_value(storage, "event_visibility"))
+                .unwrap_or_else(|| egui_charts::model::EventVisibility {
+                    show_dividends: false,
+                    show_splits: false,
+                    show_news: false,
+                    show_ideas: false,
+                    ..Default::default()
+                }),
+        );
         chart.set_order_book_view(book_view(false));
         chart.set_symbol(symbol);
         chart.set_timeframe(timeframe);
@@ -705,7 +716,10 @@ impl DemoApp {
             strategy_trade: None,
             strategy_session: SessionType::Full24x7,
             object_tree: ObjectTreePanel::new(),
-            open_panel: Some(SidePanel::Watchlist),
+            open_panel: cc
+                .storage
+                .and_then(|storage| eframe::get_value(storage, "open_panel"))
+                .flatten(),
             data_window_expanded: true,
             alerts: AlertsPanel::default(),
             alert_host: {
@@ -861,8 +875,6 @@ impl DemoApp {
         app.calendar.set_feed(app.live.clone());
         app.screener.set_feed(app.live.clone());
         app.hotlists.set_feed(app.live.clone());
-        app.notification_host
-            .notify("Connected to the synthetic feed", None);
         app.notifications.set_service(app.notification_host.clone());
         app.chats
             .set_service(Arc::new(feeds::DemoChats::new(chrono::Utc::now())));
@@ -878,6 +890,23 @@ impl DemoApp {
         let current = app.user_settings();
         if let Some(settings) = app.settings.poll(&cc.egui_ctx, &current) {
             app.apply_user_settings(&cc.egui_ctx, settings);
+        }
+        if let Some(settings) = cc.storage.and_then(|storage| {
+            eframe::get_value::<egui_charts::services::DetectorSettings>(storage, "detectors")
+        }) {
+            match settings.validate() {
+                Ok(()) => app.live.detectors().set_settings(settings),
+                Err(error) => app
+                    .toasts
+                    .error(format!("Could not restore detectors: {error}")),
+            }
+        }
+        if cc
+            .storage
+            .and_then(|storage| eframe::get_value(storage, "api_samples"))
+            .unwrap_or(false)
+        {
+            app.execute_search_command(&cc.egui_ctx, "samples");
         }
         app
     }
@@ -1403,6 +1432,10 @@ impl eframe::App for DemoApp {
         eframe::set_value(storage, "demo_formatting", &self.formatting);
         let current = self.user_settings();
         self.settings.flush(&current);
+        eframe::set_value(storage, "detectors", &self.live.detectors().settings());
+        eframe::set_value(storage, "api_samples", &self.api_samples);
+        eframe::set_value(storage, "event_visibility", self.chart.event_visibility());
+        eframe::set_value(storage, "open_panel", &self.open_panel);
         eframe::set_value(
             storage,
             "drawing_defaults",
@@ -1471,11 +1504,6 @@ impl eframe::App for DemoApp {
             self.toasts.error(error);
         }
         self.poll_storage(&ctx);
-        // The watchlist opens beside the chart by default, but a compact window starts with the
-        // chart alone.
-        if ctx.cumulative_frame_nr() == 0 && ctx.content_rect().width() < 600.0 {
-            self.open_panel = None;
-        }
 
         // Drive replay before laying out the chart so its window is current.
         self.advance_replay();
@@ -4294,6 +4322,89 @@ mod tests {
             self.0.remove(key);
         }
         fn flush(&mut self) {}
+    }
+
+    #[test]
+    fn opening_state_is_quiet_and_saved_features_restore() {
+        use eframe::App;
+        use egui_charts::services::{DetectionCounts, DetectionKind};
+
+        let now = "2026-10-27T14:00:00Z".parse().unwrap();
+        for width in [393.0, 1440.0] {
+            for theme in [egui::Theme::Light, egui::Theme::Dark] {
+                let ctx = egui::Context::default();
+                ctx.run_ui(
+                    egui::RawInput {
+                        system_theme: Some(theme),
+                        ..Default::default()
+                    },
+                    |_| {},
+                )
+                .drop_without_applying_deltas();
+                let mut app = DemoApp::new_at(
+                    &eframe::CreationContext::_new_kittest(ctx.clone()),
+                    now,
+                    true,
+                );
+                assert!(app.open_panel.is_none());
+                assert_eq!(app.chart.chart_type(), ChartType::Candles);
+                assert!(app.chart.config().show_volume);
+                assert!(!app.api_samples);
+                let events = app.chart.event_visibility();
+                assert!(
+                    !events.show_dividends
+                        && !events.show_splits
+                        && !events.show_news
+                        && !events.show_ideas
+                );
+                assert!(app.live_strategy.is_none());
+                for second in 0..=60 {
+                    app.advance_sample_to(now + chrono::TimeDelta::seconds(second));
+                    ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 900.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+                    )
+                    .drop_without_applying_deltas();
+                    assert!(app.toasts.is_empty(), "{theme:?}, {width}, second {second}");
+                    assert!(app.live.detectors().take_alerts().is_empty());
+                }
+                for kind in DetectionKind::ALL {
+                    assert_eq!(
+                        app.live.detectors().counts("SAMPLE", kind, app.live.now()),
+                        DetectionCounts::default()
+                    );
+                }
+                assert_eq!(app.notifications.unread(), 0);
+                let mut settings = app.live.detectors().settings();
+                settings.big_trades.enabled = true;
+                settings.big_trades.alert = true;
+                settings.big_trades.sound = true;
+                settings.big_trades.rule.threshold = egui_charts::services::Threshold::Fixed(10.0);
+                settings.stop_runs.enabled = true;
+                settings.stop_run_count_alert = Some(egui_charts::services::CountAlert::default());
+                app.live.detectors().set_settings(settings.clone());
+                let mut events = app.chart.event_visibility().clone();
+                events.show_news = true;
+                app.chart.set_event_visibility(events.clone());
+                app.open_panel = Some(SidePanel::OrderFlow);
+                app.execute_search_command(&ctx, "samples");
+                let mut storage = AppStorage::default();
+                app.save(&mut storage);
+                let mut cc = eframe::CreationContext::_new_kittest(egui::Context::default());
+                cc.storage = Some(&storage);
+                let restored = DemoApp::new_at(&cc, now, true);
+                assert_eq!(restored.live.detectors().settings(), settings);
+                assert!(restored.open_panel == Some(SidePanel::OrderFlow));
+                assert!(restored.api_samples);
+                assert_eq!(restored.chart.event_visibility(), &events);
+            }
+        }
     }
 
     #[test]

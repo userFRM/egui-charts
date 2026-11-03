@@ -20,7 +20,7 @@ pub struct DetectionCounts {
 }
 
 /// The feed-time window of a count alert.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CountWindow {
     /// Since tracking or reset.
     Total,
@@ -52,7 +52,7 @@ impl CountWindow {
 }
 
 /// Fires once when its window reaches `minimum`, rearming only below it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct CountAlert {
     /// Which running count to compare.
