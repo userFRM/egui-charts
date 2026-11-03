@@ -208,6 +208,7 @@ impl Chart {
         self.follow_chart_theme(&ui.active_theme());
         self.host_events.volume_map = None;
         self.host_events.target = None;
+        self.host_events.primitive_hit = None;
         self.apply_config_scale_mode();
         #[cfg(feature = "studies")]
         self.sync_volume_study(ui.ctx());
@@ -926,7 +927,10 @@ impl Chart {
                 let first = flow.complete_from()?;
                 let candles =
                     self.state.shown()[start_idx..end_idx].partition_point(|bar| bar.time < first);
-                let ranges = self.execution_profile_ranges(start_idx + candles..end_idx)?;
+                let settings = self.trade_profile_settings();
+                let extend = settings.extend_poc || settings.extend_vah || settings.extend_val;
+                let profile_start = if extend { 0 } else { start_idx + candles };
+                let ranges = self.execution_profile_ranges(profile_start..end_idx)?;
                 let mapping = self.get_chart_mapping().with_rect(price_rect);
                 let bars = &self.state.data().bars;
                 let mut profiles = crate::studies::trade_profiles(flow, &ranges);
@@ -934,11 +938,15 @@ impl Chart {
                     let first = bars.partition_point(|b| b.time < profile.range.start);
                     let end = bars.partition_point(|b| b.time < profile.range.end);
                     first < end
-                        && mapping.idx_to_x(end - 1) >= price_rect.left()
                         && mapping.idx_to_x(first) - mapping.bar_spacing * 0.45
                             <= price_rect.right()
                 });
-                Some((flow.price_step(), flow.tick_size(), profiles))
+                // Sessions left of the view only draw their extensions.
+                let shown = profiles.partition_point(|profile| {
+                    let end = bars.partition_point(|b| b.time < profile.range.end);
+                    mapping.idx_to_x(end - 1) < price_rect.left()
+                });
+                Some((flow.price_step(), flow.tick_size(), profiles, shown))
             });
         let fixed_footprint = self
             .feed_link
@@ -981,8 +989,8 @@ impl Chart {
         #[cfg(feature = "studies")]
         let profile_prices = execution_profiles
             .iter()
-            .flat_map(|(step, tick, profiles)| {
-                profiles.iter().flat_map(move |profile| {
+            .flat_map(|(step, tick, profiles, shown)| {
+                profiles[*shown..].iter().flat_map(move |profile| {
                     profile
                         .volume
                         .levels
@@ -1610,11 +1618,14 @@ impl Chart {
                     pos,
                 )
             } else {
-                self.pane_layout.main.iter().rev().find_map(|id| {
-                    primitives::primitive_at(
-                        self.main_primitives(&coords)
-                            .filter(|(item, _)| item.replaces && item.series == *id),
-                        pos,
+                self.pane_layout.main.iter().rev().fold(None, |best, id| {
+                    primitives::best_hit(
+                        best,
+                        primitives::primitive_at(
+                            self.main_primitives(&coords)
+                                .filter(|(item, _)| item.replaces && item.series == *id),
+                            pos,
+                        ),
                     )
                 })
             }
@@ -1654,6 +1665,7 @@ impl Chart {
         });
         let element_at = |pos: Pos2| {
             let renderer = renderer_hit
+                .as_ref()
                 .filter(|_| Some(pos) == pointer)
                 .and_then(|hit| {
                     if let super::PointerTarget::Element(id) = hit.target {
@@ -1897,14 +1909,15 @@ impl Chart {
                         );
                     }
                     #[cfg(feature = "studies")]
-                    if session_profiles && let Some((step, tick, profiles)) = &execution_profiles {
+                    if session_profiles
+                        && let (Some((_, _, profiles, _)), Some(flow)) = (&execution_profiles, feed)
+                    {
                         crate::chart::overlays::render_session_volume_profiles(
                             &clipped_painter,
                             &mapping,
                             bars,
                             profiles,
-                            *step,
-                            *tick,
+                            flow,
                             self.trade_profile_settings(),
                         );
                     }
@@ -2091,26 +2104,32 @@ impl Chart {
             let drawing = self.drawings.hit_test(pos);
             #[cfg(not(feature = "drawings"))]
             let drawing: Option<usize> = None;
-            if let Some(hit) = primitive_hit
-                .or(renderer_hit.filter(|hit| {
-                    element_at(pos).map(|(id, _)| super::PointerTarget::Element(id))
-                        == Some(hit.target)
-                }))
-                .filter(|_| {
-                    drawing.is_none()
-                        && response.hovered()
-                        && !response.dragged()
-                        && !self.zoom_mode_active
-                        && !eraser_mode
-                        && !drawing_tool_active
-                })
-            {
-                ui.ctx().set_cursor_icon(hit.cursor);
+            let hit = primitives::best_hit(
+                primitive_hit,
+                renderer_hit
+                    .as_ref()
+                    .filter(|hit| {
+                        element_at(pos).map(|(id, _)| super::PointerTarget::Element(id))
+                            == Some(hit.target)
+                    })
+                    .cloned(),
+            );
+            if let Some(hit) = hit.as_ref().filter(|_| {
+                drawing.is_none()
+                    && response.hovered()
+                    && !response.dragged()
+                    && !self.zoom_mode_active
+                    && !eraser_mode
+                    && !drawing_tool_active
+            }) {
+                ui.ctx().set_cursor_icon(hit.result.cursor);
             }
             self.host_events.target = drawing
                 .map(super::PointerTarget::Drawing)
-                .or(primitive_hit.map(|hit| hit.target))
+                .or(hit.as_ref().map(|hit| hit.target))
                 .or_else(|| element_at(pos).map(|(id, _)| super::PointerTarget::Element(id)));
+            self.host_events.primitive_hit =
+                hit.filter(|_| drawing.is_none()).map(|hit| hit.result);
         }
 
         // Draw selection handles for whichever element is currently selected on
@@ -2675,7 +2694,9 @@ impl Chart {
                 .finish_drawing_action(&mut self.drawings, drawing_history);
         }
         self.paint_marks(&clipped_price_ctx, &coords, MarkerZOrder::Top);
-        self.paint_primitives(&painter, &coords, PrimitivePass::Above);
+        if !self.hide_foreground {
+            self.paint_primitives(&painter, &coords, PrimitivePass::Above);
+        }
 
         // Placed after the drawings handled this frame's input, so a dragged line's tags move
         // with it in the same frame.
@@ -2936,8 +2957,8 @@ impl Chart {
             self.main_pane_series(),
         );
         #[cfg(feature = "studies")]
-        if let Some((step, tick, profiles)) = &execution_profiles {
-            for profile in profiles {
+        if let Some((step, tick, profiles, shown)) = &execution_profiles {
+            for profile in &profiles[*shown..] {
                 let levels = &profile.volume.levels;
                 let Some(((&low, _), (&high, _))) =
                     levels.first_key_value().zip(levels.last_key_value())
