@@ -397,11 +397,11 @@ Options,Expected move,Expected move to an expiry from the at-the-money straddle 
 Options,Gamma exposure,Call and put walls,missing,host,,
 Options,Gamma exposure,Gamma exposure by strike,missing,host,,
 Options,Gamma exposure,Gamma exposure computed from option chains or supplied by the feed,done,host,;src/data/option_chain.rs;src/data/mod.rs;src/model/instrument.rs,
-Options,Options profile,"Open interest by strike for calls, puts and net",missing,host,,
-Options,Options profile,"Option expiry selection: nearest, one listed expiry or every expiry up to a date",partial,host,src/data/options_volume.rs;src/studies/builtin/options_volume_profile.rs,
-Options,Options profile,Call and put volume by strike,done,host,src/data/options_volume.rs;src/studies/builtin/options_volume_profile.rs,
-Options,Options profile,Max pain from open interest,missing,host,,
-Options,Options profile,Put/call ratios of volume and open interest,missing,host,,
+Options,Options profile,"Open interest by strike for calls, puts and net",done,host,src/studies/builtin/options_volume_profile.rs;src/data/option_chain.rs;src/ui/dialogs/indicator_dialog/dialog.rs,1758
+Options,Options profile,"Option expiry selection: nearest, one listed expiry or every expiry up to a date",done,host,src/studies/builtin/options_volume_profile.rs;src/data/option_chain.rs;src/ui/dialogs/indicator_dialog/dialog.rs,1758
+Options,Options profile,Call and put volume by strike,done,host,src/studies/builtin/options_volume_profile.rs;src/data/option_chain.rs;src/ui/dialogs/indicator_dialog/dialog.rs;src/data/options_volume.rs,1758
+Options,Options profile,Max pain from open interest,done,host,src/studies/builtin/options_volume_profile.rs;src/data/option_chain.rs;src/ui/dialogs/indicator_dialog/dialog.rs;src/chart/rendering/indicator.rs,1758
+Options,Options profile,Put/call ratios of volume and open interest,done,host,src/studies/builtin/options_volume_profile.rs;src/data/option_chain.rs;src/ui/dialogs/indicator_dialog/dialog.rs,1758
 Order flow,Order flow,"Depth heatmap, order book and volume bubble settings in the chart settings dialog",done,library,src/ui/dialogs/chart_settings/mod.rs;src/ui/dialogs/chart_settings/tabs/order_flow.rs;src/ui/top_toolbar/components/settings_menu/types.rs;src/widget/settings/data.rs;src/widget/settings/apply.rs;src/widget/feed/mod.rs,
 Order flow,Order flow,"Footprints on tick, volume, range and delta intervals",missing,library,,
 Order flow,Order flow,"Prior-session POC, VAH and VAL extended until revisited, and developing value area lines",missing,library,,
@@ -710,7 +710,7 @@ Studies,Indicators,Negative Volume Index,done,library,src/studies/builtin/volume
 Studies,Indicators,Net Volume,partial,library,src/studies/builtin/net_volume.rs;src/studies/indicator_trait.rs,
 Studies,Indicators,On Balance Volume,done,library,src/studies/builtin/obv.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Open Interest,done,host,src/data/metrics.rs;src/data/mod.rs;src/studies/metric.rs;src/widget/studies_data.rs;src/ui/dialogs/indicator_dialog/dialog.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Options Volume Profile,done,host,src/studies/builtin/options_volume_profile.rs;src/data/volume_profile.rs;src/chart/rendering/indicator.rs;src/painting/volume_profile.rs;src/painting/dashed_line.rs,
+Studies,Indicators,Options Volume Profile,done,host,src/studies/builtin/options_volume_profile.rs;src/data/volume_profile.rs;src/chart/rendering/indicator.rs;src/painting/volume_profile.rs;src/painting/dashed_line.rs;src/data/option_chain.rs;src/ui/dialogs/indicator_dialog/dialog.rs,1758
 Studies,Indicators,Parabolic SAR,done,library,src/studies/builtin/parabolic_sar.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
 Studies,Indicators,Percentage Price Oscillator,partial,library,src/studies/builtin/price_oscillator.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/studies/builtin/macd.rs;src/studies/palette.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Percentage Volume Oscillator,partial,library,src/studies/builtin/percentage_volume_oscillator.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/studies/builtin/macd.rs;src/studies/palette.rs;src/chart/rendering/indicator.rs,
