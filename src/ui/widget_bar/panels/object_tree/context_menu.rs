@@ -86,7 +86,7 @@ pub(super) fn render_item_menu(
 
     ui.separator();
 
-    // Z-ordering (drawings only)
+    // Ordering for drawings and bar series.
     if item.source_type == SourceType::Drawing || item.source_type == SourceType::DataSource {
         if ui
             .selectable_label(false, l10n::text(ui.ctx(), "Bring to front"))

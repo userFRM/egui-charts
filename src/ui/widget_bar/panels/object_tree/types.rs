@@ -14,7 +14,7 @@ use egui::Color32;
 /// Type of source in the tree
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SourceType {
-    /// Main data source (chart symbol and timeframe)
+    /// Main or added bar series.
     DataSource,
     /// Technical indicator (SMA, RSI, MACD, etc.)
     Indicator,
