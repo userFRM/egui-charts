@@ -48,8 +48,7 @@ pub struct ChartPointer {
     pub kind: PointerKind,
     /// Originating egui pointer or touch event, including button state or touch device, id,
     /// phase and pressure when supplied by the integration. A matching touch takes precedence
-    /// over its emulated pointer event. `modifiers` holds the keys at that event, and `pos`
-    /// retains its unsnapped position.
+    /// over its emulated pointer event, and `pos` and `modifiers` are those of that event.
     /// `None` means the position was recomputed from chart state without originating input.
     pub origin: Option<egui::Event>,
 }
