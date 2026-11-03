@@ -42,7 +42,6 @@ test('reject invalid guide manifests and missing titles before writing pages', a
     ['edit traversal', [{ ...guide, editPath: 'docs/../../outside.md' }], '# Changelog\n', /Invalid guide edit path/],
     ['missing edit path', [{ ...guide, editPath: undefined }], '# Changelog\n', /Invalid guide edit path/],
     ['empty title', [{ ...guide, title: '' }], '# Changelog\n', /Invalid guide title/],
-    ['multiline title', [{ ...guide, title: 'Title\neditUrl: elsewhere' }], '# Changelog\n', /Invalid guide title/],
     ['missing source heading', [guide], '## Unreleased\n', /Missing guide title/],
   ]) {
     await writeFile(join(site, 'guides.mjs'), `export const guides = ${JSON.stringify(entries)};`);

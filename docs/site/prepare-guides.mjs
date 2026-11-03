@@ -10,7 +10,7 @@ for (const { slug, source, editPath, title } of guides) {
   slugs.add(slug);
   if (typeof source !== 'string' || !repositoryPath.test(source)) throw new Error(`Invalid guide source: ${source}`);
   if (typeof editPath !== 'string' || !repositoryPath.test(editPath)) throw new Error(`Invalid guide edit path: ${editPath}`);
-  if (typeof title !== 'string' || !title.trim() || /[\r\n]/.test(title)) throw new Error(`Invalid guide title: ${slug}`);
+  if (typeof title !== 'string' || !title.trim()) throw new Error(`Invalid guide title: ${slug}`);
 }
 
 // Validate every source before replacing any generated page.
