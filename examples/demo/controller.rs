@@ -232,6 +232,7 @@ enum SidePanel {
     DataWindow,
     Watchlist,
     TimeAndSales,
+    OrderFlow,
     Highlights,
     Screener,
     Hotlists,
@@ -261,7 +262,7 @@ impl SidePanel {
     ];
 
     /// Panels the demo renders behind a host rail entry, with the entry's id.
-    const HOSTED: [(SidePanel, u64); 1] = [(SidePanel::TimeAndSales, 4)];
+    const HOSTED: [(SidePanel, u64); 2] = [(SidePanel::TimeAndSales, 4), (SidePanel::OrderFlow, 5)];
 
     fn icon(self) -> Option<RightBarIcon> {
         Self::BUILT_IN
@@ -436,7 +437,7 @@ pub struct DemoApp {
     paper_reset: bool,
     // Watchlists and time and sales, fed by synthetic quotes and the live feed's executions.
     watchlist: WatchlistPanel,
-    quotes: Arc<live::DemoQuotes>,
+    quotes: Arc<feeds::DemoQuotes>,
     // Text pasted for a watchlist import, while its window is open.
     watchlist_import: Option<String>,
     /// Whether the wide watchlist window is open.
@@ -444,6 +445,7 @@ pub struct DemoApp {
     // Symbol search is open for the watchlist's add button: the pick joins the list.
     watchlist_search: bool,
     time_and_sales: TimeAndSalesPanel,
+    order_flow: egui_charts::ui::widget_bar::OrderFlowPanel,
     // Below the watchlist: the chart symbol's synthetic details and notes kept in app storage.
     symbol_details: SymbolDetailsPanel,
     /// The chart symbol's financials, shown in place of the chart while they are open.
@@ -542,7 +544,7 @@ impl DemoApp {
         options.time_scale.seconds_visible = true;
         let live = Arc::new(LiveFeed::new(symbol, now));
         live.set_paused(paused);
-        let quotes = Arc::new(live::DemoQuotes::new(live.clone()));
+        let quotes = Arc::new(feeds::DemoQuotes::new(live.clone()));
         let mut chart = egui_charts::ChartBuilder::new()
             .with_feed(live.clone())
             .with_symbol(symbol)
@@ -595,6 +597,12 @@ impl DemoApp {
             );
         });
         widget_bar.widgets.clear();
+        widget_bar.widgets.push(WidgetBarWidget {
+            id: 5,
+            icon: egui_charts::icons::icons::SETTINGS_EVENTS,
+            tooltip: "Order flow".into(),
+            section: WidgetBarSection::Bottom,
+        });
         if let Some(preferences) = cc
             .storage
             .and_then(|storage| eframe::get_value(storage, "interval_preferences"))
@@ -616,6 +624,7 @@ impl DemoApp {
         alert_live.set_view(SessionType::RTH, false);
         let mut app = Self {
             chart,
+            order_flow: egui_charts::ui::widget_bar::OrderFlowPanel::new(live.detectors()),
             live,
             layout: ChartLayout::default(),
             layout_slot: 0,
@@ -1446,6 +1455,18 @@ impl eframe::App for DemoApp {
                 ctx.request_repaint_after(delay);
             }
         }
+        self.order_flow.set_service(self.live.detectors());
+        self.notification_host
+            .watch_detectors(self.live.detectors());
+        let sounds = self.order_flow.poll(&ctx, &mut self.toasts);
+        if !sounds.is_empty() {
+            self.play_sound(
+                &ctx,
+                DEMO_SOUNDS[0],
+                self.settings_state.alerts.sound_volume,
+                false,
+            );
+        }
         self.feed_market_panels(&ctx);
 
         for (_, _, feed) in &self.comparisons {
@@ -1584,6 +1605,7 @@ impl DemoApp {
                                     ("Object Tree", SidePanel::ObjectTree),
                                     ("Data Window", SidePanel::DataWindow),
                                     ("Time and sales", SidePanel::TimeAndSales),
+                                    ("Order flow", SidePanel::OrderFlow),
                                 ]
                                 .into_iter()
                                 .filter(|(_, panel)| {
@@ -2104,6 +2126,15 @@ impl DemoApp {
                     self.show_watchlist(ui);
                 }
                 SidePanel::TimeAndSales => self.time_and_sales.show(ui),
+                SidePanel::OrderFlow => {
+                    for (kind, visible) in
+                        self.order_flow
+                            .show(ui, self.chart.symbol(), self.live.now())
+                    {
+                        self.chart
+                            .set_signal_category_visible(kind.category(), visible);
+                    }
+                }
                 SidePanel::Highlights => {
                     let action = self.highlights.show(ui);
                     self.handle_news(ui.ctx(), action);
@@ -2292,7 +2323,7 @@ impl DemoApp {
             .iter_mut()
             .flat_map(|universe| &mut universe.entries)
         {
-            if let Some(quote) = live::watchlist_quote(&entry.symbol, now) {
+            if let Some(quote) = self.live.market_quote(&entry.symbol, now) {
                 let change = (quote.last - quote.prev_close) / quote.prev_close * 100.0;
                 entry.values.insert("change".into(), change);
                 entry.values.insert("price".into(), quote.last);
@@ -2310,6 +2341,11 @@ impl DemoApp {
             }
         }
         self.watchlist.set_selected(&selected);
+        self.feed_paper_prices();
+        if self.quotes.set_live(self.live.clone()) {
+            self.screener.set_feed(self.live.clone());
+            self.hotlists.set_feed(self.live.clone());
+        }
         self.quotes.publish(now);
         self.watchlist.poll(ctx);
         self.symbol_details.set_instrument(
@@ -2319,10 +2355,7 @@ impl DemoApp {
                 .cloned()
                 .unwrap_or_else(|| egui_charts::model::Instrument::new(&chart_symbol)),
         );
-        let quoted = (self.watchlist.symbols())
-            .find(|symbol| symbol.eq_ignore_ascii_case(&chart_symbol))
-            .unwrap_or(&chart_symbol);
-        if let Some(quote) = self.watchlist.quote(quoted).cloned() {
+        if let Some(quote) = self.live.quote(now) {
             self.symbol_details.set_quote(quote.clone());
             self.trading.set_quote(&chart_symbol, quote);
         }
@@ -2809,20 +2842,19 @@ impl DemoApp {
                 if self.chart.take_event_click().is_some() {
                     self.notify("Synthetic session: generated example data");
                 }
-                if let Some(bar) = self
-                    .chart
-                    .bars(SeriesId::MAIN)
-                    .iter()
-                    .rfind(|bar| !bar.is_whitespace())
+                if self.replay.is_some()
+                    && let Some(bar) = self
+                        .chart
+                        .bars(SeriesId::MAIN)
+                        .iter()
+                        .rfind(|bar| !bar.is_whitespace())
                 {
                     self.paper.set_price(self.chart.symbol(), bar.close);
-                    if self.replay.is_some() {
-                        // Replay has no historical spread; its close prices both broker and ticket.
-                        self.trading.set_quote(
-                            self.chart.symbol(),
-                            egui_charts::model::Quote::new(bar.close, bar.close, bar.time),
-                        );
-                    }
+                    // Replay has no historical spread; its close prices both broker and ticket.
+                    self.trading.set_quote(
+                        self.chart.symbol(),
+                        egui_charts::model::Quote::new(bar.close, bar.close, bar.time),
+                    );
                 }
                 if let Some(side) = self.chart.take_quote_action() {
                     if !self.trading.has_broker() {

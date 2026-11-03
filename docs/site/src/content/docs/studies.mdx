@@ -2,11 +2,14 @@
 title: Studies
 ---
 
-Enable `studies` for the built-in catalogue and `IndicatorFactory`. The `Indicator`
-trait, `IndicatorValue`, `CustomIndicator` and `IndicatorRegistry` are also available
+Enable `studies` for the built-in catalogue and [`IndicatorFactory`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/factory/struct.IndicatorFactory.html). The [`Indicator`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html)
+trait, [`IndicatorValue`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/enum.IndicatorValue.html), [`CustomIndicator`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.CustomIndicator.html) and [`IndicatorRegistry`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.IndicatorRegistry.html) are also available
 in the headless engine.
 
 ## Attach a built-in study
+
+Pass an [`EMA`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.EMA.html)
+to [`Chart::add_indicator`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.add_indicator):
 
 ```rust
 use egui_charts::{Chart, model::BarData};
@@ -23,17 +26,17 @@ indicator. Built-in implementations and their definitions are listed in the
 
 ## Write a custom study
 
-`CustomIndicator` accepts a `Send + Sync` calculation closure. Return one value
-per source bar and use `IndicatorValue::None` during warm-up or when input is
+[`CustomIndicator`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.CustomIndicator.html) accepts a `Send + Sync` calculation closure. Return one value
+per source bar and use [`IndicatorValue::None`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/enum.IndicatorValue.html#variant.None) during warm-up or when input is
 unavailable. The [builder guide](../../../../builder-guide.md#custom-studies) includes a
-complete one-bar-change example. Implement `Indicator` directly for incremental
-calculation; `studies::helpers` and `Stepper` support reusable scalar operations.
+complete one-bar-change example. Implement [`Indicator`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html) directly for incremental
+calculation; [`studies::helpers`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/helpers/index.html) and [`Stepper`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.Stepper.html) support reusable scalar operations.
 
 ## Supply additional data
 
 Some studies need another interval, another symbol, instrument metrics or actual
 executions. A connected feed loads declared study data; direct hosts answer
-`Chart::study_data_requests` with `set_study_data`. Read
+[`Chart::study_data_requests`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.study_data_requests) with [`set_study_data`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_study_data). Read
 [calendar and viewport studies](../../../../study-data.md) for intrabar requirements and missing
 values, and [order flow](../../../../order-flow.md) for event-driven inputs.
 

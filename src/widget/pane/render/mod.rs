@@ -663,16 +663,26 @@ impl Chart {
                         self.synced_crosshair_bar_idx
                             .filter(|index| index.is_finite() && *index >= 0.0)
                             .map(|index| {
+                                let index =
+                                    if self.chart_options.time_scale.ignore_whitespace_indices
+                                        || self.chart_options.time_scale.ignore_hidden_indices
+                                    {
+                                        index
+                                    } else {
+                                        index.round()
+                                    };
                                 Pos2::new(
                                     coords
                                         .to_mapping(plot, 0.0, 1.0)
-                                        .idx_to_x(index.round() as usize),
+                                        .idx_to_x(index.floor() as usize)
+                                        + index.fract() as f32 * pane_mapping.bar_spacing,
                                     plot.center().y,
                                 )
                             })
                             .filter(|pos| plot.contains(*pos))
                     })
-                    .filter(|_| !self.menu_open && !egui::Popup::is_any_open(ui.ctx()));
+                    .filter(|_| !self.menu_open && !egui::Popup::is_any_open(ui.ctx()))
+                    .and_then(|pos| self.crosshair_position(pos, &pane_mapping));
                 let mut crosshair_options = self.chart_options.crosshair.resolved(ui.ctx());
                 if eraser_mode && crosshair_options.style != crate::config::CrosshairStyle::Hidden {
                     crosshair_options.style = crate::config::CrosshairStyle::Arrow;
