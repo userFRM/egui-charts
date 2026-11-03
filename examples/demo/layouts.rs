@@ -642,7 +642,6 @@ impl DemoApp {
                 return false;
             }
         }
-        self.restore_layout_groups(groups);
         self.layout_tabs[self.layout_tab].name = name;
         if self.layout_slot >= layout.charts.len() {
             self.activate_chart_slot(0);
@@ -687,6 +686,7 @@ impl DemoApp {
                 _ => {}
             }
         }
+        self.restore_layout_groups(groups);
         for (slot, saved) in comparisons.drain(..).enumerate() {
             if slot == self.layout_slot {
                 super::comparison::restore(

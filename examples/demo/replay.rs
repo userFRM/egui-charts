@@ -92,14 +92,72 @@ pub(super) struct LayoutGroups {
     groups: [Option<String>; 16],
     detached: [bool; 16],
     sync: [bool; 6],
+    #[serde(default)]
+    cents: [bool; 16],
 }
 
 impl DemoApp {
+    pub(super) fn show_price_unit_controls(&mut self, ui: &mut egui::Ui) {
+        use egui_charts::icons::icons;
+        let response =
+            super::commands::menu_item(ui, "Price unit", &icons::TEXT, Some(&icons::CHEVRON_RIGHT));
+        egui::containers::menu::SubMenu::new().show(ui, &response, |ui| {
+            ui.label("Synthetic prices: 1 USD = 100 US cents");
+            ui.add_enabled_ui(self.replay.is_none(), |ui| {
+                for (label, cents) in [("USD", false), ("US cents", true)] {
+                    let selected = self
+                        .chart
+                        .conversion()
+                        .is_some_and(|c| c.starts_with("cents"))
+                        == cents;
+                    if super::commands::menu_item(
+                        ui,
+                        label,
+                        &icons::TEXT,
+                        selected.then_some(&icons::CHECK),
+                    )
+                    .clicked()
+                    {
+                        self.user_action(|app| {
+                            app.chart.set_conversion(conversion(
+                                cents,
+                                app.timeframe_toolbar.state.adjust_for_dividends,
+                            ));
+                            app.regenerate_bars();
+                            app.time_and_sales.clear();
+                        });
+                        ui.close();
+                    }
+                }
+            })
+            .response
+            .on_disabled_hover_text("Exit replay before changing its price unit");
+        });
+    }
+
     pub(super) fn layout_groups(&self) -> LayoutGroups {
         let sync = &self.layout.sync;
         LayoutGroups {
             groups: std::array::from_fn(|slot| self.layout.sync_group(slot).map(str::to_owned)),
             detached: std::array::from_fn(|slot| self.layout.is_detached(slot)),
+            cents: std::array::from_fn(|slot| {
+                let chart = if slot == self.layout_slot {
+                    Some(&self.chart)
+                } else {
+                    self.extra_charts
+                        .get(if slot < self.layout_slot {
+                            slot
+                        } else {
+                            slot - 1
+                        })
+                        .map(|extra| &extra.chart)
+                };
+                chart.is_some_and(|chart| {
+                    chart
+                        .instrument()
+                        .is_some_and(|i| i.unit.as_deref() == Some("US cents"))
+                })
+            }),
             sync: [
                 sync.sync_symbol,
                 sync.sync_timeframe,
@@ -112,6 +170,23 @@ impl DemoApp {
     }
 
     pub(super) fn restore_layout_groups(&mut self, groups: Option<LayoutGroups>) {
+        let cents = groups.as_ref().map_or([false; 16], |groups| groups.cents);
+        for (slot, cents) in cents.into_iter().enumerate() {
+            let (chart, live) = if slot == self.layout_slot {
+                (&mut self.chart, &self.live)
+            } else if let Some(extra) = self.extra_charts.get_mut(if slot < self.layout_slot {
+                slot
+            } else {
+                slot - 1
+            }) {
+                (&mut extra.chart, &extra.live)
+            } else {
+                continue;
+            };
+            live.set_price_unit(cents);
+            let adjusted = chart.conversion().is_some_and(|c| c.ends_with("adjusted"));
+            chart.set_conversion(conversion(cents, adjusted));
+        }
         let Some(groups) = groups else {
             for slot in 0..16 {
                 self.layout.set_sync_group(slot, None);
@@ -247,8 +322,10 @@ impl DemoApp {
             let market = self.chart.replay_driver().is_some();
             self.paper.set_replay_time(None);
             self.chart.set_replay_time(None);
+            restore_conversion(&mut self.chart, &self.live);
             for extra in &mut self.extra_charts {
                 extra.chart.set_replay_time(None);
+                restore_conversion(&mut extra.chart, &extra.live);
             }
             self.replay_updated = None;
             self.replay_applied = None;
@@ -397,6 +474,7 @@ impl DemoApp {
                         index
                     };
                     if !self.replay_slots.contains(&slot)
+                        || extra.live.instrument().unit != instruments[0].unit
                         || instruments
                             .iter()
                             .any(|instrument| instrument.symbol == extra.chart.symbol())
@@ -436,10 +514,12 @@ impl DemoApp {
         }
         if !interval.is_trade_based() && self.chart.replay_driver().is_some() {
             self.chart.set_market_replay(None);
+            restore_conversion(&mut self.chart, &self.live);
             self.chart.set_replay_time(cutoff);
             for extra in &mut self.extra_charts {
                 if extra.chart.replay_driver().is_some() {
                     extra.chart.set_market_replay(None);
+                    restore_conversion(&mut extra.chart, &extra.live);
                     extra.chart.set_replay_time(cutoff);
                 }
             }
@@ -469,11 +549,13 @@ impl DemoApp {
                 driver.seek(time - chrono::TimeDelta::nanoseconds(1));
             }
             if self.chart.replay_driver().is_none() {
+                self.chart.set_conversion(None);
                 self.chart.set_market_replay(Some(driver));
                 self.chart.set_signal_source(None);
             }
         }
         let driver = self.chart.replay_driver().cloned();
+        let unit = self.live.instrument().unit;
         for (index, extra) in self.extra_charts.iter_mut().enumerate() {
             let slot = if index >= self.layout_slot {
                 index + 1
@@ -483,7 +565,10 @@ impl DemoApp {
             if self.replay_slots.contains(&slot) {
                 let (bars, clock) = replay_source(&extra.live, interval, &extra.chart);
                 extra.chart.set_replay_source(bars, clock);
-                if let Some(driver) = &driver {
+                if let Some(driver) = &driver
+                    && extra.live.instrument().unit == unit
+                {
+                    extra.chart.set_conversion(None);
                     extra.chart.set_market_replay(Some(driver.clone()));
                     extra.chart.set_signal_source(None);
                 }
@@ -600,6 +685,23 @@ impl DemoApp {
     }
 }
 
+fn restore_conversion(chart: &mut egui_charts::Chart, live: &LiveFeed) {
+    chart.set_conversion(conversion(
+        live.instrument().unit.as_deref() == Some("US cents"),
+        live.view(chart.extended_hours()).1,
+    ));
+}
+
+/// The existing adjustment and the price unit travel together through the host feed contract.
+pub(super) fn conversion(cents: bool, adjusted: bool) -> Option<String> {
+    match (cents, adjusted) {
+        (false, false) => None,
+        (false, true) => Some("adjusted".into()),
+        (true, false) => Some("cents".into()),
+        (true, true) => Some("cents-adjusted".into()),
+    }
+}
+
 /// The replay source of `interval` for `chart`, with its clock. The feed keeps trades from a
 /// minute on, so a one-trade source leaves out the chart bar that opened before the minute of
 /// its first trade: that bar lost earlier trades, and the chart shows its own bar there.
@@ -646,6 +748,105 @@ mod tests {
     use super::*;
     use egui_charts::model::{Bar, OrderSide};
     use egui_charts::ui::floating_replay_control::ReplayControlAction;
+
+    /// A fixed unit conversion must reach source prices, feed metadata, replay and saved layouts.
+    #[test]
+    fn cents_prices_survive_streaming_replay_and_layout_restore() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        super::super::tests::settle(&mut app, &ctx);
+        app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
+        super::super::tests::settle(&mut app, &ctx);
+        app.live.set_paused(true);
+        let raw = app.live.snapshot(
+            app.state.timeframe,
+            app.chart.bar_clock(),
+            app.chart.extended_hours(),
+        );
+        let raw_tick = app.live.instrument().tick_size.unwrap();
+        let raw_quote = app.live.quote(app.live.now()).unwrap();
+        app.chart.set_conversion(Some("cents".into()));
+        app.regenerate_bars();
+        super::super::tests::settle(&mut app, &ctx);
+        assert_eq!(app.chart.conversion(), Some("cents"));
+        assert_eq!(
+            app.chart.instrument().unwrap().unit.as_deref(),
+            Some("US cents")
+        );
+        assert!((app.live.instrument().tick_size.unwrap() - raw_tick * 100.0).abs() < 1e-9);
+        for (raw, cents) in raw.iter().zip(app.chart.bars(SeriesId::MAIN)) {
+            assert_eq!((raw.time, raw.volume), (cents.time, cents.volume));
+            for (usd, cents) in [raw.open, raw.high, raw.low, raw.close].into_iter().zip([
+                cents.open,
+                cents.high,
+                cents.low,
+                cents.close,
+            ]) {
+                assert!((usd * 100.0 - cents).abs() < 1e-7);
+            }
+        }
+        assert!(
+            (app.live.quote(app.live.now()).unwrap().last - raw_quote.last * 100.0).abs() < 1e-7
+        );
+        let saved = app.capture_layout().unwrap();
+        app.storage
+            .save_layout_groups("Unit sample", &app.layout_groups())
+            .unwrap();
+        app.chart.set_conversion(None);
+        app.regenerate_bars();
+        assert!(app.restore_layout("Unit sample".into(), saved, Ok(Vec::new())));
+        app.regenerate_bars();
+        super::super::tests::settle(&mut app, &ctx);
+        app.live.set_paused(false);
+        app.live
+            .advance(app.live.now() + chrono::TimeDelta::seconds(2));
+        app.live.set_paused(true);
+        super::super::tests::settle(&mut app, &ctx);
+        let mut events = Vec::new();
+        app.live.read_recording(&mut events);
+        assert!(
+            events.iter().any(
+                |e| matches!(&e.event, MarketEvent::Trade(t) if t.price > raw_quote.last * 50.0)
+            )
+        );
+        app.start_replay();
+        app.set_replay_interval(Timeframe::Ticks(NonZeroU64::MIN));
+        super::super::tests::settle(&mut app, &ctx);
+        assert!(app.chart.replay_driver().is_some());
+        assert!(app.extra_charts[0].chart.replay_driver().is_none());
+        assert_eq!(
+            app.extra_charts[0]
+                .chart
+                .instrument()
+                .unwrap()
+                .currency
+                .as_deref(),
+            Some("USD")
+        );
+        assert_eq!(
+            app.chart.instrument().unwrap().unit.as_deref(),
+            Some("US cents")
+        );
+        app.switch_timeframe(Timeframe::Min5);
+        super::super::tests::settle(&mut app, &ctx);
+        assert_eq!(
+            app.chart.instrument().unwrap().unit.as_deref(),
+            Some("US cents")
+        );
+        assert_eq!(app.live.instrument().unit.as_deref(), Some("US cents"));
+        assert!(app.chart.replay_driver().is_some());
+        app.switch_timeframe(Timeframe::Hour1);
+        app.stop_replay();
+        app.chart.set_conversion(None);
+        app.regenerate_bars();
+        super::super::tests::settle(&mut app, &ctx);
+        assert_eq!(
+            app.chart.instrument().unwrap().currency.as_deref(),
+            Some("USD")
+        );
+        let restored = app.chart.bars(SeriesId::MAIN)[0].close;
+        assert!((restored - raw[0].close).abs() < 1e-7);
+    }
 
     #[test]
     fn paper_account_resets_on_replay_start_and_rewind_but_not_forward_steps() {
