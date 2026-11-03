@@ -113,6 +113,29 @@ pub trait PriceFormatter: Send + Sync {
     fn clone_box(&self) -> Box<dyn PriceFormatter>;
 }
 
+impl PriceFormatter for crate::model::SeriesDisplayFormat {
+    fn format(&self, value: f64) -> String {
+        use crate::model::SeriesFormat;
+        let step = self.min_move;
+        let rounded = (value / step).round() * step;
+        let value = if step.is_finite() && step > 0.0 && rounded.is_finite() {
+            rounded
+        } else {
+            value
+        };
+        let precision = usize::from(self.precision);
+        match self.kind {
+            SeriesFormat::Price => DefaultPriceFormatter::with_precision(precision).format(value),
+            SeriesFormat::Volume => VolumeFormatter { precision }.format(value),
+            SeriesFormat::Percentage => format!("{}%", format_decimal(value, precision)),
+        }
+    }
+
+    fn clone_box(&self) -> Box<dyn PriceFormatter> {
+        Box::new(*self)
+    }
+}
+
 /// Default price formatter with configurable precision
 #[derive(Debug, Clone)]
 pub struct DefaultPriceFormatter {

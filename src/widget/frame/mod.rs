@@ -1061,14 +1061,19 @@ impl Chart {
             .price_scale_mut()
             .update_bar_ratio(bar_spacing, price_rect.height());
         let price_map = self
-            .state
-            .price_scale()
-            .map(transform, price_rect.min.y, price_rect.max.y)
+            .series_display_map(
+                super::SeriesId::MAIN,
+                self.state
+                    .price_scale()
+                    .map(transform, price_rect.min.y, price_rect.max.y),
+            )
             .with_thousands_sep(self.config.thousands_sep);
 
         self.update_shared_study_maps(price_rect);
-        let price_formatter =
-            self.series_label_formatter(super::SeriesId::MAIN, price_map.transform().mode);
+        let price_formatter = self.series_label_formatter(
+            self.series_axis_owner(super::SeriesId::MAIN),
+            price_map.transform().mode,
+        );
 
         // Store the final price mapping and rects for external use (selection dots, hit testing)
         self.last_price_map = price_map;

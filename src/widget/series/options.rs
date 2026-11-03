@@ -62,8 +62,8 @@ pub struct SeriesOptions {
     /// The price [`ChartType::Columns`] rise above or fall below, which the scale's fit then
     /// includes; `None` raises them from the pane bottom.
     pub columns_base: Option<f64>,
-    /// Last value label, price line, base line and autoscale. By default the series labels its
-    /// last value without a price line.
+    /// Numeric display format, last value label, price line, base line and autoscale. By
+    /// default the series labels its last value without a price line.
     pub style: SeriesStyle,
 }
 
@@ -547,8 +547,8 @@ impl Chart {
         }
     }
 
-    /// The last value label, price line, base line, autoscale and click tolerance of a present
-    /// bar series.
+    /// The numeric display format, last value label, price line, base line, autoscale and
+    /// click tolerance of a present bar series.
     pub fn series_style(&self, id: SeriesId) -> Option<&SeriesStyle> {
         if id == SeriesId::MAIN && self.main_series_present {
             Some(&self.main_series_style)
@@ -560,8 +560,8 @@ impl Chart {
         }
     }
 
-    /// Changes the last value label, price line, base line, autoscale or click tolerance of a
-    /// present bar series. Changes take effect on the next rendered frame.
+    /// Changes the numeric display format, last value label, price line, base line, autoscale
+    /// or click tolerance of a present bar series. Changes take effect on the next rendered frame.
     pub fn series_style_mut(&mut self, id: SeriesId) -> Option<&mut SeriesStyle> {
         if id == SeriesId::MAIN && self.main_series_present {
             Some(&mut self.main_series_style)
@@ -620,7 +620,7 @@ impl Chart {
                 .iter()
                 .find(|pane| pane.members.contains(&id) && pane.rect.is_positive())
                 .map(|pane| {
-                    pane.price_map()
+                    self.series_display_map(id, pane.price_map())
                         .with_thousands_sep(self.config.thousands_sep)
                 });
         }
