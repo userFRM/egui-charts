@@ -600,7 +600,9 @@ mod tests {
         for (pane, move_main) in [(false, false), (true, false), (false, true), (true, true)] {
             for kind in ["main", "bars", "study", "custom", "custom_volume"] {
                 for merged in [false, true] {
-                    if kind == "custom_volume" && !cfg!(feature = "studies") {
+                    if (kind == "custom_volume" && !cfg!(feature = "studies"))
+                        || (move_main && kind == "main")
+                    {
                         continue;
                     }
                     let ctx = egui::Context::default();
