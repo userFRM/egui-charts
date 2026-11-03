@@ -152,6 +152,7 @@ impl DemoApp {
                 .event_visibility()
                 .show_news_notifications
                 .then(|| self.notification_host.clone()),
+            times: Default::default(),
         })));
         if let Some(scale) = source.series_scale(SeriesId::MAIN) {
             chart.set_series_scale(SeriesId::MAIN, scale);

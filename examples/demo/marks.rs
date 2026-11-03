@@ -1,7 +1,7 @@
 //! Synthetic annotations and scheduled events for the demo's own bars.
 
 use super::{DemoApp, DemoSymbol, LiveFeed};
-use chrono::Datelike;
+use chrono::{DateTime, Datelike, Utc};
 use egui::{Color32, Vec2};
 use egui_charts::data::Reply;
 use egui_charts::drawings::FontWeight;
@@ -11,7 +11,7 @@ use egui_charts::model::{
 };
 use egui_charts::services::{Marks, MarksPage, MarksRequest};
 use egui_charts::widget::{SeriesId, Watermark, WatermarkLine};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 const LEVEL: Color32 = Color32::from_rgb(255, 152, 0);
 
@@ -31,6 +31,7 @@ impl DemoApp {
                 .event_visibility()
                 .show_news_notifications
                 .then(|| self.notification_host.clone()),
+            times: Default::default(),
         })));
         self.chart
             .set_change_markers(SeriesId::MAIN, samples.then(ChangeMarkers::default));
@@ -118,7 +119,18 @@ pub(super) struct DemoMarks {
     pub extended_hours: bool,
     pub samples: bool,
     pub notifications: Option<Arc<super::feeds::DemoNotifications>>,
+    pub times: Mutex<Option<BarTimes>>,
 }
+
+/// Bar times of a symbol and interval on their clock, kept until the next bar opens so pans do
+/// not rebuild history.
+type BarTimes = (
+    &'static str,
+    Timeframe,
+    BarClock,
+    DateTime<Utc>,
+    Vec<DateTime<Utc>>,
+);
 
 impl Marks for DemoMarks {
     fn marks(&self, request: MarksRequest, reply: Reply<MarksPage>) {
@@ -135,40 +147,57 @@ impl DemoMarks {
         else {
             return page;
         };
-        let other = (self.live.instrument().symbol != spec.symbol).then(|| {
-            let feed = self.live.fork();
-            feed.set_symbol(spec.symbol);
-            feed
-        });
-        let live = other.as_ref().unwrap_or(&self.live);
-        let instrument = live.instrument();
-        let extended = self.extended_hours;
-        let mut clock = BarClock::new(request.timeframe);
-        if let Some(session) = instrument.session {
-            clock = clock.with_session(crate::sampledata::us_equity_zone(), session, extended);
+        let now = self.live.now();
+        let mut cache = self.times.lock().unwrap_or_else(PoisonError::into_inner);
+        if !cache
+            .as_ref()
+            .is_some_and(|(symbol, timeframe, clock, slot, _)| {
+                *symbol == spec.symbol
+                    && *timeframe == request.timeframe
+                    && clock.bar_open(now) == *slot
+            })
+        {
+            let other = (self.live.instrument().symbol != spec.symbol).then(|| {
+                let feed = self.live.fork();
+                feed.set_symbol(spec.symbol);
+                feed
+            });
+            let live = other.as_ref().unwrap_or(&self.live);
+            let extended = self.extended_hours;
+            let mut clock = BarClock::new(request.timeframe);
+            if let Some(session) = live.instrument().session {
+                clock = clock.with_session(crate::sampledata::us_equity_zone(), session, extended);
+            }
+            let times = live
+                .snapshot(request.timeframe, clock.clone(), extended)
+                .iter()
+                .map(|bar| bar.time)
+                .collect();
+            *cache = Some((
+                spec.symbol,
+                request.timeframe,
+                clock.clone(),
+                clock.bar_open(now),
+                times,
+            ));
         }
-        let bars = live.snapshot(request.timeframe, clock, extended);
-        let first = bars.partition_point(|bar| bar.time < request.from);
-        let end = bars.partition_point(|bar| bar.time <= request.to.min(live.now()));
-        for bar in &bars[first..end.max(first)] {
-            let months = i64::from(bar.time.year() - 1970) * 12 + i64::from(bar.time.month0());
+        let times = &cache.as_ref().expect("cached above").4;
+        let first = times.partition_point(|time| *time < request.from);
+        let end = times.partition_point(|time| *time <= request.to.min(now));
+        for &time in &times[first..end.max(first)] {
+            let months = i64::from(time.year() - 1970) * 12 + i64::from(time.month0());
             let index = match request.timeframe {
                 Timeframe::Month1 => months,
                 Timeframe::Months(count) => months.div_euclid(i64::from(count.get())),
-                Timeframe::Week1 => (bar.time.timestamp().div_euclid(86_400) - 4).div_euclid(7),
-                Timeframe::Weeks(count) => (bar.time.timestamp().div_euclid(86_400) - 4)
-                    .div_euclid(7 * i64::from(count.get())),
-                timeframe => bar
-                    .time
+                Timeframe::Week1 => (time.timestamp().div_euclid(86_400) - 4).div_euclid(7),
+                Timeframe::Weeks(count) => {
+                    (time.timestamp().div_euclid(86_400) - 4).div_euclid(7 * i64::from(count.get()))
+                }
+                timeframe => time
                     .timestamp_millis()
                     .div_euclid(timeframe.duration_ms().max(1)),
             } - spec.seed as i64;
-            if index.rem_euclid(40) != 0
-                || page
-                    .events
-                    .last()
-                    .is_some_and(|event| event.time == bar.time)
-            {
+            if index.rem_euclid(40) != 0 {
                 continue;
             }
             let kind = match index.div_euclid(40).rem_euclid(6) {
@@ -180,8 +209,8 @@ impl DemoMarks {
                 _ => EventKind::Idea,
             };
             page.events.push(TimeScaleEvent {
-                id: format!("demo-event-{}-{}", spec.symbol, bar.time.timestamp_millis()),
-                time: bar.time,
+                id: format!("demo-event-{}-{}", spec.symbol, time.timestamp_millis()),
+                time,
                 kind,
                 title: format!("Synthetic {} event", kind.label()),
                 details: "Demonstration data supplied by the host.".into(),
@@ -193,7 +222,7 @@ impl DemoMarks {
             }
             if self.samples {
                 page.bar_marks.push(
-                    Marker::buy_signal(bar.time)
+                    Marker::buy_signal(time)
                         .with_tooltip("Synthetic signal supplied by the demo host."),
                 );
             }
@@ -217,6 +246,7 @@ mod tests {
             extended_hours: false,
             samples: true,
             notifications: None,
+            times: Default::default(),
         };
         let mut request = MarksRequest {
             symbol: "SAMPLE".into(),
