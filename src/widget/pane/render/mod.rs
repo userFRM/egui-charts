@@ -1217,9 +1217,10 @@ impl Chart {
                 // The last pass of the pane's primitives, above its drawings.
                 let painter = ui.painter().with_clip_rect(chart_rect);
                 for item in self.primitives.iter().filter(|item| {
-                    self.pane_layout.panes[pane_idx]
-                        .members
-                        .contains(&item.series)
+                    !self.hide_foreground
+                        && self.pane_layout.panes[pane_idx]
+                            .members
+                            .contains(&item.series)
                         && self.is_series_visible(item.series)
                 }) {
                     let view = self.primitive_view(item.series, pane_coords.clone());

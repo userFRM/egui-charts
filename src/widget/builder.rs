@@ -141,6 +141,7 @@ impl Chart {
             next_series: 2,
             primitives: Vec::new(),
             next_primitive: 0,
+            hide_foreground: false,
             #[cfg(feature = "drawings")]
             drawings: DrawingManager::new(),
             #[cfg(feature = "drawings")]
