@@ -126,6 +126,7 @@ pub struct ChartTypeSelector {
     /// Favorite chart types
     pub favorites: HashSet<ChartType>,
     last_non_favorite: Option<ChartType>,
+    execution_data: bool,
     /// Configuration
     pub config: ChartTypeSelectorConfig,
 }
@@ -137,6 +138,36 @@ impl Default for ChartTypeSelector {
 }
 
 impl ChartTypeSelector {
+    /// Restrict execution chart choices to declared data for the resolved instrument. Pass
+    /// [`Chart::feed_capabilities`](crate::widget::Chart::feed_capabilities) and
+    /// [`Chart::instrument`](crate::widget::Chart::instrument) when the feed or symbol changes.
+    /// Missing metadata hides these choices; saved favorites and the current button stay.
+    /// Until the first call every chart type is offered.
+    pub fn set_feed_capabilities(
+        &mut self,
+        capabilities: Option<&crate::data::FeedCapabilities>,
+        instrument: Option<&crate::model::Instrument>,
+    ) {
+        use crate::model::FeedService::{LiveTrades, Trades};
+        self.execution_data =
+            capabilities
+                .zip(instrument)
+                .is_some_and(|(capabilities, instrument)| {
+                    capabilities.declares(Trades, instrument)
+                        || capabilities.declares(LiveTrades, instrument)
+                });
+    }
+
+    /// Whether `chart_type` is offered with the last supplied feed and instrument, also for
+    /// hosts restoring a saved choice. Until the first capability update every type is offered.
+    pub fn offers(&self, chart_type: ChartType) -> bool {
+        self.execution_data
+            || !matches!(
+                chart_type,
+                ChartType::VolumeFootprint | ChartType::SessionVolumeProfile
+            )
+    }
+
     /// Create a selector with `initial` selected and no favorites.
     pub fn new(initial: ChartType) -> Self {
         Self {
@@ -144,6 +175,7 @@ impl ChartTypeSelector {
             is_open: false,
             favorites: HashSet::new(),
             last_non_favorite: None,
+            execution_data: true,
             config: ChartTypeSelectorConfig::default(),
         }
     }
@@ -177,10 +209,20 @@ impl ChartTypeSelector {
     /// Show favorite chart type buttons and the chart type menu trigger.
     pub fn show(&mut self, ui: &mut Ui) -> ChartTypeAction {
         let extra = retain_non_favorite(&mut self.last_non_favorite, self.current, &self.favorites);
+        let extra = if self.offers(self.current) {
+            extra.filter(|chart_type| self.offers(*chart_type))
+        } else {
+            Some(self.current)
+        };
+        let favorites = self
+            .favorites_in_menu_order()
+            .into_iter()
+            .filter(|chart_type| self.offers(*chart_type))
+            .collect();
         let (btn_res, clicked) = favorite_strip(
             ui,
             self.current,
-            self.favorites_in_menu_order(),
+            favorites,
             extra,
             self.is_open,
             "Chart type",
@@ -249,6 +291,9 @@ impl ChartTypeSelector {
                             | ChartType::Heikin
                     ) {
                         ui.add(egui::Separator::default().spacing(GROUP_GAP));
+                    }
+                    if !self.offers(*chart_type) {
+                        continue;
                     }
                     let mut toggle_favorite = false;
                     let content = ChartTypeRow {
@@ -431,5 +476,103 @@ mod tests {
         harness.key_press(egui::Key::Escape);
         harness.run();
         assert_eq!(strip(&harness), ["Heikin Ashi"]);
+
+        use crate::data::FeedCapabilities;
+        use crate::model::{FeedService::*, Instrument};
+        let unknown = FeedCapabilities::new();
+        let none = unknown.clone().with_services([]);
+        let live = unknown.clone().with_services([LiveTrades]);
+        let history = unknown.clone().with_services([Trades]);
+        let instrument = Instrument::new("A");
+        let no_trades = instrument.clone().with_services([]);
+        let live_symbol = instrument.clone().with_services([LiveTrades]);
+        for (capabilities, symbol, offered) in [
+            (None, None, false),
+            (None, Some(&live_symbol), false),
+            (Some(&unknown), None, false),
+            (Some(&unknown), Some(&instrument), false),
+            (Some(&none), Some(&instrument), false),
+            (Some(&live), Some(&instrument), true),
+            (Some(&history), Some(&instrument), true),
+            (Some(&live), Some(&no_trades), false),
+            (Some(&none), Some(&live_symbol), false),
+            (Some(&unknown), Some(&live_symbol), true),
+        ] {
+            let saved = ChartTypePreferences {
+                favorites: vec![ChartType::VolumeFootprint],
+            };
+            let mut selector = ChartTypeSelector::default();
+            selector.set_preferences(saved.clone());
+            assert!(ChartType::all().iter().all(|kind| selector.offers(*kind)));
+            selector.set_feed_capabilities(capabilities, symbol);
+            for kind in [ChartType::VolumeFootprint, ChartType::SessionVolumeProfile] {
+                assert_eq!(selector.offers(kind), offered);
+            }
+            assert!(selector.offers(ChartType::Candles));
+            let mut harness = Harness::builder()
+                .with_context_setup(egui_extras::install_image_loaders)
+                .with_size(vec2(800.0, 1400.0))
+                .build_ui_state(
+                    |ui, selector: &mut ChartTypeSelector| {
+                        ui.horizontal(|ui| selector.show(ui));
+                    },
+                    selector,
+                );
+            harness.run();
+            assert_eq!(
+                harness.query_by_label("Volume footprint").is_some(),
+                offered
+            );
+            harness
+                .get_by_label(if offered { "Chart type" } else { "Candles" })
+                .click();
+            harness.run();
+            for (name, count) in [("Volume footprint", 2), ("Session volume profile", 1)] {
+                assert_eq!(
+                    harness.query_all_by_label(name).count(),
+                    if offered { count } else { 0 },
+                    "{name}"
+                );
+            }
+            let gap = harness
+                .get_by_label(ChartType::TimePriceOpportunity.name())
+                .rect()
+                .top()
+                - harness
+                    .get_by_label(ChartType::HighLow.name())
+                    .rect()
+                    .bottom();
+            assert_eq!(gap, GROUP_GAP + if offered { ROW_H } else { 0.0 });
+            assert_eq!(harness.state().preferences(), saved);
+            harness.key_press(egui::Key::Escape);
+            harness.run();
+            harness
+                .state_mut()
+                .set_feed_capabilities(Some(&live), Some(&instrument));
+            harness.run();
+            assert!(harness.query_by_label("Volume footprint").is_some());
+            // Even an unavailable current type keeps its button.
+            harness.state_mut().current = ChartType::VolumeFootprint;
+            harness
+                .state_mut()
+                .set_feed_capabilities(Some(&none), Some(&instrument));
+            harness.run();
+            assert!(harness.query_by_label("Volume footprint").is_some());
+            assert_eq!(harness.state().preferences(), saved);
+            harness.state_mut().favorites.insert(ChartType::Bars);
+            harness.run();
+            assert!(harness.query_by_label("Volume footprint").is_some());
+            harness
+                .state_mut()
+                .favorites
+                .remove(&ChartType::VolumeFootprint);
+            harness.run();
+            harness.state_mut().current = ChartType::Bars;
+            harness.run();
+            assert!(
+                harness.query_by_label("Volume footprint").is_none(),
+                "an unavailable previous type is not a shortcut"
+            );
+        }
     }
 }

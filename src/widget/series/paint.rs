@@ -419,6 +419,7 @@ impl Chart {
                 continue;
             };
             if response.double_clicked()
+                && self.chart_options.handle_scale.enabled
                 && self
                     .chart_options
                     .handle_scale
@@ -427,6 +428,7 @@ impl Chart {
             {
                 scale.reset();
             } else if response.dragged()
+                && self.chart_options.handle_scale.enabled
                 && self
                     .chart_options
                     .handle_scale

@@ -15,8 +15,9 @@ pub enum CrosshairMode {
     Normal,
     /// Magnet crosshair (snaps to the nearest visible OHLC, study or comparison value)
     Magnet,
-    /// Magnet crosshair that snaps the price pane to the bar's close only. Volume and study
-    /// panes snap to their values as with `Magnet`.
+    /// Snaps the price pane to the nearest visible main or added-series close on its own
+    /// scale. Equal screen distances prefer the main series, then added series in draw
+    /// order. Volume and study panes snap to their values as with `Magnet`.
     MagnetClose,
 }
 

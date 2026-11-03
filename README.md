@@ -227,7 +227,7 @@ The UI components also include replay controls, an order ticket, a depth ladder 
 
 ## Fit your application
 
-The default build includes the chart, studies, drawings and UI components, plus locale and named time zone support. Select a smaller build with `default-features = false`:
+The default build includes the chart, studies, drawings and UI components, plus locale and named time zone support, CSV and PNG export. Select a smaller build with `default-features = false`:
 
 | Features | Included |
 |---|---|
@@ -238,6 +238,8 @@ The default build includes the chart, studies, drawings and UI components, plus 
 | `alert-engine` | `AlertEngine`, an alerts service that evaluates alerts on the bars the host feeds it, without egui |
 | `detectors` | `OrderFlowDetectors`, a signals service that finds order-flow events in the trades and depth the host feeds it, without egui |
 | `strategies` | `Backtest`, which runs a `Strategy` over bars and returns a `StrategyReport`, without egui |
+| `csv` | CSV import and export for bars, strategy reports and chart data |
+| `png-export` | `Chart::export_png` and image textures in SVG export; enables `widget` |
 | `http` | `HttpDatafeed`, HTTP column history, symbol search and live bar refresh, without egui |
 | None | Data types, scales and host service contracts without egui |
 
