@@ -9,7 +9,7 @@ use crate::painting::dashed_line::draw_dashed_line;
 use crate::scales::PriceMap;
 use crate::theme::{ThemeExt, contrast};
 pub use currency::render_axis_currency;
-use egui::{Align2, Color32, CornerRadius, FontId, Painter, Pos2, Rect, Stroke, Vec2};
+use egui::{Align2, Color32, CornerRadius, FontFamily, FontId, Painter, Pos2, Rect, Stroke, Vec2};
 pub(super) use labels::semibold;
 pub(crate) use labels::{price_marks, render_time_grid, tick_decimals, time_axis_marks};
 pub use labels::{render_price_labels, render_price_labels_at_pos, render_time_labels};
@@ -21,9 +21,49 @@ pub(crate) const PRICE_LABEL_GAP: f32 = 8.0;
 /// Padding between an axis tag's text and its edge.
 const TAG_PADDING: Vec2 = Vec2::new(6.0, 1.5);
 
-/// The default font for axis labels and tags: the theme's label text.
+fn axis_font_family_id() -> egui::Id {
+    egui::Id::NULL.with("axis_font_family")
+}
+
+/// Restores the axis family after painting one chart, including during unwinding.
+pub(crate) struct AxisFontScope {
+    ctx: egui::Context,
+    previous: Option<FontFamily>,
+}
+
+impl AxisFontScope {
+    pub(crate) fn new(ctx: &egui::Context, family: &FontFamily) -> Self {
+        let previous = ctx.data_mut(|data| {
+            let previous = data.get_temp::<FontFamily>(axis_font_family_id());
+            data.insert_temp(axis_font_family_id(), family.clone());
+            previous
+        });
+        Self {
+            ctx: ctx.clone(),
+            previous,
+        }
+    }
+}
+
+impl Drop for AxisFontScope {
+    fn drop(&mut self) {
+        self.ctx.data_mut(|data| {
+            if let Some(family) = self.previous.take() {
+                data.insert_temp(axis_font_family_id(), family);
+            } else {
+                data.remove::<FontFamily>(axis_font_family_id());
+            }
+        });
+    }
+}
+
+/// The chart's axis family at the theme's label size, proportional outside a chart.
 pub(crate) fn axis_font(ctx: &egui::Context) -> FontId {
-    FontId::proportional(ctx.active_theme().text.label)
+    FontId::new(
+        ctx.active_theme().text.label,
+        ctx.data(|data| data.get_temp::<FontFamily>(axis_font_family_id()))
+            .unwrap_or_default(),
+    )
 }
 
 /// Paints `text` on a `fill` tag in the axis font and returns the tag's rect.
@@ -332,7 +372,7 @@ pub(crate) fn tag_text_color(fill: Color32) -> Color32 {
     }
 }
 
-/// Paints a compact hover tag within its axis bounds.
+/// Paints a compact hover tag within its axis bounds, using `font`'s size and the axis family.
 pub(crate) fn paint_crosshair_tag(
     painter: &Painter,
     anchor: Pos2,
@@ -340,13 +380,14 @@ pub(crate) fn paint_crosshair_tag(
     bounds: std::ops::RangeInclusive<f32>,
     text: String,
     colors: (Color32, Color32),
-    font: FontId,
+    mut font: FontId,
     height: f32,
     covered: Option<Rect>,
 ) -> Rect {
     let (text_color, fill) = colors;
     let padding = 8.0;
     let available = (bounds.end() - bounds.start()).max(0.0);
+    font.family = axis_font(painter.ctx()).family;
     let mut job = egui::text::LayoutJob::simple_singleline(text, font, text_color);
     job.wrap = egui::text::TextWrapping::truncate_at_width((available - padding).max(0.0));
     let galley = painter.layout_job(job);
@@ -726,6 +767,93 @@ mod tests {
     use super::*;
     use crate::scales::{PriceRange, PriceScaleMode, PriceTransform};
     use egui::{Context, RawInput, Shape};
+
+    #[test]
+    fn charts_keep_axis_families_local() {
+        use crate::widget::test_frames::chart;
+
+        let ctx = Context::default();
+        let family = FontFamily::Name("Host Mono".into());
+        let mut fonts = egui::FontDefinitions::default();
+        fonts.families.insert(
+            family.clone(),
+            fonts.families[&FontFamily::Monospace].clone(),
+        );
+        ctx.set_fonts(fonts);
+        let host_style = ctx.global_style();
+        let mut charts = [chart(&[100.0], &[110.0]), chart(&[100.0], &[110.0])];
+        for chart in &mut charts {
+            chart.set_size(Some(Vec2::new(760.0, 260.0)));
+            chart.config_mut().show_volume = false;
+            let time = chart.state.shown()[90].time;
+            chart.set_crosshair_position(Some((time, 105.0)));
+        }
+        // Defaults, independent families, then a runtime change back to the defaults.
+        for families in [
+            [FontFamily::Proportional, FontFamily::Proportional],
+            [family.clone(), FontFamily::Proportional],
+            [FontFamily::Proportional, FontFamily::Proportional],
+        ] {
+            for (chart, family) in charts.iter_mut().zip(&families) {
+                chart.config_mut().axis_font_family = family.clone();
+            }
+            let output = ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 700.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.label("Host before");
+                    for chart in &mut charts {
+                        chart.show(ui);
+                    }
+                    ui.label("Host after");
+                },
+            );
+            fn texts<'a>(shape: &'a Shape, out: &mut Vec<&'a egui::epaint::TextShape>) {
+                match shape {
+                    Shape::Vec(shapes) => shapes.iter().for_each(|shape| texts(shape, out)),
+                    Shape::Text(text) => out.push(text),
+                    _ => {}
+                }
+            }
+            let mut painted = Vec::new();
+            for shape in &output.shapes {
+                texts(&shape.shape, &mut painted);
+            }
+            for (chart, family) in charts.iter().zip(&families) {
+                let plot = chart.get_rendered_price_rect();
+                let mut counts = [0; 2];
+                for text in &painted {
+                    let price = text.pos.x >= plot.right() && plot.y_range().contains(text.pos.y);
+                    let time = text.pos.y >= plot.bottom()
+                        && text.pos.y < plot.bottom() + 35.0
+                        && plot.x_range().contains(text.pos.x);
+                    if price || time {
+                        counts[usize::from(time)] += 1;
+                        assert_eq!(&text.galley.job.sections[0].format.font_id.family, family);
+                    }
+                }
+                assert!(counts.iter().all(|count| *count > 0), "{counts:?}");
+            }
+            for label in ["Host before", "Host after"] {
+                let text = painted
+                    .iter()
+                    .find(|text| text.galley.text() == label)
+                    .unwrap();
+                assert_eq!(
+                    text.galley.job.sections[0].format.font_id,
+                    host_style.text_styles[&egui::TextStyle::Body]
+                );
+            }
+            assert_eq!(ctx.global_style(), host_style);
+            assert_eq!(
+                axis_font(&ctx),
+                FontId::proportional(ctx.active_theme().text.label)
+            );
+            output.drop_without_applying_deltas();
+        }
+    }
 
     #[test]
     fn price_line_follows_the_scale() {

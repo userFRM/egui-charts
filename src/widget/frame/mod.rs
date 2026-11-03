@@ -186,6 +186,8 @@ impl Chart {
             .as_ref()
             .or(theme.as_ref())
             .map(|theme| crate::theme::ThemeScope::new(ui.ctx(), theme));
+        let _font_scope =
+            rendering::axes::AxisFontScope::new(ui.ctx(), &self.config.axis_font_family);
         let size = self.size;
         let show = |ui: &mut Ui| {
             if let Some(theme) = &theme {
