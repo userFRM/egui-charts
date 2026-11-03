@@ -565,6 +565,232 @@ fn line_pulse_and_crosshair_marker_follow_their_bars() {
     }
 }
 
+/// Each series styles its hovered circle independently. On linear ranges 0..100 and
+/// 1000..3000, closes 25 and 2500 sit a quarter and three quarters up from the pane bottom.
+#[test]
+fn crosshair_marker_styles_follow_each_series_and_scale() {
+    use crate::model::{Bar, ChartType, SeriesScale};
+    use crate::widget::{SeriesId, SeriesOptions};
+    use egui::{Color32, Stroke};
+
+    for kind in [
+        ChartType::Line,
+        ChartType::StepLine,
+        ChartType::LineWithMarkers,
+        ChartType::Area,
+        ChartType::Baseline,
+    ] {
+        for pane in [false, true] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[10.0], &[25.0]);
+            chart.config.show_volume = false;
+            chart.chart_options.tooltip.enabled = false;
+            chart.set_chart_type(kind);
+            let bars = chart.bars(SeriesId::MAIN).to_vec();
+            let added = chart.add_series(SeriesOptions {
+                chart_type: kind,
+                color: Color32::GREEN,
+                up_color: Color32::GREEN,
+                down_color: Color32::GREEN,
+                scale: SeriesScale::Left,
+                ..Default::default()
+            });
+            if pane {
+                let id = chart.add_pane();
+                assert!(chart.move_series_to_pane(added, id));
+            }
+            let valued: Vec<_> = bars
+                .iter()
+                .map(|bar| Bar::from_value(bar.time, 2500.0))
+                .collect();
+            // (radius, custom fill, custom border, border width, main and added visibility,
+            //  crosshair hidden, added bar present, main bar valued).
+            for (step, case) in [
+                (5.0, None, None, 2.0, (true, true), false, true, true),
+                (
+                    5.0,
+                    Some(Color32::GOLD),
+                    None,
+                    2.0,
+                    (true, true),
+                    false,
+                    true,
+                    true,
+                ),
+                (
+                    5.0,
+                    None,
+                    Some(Color32::MAGENTA),
+                    2.0,
+                    (true, true),
+                    false,
+                    true,
+                    true,
+                ),
+                (5.0, None, None, 4.0, (true, true), false, true, true),
+                (
+                    5.0,
+                    Some(Color32::TRANSPARENT),
+                    Some(Color32::RED),
+                    3.0,
+                    (true, true),
+                    false,
+                    true,
+                    true,
+                ),
+                (5.0, None, None, 0.0, (true, true), false, true, true),
+                (5.0, None, None, -1.0, (true, true), false, true, true),
+                (1e40, None, None, 2.0, (true, true), false, true, true),
+                (5.0, None, None, 1e40, (true, true), false, true, true),
+                (0.0, None, None, 2.0, (true, true), false, true, true),
+                (-1.0, None, None, 2.0, (true, true), false, true, true),
+                (5.0, None, None, 2.0, (false, true), false, true, true),
+                (5.0, None, None, 2.0, (true, false), false, true, true),
+                (5.0, None, None, 2.0, (true, true), true, true, true),
+                (5.0, None, None, 2.0, (true, true), false, false, true),
+                (5.0, None, None, 2.0, (true, true), false, true, false),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let (radius, fill, border, width, visible, hidden, present, main_valued) = case;
+                let mut params = chart.chart_type_params().clone();
+                params.styles.line.color = Color32::BLUE;
+                params.styles.step_line.color = Color32::BLUE;
+                params.styles.line_with_markers.color = Color32::BLUE;
+                params.styles.area.line.color = Color32::BLUE;
+                params.styles.baseline.above.color = Color32::BLUE;
+                params.styles.baseline.below.color = Color32::BLUE;
+                let mut saved = serde_json::to_value(params).unwrap();
+                saved["styles"]["crosshair_marker_radius"] = serde_json::json!(radius);
+                saved["styles"]["crosshair_marker_fill"] = serde_json::json!(fill);
+                saved["styles"]["crosshair_marker_border_color"] = serde_json::json!(border);
+                saved["styles"]["crosshair_marker_border_width"] = serde_json::json!(width);
+                chart.set_chart_type_params(serde_json::from_value(saved).unwrap());
+                let mut options =
+                    serde_json::to_value(chart.series().find(|(id, _)| *id == added).unwrap().1)
+                        .unwrap();
+                options["crosshair_marker_radius"] =
+                    serde_json::json!(if radius > 0.0 && radius < 1e40 {
+                        7.0
+                    } else {
+                        radius
+                    });
+                options["crosshair_marker_fill"] = serde_json::json!(fill.map(|_| Color32::YELLOW));
+                options["crosshair_marker_border_color"] =
+                    serde_json::json!(border.map(|_| Color32::CYAN));
+                options["crosshair_marker_border_width"] = serde_json::json!(width + 1.0);
+                assert!(chart.set_series_options(added, serde_json::from_value(options).unwrap()));
+                let mut added_bars = valued.clone();
+                if !present {
+                    if pane {
+                        added_bars[50] = Bar::whitespace(added_bars[50].time);
+                    } else {
+                        added_bars.remove(50);
+                    }
+                }
+                chart.set_data(added, added_bars);
+                let mut main_bars = bars.clone();
+                if !main_valued {
+                    main_bars[50] = Bar::whitespace(main_bars[50].time);
+                }
+                chart.set_data(SeriesId::MAIN, main_bars);
+                chart.set_main_series_visible(visible.0);
+                chart.set_series_visible(added, visible.1);
+                chart.chart_options.crosshair.style = if hidden {
+                    crate::config::CrosshairStyle::Hidden
+                } else {
+                    crate::config::CrosshairStyle::Full
+                };
+                chart
+                    .series_price_scale_mut(SeriesId::MAIN)
+                    .unwrap()
+                    .set_range(0.0, 100.0);
+                chart
+                    .series_price_scale_mut(added)
+                    .unwrap()
+                    .set_range(1000.0, 3000.0);
+                let time = step as f64;
+                frame(&ctx, &mut chart, time, vec![Event::PointerGone]);
+                let map = chart.get_chart_mapping();
+                let rect = if pane {
+                    chart
+                        .pane_layout
+                        .panes
+                        .iter()
+                        .find(|p| p.members.contains(&added))
+                        .unwrap()
+                        .rect
+                } else {
+                    map.rect
+                };
+                let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
+                let painted = shapes(&ctx, &mut chart, time + 0.1, vec![Event::PointerMoved(pos)]);
+                let circles: Vec<_> = painted
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        Shape::Circle(circle) if circle.radius == 5.0 || circle.radius == 7.0 => {
+                            Some(circle)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                let enabled = radius > 0.0 && (radius as f32).is_finite() && !hidden;
+                assert_eq!(
+                    circles.len(),
+                    usize::from(enabled && visible.0 && main_valued)
+                        + usize::from(enabled && visible.1 && present),
+                    "{kind:?}, pane {pane}, {case:?}: {circles:?}"
+                );
+                for (radius, valued, area, fraction, fill, border, width) in [
+                    (
+                        5.0,
+                        main_valued && visible.0,
+                        map.rect,
+                        0.25,
+                        fill.unwrap_or(Color32::BLUE),
+                        border,
+                        width,
+                    ),
+                    (
+                        7.0,
+                        present && visible.1,
+                        rect,
+                        0.75,
+                        fill.map_or(Color32::GREEN, |_| Color32::YELLOW),
+                        border.map(|_| Color32::CYAN),
+                        width + 1.0,
+                    ),
+                ] {
+                    if enabled && valued {
+                        let circle = circles
+                            .iter()
+                            .find(|circle| circle.radius == radius)
+                            .unwrap();
+                        let expected = Pos2::new(pos.x, area.bottom() - fraction * area.height());
+                        assert!(
+                            circle.center.distance(expected) < 0.01,
+                            "{kind:?}, {pane}: {circle:?} vs {expected:?}"
+                        );
+                        assert_eq!(circle.fill, fill);
+                        assert_eq!(
+                            circle.stroke,
+                            if width > 0.0 && (width as f32).is_finite() {
+                                Stroke::new(
+                                    width as f32,
+                                    border.unwrap_or(chart.config.background_color),
+                                )
+                            } else {
+                                Stroke::NONE
+                            }
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Held values appear only for a pressed pointer and disappear on release or disable. A
 /// hidden crosshair keeps them and shows no axis label while the pointer is held.
 #[test]

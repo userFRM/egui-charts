@@ -76,10 +76,22 @@ struct SavedOptions {
     width: f32,
     #[serde(default)]
     marker_radius: Option<f32>,
+    #[serde(default)]
+    crosshair_marker_radius: f32,
+    #[serde(default)]
+    crosshair_marker_fill: Option<egui::Color32>,
+    #[serde(default)]
+    crosshair_marker_border_color: Option<egui::Color32>,
+    #[serde(default = "default_crosshair_marker_border_width")]
+    crosshair_marker_border_width: f32,
     scale: SeriesScale,
     columns_base: Option<f64>,
     #[serde(with = "SavedStyle")]
     style: egui_charts::model::SeriesStyle,
+}
+
+fn default_crosshair_marker_border_width() -> f32 {
+    SeriesOptions::default().crosshair_marker_border_width
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
