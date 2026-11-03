@@ -196,13 +196,14 @@ impl Chart {
 
     /// Formats price scale labels in the normal and logarithmic modes: the crosshair label and
     /// price tags with [`PriceFormatter::format`], and the axis ticks with
-    /// [`PriceFormatter::format_tick`]. The formatter receives prices and replaces the
+    /// [`PriceFormatter::format_ticks`]. The tick hook receives the complete ordered list for
+    /// each axis, separately for layout and painting. The formatter receives prices and replaces the
     /// instrument's decimals. It applies to every price scale and to the prices drawings print;
     /// studies keep their own formats.
     /// `None` restores the built-in labels.
     ///
     /// [`PriceFormatter::format`]: crate::scales::PriceFormatter::format
-    /// [`PriceFormatter::format_tick`]: crate::scales::PriceFormatter::format_tick
+    /// [`PriceFormatter::format_ticks`]: crate::scales::PriceFormatter::format_ticks
     pub fn set_price_formatter(
         &mut self,
         formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,

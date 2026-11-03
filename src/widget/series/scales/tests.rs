@@ -26,6 +26,244 @@ fn bars(prices: &[f64]) -> Vec<Bar> {
         .collect()
 }
 
+/// Tick hooks see each axis separately in displayed units, while value labels keep
+/// using the individual hook. A move from 100 to 200 or 1000 to 2000 is +100%, index 200.
+#[test]
+fn tick_formatters_receive_complete_axis_lists() {
+    use crate::scales::PriceFormatter;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone, Default)]
+    struct Recording {
+        lists: Arc<Mutex<Vec<Vec<f64>>>>,
+        label_delta: i8,
+    }
+    impl PriceFormatter for Recording {
+        fn format(&self, price: f64) -> String {
+            format!("value {price:.2}")
+        }
+        fn format_tick(&self, price: f64) -> String {
+            format!("tick {price:.2}")
+        }
+        fn format_ticks(&self, prices: &[f64]) -> Vec<String> {
+            self.lists.lock().unwrap().push(prices.to_vec());
+            let mut labels: Vec<_> = prices
+                .iter()
+                .map(|price| format!("batch {} {price:.2}", prices.len()))
+                .collect();
+            if self.label_delta < 0 {
+                let _ = labels.pop();
+            } else if self.label_delta > 0 {
+                labels.push("extra".into());
+            }
+            labels
+        }
+        fn clone_box(&self) -> Box<dyn PriceFormatter> {
+            Box::new(self.clone())
+        }
+    }
+
+    for mode in [
+        PriceScaleMode::Normal,
+        PriceScaleMode::Logarithmic,
+        PriceScaleMode::Percentage,
+        PriceScaleMode::IndexedTo100,
+    ] {
+        for edges in [false, true] {
+            let ctx = egui::Context::default();
+            let mut chart = Chart::new(BarData::from_bars(bars(&[100.0, 200.0])));
+            chart.config.show_volume = false;
+            chart.config.price_axis.edge_ticks_visible = edges;
+            chart.chart_options.crosshair.mode = crate::config::CrosshairMode::Normal;
+            let other = chart.add_series(SeriesOptions {
+                scale: SeriesScale::Left,
+                ..Default::default()
+            });
+            chart.set_data(other, bars(&[1000.0, 2000.0]));
+            let raw = Arc::new(Recording::default());
+            let series = Arc::new(Recording::default());
+            let percentage = Arc::new(Recording::default());
+            chart.set_price_formatter(Some(raw.clone()));
+            chart.set_series_formatter(other, Some(series.clone()));
+            chart.set_percentage_formatter(Some(percentage.clone()));
+            for id in [SeriesId::MAIN, other] {
+                chart.series_price_scale_mut(id).unwrap().options_mut().mode = mode;
+            }
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let relative = matches!(
+                mode,
+                PriceScaleMode::Percentage | PriceScaleMode::IndexedTo100
+            );
+            for (id, low, high) in [
+                (SeriesId::MAIN, 100.0_f64, 200.0_f64),
+                (other, 1000.0, 2000.0),
+            ] {
+                let (low, high) = match mode {
+                    PriceScaleMode::Normal => (low, high),
+                    PriceScaleMode::Logarithmic => (low.ln(), high.ln()),
+                    PriceScaleMode::Percentage => (0.0, 100.0),
+                    PriceScaleMode::IndexedTo100 => (100.0, 200.0),
+                };
+                chart
+                    .series_price_scale_mut(id)
+                    .unwrap()
+                    .set_range(low, high);
+            }
+            for recorder in [&raw, &series, &percentage] {
+                recorder.lists.lock().unwrap().clear();
+            }
+            let pos = chart.last_rendered_price_rect.center();
+            let painted = crate::widget::test_frames::shapes(
+                &ctx,
+                &mut chart,
+                0.1,
+                vec![egui::Event::PointerMoved(pos)],
+            );
+            for (id, recorder, low, high) in [
+                (
+                    SeriesId::MAIN,
+                    if relative { &percentage } else { &raw },
+                    100.0,
+                    200.0,
+                ),
+                (
+                    other,
+                    if relative { &percentage } else { &series },
+                    1000.0,
+                    2000.0,
+                ),
+            ] {
+                let map = chart.series_price_map(id).unwrap();
+                let expected: Vec<_> = map.marks().iter().map(|mark| mark.price).collect();
+                let calls = recorder.lists.lock().unwrap();
+                assert!(calls.contains(&expected), "{mode:?}: {id:?}: {calls:?}");
+                let bounds = match mode {
+                    PriceScaleMode::Percentage => (0.0, 100.0),
+                    PriceScaleMode::IndexedTo100 => (100.0, 200.0),
+                    _ => (low, high),
+                };
+                for values in calls.iter() {
+                    assert!(
+                        values.windows(2).all(|pair| pair[0] < pair[1]),
+                        "{values:?}"
+                    );
+                    assert!(
+                        values
+                            .iter()
+                            .all(|&value| value >= bounds.0 - 1e-8 && value <= bounds.1 + 1e-8),
+                        "{mode:?}: {values:?}"
+                    );
+                    assert!(
+                        values.len() > 2,
+                        "edge ticks must share the axis list: {values:?}"
+                    );
+                }
+                if edges {
+                    assert!(
+                        calls.iter().any(|values| values != &expected),
+                        "edge ticks are included"
+                    );
+                } else {
+                    assert!(calls.iter().all(|values| values == &expected));
+                }
+            }
+            if relative {
+                assert!(raw.lists.lock().unwrap().is_empty());
+                assert!(series.lists.lock().unwrap().is_empty());
+            } else {
+                assert!(percentage.lists.lock().unwrap().is_empty());
+            }
+            let labels: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    egui::Shape::Text(text) => Some(text.galley.text()),
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                labels.iter().any(|label| label.starts_with("batch ")),
+                "{labels:?}"
+            );
+            assert!(!labels.iter().any(|label| label.starts_with("tick ")));
+            let value = if mode == PriceScaleMode::Percentage {
+                100.0
+            } else {
+                200.0
+            };
+            assert_eq!(
+                chart.format_series_price(SeriesId::MAIN, 200.0),
+                Some(format!("value {value:.2}"))
+            );
+            assert!(
+                labels.iter().any(|label| label.starts_with("value ")),
+                "value tags stay individual"
+            );
+            let map = chart.series_price_map(SeriesId::MAIN).unwrap();
+            let hover = chart
+                .format_series_price(SeriesId::MAIN, map.y_to_price(pos.y))
+                .unwrap();
+            assert!(
+                labels.contains(&hover.as_str()),
+                "crosshair stays individual"
+            );
+            if relative {
+                let study = chart.add_indicator(Box::new(crate::studies::CustomIndicator::new(
+                    "Relative study",
+                    |_| {
+                        vec![
+                            crate::studies::IndicatorValue::Single(200.0),
+                            crate::studies::IndicatorValue::Single(240.0),
+                        ]
+                    },
+                )));
+                assert!(chart.set_indicator_scale(
+                    study,
+                    crate::studies::StudyScale::Shared(SeriesScale::Separate(9))
+                ));
+                chart
+                    .series_scales
+                    .get_mut(&SeriesScale::Separate(9))
+                    .unwrap()
+                    .options_mut()
+                    .mode = mode;
+                percentage.lists.lock().unwrap().clear();
+                frame(&ctx, &mut chart, 0.2, vec![]);
+                let map = chart
+                    .indicators()
+                    .find(|(id, _)| *id == study)
+                    .unwrap()
+                    .1
+                    .scale_mapping()
+                    .unwrap();
+                let expected: Vec<_> = map.marks().iter().map(|mark| mark.price).collect();
+                assert!(
+                    percentage.lists.lock().unwrap().contains(&expected),
+                    "study axis ticks share one list"
+                );
+            }
+        }
+    }
+    // A host returning too few or too many labels cannot drop ticks or mislabel them.
+    let map = PriceMap::new(
+        Default::default(),
+        crate::scales::PriceRange::new(100.0, 200.0),
+        0.0,
+        400.0,
+        false,
+    );
+    for label_delta in [-1, 1] {
+        let formatter = Recording {
+            label_delta,
+            ..Default::default()
+        };
+        let marks = crate::chart::rendering::axes::price_marks(&map, Some(&formatter));
+        assert_eq!(marks.len(), map.marks().len());
+        for mark in marks {
+            assert_eq!(mark.label, formatter.format_tick(mark.price));
+        }
+    }
+}
+
 /// Saved display formats label raw units on shared and independent axes without transforming
 /// the data. A quarter-unit movement rounds 12.62 to 12.50, and 1500 / 1000 is 1.50K.
 #[test]

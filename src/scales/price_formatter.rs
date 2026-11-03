@@ -109,6 +109,22 @@ pub trait PriceFormatter: Send + Sync {
         self.format(price)
     }
 
+    /// Format the complete tick list for one axis, in ascending value order.
+    /// Values are raw prices in normal and logarithmic modes, percentages or index
+    /// values otherwise. Return one label per value, in the same order, to choose
+    /// units or precision from the whole list. The default calls [`format_tick`](Self::format_tick).
+    /// A different label count falls back to that per-value method for the whole list.
+    ///
+    /// Layout and painting can each request labels; ticks covered by tags or clipped
+    /// at the pane boundary are still included. Crosshair and price tags use
+    /// [`format`](Self::format) instead.
+    fn format_ticks(&self, prices: &[f64]) -> Vec<String> {
+        prices
+            .iter()
+            .map(|&price| self.format_tick(price))
+            .collect()
+    }
+
     /// Clone this formatter into a Box
     fn clone_box(&self) -> Box<dyn PriceFormatter>;
 }
@@ -523,6 +539,8 @@ mod tests {
         let formatter = DefaultPriceFormatter::default();
         assert_eq!(formatter.format(123.456), "123.46");
         assert_eq!(formatter.format(123.0), "123");
+        assert!(formatter.format_ticks(&[]).is_empty());
+        assert_eq!(formatter.format_ticks(&[123.456, 123.0]), ["123.46", "123"]);
         for value in [-0.0, -0.001] {
             assert_eq!(formatter.format(value), "0");
             assert_eq!(
