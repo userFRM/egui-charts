@@ -11,9 +11,9 @@ use egui::{Modifiers, PointerButton, Pos2, Ui};
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct ChartPointer {
-    /// Nearest eligible slot's timestamp, respecting the time-scale index filters.
-    /// With both filters off, extrapolated into whitespace as in `visible_time_range`.
-    pub time: DateTime<Utc>,
+    /// Stored timestamp of the nearest eligible slot, including a whitespace bar.
+    /// `None` without data or before the first or after the last stored slot.
+    pub time: Option<DateTime<Utc>>,
     /// Price on the main pane, or the value on the scale of the hovered pane or volume.
     pub price: f64,
     /// `MAIN`, `VOLUME`, or the first series or study of another hovered pane. An empty pane
@@ -28,7 +28,7 @@ pub struct ChartPointer {
     /// included: `0` unless panes sit above the price pane.
     pub pane: usize,
     /// Main series bar, or price-based element, at `index`, with its colours and payload: a
-    /// [whitespace](Bar::whitespace) bar in an empty slot, `None` in the whitespace before the
+    /// [whitespace](Bar::whitespace) bar in an empty slot, `None` without data or before the
     /// first bar or after the last.
     pub bar: Option<Bar>,
     /// Close of the last bar or element with a value before `index`, from which legends measure
@@ -141,8 +141,8 @@ pub enum ChartEvent {
     /// first non-zero size.
     TimeScaleResized(egui::Vec2),
     /// The local cursor moved or anything its pointer carries changed, such as the bar under a
-    /// stationary cursor or a held modifier; `None` means it left the plots or no eligible
-    /// crosshair index remains in view.
+    /// stationary cursor or a held modifier; `None` means it left the plots or loaded data has
+    /// no eligible crosshair index in view. Empty plots report a position without a data time.
     /// Programmatically synchronized cursors do not emit this event.
     CrosshairMoved(Option<ChartPointer>),
     /// A primary or secondary click in a plot, including clicks selecting drawings or studies.
@@ -386,10 +386,14 @@ impl Chart {
         let plot = self.last_rendered_price_rect;
         let shown = self.state.shown();
         let coords = self.get_chart_mapping();
-        let selected = self.crosshair_position(pos, &coords)?;
+        let selected = if shown.is_empty() {
+            pos
+        } else {
+            self.crosshair_position(pos, &coords)?
+        };
         let index = coords.x_to_idx_f64(selected.x).round();
-        let time = crate::model::time_at(shown, index)?;
         let bar_at = (index >= 0.0 && index < shown.len() as f64).then_some(index as usize);
+        let time = bar_at.map(|index| shown[index].time);
         let magnet = |map: crate::scales::PriceMap, values: Vec<f64>| {
             if self.chart_options.crosshair.mode.snaps() {
                 crate::chart::rendering::snap_to_values(pos.y, &map, values)
@@ -478,7 +482,10 @@ impl Chart {
                 .price_series
                 .iter()
                 .filter_map(|item| {
-                    let at = item.bars.binary_search_by_key(&time, |bar| bar.time).ok()?;
+                    let at = item
+                        .bars
+                        .binary_search_by_key(&time?, |bar| bar.time)
+                        .ok()?;
                     Some((item.id, item.bars[at].clone()))
                 })
                 .collect(),
@@ -847,6 +854,129 @@ mod tests {
     use crate::widget::test_frames::{chart, frame};
     use egui::{Context, Event};
 
+    /// Plot positions survive missing history; only stored slots supply a data time.
+    #[test]
+    fn pointer_events_keep_positions_without_data_times() {
+        for (empty, filtered) in [(false, false), (true, false), (true, true)] {
+            for secondary in [false, true] {
+                let ctx = Context::default();
+                let mut chart = chart(&[100.0], &[200.0]);
+                let mut bars = chart.bars(SeriesId::MAIN)[..3].to_vec();
+                bars[1] = Bar::whitespace(bars[1].time);
+                bars[2].time += chrono::Duration::days(3);
+                if empty {
+                    bars.clear();
+                }
+                chart.set_data(SeriesId::MAIN, bars.clone());
+                chart.config.show_volume = false;
+                chart.config.show_ohlc_info = false;
+                chart.config.show_symbol_labels = false;
+                chart.chart_options.time_scale.ignore_whitespace_indices = filtered;
+                chart.chart_options.time_scale.ignore_hidden_indices = filtered;
+                let owner = if secondary {
+                    let series = chart.add_series(Default::default());
+                    chart.set_data(series, bars.clone());
+                    let pane = chart.add_pane();
+                    assert!(chart.move_series_to_pane(series, pane));
+                    series
+                } else {
+                    SeriesId::MAIN
+                };
+                for time in [0.0, 0.1, 0.2] {
+                    frame(&ctx, &mut chart, time, vec![]);
+                }
+                if !empty {
+                    assert!(
+                        chart
+                            .set_visible_logical_range(crate::model::LogicalRange::new(-2.0, 5.0,))
+                    );
+                    frame(&ctx, &mut chart, 0.3, vec![]);
+                }
+                chart.drain_events().for_each(drop);
+                for (step, index) in [-1, 0, 1, 2, 3].into_iter().enumerate() {
+                    let map = chart.get_chart_mapping();
+                    let y = if secondary {
+                        chart.pane_layout.panes[1].rect.center().y
+                    } else {
+                        200.0
+                    };
+                    let x = if empty {
+                        300.0 + step as f32 * 10.0
+                    } else {
+                        map.idx_to_x(0) + index as f32 * map.bar_spacing
+                    };
+                    let pos = egui::pos2(x, y);
+                    let time = 1.0 + step as f64;
+                    frame(&ctx, &mut chart, time, vec![Event::PointerMoved(pos)]);
+                    let pointer = chart
+                        .drain_events()
+                        .find_map(|event| match event {
+                            ChartEvent::CrosshairMoved(pointer) => pointer,
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| panic!("missing position: {empty} {secondary} {index}"));
+                    let bar = usize::try_from(index).ok().and_then(|i| bars.get(i));
+                    assert_eq!(pointer.time, bar.map(|bar| bar.time));
+                    assert_eq!(
+                        (pointer.pos, pointer.pane, pointer.series),
+                        (pos, usize::from(secondary), owner)
+                    );
+                    assert!(pointer.price.is_finite());
+                    assert_eq!(
+                        pointer.bar.as_ref().map(|bar| bar.time),
+                        bar.map(|bar| bar.time)
+                    );
+                    assert_eq!(
+                        pointer.bar.as_ref().map(Bar::is_whitespace),
+                        bar.map(Bar::is_whitespace)
+                    );
+                    assert_eq!(
+                        pointer.series_bars.len(),
+                        usize::from(secondary && bar.is_some())
+                    );
+                    if !empty {
+                        assert_eq!(pointer.index, index);
+                    }
+                    for button in [PointerButton::Primary, PointerButton::Secondary] {
+                        for pressed in [true, false] {
+                            frame(
+                                &ctx,
+                                &mut chart,
+                                time + 0.1,
+                                vec![Event::PointerButton {
+                                    pos,
+                                    button,
+                                    pressed,
+                                    modifiers: Modifiers::NONE,
+                                }],
+                            );
+                        }
+                        assert!(
+                            chart.drain_events().any(|event| event
+                                == ChartEvent::Click {
+                                    position: pointer.clone(),
+                                    button,
+                                }),
+                            "missing click: {empty} {secondary} {index}"
+                        );
+                    }
+                    frame(&ctx, &mut chart, time + 0.2, vec![]);
+                    assert!(
+                        !chart
+                            .drain_events()
+                            .any(|event| matches!(event, ChartEvent::CrosshairMoved(_)))
+                    );
+                }
+                frame(&ctx, &mut chart, 7.0, vec![Event::PointerGone]);
+                assert!(
+                    chart
+                        .drain_events()
+                        .any(|event| event == ChartEvent::CrosshairMoved(None))
+                );
+            }
+        }
+    }
+
     /// Direct operations keep their kind and order, including unchanged updates, while compact
     /// events still coalesce. Rejections stay silent and overflow reports every lost entry.
     #[test]
@@ -1077,7 +1207,7 @@ mod tests {
             let Some(ChartEvent::CrosshairMoved(Some(pointer))) = events.last() else {
                 panic!("{events:?}")
             };
-            assert_eq!(pointer.time, bars[70].time);
+            assert_eq!(pointer.time, Some(bars[70].time));
             assert_eq!(pointer.series, SeriesId::MAIN);
             assert!(
                 (pointer.price - price).abs() < 0.001,
@@ -1149,7 +1279,7 @@ mod tests {
                     panic!("above={above}, maximized={maximized}: {events:?}")
                 };
                 assert_eq!(pointer.series, id);
-                assert_eq!(pointer.time, bars[70].time);
+                assert_eq!(pointer.time, Some(bars[70].time));
                 assert!((pointer.price - 50.0).abs() < 0.001);
                 assert_eq!(pointer.pane, usize::from(!above));
                 assert_eq!(

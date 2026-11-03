@@ -77,7 +77,8 @@ impl Chart {
     /// Index `0` is the oldest bar, or the oldest element on price-based chart types. Both
     /// bounds are fractional and may lie outside the data, in whitespace before the first bar
     /// or after the last. `right` is the index at the right edge less half a bar, so a range
-    /// spans `right - left + 1` bar widths of plot.
+    /// spans `right - left + 1` bar widths of plot on an ordinal axis. Numeric axes apply
+    /// those margins in mean key gaps before converting the bounds to fractional row indices.
     pub fn visible_logical_range(&self) -> Option<LogicalRange> {
         (!self.state.shown().is_empty()).then(|| self.state.time_scale().visible_logical_range())
     }
@@ -88,7 +89,10 @@ impl Chart {
     /// Returns `false` without changing the view for empty data, non-finite bounds or a
     /// `right` below `left`. The bar spacing and edge limits still apply.
     pub fn set_visible_logical_range(&mut self, range: LogicalRange) -> bool {
-        let bars = range.right - range.left + 1.0;
+        let ts = self.state.time_scale();
+        let left = ts.position(f64::from(range.left));
+        let right = ts.position(f64::from(range.right));
+        let bars = (right - left + 1.0) as f32;
         if self.state.shown().is_empty() || !bars.is_finite() || range.right < range.left {
             return false;
         }
@@ -96,7 +100,7 @@ impl Chart {
         self.tracking_mode_active = false;
         let scale = self.state.time_scale_mut();
         scale.set_bar_spacing(scale.width() / bars);
-        scale.set_right_offset(range.right - scale.base_idx() as f32);
+        scale.set_right_offset(right - scale.base_idx() as f64);
         true
     }
 
@@ -119,6 +123,9 @@ impl Chart {
     /// calendar months in the display time zone when the edge bars fall at its midnight, and in
     /// UTC otherwise.
     pub fn index_to_time(&self, index: f64) -> Option<DateTime<Utc>> {
+        if self.state.time_scale().numeric_positions().is_some() {
+            return crate::model::time_at(self.state.shown(), index);
+        }
         crate::model::time_at_with_timeframe(
             self.state.shown(),
             index,
@@ -132,6 +139,9 @@ impl Chart {
     /// The inverse of [`Chart::index_to_time`]: a time between two bars lies between their
     /// indices, and a time outside the data is extrapolated into whitespace.
     pub fn time_to_index(&self, time: DateTime<Utc>) -> Option<f64> {
+        if self.state.time_scale().numeric_positions().is_some() {
+            return crate::model::index_at(self.state.shown(), time);
+        }
         crate::model::index_at_with_timeframe(
             self.state.shown(),
             time,
@@ -146,11 +156,15 @@ impl Chart {
     /// time is placed by key. `None` restores the time scale.
     ///
     /// Session breaks and extended-hours shading are periods of time, drawn on the time scale
-    /// only.
+    /// only. Numeric scales space actual samples proportionally, retaining row indices for
+    /// data access; spacing and scroll offsets use the mean numeric gap as one unit.
     pub fn set_horizontal_scale(
         &mut self,
         scale: Option<std::sync::Arc<dyn crate::scales::HorizontalScale>>,
     ) {
+        let numeric = scale.as_ref().is_some_and(|scale| scale.is_numeric());
+        let positions = numeric.then(|| crate::model::numeric_positions(self.state.shown()));
+        self.state.time_scale_mut().set_numeric_positions(positions);
         self.horizontal_scale = scale;
     }
 
@@ -520,6 +534,263 @@ mod tests {
             99.0 + 60.0 / chart.get_time_scale_state().0,
             "fit with pixels",
         );
+    }
+
+    /// An affine axis preserves differences: strikes have gaps 10:30 and maturities 9:24.
+    /// Secondary samples, edge keys, markers, panes and the cursor share that same line.
+    #[test]
+    fn numeric_curves_use_key_distances_for_rendering_and_coordinates() {
+        use crate::model::{Marker, MarkerPos, MarkerShape};
+        use crate::scales::{HorizontalScale, MaturityScale};
+        use crate::studies::{CustomIndicator, IndicatorValue};
+        use crate::theme::{Theme, apply_to_egui};
+        use crate::widget::SeriesOptions;
+        use std::sync::Arc;
+
+        let cases: [(Arc<dyn HorizontalScale>, &[f64]); 7] = [
+            (
+                Arc::new(PriceHorizontalScale { precision: 1 }),
+                &[100.0, 110.0, 140.0],
+            ),
+            (Arc::new(MaturityScale::default()), &[3.0, 12.0, 36.0]),
+            (
+                Arc::new(PriceHorizontalScale::default()),
+                &[-2.0, -1.75, 0.5],
+            ),
+            // The first whitespace step differs from subsequent steps at the right edge.
+            (Arc::new(PriceHorizontalScale::default()), &[0.0, 0.25, 1.1]),
+            (Arc::new(MaturityScale::default()), &[3.0]),
+            (Arc::new(PriceHorizontalScale::default()), &[100.0]),
+            (Arc::new(PriceHorizontalScale::default()), &[]),
+        ];
+        for theme in [Theme::light(), Theme::dark()] {
+            for (scale, keys) in &cases {
+                let bars = keys
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &key)| Bar::from_value(key_time(key).unwrap(), 10.0 + i as f64))
+                    .collect();
+                let mut chart = Chart::new(BarData::from_bars(bars));
+                chart.set_chart_type(crate::ChartType::LineWithMarkers);
+                chart.set_horizontal_scale(Some(scale.clone()));
+                chart.config_mut().conflation_threshold = Some(4.0);
+                assert_eq!(chart.prepare_conflation(0.01, 1.0), 1);
+                assert!(chart.merge_groups.groups.is_empty());
+                chart
+                    .chart_options
+                    .time_scale
+                    .tick_mark_max_character_length = 4;
+                chart.chart_options.time_scale.ticks_visible = true;
+                chart.add_indicator(Box::new(
+                    CustomIndicator::new("Numeric pane", |bars| {
+                        bars.iter()
+                            .map(|bar| IndicatorValue::Single(bar.close))
+                            .collect()
+                    })
+                    .with_overlay(false),
+                ));
+                let color = egui::Color32::from_rgb(133, 77, 211);
+                let secondary = chart.add_series(SeriesOptions {
+                    color,
+                    ..Default::default()
+                });
+                let ctx = egui::Context::default();
+                apply_to_egui(&ctx, &theme);
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                chart.fit_content();
+                frame(&ctx, &mut chart, 0.1, vec![]);
+                if keys.is_empty() {
+                    assert_eq!(chart.visible_logical_range(), None);
+                    assert_eq!(chart.index_to_time(0.0), None);
+                    // A scale installed before data must pick up the first streamed samples.
+                    for key in [100.0, 110.0, 140.0] {
+                        chart.update(
+                            SeriesId::MAIN,
+                            Bar::from_value(key_time(key).unwrap(), 10.0),
+                        );
+                    }
+                    let x = |i| chart.index_to_x(i).unwrap();
+                    assert_close(
+                        f64::from((x(2.0) - x(1.0)) / (x(1.0) - x(0.0))),
+                        3.0,
+                        "streamed gaps",
+                    );
+                    continue;
+                }
+                let xs: Vec<_> = (0..keys.len())
+                    .map(|i| chart.index_to_x(i as f64).unwrap())
+                    .collect();
+                let plot = chart.get_rendered_price_rect();
+                for (i, &x) in xs.iter().enumerate() {
+                    assert!(plot.x_range().contains(x), "{keys:?}: {x}");
+                    assert_close(chart.x_to_index(x).unwrap(), i as f64, "inverse x");
+                    assert_close(
+                        chart.get_chart_mapping().idx_to_x(i).into(),
+                        x.into(),
+                        "rendering mapping",
+                    );
+                    let pane = &chart.get_rendered_indicator_panes()[0];
+                    assert_close(pane.mapping.idx_to_x(i).into(), x.into(), "pane mapping");
+                    assert_eq!(chart.index_to_time(i as f64), key_time(keys[i]));
+                }
+                if keys.len() >= 3 {
+                    let expected = (keys[2] - keys[1]) / (keys[1] - keys[0]);
+                    assert_close(
+                        f64::from((xs[2] - xs[1]) / (xs[1] - xs[0])),
+                        expected,
+                        "numeric gap ratio",
+                    );
+                }
+                // A single point uses one key unit per spacing unit.
+                let unit = if keys.len() == 1 {
+                    1.0
+                } else {
+                    (keys[keys.len() - 1] - keys[0]) / (keys.len() - 1) as f64
+                };
+                let samples = [
+                    keys[0] - 2.0 * unit,
+                    keys[0] + unit / 2.0,
+                    keys[keys.len() - 1] + 2.0 * unit,
+                ];
+                chart.set_data(
+                    secondary,
+                    samples
+                        .iter()
+                        .map(|&key| Bar::from_value(key_time(key).unwrap(), 15.0))
+                        .collect(),
+                );
+                let range = LogicalRange::new(
+                    chart.time_to_index(key_time(samples[0]).unwrap()).unwrap() as f32 - 1.0,
+                    chart.time_to_index(key_time(samples[2]).unwrap()).unwrap() as f32 + 1.0,
+                );
+                assert!(chart.set_visible_logical_range(range));
+                assert_range(&chart, range.left, range.right, "numeric bounds");
+                let marker_key = keys[keys.len() / 2];
+                for (id, marker_color) in [
+                    (SeriesId::MAIN, egui::Color32::GREEN),
+                    (secondary, egui::Color32::RED),
+                ] {
+                    chart.set_markers(
+                        id,
+                        vec![
+                            Marker::new(key_time(marker_key).unwrap())
+                                .with_shape(MarkerShape::Circle)
+                                .with_pos(MarkerPos::InBar)
+                                .with_color(marker_color),
+                        ],
+                    );
+                }
+                let painted = shapes(&ctx, &mut chart, 0.2, vec![]);
+                let first = chart.index_to_x(0.0).unwrap();
+                let spacing = chart.get_time_scale_state().0;
+                let expected_x = |key: f64| first + ((key - keys[0]) / unit) as f32 * spacing;
+                let tick_x = |key: f64| {
+                    let label = scale.format_crosshair(key_time(key).unwrap(), 0);
+                    let x = painted.iter().find_map(|shape| match shape {
+                        egui::Shape::Text(text)
+                            if text.galley.text() == label && text.pos.y >= plot.bottom() =>
+                        {
+                            Some(text.pos.x + text.galley.size().x / 2.0)
+                        }
+                        _ => None,
+                    });
+                    (label, x)
+                };
+                for &key in *keys {
+                    let (label, tick) = tick_x(key);
+                    if let Some(x) = tick {
+                        assert_close(x.into(), expected_x(key).into(), "numeric tick position");
+                    } else if keys[0] == 100.0 && keys.len() == 3 {
+                        panic!("missing numeric tick {label}");
+                    }
+                }
+                if keys[0] == 100.0 && keys.len() == 3 {
+                    for key in [90.0, 150.0] {
+                        let (label, x) = tick_x(key);
+                        let x = x.unwrap_or_else(|| panic!("numeric whitespace tick {label}"));
+                        assert_close(
+                            x.into(),
+                            expected_x(key).into(),
+                            "numeric whitespace position",
+                        );
+                    }
+                }
+                for key in samples {
+                    let index = chart.time_to_index(key_time(key).unwrap()).unwrap();
+                    let actual = chart.index_to_x(index).unwrap();
+                    assert_close(
+                        actual.into(),
+                        expected_x(key).into(),
+                        "numeric edge and fractional key",
+                    );
+                    assert_close(
+                        crate::scales::time_key(
+                            chart
+                                .index_to_time(chart.x_to_index(actual).unwrap())
+                                .unwrap(),
+                        ),
+                        key,
+                        "inverse numeric key",
+                    );
+                }
+                let paths: Vec<_> = painted
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        egui::Shape::Path(path)
+                            if path.stroke.color == egui::epaint::ColorMode::Solid(color) =>
+                        {
+                            Some(path)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert!(
+                    paths.iter().any(|path| samples.iter().all(|&key| path
+                        .points
+                        .iter()
+                        .any(|p| (p.x - expected_x(key)).abs() < 0.01))),
+                    "secondary curve: {paths:?}"
+                );
+                for color in [egui::Color32::GREEN, egui::Color32::RED] {
+                    assert!(painted.iter().any(|shape| matches!(shape,
+                        egui::Shape::Circle(circle) if circle.fill == color && (circle.center.x - expected_x(marker_key)).abs() < 0.01)), "marker {color:?}");
+                }
+                let hover = egui::pos2(expected_x(marker_key), plot.center().y);
+                let hovered = shapes(
+                    &ctx,
+                    &mut chart,
+                    0.3,
+                    vec![egui::Event::PointerMoved(hover)],
+                );
+                let label = scale.format_crosshair(key_time(marker_key).unwrap(), 0);
+                assert!(hovered.iter().any(|shape| matches!(shape, egui::Shape::Text(text) if text.galley.text() == label && text.pos.y >= plot.bottom())), "numeric crosshair {label}");
+                assert_close(
+                    chart.last_hover_bar_idx.unwrap(),
+                    (keys.len() / 2) as f64,
+                    "crosshair index",
+                );
+                chart.set_horizontal_scale(None);
+                frame(&ctx, &mut chart, 0.4, vec![]);
+                if keys.len() >= 3 {
+                    let x = |i| chart.index_to_x(i).unwrap();
+                    assert_close(
+                        f64::from(x(2.0) - x(1.0)),
+                        f64::from(x(1.0) - x(0.0)),
+                        "ordinal time spacing",
+                    );
+                }
+            }
+        }
+        // Both keys fit key_time, but their difference exceeds an i64 count of nanoseconds.
+        // -9e9 + 0.75 * (8e9 - -9e9) = 3.75e9.
+        let mut wide = Chart::new(BarData::from_bars(
+            [-9e9, 8e9, 9e9]
+                .into_iter()
+                .map(|key| Bar::from_value(key_time(key).unwrap(), 10.0))
+                .collect(),
+        ));
+        wide.set_horizontal_scale(Some(Arc::new(PriceHorizontalScale::default())));
+        assert_eq!(wide.index_to_time(0.75), key_time(3.75e9));
     }
 
     /// Strikes 4400 to 4600 in steps of 25 across the plot are about 80 points apart, so the

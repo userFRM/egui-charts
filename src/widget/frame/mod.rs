@@ -27,9 +27,11 @@ impl Chart {
     /// revision rebuilds them; appends and tail updates rebuild only the last existing group
     /// and any new groups. Only one factor is retained at a time. This reads the currently
     /// applied bars, including a replay cutoff; it does not poll a connected feed.
-    /// Disabled conflation and price-based chart types return 1 and clear the groups.
+    /// Disabled conflation, numeric scales and price-based chart types return 1 and clear the groups.
     pub fn prepare_conflation(&mut self, bar_spacing: f32, pixels_per_point: f32) -> usize {
-        let factor = if self.chart_type.is_time_independent() {
+        let factor = if self.chart_type.is_time_independent()
+            || self.state.time_scale().numeric_positions().is_some()
+        {
             1
         } else {
             super::merge::factor(
@@ -785,6 +787,12 @@ impl Chart {
         if self.state.data().is_empty() {
             self.last_hover_bar_idx = None;
             self.last_crosshair = None;
+            self.last_rendered_price_rect = layout.price_rect;
+            self.last_rendered_volume_rect = Rect::NOTHING;
+            let scale = self.state.price_scale();
+            self.last_price_map = scale
+                .map(scale.transform(), chart_rect.top(), chart_rect.bottom())
+                .with_thousands_sep(self.config.thousands_sep);
             self.pump_marks(ui.ctx());
             painter.text(
                 rect.center(),
@@ -793,6 +801,7 @@ impl Chart {
                 egui::FontId::proportional(ui.active_theme().text.title),
                 self.config.text_color,
             );
+            self.record_host_click(ui, &response);
             return response;
         }
 
@@ -1122,7 +1131,7 @@ impl Chart {
         let bar_spacing = self.state.time_scale().bar_spacing();
         let bar_width = bar_spacing * self.config.candle_width;
         let price_ctx = RenderContext::new(&painter, price_rect);
-        let coords = ChartMapping::new(
+        let mut coords = ChartMapping::new(
             price_rect,
             bar_spacing,
             start_idx,
@@ -1130,12 +1139,13 @@ impl Chart {
             self.state.time_scale().right_offset_precise(),
             price_map,
         );
+        coords.numeric_positions = self.state.time_scale().numeric_positions().cloned();
         let (time_data, time_coords) = match (&time_bars, groups) {
             (Some(bars), Some((start, _))) => (
                 bars.as_slice(),
                 super::merge::group_mapping(&coords, factor, start),
             ),
-            _ => (visible_data, coords),
+            _ => (visible_data, coords.clone()),
         };
         let colors = StyleColors {
             bullish: self.config.bullish_color,
@@ -1157,6 +1167,7 @@ impl Chart {
         let (time_marks, time_points, axis_coords) = if time_grid || self.config.show_time_labels {
             // Resolved once: a fixed-offset zone allocates on every clone.
             let calendar = self.calendar_timezone();
+            let numeric = time_coords.numeric_positions.is_some();
             rendering::time_axis_marks(
                 &RenderContext::new(&painter, chart_rect),
                 time_data,
@@ -1165,16 +1176,21 @@ impl Chart {
                 &self.chart_options.time_scale,
                 calendar.as_ref(),
                 |index| {
-                    crate::model::time_at_with_timeframe(
-                        self.state.shown(),
-                        index * factor as f64,
-                        self.timeframe(),
-                        calendar.as_ref(),
-                    )
+                    let index = index * factor as f64;
+                    if numeric {
+                        crate::model::time_at(self.state.shown(), index)
+                    } else {
+                        crate::model::time_at_with_timeframe(
+                            self.state.shown(),
+                            index,
+                            self.timeframe(),
+                            calendar.as_ref(),
+                        )
+                    }
                 },
             )
         } else {
-            (Vec::new(), Vec::new(), time_coords)
+            (Vec::new(), Vec::new(), time_coords.clone())
         };
 
         if self.config.show_grid && self.config.show_vertical_grid {
@@ -2951,6 +2967,7 @@ impl Chart {
                 let mut main_options = crosshair_options;
                 if volume_rect.contains(hover_pos) {
                     main_options.horz_line_visible = false;
+                    main_options.horz_label_visible = false;
                     if main_options.style == crate::config::CrosshairStyle::Dot {
                         main_options.style = crate::config::CrosshairStyle::Arrow;
                     }
@@ -3127,11 +3144,7 @@ impl Chart {
                             return Some(index);
                         }
                         self.crosshair_position(
-                            Pos2::new(
-                                coords.idx_to_x(index.floor() as usize)
-                                    + index.fract() as f32 * coords.bar_spacing,
-                                price_rect.center().y,
-                            ),
+                            Pos2::new(coords.index_to_x(index), price_rect.center().y),
                             &coords,
                         )
                         .map(|pos| coords.x_to_idx_f64(pos.x))

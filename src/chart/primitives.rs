@@ -114,7 +114,7 @@ impl PrimitiveView<'_> {
 
     /// The x of a fractional bar index, the centre of bar `index` when it is whole.
     pub fn index_to_x(&self, index: f64) -> f32 {
-        self.mapping.idx_to_x(0) + index as f32 * self.mapping.bar_spacing
+        self.mapping.index_to_x(index)
     }
 
     /// The x of a UTC time, interpolated between bars. Without a timeframe, whitespace extends
