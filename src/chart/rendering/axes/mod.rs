@@ -21,22 +21,22 @@ pub(crate) const PRICE_LABEL_GAP: f32 = 8.0;
 /// Padding between an axis tag's text and its edge.
 const TAG_PADDING: Vec2 = Vec2::new(6.0, 1.5);
 
-fn axis_font_family_id() -> egui::Id {
-    egui::Id::NULL.with("axis_font_family")
+fn axis_font_id() -> egui::Id {
+    egui::Id::NULL.with("axis_font")
 }
 
-/// Restores the axis family after painting one chart, including during unwinding.
+/// Restores the axis font after painting one chart, including during unwinding.
 pub(crate) struct AxisFontScope {
     ctx: egui::Context,
-    previous: Option<FontFamily>,
+    previous: Option<FontId>,
 }
 
 impl AxisFontScope {
     pub(crate) fn new(ctx: &egui::Context, family: &FontFamily) -> Self {
+        let font = FontId::new(ctx.active_theme().text.label, family.clone());
         let previous = ctx.data_mut(|data| {
-            let previous = data.get_temp::<FontFamily>(axis_font_family_id());
-            data.insert_temp(axis_font_family_id(), family.clone());
-            previous
+            data.get_temp_mut_or_default::<Option<FontId>>(axis_font_id())
+                .replace(font)
         });
         Self {
             ctx: ctx.clone(),
@@ -48,22 +48,17 @@ impl AxisFontScope {
 impl Drop for AxisFontScope {
     fn drop(&mut self) {
         self.ctx.data_mut(|data| {
-            if let Some(family) = self.previous.take() {
-                data.insert_temp(axis_font_family_id(), family);
-            } else {
-                data.remove::<FontFamily>(axis_font_family_id());
-            }
+            // Keep the slot allocated so steady frames only replace its value.
+            *data.get_temp_mut_or_default::<Option<FontId>>(axis_font_id()) = self.previous.take();
         });
     }
 }
 
 /// The chart's axis family at the theme's label size, proportional outside a chart.
 pub(crate) fn axis_font(ctx: &egui::Context) -> FontId {
-    FontId::new(
-        ctx.active_theme().text.label,
-        ctx.data(|data| data.get_temp::<FontFamily>(axis_font_family_id()))
-            .unwrap_or_default(),
-    )
+    ctx.data(|data| data.get_temp::<Option<FontId>>(axis_font_id()))
+        .flatten()
+        .unwrap_or_else(|| FontId::proportional(ctx.active_theme().text.label))
 }
 
 /// Paints `text` on a `fill` tag in the axis font and returns the tag's rect.
@@ -767,6 +762,37 @@ mod tests {
     use super::*;
     use crate::scales::{PriceRange, PriceScaleMode, PriceTransform};
     use egui::{Context, RawInput, Shape};
+
+    #[test]
+    fn axis_font_scope_restores_nested_fonts_after_unwinding() {
+        let ctx = Context::default();
+        let other = Context::default();
+        let default = axis_font(&ctx);
+        for size in [18.0, 24.0] {
+            let mut theme = ctx.active_theme();
+            theme.text.label = size;
+            {
+                let _theme = crate::theme::ThemeScope::new(&ctx, &theme);
+                let _font = AxisFontScope::new(&ctx, &FontFamily::Monospace);
+                assert_eq!(axis_font(&ctx), FontId::monospace(size));
+                assert_eq!(axis_font(&other), default);
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    theme.text.label = 30.0;
+                    let _theme = crate::theme::ThemeScope::new(&ctx, &theme);
+                    let family = FontFamily::Name("Nested".into());
+                    let _font = AxisFontScope::new(&ctx, &family);
+                    assert_eq!(axis_font(&ctx), FontId::new(30.0, family));
+                    panic!("unwind the nested chart");
+                }));
+                assert_eq!(
+                    result.unwrap_err().downcast_ref::<&str>(),
+                    Some(&"unwind the nested chart")
+                );
+                assert_eq!(axis_font(&ctx), FontId::monospace(size));
+            }
+            assert_eq!(axis_font(&ctx), default);
+        }
+    }
 
     #[test]
     fn charts_keep_axis_families_local() {
