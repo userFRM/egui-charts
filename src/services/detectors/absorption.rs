@@ -16,7 +16,7 @@ use crate::services::SignalEvent;
 /// An inside-price episode closes after one second without an execution there. It qualifies
 /// when aggressive volume reaches both the threshold and opening displayed size, no trade
 /// printed beyond it, and half the displayed size remains or order-level depth received adds.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct AbsorptionRule {
     /// Fixed size, or nearest-rank 99th percentile of the last 1,000 closed episode volumes,

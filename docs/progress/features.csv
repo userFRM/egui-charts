@@ -14,6 +14,7 @@ Builder API,Broker API,Order ticket and order or position dialogs,done,host,src/
 Builder API,Broker API,"Order, position and execution queries",done,host,src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/events.rs;src/ui/trading/account_panel/mod.rs;src/ui/trading/account_panel/history.rs;src/ui/trading/account_panel/view.rs,
 Builder API,Broker API,Take-profit levels,done,host,src/model/trading.rs;src/services/paper.rs;src/ui/trading/ticket/mod.rs;src/chart/rendering/trading_lines/mod.rs,
 Builder API,Broker API,Trading entry points in the UI,done,host,src/ui/top_toolbar/toolbar.rs;src/ui/trading/mod.rs;src/ui/trading/account_panel/mod.rs;src/ui/trading/account_panel/view.rs;src/ui/dialogs/chart_settings/tabs/trading.rs,
+Builder API,Builder integration,Clean demo opening and saved opt-ins,done,library,examples/demo/controller.rs;examples/demo/live.rs;src/services/detectors/mod.rs,1957
 Builder API,Builder integration,Custom drawing tools from a downstream crate,done,library,src/drawings/registry.rs;src/drawings/manager/mod.rs;src/drawings/manager/interaction.rs,
 Builder API,Builder integration,Custom indicator metadata,done,library,src/studies/indicator_trait.rs;src/studies/inputs.rs;src/studies/settings.rs;src/chart/rendering/indicator.rs;src/chart/rendering/axes/study_scale.rs,
 Builder API,Builder integration,Custom indicators from a downstream crate,done,library,src/studies/factory/mod.rs;src/ui/dialogs/indicator_dialog/dialog.rs;src/widget/studies.rs;src/studies/custom.rs;terminal/src/studies.rs,
@@ -460,7 +461,7 @@ Order flow,Order flow,Options gamma exposure suite,partial,host,;src/data/option
 Order flow,Order flow,"Order book, heatmap and order-level replay",done,library,src/data/replay.rs;src/data/recording.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/widget/replay.rs;src/widget/feed/mod.rs;src/widget/feed/pump.rs,
 Order flow,Order flow,Minimum traded volume for imbalances and stacked imbalance zones,done,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/studies/builtin/footprint_studies.rs,1749
 Order flow,Order flow,Order-flow entries offered only for symbols whose feed supplies their data,missing,host,,
-Order flow,Order flow,Order-flow event alerts,done,library,src/services/detectors/alerts.rs;src/services/detectors/mod.rs;src/services/notifications.rs;src/ui/widget_bar/panels/order_flow.rs;src/ui/widget_bar/panels/time_and_sales.rs,1148;1149
+Order flow,Order flow,Order-flow event alerts,done,library,src/services/detectors/alerts.rs;src/services/detectors/mod.rs;src/services/notifications.rs;src/ui/widget_bar/panels/order_flow.rs;src/ui/widget_bar/panels/time_and_sales.rs;examples/demo/controller.rs,1148;1149;1957
 Order flow,Order flow,Order-level trade classification,partial,library,src/data/trades.rs;src/data/orders.rs;src/model/quote.rs;src/widget/feed/mod.rs,
 Order flow,Order flow,Passive wall detection,done,library,src/services/detectors/liquidity.rs;src/services/detectors/depth.rs;src/services/detectors/mod.rs;src/model/signal.rs;src/widget/signals.rs,
 Order flow,Order flow,Per-bar delta and volume heatmap strip,done,library,src/chart/overlays/heatmap_strip.rs,
