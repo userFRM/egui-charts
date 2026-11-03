@@ -16,7 +16,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Heikin-Ashi, Renko, Kagi, line break, point and figure, and range-bar transformations and rendering.
 - [x] Renko box sizing and wicks, line-break lookback, and price-based chart parameters are configurable.
 - [x] Market Profile (TPO) uses exchange sessions or calendar days, with letters or blocks, initial balance, point of control, value area and composite profiles; autoscale fits the full displayed distributions and cropped profiles retain their session and central-level readouts. POC, value-area and midpoint captions keep a gutter at the first or offscreen session opening, separate nearby levels and reveal their prices on hover.
-- [x] Volume Footprint and Session Volume Profile aggregate supplied executions on time-based intervals with an instrument tick size; unsupported intervals and bars without retained trades use candles. Session profiles require `studies`; autoscale includes their full price rows after range edits, and manual crops retain session and POC/value-area readouts.
+- [x] Volume Footprint and Session Volume Profile aggregate supplied executions on time-based intervals with an instrument tick size; unsupported intervals and bars without retained trades use candles. Session profiles require `studies`; autoscale includes their full price rows after range edits, and manual crops retain session and POC/value-area readouts. Hosts can restrict the chart type menu and favourite strip to declared historical or live executions for the resolved instrument; unavailable favourites stay saved.
 - [ ] Change Kagi line thickness at shoulder and waist crossings within a continuing leg.
 - [ ] Expose the standalone point-and-figure close-only source in chart parameters and settings.
 - [x] Range charts build their bars from the supplied executions, falling back to the OHLC approximation while the chart holds none; `Chart::range_bar_source` reports which one is shown.
@@ -103,7 +103,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 
 ### Calculations and Rendering
 
-- [x] `IndicatorFactory` registers 204 indicators with default features and accepts downstream registrations; the study picker groups its built-in results on Indicators, Profiles, Patterns and Order flow pages, each offered only while it has an accepted study.
+- [x] `IndicatorFactory` registers 204 indicators with default features and accepts downstream registrations; the study picker groups its built-in results on Indicators, Profiles, Patterns and Order flow pages, each offered only while it has an accepted study. Hosts can restrict Order flow entries, including search and favourites, to the feed services each study's inputs read; requirements are cached when feed metadata or the factory changes. Other categories keep their existing availability.
 - [x] Moving-average families include SMA, EMA, WMA, HMA, ALMA, KAMA and configurable combinations, ribbons and crossing markers.
 - [x] Momentum and trend studies include RSI, MACD, Stochastic, ADX, SuperTrend, Ichimoku and Parabolic SAR.
 - [x] Volatility and channel studies include Bollinger Bands, ATR, Keltner, Donchian and historical volatility.
