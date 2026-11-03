@@ -264,6 +264,17 @@ impl ExportDialog {
     /// ```
     #[must_use = "Export dialog response should be handled"]
     pub fn show(&mut self, ctx: &Context) -> ExportResponse {
+        self.show_with(ctx, |_, _| {})
+    }
+
+    /// Shows the dialog with host controls below its title, such as an image scope chooser.
+    /// `content` receives the currently selected format; the host keeps its own control state.
+    #[must_use = "Export dialog response should be handled"]
+    pub fn show_with(
+        &mut self,
+        ctx: &Context,
+        mut content: impl FnMut(&mut egui::Ui, ExportFormat),
+    ) -> ExportResponse {
         if !self.is_open {
             return ExportResponse::None;
         }
@@ -287,7 +298,7 @@ impl ExportDialog {
             .frame(frame)
             .pivot(egui::Align2::CENTER_TOP)
             .default_pos(egui::pos2(r.center().x, r.top() + r.height() * 0.2))
-            .show(ctx, |ui| response = self.draw_contents(ui));
+            .show(ctx, |ui| response = self.draw_contents(ui, &mut content));
 
         let consume = |key| {
             ctx.input_mut(|i| {
@@ -315,12 +326,17 @@ impl ExportDialog {
         response
     }
 
-    fn draw_contents(&mut self, ui: &mut egui::Ui) -> ExportResponse {
+    fn draw_contents(
+        &mut self,
+        ui: &mut egui::Ui,
+        content: &mut impl FnMut(&mut egui::Ui, ExportFormat),
+    ) -> ExportResponse {
         let theme = ui.active_theme();
         if title_row(ui, "Export chart", true) {
             return ExportResponse::Closed;
         }
 
+        content(ui, self.config.format);
         let mut response = ExportResponse::None;
         ui.add_enabled_ui(self.export_status != ExportStatus::Exporting, |ui| {
             FormGrid::new("export_form").show(ui, |ui| {

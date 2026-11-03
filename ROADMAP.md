@@ -45,7 +45,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Chart-wide time, price, percentage and volume formatters, plus per-series price formatters. Time tick hooks receive the current locale and display-time context and can defer individual ticks to the normal locale-aware text without changing crosshair formatting. Drawing prices and price changes use their pane's raw-price formatter, including measurements, forecasts, projections, position levels and rectangle heights.
 - [x] Locale-aware date names and configurable date patterns. Forecast dates use the chart's display time zone and crosshair time formatter, including host formatting and clock visibility.
 - [x] Chart-owned panes share the time axis and support resizing, reordering, stretch sizing, collapse and maximise controls.
-- [x] Studies and added series can use separate panes and independent scales.
+- [x] Studies and added series can use separate panes and independent scales. The demo menu's Samples entries open synthetic strike and maturity charts with numeric crosshair readouts and preserve the price workspace on return.
 - [x] Scale settings control currency and unit labels, scale-mode and price-action buttons, price-to-bar ratio, label overlap and symbol, study and extended-session value colours.
 - [ ] Forward pan, wheel and pinch input to maximised study panes and support pane maximisation by double-click.
 - [ ] Apply the main-series-only autoscale quick setting and the left-axis scale-mode configuration field.
@@ -140,7 +140,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [ ] Expose every supported plot type in the Style editor.
 - [ ] Add a configurable per-chart study limit and rejection feedback.
 - [x] Restore custom registered studies and remap study-source dependencies through a library-owned template operation, including the terminal's indicator templates.
-- [ ] Provide a study editor surface with host callbacks for submitted content.
+- [x] `StudyEditor` sends open, save and apply requests to the host and displays diagnostics. The demo applies the documented `close - close[N]` sample to live bars, keeps the last valid study on errors and stores named source documents locally.
 
 ## Order Flow
 
@@ -259,7 +259,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 
 - [x] `Chart::export_csv` exports OHLCV and study values with timestamps and missing-value handling.
 - [x] `Chart::export_png` renders an isolated chart frame on the CPU after font initialisation; export controls include size, title, timestamp, crosshair and transparency.
-- [x] Export dialog and demo actions save images/data or copy images through application facilities. The terminal's file callback returns save errors and carries a host request to open an exported image.
+- [x] Export dialog and demo actions save images/data or copy images through application facilities. The demo exports either the active chart or the visible arrangement as PNG or SVG, with shared image options and opted-in trading overlays. The terminal's file callback returns save errors and carries a host request to open an exported image.
 - [ ] Capture composed panels, trading overlays, external textures and feed-backed order-flow visuals in a complete terminal image.
 - [ ] Add an export watermark switch, vector image output and print/PDF output.
 - [ ] Integrate a native save-file chooser and provide an `Exportable` adapter for direct chart export.
@@ -288,7 +288,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Optional per-series bar limits bound retained history; feed queues coalesce updates and bound pending trades/depth.
 - [x] Runtime symbol/interval changes reload the feed; explicit reload and reset paths invalidate old work.
 - [x] Public events report pointer, range, symbol, interval and data changes; custom menu entries and toolbar controls return application identifiers.
-- [x] Added price series, custom study-backed series and attached `Primitive` renderers support visibility, hit testing, scale participation and removal. Bar-series logical-range queries return stored slices and shared-scale distances, including gaps and fractional bounds outside the data.
+- [x] Added price series, custom study-backed series and attached `Primitive` renderers support visibility, hit testing, scale participation and removal. Bar-series logical-range queries return stored slices and shared-scale distances, including gaps and fractional bounds outside the data. The demo menu's Samples entries demonstrate toggleable session backgrounds, axis labels and a custom range pane with pointer feedback.
 - [ ] Reset a stale manual price range when changing symbols.
 - [ ] Accept locale, formatters, storage and saved state as builder inputs.
 - [ ] Add bounded time-range requests for trades/depth and page older trades during scroll-back.

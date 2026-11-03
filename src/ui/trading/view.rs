@@ -295,7 +295,9 @@ impl Trading {
         chart.export_layout_svg(ctx, options, |ui, chart| self.draw_export(ui, chart))
     }
 
-    fn draw_export(&self, ui: &mut egui::Ui, chart: &mut Chart) {
+    /// Draws a frozen chart and its opted-in trading overlays inside an image layout callback.
+    /// Use with [`Chart::export_layout_image`] and [`Chart::export_snapshot`] for several charts.
+    pub fn draw_export(&self, ui: &mut egui::Ui, chart: &mut Chart) {
         chart.show(ui);
         if self.display.include_in_image {
             chart.trading_bid_ask = self.display.bid_ask_labels;
