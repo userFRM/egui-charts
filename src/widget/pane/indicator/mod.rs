@@ -318,6 +318,7 @@ impl IndicatorPane {
             None,
             &[],
             false,
+            1,
         )?;
         if let Some(table) = indicator.table() {
             crate::studies::table::paint(
@@ -344,6 +345,7 @@ impl IndicatorPane {
         hover: Option<(Pos2, crate::config::CrosshairOptions)>,
         primitives: &[&crate::widget::primitives::Attached],
         bar_series: bool,
+        factor: usize,
     ) -> Option<PaneInteraction> {
         if !indicator.is_visible() {
             return None;
@@ -427,7 +429,7 @@ impl IndicatorPane {
         let draw = |painter: &egui::Painter, pass| {
             if let Some(view) = &view {
                 for item in primitives {
-                    item.draw(painter, view, pass);
+                    item.draw(painter, view, pass, factor);
                 }
             }
         };

@@ -576,6 +576,8 @@ fn zoomed_out_bars_merge_per_pixel_and_keep_their_extremes() {
     let groups = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let ctx = egui::Context::default();
     let mut chart = crate::widget::Chart::new(BarData::from_bars(bars));
+    // Axis value tags share candle colours but are not candle geometry.
+    chart.config_mut().show_right_axis = false;
     chart
         .attach_primitive(crate::widget::SeriesId::MAIN, MergeProbe(groups.clone()))
         .unwrap();
@@ -605,15 +607,7 @@ fn zoomed_out_bars_merge_per_pixel_and_keep_their_extremes() {
     }
     let color = chart.config().bullish_color;
     let painted_ys = |chart: &mut crate::widget::Chart, t| -> Vec<f32> {
-        let painted = shapes(&ctx, chart, t, Vec::new())
-            .into_iter()
-            .filter(|shape| {
-                shape
-                    .visual_bounding_rect()
-                    .intersects(chart.get_rendered_price_rect())
-            })
-            .collect::<Vec<_>>();
-        candle_ys(&painted, color)
+        candle_ys(&shapes(&ctx, chart, t, Vec::new()), color)
     };
     let ys = painted_ys(&mut chart, 0.2);
     // About one bar per pixel column, each still reaching the highest and lowest price.
@@ -637,19 +631,98 @@ fn zoomed_out_bars_merge_per_pixel_and_keep_their_extremes() {
     }
     chart.set_chart_type(ChartType::Candles);
 
+    let spacing = chart.state.time_scale().bar_spacing();
+    let default_factor = chart.merge_groups.factor();
+    for (threshold, expected) in [
+        (None, 1),
+        (Some(0.25), default_factor / 4),
+        (Some(4.0), default_factor * 4),
+        (Some(1.0), default_factor),
+    ] {
+        chart.config_mut().conflation_threshold = threshold;
+        assert_eq!(chart.prepare_conflation(spacing, 1.0), expected);
+        assert_eq!(
+            chart.merge_groups.groups.len(),
+            if expected == 1 { 0 } else { 65_536 / expected }
+        );
+        // Give the cached tail a unique payload: reconstructing it would drop this witness.
+        let witness = (expected > 1).then(|| {
+            let payload = std::sync::Arc::new(serde_json::Value::Null);
+            let weak = std::sync::Arc::downgrade(&payload);
+            chart.merge_groups.groups.last_mut().unwrap().bar.payload = Some(payload);
+            weak
+        });
+        chart.prepare_conflation(spacing, 1.0);
+        let drawn = painted_ys(&mut chart, 0.25);
+        if let Some(witness) = witness {
+            assert!(
+                witness.upgrade().is_some(),
+                "rendering reuses prepared groups"
+            );
+        }
+        assert_eq!(groups.lock().unwrap().first().unwrap().len(), expected);
+        assert_eq!(chart.merge_groups.factor(), expected);
+        assert_eq!(
+            drawn.len().cmp(&ys.len()),
+            expected.cmp(&default_factor).reverse(),
+            "disabled and custom thresholds change rendered sample counts"
+        );
+        for (price, edge) in [
+            (1000.0, drawn.iter().copied().fold(f32::INFINITY, f32::min)),
+            (1.0, drawn.iter().copied().fold(f32::NEG_INFINITY, f32::max)),
+        ] {
+            assert!((edge - chart.get_chart_mapping().price_to_y(price)).abs() < 1.0);
+        }
+    }
+
+    // A source change must replace the cached line extrema even at the same grouping factor.
+    chart.config_mut().price_source = crate::model::PriceSource::High;
+    chart.prepare_conflation(spacing, 1.0);
+    assert_eq!(
+        chart.merge_groups.groups[34_321 / default_factor].extremes[1],
+        34_321
+    );
+    chart.config_mut().price_source = crate::model::PriceSource::Close;
+    chart.prepare_conflation(spacing, 1.0);
+    assert_eq!(
+        chart.merge_groups.groups[34_321 / default_factor].extremes[1],
+        34_321 / default_factor * default_factor
+    );
+    let mut corrected = chart.bars(crate::widget::SeriesId::MAIN)[34_321].clone();
+    corrected.high = 1100.0;
+    chart.update(crate::widget::SeriesId::MAIN, corrected);
+    chart.prepare_conflation(spacing, 1.0);
+    assert_eq!(
+        chart.merge_groups.groups[34_321 / default_factor].bar.high,
+        1100.0
+    );
+
     // A live bar opening a group, then updating it, is drawn in it, with its volume.
     let time = Utc.timestamp_opt(1_600_000_000 + 65_536 * 60, 0).unwrap();
-    for (t, high) in [(0.3, 1500.0), (0.5, 2000.0)] {
+    for (t, high, threshold) in [
+        (0.3, 1500.0, Some(1.0)),
+        (0.5, 2000.0, Some(4.0)),
+        (0.7, 2500.0, Some(4.0)),
+        (0.9, 2000.0, Some(4.0)),
+        (1.1, 3000.0, None),
+    ] {
+        chart.config_mut().conflation_threshold = threshold;
         chart.update(
             crate::widget::SeriesId::MAIN,
             Bar::new(time, 100.0, high, 100.0, 101.0, 1.0),
         );
+        chart.prepare_conflation(spacing, 1.0);
         frame(&ctx, &mut chart, t, Vec::new());
         let ys = painted_ys(&mut chart, t + 0.1);
         let top = ys.iter().copied().fold(f32::INFINITY, f32::min);
         let y = chart.get_chart_mapping().price_to_y(high);
         assert!((top - y).abs() < 1.0, "{high}: {top} against {y}");
     }
+
+    chart.set_chart_type(ChartType::Range);
+    chart.config_mut().conflation_threshold = Some(4.0);
+    assert_eq!(chart.prepare_conflation(spacing, 1.0), 1);
+    assert!(chart.merge_groups.groups.is_empty());
 }
 
 /// Bars whose footprint cells are not drawn show candles: all bars, merged per pixel column,

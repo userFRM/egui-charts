@@ -1,12 +1,12 @@
 # Strategy reports
 
-A host produces a `model::StrategyReport` with `strategies::Backtest` (the `strategies`
+A host produces a [`model::StrategyReport`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html) with [`strategies::Backtest`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html) (the `strategies`
 feature), or supplies one from its own strategy execution or analytics. The report serializes
 without egui and its performance metrics work with `default-features = false`. The host
 supplies the market data.
-`examples/backtesting.rs` demonstrates both a headless run and, with `ui`, a report window.
+`examples/backtesting.rs` demonstrates both a headless run and, with [`ui`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/index.html), a report window.
 
-With the `strategies` feature, configure a run through `Backtest::settings`:
+With the `strategies` feature, configure a run through [`Backtest::settings`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#structfield.settings):
 
 ```rust
 use egui_charts::model::{Bar, OrderSide, OrderType, Timeframe};
@@ -58,16 +58,16 @@ margin closes at its open. For example, capital
 `7.5p` at positive price `p`; a decline crosses at `p = 200/3`, leaving equity 500 before
 exit costs, even if the bar later recovers.
 
-`recalculate_after_fills` calls the strategy again after every fill, with `price()` equal
-to the execution price and `equity()` marked there after commission. `is_after_fill()`
-distinguishes it from a closed-bar decision. During this call, `bars()` contains only
+[`recalculate_after_fills`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.recalculate_after_fills) calls the strategy again after every fill, with [`price()`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.StrategyContext.html#method.price) equal
+to the execution price and [`equity()`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.StrategyContext.html#method.equity) marked there after commission. [`is_after_fill()`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.StrategyContext.html#method.is_after_fill)
+distinguishes it from a closed-bar decision. During this call, [`bars()`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.StrategyContext.html#method.bars) contains only
 previously closed chart bars, excluding the unfinished bar. Newly created orders wait for
-a subsequent price point; they cannot repeatedly fill on the same tick. `fill_on_close`
-fills market orders on the closing tick. All settings and `Strategy::inputs()` appear in
+a subsequent price point; they cannot repeatedly fill on the same tick. [`fill_on_close`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.fill_on_close)
+fills market orders on the closing tick. All settings and [`Strategy::inputs()`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/trait.Strategy.html#method.inputs) appear in
 the report's Properties tab and summary CSV. Capital, currency and risk-free rate use the
 report's existing metadata fields, so each appears once.
 
-`Backtest::run(strategy, bars, lower)` uses valid lower-interval bars in timestamp order
+[`Backtest::run(strategy, bars, lower)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#method.run) uses valid lower-interval bars in timestamp order
 within each chart bar's time span, with the end excluded. Duplicate finer timestamps use
 the first valid bar. A chart bar without valid finer coverage uses its own path; gaps
 between supplied finer bars fill at the next finer open. Monthly spans use calendar
@@ -75,8 +75,8 @@ months; execution bars end at the next chart open, with the final one covering r
 finer bars. Only fills use finer timestamps; decisions and equity stay on the chart
 interval. Without finer bars the existing nearest-extreme-first chart path is unchanged.
 
-`settings.start_time` selects the first eligible chart-bar open. Earlier chart bars cannot
-place or fill orders, but still reach `Strategy::prepare` and `Strategy::on_bar` to warm
+[`settings.start_time`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.start_time) selects the first eligible chart-bar open. Earlier chart bars cannot
+place or fill orders, but still reach [`Strategy::prepare`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/trait.Strategy.html#method.prepare) and [`Strategy::on_bar`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/trait.Strategy.html#tymethod.on_bar) to warm
 both precomputed studies and incremental strategy state. The host loads
 both histories and can supply more data than its chart has loaded; no account or market
 data service is required by the engine. With a start time, equity starts at that time and
@@ -86,14 +86,14 @@ one nanosecond after its last supplied price timestamp so the curve stays ordere
 Without a start time, the existing equity timestamps are retained. When comparing a
 bounded run in the panel, supply only its eligible chart bars as the comparison source.
 
-Migration: `Backtest::initial_capital` and `Backtest::fill_on_close` move to
-`Backtest::settings`. `Backtest::new` keeps its starting-capital argument. Add `&[]` as the
-third argument to existing `run` calls, or supply finer bars. Runs that intentionally stack
-entries must set `settings.pyramiding` to their limit; the default is now one. Entries also
+Migration: [`Backtest::initial_capital`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.initial_capital) and [`Backtest::fill_on_close`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.fill_on_close) move to
+[`Backtest::settings`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#structfield.settings). [`Backtest::new`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#method.new) keeps its starting-capital argument. Add `&[]` as the
+third argument to existing [`run`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#method.run) calls, or supply finer bars. Runs that intentionally stack
+entries must set [`settings.pyramiding`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.pyramiding) to their limit; the default is now one. Entries also
 need enough margin and commission in the account, with leverage one by default. Starting
 capital must be finite.
 
-With the `ui` feature, keep a `ui::strategy_report::StrategyReportPanel` in your host:
+With the [`ui`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/index.html) feature, keep a [`ui::strategy_report::StrategyReportPanel`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/struct.StrategyReportPanel.html) in your host:
 
 ```rust
 use egui_charts::model::{Bar, StrategyReport};
@@ -122,10 +122,10 @@ fn render(ui: &mut egui::Ui, panel: &mut StrategyReportPanel) {
 }
 ```
 
-Call `set_report` when a finished report or its source bars change. It computes and caches
-metrics, clears selection and opens Summary. Mount `show` in your panel below the chart,
-with a separate egui id scope for each report component. `set_report(None, &[])` clears
-it; `show` then takes no space and shows no controls. `report()` reads the current run.
+Call [`set_report`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/struct.StrategyReportPanel.html#method.set_report) when a finished report or its source bars change. It computes and caches
+metrics, clears selection and opens Summary. Mount [`show`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/struct.StrategyReportPanel.html#method.show) in your panel below the chart,
+with a separate egui id scope for each report component. [`set_report(None, &[])`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/struct.StrategyReportPanel.html#method.set_report) clears
+it; [`show`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/struct.StrategyReportPanel.html#method.show) then takes no space and shows no controls. [`report()`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/struct.StrategyReportPanel.html#method.report) reads the current run.
 Selecting a trade returns its symbol, interval, original index and entry/exit timestamps.
 An open trade has no exit boundary. The host owns navigation, highlighting, report panel
 placement, data loading and CSV storage. Chart entry/exit markers use the signals service.
@@ -140,10 +140,10 @@ Fill prices retain their precision and fill times retain fractional seconds.
 Properties includes run metadata and the host's ordered settings. Invalid inputs are
 counted visibly. An undefined or non-finite metric displays as `N/A`, including when
 converting a fraction to a displayed percentage overflows.
-CSV exports only valid trades using `StrategyReport::trades_csv`, retaining its existing
+CSV exports only valid trades using [`StrategyReport::trades_csv`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.trades_csv), retaining its existing
 columns, quoting and UTC timestamps. Export summary CSV returns
-`StrategyReportAction::ExportSummaryCsv` with a suggested file name and the metrics and
-properties shown, as `StrategyReport::summary_csv` writes them: a dot as the decimal
+[`StrategyReportAction::ExportSummaryCsv`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/strategy_report/enum.StrategyReportAction.html#variant.ExportSummaryCsv) with a suggested file name and the metrics and
+properties shown, as [`StrategyReport::summary_csv`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.summary_csv) writes them: a dot as the decimal
 separator, no thousands separator, and an empty cell for an unavailable value. Percent
 values keep 15 significant decimal digits, so a rate of `0.07` reads `7`, and a zero is
 always `0`. Both exports prefix a text cell that starts with `=`, `+`, `-`, `@`, a tab or a
@@ -152,12 +152,12 @@ including negative numbers, are unchanged.
 
 ## Metric definitions
 
-`StrategyReport::performance` retains the base definitions on `StrategyPerformance`:
+[`StrategyReport::performance`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.performance) retains the base definitions on [`StrategyPerformance`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyPerformance.html):
 net and gross profit/loss use the host's net closed-trade profits; drawdown uses running
 equity peaks. Sharpe uses sample standard deviation, Sortino uses the root mean square
 of downside excess returns over all steps, and both use the curve's actual steps per
 365.25-day year and require at least 13 weeks. Non-finite equity points are skipped;
-unordered finite points invalidate the entire curve. `equity_curve()` exposes those same
+unordered finite points invalidate the entire curve. [`equity_curve()`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.equity_curve) exposes those same
 validated points for rendering.
 
 The largest winner is the greatest positive net profit, and the largest loser is the most
@@ -167,7 +167,7 @@ runs; invalid and open trades do not participate. For profits `5, 3, -1, -7, -2,
 net profit is 8, gross profit 18, gross loss 10, largest winner 5, largest loser -7, and the
 longest winning and losing runs are 2 and 3.
 
-`StrategyReport::comparison(source)` takes the complete source bars of this run's symbol
+[`StrategyReport::comparison(source)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.StrategyReport.html#method.comparison) takes the complete source bars of this run's symbol
 and interval, with timestamps denoting bar opens. The host must supply exactly the run's
 bars, including every held bar; the library cannot detect a missing session or a wrong
 symbol from OHLC alone. Non-finite or inverted OHLC bars are skipped and counted; unordered

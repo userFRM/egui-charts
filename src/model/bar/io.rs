@@ -326,24 +326,50 @@ mod tests {
         assert_eq!(parsed.bars[0], bar);
         // JSON writes NaN as null, which reads back as NaN.
         assert!(parsed.bars[1].is_whitespace());
+    }
 
-        // A date alone is midnight UTC, and a time alone is a whitespace bar.
-        let parsed = BarData::from_json_string(
-            r#"[{"time":"2024-03-15","open":1,"high":2,"low":0.5,"close":1.5,"volume":10},
-                {"time":"2024-03-16"}]"#,
-        )
-        .unwrap();
-        let midnight = |day| {
-            format!("2024-03-{day}T00:00:00Z")
-                .parse::<DateTime<Utc>>()
-                .unwrap()
-        };
-        assert_eq!(
-            parsed.bars[0],
-            Bar::new(midnight(15), 1.0, 2.0, 0.5, 1.5, 10.0)
-        );
-        assert_eq!(parsed.bars[1].time, midnight(16));
-        assert!(parsed.bars[1].is_whitespace());
+    #[test]
+    fn calendar_date_constructors_match_date_only_imports() {
+        let path = temp_csv("calendar-dates");
+        for (year, month, day, midnight) in [
+            (1969, 12, 31, -86_400),
+            (2024, 2, 28, 1_709_078_400),
+            (2024, 2, 29, 1_709_164_800),
+            (2024, 3, 1, 1_709_251_200),
+        ] {
+            let date = chrono::NaiveDate::from_ymd_opt(year, month, day).unwrap();
+            let typed = [
+                Bar::from_date(date, 1.0, 2.0, 0.5, 1.5, 10.0),
+                Bar::from_value_on_date(date, 3.0),
+                Bar::whitespace_on_date(date),
+            ];
+            let json = format!(
+                r#"[{{"time":"{date}","open":1,"high":2,"low":0.5,"close":1.5,"volume":10}},
+                    {{"time":"{date}","open":3,"high":3,"low":3,"close":3,"volume":0}},
+                    {{"time":"{date}"}}]"#
+            );
+            let json = BarData::from_json_string(&json).unwrap();
+            std::fs::write(
+                &path,
+                format!(
+                    "ts,open,high,low,close,volume\n{date},1,2,0.5,1.5,10\n\
+                     {date},3,3,3,3,0\n{date},NaN,NaN,NaN,NaN,NaN\n"
+                ),
+            )
+            .unwrap();
+            let csv = BarData::from_csv(&path).unwrap();
+            for bars in [&typed[..], &json.bars[..], &csv.bars[..]] {
+                assert_eq!(bars.len(), 3, "{date}");
+                for bar in bars {
+                    assert_eq!(bar.time.timestamp(), midnight, "{date}");
+                    assert_eq!(bar.time.timestamp_subsec_nanos(), 0, "{date}");
+                }
+                assert_eq!(bars[0], typed[0], "{date}");
+                assert_eq!(bars[1], typed[1], "{date}");
+                assert!(bars[2].is_whitespace(), "{date}");
+            }
+        }
+        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]
