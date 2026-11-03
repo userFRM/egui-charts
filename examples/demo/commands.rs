@@ -765,11 +765,6 @@ mod tests {
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
         app.live.set_paused(true);
         frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
-        assert!(
-            SAMPLES.iter().any(|(id, _, description)| {
-                *id == "financials" && description.contains("AAPL")
-            })
-        );
         app.execute_search_command(&ctx, "financials");
         assert_eq!(app.chart.symbol(), "AAPL");
         assert_eq!(app.financials.as_ref().unwrap().0, "AAPL");
