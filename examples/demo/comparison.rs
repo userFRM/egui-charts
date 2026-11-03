@@ -283,7 +283,8 @@ pub(super) fn refresh_spreads(chart: &mut Chart, spreads: &mut [Spread], paused:
             feed.set_paused(paused);
             feed.advance(chrono::Utc::now());
         }
-        if spread.loading(chart) {
+        // Seed empty spreads from cached history before their executions finish loading.
+        if spread.loading(chart) && !chart.bars(spread.id).is_empty() {
             continue;
         }
         let key: Vec<_> = spread
@@ -647,6 +648,20 @@ mod tests {
             snapshot: None,
             replay_time: None,
         }];
+        refresh_spreads(&mut chart, &mut spreads, true);
+        assert!(
+            !chart.bars(id).is_empty(),
+            "a new spread must show cached history before bootstrap finishes"
+        );
+        assert!(spreads[0].loading(&chart));
+        chart.drain_events().for_each(drop);
+        refresh_spreads(&mut chart, &mut spreads, true);
+        assert!(
+            !chart
+                .drain_events()
+                .any(|event| matches!(event, ChartEvent::DataLoaded { .. })),
+            "loading spreads must retain their cached history"
+        );
         for feed in &spreads[0].feeds {
             super::super::tests::finish_feed(feed);
         }

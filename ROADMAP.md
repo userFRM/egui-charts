@@ -225,7 +225,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 ### Toolbars, Dialogs and Panels
 
 - [x] Top toolbar with symbol search, comparison, interval/type selection, study, alert, replay, history, settings, save and layout actions.
-- [x] Symbol search supports text, type, exchange and source filters, pagination, keyboard navigation and host results; the terminal loads comparisons from the chart feed on shared percentage scales, separate scales or panes, and displays arithmetic spreads as candles in their own panes. Demo spreads refresh when their components or display inputs change.
+- [x] Symbol search supports text, type, exchange and source filters, pagination, keyboard navigation and host results; the terminal loads comparisons from the chart feed on shared percentage scales, separate scales or panes, and displays arithmetic spreads as candles in their own panes. Demo spreads show cached history before execution bootstrap finishes and refresh when their components or display inputs change.
 - [x] Timeframe toolbar provides range presets, go-to-date, time zone, regular/extended session and adjustment requests. `Terminal` fits ranges to loaded history, navigates dates in the chart time zone, switches intervals and sessions, restores interval favourites, and requests host-supplied dividend adjustment.
 - [x] Drawing toolbar categories, cursor modes, snapping, repeated placement, locking and template actions; favourites can be stored.
 - [x] Chart settings apply backgrounds, grids, candle parts and colours, previous-close colouring, crosshair styling, session shading and watermarks.
@@ -282,7 +282,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 ## Data and Builder API
 
 - [x] `Chart::new` embeds static bars; `ChartBuilder` configures a chart, feed, symbol, interval, studies, theme and drawing registry. `Bar` accepts typed calendar dates for OHLCV, single-value and whitespace daily bars at midnight UTC, matching date-only imports.
-- [x] `Datafeed`, `Reply` and `Sink` provide asynchronous metadata/history and streaming bars, executions, quotes and depth, with per-symbol service declarations, stale-response rejection and subscription cancellation. The demo generates and delivers recent history in scheduled batches and shows loading progress while input remains available.
+- [x] `Datafeed`, `Reply` and `Sink` provide asynchronous metadata/history and streaming bars, executions, quotes and depth, with per-symbol service declarations, stale-response rejection and subscription cancellation. The demo draws cached history on its first frame without a loading row, then generates and delivers recent executions in scheduled batches while input remains available.
 - [x] Scroll-back pages bar history; transient failures retry with bounded backoff and expose errors and status through `FeedState`.
 - [x] Shared validation sorts/deduplicates bars, rejects invalid OHLCV and counts rejected updates; out-of-order corrections update the affected history.
 - [x] Live trade aggregation supports time, execution-count, volume, delta and range intervals; resampling helpers accept session rules.
