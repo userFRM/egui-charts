@@ -2,6 +2,7 @@
 
 use crate::chart::coords::ChartMapping;
 use crate::chart::overlays::{FootprintConfig, FootprintMode};
+use crate::data::Footprint;
 use crate::model::Bar;
 use crate::studies::TradeProfile;
 use crate::theme::ThemeExt;
@@ -39,8 +40,7 @@ pub(crate) fn render_session_volume_profiles(
     mapping: &ChartMapping,
     bars: &[Bar],
     profiles: &[TradeProfile],
-    step: f64,
-    tick: f64,
+    flow: &Footprint,
     settings: &TradeProfileSettings,
 ) {
     let theme = painter.ctx().active_theme();
@@ -69,10 +69,10 @@ pub(crate) fn render_session_volume_profiles(
         mapping,
         bars,
         profiles,
-        step,
-        tick,
+        flow.price_step(),
+        flow.tick_size(),
         &config,
-        Some(settings),
+        Some((settings, flow)),
     );
 }
 
@@ -84,7 +84,7 @@ fn render_profiles(
     step: f64,
     tick: f64,
     config: &FootprintConfig,
-    settings: Option<&TradeProfileSettings>,
+    settings: Option<(&TradeProfileSettings, &Footprint)>,
 ) {
     let session = settings.is_some();
     if !step.is_finite() || step <= 0.0 || !tick.is_finite() || tick <= 0.0 || bars.is_empty() {
@@ -100,17 +100,20 @@ fn render_profiles(
         if first >= end {
             continue;
         }
-        // Extensions survive after their source histogram has left the viewport.
-        if let Some(settings) = settings
+        // Extensions survive after their source histogram has left the viewport. A partial
+        // profile's levels are not the session's, and away from its label nothing would say so.
+        if let Some((settings, _)) = settings
+            && profile.complete
             && end < bars.len()
         {
             let start = mapping.idx_to_x(end - 1) + mapping.bar_spacing * 0.5;
-            let mut extend = |price: f64, stroke: Stroke| {
-                // Decimal tick arithmetic can leave the level a few rounding steps away.
-                let tolerance = 4.0 * f64::EPSILON * price.abs().max(tick);
+            let mut extend = |price: f64, level: i64, stroke: Stroke| {
+                // Trading anywhere in the level's row touches it, as for footprint POC revisits.
+                let row =
+                    level as f64 * step - tick * 0.5..(level as f64 + 1.0) * step - tick * 0.5;
                 let last = bars[end..]
                     .iter()
-                    .position(|bar| bar.low <= price + tolerance && price - tolerance <= bar.high)
+                    .position(|bar| bar.low < row.end && row.start <= bar.high)
                     .map_or(mapping.rect.right(), |i| mapping.idx_to_x(end + i));
                 let left = start.max(mapping.rect.left());
                 let right = last.min(mapping.rect.right());
@@ -124,19 +127,26 @@ fn render_profiles(
             {
                 extend(
                     (poc as f64 + 0.5) * step - tick * 0.5,
+                    poc,
                     Stroke::new(1.0, config.text_color),
                 );
             }
-            if settings.extend_value_area
+            if (settings.extend_vah || settings.extend_val)
                 && let Some((low, high)) = settings
                     .value_area
                     .and_then(|s| profile.volume.value_area(s))
             {
-                for edge in [low as f64 * step, (high as f64 + 1.0) * step] {
-                    extend(
-                        edge - tick * 0.5,
-                        Stroke::new(1.0, theme.chart.axis_text_secondary),
-                    );
+                for (enabled, edge, level) in [
+                    (settings.extend_vah, high as f64 + 1.0, high),
+                    (settings.extend_val, low as f64, low),
+                ] {
+                    if enabled {
+                        extend(
+                            edge * step - tick * 0.5,
+                            level,
+                            Stroke::new(1.0, theme.chart.axis_text_secondary),
+                        );
+                    }
                 }
             }
         }
@@ -330,7 +340,7 @@ fn render_profiles(
                 }
             }
         }
-        if settings.is_none_or(|s| s.developing_poc) {
+        if settings.is_none_or(|(s, _)| s.developing_poc) {
             render_developing(
                 &painter,
                 mapping,
@@ -342,11 +352,11 @@ fn render_profiles(
                 Stroke::new(1.0, config.text_color),
             );
         }
-        if let Some(settings) = settings
+        if let Some((settings, flow)) = settings
             && settings.developing_value_area
             && let Some(share) = settings.value_area
         {
-            let areas = profile.developing_value_area(share);
+            let areas = profile.developing_value_area(flow, share);
             for high in [false, true] {
                 render_developing(
                     &painter,
@@ -397,7 +407,6 @@ fn render_developing(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::Footprint;
     use crate::model::{BarClock, OrderSide, Tick, Timeframe};
     use crate::scales::{PriceMap, PriceRange, PriceScaleMode, PriceTransform};
     use crate::studies::{TradeProfileRanges, trade_profiles};
@@ -582,8 +591,67 @@ mod tests {
         assert_eq!(guides(Some(red), None), [(top, egui::Color32::RED)]);
     }
 
+    /// The first session lost its first bar to the budget, so its POC is not the session's.
+    #[test]
+    fn partial_sessions_do_not_extend_their_levels() {
+        let time = "2026-01-05T10:00:00Z".parse().unwrap();
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        flow.set_budget(2, usize::MAX);
+        let mut bars = Vec::new();
+        for (minute, price) in [(0, 100.0), (1, 101.0), (2, 103.0)] {
+            let at = time + TimeDelta::minutes(minute);
+            flow.push(&Tick::new(at, price, 1.0, None)).unwrap();
+            bars.push(Bar::new(at, price, price, price, price, 1.0));
+        }
+        let ranges = TradeProfileRanges::new(vec![
+            time..time + TimeDelta::minutes(2),
+            time + TimeDelta::minutes(2)..time + TimeDelta::minutes(3),
+        ])
+        .unwrap();
+        let profiles = trade_profiles(&flow, &ranges);
+        let transform = PriceTransform::default();
+        let mapping = ChartMapping::new(
+            Rect::from_min_size(pos2(40.0, 20.0), vec2(400.0, 240.0)),
+            40.0,
+            0,
+            3,
+            0.0,
+            PriceMap::new(
+                transform,
+                PriceRange::new(transform.to_scale(98.0), transform.to_scale(105.0)),
+                20.0,
+                260.0,
+                false,
+            ),
+        );
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            render_session_volume_profiles(
+                ui.painter(),
+                &mapping,
+                &bars,
+                &profiles,
+                &flow,
+                &TradeProfileSettings {
+                    extend_poc: true,
+                    extend_vah: true,
+                    extend_val: true,
+                    ..Default::default()
+                },
+            );
+        });
+        output.textures_delta.clear();
+        // Only the complete second session's own POC reaches past the first session.
+        let session_end = mapping.idx_to_x(1) + mapping.bar_spacing * 0.5;
+        let own_poc = mapping.price_to_y(103.0);
+        assert!(!output.shapes.iter().any(|s| matches!(
+            &s.shape,
+            Shape::LineSegment { points, .. } if points[1].x > session_end && points[0].y != own_poc
+        )));
+    }
+
     /// At 70%, 6 + 3 exceeds 7 of 10; after adding 8 at 100, 9 + 6 exceeds 12.6
-    /// of 18. Prior levels stop independently at the first inclusive later price range.
+    /// of 18. Prior levels stop independently at the first later bar trading in their row.
     #[test]
     fn developing_area_and_prior_levels_follow_live_and_rebuilt_history() {
         let time = "2026-01-05T10:00:00Z".parse().unwrap();
@@ -685,8 +753,7 @@ mod tests {
                         &mapping,
                         &bars[..count],
                         &profiles,
-                        step,
-                        step,
+                        flow,
                         &settings,
                     );
                 });
@@ -715,27 +782,38 @@ mod tests {
                 {
                     rebuilt.push(tick).unwrap();
                 }
-                for (saved, developing, extend_poc, extend_area, share) in [
-                    (r#"{}"#, false, false, false, 0.7),
-                    (r#"{"developing_value_area":true}"#, true, false, false, 0.7),
+                for (saved, developing, extend_poc, extend_vah, extend_val, share) in [
+                    (r#"{}"#, false, false, false, false, 0.7),
+                    (
+                        r#"{"developing_value_area":true}"#,
+                        true,
+                        false,
+                        false,
+                        false,
+                        0.7,
+                    ),
                     (
                         r#"{"developing_value_area":true,"value_area":0.5}"#,
                         true,
                         false,
                         false,
+                        false,
                         0.5,
                     ),
-                    (r#"{"extend_poc":true}"#, false, true, false, 0.7),
-                    (r#"{"extend_value_area":true}"#, false, false, true, 0.7),
+                    (r#"{"extend_poc":true}"#, false, true, false, false, 0.7),
+                    (r#"{"extend_vah":true}"#, false, false, true, false, 0.7),
+                    (r#"{"extend_val":true}"#, false, false, false, true, 0.7),
                     (
-                        r#"{"developing_value_area":true,"extend_poc":true,"extend_value_area":true}"#,
+                        r#"{"developing_value_area":true,"extend_poc":true,"extend_vah":true,"extend_val":true}"#,
+                        true,
                         true,
                         true,
                         true,
                         0.7,
                     ),
                     (
-                        r#"{"developing_value_area":true,"extend_value_area":true,"value_area":null}"#,
+                        r#"{"developing_value_area":true,"extend_vah":true,"extend_val":true,"value_area":null}"#,
+                        false,
                         false,
                         false,
                         false,
@@ -791,8 +869,8 @@ mod tests {
                         let start = (map.idx_to_x(1) + 20.0).max(map.rect.left());
                         for (price, stop, enabled, color) in [
                             (100.0, 3, extend_poc, poc_color),
-                            (101.5, usize::MAX, extend_area, area_color),
-                            (99.5, 4, extend_area, area_color),
+                            (101.5, 4, extend_vah, area_color),
+                            (99.5, 3, extend_val, area_color),
                         ] {
                             let end = if stop < count {
                                 map.idx_to_x(stop)

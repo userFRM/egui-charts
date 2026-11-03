@@ -408,11 +408,14 @@ pub struct TradeProfileSettings {
     /// `value_area`. Uses that share and the same row selection as the final profile.
     pub developing_value_area: bool,
     /// Extend a completed session's POC until the first later bar whose low-to-high range
-    /// contains its price, or the viewport's right edge while untouched.
+    /// reaches its row, or the viewport's right edge while untouched.
     pub extend_poc: bool,
-    /// Extend a completed session's outer value area edges independently until price touches
-    /// each, as for `extend_poc`; hidden without `value_area`.
-    pub extend_value_area: bool,
+    /// Extend a completed session's value area high, as for `extend_poc`; hidden without
+    /// `value_area`.
+    pub extend_vah: bool,
+    /// Extend a completed session's value area low, as for `extend_poc`; hidden without
+    /// `value_area`.
+    pub extend_val: bool,
     /// Volume-node smoothing and prominence; `None` hides the node labels.
     pub nodes: Option<NodeSensitivity>,
     /// Share of total volume shaded as the contiguous value area; `None` hides it.
@@ -428,7 +431,8 @@ impl Default for TradeProfileSettings {
             developing_poc: false,
             developing_value_area: false,
             extend_poc: false,
-            extend_value_area: false,
+            extend_vah: false,
+            extend_val: false,
             nodes: None,
             value_area: Some(0.7),
             value_area_guides: false,
@@ -794,7 +798,8 @@ mod tests {
             "footprint_statistics": true, "footprint_statistics_rows": ["Volume", "Delta"],
             "footprint_colors": [[12, 34, 56, 255], null, null, null],
             "profile": {"mode": "Volume", "value_area": 0.5, "developing_poc": true,
-                "developing_value_area": true, "extend_poc": true, "extend_value_area": true,
+                "developing_value_area": true, "extend_poc": true, "extend_vah": true,
+                "extend_val": true,
                 "nodes": {"smoothing": 2, "prominence": 0.1}}
         });
         let params: ChartTypeParams = serde_json::from_value(settings.clone()).unwrap();
@@ -850,7 +855,12 @@ mod tests {
             assert_eq!(legacy[field], false);
         }
         assert_eq!(legacy["profile"]["value_area"], 0.7);
-        for field in ["developing_value_area", "extend_poc", "extend_value_area"] {
+        for field in [
+            "developing_value_area",
+            "extend_poc",
+            "extend_vah",
+            "extend_val",
+        ] {
             assert_eq!(legacy["profile"][field], false);
         }
     }

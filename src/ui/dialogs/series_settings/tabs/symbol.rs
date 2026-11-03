@@ -441,11 +441,8 @@ impl SymbolTab {
                 &mut profile.developing_value_area,
             );
             Self::switch(ui, "Extend prior POC", &mut profile.extend_poc);
-            Self::switch(
-                ui,
-                "Extend prior value area",
-                &mut profile.extend_value_area,
-            );
+            Self::switch(ui, "Extend prior VAH", &mut profile.extend_vah);
+            Self::switch(ui, "Extend prior VAL", &mut profile.extend_val);
             let mut nodes = profile.nodes.is_some();
             Self::switch(ui, "Volume nodes", &mut nodes);
             if nodes != profile.nodes.is_some() {
