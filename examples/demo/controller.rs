@@ -1781,10 +1781,12 @@ impl DemoApp {
                     ctx.copy_text(self.chart.symbol().to_string());
                 }
                 if id == "research" {
-                    if let Some(click) = &self.last_chart_click {
+                    if let Some(click) = &self.last_chart_click
+                        && let Some(time) = click.time
+                    {
                         self.toasts.info(format!(
                             "Host action: {id}, last chart click: {}, price: {:.4}",
-                            click.time.to_rfc3339(),
+                            time.to_rfc3339(),
                             click.price
                         ));
                     } else {
@@ -3017,8 +3019,11 @@ impl DemoApp {
                     ctx.request_repaint();
                 }
                 egui_charts::widget::ChartEvent::Click { position, button } => {
-                    if button == egui::PointerButton::Primary && position.series == SeriesId::MAIN {
-                        replay_click.get_or_insert(position.time);
+                    if button == egui::PointerButton::Primary
+                        && position.series == SeriesId::MAIN
+                        && let Some(time) = position.time
+                    {
+                        replay_click.get_or_insert(time);
                     }
                     self.last_chart_click = Some(position);
                 }
@@ -3075,7 +3080,9 @@ impl DemoApp {
                 bar.open, bar.high, bar.low, bar.close, bar.volume
             ))
             .on_hover_ui(|ui| {
-                ui.label(pointer.time.to_rfc3339());
+                if let Some(time) = pointer.time {
+                    ui.label(time.to_rfc3339());
+                }
                 ui.label(format!("Bar {} · Pane {}", pointer.index, pointer.pane));
                 for (id, bar) in &pointer.series_bars {
                     ui.label(format!("Series {}: {:.2}", id.0, bar.close));
@@ -4127,7 +4134,7 @@ mod tests {
         let replay = app.replay.as_ref().unwrap();
         assert_eq!(replay.state.curr_bar, index);
         assert!(!replay.state.is_playing());
-        assert_eq!(app.last_chart_click.as_ref().unwrap().time, time);
+        assert_eq!(app.last_chart_click.as_ref().unwrap().time, Some(time));
         app.handle_top_toolbar(&ctx, TopToolbarAction::Host("research".into()));
         let message = &app.toasts.toasts().last().unwrap().message;
         assert!(message.contains(&time.to_rfc3339()), "{message}");
@@ -7413,7 +7420,10 @@ mod tests {
                         )),
                         "{labels:?}"
                     );
-                    assert!(labels.contains(&pointer.time.to_rfc3339()), "{labels:?}");
+                    assert!(
+                        labels.contains(&pointer.time.unwrap().to_rfc3339()),
+                        "{labels:?}"
+                    );
                     assert!(
                         labels.iter().any(|label| label.starts_with("SMA: SMA(2) ")),
                         "{labels:?}"

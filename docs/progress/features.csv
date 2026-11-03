@@ -77,7 +77,7 @@ Builder API,Save/load adapter,Study templates,done,library,src/studies/template.
 Builder API,Save/load adapter,User settings persistence,done,host,src/services/settings.rs,
 Builder API,Widget API and customization,Change interval at runtime,done,library,src/widget/feed/mod.rs;src/widget/events.rs,
 Builder API,Widget API and customization,Change symbol at runtime,done,library,src/widget/feed/mod.rs;src/scales/pricescale.rs;src/widget/events.rs,
-Builder API,Widget API and customization,Chart events,done,library,src/widget/events.rs;src/widget/feed/mod.rs;src/widget/series/mod.rs;src/widget/replay.rs;src/widget/frame/mod.rs,1864
+Builder API,Widget API and customization,Chart events,done,library,src/widget/events.rs;src/widget/feed/mod.rs;src/widget/series/mod.rs;src/widget/replay.rs;src/widget/frame/mod.rs;src/widget/pane/render/mod.rs,1864
 Builder API,Widget API and customization,Chart synchronisation,done,library,src/widget/sync.rs;src/widget/layout.rs;src/model/timescale.rs;src/widget/frame/mod.rs,
 Builder API,Widget API and customization,Chart type switching,done,library,src/widget/builder.rs;src/chart/rendering/candles/mod.rs;src/widget/frame/mod.rs,
 Builder API,Widget API and customization,Chart without toolbars,done,library,Cargo.toml;src/lib.rs;src/widget/builder.rs;src/widget/frame/mod.rs,
