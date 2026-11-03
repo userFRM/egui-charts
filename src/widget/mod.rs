@@ -137,7 +137,7 @@ pub use crate::chart::primitives::{
 };
 pub use pane::VisualOrder;
 pub use series::SeriesOptions;
-pub use series::{BarsInRange, MismatchDirection, PriceLineId};
+pub use series::{BarsInRange, MismatchDirection, PriceLineId, SeriesLastValue};
 #[cfg(feature = "ui")]
 #[cfg_attr(docsrs, doc(cfg(feature = "ui")))]
 pub use snapshot::{

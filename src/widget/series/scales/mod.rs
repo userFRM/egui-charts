@@ -1,6 +1,6 @@
 //! Fitting and mapping the price scales shared by bar series and studies.
 
-use super::PriceSeries;
+use super::{PriceSeries, SeriesLastValue};
 use crate::model::{
     Bar, ChartType, Marker, MarkerOptions, MarkerPos, PriceLineSource, SeriesScale,
 };
@@ -92,12 +92,76 @@ impl Chart {
 
     /// The bar whose close the series' price line and last value label show.
     pub(super) fn series_last_bar<'a>(&self, item: &'a PriceSeries) -> Option<&'a Bar> {
-        match item.options.style.price_line_source {
+        self.series_bar_from(item, item.options.style.price_line_source)
+    }
+
+    fn series_bar_from<'a>(
+        &self,
+        item: &'a PriceSeries,
+        source: PriceLineSource,
+    ) -> Option<&'a Bar> {
+        match source {
             PriceLineSource::LastBar => crate::model::last_with_value(&item.bars),
             PriceLineSource::LastVisible => {
                 crate::model::last_with_value(&item.bars[self.series_range(item)])
             }
         }
+    }
+
+    /// The latest loaded or latest visible valued bar of a main or added bar series.
+    /// Trailing whitespace is skipped; `source` is independent of the price-line setting.
+    /// Hidden series and hidden value labels remain queryable.
+    ///
+    /// Uses the series' price scale, pane and formatter, as last drawn. Visible selection
+    /// includes bars cut by a plot edge, as rendering does. On price-based main charts,
+    /// loaded selection uses stored bars and visible selection uses displayed elements.
+    /// Returns `None` for absent series, studies, a selection without values, or before the
+    /// pane is drawn. A scale without a valid coordinate also returns `None`.
+    pub fn series_last_value(
+        &self,
+        id: SeriesId,
+        source: PriceLineSource,
+    ) -> Option<SeriesLastValue> {
+        let map = self.series_price_map(id)?;
+        let (bar, color, index) = if id == SeriesId::MAIN {
+            let (bars, start) = match source {
+                PriceLineSource::LastBar => (self.bars(id), 0),
+                PriceLineSource::LastVisible => {
+                    (self.state.visible_data(), self.state.visible_range().0)
+                }
+            };
+            let at = bars.iter().rposition(|bar| !bar.is_whitespace())?;
+            let bar = &bars[at];
+            let index = match source {
+                PriceLineSource::LastBar => self.time_to_index(bar.time)?,
+                PriceLineSource::LastVisible => (start + at) as f64,
+            };
+            let color = self
+                .main_series_style
+                .price_line_color
+                .or_else(|| bar.colors.as_ref().and_then(|own| own.color))
+                .unwrap_or(if bar.close >= bar.open {
+                    self.config.bullish_color
+                } else {
+                    self.config.bearish_color
+                });
+            (bar, color, index)
+        } else {
+            let item = self.price_series.iter().find(|item| item.id == id)?;
+            let bar = self.series_bar_from(item, source)?;
+            (bar, item.value_color(bar), self.time_to_index(bar.time)?)
+        };
+        let coordinate = map.price_to_y(bar.close);
+        if !coordinate.is_finite() {
+            return None;
+        }
+        Some(SeriesLastValue {
+            value: bar.close,
+            index,
+            coordinate,
+            color,
+            text: self.format_series_price(id, bar.close)?,
+        })
     }
 
     /// The prices of price-anchored markers of `markers` and `more` in view, when `options` fit them.
