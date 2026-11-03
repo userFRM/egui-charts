@@ -1826,7 +1826,6 @@ mod options_profile_tests {
             assert_eq!(plot.config.display, ProfileDisplay::Delta);
             assert_eq!(plot.profile.up(), [calls]);
             assert_eq!(plot.profile.down(), [puts]);
-            assert_eq!(plot.profile.up()[0] - plot.profile.down()[0], calls - puts);
         }
         study
             .set_input(
@@ -1896,11 +1895,22 @@ mod options_profile_tests {
             (&[20.0, 0.0][..], &[0.0, 10.0][..]),
             "one row per listed strike, not per price tick"
         );
+        let sink = feed.sink.lock().unwrap().clone().unwrap();
+        let mut offset = rows.clone();
+        offset[0].strike = 102.5;
+        offset[1].strike = 107.5;
+        sink.push(offset).unwrap();
+        let profile = study.volume_profiles(0..3).remove(0).profile;
+        let half = profile.row_height() / 2.0;
+        assert_eq!(
+            (profile.low() + half, profile.high() - half),
+            (102.5, 107.5),
+            "rows centre on strikes off a multiple of their spacing"
+        );
         assert_eq!(study.plot_value(1, 0), None, "max pain starts off");
         study
             .set_input("max_pain", InputValue::Toggle(true))
             .unwrap();
-        let sink = feed.sink.lock().unwrap().clone().unwrap();
         // Payout at 100 and 110: 2,000 and 1,000; equal interest ties; a 300 call
         // multiplier makes 110 cost 3,000; no interest ties at zero.
         for (calls, puts, call_multiplier, expected) in [

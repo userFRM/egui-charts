@@ -123,7 +123,8 @@ impl OptionsVolumeProfile {
     /// Measures with missing figures in any selected contract are unavailable, never zero.
     /// Max pain needs every selected contract's open interest and multiplier. It minimises
     /// their combined intrinsic payout over listed strikes, choosing the lower strike on ties.
-    /// Each row spans the common increment of the selected strikes, one unit for a single strike.
+    /// Rows are as tall as the largest common divisor of the selected strikes, so each strike
+    /// is a row centre, and coarser only where the 10,000-row limit requires.
     /// Returns `None` for an empty symbol or expiry list.
     pub fn from_chain(
         chain: OptionChain,
@@ -243,19 +244,24 @@ impl OptionsVolumeProfile {
     }
 }
 
-// The greatest common divisor of strike gaps, so every listed strike is a row centre.
+// Rows are centred on multiples of their height, so it is the greatest common divisor of
+// the strikes (and of 1 for a single strike), coarsened to stay within the row limit.
 fn strike_step(rows: &[OptionsVolume]) -> f64 {
-    let mut strikes: Vec<_> = rows.iter().map(|row| row.strike).collect();
-    strikes.sort_by(f64::total_cmp);
-    let mut step = 0.0;
-    for gap in strikes.windows(2).map(|pair| pair[1] - pair[0]) {
-        let (mut a, mut b) = (gap, step);
-        while b > 1e-6 {
+    let (low, high) = rows
+        .iter()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), row| {
+            (low.min(row.strike), high.max(row.strike))
+        });
+    let tolerance = ((high - low) / 5_000.0).max(1e-6);
+    let mut step = if high > low { 0.0 } else { 1.0 };
+    for row in rows {
+        let (mut a, mut b) = (row.strike, step);
+        while b > tolerance {
             (a, b) = (b, a % b);
         }
         step = a;
     }
-    if step > 1e-6 { step } else { 1.0 }
+    step.max(tolerance)
 }
 
 // Payout is convex: at each strike its slope increases by call plus put interest,
