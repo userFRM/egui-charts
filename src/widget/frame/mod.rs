@@ -1505,15 +1505,7 @@ impl Chart {
             }
         };
         let last_price_line = last.filter(|_| self.main_series_visible).map(|last| {
-            let color = style
-                .price_line_color
-                .or_else(|| last.colors.as_ref().and_then(|own| own.color))
-                .unwrap_or(if last.close >= last.open {
-                    self.config.bullish_color
-                } else {
-                    self.config.bearish_color
-                });
-            PriceLine::new(last.close, color)
+            PriceLine::new(last.close, self.main_value_color(last))
                 .with_width(if self.config.show_price_line && style.price_line_visible {
                     style.price_line_width
                 } else {
