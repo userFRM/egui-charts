@@ -620,9 +620,11 @@ fn check(snapshot: &ChartSnapshot, factory: &IndicatorFactory) -> Result<Checked
             .chain(snapshot.series.iter().flatten().filter_map(|series| series.price_scale.as_ref()))
             .any(|scale| !valid_scale(scale))
         || snapshot.panes.iter().any(|pane| {
-            (pane.main && !pane.scales.is_empty())
-                || pane.scales.iter().any(|(key, _)| *key == crate::model::SeriesScale::Right)
-                || pane.scales.iter().map(|(key, _)| key).collect::<std::collections::HashSet<_>>().len() != pane.scales.len()
+            let keys: std::collections::HashSet<_> =
+                pane.scales.iter().map(|(key, _)| *key).collect();
+            (pane.main && !keys.is_empty())
+                || keys.contains(&crate::model::SeriesScale::Right)
+                || keys.len() != pane.scales.len()
         })
         || snapshot
             .studies
