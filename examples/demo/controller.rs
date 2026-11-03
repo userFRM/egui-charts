@@ -508,7 +508,7 @@ fn sample_widgets() -> [WidgetBarWidget; 2] {
     [
         WidgetBarWidget {
             id: 4,
-            icon: egui_charts::icons::icons::WATCHLIST,
+            icon: egui_charts::icons::icons::SETTINGS_EVENTS,
             tooltip: "Time and sales".into(),
             section: WidgetBarSection::Bottom,
         },
@@ -1723,7 +1723,11 @@ impl DemoApp {
                                 &icons::WIDGET_BAR_LAYERS,
                             ),
                             ("Data Window", SidePanel::DataWindow, &icons::TABLE),
-                            ("Time and sales", SidePanel::TimeAndSales, &icons::WATCHLIST),
+                            (
+                                "Time and sales",
+                                SidePanel::TimeAndSales,
+                                &icons::SETTINGS_EVENTS,
+                            ),
                         ]
                         .into_iter()
                         .filter(|(_, panel, _)| {
