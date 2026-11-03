@@ -20,6 +20,10 @@ mod images;
 mod interval;
 #[path = "layouts.rs"]
 mod layouts;
+#[path = "numeric_scenes.rs"]
+mod numeric_scenes;
+#[path = "primitive_scene.rs"]
+mod primitive_scene;
 use egui_charts::widget::ChartLayout;
 use layouts::{DemoChart, LayoutTab};
 
@@ -35,6 +39,8 @@ mod storage;
 mod strategy;
 #[path = "strategy_live.rs"]
 mod strategy_live;
+#[path = "study_editor.rs"]
+mod study_editor;
 #[path = "templates.rs"]
 mod templates;
 use egui_charts::services::StoreKind;
@@ -400,6 +406,8 @@ pub struct DemoApp {
     study_templates: TemplateDialog<StudyTemplateSet>,
     drawing_templates: TemplateDialog<DrawingTemplate>,
     quick_search: egui_charts::ui_kit::command_palette::CommandPaletteHandler,
+    sample_scene: Option<commands::SampleScene>,
+    sample_study: study_editor::SampleStudyEditor,
     alert_dialog: AlertDialog,
     drawing_props: DrawingPropertiesDialog,
     keyboard_shortcuts: KeyboardShortcutsDialog,
@@ -412,6 +420,7 @@ pub struct DemoApp {
     // A study copied in this session, kept across symbols and intervals.
     copied_study: Option<String>,
     export_dialog: ExportDialog,
+    export_arrangement: bool,
     date_picker: DatePicker,
 
     // A finished host-run sample, independent of subsequent chart navigation.
@@ -676,6 +685,8 @@ impl DemoApp {
             quick_search: egui_charts::ui_kit::command_palette::CommandPaletteHandler::new(
                 commands::quick_search_commands(),
             ),
+            sample_scene: None,
+            sample_study: Default::default(),
             alert_dialog: AlertDialog::new(),
             drawing_props: DrawingPropertiesDialog::new(),
             keyboard_shortcuts: KeyboardShortcutsDialog::new(),
@@ -686,6 +697,7 @@ impl DemoApp {
             copied_drawing: None,
             copied_study: None,
             export_dialog: ExportDialog::new().with_formats(EXPORT_FORMATS),
+            export_arrangement: false,
             date_picker: DatePicker::new(),
             strategy_report: Default::default(),
             live_strategy: None,
@@ -1220,7 +1232,15 @@ impl DemoApp {
         }
 
         // Export dialog (screenshot / CSV).
-        match self.export_dialog.show(ctx) {
+        match self.export_dialog.show_with(ctx, |ui, format| {
+            if !format.is_data_format() {
+                ui.horizontal(|ui| {
+                    ui.label("Image scope");
+                    ui.radio_value(&mut self.export_arrangement, false, "Active chart");
+                    ui.radio_value(&mut self.export_arrangement, true, "Visible arrangement");
+                });
+            }
+        }) {
             ExportResponse::Export { config, save_path } => self.run_export(ctx, config, save_path),
             ExportResponse::Closed | ExportResponse::None => {}
         }
@@ -1330,8 +1350,8 @@ impl DemoApp {
         image: &egui_charts::widget::ImageExportOptions,
         save_path: Option<std::path::PathBuf>,
     ) {
-        match self.chart.export_svg(ctx, image) {
-            Ok(svg) => self.write_export(save_path, "svg", svg.as_bytes()),
+        match self.export_image_bytes(ctx, image, ExportFormat::Svg, self.export_arrangement) {
+            Ok(svg) => self.write_export(save_path, "svg", &svg),
             Err(error) => self.export_failed(save_path.is_some(), error.to_string()),
         }
     }
@@ -1509,13 +1529,17 @@ impl eframe::App for DemoApp {
             .rect_filled(ui.max_rect(), 0.0, self.theme.ui.border);
 
         // Dialogs consume their keys before chart commands and the replay transport.
-        if !self.keyboard_dialog_open() {
+        if self.sample_scene.is_none() && !self.keyboard_dialog_open() {
             let action = self.replay_control.shortcut(&ctx);
             self.handle_replay_control(action);
             self.handle_keyboard(&ctx);
         }
-        if self.keyboard_dialog_open() {
+        if self.sample_scene.is_none() && self.keyboard_dialog_open() {
             self.chart.suppress_shortcuts(&ctx);
+        }
+        if self.show_samples(ui) {
+            self.storage.flush(frame.storage_mut());
+            return;
         }
         self.show_layout_tabs(ui);
         self.refresh_layout_menu();
@@ -1534,6 +1558,7 @@ impl eframe::App for DemoApp {
             self.show_account_panel(ui, panel_bg);
         }
         self.show_strategy_report(ui, panel_bg);
+        self.show_sample_study(ui);
         self.show_bottom_toolbar(ui, panel_bg);
         let groups = self.layout_groups();
         self.show_chart(ui, panel_bg);
@@ -1600,6 +1625,7 @@ impl DemoApp {
             .show(ui, |ui| {
                 use egui_charts::ui_kit::buttons::IconButton;
                 let mut menu_action = TopToolbarAction::None;
+                let mut sample = None;
                 let mut panel_action = None;
                 let mut widget_action = None;
                 let mut show_help = false;
@@ -1669,6 +1695,7 @@ impl DemoApp {
                                     ui.close();
                                 }
                             }
+                            sample = commands::sample_menu(ui, "Samples");
                         });
                     },
                     |_| {},
@@ -1702,6 +1729,9 @@ impl DemoApp {
                 }
                 self.handle_top_toolbar(ui.ctx(), action);
                 self.handle_top_toolbar(ui.ctx(), menu_action);
+                if let Some(id) = sample {
+                    self.execute_search_command(ui.ctx(), id);
+                }
             });
     }
 
@@ -3460,8 +3490,12 @@ impl DemoApp {
             return;
         };
         let result = self
-            .trading
-            .export_png(&self.chart, ctx, &options)
+            .export_image_bytes(
+                ctx,
+                &options,
+                ExportFormat::Png,
+                self.export_dialog.is_open() && self.export_arrangement,
+            )
             .map_err(|error| error.to_string())
             .and_then(|png| match target {
                 ScreenshotTarget::File(path) => self.save_screenshot(&png, path),
@@ -4935,6 +4969,10 @@ mod tests {
             "Chart settings",
             "Sample backtest",
             "Export chart",
+            "Volatility smile",
+            "Yield curve",
+            "Primitives and custom series",
+            "Sample study editor",
         ]
         .into_iter()
         .flat_map(|query| {
@@ -4947,7 +4985,10 @@ mod tests {
             let ctx = egui::Context::default();
             let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
             app.live.set_paused(true);
-            if query == "RSI" {
+            if matches!(
+                query,
+                "RSI" | "Volatility smile" | "Yield curve" | "Primitives and custom series"
+            ) {
                 app.chart.user_action(|chart| {
                     let dm = chart.drawings_mut();
                     let tool = egui_charts::drawings::DrawingToolType::TrendLine;
@@ -5068,6 +5109,162 @@ mod tests {
                     assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
                         egui::Shape::Text(text) if text.galley.text().starts_with("Error:"))));
                     output.drop_without_applying_deltas();
+                }
+                "Volatility smile"
+                | "Yield curve"
+                | "Primitives and custom series"
+                | "Sample study editor" => {
+                    let label = match query {
+                        "Volatility smile" => "30-day IV, %",
+                        "Yield curve" => "Today",
+                        "Primitives and custom series" => "Bar range, price units",
+                        _ => "Sample study editor",
+                    };
+                    let bars = app.chart.bars(SeriesId::MAIN).to_vec();
+                    let studies: Vec<_> = app.chart.indicators().map(|(id, _)| id).collect();
+                    let range = app.chart.get_time_scale_state();
+                    let can_undo = app.chart.can_undo();
+                    let mut found = false;
+                    for _ in 0..3 {
+                        let output = ctx.run_ui(
+                            RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(
+                                    egui::Pos2::ZERO,
+                                    egui::vec2(1440.0, 900.0),
+                                )),
+                                ..Default::default()
+                            },
+                            |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+                        );
+                        found |= output.shapes.iter().any(|shape| {
+                            matches!(&shape.shape,
+                            egui::Shape::Text(text) if text.galley.text().contains(label))
+                        });
+                        output.drop_without_applying_deltas();
+                    }
+                    assert!(found, "{query} must show {label}");
+                    if query == "Primitives and custom series" {
+                        let frame = |app: &mut DemoApp, events| {
+                            ctx.run_ui(
+                                RawInput {
+                                    events,
+                                    ..Default::default()
+                                },
+                                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+                            )
+                        };
+                        let output = frame(&mut app, Vec::new());
+                        let head = output
+                            .shapes
+                            .iter()
+                            .filter_map(|shape| match &shape.shape {
+                                egui::Shape::Circle(circle)
+                                    if circle.fill == egui::Color32::from_rgb(255, 152, 0)
+                                        && shape.clip_rect.contains(circle.center) =>
+                                {
+                                    Some(circle.center)
+                                }
+                                _ => None,
+                            })
+                            .max_by(|left, right| left.y.total_cmp(&right.y))
+                            .expect("custom range heads are visible");
+                        output.drop_without_applying_deltas();
+                        let output = frame(&mut app, vec![Event::PointerMoved(head)]);
+                        let cursor = output.platform_output.cursor_icon;
+                        output.drop_without_applying_deltas();
+                        assert_eq!(cursor, egui::CursorIcon::PointingHand);
+                        for enabled in [false, true] {
+                            for control in ["Session background", "Custom range series"] {
+                                let output = frame(&mut app, Vec::new());
+                                let point = output
+                                    .shapes
+                                    .iter()
+                                    .find_map(|shape| match &shape.shape {
+                                        egui::Shape::Text(text)
+                                            if text.galley.text() == control =>
+                                        {
+                                            Some(text.pos + text.galley.size() / 2.0)
+                                        }
+                                        _ => None,
+                                    })
+                                    .unwrap();
+                                output.drop_without_applying_deltas();
+                                frame(
+                                    &mut app,
+                                    vec![
+                                        Event::PointerMoved(point),
+                                        Event::PointerButton {
+                                            pos: point,
+                                            button: egui::PointerButton::Primary,
+                                            pressed: true,
+                                            modifiers: Modifiers::NONE,
+                                        },
+                                        Event::PointerButton {
+                                            pos: point,
+                                            button: egui::PointerButton::Primary,
+                                            pressed: false,
+                                            modifiers: Modifiers::NONE,
+                                        },
+                                    ],
+                                )
+                                .drop_without_applying_deltas();
+                            }
+                            let output = frame(&mut app, Vec::new());
+                            for needle in ["Open ", "Bar range, price units"] {
+                                let visible = output.shapes.iter().any(|shape| {
+                                    matches!(&shape.shape,
+                                    egui::Shape::Text(text) if text.galley.text().contains(needle))
+                                });
+                                assert_eq!(visible, enabled, "{needle}");
+                            }
+                            output.drop_without_applying_deltas();
+                        }
+                    }
+                    if query != "Sample study editor" {
+                        if query == "Volatility smile" && same_frame && toolbar {
+                            app.keyboard_shortcuts.open();
+                        }
+                        for (events, modifiers) in [
+                            (vec![key(Key::Home, Modifiers::NONE)], Modifiers::NONE),
+                            (vec![key(Key::K, Modifiers::COMMAND)], Modifiers::COMMAND),
+                            (
+                                vec![Event::Text("Return to price chart".into())],
+                                Modifiers::NONE,
+                            ),
+                            (vec![key(Key::Enter, Modifiers::NONE)], Modifiers::NONE),
+                        ] {
+                            ctx.run_ui(
+                                RawInput {
+                                    events: std::iter::once(Event::ModifiersChanged(modifiers))
+                                        .chain(events)
+                                        .collect(),
+                                    ..Default::default()
+                                },
+                                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+                            )
+                            .drop_without_applying_deltas();
+                            assert_eq!(
+                                app.chart.get_time_scale_state(),
+                                range,
+                                "sample keys must not move the hidden workspace"
+                            );
+                        }
+                        let output = ctx.run_ui(RawInput::default(), |ui| {
+                            app.ui(ui, &mut eframe::Frame::_new_kittest())
+                        });
+                        assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+                            egui::Shape::Text(text) if text.galley.text() == "Return to price chart")));
+                        output.drop_without_applying_deltas();
+                        app.execute_search_command(&ctx, "price-workspace");
+                        assert_eq!(app.chart.bars(SeriesId::MAIN), bars);
+                        assert_eq!(
+                            app.chart.indicators().map(|(id, _)| id).collect::<Vec<_>>(),
+                            studies
+                        );
+                        assert_eq!(app.chart.get_time_scale_state(), range);
+                        assert_eq!(app.chart.drawings().drawings.len(), 1);
+                        assert_eq!(app.chart.can_undo(), can_undo);
+                    }
                 }
                 _ => assert!(app.settings_dialog.is_open),
             }
