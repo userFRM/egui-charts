@@ -85,7 +85,7 @@ mod targets;
 #[cfg(feature = "drawings")]
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
 pub use events::ImageRequest;
-pub use events::{ChartEvent, ChartPointer, PointerKind, PointerTarget};
+pub use events::{ChartEvent, ChartPointer, DataOperation, PointerKind, PointerTarget};
 mod export;
 mod format;
 mod frame;
