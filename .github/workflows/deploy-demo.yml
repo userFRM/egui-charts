@@ -16,11 +16,12 @@ env:
   CARGO_TERM_COLOR: always
   TRUNK_VERSION: "0.21.14"
 
-# Allow only one concurrent deployment, cancelling in-progress runs of the same
-# ref so a newer commit always wins the Pages publish.
+# One run per ref at a time. A newer pull request push cancels the running build;
+# a main deploy always finishes, and only the newest waiting commit runs next, so
+# frequent merges cannot keep the published site from updating.
 concurrency:
   group: pages-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Build the native examples and the site exactly as it is published, so a
