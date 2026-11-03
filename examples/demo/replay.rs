@@ -1224,6 +1224,13 @@ mod tests {
                 },
             ));
         }
+        let first_price = events
+            .iter()
+            .find_map(|event| match &event.event {
+                MarketEvent::Trade(trade) => Some(trade.price),
+                _ => None,
+            })
+            .unwrap();
         let bytes = recording_bytes(&app.live.instrument(), &events).unwrap();
         let mut import = RecordingImport::new(bytes.clone()).unwrap();
         let mut batches = 1;
@@ -1261,6 +1268,11 @@ mod tests {
             "an imported price basis must not change the saved live workspace"
         );
         assert_eq!(driver.time(), first);
+        assert_eq!(
+            app.chart.bars(SeriesId::MAIN).last().map(|bar| bar.close),
+            Some(first_price),
+            "imported executions must reach the chart at its cursor"
+        );
         app.handle_replay_control(ReplayControlAction::StepForward);
         assert!(driver.time() > first);
         app.handle_replay_control(ReplayControlAction::Play);
@@ -1385,6 +1397,10 @@ mod tests {
         app.set_replay_interval(Timeframe::Ticks(NonZeroU64::MIN));
         super::super::tests::settle(&mut app, &ctx);
         assert!(app.chart.replay_driver().is_some());
+        assert!(
+            !app.chart.bars(SeriesId::MAIN).is_empty(),
+            "converted executions must appear during market replay"
+        );
         assert!(app.extra_charts[0].chart.replay_driver().is_none());
         assert_eq!(
             app.extra_charts[0]
