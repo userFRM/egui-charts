@@ -46,8 +46,9 @@ Create `Presentation::default()` once and call `show(ui, &mut chart)` before
 
 [`apply_to_egui`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/theme/fn.apply_to_egui.html) installs the bundled Roboto face ahead of the application's
 proportional fonts. To replace it, call [`Context::set_fonts`](https://docs.rs/egui/0.37.0/egui/struct.Context.html#method.set_fonts) afterwards. The host
-supplies additional glyph coverage. The chart installs SVG image loading;
-applications displaying other image formats install their own loaders.
+supplies additional glyph coverage. With `ui`, the chart installs general SVG
+image loading; `icons` alone installs only the embedded icon loader. Hosts using
+other image formats or general SVG images without `ui` install their own loaders.
 
 Install your font after each global theme change. For example, pass bytes from
 an embedded, licensed font asset to this function after `apply_to_egui`:
@@ -143,7 +144,10 @@ Choose the formatter for the values being displayed:
 | [`set_percentage_formatter`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_percentage_formatter) | Already transformed percentage or indexed-to-100 values. |
 | [`set_volume_formatter`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_volume_formatter) | Volume readouts and volume-formatted studies, in volume units. |
 
-Pass `None` to restore defaults. Other studies retain their own value formats.
+Pass `None` to remove a host formatter. A series falls back to the chart price
+formatter, then its saved
+[`SeriesStyle::display_format`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.SeriesStyle.html#structfield.display_format)
+declaration, then built-in formatting. Other studies retain their own value formats.
 Formatters change text, never stored prices, volumes or calculations. See the
 [price scale guide](price-scale.mdx#choose-the-transform) for relative units and
 the [accessibility guide](accessibility.mdx#screen-reader-output) for the separate
