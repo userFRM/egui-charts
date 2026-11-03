@@ -231,6 +231,7 @@ impl Chart {
                 |ui| self.show_internal(ui, Some(time_axis), maximized_plot.as_ref(), footprint),
             )
             .inner;
+        let touch_readout = crate::widget::interaction::touch_crosshair(ui, response.id);
 
         let mut host_clicks = Vec::new();
         let studies = if self.chart_type.is_time_independent() {
@@ -664,14 +665,19 @@ impl Chart {
                 let key = (pane_id, id);
                 panel.overlay = paint_row > 0;
                 panel.axis_tags = axis_tags.clone();
-                let mut hover = self
-                    .axis_hover
-                    .map(|(pos, _)| pos)
-                    .or_else(|| {
+                let hover = if touch_readout.touch_input
+                    && self.chart_options.tooltip.enabled
+                    && self.chart_options.tooltip.on_long_press
+                {
+                    touch_readout.position
+                } else {
+                    self.axis_hover.map(|(pos, _)| pos).or_else(|| {
                         ui.input(|input| input.pointer.hover_pos()).filter(|pos| {
                             hover_rect.contains(*pos) && ui.rect_contains_pointer(hover_rect)
                         })
                     })
+                };
+                let mut hover = hover
                     .or_else(|| {
                         self.synced_crosshair_bar_idx
                             .filter(|index| index.is_finite() && *index >= 0.0)
@@ -851,10 +857,20 @@ impl Chart {
                         menu,
                     } = interaction;
 
-                    let pane_response = match &maximized_plot {
+                    let mut pane_response = match &maximized_plot {
                         Some(plot) => pane_response.union(plot.clone()),
                         None => pane_response.interact(Sense::click_and_drag()),
                     };
+                    if self.chart_options.tooltip.enabled
+                        && self.chart_options.tooltip.on_long_press
+                        && touch_readout.touch_input
+                        && !drawing_tool_active
+                        && !eraser_mode
+                    {
+                        pane_response
+                            .flags
+                            .remove(egui::response::Flags::LONG_TOUCHED);
+                    }
 
                     // A click on the legend's close "x" removes this study or series.
                     let close_clicked = close_response.as_ref().is_some_and(|r| r.clicked());
