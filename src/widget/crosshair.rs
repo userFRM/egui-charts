@@ -155,7 +155,7 @@ impl Chart {
         let rect = self.last_rendered_price_rect;
         let series = self
             .main_pane_series()
-            .filter(|_| time_based)
+            .filter(|_| time_based || close_only)
             .filter_map(|item| {
                 let scale = self.series_map(item, rect);
                 self.series_close_at(item, index)

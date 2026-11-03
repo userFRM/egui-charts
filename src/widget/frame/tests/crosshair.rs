@@ -6,7 +6,8 @@ use egui::{Event, Pos2, Shape};
 #[test]
 fn close_magnet_uses_visible_series_scales_for_line_label_and_event() {
     use crate::config::CrosshairMode;
-    use crate::model::{Bar, ChartType, LineStyle, SeriesScale};
+    use crate::model::ChartType::{Candles, Renko};
+    use crate::model::{Bar, LineStyle, SeriesScale};
     use crate::studies::{CustomIndicator, IndicatorValue};
     use crate::widget::{ChartEvent, PaneId, SeriesId, SeriesOptions};
 
@@ -23,9 +24,15 @@ fn close_magnet_uses_visible_series_scales_for_line_label_and_event() {
         bar.open = 20.0;
         bar.close = 75.0;
     }
+    // A final 600-point rise yields 60 ten-point bricks for the price-based case.
+    bars[99].close = 675.0;
+    bars[99].high = 690.0;
     chart.set_data(SeriesId::MAIN, bars.clone());
+    let mut params = chart.chart_type_params().clone();
+    params.renko_brick_size = 10.0;
+    chart.set_chart_type_params(params);
     let added = chart.add_series(SeriesOptions {
-        chart_type: ChartType::Candles,
+        chart_type: Candles,
         scale: SeriesScale::Left,
         ..Default::default()
     });
@@ -43,26 +50,29 @@ fn close_magnet_uses_visible_series_scales_for_line_label_and_event() {
         vec![IndicatorValue::Single(49.0); bars.len()]
     })));
     let pane = chart.add_pane();
-    // (main visible, added visible, added valued, added in another pane, second visible,
+    // (chart type, main visible, added visible, added valued, added in another pane, second visible,
     //  reverse added-series order, pointer in main-price units, expected main-price readout).
     for (step, case) in [
-        (true, true, true, false, false, false, 49.0, 50.0),
-        (true, false, true, false, false, false, 49.0, 75.0),
-        (true, true, false, false, false, false, 49.0, 75.0),
-        (false, true, true, false, false, false, 49.0, 50.0),
-        (false, false, true, false, false, false, 49.0, 49.0),
-        (true, true, true, true, false, false, 49.0, 75.0),
-        (true, true, true, false, false, false, 20.0, 50.0),
-        (true, true, true, false, false, false, 10.0, 50.0),
-        (true, true, true, false, false, false, 90.0, 75.0),
-        (true, true, true, false, false, false, 62.5, 75.0),
-        (false, true, true, false, true, false, 62.5, 50.0),
-        (false, true, true, false, true, true, 62.5, 75.0),
+        (Candles, true, true, true, false, false, false, 49.0, 50.0),
+        (Candles, true, false, true, false, false, false, 49.0, 75.0),
+        (Candles, true, true, false, false, false, false, 49.0, 75.0),
+        (Candles, false, true, true, false, false, false, 49.0, 50.0),
+        (Candles, false, false, true, false, false, false, 49.0, 49.0),
+        (Candles, true, true, true, true, false, false, 49.0, 75.0),
+        (Candles, true, true, true, false, false, false, 20.0, 50.0),
+        (Candles, true, true, true, false, false, false, 10.0, 50.0),
+        (Candles, true, true, true, false, false, false, 90.0, 75.0),
+        (Candles, true, true, true, false, false, false, 62.5, 75.0),
+        (Candles, false, true, true, false, true, false, 62.5, 50.0),
+        (Candles, false, true, true, false, true, true, 62.5, 75.0),
+        (Renko, false, true, true, false, false, false, 49.0, 50.0),
     ]
     .into_iter()
     .enumerate()
     {
-        let (main, visible, valued, elsewhere, second_visible, reverse, pointer, expected) = case;
+        let (kind, main, visible, valued, elsewhere, second_visible, reverse, pointer, expected) =
+            case;
+        chart.set_chart_type(kind);
         chart.set_series_order(if reverse { second } else { added }, 0);
         chart.set_main_series_visible(main);
         chart.set_series_visible(added, visible);
