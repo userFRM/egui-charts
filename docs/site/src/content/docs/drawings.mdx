@@ -3,13 +3,13 @@ title: Drawings and persistence
 ---
 
 Enable `drawings` for drawing tools, selection, handles, undo/redo and persistence.
-`DrawingToolType` identifies a tool and its interaction mode. The `ui` feature
+[`DrawingToolType`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/enum.DrawingToolType.html) identifies a tool and its interaction mode. The [`ui`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/index.html) feature
 also provides a drawing toolbar for a host-composed layout.
 
 ## Save through the chart
 
-Use `Chart::save_drawings`, then validate and serialize the returned drawing file
-before replacing a previous save. Restore with `Chart::load_drawings` after setting
+Use [`Chart::save_drawings`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.save_drawings), then validate and serialize the returned drawing file
+before replacing a previous save. Restore with [`Chart::load_drawings`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.load_drawings) after setting
 the matching symbol. Chart-level persistence retains timestamped anchors, so
 prepending history does not move a saved drawing to another bar.
 
@@ -19,9 +19,9 @@ report skipped records to the user rather than silently discarding them.
 
 ## Keep durable storage in the host
 
-Store the JSON in your own file or service. Implement `services::Storage` and
-attach it with `Chart::set_storage` for automatic per-symbol persistence.
-With `ui`, `Chart::snapshot` and `Chart::restore` additionally preserve settings,
+Store the JSON in your own file or service. Implement [`services::Storage`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/services/trait.Storage.html) and
+attach it with [`Chart::set_storage`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_storage) for automatic per-symbol persistence.
+With [`ui`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/index.html), [`Chart::snapshot`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.snapshot) and [`Chart::restore`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.restore) additionally preserve settings,
 studies and the view.
 
 The [drawing persistence example](https://github.com/userFRM/egui-charts/blob/main/examples/drawing_persistence.rs)

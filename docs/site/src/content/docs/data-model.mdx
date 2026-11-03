@@ -2,14 +2,14 @@
 title: The data model
 ---
 
-The core types live in `egui_charts::model`. Keep market data in UTC and let the
+The core types live in [`egui_charts::model`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/index.html). Keep market data in UTC and let the
 chart's formatters and instrument calendar control its presentation.
 
 ## Bars and series
 
-`Bar` holds a UTC timestamp and `f64` open, high, low, close and volume values.
-Its timestamp denotes the opening time. `BarData` owns a vector of bars; supply
-ordered history with unique opening times. `BarData::from_bars` is a container
+[`Bar`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.Bar.html) holds a UTC timestamp and `f64` open, high, low, close and volume values.
+Its timestamp denotes the opening time. [`BarData`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.BarData.html) owns a vector of bars; supply
+ordered history with unique opening times. [`BarData::from_bars`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.BarData.html#method.from_bars) is a container
 constructor, not an ingestion validator.
 
 ```rust
@@ -24,16 +24,16 @@ let data = BarData::from_bars(vec![first, next]);
 assert_eq!(data.len(), 2);
 ```
 
-Use `Bar::from_value` for a single value and `Bar::whitespace` for a time-axis
+Use [`Bar::from_value`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.Bar.html#method.from_value) for a single value and [`Bar::whitespace`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.Bar.html#method.whitespace) for a time-axis
 slot with no value. A bar may carry per-bar colours and an optional host JSON
 payload; the chart returns the payload through bar lookups and pointer/data events.
 Do not replace missing observations with invented OHLC values.
 
 ## Instruments and intervals
 
-`Instrument` describes the feed's symbol, tick size, price precision and trading
+[`Instrument`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.Instrument.html) describes the feed's symbol, tick size, price precision and trading
 calendar. Resolve it consistently with the identifiers accepted by your feed.
-`Timeframe` describes time intervals and execution-based intervals. Tick-count,
+[`Timeframe`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/enum.Timeframe.html) describes time intervals and execution-based intervals. Tick-count,
 volume, range and delta bars need executions; OHLC history cannot reconstruct them.
 Range aggregation also needs the instrument tick size.
 
@@ -44,7 +44,7 @@ without it.
 
 ## Chart state belongs to the widget
 
-`Chart` owns the view, configured series, studies and interactions. `SeriesId::MAIN`
+[`Chart`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html) owns the view, configured series, studies and interactions. [`SeriesId::MAIN`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/series/selection/struct.SeriesId.html#associatedconstant.MAIN)
 identifies its main series. Keep local bar indices inside their chart: synchronized
 charts exchange UTC positions because intervals and history lengths can differ.
 See [scales and navigation](scales.mdx) and the [builder guide](../../../../builder-guide.md).

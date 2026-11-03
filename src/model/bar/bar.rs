@@ -90,12 +90,18 @@ pub struct BarColors {
     pub wick: Option<Color32>,
     /// A baseline's line above its base value, from this bar to the next.
     pub top_line: Option<Color32>,
-    /// A baseline's fill above its base value, from this bar to the next.
+    /// A baseline's fill at the pane's high-price edge, from this bar to the next.
     pub top_fill: Option<Color32>,
     /// A baseline's line below its base value, from this bar to the next.
     pub bottom_line: Option<Color32>,
-    /// A baseline's fill below its base value, from this bar to the next.
+    /// A baseline's fill at the pane's low-price edge, from this bar to the next.
     pub bottom_fill: Option<Color32>,
+    /// A baseline's fill at the base on its higher-price side, from this bar to the next.
+    /// Falls back to the series' base endpoint, or the resolved `top_fill` for a flat fill.
+    pub top_fill_at_base: Option<Color32>,
+    /// A baseline's fill at the base on its lower-price side, from this bar to the next.
+    /// Falls back to the series' base endpoint, or the resolved `bottom_fill` for a flat fill.
+    pub bottom_fill_at_base: Option<Color32>,
 }
 
 /// A value missing from a JSON bar, which leaves the bar without it.

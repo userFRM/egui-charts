@@ -23,11 +23,11 @@ following the existing pattern, and keep those sources available in Cargo's
 package excludes. `cargo test --doc --all-features` checks them. Only examples
 that open native windows use `no_run`.
 
-The Pages build also builds rustdoc with all features. From the repository root:
-
-```sh
-RUSTUP_TOOLCHAIN=stable RUSTDOCFLAGS=-Dwarnings cargo doc --no-deps --all-features
-```
+`npm run build` also builds rustdoc with all features into `target/doc`, then
+`check-api-links.mjs` fails on any local guide or API page or anchor that does not
+resolve, so the build needs a Rust toolchain. Link each option, type or method a
+page discusses to its rustdoc member under `/egui-charts/docs/api/`. The Pages build
+sets `RUSTDOCFLAGS=-Dwarnings` and repeats the check on the assembled `_site/docs`.
 
 The workflow's assembly step combines the guide, API and demo in `_site/`.
 To preview the production URL prefix locally, serve a temporary parent containing

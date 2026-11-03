@@ -50,6 +50,10 @@ pub struct SeriesOptions {
     pub up_color: Color32,
     /// Falling bars of the OHLC and column types, and the baseline type below its base.
     pub down_color: Color32,
+    /// Independent baseline line and fill styles. `None` uses `up_color`, `down_color` and
+    /// `width`, with flat fills at the default opacity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_style: Option<BaselineStyle>,
     /// Line width in logical pixels.
     pub width: f32,
     /// Scale shared with the series carrying the same assignment in the price pane. In another
@@ -71,6 +75,7 @@ impl Default for SeriesOptions {
             color: Color32::from_rgb(41, 98, 255),
             up_color: DESIGN_TOKENS.semantic.extended.bullish,
             down_color: DESIGN_TOKENS.semantic.extended.bearish,
+            baseline_style: None,
             width: 2.0,
             scale: SeriesScale::Right,
             columns_base: None,
@@ -95,8 +100,8 @@ impl SeriesOptions {
         self
     }
 
-    /// The line, area and baseline styles in the series colours, with the fill opacities of
-    /// the default styles, and the columns' base.
+    /// The line, area and baseline styles in the series colours, unless `baseline_style`
+    /// supplies an explicit baseline style, and the columns' base.
     pub(super) fn type_params(&self) -> ChartTypeParams {
         let line = |color| LinePlotStyle {
             color,
@@ -118,12 +123,16 @@ impl SeriesOptions {
                     bottom_fill: Color32::TRANSPARENT,
                     ..Default::default()
                 },
-                baseline: BaselineStyle {
-                    above: line(self.up_color),
-                    below: line(self.down_color),
-                    above_fill: fill(self.up_color, 30),
-                    below_fill: fill(self.down_color, 30),
-                },
+                baseline: self
+                    .baseline_style
+                    .clone()
+                    .unwrap_or_else(|| BaselineStyle {
+                        above: line(self.up_color),
+                        below: line(self.down_color),
+                        above_fill: fill(self.up_color, 30),
+                        below_fill: fill(self.down_color, 30),
+                        ..Default::default()
+                    }),
                 ..Default::default()
             },
             columns_base: self.columns_base,
@@ -637,5 +646,56 @@ impl Chart {
             map.price_precision().unwrap_or(2),
             self.series_label_formatter(id, transform.mode).as_deref(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn added_baseline_series_keep_explicit_styles_and_legacy_colours() {
+        for gradient in [false, true] {
+            let mut saved = serde_json::to_value(SeriesOptions::default()).unwrap();
+            saved["up_color"] = serde_json::json!([0, 0, 255, 255]);
+            saved["down_color"] = serde_json::json!([255, 0, 0, 255]);
+            if gradient {
+                saved["baseline_style"] = serde_json::json!({
+                    "above_fill": [0, 200, 0, 200], "above_fill_at_base": [0, 40, 0, 40],
+                    "below_fill": [200, 0, 0, 200], "below_fill_at_base": [40, 0, 0, 40]
+                });
+            }
+            let options: SeriesOptions = serde_json::from_value(saved).unwrap();
+            let params = options.type_params();
+            if gradient {
+                let actual = serde_json::to_value(&params.styles.baseline).unwrap();
+                assert_eq!(actual["above_fill"], serde_json::json!([0, 200, 0, 200]));
+                assert_eq!(
+                    actual["above_fill_at_base"],
+                    serde_json::json!([0, 40, 0, 40])
+                );
+                assert_eq!(actual["below_fill"], serde_json::json!([200, 0, 0, 200]));
+                assert_eq!(
+                    actual["below_fill_at_base"],
+                    serde_json::json!([40, 0, 0, 40])
+                );
+            } else {
+                assert_eq!(params.styles.baseline.above.color, Color32::BLUE);
+                assert_eq!(params.styles.baseline.below.color, Color32::RED);
+                assert_eq!(
+                    params.styles.baseline.above_fill,
+                    Color32::from_rgba_unmultiplied(0, 0, 255, 30)
+                );
+                assert_eq!(
+                    params.styles.baseline.below_fill,
+                    Color32::from_rgba_unmultiplied(255, 0, 0, 30)
+                );
+            }
+            assert_eq!(
+                serde_json::from_value::<SeriesOptions>(serde_json::to_value(&options).unwrap())
+                    .unwrap(),
+                options
+            );
+        }
     }
 }
