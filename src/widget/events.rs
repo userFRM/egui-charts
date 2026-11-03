@@ -110,6 +110,21 @@ pub enum PointerKind {
     Pen,
 }
 
+/// An accepted host data operation, reported by [`ChartEvent::DataOperation`].
+/// Update times are the incoming timestamps, matched using the chart's bar slots.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DataOperation {
+    /// A full replacement through [`Chart::set_data`], including an empty or unchanged load.
+    SetData,
+    /// An [`update`](Chart::update) beyond the last stored slot, or into an empty series.
+    Append(DateTime<Utc>),
+    /// An [`update`](Chart::update) to an existing slot, including an unchanged bar.
+    Update(DateTime<Utc>),
+    /// An [`update`](Chart::update) inserted into a missing slot before the last stored slot.
+    Insert(DateTime<Utc>),
+}
+
 /// A notification for the host. Existing selection and action polling APIs remain independent.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
@@ -184,6 +199,18 @@ pub enum ChartEvent {
         /// Total bars now held by that series.
         bars: usize,
     },
+    /// One accepted `set_data` or `update` call, when enabled with
+    /// [`Chart::set_data_operation_notifications`]. Never coalesced; additional to the compact
+    /// `DataLoaded` and `DataUpdated` events. Feed replies, removals and constructor data do not
+    /// emit this event. Overflow is reported by `EventsDropped` as for other notifications.
+    DataOperation {
+        /// Bar series that accepted the operation.
+        series: SeriesId,
+        /// The operation and, for an update, its incoming bar time.
+        operation: DataOperation,
+        /// Total bars now held in the series' current window, after cleaning and retention.
+        bars: usize,
+    },
     /// The symbol setter accepted a different symbol.
     SymbolChanged(String),
     /// The interval setter accepted a different interval.
@@ -236,6 +263,7 @@ impl PartialEq for ImageRequest {
 pub(super) struct HostEvents {
     queue: std::collections::VecDeque<ChartEvent>,
     dropped: usize,
+    pub(super) data_operations: bool,
     range: Option<VisibleTimeRange>,
     logical_range: Option<crate::model::LogicalRange>,
     time_scale_size: egui::Vec2,
@@ -260,6 +288,20 @@ impl HostEvents {
 }
 
 impl Chart {
+    /// Enables an additional [`ChartEvent::DataOperation`] for each accepted [`set_data`](Self::set_data)
+    /// or [`update`](Self::update) call, in call order, including unchanged data. Disabled by
+    /// default; changing this setting affects future calls and keeps already queued events.
+    /// Compact state-change notifications remain available in either mode.
+    ///
+    /// Invalid updates emit no operation event and increment [`FeedState::rejected_bars`](crate::data::FeedState::rejected_bars).
+    /// A full replacement still emits one after dropping invalid bars, even if none remain.
+    /// Unknown, removed, volume and study series accept no data and emit no operation event.
+    /// During replay, updates are classified against the retained history, including future bars.
+    /// Feed notifications keep their existing batch semantics; this setting observes direct calls.
+    pub fn set_data_operation_notifications(&mut self, enabled: bool) {
+        self.host_events.data_operations = enabled;
+    }
+
     /// Overrides the input device reported by pointer events. Set this before `show` when
     /// the host knows the active device, including pens that egui cannot identify. `None`
     /// restores automatic mouse/touch detection. Update it when the active device changes.
@@ -303,12 +345,32 @@ impl Chart {
         });
     }
 
+    pub(super) fn data_set(&mut self, series: SeriesId) {
+        self.data_loaded(series);
+        self.data_operation(series, DataOperation::SetData);
+    }
+
+    pub(super) fn data_operation(&mut self, series: SeriesId, operation: DataOperation) {
+        if self.host_events.data_operations {
+            self.host_events.push(ChartEvent::DataOperation {
+                series,
+                operation,
+                bars: self.bars(series).len(),
+            });
+        }
+    }
+
     pub(super) fn data_updated(&mut self, series: SeriesId) {
         let bars = self.bars(series).len();
         if let Some(ChartEvent::DataUpdated {
             series: last,
             bars: count,
-        }) = self.host_events.queue.back_mut()
+        }) = self
+            .host_events
+            .queue
+            .iter_mut()
+            .rev()
+            .find(|event| !matches!(event, ChartEvent::DataOperation { .. }))
             && *last == series
         {
             *count = bars;
@@ -782,6 +844,127 @@ mod tests {
     use super::*;
     use crate::widget::test_frames::{chart, frame};
     use egui::{Context, Event};
+
+    /// Direct operations keep their kind and order, including unchanged updates, while compact
+    /// events still coalesce. Rejections stay silent and overflow reports every lost entry.
+    #[test]
+    fn data_operation_notifications_keep_accepted_setter_order() {
+        let start = "2024-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let bar = |minute, price| {
+            Bar::new(
+                start + chrono::TimeDelta::minutes(minute),
+                price,
+                price,
+                price,
+                price,
+                1.0,
+            )
+        };
+        for secondary in [false, true] {
+            for replay in [false, true] {
+                for enabled in [false, true] {
+                    let mut chart = Chart::new(crate::model::BarData::new());
+                    let series = if secondary {
+                        chart.add_series(Default::default())
+                    } else {
+                        SeriesId::MAIN
+                    };
+                    if replay {
+                        chart.set_replay_time(Some(bar(2, 1.0).time));
+                    }
+                    chart.drain_events().for_each(drop);
+                    if enabled {
+                        chart.set_data_operation_notifications(true);
+                    }
+                    chart.set_data(series, vec![bar(0, 10.0), bar(2, 20.0)]);
+                    chart.update(series, bar(3, 30.0));
+                    chart.update(series, bar(3, 30.0));
+                    chart.update(series, bar(0, 11.0));
+                    chart.update(series, bar(1, 15.0));
+                    chart.update(series, bar(4, f64::INFINITY));
+                    chart.update(SeriesId(usize::MAX), bar(4, 40.0));
+                    chart.set_data(SeriesId(usize::MAX), vec![bar(4, 40.0)]);
+                    assert_eq!(chart.feed_state(series).unwrap().rejected_bars, 1);
+                    let events = chart.drain_events().collect::<Vec<_>>();
+                    let operations = events
+                        .iter()
+                        .filter(|event| matches!(event, ChartEvent::DataOperation { .. }))
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    let operation = |operation, bars| ChartEvent::DataOperation {
+                        series,
+                        operation,
+                        bars,
+                    };
+                    let expected = if enabled {
+                        vec![
+                            operation(DataOperation::SetData, if replay { 1 } else { 2 }),
+                            operation(
+                                DataOperation::Append(bar(3, 30.0).time),
+                                if replay { 1 } else { 3 },
+                            ),
+                            operation(
+                                DataOperation::Update(bar(3, 30.0).time),
+                                if replay { 1 } else { 3 },
+                            ),
+                            operation(DataOperation::Update(start), if replay { 1 } else { 3 }),
+                            operation(
+                                DataOperation::Insert(bar(1, 15.0).time),
+                                if replay { 2 } else { 4 },
+                            ),
+                        ]
+                    } else {
+                        Vec::new()
+                    };
+                    assert_eq!(
+                        operations, expected,
+                        "secondary={secondary}, replay={replay}, enabled={enabled}"
+                    );
+                    let compact = events
+                        .into_iter()
+                        .filter(|event| !matches!(event, ChartEvent::DataOperation { .. }))
+                        .collect::<Vec<_>>();
+                    assert_eq!(
+                        compact,
+                        [
+                            ChartEvent::DataLoaded {
+                                series,
+                                bars: if replay { 1 } else { 2 }
+                            },
+                            ChartEvent::DataUpdated {
+                                series,
+                                bars: if replay { 2 } else { 4 }
+                            },
+                        ]
+                    );
+                    chart.set_data(series, Vec::new());
+                    chart.update(series, bar(0, 10.0));
+                    chart.set_data_operation_notifications(false);
+                    let events = chart.drain_events().collect::<Vec<_>>();
+                    assert_eq!(events.len(), if enabled { 4 } else { 2 });
+                    if enabled {
+                        assert_eq!(events[1], operation(DataOperation::SetData, 0));
+                        assert_eq!(events[3], operation(DataOperation::Append(start), 1));
+                    }
+                    chart.update(series, bar(0, 10.0));
+                    assert_eq!(chart.drain_events().count(), 0);
+                    chart.set_replay_time(None);
+                    chart.set_data_operation_notifications(true);
+                    for _ in 0..1100 {
+                        chart.update(series, bar(0, 10.0));
+                    }
+                    let events = chart.drain_events().collect::<Vec<_>>();
+                    assert_eq!(events.len(), 1025);
+                    assert_eq!(events[0], ChartEvent::EventsDropped(76));
+                    assert!(
+                        events[1..]
+                            .iter()
+                            .all(|event| *event == operation(DataOperation::Update(start), 1))
+                    );
+                }
+            }
+        }
+    }
 
     /// Hosts receive changes once, retain setter order, and get UTC and raw prices rather
     /// than scale coordinates. Polling selection or draining twice cannot consume a click.

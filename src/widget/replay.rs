@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 pub(super) struct ReplayWindow {
     pub(super) time: DateTime<Utc>,
-    bars: HashMap<SeriesId, Vec<Bar>>,
+    pub(super) bars: HashMap<SeriesId, Vec<Bar>>,
     source: Option<(Vec<Bar>, BarClock)>,
     /// The pause last set with `set_feed_paused` before the replay, which its exit sets again.
     feed_paused: bool,
