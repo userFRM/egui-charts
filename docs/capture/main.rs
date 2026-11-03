@@ -2,11 +2,23 @@
 //! renderer. The demo starts at a fixed timestamp with its sample feed paused. Each scene sets its state through the
 //! controller's own action handlers and the public chart API, so no step depends on where a control is drawn.
 //!
-//! Run from this directory: `cargo run --release -- <out-dir> [scene-filter]`
+//! Run from this directory: `cargo run --release -- <out-dir> [scene-filter] [--animated]`
 //! Output: `<scene>-<theme>.png` for the dark and light themes, from a 1600x1000 window at 1.5 pixels per point.
 //! Each capture sets its theme on the app and with `Chart::set_theme` before the first step. `docs/images` holds
 //! them converted unchanged to lossless WebP: `for f in <out-dir>/*.png; do cwebp -quiet -lossless -z 9 "$f" -o
 //! docs/images/$(basename "${f%.png}").webp; done`.
+//!
+//! For byte-for-byte repeats on the software renderer, set `LP_NUM_THREADS=1` for both runs.
+//! Animated mode records hero, liquidity, drawings and replay as `<out-dir>/<scene>-<theme>/0000.png`, etc.
+//! It uses 20 fps at 0.75 pixels per point: 1120x800 logical points (840x600 pixels) for the hero and
+//! 880x660 logical points (660x495 pixels) for gallery tiles. Each eight-second
+//! loop plays a four-second trajectory and its rewind, returning data, pointer and viewport to their first frame.
+//! The drawing loop starts with the completed line, so its first frame also works as a still.
+//! Axis labels use 18 logical pixels so gallery labels remain readable at about 430 pixels wide.
+//! Encode from the repository root (the sorted, zero-padded filenames are significant):
+//! `for d in <out-dir>/*/; do q=65; case $(basename "$d") in hero-*) q=50;; esac;
+//! img2webp -loop 0 -mixed -q "$q" -m 6 -d 50 "$d"*.png -o
+//! "docs/images/$(basename "$d").webp"; done`. The first frame is a fully settled view.
 
 #[path = "../../examples/demo/controller.rs"]
 #[expect(dead_code, reason = "only the captured scenes are exercised")]
@@ -16,6 +28,8 @@ mod panel_alerts;
 #[path = "../../examples/demo/sampledata.rs"]
 #[expect(dead_code, reason = "only the captured scenes are exercised")]
 mod sampledata;
+
+mod animation;
 
 use controller::DemoApp;
 use egui::containers::panel::PanelState;
@@ -395,9 +409,18 @@ fn chart_rect(ctx: &Context) -> Rect {
     r
 }
 
-fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
+fn prepare(scene: &Scene, light: bool, scale: f32, animated: bool) -> Harness<'static, DemoApp> {
     let mut h = Harness::builder()
-        .with_size(SIZE)
+        .with_size(if animated {
+            if scene.name == "hero" {
+                vec2(1120.0, 800.0)
+            } else {
+                vec2(880.0, 660.0)
+            }
+        } else {
+            SIZE
+        })
+        .with_step_dt(if animated { 0.05 } else { 0.25 })
         .with_pixels_per_point(scale)
         // The chart draws its own crosshair; kittest would paint a pointer arrow over it.
         .with_render_cursor(false)
@@ -409,13 +432,42 @@ fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
         .wgpu()
         .build_eframe(|cc| {
             let now = "2026-10-27T19:29:50Z".parse().unwrap();
-            *DemoApp::new_at(cc, now, true)
+            let mut app = DemoApp::new_at(cc, now, true);
+            if animated {
+                app.theme = if light { Theme::light() } else { Theme::dark() };
+                app.chart.set_theme(&cc.egui_ctx, &app.theme);
+            }
+            *app
         });
     h.run_steps(3);
+    if animated {
+        // Replay and drawings must start from the completed history, including retained executions.
+        let ready = |h: &Harness<'_, DemoApp>| {
+            h.state()
+                .chart
+                .feed_state(SeriesId::MAIN)
+                .is_some_and(|state| {
+                    state.status == Some(egui_charts::data::FeedStatus::Live)
+                        && !state.loading_history
+                })
+        };
+        for _ in 0..2_000 {
+            if ready(&h) {
+                break;
+            }
+            h.step();
+        }
+        assert!(
+            ready(&h),
+            "sample history must finish before scripting a scene"
+        );
+    }
     let ctx = h.ctx.clone();
-    h.state_mut().toggle_panel(RightBarIcon::Notifications);
-    h.run_steps(3);
-    h.state_mut().toggle_panel(RightBarIcon::Notifications);
+    if !animated {
+        h.state_mut().toggle_panel(RightBarIcon::Notifications);
+        h.run_steps(3);
+        h.state_mut().toggle_panel(RightBarIcon::Notifications);
+    }
     let app = h.state_mut();
     app.theme = if light { Theme::light() } else { Theme::dark() };
     app.chart.set_theme(&ctx, &app.theme);
@@ -424,6 +476,10 @@ fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
     app.paper
         .set_replay_time(Some("2026-10-27T19:29:50Z".parse().unwrap()));
     app.chart.config_mut().show_countdown = false;
+    if animated {
+        app.chart.config_mut().axis_font_size = Some(18.0);
+        app.chart.config_mut().right_axis_width = 88.0;
+    }
     app.trading.display.notifications = egui_charts::widget::settings::TradingNotifications::Off;
     app.timeframe_toolbar
         .set_control_visible(egui_charts::ui::Control::TimeZone, false);
@@ -529,7 +585,7 @@ fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
     if scene.name == "footprint" {
         h.state_mut().chart.scroll_to_position(0.5, false);
     }
-    if scene.name == "hero" {
+    if scene.name == "hero" && !animated {
         h.run_steps(3);
         h.get_by_role(egui::accesskit::Role::MultilineTextInput)
             .focus();
@@ -556,18 +612,27 @@ fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
         h.hover_at(area.min + area.size() * f);
         h.run_steps(2);
     }
+    h
+}
+
+fn save_frame(h: &mut Harness<'_, DemoApp>, path: &Path) {
     let img = h
         .render()
-        .unwrap_or_else(|e| panic!("render {}: {e}", scene.name));
-    let theme = if light { "light" } else { "dark" };
-    let path = out.join(format!("{}-{theme}.png", scene.name));
-    let file = std::io::BufWriter::new(std::fs::File::create(&path).unwrap());
+        .unwrap_or_else(|e| panic!("render {}: {e}", path.display()));
+    let file = std::io::BufWriter::new(std::fs::File::create(path).unwrap());
     img.write_with_encoder(PngEncoder::new_with_quality(
         file,
         CompressionType::Best,
         FilterType::Adaptive,
     ))
     .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+}
+
+fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
+    let mut h = prepare(scene, light, scale, false);
+    let theme = if light { "light" } else { "dark" };
+    let path = out.join(format!("{}-{theme}.png", scene.name));
+    save_frame(&mut h, &path);
     let bytes = std::fs::metadata(&path).unwrap().len();
     if bytes > MAX_BYTES {
         eprintln!(
@@ -580,15 +645,30 @@ fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let Some(out) = args.get(1) else {
-        eprintln!("usage: capture <out-dir> [scene-filter]");
+        eprintln!("usage: capture <out-dir> [scene-filter] [--animated]");
         std::process::exit(2);
     };
-    let filter = args.get(2).map(String::as_str).unwrap_or("");
+    let animated = args.iter().skip(2).any(|arg| arg == "--animated");
+    let filter = args
+        .iter()
+        .skip(2)
+        .find(|arg| arg.as_str() != "--animated")
+        .map(String::as_str)
+        .unwrap_or("");
     let out = Path::new(out);
     std::fs::create_dir_all(out).unwrap();
-    for scene in scenes().iter().filter(|s| s.name.contains(filter)) {
+    let scenes = if animated {
+        animation::scenes()
+    } else {
+        scenes()
+    };
+    for scene in scenes.iter().filter(|s| s.name.contains(filter)) {
         for light in [false, true] {
-            shoot(scene, light, 1.5, out);
+            if animated {
+                animation::shoot(scene, light, out);
+            } else {
+                shoot(scene, light, 1.5, out);
+            }
         }
         eprintln!("captured {}", scene.name);
     }

@@ -25,10 +25,10 @@ This README and the [guide](https://userfrm.github.io/egui-charts/docs/) follow 
 
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="docs/images/hero-light.webp">
-  <img src="docs/images/hero-dark.webp" alt="Intraday workspace with candles, volume, EMA overlays, VWAP, RSI, a long-position plan, working orders, an alert, watchlist and paper account">
+  <img src="docs/images/hero-dark.webp" alt="Animated sample feed updating the last candle as the crosshair moves, followed by a zoom and pan, then a rewind">
 </picture>
 
-*An intraday session: analysis, risk and orders on the same chart. Every image uses generated sample data and simulated trading.*
+*The sample feed updates the last candle while the crosshair follows the pointer, then the view zooms, pans and rewinds. Every image uses generated sample data and simulated trading.*
 
 ## Inside the demo
 
@@ -38,9 +38,9 @@ This README and the [guide](https://userfrm.github.io/egui-charts/docs/) follow 
       <strong>Liquidity and executions</strong><br>
       <a href="docs/images/liquidity-dark.webp"><picture>
         <source media="(prefers-color-scheme: light)" srcset="docs/images/liquidity-light.webp">
-        <img src="docs/images/liquidity-dark.webp" alt="Depth history and volume bubbles from the sample feed’s synthetic order book.">
+        <img src="docs/images/liquidity-dark.webp" alt="Animated depth history and volume bubbles filling in as synthetic trades arrive, then rewinding.">
       </picture></a><br>
-      Depth history and volume bubbles from the sample feed’s synthetic order book.
+      Animated depth history and volume bubbles filling in as synthetic trades arrive, then rewinding.
     </td>
     <td width="50%" valign="top">
       <strong>Session volume</strong><br>
@@ -82,9 +82,9 @@ This README and the [guide](https://userfrm.github.io/egui-charts/docs/) follow 
       <strong>Mark the setup</strong><br>
       <a href="docs/images/drawings-dark.webp"><picture>
         <source media="(prefers-color-scheme: light)" srcset="docs/images/drawings-light.webp">
-        <img src="docs/images/drawings-dark.webp" alt="Pitchfork, Fibonacci extension, XABCD pattern and a retest callout.">
+        <img src="docs/images/drawings-dark.webp" alt="Animated trend line snapping to a bar low and high, followed by a handle drag and rewind.">
       </picture></a><br>
-      Pitchfork, Fibonacci extension, XABCD pattern and a retest callout.
+      Animated trend line snapping to a bar low and high, followed by a handle drag and rewind.
     </td>
   </tr>
   <tr>
@@ -100,9 +100,9 @@ This README and the [guide](https://userfrm.github.io/egui-charts/docs/) follow 
       <strong>Rehearse the session</strong><br>
       <a href="docs/images/replay-dark.webp"><picture>
         <source media="(prefers-color-scheme: light)" srcset="docs/images/replay-light.webp">
-        <img src="docs/images/replay-dark.webp" alt="Replay transport and a paper position with working orders.">
+        <img src="docs/images/replay-dark.webp" alt="Animated bar replay stepping through a synthetic session, then rewinding to the start.">
       </picture></a><br>
-      Replay transport and a paper position with working orders.
+      Animated bar replay stepping through a synthetic session, then rewinding to the start.
     </td>
   </tr>
   <tr>
