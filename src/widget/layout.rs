@@ -764,6 +764,23 @@ impl ChartLayout {
         }
     }
 
+    /// The slot and rectangle of each visible chart inside `rect`, for an image export.
+    /// Uses the on-screen arrangement, omitting detached and hidden slots and tab controls.
+    /// `count` is the number of charts the host owns, including the active one.
+    pub fn visible_chart_rects(&self, rect: Rect, count: usize) -> Vec<(usize, Rect)> {
+        let count = count.min(16).min(self.mode.chart_count());
+        self.rects(rect, count)
+            .into_iter()
+            .enumerate()
+            .filter(|(slot, rect)| {
+                !self.is_detached(*slot)
+                    && rect.is_positive()
+                    && (self.mode != ChartLayoutMode::Tabs
+                        || *slot == self.active.min(count.saturating_sub(1)))
+            })
+            .collect()
+    }
+
     fn rects(&self, rect: Rect, count: usize) -> Vec<Rect> {
         if self.mode == ChartLayoutMode::Tabs {
             return vec![rect; count];
