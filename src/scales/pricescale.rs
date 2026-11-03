@@ -566,6 +566,44 @@ impl PriceMap {
         self
     }
 
+    /// Applies a series' raw display units without changing the range or transform.
+    #[cfg(feature = "widget")]
+    pub(crate) fn with_display_format(mut self, format: crate::model::SeriesDisplayFormat) -> Self {
+        if matches!(
+            self.transform.mode,
+            PriceScaleMode::Normal | PriceScaleMode::Logarithmic
+        ) {
+            self.price_precision = Some(format.precision);
+            let mut unit = 10f64.powi(-i32::from(format.precision));
+            if format.kind == crate::model::SeriesFormat::Volume {
+                let magnitude = self
+                    .transform
+                    .to_price(self.range.min)
+                    .abs()
+                    .max(self.transform.to_price(self.range.max).abs());
+                // Volume decimals belong to the abbreviated unit, so adjacent ticks must
+                // still have distinguishable labels after applying its suffix.
+                unit *= if magnitude >= 1e9 {
+                    1e9
+                } else if magnitude >= 1e6 {
+                    1e6
+                } else if magnitude >= 1e3 {
+                    1e3
+                } else {
+                    1.0
+                };
+            }
+            self.tick_marks.min_price_step =
+                Some(if format.min_move.is_finite() && format.min_move > 0.0 {
+                    let step = (unit / format.min_move).ceil().max(1.0) * format.min_move;
+                    if step.is_finite() { step } else { unit }
+                } else {
+                    unit
+                });
+        }
+        self
+    }
+
     /// Sets how [`marks`](Self::marks) spaces the tick marks.
     pub fn with_tick_marks(mut self, config: PriceMarkGeneratorConfig) -> Self {
         self.tick_marks = config;

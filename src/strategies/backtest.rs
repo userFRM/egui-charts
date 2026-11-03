@@ -1787,6 +1787,7 @@ mod tests {
                 (closed > 0).then(|| wins as f64 / closed as f64)
             );
             assert_eq!(metrics.profit_factor, None);
+            #[cfg(feature = "csv")]
             assert!(!report.trades_csv().contains(",-0"));
         }
 
@@ -2752,15 +2753,18 @@ mod tests {
             if let Some((_, last)) = report.equity.last() {
                 assert_eq!(*last, expected_last, "{name}");
             }
-            let csv = report.summary_csv(&report.performance(), &report.comparison(&source));
-            for setting in ["Initial capital", "Currency", "Risk-free rate"] {
-                assert_eq!(
-                    csv.lines()
-                        .filter(|row| row.starts_with(&format!("properties,{setting},")))
-                        .count(),
-                    1,
-                    "{name}: {setting} must appear once"
-                );
+            #[cfg(feature = "csv")]
+            {
+                let csv = report.summary_csv(&report.performance(), &report.comparison(&source));
+                for setting in ["Initial capital", "Currency", "Risk-free rate"] {
+                    assert_eq!(
+                        csv.lines()
+                            .filter(|row| row.starts_with(&format!("properties,{setting},")))
+                            .count(),
+                        1,
+                        "{name}: {setting} must appear once"
+                    );
+                }
             }
             assert!(
                 report

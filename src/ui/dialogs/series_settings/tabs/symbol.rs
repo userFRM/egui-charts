@@ -39,19 +39,13 @@ impl SymbolTab {
                 ChartType::StepLine => Self::line_style(ui, &mut styles.step_line, "line_style"),
                 ChartType::LineWithMarkers => {
                     Self::line_style(ui, &mut styles.line_with_markers, "line_style");
-                    let label = ui.label(l10n::text(ui.ctx(), "Marker radius"));
-                    ui.add(
-                        egui::DragValue::new(&mut styles.marker_radius)
-                            .range(0.0..=20.0)
-                            .suffix(l10n::text(ui.ctx(), " pt")),
-                    )
-                    .labelled_by(label.id);
-                    ui.end_row();
+                    Self::marker_radius_row(ui, &mut styles.marker_radius);
                 }
                 ChartType::Area => {
                     Self::line_style(ui, &mut styles.area.line, "line_style");
                     Self::fill_row(ui, "Top fill", &mut styles.area.top_fill);
                     Self::fill_row(ui, "Bottom fill", &mut styles.area.bottom_fill);
+                    Self::marker_radius_row(ui, &mut styles.area.marker_radius);
                 }
                 ChartType::HlcArea => {
                     let label = ui.label(l10n::text(ui.ctx(), "Fill opacity"));
@@ -82,6 +76,7 @@ impl SymbolTab {
                     ui.end_row();
                     Self::line_style(ui, &mut styles.baseline.below, "below_style");
                     Self::fill_row(ui, "Below fill", &mut styles.baseline.below_fill);
+                    Self::marker_radius_row(ui, &mut styles.baseline.marker_radius);
                 }
                 ChartType::Kagi => {
                     for (name, width) in [
@@ -103,6 +98,17 @@ impl SymbolTab {
                 _ => Self::candle_colors_section(ui, settings),
             }
         });
+    }
+
+    fn marker_radius_row(ui: &mut Ui, radius: &mut f32) {
+        let label = ui.label(l10n::text(ui.ctx(), "Marker radius"));
+        ui.add(
+            egui::DragValue::new(radius)
+                .range(0.0..=20.0)
+                .suffix(l10n::text(ui.ctx(), " pt")),
+        )
+        .labelled_by(label.id);
+        ui.end_row();
     }
 
     fn parameters(ui: &mut Ui, settings: &mut SeriesSettings) {

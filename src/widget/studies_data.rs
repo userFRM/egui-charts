@@ -1310,19 +1310,22 @@ mod tests {
             let shown: Vec<_> = (0..study.values().len())
                 .map(|at| study.values().value(0, at))
                 .collect();
-            let exported = chart.export_csv().unwrap();
-            let mut reader = csv::Reader::from_reader(exported.as_bytes());
-            let column = reader
-                .headers()
-                .unwrap()
-                .iter()
-                .position(|name| name == "SMA: SMA(1)")
-                .unwrap();
-            let exported: Vec<Option<f64>> = reader
-                .records()
-                .map(|row| row.unwrap()[column].parse().ok())
-                .collect();
-            assert_eq!(exported, shown, "export uses the same replay cutoff");
+            #[cfg(feature = "csv")]
+            {
+                let exported = chart.export_csv().unwrap();
+                let mut reader = csv::Reader::from_reader(exported.as_bytes());
+                let column = reader
+                    .headers()
+                    .unwrap()
+                    .iter()
+                    .position(|name| name == "SMA: SMA(1)")
+                    .unwrap();
+                let exported: Vec<Option<f64>> = reader
+                    .records()
+                    .map(|row| row.unwrap()[column].parse().ok())
+                    .collect();
+                assert_eq!(exported, shown, "export uses the same replay cutoff");
+            }
             shown
         };
         let minute = |m: i64| DateTime::UNIX_EPOCH + Duration::minutes(m);

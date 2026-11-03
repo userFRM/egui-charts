@@ -43,13 +43,14 @@ export default defineConfig({
             { slug: 'scales', label: 'Scales and interaction overview' },
             'price-scale',
             'time-scale',
+            'horizontal-scales',
             'panes',
             { label: 'Markers', link: '/api-reference/#markers' },
           ],
         },
         {
           label: 'Studies and extensions',
-          items: ['studies', 'study-data', 'drawings', 'order-flow', 'theming', { label: 'Extensions', link: '/api-reference/#extensions' }],
+          items: ['studies', 'study-data', 'drawings', 'order-flow', 'theming', 'time-zones', 'accessibility', 'extensions', 'extensions/custom-series'],
         },
         {
           label: 'Recipes',
