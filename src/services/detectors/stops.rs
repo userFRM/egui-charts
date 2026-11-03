@@ -269,7 +269,7 @@ impl StopSweeps {
                 .levels
                 .keys()
                 .filter(|&&level| {
-                    let (bid, ask) = bar.imbalance(level, 3.0, true);
+                    let (bid, ask) = bar.imbalance(level, 3.0, true, 0.0);
                     if buy { ask } else { bid }
                 })
                 .count();
