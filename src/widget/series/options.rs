@@ -56,6 +56,12 @@ pub struct SeriesOptions {
     pub baseline_style: Option<BaselineStyle>,
     /// Line width in logical pixels.
     pub width: f32,
+    /// Point marker radius in logical points for Line with markers, Area and Baseline.
+    /// Overrides `baseline_style`'s radius. `None` keeps that style's radius or the chart
+    /// type's default: 3 for Line with markers, hidden for Area and Baseline.
+    /// Non-positive or non-finite radii hide markers.
+    #[serde(default)]
+    pub marker_radius: Option<f32>,
     /// Scale shared with the series carrying the same assignment in the price pane. In another
     /// pane the series uses that pane's scale.
     pub scale: SeriesScale,
@@ -77,6 +83,7 @@ impl Default for SeriesOptions {
             down_color: DESIGN_TOKENS.semantic.extended.bearish,
             baseline_style: None,
             width: 2.0,
+            marker_radius: None,
             scale: SeriesScale::Right,
             columns_base: None,
             style: SeriesStyle {
@@ -112,27 +119,33 @@ impl SeriesOptions {
         let fill = |color: Color32, alpha| {
             Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha)
         };
+        let mut baseline = self
+            .baseline_style
+            .clone()
+            .unwrap_or_else(|| BaselineStyle {
+                above: line(self.up_color),
+                below: line(self.down_color),
+                above_fill: fill(self.up_color, 30),
+                below_fill: fill(self.down_color, 30),
+                ..Default::default()
+            });
+        if let Some(radius) = self.marker_radius {
+            baseline.marker_radius = radius;
+        }
         ChartTypeParams {
             styles: ChartTypeStyles {
                 line: line(self.color),
                 step_line: line(self.color),
                 line_with_markers: line(self.color),
+                marker_radius: self.marker_radius.unwrap_or(3.0),
                 area: AreaStyle {
                     line: line(self.color),
+                    marker_radius: self.marker_radius.unwrap_or(0.0),
                     top_fill: fill(self.color, 115),
                     bottom_fill: Color32::TRANSPARENT,
                     ..Default::default()
                 },
-                baseline: self
-                    .baseline_style
-                    .clone()
-                    .unwrap_or_else(|| BaselineStyle {
-                        above: line(self.up_color),
-                        below: line(self.down_color),
-                        above_fill: fill(self.up_color, 30),
-                        below_fill: fill(self.down_color, 30),
-                        ..Default::default()
-                    }),
+                baseline,
                 ..Default::default()
             },
             columns_base: self.columns_base,
@@ -652,6 +665,31 @@ impl Chart {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn baseline_marker_override_preserves_explicit_gradient_style() {
+        let style = BaselineStyle {
+            marker_radius: 4.0,
+            above_fill_at_base: Some(Color32::TRANSPARENT),
+            below_fill_at_base: Some(Color32::GOLD),
+            ..Default::default()
+        };
+        for radius in [None, Some(0.0), Some(7.0)] {
+            let options = SeriesOptions {
+                baseline_style: Some(style.clone()),
+                marker_radius: radius,
+                ..Default::default()
+            };
+            let mut expected = style.clone();
+            expected.marker_radius = radius.unwrap_or(style.marker_radius);
+            assert_eq!(options.type_params().styles.baseline, expected);
+            assert_eq!(
+                serde_json::from_value::<SeriesOptions>(serde_json::to_value(&options).unwrap())
+                    .unwrap(),
+                options
+            );
+        }
+    }
 
     #[test]
     fn added_baseline_series_keep_explicit_styles_and_legacy_colours() {
