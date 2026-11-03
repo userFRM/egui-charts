@@ -7,10 +7,10 @@ import SocialIcons from '@astrojs/starlight/components/SocialIcons.astro';
 const path = Astro.url.pathname;
 const base = '/egui-charts/docs/';
 const sections = [
-  { label: 'Learning', href: `${base}installation/`, slugs: ['installation', 'first-chart', 'builder-guide', 'data-model', 'data'] },
-  { label: 'Concepts', href: `${base}#chart-concepts`, slugs: ['chart-types', 'scales'] },
+  { label: 'Learning', href: `${base}installation/`, slugs: ['installation', 'first-chart', 'tutorial/second-series', 'builder-guide', 'data-model', 'data'] },
+  { label: 'Concepts', href: `${base}#chart-concepts`, slugs: ['chart-types', 'scales', 'interaction'] },
   { label: 'Extensions', href: `${base}api-reference/#extensions`, slugs: ['studies', 'study-data', 'drawings', 'order-flow', 'theming'] },
-  { label: 'Recipes', href: `${base}api-reference/#recipes`, slugs: ['application-ui', 'replay', 'strategy-report', 'host-services', 'performance'] },
+  { label: 'Recipes', href: `${base}recipes/`, slugs: ['recipes', 'recipes/annotations', 'recipes/price-volume', 'recipes/host-readout', 'recipes/synchronized', 'recipes/export', 'application-ui', 'replay', 'strategy-report', 'host-services', 'performance'] },
   { label: 'Status', href: `${base}progress/`, slugs: ['progress'] },
 ];
 ---
