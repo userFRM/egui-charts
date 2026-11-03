@@ -156,6 +156,16 @@ pub trait Indicator: Send {
         false
     }
 
+    /// Whether users may edit this study. Host setters and restore operations remain available.
+    fn user_edit_enabled(&self) -> bool {
+        true
+    }
+
+    /// Optional study help article, opened by the host from the legend or context menu.
+    fn help_url(&self) -> Option<&str> {
+        None
+    }
+
     /// Colour inside a projected price band.
     fn projection_fill_color(&self, projection: &super::StudyProjection) -> Color32 {
         self.plot_color(projection.plot, projection.bars.start as usize)
@@ -266,6 +276,9 @@ pub trait Indicator: Send {
         let (levels, fill_between_levels, level_fill_color) =
             super::settings::declared_levels(self);
         super::StudySettings {
+            show_legend_values: true,
+            user_edit_enabled: self.user_edit_enabled(),
+            help_url: self.help_url().map(str::to_owned),
             plots: (0..self.line_count())
                 .map(|line| self.plot_style(line))
                 .collect(),

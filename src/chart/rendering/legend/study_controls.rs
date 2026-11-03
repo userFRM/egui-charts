@@ -1,6 +1,5 @@
 use crate::localization as l10n;
 use crate::theme::ThemeExt;
-#[cfg(not(feature = "icons"))]
 use egui::FontId;
 use egui::{Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
 
@@ -12,9 +11,19 @@ pub(crate) fn study_controls(
     row: Rect,
     controls: Rect,
     id: egui::Id,
-    visible: bool,
+    study: &dyn crate::studies::Indicator,
 ) -> ([Response; 3], Option<Pos2>) {
     let theme = ui.active_theme();
+    let visible = study.is_visible();
+    let editable = study.user_edit_enabled();
+    let help = study.help_url();
+    let count: usize = if !editable {
+        1
+    } else if help.is_some() {
+        5
+    } else {
+        4
+    };
     let touch_id = egui::Id::unique("legend_touch_input");
     let input_touch = ui.input(|input| {
         if input.any_touches()
@@ -62,7 +71,7 @@ pub(crate) fn study_controls(
     // Keep controls focusable while Tab transfers focus from their row.
     let focused = row_response.has_focus()
         || row_response.lost_focus()
-        || (0..4_usize).any(|index| ui.memory(|memory| memory.has_focus(id.with(index))));
+        || (0..count).any(|index| ui.memory(|memory| memory.has_focus(id.with(index))));
     let hovered = !touch
         && ui.input(|input| input.pointer.hover_pos().is_some())
         && ui.rect_contains_pointer(row);
@@ -77,7 +86,7 @@ pub(crate) fn study_controls(
             egui::StrokeKind::Inside,
         );
     }
-    let buttons: [Response; 4] = std::array::from_fn(|index| {
+    let buttons: [Response; 5] = std::array::from_fn(|index| {
         let rect = Rect::from_min_size(
             controls.min + Vec2::new(index as f32 * 20.0, 0.0),
             Vec2::splat(20.0),
@@ -90,51 +99,73 @@ pub(crate) fn study_controls(
                 0 => "Show study",
                 1 => "Study settings",
                 2 => "Remove study",
-                _ => "More actions",
+                3 => "More actions",
+                _ => "Study help",
             },
         );
+        let enabled = index < count;
         let response = ui.interact(
             rect,
             id.with(index),
-            if revealed {
+            if revealed && enabled && (index < 4 || help.is_some()) {
                 Sense::click()
             } else {
                 Sense::hover()
             },
         );
-        if !revealed {
+        if !revealed || !enabled {
             return response;
         }
         let response = response.on_hover_text(&label);
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
-        if response.hovered() {
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, &label));
+        if response.hovered() && enabled {
             ui.painter()
                 .rect_filled(rect, theme.radius.sm, theme.ui.btn_bg_hover);
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
-        #[cfg(feature = "icons")]
-        {
-            let icon = match index {
-                0 if visible => &crate::icons::icons::EYE,
-                0 => &crate::icons::icons::EYE_HIDE,
-                1 => &crate::icons::icons::SETTINGS,
-                2 => &crate::icons::icons::TRASH,
-                _ => &crate::icons::icons::UI_MORE_HORIZONTAL,
-            };
-            icon.as_image_tinted(Vec2::splat(14.0), theme.ui.text)
-                .paint_at(ui, rect.shrink(3.0));
+        let color = if enabled {
+            theme.ui.text
+        } else {
+            theme.ui.text_muted
+        };
+        if index == 4 {
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "?",
+                FontId::proportional(14.0),
+                color,
+            );
+            if response.clicked()
+                && let Some(url) = help
+            {
+                ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+            }
+        } else {
+            #[cfg(feature = "icons")]
+            {
+                let icon = match index {
+                    0 if visible => &crate::icons::icons::EYE,
+                    0 => &crate::icons::icons::EYE_HIDE,
+                    1 => &crate::icons::icons::SETTINGS,
+                    2 => &crate::icons::icons::TRASH,
+                    _ => &crate::icons::icons::UI_MORE_HORIZONTAL,
+                };
+                icon.as_image_tinted(Vec2::splat(14.0), color)
+                    .paint_at(ui, rect.shrink(3.0));
+            }
+            #[cfg(not(feature = "icons"))]
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                [if visible { "−" } else { "+" }, "...", "×", "•••"][index],
+                FontId::proportional(14.0),
+                color,
+            );
         }
-        #[cfg(not(feature = "icons"))]
-        ui.painter().text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            [if visible { "−" } else { "+" }, "...", "×", "•••"][index],
-            FontId::proportional(14.0),
-            theme.ui.text,
-        );
         response
     });
-    let [hide, settings, remove, more] = buttons;
+    let [hide, settings, remove, more, _] = buttons;
     if more.clicked() {
         menu = Some(more.rect.left_bottom());
     }
@@ -167,8 +198,13 @@ mod tests {
                         ..Default::default()
                     },
                     |ui| {
-                        let (buttons, opened) =
-                            study_controls(ui, row, controls, egui::Id::unique("study"), true);
+                        let (buttons, opened) = study_controls(
+                            ui,
+                            row,
+                            controls,
+                            egui::Id::unique("study"),
+                            &crate::studies::SMA::new(1),
+                        );
                         clicked = buttons.map(|response| response.clicked());
                         menu = opened;
                     },
@@ -292,6 +328,103 @@ mod tests {
                     (index == 4).then(|| controls.min + Vec2::new(60.0, 20.0))
                 );
             }
+
+            // Read-only studies keep visibility; editable studies send help URLs to the host.
+            let mut study =
+                crate::studies::ConfiguredStudy::new(Box::new(crate::studies::SMA::new(1)));
+            let mut saved = serde_json::to_value(study.settings()).unwrap();
+            saved["user_edit_enabled"] = false.into();
+            saved["help_url"] = "https://example.org/average".into();
+            study
+                .apply_settings(&[], serde_json::from_value(saved).unwrap())
+                .unwrap();
+            let ctx = Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let controls = Rect::from_min_size(Pos2::new(150.0, 10.0), Vec2::new(100.0, 20.0));
+            let frame = |events| {
+                let mut clicks = [false; 3];
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let (buttons, _) =
+                            study_controls(ui, row, controls, egui::Id::unique("locked"), &study);
+                        clicks = buttons.map(|button| button.clicked());
+                    },
+                );
+                let urls: Vec<_> = output
+                    .platform_output
+                    .commands
+                    .iter()
+                    .filter_map(|command| {
+                        if let egui::OutputCommand::OpenUrl(url) = command {
+                            Some(url.url.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                output.drop_without_applying_deltas();
+                (clicks, urls)
+            };
+            for index in [1, 2, 3, 4, 0] {
+                let pos = controls.min + Vec2::new(index as f32 * 20.0 + 10.0, 10.0);
+                frame(vec![Event::PointerMoved(pos)]);
+                let mut opened = Vec::new();
+                for pressed in [true, false] {
+                    let (clicks, urls) = frame(vec![Event::PointerButton {
+                        pos,
+                        button: PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    }]);
+                    assert_eq!(clicks, [index == 0 && !pressed, false, false]);
+                    opened.extend(urls);
+                }
+                assert_eq!(opened, Vec::<String>::new());
+            }
+
+            let mut settings = serde_json::to_value(study.settings()).unwrap();
+            settings["user_edit_enabled"] = true.into();
+            study
+                .apply_settings(&[], serde_json::from_value(settings).unwrap())
+                .unwrap();
+            let pos = controls.min + Vec2::new(90.0, 10.0);
+            let mut urls = Vec::new();
+            for events in [
+                vec![Event::PointerMoved(pos)],
+                vec![Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Default::default(),
+                }],
+                vec![Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Default::default(),
+                }],
+            ] {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        study_controls(ui, row, controls, egui::Id::unique("locked"), &study);
+                    },
+                );
+                for command in &output.platform_output.commands {
+                    if let egui::OutputCommand::OpenUrl(url) = command {
+                        urls.push(url.url.clone());
+                    }
+                }
+                output.drop_without_applying_deltas();
+            }
+            assert_eq!(urls, ["https://example.org/average"]);
 
             // A wrapped row is selectable over its text, even when the controls wrap below it.
             let ctx = Context::default();

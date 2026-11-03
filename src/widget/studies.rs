@@ -144,6 +144,23 @@ impl Chart {
         true
     }
 
+    /// Whether an existing study permits user edits. Unknown ids return false.
+    pub fn indicator_user_edit_enabled(&self, id: SeriesId) -> bool {
+        self.indicators()
+            .any(|(candidate, study)| candidate == id && study.user_edit_enabled())
+    }
+
+    /// Enable or disable user editing, retaining the choice in study snapshots and saved state.
+    /// Host APIs can still update the study. Returns false for an unknown id or rejected settings.
+    pub fn set_indicator_user_edit_enabled(&mut self, id: SeriesId, enabled: bool) -> bool {
+        let Some(study) = self.indicator_mut(id) else {
+            return false;
+        };
+        let mut settings = study.settings();
+        settings.user_edit_enabled = enabled;
+        study.apply_settings(&[], settings).is_ok()
+    }
+
     /// Includes or excludes study `id` from the main price auto-scale, without hiding it.
     /// Defaults to `true`; only visible overlay studies contribute. Returns `false` for an id
     /// that is not a study of the chart.
@@ -1087,6 +1104,102 @@ mod tests {
         chart.set_study_limit(None);
         assert!(chart.try_add_indicator(Box::new(SMA::new(8))).is_ok());
     }
+    /// Saved study presentation hides only legend values and keeps edit permissions across history.
+    #[test]
+    fn study_metadata_keeps_values_and_blocks_user_settings() {
+        use crate::studies::{IndicatorFactory, StudySettings};
+        let mut chart = super::super::test_frames::chart(&[100.0], &[110.0]);
+        let id = chart.add_indicator(Box::new(SMA::new(1)));
+        let study = chart.indicator_mut(id).unwrap();
+        let mut saved = serde_json::to_value(study.settings()).unwrap();
+        saved["show_legend_values"] = false.into();
+        saved["user_edit_enabled"] = false.into();
+        saved["help_url"] = "https://example.org/studies/average".into();
+        let settings: StudySettings = serde_json::from_value(saved).unwrap();
+        chart.user_action(|chart| {
+            chart
+                .indicator_mut(id)
+                .unwrap()
+                .apply_settings(&[], settings)
+                .unwrap();
+        });
+        let study = chart
+            .indicators()
+            .find(|(candidate, _)| *candidate == id)
+            .unwrap()
+            .1;
+        assert!(!study.legend_visible(0), "only the status value is hidden");
+        assert!(study.plot_style(0).visible);
+        assert!(study.plot_tagged(0));
+        assert_eq!(study.plot_value(0, 0), Some(110.0));
+        let copy = chart.copy_indicator(id).unwrap();
+        let pasted = chart
+            .paste_indicator(&copy, &IndicatorFactory::new())
+            .unwrap();
+        let copied = chart
+            .indicators()
+            .find(|(candidate, _)| *candidate == pasted)
+            .unwrap()
+            .1;
+        assert!(!copied.legend_visible(0));
+        let copied_settings = serde_json::to_value(copied.settings()).unwrap();
+        assert_eq!(copied_settings["user_edit_enabled"], false);
+        assert_eq!(
+            copied_settings["help_url"],
+            "https://example.org/studies/average"
+        );
+        #[cfg(feature = "ui")]
+        {
+            let mut dialog = crate::ui::dialogs::IndicatorSettingsDialog::default();
+            assert!(!dialog.open_for_chart(&chart, id));
+            let saved = chart.snapshot().unwrap();
+            let saved = serde_json::to_string(&saved).unwrap();
+            let mut restored = super::super::test_frames::chart(&[100.0], &[110.0]);
+            restored
+                .restore(&serde_json::from_str(&saved).unwrap())
+                .unwrap();
+            for (_, study) in restored.indicators() {
+                let settings = serde_json::to_value(study.settings()).unwrap();
+                assert_eq!(settings["show_legend_values"], false);
+                assert_eq!(settings["user_edit_enabled"], false);
+                assert_eq!(settings["help_url"], "https://example.org/studies/average");
+            }
+        }
+        let mut legacy = copied_settings;
+        for field in ["show_legend_values", "user_edit_enabled", "help_url"] {
+            legacy.as_object_mut().unwrap().remove(field);
+        }
+        let legacy: StudySettings = serde_json::from_value(legacy).unwrap();
+        let legacy = serde_json::to_value(legacy).unwrap();
+        assert_eq!(legacy["show_legend_values"], true);
+        assert_eq!(legacy["user_edit_enabled"], true);
+        assert!(legacy["help_url"].is_null());
+        // The metadata is part of the same presentation snapshot as the plot styles.
+        chart.user_action(|chart| {
+            chart.remove_series(pasted);
+        });
+        assert!(chart.undo());
+        assert!(chart.undo());
+        assert!(chart.undo());
+        assert!(
+            chart
+                .indicators()
+                .find(|(candidate, _)| *candidate == id)
+                .unwrap()
+                .1
+                .legend_visible(0)
+        );
+        assert!(chart.redo());
+        assert!(
+            !chart
+                .indicators()
+                .find(|(candidate, _)| *candidate == id)
+                .unwrap()
+                .1
+                .legend_visible(0)
+        );
+    }
+
     #[test]
     fn api_errors_are_std_errors() {
         fn needs_error<E: std::error::Error + Send + Sync + 'static>() {}

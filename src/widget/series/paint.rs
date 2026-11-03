@@ -498,8 +498,7 @@ impl Chart {
         colors: &StyleColors,
     ) -> f32 {
         let study_axis = crate::config::PriceAxisOptions {
-            show_study_values: self.config.show_indicator_last_val
-                && self.config.price_axis.show_study_values,
+            show_study_values: self.config.price_axis.show_study_values,
             ..self.config.price_axis
         };
         let mut measured = 0.0_f32;

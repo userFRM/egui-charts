@@ -45,7 +45,11 @@ macro_rules! register_builtins {
             let key = <$ty as Default>::default().name().to_string();
             $factory.constructors.insert(
                 key,
-                (Some($category), Box::new(|| Box::new(<$ty as Default>::default()))),
+                (Some($category), Box::new(|| Box::new(
+                    ConfiguredStudy::new(Box::new(<$ty as Default>::default())).with_help_url(
+                        concat!("https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.", stringify!($ty), ".html")
+                    )
+                ))),
             );
         )+)+
     };
@@ -364,7 +368,11 @@ impl IndicatorFactory {
                 name,
                 (
                     Some(Self::ORDER_FLOW),
-                    Box::new(move || Box::new(OrderFlowStudy::new(kind))),
+                    Box::new(move || Box::new(
+                        ConfiguredStudy::new(Box::new(OrderFlowStudy::new(kind))).with_help_url(
+                            "https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.OrderFlowStudy.html"
+                        )
+                    )),
                 ),
             );
         }
@@ -376,7 +384,11 @@ impl IndicatorFactory {
                 name,
                 (
                     Some(Self::ORDER_FLOW),
-                    Box::new(move || Box::new(OrderFlowStudy::execution_delta(cumulative))),
+                    Box::new(move || Box::new(
+                        ConfiguredStudy::new(Box::new(OrderFlowStudy::execution_delta(cumulative))).with_help_url(
+                            "https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.OrderFlowStudy.html"
+                        )
+                    )),
                 ),
             );
         }
@@ -386,7 +398,11 @@ impl IndicatorFactory {
                 name,
                 (
                     Some(Self::PATTERNS),
-                    Box::new(move || Box::new(ChartPatterns::new(family))),
+                    Box::new(move || Box::new(
+                        ConfiguredStudy::new(Box::new(ChartPatterns::new(family))).with_help_url(
+                            "https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ChartPatterns.html"
+                        )
+                    )),
                 ),
             );
         }
@@ -397,7 +413,11 @@ impl IndicatorFactory {
                 name,
                 (
                     Some("Support and resistance"),
-                    Box::new(move || Box::new(AutoDrawing::new(kind, 5.0, 10).with_atr(3.0, 10))),
+                    Box::new(move || Box::new(
+                        ConfiguredStudy::new(Box::new(AutoDrawing::new(kind, 5.0, 10).with_atr(3.0, 10))).with_help_url(
+                            "https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.AutoDrawing.html"
+                        )
+                    )),
                 ),
             );
         }
