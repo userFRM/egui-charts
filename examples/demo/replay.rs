@@ -333,8 +333,11 @@ impl DemoApp {
                     let mut events = Vec::new();
                     self.live.read_recording(&mut events);
                     let bytes = recording_bytes(&self.live.instrument(), &events)?;
-                    let path = std::env::temp_dir()
-                        .join(format!("{}-market.egcreplay", self.state.symbol));
+                    let filename = format!("{}-market.egcreplay", self.state.symbol);
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let path = std::env::temp_dir().join(filename);
+                    #[cfg(target_arch = "wasm32")]
+                    let path = std::path::PathBuf::from(filename);
                     #[cfg(not(target_arch = "wasm32"))]
                     std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
                     #[cfg(target_arch = "wasm32")]
