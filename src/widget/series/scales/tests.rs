@@ -184,7 +184,7 @@ fn added_series_styles_reach_frames_and_saved_layouts() {
                     } else {
                         rect.bottom()
                     };
-                    for pair in mesh.vertices.chunks_exact(2) {
+                    for pair in mesh.vertices.as_chunks::<2>().0 {
                         assert_eq!(
                             pair[1].pos.y,
                             if inverted { rect.top() } else { rect.bottom() }
