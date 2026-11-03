@@ -1,9 +1,29 @@
 //! Isolated guide scenes with deterministic bars, also runnable natively.
 
 mod first_chart;
+mod scenes {
+    pub mod chart_types;
+    pub mod series;
+}
 
 use eframe::egui;
 use egui_charts::Chart;
+
+fn scene(name: &str) -> Option<Chart> {
+    Some(match name {
+        "first-chart" => first_chart::first_chart(),
+        "series" => scenes::series::lifecycle(),
+        "series-candles" => scenes::series::candles(),
+        "series-line" => scenes::series::line(),
+        "series-area" => scenes::series::area(),
+        "series-baseline" => scenes::series::baseline(),
+        "series-histogram" => scenes::series::histogram(),
+        "series-heikin" => scenes::chart_types::heikin(),
+        "series-renko" => scenes::chart_types::renko(),
+        "series-point-and-figure" => scenes::chart_types::point_and_figure(),
+        _ => return None,
+    })
+}
 
 struct ExampleApp {
     chart: Chart,
@@ -64,22 +84,17 @@ fn main() -> eframe::Result {
             .dyn_into::<web_sys::HtmlCanvasElement>()
             .unwrap();
         wasm_bindgen_futures::spawn_local(async move {
-            let result = match root.get_attribute("data-scene").as_deref() {
-                Some("first-chart") => {
+            let result = match scene(&root.get_attribute("data-scene").unwrap_or_default()) {
+                Some(chart) => {
                     eframe::WebRunner::new()
                         .start(
                             canvas,
                             eframe::WebOptions::default(),
-                            Box::new(|_| {
-                                Ok(Box::new(ExampleApp {
-                                    chart: first_chart::first_chart(),
-                                    dark: None,
-                                }))
-                            }),
+                            Box::new(move |_| Ok(Box::new(ExampleApp { chart, dark: None }))),
                         )
                         .await
                 }
-                _ => Err(wasm_bindgen::JsValue::from_str("Unknown example scene")),
+                None => Err(wasm_bindgen::JsValue::from_str("Unknown example scene")),
             };
             match result {
                 Ok(()) => {
@@ -107,7 +122,12 @@ fn main() -> eframe::Result {
         Default::default(),
         Box::new(|_| {
             Ok(Box::new(ExampleApp {
-                chart: first_chart::first_chart(),
+                chart: scene(
+                    &std::env::args()
+                        .nth(1)
+                        .unwrap_or_else(|| "first-chart".into()),
+                )
+                .expect("unknown example scene"),
             }))
         }),
     )
