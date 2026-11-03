@@ -31,6 +31,10 @@ pub(crate) fn paint_profile(
     if left >= right {
         return;
     }
+    if profile.exposure.is_some() {
+        paint_exposure(painter, profile, config, span, price_to_y);
+        return;
+    }
     let Some((poc, (va_low, va_high))) = profile.poc_and_value_area(config.value_area()) else {
         return;
     };
@@ -162,6 +166,146 @@ pub(crate) fn paint_profile(
     // rows start at the left notes its source at the right.
     let note_right = !drawing && !right_aligned;
     paint_source_note(painter, profile.source(), rect, note_right, color);
+}
+
+// Both painting and selection use these signed rectangles, including inverted price scales.
+pub(crate) fn exposure_rects(
+    profile: &VolumeProfile,
+    display: ProfileDisplay,
+    span: Range<f32>,
+    price_to_y: &dyn Fn(f64) -> f32,
+) -> Vec<(usize, Rect, bool)> {
+    let Some(snapshot) = &profile.exposure else {
+        return Vec::new();
+    };
+    let split = display == ProfileDisplay::UpDown;
+    let max = snapshot
+        .rows
+        .iter()
+        .flat_map(|row| {
+            if split {
+                [row.calls, row.puts]
+            } else {
+                [row.net, None]
+            }
+        })
+        .flatten()
+        .map(f64::abs)
+        .fold(0.0, f64::max);
+    let zero = (span.start + span.end) * 0.5;
+    let width = (span.end - span.start) * 0.45;
+    let mut rects = Vec::new();
+    for (index, row) in snapshot.rows.iter().enumerate() {
+        let y = price_to_y(row.strike);
+        let height = (price_to_y(row.strike - profile.row_height * 0.5)
+            - price_to_y(row.strike + profile.row_height * 0.5))
+        .abs()
+        .clamp(2.0, 24.0);
+        for (side, value) in (if split {
+            [row.calls, row.puts]
+        } else {
+            [row.net, None]
+        })
+        .into_iter()
+        .enumerate()
+        {
+            let Some(value) = value else {
+                continue;
+            };
+            let end = zero
+                + if max > 0.0 {
+                    (value / max) as f32 * width
+                } else {
+                    0.0
+                };
+            let (top, bottom) = if split {
+                let middle = y;
+                let gap = (height * 0.25).min(1.0);
+                if side == 0 {
+                    (middle - height * 0.5, middle - gap)
+                } else {
+                    (middle + gap, middle + height * 0.5)
+                }
+            } else {
+                (y - height * 0.5, y + height * 0.5)
+            };
+            rects.push((
+                index,
+                Rect::from_two_pos(Pos2::new(zero, top), Pos2::new(end, bottom)),
+                if split { side == 1 } else { value < 0.0 },
+            ));
+        }
+    }
+    rects
+}
+
+fn paint_exposure(
+    painter: &egui::Painter,
+    profile: &VolumeProfile,
+    config: VolumeProfileConfig,
+    span: Range<f32>,
+    price_to_y: &dyn Fn(f64) -> f32,
+) {
+    let snapshot = profile.exposure.as_ref().expect("exposure profile");
+    let theme = painter.ctx().active_theme();
+    let zero = (span.start + span.end) * 0.5;
+    let (a, b) = (price_to_y(profile.low()), price_to_y(profile.high()));
+    painter.vline(
+        zero,
+        a.min(b)..=a.max(b),
+        Stroke::new(1.0, theme.ui.text_muted),
+    );
+    let point = painter.ctx().pointer_hover_pos().filter(|point| {
+        painter.clip_rect().contains(*point)
+            && painter.ctx().layer_id_at(*point) == Some(painter.layer_id())
+    });
+    let mut hovered = None;
+    for (index, rect, down) in exposure_rects(profile, config.display, span, price_to_y) {
+        let rgba = if down {
+            config.down_color
+        } else {
+            config.up_color
+        };
+        let color = Color32::from_rgba_unmultiplied(rgba[0], rgba[1], rgba[2], rgba[3]);
+        painter.rect_filled(rect, 0.0, color.gamma_multiply(0.35));
+        if point.is_some_and(|point| rect.expand(3.0).contains(point)) {
+            hovered = Some(index);
+        }
+    }
+    if let Some(index) = hovered {
+        let row = &snapshot.rows[index];
+        egui::Tooltip::always_open(
+            painter.ctx().clone(),
+            painter.layer_id(),
+            egui::Id::unique((
+                "options_exposure",
+                painter.layer_id(),
+                painter.clip_rect().min.x.to_bits(),
+                painter.clip_rect().min.y.to_bits(),
+                row.strike.to_bits(),
+            )),
+            point.unwrap(),
+        )
+        .show(|ui| {
+            let ctx = ui.ctx().clone();
+            ui.label(crate::localization::format_text(
+                &ctx,
+                "Strike {0}",
+                &[("0", row.strike.to_string())],
+            ));
+            for (label, value) in [("Calls", row.calls), ("Puts", row.puts), ("Net", row.net)] {
+                ui.label(format!(
+                    "{}: {}",
+                    crate::localization::text(&ctx, label),
+                    value.map_or_else(
+                        || crate::localization::text(&ctx, "Unavailable"),
+                        |value| format!("{value:+.2}")
+                    )
+                ));
+            }
+            ui.label(&snapshot.note);
+        });
+    }
 }
 
 /// Notes at the top of `rect`, in the colour of the value area lines, a profile that does not hold
