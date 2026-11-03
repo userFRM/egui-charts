@@ -33,6 +33,8 @@ struct SavedWorkspace {
     layout: SavedLayout,
     /// The comparisons and spreads of each chart.
     comparisons: Vec<Vec<super::comparison::SavedComparison>>,
+    #[serde(default)]
+    groups: Option<super::replay::LayoutGroups>,
     /// The slot that was active.
     active_slot: usize,
     /// Whether each chart's feed serves the continuous 24/7 session.
@@ -86,6 +88,7 @@ impl super::DemoApp {
         match saved {
             Ok(saved) => {
                 if self.restore_layout(name, saved.layout, Ok(saved.comparisons)) {
+                    self.restore_layout_groups(saved.groups);
                     let restore_view = |chart: &mut egui_charts::widget::Chart,
                                         live: &super::LiveFeed,
                                         continuous| {
@@ -176,6 +179,7 @@ impl super::DemoApp {
                 version: SavedLayout::VERSION,
                 layout,
                 comparisons: self.capture_comparisons()?,
+                groups: Some(self.layout_groups()),
                 active_slot: self.layout_slot,
                 continuous_sessions,
             };
@@ -521,6 +525,11 @@ mod tests {
                 egui_charts::widget::settings::ChartSettingsState::from_chart(&app.chart);
             settings.timezone = "+05:45".into();
             app.apply_chart_settings(settings);
+            app.layout.set_sync_group(0, Some("Recovered".into()));
+            app.layout.set_detached(mode.chart_count() - 1, true);
+            app.layout.sync.sync_symbol = false;
+            app.layout.sync.sync_drawings = true;
+            let saved_groups = app.layout_groups();
             let studies = |app: &DemoApp| {
                 app.chart
                     .indicators()
@@ -541,6 +550,7 @@ mod tests {
             app = restart(&ctx, &storage);
             assert_eq!(app.layout.mode, mode);
             assert_eq!(app.layout_slot, mode.chart_count() - 1);
+            assert!(app.layout_groups() == saved_groups);
             assert_eq!(app.chart.chart_type(), ChartType::Line);
             assert_eq!(app.timeframe_toolbar.state.session_type, session);
             assert_eq!(app.timeframe_toolbar.state.timezone, "+05:45");
@@ -583,6 +593,7 @@ mod tests {
             app.storage.persist(&mut storage);
             app = restart(&ctx, &storage);
             assert_eq!(app.chart.chart_type(), ChartType::Area);
+            assert!(app.layout_groups() == saved_groups);
 
             app.handle_top_toolbar(&ctx, TopToolbarAction::Save);
             app.poll_storage(&ctx);
@@ -671,6 +682,27 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn workspace_without_groups_restores_with_default_synchronization() {
+        let ctx = egui::Context::default();
+        let mut storage = AppStorage::default();
+        let mut app = restart(&ctx, &storage);
+        app.chart
+            .set_chart_type(egui_charts::model::ChartType::Area);
+        app.save(&mut storage);
+        let mut documents: HashMap<String, String> = eframe::get_value(&storage, KEY).unwrap();
+        let mut workspace: serde_json::Value = serde_json::from_str(&documents[WORKSPACE]).unwrap();
+        workspace.as_object_mut().unwrap().remove("groups");
+        documents.insert(WORKSPACE.into(), workspace.to_string());
+        eframe::set_value(&mut storage, KEY, &documents);
+
+        app = restart(&ctx, &storage);
+        assert_eq!(app.chart.chart_type(), egui_charts::model::ChartType::Area);
+        assert_eq!(app.layout.sync_group(0), None);
+        assert!(!app.layout.is_detached(0));
+        assert!(app.layout.sync == Default::default());
     }
 
     #[test]
