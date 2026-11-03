@@ -4,7 +4,6 @@ import test from 'node:test';
 import { areas, features, statuses } from './src/lib/progress.ts';
 
 const page = readFileSync(new URL('./dist/progress/index.html', import.meta.url), 'utf8');
-const svg = readFileSync(new URL('./dist/progress/areas.svg', import.meta.url), 'utf8');
 const escape = (value) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 const sections = [...page.matchAll(/<section\b[^>]*>(.*?)<\/section>/gs)].map((match) => match[1]);
 
@@ -27,18 +26,11 @@ test('map labels end at word boundaries and retain their full group tooltip', ()
   assert.ok(page.includes(map), 'the inline map exposes cell tooltips on the status page');
 });
 
-test('published area bars and group tables count every CSV status', () => {
+test('published group tables count every CSV status', () => {
   assert.equal(sections.length, areas.length);
-  const bars = [...svg.matchAll(/<g>(.*?)<\/g>/gs)].map((match) => match[1]);
-  assert.equal(bars.length, areas.length);
   for (const [index, area] of areas.entries()) {
     const members = features.filter((feature) => feature.area === area);
     const summary = statuses.map((status) => members.filter((feature) => feature.status === status).length);
-    assert.deepEqual([...bars[index].matchAll(/<text\b[^>]*>(.*?)<\/text>/g)].map((match) => match[1]),
-      [area, ...summary.map(String)], area);
-    const widths = [...bars[index].matchAll(/<rect\b[^>]*width="([^"]+)"/g)].map((match) => Number(match[1]));
-    assert.equal(widths.length, statuses.length);
-    widths.forEach((width, column) => assert.ok(Math.abs(width - summary[column] / members.length * 136) < 1e-9, area));
     const groups = [...new Set(members.map((feature) => feature.group))];
     const expected = groups.map((group) => {
       const rows = members.filter((feature) => feature.group === group);

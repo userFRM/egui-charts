@@ -565,6 +565,224 @@ fn line_pulse_and_crosshair_marker_follow_their_bars() {
     }
 }
 
+/// Crosshair marker options of one series: radius, fill, border colour and border width.
+type MarkerStyle = (f32, Option<egui::Color32>, Option<egui::Color32>, f32);
+
+/// Hovers bar 50 of a main line (blue, prices 0..100, radius 5 markers) and an added line
+/// (green, prices 1000..3000, radius 7 markers) in the same pane or its own. `setup` runs
+/// before the frame. Returns the marker circles, the hover x, and the main and added pane
+/// rects.
+fn hover_markers(
+    kind: crate::model::ChartType,
+    pane: bool,
+    styles: (MarkerStyle, MarkerStyle),
+    setup: impl FnOnce(&mut crate::widget::Chart, crate::widget::SeriesId),
+) -> (Vec<egui::epaint::CircleShape>, f32, egui::Rect, egui::Rect) {
+    use crate::model::{Bar, SeriesScale};
+    use crate::widget::{SeriesId, SeriesOptions};
+    use egui::Color32;
+
+    let ctx = egui::Context::default();
+    let mut chart = chart(&[10.0], &[25.0]);
+    chart.config.show_volume = false;
+    chart.config.background_color = Color32::LIGHT_GRAY;
+    chart.chart_options.tooltip.enabled = false;
+    chart.set_chart_type(kind);
+    let mut params = chart.chart_type_params().clone();
+    params.styles.line.color = Color32::BLUE;
+    params.styles.step_line.color = Color32::BLUE;
+    params.styles.line_with_markers.color = Color32::BLUE;
+    params.styles.area.line.color = Color32::BLUE;
+    params.styles.baseline.above.color = Color32::BLUE;
+    params.styles.baseline.below.color = Color32::BLUE;
+    let (main, extra) = styles;
+    params.styles.crosshair_marker_radius = main.0;
+    params.styles.crosshair_marker_fill = main.1;
+    params.styles.crosshair_marker_border_color = main.2;
+    params.styles.crosshair_marker_border_width = main.3;
+    chart.set_chart_type_params(params);
+    let added = chart.add_series(SeriesOptions {
+        chart_type: kind,
+        color: Color32::GREEN,
+        up_color: Color32::GREEN,
+        down_color: Color32::GREEN,
+        scale: SeriesScale::Left,
+        crosshair_marker_radius: extra.0,
+        crosshair_marker_fill: extra.1,
+        crosshair_marker_border_color: extra.2,
+        crosshair_marker_border_width: extra.3,
+        ..Default::default()
+    });
+    if pane {
+        let id = chart.add_pane();
+        assert!(chart.move_series_to_pane(added, id));
+    }
+    let times: Vec<_> = chart
+        .bars(SeriesId::MAIN)
+        .iter()
+        .map(|bar| bar.time)
+        .collect();
+    chart.set_data(
+        added,
+        times
+            .iter()
+            .map(|time| Bar::from_value(*time, 2500.0))
+            .collect(),
+    );
+    chart
+        .series_price_scale_mut(SeriesId::MAIN)
+        .unwrap()
+        .set_range(0.0, 100.0);
+    chart
+        .series_price_scale_mut(added)
+        .unwrap()
+        .set_range(1000.0, 3000.0);
+    setup(&mut chart, added);
+    frame(&ctx, &mut chart, 0.0, vec![Event::PointerGone]);
+    let map = chart.get_chart_mapping();
+    let added_rect = if pane {
+        chart
+            .pane_layout
+            .panes
+            .iter()
+            .find(|p| p.members.contains(&added))
+            .unwrap()
+            .rect
+    } else {
+        map.rect
+    };
+    let x = map.idx_to_x(50);
+    let hover = Pos2::new(x, map.rect.center().y);
+    let circles = shapes(&ctx, &mut chart, 0.1, vec![Event::PointerMoved(hover)])
+        .into_iter()
+        .filter_map(|shape| match shape {
+            Shape::Circle(circle) if circle.radius == 5.0 || circle.radius == 7.0 => Some(circle),
+            _ => None,
+        })
+        .collect();
+    (circles, x, map.rect, added_rect)
+}
+
+/// Each series styles its hovered circle independently, on its own scale and pane. On the
+/// linear ranges, closes 25 and 2500 sit a quarter and three quarters up their pane.
+#[test]
+fn crosshair_marker_styles_follow_each_series_and_scale() {
+    use crate::model::ChartType;
+    use egui::{Color32, Stroke};
+
+    let ring = crate::tokens::DESIGN_TOKENS.stroke.thick;
+    // Each row: main style, added style, and the expected fill and stroke of both circles,
+    // with `None` for a hidden marker. `None` colours resolve to the line colour and to the
+    // chart background, set to light gray.
+    let rows: [(MarkerStyle, MarkerStyle, _, _); 5] = [
+        (
+            (5.0, None, None, ring),
+            (7.0, None, None, ring),
+            Some((Color32::BLUE, Stroke::new(ring, Color32::LIGHT_GRAY))),
+            Some((Color32::GREEN, Stroke::new(ring, Color32::LIGHT_GRAY))),
+        ),
+        (
+            (5.0, Some(Color32::GOLD), Some(Color32::MAGENTA), 3.0),
+            (7.0, None, Some(Color32::CYAN), 0.0),
+            Some((Color32::GOLD, Stroke::new(3.0, Color32::MAGENTA))),
+            Some((Color32::GREEN, Stroke::NONE)),
+        ),
+        (
+            (5.0, Some(Color32::TRANSPARENT), Some(Color32::RED), 1.0),
+            (7.0, Some(Color32::YELLOW), None, 4.0),
+            Some((Color32::TRANSPARENT, Stroke::new(1.0, Color32::RED))),
+            Some((Color32::YELLOW, Stroke::new(4.0, Color32::LIGHT_GRAY))),
+        ),
+        (
+            (5.0, None, None, -1.0),
+            (7.0, None, None, f32::NAN),
+            Some((Color32::BLUE, Stroke::NONE)),
+            Some((Color32::GREEN, Stroke::NONE)),
+        ),
+        (
+            (0.0, None, None, ring),
+            (f32::NAN, None, None, ring),
+            None,
+            None,
+        ),
+    ];
+    for kind in [
+        ChartType::Line,
+        ChartType::StepLine,
+        ChartType::LineWithMarkers,
+        ChartType::Area,
+        ChartType::Baseline,
+    ] {
+        for pane in [false, true] {
+            for (main, added, expect_main, expect_added) in rows {
+                let (circles, x, main_rect, added_rect) =
+                    hover_markers(kind, pane, (main, added), |_, _| {});
+                for (radius, rect, fraction, expected) in [
+                    (5.0, main_rect, 0.25, expect_main),
+                    (7.0, added_rect, 0.75, expect_added),
+                ] {
+                    let found = circles.iter().find(|circle| circle.radius == radius);
+                    let case = format!("{kind:?}, pane {pane}, {main:?} {added:?}");
+                    let Some((fill, stroke)) = expected else {
+                        assert!(found.is_none(), "{case}: {found:?}");
+                        continue;
+                    };
+                    let circle = found.unwrap_or_else(|| panic!("{case}: {circles:?}"));
+                    let at = Pos2::new(x, rect.bottom() - fraction * rect.height());
+                    assert!(circle.center.distance(at) < 0.01, "{case}: {circle:?}");
+                    assert_eq!((circle.fill, circle.stroke), (fill, stroke), "{case}");
+                }
+            }
+        }
+    }
+}
+
+/// Hidden series, a hidden crosshair, and a hovered time without a valued bar draw no marker
+/// for the affected series only.
+#[test]
+fn crosshair_marker_is_suppressed_for_hidden_and_missing_bars() {
+    use crate::model::{Bar, ChartType};
+    use crate::widget::SeriesId;
+
+    let style = (5.0, None, None, 2.0);
+    let added_style = (7.0, None, None, 2.0);
+    for pane in [false, true] {
+        // (hide main, hide added, hide crosshair, empty main bar, empty added bar) and the
+        // radii that remain.
+        let cases: [([bool; 5], &[f32]); 5] = [
+            ([true, false, false, false, false], &[7.0]),
+            ([false, true, false, false, false], &[5.0]),
+            ([false, false, true, false, false], &[]),
+            ([false, false, false, true, false], &[7.0]),
+            ([false, false, false, false, true], &[5.0]),
+        ];
+        for (flags, radii) in cases {
+            let (circles, ..) = hover_markers(
+                ChartType::Line,
+                pane,
+                (style, added_style),
+                |chart, added| {
+                    chart.set_main_series_visible(!flags[0]);
+                    chart.set_series_visible(added, !flags[1]);
+                    if flags[2] {
+                        chart.chart_options.crosshair.style = crate::config::CrosshairStyle::Hidden;
+                    }
+                    for (id, empty) in [(SeriesId::MAIN, flags[3]), (added, flags[4])] {
+                        let mut bars = chart.bars(id).to_vec();
+                        if empty {
+                            bars[50] = Bar::whitespace(bars[50].time);
+                        }
+                        chart.set_data(id, bars);
+                    }
+                },
+            );
+            let mut found: Vec<f32> = circles.iter().map(|circle| circle.radius).collect();
+            found.sort_by(f32::total_cmp);
+            assert_eq!(found, radii, "pane {pane}, {flags:?}");
+        }
+    }
+}
+
 /// Held values appear only for a pressed pointer and disappear on release or disable. A
 /// hidden crosshair keeps them and shows no axis label while the pointer is held.
 #[test]
@@ -652,6 +870,180 @@ fn held_values_follow_press_release_and_switch() {
                 );
                 assert!(painted.iter().any(|shape| matches!(shape, Shape::Text(text)
                     if text.galley.text() == "110.00" && text.galley.job.sections[0].format.color == egui::Color32::BLUE)));
+            }
+        }
+    }
+}
+
+/// Touch holds respect their delay, move without panning, and exit by release or a later tap.
+/// Short taps, cancelled contacts and a pan started before the delay cannot latch a readout.
+#[test]
+fn touch_readout_tracks_and_exits_without_following_the_live_edge() {
+    use crate::config::TouchTrackingExitMode;
+    use egui::TouchPhase::{Cancel, End, Move, Start};
+
+    for panes in [false, true] {
+        for mode in [
+            TouchTrackingExitMode::OnTouchEnd,
+            TouchTrackingExitMode::OnNextTap,
+        ] {
+            let ctx = egui::Context::default();
+            ctx.options_mut(|options| options.input_options.max_click_duration = 0.3);
+            let mut chart = chart(&[100.0], &[110.0, 120.0]);
+            chart.config.show_volume = false;
+            chart.chart_options.tooltip.on_long_press = true;
+            chart.chart_options.tooltip.long_press_delay = std::time::Duration::from_millis(800);
+            chart.chart_options.tooltip.touch_exit_mode = mode;
+            chart.chart_options.crosshair.vert_line_color = egui::Color32::MAGENTA;
+            let pane_series = panes.then(|| {
+                let id = chart.add_series(Default::default());
+                chart.set_data(id, chart.bars(crate::widget::SeriesId::MAIN).to_vec());
+                let pane = chart.add_pane();
+                assert!(chart.move_series_to_pane(id, pane));
+                id
+            });
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            chart.apply_synced_time_scale(6.0, -10.0);
+            frame(&ctx, &mut chart, 0.1, vec![]);
+            let viewport = chart.get_time_scale_state();
+            let map = chart.get_chart_mapping();
+            let y = pane_series.map_or(map.rect.center().y, |id| {
+                chart.series_price_map(id).unwrap().price_to_y(115.0)
+            });
+            let point = |index| Pos2::new(map.idx_to_x(index), y);
+            let touch = |phase, index| {
+                let pos = point(index);
+                let mut events = vec![
+                    Event::Touch {
+                        device_id: egui::TouchDeviceId(1),
+                        id: egui::TouchId(1),
+                        phase,
+                        pos,
+                        force: None,
+                    },
+                    Event::PointerMoved(pos),
+                ];
+                if phase != Move {
+                    events.push(Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: phase == Start,
+                        modifiers: Default::default(),
+                    });
+                }
+                if matches!(phase, End | Cancel) {
+                    events.push(Event::PointerGone);
+                }
+                events
+            };
+            let latched = mode == TouchTrackingExitMode::OnNextTap;
+            let jitter = point(50) + egui::vec2(2.0, 1.0);
+            for (time, events, expected, index) in [
+                (1.0, touch(Start, 50), false, 50),
+                (
+                    1.4,
+                    vec![
+                        Event::Touch {
+                            device_id: egui::TouchDeviceId(1),
+                            id: egui::TouchId(1),
+                            phase: Move,
+                            pos: jitter,
+                            force: None,
+                        },
+                        Event::PointerMoved(jitter),
+                    ],
+                    false,
+                    50,
+                ),
+                (1.7, vec![], false, 50),
+                (1.81, vec![], true, 50),
+                (1.9, touch(Move, 54), true, 54),
+                (2.0, touch(End, 55), latched, 55),
+                (2.1, vec![], latched, 55),
+                (2.2, touch(Start, 60), latched, 55),
+                (2.3, touch(End, 60), false, 60),
+                (3.0, touch(Start, 50), false, 50),
+                (3.1, touch(End, 50), false, 50),
+                (4.0, touch(Start, 50), false, 50),
+                (4.81, vec![], true, 50),
+                (4.9, touch(Cancel, 50), false, 50),
+                (5.8, vec![], false, 50),
+                (6.0, touch(Start, 50), false, 50),
+                (6.1, touch(Cancel, 50), false, 50),
+                (6.9, vec![], false, 50),
+                (7.0, touch(Start, 50), false, 50),
+                (7.81, vec![], true, 50),
+                (
+                    7.9,
+                    vec![Event::Touch {
+                        device_id: egui::TouchDeviceId(1),
+                        id: egui::TouchId(2),
+                        phase: Start,
+                        pos: point(60),
+                        force: None,
+                    }],
+                    false,
+                    50,
+                ),
+                (8.8, vec![], false, 50),
+                (
+                    8.9,
+                    vec![Event::Touch {
+                        device_id: egui::TouchDeviceId(1),
+                        id: egui::TouchId(2),
+                        phase: End,
+                        pos: point(60),
+                        force: None,
+                    }],
+                    false,
+                    50,
+                ),
+                (9.0, touch(End, 50), false, 50),
+            ] {
+                let painted = shapes(&ctx, &mut chart, time, events);
+                assert_eq!(
+                    painted.iter().any(|shape| matches!(shape, Shape::Text(text)
+                        if text.galley.text() == "Open")),
+                    expected,
+                    "{mode:?}, panes {panes}, time {time}"
+                );
+                assert_eq!(
+                    painted.iter().any(|shape| matches!(shape,
+                        Shape::LineSegment { points, stroke }
+                            if stroke.color == egui::Color32::MAGENTA && points[0].x == points[1].x
+                    )),
+                    expected,
+                    "crosshair: {mode:?}, panes {panes}, time {time}"
+                );
+                if expected {
+                    assert_eq!(chart.last_hover_bar_idx, Some(index as f64));
+                    let close = chart.state.shown()[index].close;
+                    assert!(painted.iter().any(|shape| matches!(shape, Shape::Text(text)
+                        if text.galley.text() == format!("{close:.2}"))));
+                }
+                assert_eq!(chart.get_time_scale_state(), viewport, "time {time}");
+                assert!(!chart.tracking_mode_active);
+                assert!(
+                    chart.take_right_click().is_none(),
+                    "a hold belongs to the readout"
+                );
+            }
+            frame(&ctx, &mut chart, 10.0, touch(Start, 50));
+            frame(&ctx, &mut chart, 10.1, touch(Move, 54));
+            for (time, events) in [(10.9, vec![]), (11.0, touch(End, 54)), (11.1, vec![])] {
+                let painted = shapes(&ctx, &mut chart, time, events);
+                assert!(
+                    !painted.iter().any(|shape| matches!(shape, Shape::Text(text)
+                    if text.galley.text() == "Open")),
+                    "a pan cannot become a hold"
+                );
+            }
+            if !panes {
+                assert_ne!(
+                    chart.get_time_scale_state(),
+                    viewport,
+                    "touch panning still works"
+                );
             }
         }
     }

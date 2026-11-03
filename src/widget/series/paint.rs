@@ -115,7 +115,7 @@ impl Chart {
             bearish_border: None,
             bullish_wick: None,
             bearish_wick: None,
-            candle_border_width: 0.0,
+            candle_border_width: options.candle_border_width,
         };
         let context = RenderContext::new(plot, rect);
         let clock = self.bar_clock();
@@ -207,6 +207,47 @@ impl Chart {
         }
         if item.marker_options.z_order == MarkerZOrder::Normal || self.in_pane(item.id) {
             self.paint_series_markers(plot, rect, item, map);
+        }
+    }
+
+    /// Paints `item`'s crosshair marker at the shown bar's time, using its own price map.
+    pub(in crate::widget) fn paint_series_crosshair_marker(
+        &self,
+        plot: &egui::Painter,
+        rect: Rect,
+        item: &PriceSeries,
+        map: PriceMap,
+        index: usize,
+    ) {
+        let Some(time) = self.state.shown().get(index).map(|bar| bar.time) else {
+            return;
+        };
+        let Ok(at) = item.bars.binary_search_by_key(&time, |bar| bar.time) else {
+            return;
+        };
+        let bar = &item.bars[at];
+        let params = item.options.type_params();
+        if let Some(color) = rendering::candles::line_color_at(
+            item.options.chart_type,
+            &params.styles,
+            params.baseline,
+            &map,
+            rect,
+            bar.close,
+            bar,
+        ) {
+            let x = self.state.time_scale().idx_to_coord_precise(
+                index as f64,
+                rect.left(),
+                rect.width(),
+            );
+            rendering::candles::render_crosshair_marker(
+                &plot.with_clip_rect(plot.clip_rect().intersect(rect)),
+                Pos2::new(x, map.price_to_y(bar.close)),
+                &params.styles,
+                color,
+                self.config.background_color,
+            );
         }
     }
 

@@ -498,8 +498,7 @@ pub struct DemoApp {
     toasts: Toasts,
     /// Handle of the demo's price line, moved and removed from the chart menu.
     demo_level: Option<egui_charts::widget::PriceLineId>,
-    /// Whether the sample panels, markers, change marks, bar marks and demo level are on, from the
-    /// quick search.
+    /// Whether the showcase panels and overlays are enabled for this session.
     api_samples: bool,
     annotation_editor: bool,
     annotation_series: SeriesId,
@@ -523,7 +522,7 @@ fn sample_widgets() -> [WidgetBarWidget; 2] {
 }
 
 impl DemoApp {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Box<Self> {
         Self::new_at(cc, chrono::Utc::now(), false)
     }
 
@@ -531,7 +530,7 @@ impl DemoApp {
         cc: &eframe::CreationContext<'_>,
         now: chrono::DateTime<chrono::Utc>,
         paused: bool,
-    ) -> Self {
+    ) -> Box<Self> {
         // Register egui's image loaders so the embedded SVG toolbar icons decode.
         egui_extras::install_image_loaders(&cc.egui_ctx);
         cc.egui_ctx.include_bytes(SAMPLE_LOGO, SAMPLE_LOGO_SVG);
@@ -646,7 +645,8 @@ impl DemoApp {
 
         let alert_live = Arc::new(live.fork());
         alert_live.set_view(SessionType::RTH, false);
-        let mut app = Self {
+        // Keep the controller off callers' stacks, including tests that restart it.
+        let mut app = Box::new(Self {
             chart,
             order_flow: egui_charts::ui::widget_bar::OrderFlowPanel::new(live.detectors()),
             live,
@@ -725,7 +725,8 @@ impl DemoApp {
             open_panel: cc
                 .storage
                 .and_then(|storage| eframe::get_value(storage, "open_panel"))
-                .flatten(),
+                .flatten()
+                .filter(|panel| *panel != SidePanel::TimeAndSales),
             data_window_expanded: true,
             alerts: AlertsPanel::default(),
             alert_host: {
@@ -831,7 +832,7 @@ impl DemoApp {
             api_samples: false,
             annotation_editor: false,
             annotation_series: SeriesId::MAIN,
-        };
+        });
         app.drawing_toolbar
             .set_control_visible(egui_charts::ui::Control::Trading, false);
         app.settings_dialog
@@ -913,13 +914,6 @@ impl DemoApp {
                     .toasts
                     .error(format!("Could not restore detectors: {error}")),
             }
-        }
-        if cc
-            .storage
-            .and_then(|storage| eframe::get_value(storage, "api_samples"))
-            .unwrap_or(false)
-        {
-            app.execute_search_command(&cc.egui_ctx, "samples");
         }
         app
     }
@@ -1459,7 +1453,7 @@ impl eframe::App for DemoApp {
         let current = self.user_settings();
         self.settings.flush(&current);
         eframe::set_value(storage, "detectors", &self.live.detectors().settings());
-        eframe::set_value(storage, "api_samples", &self.api_samples);
+        storage.remove_string("api_samples");
         eframe::set_value(storage, "event_visibility", self.chart.event_visibility());
         eframe::set_value(storage, "open_panel", &self.open_panel);
         eframe::set_value(
@@ -2954,11 +2948,8 @@ impl DemoApp {
                                     .iter()
                                     .any(|spread| spread.loading(&extra.chart)))
                     });
+                // Paused charts still need frames to finish their comparison and spread feeds.
                 if loading {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label("Loading chart data…");
-                    });
                     ui.ctx().request_repaint();
                 }
                 if self.api_samples
@@ -3854,10 +3845,10 @@ mod tests {
         assert!(!app.live.loading());
     }
 
-    /// The initial history yields to input while the chart is paused, then finishes normally
-    /// and answers the symbol details from the complete history.
+    /// Cached bars paint immediately while bootstrap yields to input, then symbol details
+    /// use the complete history.
     #[test]
-    fn initial_history_shows_loading_and_keeps_keyboard_input_responsive() {
+    fn initial_history_is_visible_while_bootstrap_keeps_keyboard_input_responsive() {
         fn texts(
             app: &mut DemoApp,
             ctx: &egui::Context,
@@ -3886,9 +3877,16 @@ mod tests {
             texts
         }
         fn frame(app: &mut DemoApp, ctx: &egui::Context, events: Vec<egui::Event>) -> bool {
-            texts(app, ctx, events)
-                .iter()
-                .any(|(text, _)| text == "Loading chart data…")
+            let texts = texts(app, ctx, events);
+            assert!(
+                !app.chart.bars(SeriesId::MAIN).is_empty(),
+                "history must be visible on every frame, including the first"
+            );
+            assert!(
+                texts.iter().all(|(text, _)| !text.contains("Loading")),
+                "bootstrap must not paint a loading indicator"
+            );
+            app.live.loading()
         }
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
@@ -3897,7 +3895,7 @@ mod tests {
         app.live.set_paused(true);
         assert!(
             frame(&mut app, &ctx, Vec::new()),
-            "the first frame must expose the pending load"
+            "showing history must not finish bootstrap on the first frame"
         );
         assert!(frame(
             &mut app,
@@ -4422,7 +4420,7 @@ mod tests {
         };
         frame(&mut app.chart);
         let mut storage = AppStorage::default();
-        eframe::App::save(&mut app, &mut storage);
+        eframe::App::save(&mut *app, &mut storage);
         let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
         cc.storage = Some(&storage);
         let mut restored = DemoApp::new(&cc);
@@ -4501,7 +4499,7 @@ mod tests {
         app.stop_replay();
         assert!(app.extra_charts[0].chart.replay_time().is_none());
         let mut storage = AppStorage::default();
-        eframe::App::save(&mut app, &mut storage);
+        eframe::App::save(&mut *app, &mut storage);
         let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
         cc.storage = Some(&storage);
         let mut restored = DemoApp::new(&cc);
@@ -4639,23 +4637,79 @@ mod tests {
                 let mut events = app.chart.event_visibility().clone();
                 events.show_news = true;
                 app.chart.set_event_visibility(events.clone());
-                app.open_panel = Some(SidePanel::OrderFlow);
                 app.execute_search_command(&ctx, "samples");
-                let mut storage = AppStorage::default();
-                app.save(&mut storage);
-                let mut cc = eframe::CreationContext::_new_kittest(egui::Context::default());
-                cc.storage = Some(&storage);
-                let restored = DemoApp::new_at(&cc, now, true);
-                assert_eq!(restored.live.detectors().settings(), settings);
-                assert!(restored.open_panel == Some(SidePanel::OrderFlow));
-                assert!(restored.api_samples);
-                assert_eq!(restored.chart.event_visibility(), &events);
+                // Matching labels alone must not discard annotations the visitor added.
+                let mut markers = app.chart.markers(SeriesId::MAIN).to_vec();
+                markers.push(egui_charts::model::Marker::new(now).with_text("Fill"));
+                app.chart.set_markers(SeriesId::MAIN, markers);
+                app.chart.add_price_line(
+                    SeriesId::MAIN,
+                    egui_charts::model::PriceLine::new(320.0, egui::Color32::BLUE)
+                        .with_title("Demo level"),
+                );
+                for named in [false, true] {
+                    app.open_panel = Some(if named {
+                        SidePanel::TimeAndSales
+                    } else {
+                        SidePanel::OrderFlow
+                    });
+                    if named {
+                        app.handle_layout_action(
+                            egui_charts::ui::top_toolbar::components::layout_menu::LayoutAction::Save,
+                        );
+                        app.poll_storage(&ctx);
+                    }
+                    for legacy in [false, true] {
+                        let mut storage = AppStorage::default();
+                        // Saving also removes the old key from existing storage.
+                        eframe::set_value(&mut storage, "api_samples", &true);
+                        app.save(&mut storage);
+                        assert!(eframe::Storage::get_string(&storage, "api_samples").is_none());
+                        if legacy {
+                            eframe::set_value(&mut storage, "api_samples", &true);
+                        }
+                        let mut cc =
+                            eframe::CreationContext::_new_kittest(egui::Context::default());
+                        cc.storage = Some(&storage);
+                        let mut restored = DemoApp::new_at(&cc, now, true);
+                        restored.poll_storage(&cc.egui_ctx);
+                        assert_eq!(restored.live.detectors().settings(), settings);
+                        assert!(restored.open_panel == (!named).then_some(SidePanel::OrderFlow));
+                        assert!(!restored.api_samples);
+                        assert_eq!(restored.widget_bar.widgets.len(), 1);
+                        assert_eq!(restored.widget_bar.widgets[0].id, 5);
+                        let markers = restored.chart.markers(SeriesId::MAIN);
+                        assert_eq!(markers.len(), 1, "named={named}, legacy={legacy}");
+                        assert_eq!(markers[0].text.as_deref(), Some("Fill"));
+                        assert_eq!(markers[0].color, egui::Color32::PLACEHOLDER);
+                        let lines: Vec<_> = restored.chart.price_lines(SeriesId::MAIN).collect();
+                        assert_eq!(lines.len(), 1, "named={named}, legacy={legacy}");
+                        assert_eq!(lines[0].1.price, 320.0);
+                        assert_eq!(lines[0].1.color, egui::Color32::BLUE);
+                        assert_eq!(restored.chart.event_visibility(), &events);
+                        restored.execute_search_command(&cc.egui_ctx, "signals");
+                        assert!(restored.api_samples);
+                        assert_eq!(restored.widget_bar.widgets.len(), 3);
+                        assert_eq!(restored.chart.markers(SeriesId::MAIN).len(), 2);
+                    }
+                }
             }
         }
     }
 
     #[test]
     fn legacy_themes_follow_system_and_new_choices_survive_restart() {
+        // Repeated construction used to overflow this stack before checking the saved theme.
+        std::thread::Builder::new()
+            .name("theme-restarts".into())
+            .stack_size(512 * 1024)
+            .spawn(check_theme_restarts)
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    fn check_theme_restarts() {
         use eframe::App;
         use egui_charts::drawings::DrawingToolType;
         let cases = [

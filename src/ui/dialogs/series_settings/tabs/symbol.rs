@@ -3,9 +3,10 @@
 use crate::chart::series::SeriesSettings;
 use crate::localization as l10n;
 use crate::model::{
-    BaselineLevel, BoxSizeMethod, ChartType, LinePlotStyle, LineStyle, PriceBasedSource,
-    PriceSource,
+    BaselineLevel, BoxSizeMethod, ChartType, ChartTypeParams, FootprintColor, FootprintMode,
+    FootprintStatistic, LinePlotStyle, LineStyle, PriceBasedSource, PriceSource,
 };
+use crate::theme::ThemeExt;
 use crate::ui_kit::ext::UiExt;
 use crate::ui_kit::{ColorPicker, ColorPickerState, FormGrid};
 use egui::{Color32, RichText, Ui};
@@ -17,6 +18,18 @@ impl SymbolTab {
     /// Show the symbol tab content
     pub fn show(ui: &mut Ui, settings: &mut SeriesSettings) {
         ui.space_md();
+        match settings.chart_type {
+            ChartType::VolumeFootprint => {
+                let candles = [settings.bullish_color, settings.bearish_color];
+                Self::footprint(ui, &mut settings.chart_type_params, candles);
+                return;
+            }
+            ChartType::SessionVolumeProfile => {
+                Self::profile(ui, &mut settings.chart_type_params);
+                return;
+            }
+            _ => {}
+        }
 
         ui.label(
             RichText::new(l10n::text(ui.ctx(), settings.chart_type.name()))
@@ -96,6 +109,350 @@ impl SymbolTab {
                     Self::candle_colors_section(ui, settings);
                 }
                 _ => Self::candle_colors_section(ui, settings),
+            }
+        });
+    }
+
+    fn section(ui: &mut Ui, name: &str, open: bool, content: impl FnOnce(&mut Ui)) {
+        egui::CollapsingHeader::new(l10n::text(ui.ctx(), name))
+            .default_open(open)
+            .show(ui, |ui| {
+                FormGrid::new(name).show(ui, content);
+            });
+    }
+
+    fn switch(ui: &mut Ui, name: &str, value: &mut bool) {
+        let label = ui.label(l10n::text(ui.ctx(), name));
+        ui.checkbox(value, "").labelled_by(label.id);
+        ui.end_row();
+    }
+
+    fn optional_number(
+        ui: &mut Ui,
+        name: &str,
+        value: &mut Option<f64>,
+        default: f64,
+        range: std::ops::RangeInclusive<f64>,
+        suffix: &str,
+    ) {
+        let mut enabled = value.is_some();
+        let label = ui.checkbox(&mut enabled, l10n::text(ui.ctx(), name));
+        if enabled != value.is_some() {
+            *value = enabled.then_some(default);
+        }
+        if let Some(value) = value {
+            ui.add(
+                egui::DragValue::new(value)
+                    .range(range)
+                    .speed(0.1)
+                    .suffix(suffix),
+            )
+            .labelled_by(label.id);
+        } else {
+            ui.label("");
+        }
+        ui.end_row();
+    }
+
+    fn mode_name(mode: &FootprintMode) -> String {
+        match mode {
+            FootprintMode::BidAsk => "Bid × ask",
+            FootprintMode::Volume => "Volume",
+            FootprintMode::Delta => "Delta",
+            FootprintMode::DeltaVolume => "Delta / volume",
+            FootprintMode::DominantSide => "Dominant side",
+        }
+        .to_owned()
+    }
+
+    /// `candles` are the chart's up and down colours, which unset buy and sell colours follow.
+    fn footprint(ui: &mut Ui, params: &mut ChartTypeParams, [up, down]: [Color32; 2]) {
+        ui.strong(l10n::text(ui.ctx(), "Footprint"));
+        Self::section(ui, "Display", true, |ui| {
+            let label = ui.label(l10n::text(ui.ctx(), "Columns"));
+            let mut count = params.footprint_modes.len().clamp(1, 4);
+            if ui
+                .add(egui::DragValue::new(&mut count).range(1..=4))
+                .labelled_by(label.id)
+                .changed()
+            {
+                params.footprint_modes.resize(count, FootprintMode::Volume);
+            }
+            ui.end_row();
+            for (i, mode) in params.footprint_modes.iter_mut().take(4).enumerate() {
+                let label = ui.label(format!("{} {}", l10n::text(ui.ctx(), "Column"), i + 1));
+                ui.label_inputs_by(label.id, |ui| {
+                    ui.combo_select(
+                        ("footprint_column", i),
+                        mode,
+                        [
+                            FootprintMode::BidAsk,
+                            FootprintMode::Volume,
+                            FootprintMode::Delta,
+                            FootprintMode::DeltaVolume,
+                            FootprintMode::DominantSide,
+                        ],
+                        Self::mode_name,
+                    );
+                });
+                ui.end_row();
+            }
+            Self::switch(ui, "Profile in bar", &mut params.footprint_profile);
+            let label = ui.label(l10n::text(ui.ctx(), "Colouring"));
+            ui.label_inputs_by(label.id, |ui| {
+                ui.combo_select(
+                    "footprint_colour",
+                    &mut params.footprint_color_by,
+                    [
+                        FootprintColor::Volume,
+                        FootprintColor::Delta,
+                        FootprintColor::Imbalance,
+                        FootprintColor::Fixed,
+                        FootprintColor::DeltaOpacity,
+                    ],
+                    |color| {
+                        match color {
+                            FootprintColor::Volume => "Volume",
+                            FootprintColor::Delta => "Delta",
+                            FootprintColor::Imbalance => "Imbalance",
+                            FootprintColor::Fixed => "Fixed",
+                            FootprintColor::DeltaOpacity => "Delta opacity",
+                        }
+                        .to_owned()
+                    },
+                );
+            });
+            ui.end_row();
+            let text = ui.active_theme().chart.axis_text;
+            for (i, (name, default)) in [
+                ("Buy colour", up),
+                ("Sell colour", down),
+                ("Text colour", text),
+                ("Neutral colour", text),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let label = ui.label(l10n::text(ui.ctx(), name));
+                ui.horizontal(|ui| {
+                    let color = &mut params.footprint_colors[i];
+                    let mut selected = color.unwrap_or(default);
+                    if Self::color_picker(ui, &mut selected) {
+                        *color = Some(selected);
+                    }
+                    if ui
+                        .small_button(l10n::text(ui.ctx(), "Auto"))
+                        .labelled_by(label.id)
+                        .clicked()
+                    {
+                        *color = None;
+                    }
+                });
+                ui.end_row();
+            }
+        });
+        Self::section(ui, "Rows", true, |ui| {
+            let label = ui.label(l10n::text(ui.ctx(), "Grouping"));
+            let mut automatic = params.footprint_row_ticks == 0;
+            let previous = automatic;
+            ui.label_inputs_by(label.id, |ui| {
+                ui.combo_select("footprint_rows", &mut automatic, [true, false], |auto| {
+                    if *auto {
+                        "Automatic by zoom"
+                    } else {
+                        "Fixed ticks"
+                    }
+                    .to_owned()
+                });
+            });
+            if automatic != previous {
+                params.footprint_row_ticks = if automatic { 0 } else { 1 };
+            }
+            ui.end_row();
+            if !automatic {
+                let label = ui.label(l10n::text(ui.ctx(), "Ticks per row"));
+                ui.add(egui::DragValue::new(&mut params.footprint_row_ticks).range(1..=1_000_000))
+                    .labelled_by(label.id);
+                ui.end_row();
+            }
+        });
+        Self::section(ui, "Levels", true, |ui| {
+            Self::switch(ui, "Point of control", &mut params.footprint_poc);
+            Self::value_area(ui, &mut params.footprint_value_area);
+        });
+        Self::section(ui, "Imbalance", true, |ui| {
+            let label = ui.label(l10n::text(ui.ctx(), "Ratio"));
+            ui.add(
+                egui::DragValue::new(&mut params.footprint_imbalance_ratio)
+                    .range(1.0..=1000.0)
+                    .speed(0.1)
+                    .suffix(":1"),
+            )
+            .labelled_by(label.id);
+            ui.end_row();
+            let label = ui.label(l10n::text(ui.ctx(), "Comparison"));
+            ui.label_inputs_by(label.id, |ui| {
+                ui.combo_select(
+                    "footprint_comparison",
+                    &mut params.footprint_diagonal,
+                    [true, false],
+                    |d| if *d { "Diagonal" } else { "Same price" }.to_owned(),
+                );
+            });
+            ui.end_row();
+            let label = ui.label(l10n::text(ui.ctx(), "Minimum volume"));
+            ui.add(
+                egui::DragValue::new(&mut params.footprint_imbalance_min_volume)
+                    .range(0.0..=f64::MAX)
+                    .speed(0.1),
+            )
+            .labelled_by(label.id);
+            ui.end_row();
+        });
+        Self::section(ui, "Annotations", false, |ui| {
+            for (name, value) in [
+                (
+                    "Stacked imbalances",
+                    &mut params.footprint_stacked_imbalances,
+                ),
+                ("Unrevisited POC", &mut params.footprint_naked_poc),
+                ("Delta POC", &mut params.footprint_delta_poc),
+                (
+                    "Unfinished auctions",
+                    &mut params.footprint_unfinished_auctions,
+                ),
+                (
+                    "Extreme ask/bid ratios",
+                    &mut params.footprint_extreme_ratio,
+                ),
+                ("Pullback", &mut params.footprint_pullback),
+            ] {
+                Self::switch(ui, name, value);
+            }
+            if params.footprint_stacked_imbalances {
+                let label = ui.label(l10n::text(ui.ctx(), "Adjacent imbalances"));
+                ui.add(egui::DragValue::new(&mut params.footprint_stack).range(1..=1000))
+                    .labelled_by(label.id);
+                ui.end_row();
+            }
+            let mut cluster = params.footprint_cluster_share.map(|share| share * 100.0);
+            Self::optional_number(ui, "Volume clusters", &mut cluster, 25.0, 0.0..=100.0, "%");
+            if cluster != params.footprint_cluster_share.map(|share| share * 100.0) {
+                params.footprint_cluster_share = cluster.map(|percent| percent / 100.0);
+            }
+            Self::optional_number(
+                ui,
+                "Single prints: maximum volume",
+                &mut params.footprint_single_print_max,
+                1.0,
+                0.0..=f64::MAX,
+                "",
+            );
+            Self::optional_number(
+                ui,
+                "Delta markers",
+                &mut params.footprint_delta_percent,
+                50.0,
+                0.0..=100.0,
+                "%",
+            );
+            Self::optional_number(
+                ui,
+                "Bid/ask ratio markers",
+                &mut params.footprint_ratio,
+                3.0,
+                1.0..=1000.0,
+                ":1",
+            );
+        });
+        Self::section(ui, "Numbers", true, |ui| {
+            Self::switch(ui, "Abbreviation", &mut params.footprint_abbreviate);
+            Self::switch(ui, "Zero values", &mut params.footprint_show_zero);
+            for (i, name) in ["Minimum font size", "Maximum font size"]
+                .into_iter()
+                .enumerate()
+            {
+                let label = ui.label(l10n::text(ui.ctx(), name));
+                ui.add(
+                    egui::DragValue::new(&mut params.footprint_font_size[i])
+                        .range(8.0..=24.0)
+                        .suffix(l10n::text(ui.ctx(), " pt")),
+                )
+                .labelled_by(label.id);
+                ui.end_row();
+            }
+        });
+        Self::section(ui, "Statistics", true, |ui| {
+            Self::switch(ui, "Bar statistics", &mut params.footprint_statistics);
+            if params.footprint_statistics {
+                for row in FootprintStatistic::ALL {
+                    let mut enabled = params.footprint_statistics_rows.contains(&row);
+                    let name = if row == FootprintStatistic::Volume {
+                        "Volume"
+                    } else {
+                        row.label()
+                    };
+                    let was_enabled = enabled;
+                    Self::switch(ui, name, &mut enabled);
+                    if enabled != was_enabled {
+                        let rows = &params.footprint_statistics_rows;
+                        params.footprint_statistics_rows = FootprintStatistic::ALL
+                            .into_iter()
+                            .filter(|r| if *r == row { enabled } else { rows.contains(r) })
+                            .collect();
+                    }
+                }
+            }
+        });
+    }
+
+    fn value_area(ui: &mut Ui, share: &mut Option<f64>) {
+        let mut percent = share.map(|share| share * 100.0);
+        Self::optional_number(ui, "Value area", &mut percent, 70.0, 1.0..=100.0, "%");
+        if percent != share.map(|share| share * 100.0) {
+            *share = percent.map(|percent| percent / 100.0);
+        }
+    }
+
+    fn profile(ui: &mut Ui, params: &mut ChartTypeParams) {
+        ui.strong(l10n::text(ui.ctx(), "Profile"));
+        FormGrid::new("execution_profile_settings").show(ui, |ui| {
+            let profile = &mut params.profile;
+            let label = ui.label(l10n::text(ui.ctx(), "Display mode"));
+            ui.label_inputs_by(label.id, |ui| {
+                ui.combo_select(
+                    "profile_mode",
+                    &mut profile.mode,
+                    [
+                        FootprintMode::BidAsk,
+                        FootprintMode::Volume,
+                        FootprintMode::Delta,
+                    ],
+                    Self::mode_name,
+                );
+            });
+            ui.end_row();
+            Self::value_area(ui, &mut profile.value_area);
+            Self::switch(ui, "Value area guides", &mut profile.value_area_guides);
+            Self::switch(ui, "Developing POC", &mut profile.developing_poc);
+            let mut nodes = profile.nodes.is_some();
+            Self::switch(ui, "Volume nodes", &mut nodes);
+            if nodes != profile.nodes.is_some() {
+                profile.nodes = nodes.then(Default::default);
+            }
+            if let Some(nodes) = &mut profile.nodes {
+                let label = ui.label(l10n::text(ui.ctx(), "Node smoothing"));
+                ui.add(egui::DragValue::new(&mut nodes.smoothing).range(0..=1000))
+                    .labelled_by(label.id);
+                ui.end_row();
+                let label = ui.label(l10n::text(ui.ctx(), "Node prominence"));
+                ui.add(
+                    egui::DragValue::new(&mut nodes.prominence)
+                        .range(0.0..=1.0)
+                        .speed(0.01),
+                )
+                .labelled_by(label.id);
+                ui.end_row();
             }
         });
     }
@@ -409,7 +766,7 @@ impl SymbolTab {
         }
     }
 
-    pub(super) fn color_picker(ui: &mut Ui, color: &mut Color32) {
+    pub(super) fn color_picker(ui: &mut Ui, color: &mut Color32) -> bool {
         let id = ui.next_auto_id();
         let mut state = ui
             .data(|data| data.get_temp::<ColorPickerState>(id))
@@ -417,10 +774,12 @@ impl SymbolTab {
         if !state.is_open {
             state.sel_color = *color;
         }
-        if let Some(selected) = ColorPicker::new(&mut state, id).show(ui).inner {
+        let picked = ColorPicker::new(&mut state, id).show(ui).inner;
+        if let Some(selected) = picked {
             *color = selected;
         }
         ui.data_mut(|data| data.insert_temp(id, state));
+        picked.is_some()
     }
 
     fn optional_color_picker(ui: &mut Ui, color: &mut Option<Color32>, default: Color32) {
