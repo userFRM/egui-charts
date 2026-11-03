@@ -20,7 +20,7 @@ enum Scene {
     Theme(scenes::theme::Presentation),
     Panes(scenes::panes::Panes),
     Live(scenes::studies::LiveData),
-    HostReadout(scenes::recipes::HostReadout),
+    HostReadout(Box<scenes::recipes::HostReadout>),
     Synchronized(Box<scenes::recipes::Synchronized>),
     Export(scenes::recipes::Export),
 }
@@ -47,7 +47,7 @@ impl ExampleApp {
                 chart
             }
             "host-readout" => {
-                scene = Scene::HostReadout(scenes::recipes::HostReadout::default());
+                scene = Scene::HostReadout(Box::default());
                 first_chart::first_chart()
             }
             "synchronized" => {
