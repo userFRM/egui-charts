@@ -9,14 +9,20 @@
 //! its own: a study supplies the values, and its renderer draws them, keeps the zero baseline in
 //! the pane's range and shows a pointing hand over each head. The prices are generated sample
 //! data, not market data.
+//!
+//! The Categorical keys tab supplies an ordered enum directly to a horizontal scale. Bars,
+//! a marker, axis labels and the crosshair use those keys without host-generated dates.
 
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use egui::{Color32, CursorIcon, Painter, Pos2, Rect, Stroke};
 use egui_charts::model::{Bar, BarData};
+use egui_charts::scales::CustomHorizontalScale;
 use egui_charts::studies::{CustomIndicator, IndicatorValue};
+use egui_charts::theme::ThemeExt;
 use egui_charts::widget::{
     Chart, Primitive, PrimitivePass, PrimitiveView, SeriesId, TimeAxisLabel,
 };
+use std::sync::Arc;
 
 fn main() -> eframe::Result {
     let mut app = PrimitivesExample::new();
@@ -29,6 +35,8 @@ fn main() -> eframe::Result {
 
 pub(crate) struct PrimitivesExample {
     pub(crate) chart: Chart,
+    categories: Chart,
+    show_categories: bool,
 }
 
 impl PrimitivesExample {
@@ -52,14 +60,90 @@ impl PrimitivesExample {
         .with_overlay(false)
         .with_color(Color32::from_rgb(255, 152, 0));
         chart.add_custom_series(Box::new(range), Lollipops);
-        Self { chart }
+        Self {
+            chart,
+            categories: categorical_chart(),
+            show_categories: false,
+        }
     }
 
     pub(crate) fn ui(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default().show(ui, |ui| {
-            self.chart.show(ui);
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.show_categories, false, "Time primitives");
+                ui.selectable_value(&mut self.show_categories, true, "Categorical keys");
+            });
+            if self.show_categories {
+                self.categories
+                    .set_theme(ui.ctx(), &ui.ctx().active_theme());
+                self.categories.show(ui);
+            } else {
+                self.chart.show(ui);
+            }
         });
     }
+}
+
+/// Domain order is independent of the alphabetical order of the displayed labels.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Phase {
+    Open,
+    Morning,
+    Auction,
+    Afternoon,
+    Close,
+}
+
+fn categorical_chart() -> Chart {
+    let keys = [
+        Phase::Open,
+        Phase::Morning,
+        Phase::Auction,
+        Phase::Afternoon,
+        Phase::Close,
+    ];
+    let scale = Arc::new(CustomHorizontalScale::new(keys, |phase| {
+        match phase {
+            Phase::Open => "Open",
+            Phase::Morning => "Morning",
+            Phase::Auction => "Auction",
+            Phase::Afternoon => "Afternoon",
+            Phase::Close => "Close",
+        }
+        .to_owned()
+    }));
+    let mut chart = Chart::new(BarData::new());
+    chart.set_symbol("SAMPLE PHASES");
+    chart.set_chart_type(egui_charts::ChartType::LineWithMarkers);
+    chart.set_horizontal_scale(Some(scale.clone()));
+    chart.set_data(
+        SeriesId::MAIN,
+        keys.iter()
+            .zip([100.0, 104.0, 102.0, 108.0, 106.0])
+            .map(|(key, value)| scale.value(key, value).unwrap())
+            .collect(),
+    );
+    // Repeated keys update their existing slot instead of adding a category.
+    chart.update(SeriesId::MAIN, scale.value(&Phase::Auction, 103.0).unwrap());
+    assert_eq!(
+        chart
+            .bar_at_key(SeriesId::MAIN, &scale, &Phase::Auction)
+            .unwrap()
+            .close,
+        103.0
+    );
+    chart.set_markers(
+        SeriesId::MAIN,
+        vec![
+            scale
+                .marker(&Phase::Auction)
+                .unwrap()
+                .with_text("Auction".to_owned())
+                .with_color(Color32::from_rgb(177, 52, 210)),
+        ],
+    );
+    chart.set_visible_bars(8);
+    chart
 }
 
 /// Shades the regular session of every day behind the bars and labels its open on the time axis.

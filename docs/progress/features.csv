@@ -222,6 +222,7 @@ Chart,Scales and axes,Auto-scale,done,library,src/studies/chart_state.rs;src/sca
 Chart,Scales and axes,Bar spacing and time zoom,done,library,src/model/timescale.rs;src/widget/pan_zoom/mod.rs;src/config/timescale.rs;src/widget/sync.rs;src/widget/mod.rs;src/widget/builder.rs;src/widget/keyboard.rs,
 Chart,Scales and axes,Bid and ask lines,done,host,src/widget/mod.rs;src/widget/settings/apply.rs;src/chart/rendering/axes/mod.rs;src/painting/dashed_line.rs;src/widget/frame/mod.rs,
 Chart,Scales and axes,Countdown to bar close,done,library,src/widget/mod.rs;src/chart/rendering/axes/mod.rs;src/model/session/exchange.rs;src/widget/frame/mod.rs;src/widget/format.rs,
+Chart,Scales and axes,Custom horizontal keys,done,library,src/scales/horizontal.rs;src/model/timescale.rs;src/model/bar/time.rs;src/chart/coords/mod.rs;src/widget/frame/mod.rs;src/widget/time_scale.rs;src/widget/series/mod.rs;src/chart/rendering/axes/labels.rs;src/chart/rendering/overlays/crosshair.rs;src/chart/rendering/markers.rs;examples/primitives.rs,1858
 Chart,Scales and axes,Extended hours,done,host,src/widget/feed/mod.rs;src/chart/rendering/session_breaks.rs;src/widget/frame/mod.rs;src/widget/frame/sessions.rs,
 Chart,Scales and axes,High and low price labels,done,library,src/widget/settings/apply.rs;src/chart/rendering/axes/mod.rs;src/widget/frame/mod.rs,
 Chart,Scales and axes,Index-based time axis,done,library,src/model/timescale.rs;src/widget/frame/mod.rs,
