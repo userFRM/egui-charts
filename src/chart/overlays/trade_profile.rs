@@ -93,11 +93,52 @@ fn render_profiles(
     let painter = painter.with_clip_rect(mapping.rect.intersect(painter.clip_rect()));
     let theme = painter.ctx().active_theme();
     let pixel = 1.0 / painter.pixels_per_point();
+    let mut extensions = Vec::new();
     for profile in profiles {
         let first = bars.partition_point(|b| b.time < profile.range.start);
         let end = bars.partition_point(|b| b.time < profile.range.end);
         if first >= end {
             continue;
+        }
+        // Extensions survive after their source histogram has left the viewport.
+        if let Some(settings) = settings
+            && end < bars.len()
+        {
+            let start = mapping.idx_to_x(end - 1) + mapping.bar_spacing * 0.5;
+            let mut extend = |price: f64, stroke: Stroke| {
+                // Decimal tick arithmetic can leave the level a few rounding steps away.
+                let tolerance = 4.0 * f64::EPSILON * price.abs().max(tick);
+                let last = bars[end..]
+                    .iter()
+                    .position(|bar| bar.low <= price + tolerance && price - tolerance <= bar.high)
+                    .map_or(mapping.rect.right(), |i| mapping.idx_to_x(end + i));
+                let left = start.max(mapping.rect.left());
+                let right = last.min(mapping.rect.right());
+                let y = mapping.price_to_y(price);
+                if left < right && y.is_finite() {
+                    extensions.push(([pos2(left, y), pos2(right, y)], stroke));
+                }
+            };
+            if settings.extend_poc
+                && let Some(poc) = profile.volume.poc()
+            {
+                extend(
+                    (poc as f64 + 0.5) * step - tick * 0.5,
+                    Stroke::new(1.0, config.text_color),
+                );
+            }
+            if settings.extend_value_area
+                && let Some((low, high)) = settings
+                    .value_area
+                    .and_then(|s| profile.volume.value_area(s))
+            {
+                for edge in [low as f64 * step, (high as f64 + 1.0) * step] {
+                    extend(
+                        edge - tick * 0.5,
+                        Stroke::new(1.0, theme.chart.axis_text_secondary),
+                    );
+                }
+            }
         }
         let x = mapping.idx_to_x(first) - mapping.bar_spacing * 0.45;
         if mapping.idx_to_x(end - 1) < mapping.rect.left() || x > mapping.rect.right() {
@@ -220,8 +261,9 @@ fn render_profiles(
                 left = right;
             }
             if config.show_poc && poc == Some(row.level) {
+                let y = mapping.price_to_y((row.level as f64 + 0.5) * step - tick * 0.5);
                 painter.line_segment(
-                    [pos2(x, (y0 + y1) * 0.5), pos2(x + width, (y0 + y1) * 0.5)],
+                    [pos2(x, y), pos2(x + width, y)],
                     Stroke::new(DESIGN_TOKENS.stroke.hairline, config.text_color),
                 );
             }
@@ -288,34 +330,67 @@ fn render_profiles(
                 }
             }
         }
-        if settings.is_some_and(|s| !s.developing_poc) {
+        if settings.is_none_or(|s| s.developing_poc) {
+            render_developing(
+                &painter,
+                mapping,
+                bars,
+                profile
+                    .developing_poc
+                    .iter()
+                    .map(|&(time, poc)| (time, (poc as f64 + 0.5) * step - tick * 0.5)),
+                Stroke::new(1.0, config.text_color),
+            );
+        }
+        if let Some(settings) = settings
+            && settings.developing_value_area
+            && let Some(share) = settings.value_area
+        {
+            let areas = profile.developing_value_area(share);
+            for high in [false, true] {
+                render_developing(
+                    &painter,
+                    mapping,
+                    bars,
+                    areas.iter().map(|&(time, (low, upper))| {
+                        let edge = if high { upper as f64 + 1.0 } else { low as f64 };
+                        (time, edge * step - tick * 0.5)
+                    }),
+                    Stroke::new(1.0, theme.chart.axis_text_secondary),
+                );
+            }
+        }
+    }
+    // Later session boxes must not cover the part of a level before its first touch.
+    for (points, stroke) in extensions {
+        painter.line_segment(points, stroke);
+    }
+}
+
+fn render_developing(
+    painter: &Painter,
+    mapping: &ChartMapping,
+    bars: &[Bar],
+    points: impl Iterator<Item = (chrono::DateTime<chrono::Utc>, f64)>,
+    stroke: Stroke,
+) {
+    let mut previous = None;
+    let mut points = points.peekable();
+    while let Some((time, price)) = points.next() {
+        // Keep the last point before retained candles, so the trace enters at the right level.
+        if time < bars[0].time && points.peek().is_some_and(|(next, _)| *next <= bars[0].time) {
             continue;
         }
-        let mut previous = None;
-        for (at, &(time, poc)) in profile.developing_poc.iter().enumerate() {
-            // Earlier bars may still contribute volume after their candles were evicted.
-            if time < bars[0].time
-                && profile
-                    .developing_poc
-                    .get(at + 1)
-                    .is_some_and(|(next, _)| *next <= bars[0].time)
-            {
-                continue;
-            }
-            let index = bars.partition_point(|b| b.time < time);
-            let point = pos2(
-                mapping.idx_to_x(index),
-                mapping.price_to_y((poc as f64 + 0.5) * step - tick * 0.5),
-            );
-            if !point.is_finite() {
-                previous = None;
-                continue;
-            }
-            if let Some(old) = previous {
-                painter.line_segment([old, point], Stroke::new(1.0, config.text_color));
-            }
-            previous = Some(point);
+        let index = bars.partition_point(|b| b.time < time);
+        let point = pos2(mapping.idx_to_x(index), mapping.price_to_y(price));
+        if !point.is_finite() {
+            previous = None;
+            continue;
         }
+        if let Some(old) = previous {
+            painter.line_segment([old, point], stroke);
+        }
+        previous = Some(point);
     }
 }
 
@@ -324,7 +399,7 @@ mod tests {
     use super::*;
     use crate::data::Footprint;
     use crate::model::{BarClock, OrderSide, Tick, Timeframe};
-    use crate::scales::{PriceMap, PriceRange, PriceTransform};
+    use crate::scales::{PriceMap, PriceRange, PriceScaleMode, PriceTransform};
     use crate::studies::{TradeProfileRanges, trade_profiles};
     use chrono::TimeDelta;
     use egui::{Shape, vec2};
@@ -505,5 +580,240 @@ mod tests {
         );
         assert_eq!(guides(None, Some(blue)), [(bottom, egui::Color32::BLUE)]);
         assert_eq!(guides(Some(red), None), [(top, egui::Color32::RED)]);
+    }
+
+    /// At 70%, 6 + 3 exceeds 7 of 10; after adding 8 at 100, 9 + 6 exceeds 12.6
+    /// of 18. Prior levels stop independently at the first inclusive later price range.
+    #[test]
+    fn developing_area_and_prior_levels_follow_live_and_rebuilt_history() {
+        let time = "2026-01-05T10:00:00Z".parse().unwrap();
+        let ticks: Vec<_> = [
+            (0, 100.0, 1.0),
+            (1, 101.0, 6.0),
+            (2, 102.0, 3.0),
+            (60, 100.0, 8.0),
+            (120, 103.0, 1.0),
+            (121, 104.0, 1.0),
+            (180, 100.0, 1.0),
+            (240, 99.0, 1.0),
+            (241, 101.0, 1.0),
+        ]
+        .into_iter()
+        .map(|(second, price, size)| {
+            Tick::new(time + TimeDelta::seconds(second), price, size, None)
+        })
+        .collect();
+        let ranges = TradeProfileRanges::new(vec![
+            time..time + TimeDelta::minutes(2),
+            time + TimeDelta::minutes(2)..time + TimeDelta::minutes(5),
+        ])
+        .unwrap();
+        let bars: Vec<_> = [
+            (100.0, 102.0),
+            (100.0, 100.0),
+            (103.0, 104.0),
+            (100.0, 100.0),
+            (99.0, 101.0),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (low, high))| {
+            Bar::new(
+                time + TimeDelta::minutes(i as i64),
+                low,
+                high,
+                low,
+                high,
+                1.0,
+            )
+        })
+        .collect();
+        for step in [1.0, 0.003] {
+            let ticks: Vec<_> = ticks
+                .iter()
+                .cloned()
+                .map(|mut tick| {
+                    tick.price *= step;
+                    tick
+                })
+                .collect();
+            let bars: Vec<_> = bars
+                .iter()
+                .map(|bar| {
+                    Bar::new(
+                        bar.time,
+                        bar.open * step,
+                        bar.high * step,
+                        bar.low * step,
+                        bar.close * step,
+                        bar.volume,
+                    )
+                })
+                .collect();
+            let ctx = egui::Context::default();
+            let theme = ctx.active_theme();
+            let poc_color = DESIGN_TOKENS.semantic.chart.bearish;
+            let area_color = theme.chart.axis_text_secondary;
+            let mut live = Footprint::new(BarClock::new(Timeframe::Min1), step, 1).unwrap();
+            let paint = |flow: &Footprint, count, saved, offset, inverted, mode| {
+                let transform = PriceTransform {
+                    mode,
+                    ..Default::default()
+                };
+                let settings: TradeProfileSettings = serde_json::from_str(saved).unwrap();
+                let mapping = ChartMapping::new(
+                    Rect::from_min_size(pos2(40.0, 20.0), vec2(400.0, 240.0)),
+                    40.0,
+                    0,
+                    4,
+                    offset,
+                    PriceMap::new(
+                        transform,
+                        PriceRange::new(
+                            transform.to_scale(98.0 * step),
+                            transform.to_scale(105.0 * step),
+                        ),
+                        20.0,
+                        260.0,
+                        inverted,
+                    ),
+                );
+                let profiles = trade_profiles(flow, &ranges);
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    render_session_volume_profiles(
+                        ui.painter(),
+                        &mapping,
+                        &bars[..count],
+                        &profiles,
+                        step,
+                        step,
+                        &settings,
+                    );
+                });
+                output.textures_delta.clear();
+                let lines = output
+                    .shapes
+                    .into_iter()
+                    .filter_map(|s| match s.shape {
+                        Shape::LineSegment { points, stroke } => Some((points, stroke.color)),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                (mapping, lines)
+            };
+            for count in 1..=5 {
+                for tick in ticks.iter().filter(|t| {
+                    t.ts >= time + TimeDelta::minutes(count as i64 - 1)
+                        && t.ts < time + TimeDelta::minutes(count as i64)
+                }) {
+                    live.push(tick).unwrap();
+                }
+                let mut rebuilt = Footprint::new(BarClock::new(Timeframe::Min1), step, 1).unwrap();
+                for tick in ticks
+                    .iter()
+                    .filter(|t| t.ts < time + TimeDelta::minutes(count as i64))
+                {
+                    rebuilt.push(tick).unwrap();
+                }
+                for (saved, developing, extend_poc, extend_area, share) in [
+                    (r#"{}"#, false, false, false, 0.7),
+                    (r#"{"developing_value_area":true}"#, true, false, false, 0.7),
+                    (
+                        r#"{"developing_value_area":true,"value_area":0.5}"#,
+                        true,
+                        false,
+                        false,
+                        0.5,
+                    ),
+                    (r#"{"extend_poc":true}"#, false, true, false, 0.7),
+                    (r#"{"extend_value_area":true}"#, false, false, true, 0.7),
+                    (
+                        r#"{"developing_value_area":true,"extend_poc":true,"extend_value_area":true}"#,
+                        true,
+                        true,
+                        true,
+                        0.7,
+                    ),
+                    (
+                        r#"{"developing_value_area":true,"extend_value_area":true,"value_area":null}"#,
+                        false,
+                        false,
+                        false,
+                        0.7,
+                    ),
+                ] {
+                    for (offset, inverted, mode) in [
+                        (0.0, false, PriceScaleMode::Normal),
+                        (9.0, true, PriceScaleMode::Normal),
+                        (0.0, false, PriceScaleMode::Logarithmic),
+                    ] {
+                        let (map, lines) = paint(&live, count, saved, offset, inverted, mode);
+                        assert_eq!(
+                            lines,
+                            paint(&rebuilt, count, saved, offset, inverted, mode).1
+                        );
+                        let contains = |a, b, color| {
+                            lines
+                                .iter()
+                                .any(|(points, c)| *c == color && *points == [a, b])
+                        };
+                        let visible_source = map.idx_to_x(1) >= map.rect.left();
+                        if count >= 2 && visible_source {
+                            if extend_poc {
+                                let y = map.price_to_y(100.0 * step);
+                                assert!(
+                                    contains(
+                                        pos2(map.idx_to_x(0) - 18.0, y),
+                                        pos2(map.idx_to_x(1) + 20.0, y),
+                                        poc_color,
+                                    ),
+                                    "POC joins its extension at the same price on {mode:?}"
+                                );
+                            }
+                            for (first, last) in [
+                                (100.5, 99.5),
+                                (
+                                    if share == 0.7 { 102.5 } else { 101.5 },
+                                    if share == 0.7 { 101.5 } else { 100.5 },
+                                ),
+                            ] {
+                                assert_eq!(
+                                    contains(
+                                        pos2(map.idx_to_x(0), map.price_to_y(first * step)),
+                                        pos2(map.idx_to_x(1), map.price_to_y(last * step)),
+                                        area_color
+                                    ),
+                                    developing,
+                                    "developing: {saved}"
+                                );
+                            }
+                        }
+                        let start = (map.idx_to_x(1) + 20.0).max(map.rect.left());
+                        for (price, stop, enabled, color) in [
+                            (100.0, 3, extend_poc, poc_color),
+                            (101.5, usize::MAX, extend_area, area_color),
+                            (99.5, 4, extend_area, area_color),
+                        ] {
+                            let end = if stop < count {
+                                map.idx_to_x(stop)
+                            } else {
+                                map.rect.right()
+                            };
+                            if start < end {
+                                assert_eq!(
+                                    contains(
+                                        pos2(start, map.price_to_y(price * step)),
+                                        pos2(end, map.price_to_y(price * step)),
+                                        color
+                                    ),
+                                    enabled && count > 2,
+                                    "count {count}, level {price}, {saved}, offset {offset}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }

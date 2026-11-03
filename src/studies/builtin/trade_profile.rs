@@ -58,7 +58,7 @@ impl TradeProfileRanges {
     }
 }
 
-/// Executed volume over one session or composite, with the POC after each contributing bar.
+/// Executed volume over one session or composite, with its contributing bars and developing POC.
 #[derive(Clone, Debug)]
 pub struct TradeProfile {
     /// Half-open range of bar opening times.
@@ -67,6 +67,9 @@ pub struct TradeProfile {
     pub volume: FootprintBar,
     /// Developing POC as `(bar open, grouped price level)`, including lower-price ties.
     pub developing_poc: Vec<(DateTime<Utc>, i64)>,
+    /// Complete contributing footprint bars in time order, for recalculating developing levels
+    /// at any value area share. Bars before [`Footprint::complete_from`] are left out.
+    pub bars: Vec<FootprintBar>,
     /// Whether the executions of every bar in `range` are held. False when `range` starts
     /// before [`Footprint::complete_from`], or no bar is complete: `volume` and
     /// `developing_poc` then leave out the bars before it, and the profile is partial.
@@ -74,6 +77,19 @@ pub struct TradeProfile {
 }
 
 impl TradeProfile {
+    /// Inclusive lower and upper value area rows after each contributing bar, paired with its
+    /// opening time. Uses [`FootprintBar::value_area`], including its share and tie rules.
+    pub fn developing_value_area(&self, share: f64) -> Vec<(DateTime<Utc>, (i64, i64))> {
+        let mut volume = FootprintBar::empty(self.range.start);
+        self.bars
+            .iter()
+            .filter_map(|bar| {
+                volume.absorb(bar);
+                volume.value_area(share).map(|area| (bar.time, area))
+            })
+            .collect()
+    }
+
     /// Local volume maxima and minima, respectively, between the first and last traded rows.
     /// Untraded rows have zero volume, so a gap between traded rows is a valley; it is
     /// evaluated as one span, however wide. Rows of equal smoothed volume form one plateau,
@@ -147,7 +163,8 @@ pub fn trade_profiles(flow: &Footprint, ranges: &TradeProfileRanges) -> Vec<Trad
         .map(|range| {
             let mut volume = FootprintBar::empty(range.start);
             let mut developing_poc = Vec::new();
-            for bar in flow.complete_bars(range.clone()) {
+            let bars: Vec<_> = flow.complete_bars(range.clone()).cloned().collect();
+            for bar in &bars {
                 volume.absorb(bar);
                 if let Some(poc) = volume.poc() {
                     developing_poc.push((bar.time, poc));
@@ -157,6 +174,7 @@ pub fn trade_profiles(flow: &Footprint, ranges: &TradeProfileRanges) -> Vec<Trad
                 range: range.clone(),
                 volume,
                 developing_poc,
+                bars,
                 complete: complete_from.is_some_and(|from| from <= range.start),
             }
         })
@@ -263,6 +281,7 @@ mod tests {
                     max_delta: 0.0,
                 },
                 developing_poc: Vec::new(),
+                bars: Vec::new(),
                 complete: true,
             }
             .nodes(NodeSensitivity {

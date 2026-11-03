@@ -926,7 +926,10 @@ impl Chart {
                 let first = flow.complete_from()?;
                 let candles =
                     self.state.shown()[start_idx..end_idx].partition_point(|bar| bar.time < first);
-                let ranges = self.execution_profile_ranges(start_idx + candles..end_idx)?;
+                let extend = self.trade_profile_settings().extend_poc
+                    || self.trade_profile_settings().extend_value_area;
+                let profile_start = if extend { 0 } else { start_idx + candles };
+                let ranges = self.execution_profile_ranges(profile_start..end_idx)?;
                 let mapping = self.get_chart_mapping().with_rect(price_rect);
                 let bars = &self.state.data().bars;
                 let mut profiles = crate::studies::trade_profiles(flow, &ranges);
@@ -934,7 +937,7 @@ impl Chart {
                     let first = bars.partition_point(|b| b.time < profile.range.start);
                     let end = bars.partition_point(|b| b.time < profile.range.end);
                     first < end
-                        && mapping.idx_to_x(end - 1) >= price_rect.left()
+                        && (extend || mapping.idx_to_x(end - 1) >= price_rect.left())
                         && mapping.idx_to_x(first) - mapping.bar_spacing * 0.45
                             <= price_rect.right()
                 });
@@ -979,24 +982,33 @@ impl Chart {
             .map(|price| [price, price])
             .reduce(|a, b| [a[0].min(b[0]), a[1].max(b[1])]);
         #[cfg(feature = "studies")]
-        let profile_prices = execution_profiles
+        let profile_prices: Vec<_> = execution_profiles
             .iter()
             .flat_map(|(step, tick, profiles)| {
-                profiles.iter().flat_map(move |profile| {
-                    profile
-                        .volume
-                        .levels
-                        .first_key_value()
-                        .zip(profile.volume.levels.last_key_value())
-                        .into_iter()
-                        .flat_map(move |((&low, _), (&high, _))| {
-                            [
-                                low as f64 * step - tick * 0.5,
-                                (high as f64 + 1.0) * step - tick * 0.5,
-                            ]
-                        })
-                })
-            });
+                let mapping = self.get_chart_mapping().with_rect(price_rect);
+                let bars = &self.state.data().bars;
+                profiles
+                    .iter()
+                    .filter(move |profile| {
+                        let end = bars.partition_point(|bar| bar.time < profile.range.end);
+                        end > 0 && mapping.idx_to_x(end - 1) >= price_rect.left()
+                    })
+                    .flat_map(move |profile| {
+                        profile
+                            .volume
+                            .levels
+                            .first_key_value()
+                            .zip(profile.volume.levels.last_key_value())
+                            .into_iter()
+                            .flat_map(move |((&low, _), (&high, _))| {
+                                [
+                                    low as f64 * step - tick * 0.5,
+                                    (high as f64 + 1.0) * step - tick * 0.5,
+                                ]
+                            })
+                    })
+            })
+            .collect();
         #[cfg(not(feature = "studies"))]
         let profile_prices = std::iter::empty();
         // Fit the price scale, then apply this frame's price zoom
