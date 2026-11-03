@@ -280,7 +280,8 @@ impl LiveFeed {
     /// Each comparison owns a feed. Rebuild its history only when the source or view changes,
     /// or when restoring the chart cleared previously loaded bars.
     pub(super) fn refresh_comparison(&self, chart: &mut Chart, id: SeriesId) {
-        if self.loading() {
+        // Seed an empty series from cached minutes before retained ticks finish loading.
+        if self.loading() && !chart.bars(id).is_empty() {
             return;
         }
         let timeframe = chart.timeframe().unwrap_or(Timeframe::Hour1);
@@ -632,6 +633,17 @@ impl LiveFeed {
             && let Some(start) = sim.bootstrap
         {
             let sub = sim.subscription.take().expect("initializing subscription");
+            if start == 0 {
+                // Initialization can archive executions before the retained tick window.
+                for bar in sim.archived_bars(
+                    sub.timeframe,
+                    sub.clock.clone(),
+                    sub.extended_hours,
+                    sub.conversion.as_deref() == Some("adjusted"),
+                ) {
+                    sub.sink.push_bar(bar);
+                }
+            }
             let end = (start + LOAD_BATCH).min(sim.trades.len());
             let trades: Vec<_> = sim
                 .trades
@@ -757,33 +769,40 @@ pub(super) fn price_decimals(symbol: &str) -> Option<u8> {
 
 impl Simulation {
     fn history_page(&self, request: &HistoryRequest) -> HistoryPage {
+        let bars = self.archived_bars(
+            request.timeframe,
+            request.clock.clone(),
+            request.extended_hours,
+            request.conversion.as_deref() == Some("adjusted"),
+        );
+        super::feeds::history_page(&bars, request.since, request.before, request.count)
+    }
+
+    fn archived_bars(
+        &self,
+        timeframe: Timeframe,
+        clock: BarClock,
+        extended_hours: bool,
+        adjusted: bool,
+    ) -> Vec<Bar> {
         // Count and smaller time bars arrive through the retained-execution stream.
-        if request.timeframe.duration_ms() < 60_000 || request.timeframe.duration_ms() % 60_000 != 0
-        {
-            return HistoryPage::new(Vec::new(), true);
+        if timeframe.duration_ms() < 60_000 || timeframe.duration_ms() % 60_000 != 0 {
+            return Vec::new();
         }
         let source = &self.history[..self.archived_end()];
         let shown = if let Some((dividend, _)) = self.dividend {
-            let session = if !request.clock.has_session() {
+            let session = if !clock.has_session() {
                 SessionType::Full24x7
-            } else if request.extended_hours {
+            } else if extended_hours {
                 SessionType::ETH
             } else {
                 SessionType::RTH
             };
-            session_bars(
-                &self.symbol,
-                source,
-                session,
-                request.conversion.as_deref() == Some("adjusted"),
-                dividend,
-            )
+            session_bars(&self.symbol, source, session, adjusted, dividend)
         } else {
             source.to_vec()
         };
-        let bars = resample(&shown, Timeframe::Min1, request.clock.clone())
-            .expect("nested minute history");
-        super::feeds::history_page(&bars, request.since, request.before, request.count)
+        resample(&shown, Timeframe::Min1, clock).expect("nested minute history")
     }
 
     /// The displayed symbol's session, also when this is the host rather than its stream.
@@ -1329,8 +1348,11 @@ impl Datafeed for LiveFeed {
             let now = sim.now;
             sim.streams.push(LiveFeed::new(&request.symbol, now));
             sim.streams.last().unwrap().history(request, reply);
+        } else if sim.subscription.is_none() {
+            // The chart asks before subscribing; its cached archive is already available.
+            reply.send(Ok(sim.history_page(&request)));
         } else {
-            // Reply after bootstrap so consumers never evaluate partly delivered history.
+            // Subscribed consumers, including alerts, wait for complete tick bootstrap.
             sim.history_requests.push_back((request, reply));
         }
     }
@@ -1508,6 +1530,58 @@ mod tests {
             }
         }
         panic!("retained executions did not finish loading");
+    }
+
+    #[test]
+    fn cached_archive_is_visible_before_bootstrap_and_joins_retained_ticks() {
+        use egui_charts::services::AlertFeed;
+
+        let now = "2026-10-24T02:59:59Z".parse().unwrap();
+        for interval in ["1min", "45min", "1D"] {
+            let timeframe = interval.parse().unwrap();
+            let feed = Arc::new(LiveFeed::new("SAMPLE", now));
+            feed.set_paused(true);
+            let ctx = egui::Context::default();
+            let mut chart = ChartBuilder::new()
+                .with_feed(feed.clone())
+                .with_symbol("SAMPLE")
+                .with_timeframe(timeframe)
+                .with_initial_bars(20_000)
+                .build();
+            ctx.run_ui(Default::default(), |ui| {
+                chart.show(ui);
+            })
+            .drop_without_applying_deltas();
+            let comparison = chart.add_comparison("SAMPLE", egui::Color32::BLUE);
+            feed.refresh_comparison(&mut chart, comparison);
+            assert!(!chart.bars(SeriesId::MAIN).is_empty(), "{interval}");
+            assert_eq!(chart.bars(SeriesId::MAIN), chart.bars(comparison));
+            assert!(
+                feed.loading(),
+                "showing the archive must not finish loading"
+            );
+
+            let mut alerts = AlertFeed::new(
+                feed.clone(),
+                AlertFeed::history_request("SAMPLE", timeframe),
+                None,
+            );
+            for _ in 0..3 {
+                assert!(alerts.poll(&ctx, now).is_empty());
+                assert!(alerts.bars().is_empty(), "alerts must wait for bootstrap");
+            }
+
+            load_chart(&feed, &mut chart, &ctx);
+            feed.refresh_comparison(&mut chart, comparison);
+            assert!(alerts.poll(&ctx, now).is_empty());
+            let expected = feed.snapshot(timeframe, chart.bar_clock(), chart.extended_hours());
+            let actual = chart.bars(SeriesId::MAIN);
+            assert_eq!(&actual[actual.len() - expected.len()..], expected);
+            assert_eq!(chart.bars(comparison), expected);
+            assert_eq!(alerts.bars(), expected);
+            let sim = feed.state();
+            assert!(sim.trades.front().unwrap().ts > sim.retain_from);
+        }
     }
 
     #[test]
