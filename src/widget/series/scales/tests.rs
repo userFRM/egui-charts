@@ -1,5 +1,5 @@
 use super::*;
-use crate::model::{BarData, LineStyle};
+use crate::model::{BarData, LineStyle, SeriesDisplayFormat, SeriesFormat};
 use crate::tokens::DESIGN_TOKENS;
 use crate::widget::test_frames::frame;
 use crate::widget::{PaneId, SeriesId, SeriesOptions};
@@ -31,12 +31,12 @@ fn bars(prices: &[f64]) -> Vec<Bar> {
 #[test]
 fn series_display_formats_reach_ticks_tags_readouts_and_snapshots() {
     for (kind, value, step, expected) in [
-        ("Price", 12.62, 0.25, "12.50"),
-        ("Price", 12.625, 0.25, "12.75"),
-        ("Price", -12.625, 0.25, "-12.75"),
-        ("Volume", 1500.0, 1.0, "1.50K"),
-        ("Volume", 1500.0, 3.0, "1.50K"),
-        ("Percentage", 12.5, 0.25, "12.50%"),
+        (SeriesFormat::Price, 12.62, 0.25, "12.50"),
+        (SeriesFormat::Price, 12.625, 0.25, "12.75"),
+        (SeriesFormat::Price, -12.625, 0.25, "-12.75"),
+        (SeriesFormat::Volume, 1500.0, 1.0, "1.50K"),
+        (SeriesFormat::Volume, 1500.0, 3.0, "1.50K"),
+        (SeriesFormat::Percentage, 12.5, 0.25, "12.50%"),
     ] {
         for assignment in [
             None,
@@ -63,11 +63,11 @@ fn series_display_formats_reach_ticks_tags_readouts_and_snapshots() {
                 let pane = chart.add_pane();
                 assert!(chart.move_series_to_pane(id, pane));
             }
-            let mut style = serde_json::to_value(chart.series_style(id).unwrap()).unwrap();
-            style["display_format"] = serde_json::json!({
-                "kind": kind, "precision": 2, "min_move": step
+            chart.series_style_mut(id).unwrap().display_format = Some(SeriesDisplayFormat {
+                kind,
+                precision: 2,
+                min_move: step,
             });
-            *chart.series_style_mut(id).unwrap() = serde_json::from_value(style).unwrap();
             let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 0.0, vec![]);
             assert_eq!(
                 chart.format_series_price(id, value).as_deref(),
@@ -77,7 +77,7 @@ fn series_display_formats_reach_ticks_tags_readouts_and_snapshots() {
                 painted.iter().any(|shape| matches!(shape,
                     egui::Shape::Text(text) if text.galley.text() == expected
                 )),
-                "{kind} {assignment:?}: last-value tag"
+                "{kind:?} {assignment:?}: last-value tag"
             );
             assert_eq!(chart.bars(id), data);
             let map = chart.series_price_map(id).unwrap();
