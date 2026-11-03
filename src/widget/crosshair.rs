@@ -52,7 +52,7 @@ impl Chart {
                 candidate
             };
             let x = coords.idx_to_x(candidate);
-            if self.crosshair_index_eligible(candidate) {
+            if self.crosshair_time_eligible(bars[candidate].time, Some(candidate)) {
                 pos.x = x;
                 return Some(pos);
             }
@@ -60,14 +60,14 @@ impl Chart {
         None
     }
 
-    fn crosshair_index_eligible(&self, index: usize) -> bool {
+    pub(super) fn crosshair_time_eligible(
+        &self,
+        time: chrono::DateTime<chrono::Utc>,
+        index: Option<usize>,
+    ) -> bool {
         let options = &self.chart_options.time_scale;
-        let bar = &self.state.shown()[index];
         let series = self.price_series.iter().filter_map(|item| {
-            let at = item
-                .bars
-                .binary_search_by_key(&bar.time, |bar| bar.time)
-                .ok()?;
+            let at = item.bars.binary_search_by_key(&time, |bar| bar.time).ok()?;
             Some((item.visible, !item.bars[at].is_whitespace()))
         });
         let studies = self
@@ -81,15 +81,18 @@ impl Chart {
                         plot.plot_type,
                         crate::studies::PlotType::BarColor
                             | crate::studies::PlotType::BackgroundColor
-                    ) && study.plot_value(line, index).is_some_and(f64::is_finite);
+                    ) && index
+                        .and_then(|index| study.plot_value(line, index))
+                        .is_some_and(f64::is_finite);
                     (study.is_visible() && plot.visible, valued)
                 })
             });
         let mut valued = false;
-        for (visible, has_value) in
-            std::iter::once((self.main_series_visible, !bar.is_whitespace()))
-                .chain(series)
-                .chain(studies)
+        let main_value = self.main_series_present
+            && index.is_some_and(|index| !self.state.shown()[index].is_whitespace());
+        for (visible, has_value) in std::iter::once((self.main_series_visible, main_value))
+            .chain(series)
+            .chain(studies)
         {
             if has_value {
                 if visible || !options.ignore_hidden_indices {
@@ -106,17 +109,7 @@ impl Chart {
         if !mode.snaps() {
             return pos;
         }
-        if mode == CrosshairMode::MagnetClose {
-            if let Some(bar) = self
-                .state
-                .shown()
-                .get(index)
-                .filter(|bar| self.main_series_visible && !bar.is_whitespace())
-            {
-                pos.y = map.price_to_y(bar.close);
-            }
-            return pos;
-        }
+        let close_only = mode == CrosshairMode::MagnetClose;
         // Candidates are pointer-space heights, so each value goes through its own scale.
         let ohlc = self
             .state
@@ -124,7 +117,11 @@ impl Chart {
             .get(index)
             .filter(|bar| self.main_series_visible && !bar.is_whitespace())
             .into_iter()
-            .flat_map(|bar| [bar.open, bar.high, bar.low, bar.close])
+            .flat_map(|bar| {
+                [bar.open, bar.high, bar.low, bar.close]
+                    .into_iter()
+                    .skip(if close_only { 3 } else { 0 })
+            })
             .map(|value| map.price_to_y(value));
         let time_based = !self.chart_type.is_time_independent();
         let coords = ChartMapping {
@@ -136,7 +133,8 @@ impl Chart {
             .iter()
             .zip(self.studies.indicators())
             .filter(|(id, study)| {
-                time_based
+                !close_only
+                    && time_based
                     && study.is_visible()
                     && study.is_overlay()
                     && !study.is_volume()
@@ -160,7 +158,7 @@ impl Chart {
         let rect = self.last_rendered_price_rect;
         let series = self
             .main_pane_series()
-            .filter(|_| time_based)
+            .filter(|_| time_based || close_only)
             .filter_map(|item| {
                 let scale = self.series_map(item, rect);
                 self.series_close_at(item, index)

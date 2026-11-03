@@ -15,8 +15,9 @@ pub enum CrosshairMode {
     Normal,
     /// Magnet crosshair (snaps to the nearest visible OHLC, study or comparison value)
     Magnet,
-    /// Magnet crosshair that snaps the price pane to the bar's close only. Volume and study
-    /// panes snap to their values as with `Magnet`.
+    /// Snaps the price pane to the nearest visible main or added-series close on its own
+    /// scale. Equal screen distances prefer the main series, then added series in draw
+    /// order. Volume and study panes snap to their values as with `Magnet`.
     MagnetClose,
 }
 
@@ -50,6 +51,7 @@ pub enum CrosshairStyle {
 /// Crosshair options
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
+#[serde(default)]
 pub struct CrosshairOptions {
     /// Crosshair mode
     pub mode: CrosshairMode,
@@ -81,8 +83,15 @@ pub struct CrosshairOptions {
     /// Horizontal line width
     pub horz_line_width: f32,
 
-    /// Show labels
+    /// Show axis labels, subject to each label's visibility switch.
     pub label_visible: bool,
+
+    /// Show the time-axis label, independently of the vertical line. Needs `label_visible`.
+    pub vert_label_visible: bool,
+
+    /// Show the price-axis label, independently of the horizontal line. Needs `label_visible`.
+    /// Also applies to volume and study values.
+    pub horz_label_visible: bool,
 
     /// Background of the vertical line's label on the time axis (`Color32::PLACEHOLDER`:
     /// active theme)
@@ -110,6 +119,8 @@ impl Default for CrosshairOptions {
             vert_line_width: 1.0,
             horz_line_width: 1.0,
             label_visible: true,
+            vert_label_visible: true,
+            horz_label_visible: true,
             vert_label_background_color: Color32::PLACEHOLDER,
             horz_label_background_color: Color32::PLACEHOLDER,
             label_text_color: Color32::PLACEHOLDER,

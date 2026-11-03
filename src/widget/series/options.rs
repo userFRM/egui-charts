@@ -50,6 +50,10 @@ pub struct SeriesOptions {
     pub up_color: Color32,
     /// Falling bars of the OHLC and column types, and the baseline type below its base.
     pub down_color: Color32,
+    /// Candle border width in logical points, drawn inside the body. Defaults to zero;
+    /// non-positive or non-finite widths disable borders, including per-bar border colours.
+    #[serde(default)]
+    pub candle_border_width: f32,
     /// Independent baseline line and fill styles. `None` uses `up_color`, `down_color` and
     /// `width`, with flat fills at the default opacity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -68,8 +72,8 @@ pub struct SeriesOptions {
     /// The price [`ChartType::Columns`] rise above or fall below, which the scale's fit then
     /// includes; `None` raises them from the pane bottom.
     pub columns_base: Option<f64>,
-    /// Last value label, price line, base line and autoscale. By default the series labels its
-    /// last value without a price line.
+    /// Numeric display format, last value label, price line, base line and autoscale. By
+    /// default the series labels its last value without a price line.
     pub style: SeriesStyle,
 }
 
@@ -81,6 +85,7 @@ impl Default for SeriesOptions {
             color: Color32::from_rgb(41, 98, 255),
             up_color: DESIGN_TOKENS.semantic.extended.bullish,
             down_color: DESIGN_TOKENS.semantic.extended.bearish,
+            candle_border_width: 0.0,
             baseline_style: None,
             width: 2.0,
             marker_radius: None,
@@ -98,6 +103,9 @@ impl SeriesOptions {
     fn sanitized(mut self) -> Self {
         if !self.width.is_finite() || self.width <= 0.0 {
             self.width = 2.0;
+        }
+        if !self.candle_border_width.is_finite() || self.candle_border_width < 0.0 {
+            self.candle_border_width = 0.0;
         }
         if self.chart_type.is_time_independent()
             || self.chart_type == ChartType::TimePriceOpportunity
@@ -430,22 +438,90 @@ impl Chart {
         }
     }
 
-    /// The position of an added bar series in the draw order, which [`series`](Self::series)
-    /// follows. Each pane draws its added series in this order: they are drawn above the main
-    /// series, and a later one covers an earlier one.
-    pub fn series_order(&self, id: SeriesId) -> Option<usize> {
-        self.price_series.iter().position(|item| item.id == id)
+    /// The bar series in `pane`, back to front, excluding studies and absent series.
+    fn ordered_bar_series(&self, pane: PaneId) -> Vec<SeriesId> {
+        let items = if pane == PaneId::MAIN {
+            self.main_pane_order(self.pane_layout.main.clone())
+        } else {
+            self.pane_series(pane)
+        };
+        items
+            .into_iter()
+            .filter(|id| self.series_scale(*id).is_some())
+            .collect()
     }
 
-    /// Moves an added bar series to position `order` of the draw order, or to the end for a
-    /// larger value. Returns `false` for an unknown id.
+    /// The zero-based position of a bar series among the bar series in its pane, back to
+    /// front. Includes the main series and hidden series; excludes studies. A later series
+    /// covers an earlier one. Returns `None` for an absent series or a study.
+    pub fn series_order(&self, id: SeriesId) -> Option<usize> {
+        self.ordered_bar_series(self.series_pane(id)?)
+            .iter()
+            .position(|item| *item == id)
+    }
+
+    /// Moves a bar series, including the main series, to position `order` among the bar
+    /// series in its pane, or to the last position for a larger value. Other panes keep their
+    /// order. Returns `false` for an absent series or a study. The order survives snapshots;
+    /// [`hovered_series_on_top`](crate::config::ChartOptions::hovered_series_on_top) can raise
+    /// a hovered series for one frame without changing it.
     pub fn set_series_order(&mut self, id: SeriesId, order: usize) -> bool {
-        let Some(at) = self.series_order(id) else {
+        let Some(pane) = self.series_pane(id) else {
             return false;
         };
-        let item = self.price_series.remove(at);
-        self.price_series
-            .insert(order.min(self.price_series.len()), item);
+        let mut series = self.ordered_bar_series(pane);
+        let Some(at) = series.iter().position(|item| *item == id) else {
+            return false;
+        };
+        let order = order.min(series.len() - 1);
+        if at == order {
+            return true;
+        }
+        self.sync_panes();
+        let items = if pane == PaneId::MAIN {
+            &mut self.pane_layout.main
+        } else {
+            &mut self
+                .pane_layout
+                .panes
+                .iter_mut()
+                .find(|item| item.id == pane)
+                .expect("series belongs to pane")
+                .members
+        };
+        items.retain(|item| *item != id);
+        series.remove(at);
+        let to = series
+            .get(order)
+            .and_then(|next| items.iter().position(|item| item == next))
+            .unwrap_or_else(|| {
+                series
+                    .last()
+                    .and_then(|last| items.iter().position(|item| item == last))
+                    .map_or(items.len(), |at| at + 1)
+            });
+        items.insert(to, id);
+        series.insert(order, id);
+
+        // Keep series() in the same relative order without moving another pane's entries.
+        let slots: Vec<_> = self
+            .price_series
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| series.contains(&item.id))
+            .map(|(at, _)| at)
+            .collect();
+        for (slot, id) in slots
+            .into_iter()
+            .zip(series.into_iter().filter(|id| *id != SeriesId::MAIN))
+        {
+            let at = self
+                .price_series
+                .iter()
+                .position(|item| item.id == id)
+                .unwrap();
+            self.price_series.swap(slot, at);
+        }
         true
     }
 
@@ -560,8 +636,8 @@ impl Chart {
         }
     }
 
-    /// The last value label, price line, base line, autoscale and click tolerance of a present
-    /// bar series.
+    /// The numeric display format, last value label, price line, base line, autoscale and
+    /// click tolerance of a present bar series.
     pub fn series_style(&self, id: SeriesId) -> Option<&SeriesStyle> {
         if id == SeriesId::MAIN && self.main_series_present {
             Some(&self.main_series_style)
@@ -573,8 +649,8 @@ impl Chart {
         }
     }
 
-    /// Changes the last value label, price line, base line, autoscale or click tolerance of a
-    /// present bar series. Changes take effect on the next rendered frame.
+    /// Changes the numeric display format, last value label, price line, base line, autoscale
+    /// or click tolerance of a present bar series. Changes take effect on the next rendered frame.
     pub fn series_style_mut(&mut self, id: SeriesId) -> Option<&mut SeriesStyle> {
         if id == SeriesId::MAIN && self.main_series_present {
             Some(&mut self.main_series_style)
@@ -633,7 +709,7 @@ impl Chart {
                 .iter()
                 .find(|pane| pane.members.contains(&id) && pane.rect.is_positive())
                 .map(|pane| {
-                    pane.price_map()
+                    self.series_display_map(id, pane.price_map())
                         .with_thousands_sep(self.config.thousands_sep)
                 });
         }

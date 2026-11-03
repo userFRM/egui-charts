@@ -261,7 +261,7 @@ impl IndicatorRenderer {
                 indicator.as_ref(),
                 &ChartMapping {
                     price: *price_scale,
-                    ..*coords
+                    ..coords.clone()
                 },
             );
             Self::render_study(
@@ -441,7 +441,7 @@ impl IndicatorRenderer {
                     }
                     continue;
                 }
-                let price = values.value(line_idx, i);
+                let price = indicator.plot_value(line_idx, display_bar);
 
                 if let Some(price) = price {
                     // Convert price to screen Y coord

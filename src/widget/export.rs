@@ -550,6 +550,7 @@ impl Chart {
                 None => {
                     chart.set_synced_crosshair_time(Some(time));
                     chart.chart_options.crosshair.horz_line_visible = false;
+                    chart.chart_options.crosshair.horz_label_visible = false;
                 }
             }
         }
@@ -1384,7 +1385,7 @@ mod tests {
             vec![Event::PointerMoved(Pos2::new(400.0, 200.0))],
         );
         frame(&ctx, &mut chart, 0.1, vec![Event::PointerGone]);
-        let decode = |include_crosshair| {
+        let decode = |chart: &Chart, include_crosshair| {
             let png = chart
                 .export_png(
                     &ctx,
@@ -1406,7 +1407,7 @@ mod tests {
             );
             pixels.as_chunks::<4>().0.to_vec()
         };
-        let (plain, crosshair) = (decode(false), decode(true));
+        let (plain, crosshair) = (decode(&chart, false), decode(&chart, true));
         // Candle bodies keep their exact colour through rasterisation and encoding.
         let bullish = chart.config().bullish_color.to_srgba_unmultiplied();
         assert!(plain.iter().filter(|pixel| **pixel == bullish).count() > 1000);
@@ -1415,5 +1416,15 @@ mod tests {
         let column = (0..480).map(|x| (0..320).filter(|&y| changed(x, y)).count());
         let row = (0..320).map(|y| (0..480).filter(|&x| changed(x, y)).count());
         assert!(column.max() > Some(60) && row.max() > Some(100));
+
+        chart.chart_options.crosshair.vert_label_background_color = egui::Color32::RED;
+        chart.chart_options.crosshair.horz_label_background_color = egui::Color32::BLUE;
+        let (time, _) = chart.last_crosshair.unwrap();
+        for price in [Some(105.0), None] {
+            chart.last_crosshair = Some((time, price));
+            let crosshair = decode(&chart, true);
+            assert!(crosshair.contains(&[255, 0, 0, 255]));
+            assert_eq!(crosshair.contains(&[0, 0, 255, 255]), price.is_some());
+        }
     }
 }

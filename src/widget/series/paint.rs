@@ -115,7 +115,7 @@ impl Chart {
             bearish_border: None,
             bullish_wick: None,
             bearish_wick: None,
-            candle_border_width: 0.0,
+            candle_border_width: options.candle_border_width,
         };
         let context = RenderContext::new(plot, rect);
         let clock = self.bar_clock();
@@ -236,7 +236,9 @@ impl Chart {
             if let Some(bar) = item.bars.get(at) {
                 let coords = crate::chart::coords::ChartMapping {
                     start_idx: 0,
-                    right_offset: self.get_chart_mapping().right_offset - index,
+                    numeric_positions: None,
+                    right_offset: self.get_chart_mapping().right_offset
+                        - self.state.time_scale().position(index),
                     price: map,
                     ..self.get_chart_mapping()
                 };

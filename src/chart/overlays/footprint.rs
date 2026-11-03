@@ -2,7 +2,7 @@
 
 use crate::chart::coords::ChartMapping;
 use crate::data::{Footprint, FootprintBar, FootprintLevel, NodeSensitivity};
-use crate::model::Bar;
+use crate::model::{Bar, ChartTypeParams, FootprintStatistic};
 use crate::theme::ThemeExt;
 use egui::epaint::{Galley, Mesh, Shape};
 use egui::{Align2, Color32, FontId, Painter, Rect, Stroke, StrokeKind, pos2, vec2};
@@ -13,38 +13,7 @@ use std::sync::Arc;
 /// The smallest and largest font size a footprint number is drawn at, in points.
 const FONT_LIMITS: [f32; 2] = [8.0, 24.0];
 
-/// Numbers shown in a footprint column.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum FootprintMode {
-    /// Sell volume on the left, buy volume on the right.
-    BidAsk,
-    /// All executed volume, including unknown sides.
-    Volume,
-    /// Buy minus sell volume.
-    Delta,
-    /// Delta followed by total volume.
-    DeltaVolume,
-    /// Only the larger of the sell and buy volume of the row, at the left of the cell when sells
-    /// dominate and at the right when buys do, centred on a tie. The other side stays out.
-    DominantSide,
-}
-
-/// What determines a footprint cell's colour.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum FootprintColor {
-    /// Volume relative to the largest row of this bar.
-    Volume,
-    /// Delta as a fraction of the row's classified volume.
-    Delta,
-    /// Dominant bid or ask side, using the configured comparison.
-    Imbalance,
-    /// The neutral colour for every cell, whatever was traded.
-    Fixed,
-    /// The buy colour for a positive delta and the sell colour for a negative one, with the
-    /// opacity growing with the delta's absolute size relative to the bar's largest. A zero delta
-    /// takes the neutral colour at full opacity.
-    DeltaOpacity,
-}
+pub use crate::model::{FootprintColor, FootprintMode};
 
 /// Footprint appearance. Supply colours from the host's theme. Serializable, so a host can keep
 /// it with its chart settings; fields missing from older documents take their defaults.
@@ -68,6 +37,9 @@ pub struct FootprintConfig {
     /// Group adjacent rows automatically to at least this screen height. `None` keeps the
     /// aggregation's manual grouping. Grouping is an integer multiple of the input step.
     pub auto_row_height: Option<f32>,
+    /// Minimum instrument ticks per displayed row, rounded up to a multiple of the input step.
+    /// Zero keeps the input grouping. Automatic grouping can raise this minimum.
+    pub row_ticks: u32,
     /// Hide numbers when a row is shorter than this height. A column uses compact values and
     /// fonts down to 8 points before switching to a profile overview without numbers.
     pub min_text_height: f32,
@@ -106,10 +78,12 @@ pub struct FootprintConfig {
     /// Outline the rows of the bar's pullback range, see [`pullback_range`].
     pub pullback: bool,
     /// Reserve a per-bar statistics table below the chart's price pane.
-    /// Used by [`crate::widget::Chart::show_footprint`].
+    /// Used by the footprint chart type and [`crate::widget::Chart::show_footprint`].
     pub statistics: bool,
+    /// Statistics rows in display order. An empty list hides the table.
+    pub statistics_rows: Vec<FootprintStatistic>,
     /// Annotations calculated from the displayed rows after executions or grouping change.
-    /// `None` hides them. Used by [`crate::widget::Chart::show_footprint`].
+    /// `None` hides them. Used by the footprint chart type and [`crate::widget::Chart::show_footprint`].
     #[cfg(feature = "studies")]
     pub studies: Option<crate::studies::FootprintStudyConfig>,
 }
@@ -125,6 +99,7 @@ impl Default for FootprintConfig {
             text_color: Color32::WHITE,
             neutral_color: Color32::GRAY,
             auto_row_height: Some(16.0),
+            row_ticks: 0,
             min_text_height: 12.0,
             imbalance_ratio: 3.0,
             imbalance_min_volume: 0.0,
@@ -140,8 +115,64 @@ impl Default for FootprintConfig {
             extreme_ratio: false,
             pullback: false,
             statistics: false,
+            statistics_rows: FootprintStatistic::ALL.to_vec(),
             #[cfg(feature = "studies")]
             studies: None,
+        }
+    }
+}
+
+impl FootprintConfig {
+    pub(crate) fn from_chart_params(params: &ChartTypeParams, colors: [Color32; 4]) -> Self {
+        let [ask_color, bid_color, text_color, neutral_color] =
+            std::array::from_fn(|i| params.footprint_colors[i].unwrap_or(colors[i]));
+        Self {
+            modes: params.footprint_modes.clone(),
+            profile: params.footprint_profile,
+            color_by: params.footprint_color_by,
+            ask_color,
+            bid_color,
+            text_color,
+            neutral_color,
+            auto_row_height: (params.footprint_row_ticks == 0).then_some(16.0),
+            row_ticks: params.footprint_row_ticks,
+            imbalance_ratio: params.footprint_imbalance_ratio,
+            imbalance_min_volume: params.footprint_imbalance_min_volume,
+            diagonal: params.footprint_diagonal,
+            show_poc: params.footprint_poc,
+            value_area: params.footprint_value_area,
+            abbreviate: params.footprint_abbreviate,
+            show_zero: params.footprint_show_zero,
+            font_size: params.footprint_font_size,
+            extreme_ratio: params.footprint_extreme_ratio,
+            pullback: params.footprint_pullback,
+            statistics: params.footprint_statistics,
+            statistics_rows: params.footprint_statistics_rows.clone(),
+            #[cfg(feature = "studies")]
+            studies: (params.footprint_stacked_imbalances
+                || params.footprint_naked_poc
+                || params.footprint_delta_poc
+                || params.footprint_unfinished_auctions
+                || params.footprint_cluster_share.is_some()
+                || params.footprint_single_print_max.is_some()
+                || params.footprint_delta_percent.is_some()
+                || params.footprint_ratio.is_some())
+            .then_some(crate::studies::FootprintStudyConfig {
+                stacked_imbalances: params.footprint_stacked_imbalances,
+                stack: params.footprint_stack,
+                naked_poc: params.footprint_naked_poc,
+                delta_poc: params.footprint_delta_poc,
+                unfinished_auctions: params.footprint_unfinished_auctions,
+                cluster_share: params.footprint_cluster_share,
+                single_print_max: params.footprint_single_print_max,
+                delta_percent: params.footprint_delta_percent,
+                ratio: params.footprint_ratio,
+                imbalance_ratio: params.footprint_imbalance_ratio,
+                imbalance_min_volume: params.footprint_imbalance_min_volume,
+                diagonal: params.footprint_diagonal,
+                ..Default::default()
+            }),
+            ..Default::default()
         }
     }
 }
@@ -587,16 +618,24 @@ fn volume_text(value: f64, abbreviate: bool) -> String {
     }
 }
 
+/// Input rows per displayed row holding at least `row_ticks` instrument ticks; zero keeps the
+/// input rows.
+pub(crate) fn fixed_row_group(flow: &Footprint, row_ticks: u32) -> i64 {
+    let input_ticks = (flow.price_step() / flow.tick_size()).round() as u32;
+    i64::from(row_ticks.div_ceil(input_ticks).clamp(1, 1_000_000))
+}
+
 fn row_group(mapping: &ChartMapping, bar: &Bar, flow: &Footprint, config: &FootprintConfig) -> i64 {
     let raw_height =
         (mapping.price_to_y(bar.close + flow.price_step()) - mapping.price_to_y(bar.close)).abs();
+    let manual = fixed_row_group(flow, config.row_ticks);
     config
         .auto_row_height
         .filter(|h| h.is_finite() && *h > 0.0)
-        .map_or(1, |height| {
+        .map_or(manual, |height| {
             (height / raw_height.max(0.01))
                 .ceil()
-                .clamp(1.0, 1_000_000.0) as i64
+                .clamp(manual as f32, 1_000_000.0) as i64
         })
 }
 
@@ -690,10 +729,29 @@ pub fn render_footprint_statistics(
     flow: &Footprint,
     text_color: Color32,
 ) {
+    render_footprint_statistics_rows(
+        painter,
+        mapping,
+        bars,
+        flow,
+        text_color,
+        &FootprintStatistic::ALL,
+    );
+}
+
+pub(crate) fn render_footprint_statistics_rows(
+    painter: &Painter,
+    mapping: &ChartMapping,
+    bars: &[Bar],
+    flow: &Footprint,
+    text_color: Color32,
+    rows: &[FootprintStatistic],
+) {
+    if rows.is_empty() {
+        return;
+    }
     let painter = painter.with_clip_rect(mapping.rect.intersect(painter.clip_rect()));
-    let labels = [
-        "Vol", "Bid", "Ask", "Delta", "Min", "Max", "CVD", "Delta %", "Ask/Bid",
-    ];
+    let labels: Vec<_> = rows.iter().map(|row| row.label()).collect();
     let row_height = (mapping.rect.height() / labels.len() as f32).min(12.0);
     let font = FontId::monospace(10.0);
     let labels: Vec<_> = labels
@@ -739,6 +797,7 @@ pub fn render_footprint_statistics(
             row.delta_percent(),
             (row.bid > 0.0).then(|| row.ask / row.bid),
         ];
+        let values: Vec<_> = rows.iter().map(|row| values[*row as usize]).collect();
         columns.push((x, values));
     }
     let mut size = 10.0;
@@ -759,9 +818,13 @@ pub fn render_footprint_statistics(
                                 .map(|(line, value)| {
                                     let text = value.map_or_else(
                                         || "n/a".to_owned(),
-                                        |value| match line {
-                                            7 => format!("{value:.1}%"),
-                                            8 => format!("{value:.2}:1"),
+                                        |value| match rows[line] {
+                                            FootprintStatistic::DeltaPercent => {
+                                                format!("{value:.1}%")
+                                            }
+                                            FootprintStatistic::AskBidRatio => {
+                                                format!("{value:.2}:1")
+                                            }
                                             _ => volume_text(value, abbreviate),
                                         },
                                     );
@@ -1143,19 +1206,22 @@ mod tests {
     /// Rows cover the nearest-tick band; spacing that leaves cells under a point wide produces no
     /// geometry.
     #[test]
-    fn rendered_rows_surround_their_instrument_ticks() {
+    fn rendered_execution_rows_surround_their_instrument_ticks() {
         let time = "2026-01-05T10:00:00Z".parse().unwrap();
         // y(P) = (high - P) / (high - 99) * 160, calculated independently.
         #[rustfmt::skip]
         let cases = [
-            (1.63, 1.0, 1, None, 100.0, 102.0, None),
-            (1.64, 1.0, 1, None, 100.0, 102.0, Some((80.0, 133.33333))),
-            (100.0, 1.0, 1, None, 100.0, 102.0, Some((80.0, 133.33333))),
-            (100.0, 0.25, 1, None, 100.25, 102.0, Some((86.66667, 100.0))),
-            (100.0, 1.0, 4, None, 100.0, 106.0, Some((57.142857, 148.57143))),
-            (100.0, 1.0, 1, Some(75.0), 100.0, 106.0, Some((57.142857, 148.57143))),
+            (1.63, 1.0, 1, 0, None, 100.0, 102.0, None),
+            (1.64, 1.0, 1, 0, None, 100.0, 102.0, Some((80.0, 133.33333))),
+            (100.0, 1.0, 1, 0, None, 100.0, 102.0, Some((80.0, 133.33333))),
+            (100.0, 0.25, 1, 0, None, 100.25, 102.0, Some((86.66667, 100.0))),
+            (100.0, 1.0, 4, 0, None, 100.0, 106.0, Some((57.142857, 148.57143))),
+            (100.0, 1.0, 1, 0, Some(75.0), 100.0, 106.0, Some((57.142857, 148.57143))),
+            (100.0, 1.0, 1, 2, None, 100.0, 106.0, Some((102.85714, 148.57143))),
+            (100.0, 0.1, 1, 3, None, 100.0, 102.0, Some((98.66667, 114.66667))),
+            (100.0, 0.1, 3, 3, None, 100.0, 102.0, Some((98.66667, 114.66667))),
         ];
-        for (spacing, tick, ticks, auto, price, high, extent) in cases {
+        for (spacing, tick, ticks, manual, auto, price, high, extent) in cases {
             let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), tick, ticks).unwrap();
             flow.push(&Tick::new(time, price, 3.0, Some(OrderSide::Buy)))
                 .unwrap();
@@ -1177,6 +1243,7 @@ mod tests {
             );
             let config = FootprintConfig {
                 auto_row_height: auto,
+                row_ticks: manual,
                 show_poc: false,
                 value_area: None,
                 ..Default::default()
@@ -2087,7 +2154,7 @@ mod tests {
             let map = ChartMapping {
                 bar_spacing: spacing,
                 base_idx: 1,
-                ..map
+                ..map.clone()
             };
             let mut output = ctx.run_ui(
                 egui::RawInput {

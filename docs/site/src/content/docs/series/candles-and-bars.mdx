@@ -48,7 +48,9 @@ Main-series colours, wick width and candle border width live in
 [`BarColors`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.BarColors.html)
 can override a bar's body, wick and border. Added OHLC series use
 [`SeriesOptions::up_color`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.SeriesOptions.html#structfield.up_color)
-and `down_color`; they do not expose the main series' candle/bar style switches.
+and `down_color`, and draw each bar's border colour inside its body when
+[`SeriesOptions::candle_border_width`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.SeriesOptions.html#structfield.candle_border_width)
+is positive (zero by default); they do not expose the main series' candle/bar style switches.
 All five types can be [added series](../chart-types.mdx#added-series-restrictions).
 
 For smoothed OHLC, continue to [Heikin-Ashi](/egui-charts/docs/chart-types/transforms/#heikin-ashi).
