@@ -1,5 +1,5 @@
 use super::*;
-use crate::model::{BarData, LineStyle};
+use crate::model::{BarData, LineStyle, SeriesDisplayFormat, SeriesFormat};
 use crate::tokens::DESIGN_TOKENS;
 use crate::widget::test_frames::frame;
 use crate::widget::{PaneId, SeriesId, SeriesOptions};
@@ -24,6 +24,180 @@ fn bars(prices: &[f64]) -> Vec<Bar> {
             )
         })
         .collect()
+}
+
+/// Saved display formats label raw units on shared and independent axes without transforming
+/// the data. A quarter-unit movement rounds 12.62 to 12.50, and 1500 / 1000 is 1.50K.
+#[test]
+fn series_display_formats_reach_ticks_tags_readouts_and_snapshots() {
+    for (kind, value, step, expected) in [
+        (SeriesFormat::Price, 12.62, 0.25, "12.50"),
+        (SeriesFormat::Price, 12.625, 0.25, "12.75"),
+        (SeriesFormat::Price, -12.625, 0.25, "-12.75"),
+        (SeriesFormat::Volume, 1500.0, 1.0, "1.50K"),
+        (SeriesFormat::Volume, 1500.0, 3.0, "1.50K"),
+        (SeriesFormat::Percentage, 12.5, 0.25, "12.50%"),
+    ] {
+        for assignment in [
+            None,
+            Some(SeriesScale::Right),
+            Some(SeriesScale::Left),
+            Some(SeriesScale::Separate(1)),
+        ] {
+            let ctx = egui::Context::default();
+            let data = bars(&[value - step, value]);
+            let mut chart = Chart::new(BarData::from_bars(data.clone()));
+            chart
+                .series_price_scale_mut(SeriesId::MAIN)
+                .unwrap()
+                .set_price_precision(Some(4));
+            let id = assignment.map_or(SeriesId::MAIN, |scale| {
+                let id = chart.add_series(SeriesOptions {
+                    scale,
+                    ..Default::default()
+                });
+                chart.set_data(id, data.clone());
+                id
+            });
+            if assignment == Some(SeriesScale::Separate(1)) {
+                let pane = chart.add_pane();
+                assert!(chart.move_series_to_pane(id, pane));
+            }
+            chart.series_style_mut(id).unwrap().display_format = Some(SeriesDisplayFormat {
+                kind,
+                precision: 2,
+                min_move: step,
+            });
+            let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 0.0, vec![]);
+            assert_eq!(
+                chart.format_series_price(id, value).as_deref(),
+                Some(expected)
+            );
+            assert!(
+                painted.iter().any(|shape| matches!(shape,
+                    egui::Shape::Text(text) if text.galley.text() == expected
+                )),
+                "{kind:?} {assignment:?}: last-value tag"
+            );
+            assert_eq!(chart.bars(id), data);
+            let map = chart.series_price_map(id).unwrap();
+            assert_eq!(map.transform().mode, PriceScaleMode::Normal);
+            assert_eq!(
+                map.price_precision(),
+                if assignment == Some(SeriesScale::Right) {
+                    Some(4)
+                } else {
+                    Some(2)
+                }
+            );
+            let formatter = chart
+                .series_label_formatter(id, PriceScaleMode::Normal)
+                .unwrap();
+            assert_eq!(formatter.format(value), expected);
+            if id != SeriesId::MAIN {
+                assert_eq!(
+                    chart.series_tag_label(&chart.price_series[0], &map, value, true),
+                    expected
+                );
+            }
+            // On a shared axis the visible main series owns the ticks, while each series
+            // keeps its own tag and readout format.
+            if assignment != Some(SeriesScale::Right) {
+                let marks =
+                    crate::chart::rendering::axes::price_marks(&map, Some(formatter.as_ref()));
+                assert!(!marks.is_empty());
+                for adjacent in marks.windows(2) {
+                    assert_ne!(adjacent[0].label, adjacent[1].label);
+                }
+                for mark in marks {
+                    assert!((mark.price / step - (mark.price / step).round()).abs() < 1e-8);
+                    assert_eq!(mark.label, formatter.format(mark.price));
+                }
+            }
+            for mode in [
+                PriceScaleMode::Logarithmic,
+                PriceScaleMode::Percentage,
+                PriceScaleMode::IndexedTo100,
+            ] {
+                if mode == PriceScaleMode::Logarithmic && value <= 0.0 {
+                    continue;
+                }
+                chart.series_price_scale_mut(id).unwrap().options_mut().mode = mode;
+                frame(&ctx, &mut chart, 0.1, vec![]);
+                if mode == PriceScaleMode::Logarithmic {
+                    assert_eq!(
+                        chart.format_series_price(id, value).as_deref(),
+                        Some(expected)
+                    );
+                } else {
+                    // Explicit transformed-mode hooks receive scale units even with a raw declaration.
+                    chart.set_percentage_formatter(Some(std::sync::Arc::new(
+                        crate::scales::CustomPriceFormatter::new(|_| "transformed".into()),
+                    )));
+                    assert_eq!(
+                        chart.format_series_price(id, value).as_deref(),
+                        Some("transformed")
+                    );
+                    chart.set_percentage_formatter(None);
+                    assert_ne!(
+                        chart.format_series_price(id, value).as_deref(),
+                        Some(expected)
+                    );
+                }
+            }
+            chart.series_price_scale_mut(id).unwrap().options_mut().mode = PriceScaleMode::Normal;
+            frame(&ctx, &mut chart, 0.2, vec![]);
+            chart.set_price_formatter(Some(std::sync::Arc::new(
+                crate::scales::CustomPriceFormatter::new(|_| "chart".into()),
+            )));
+            assert_eq!(
+                chart.format_series_price(id, value).as_deref(),
+                Some("chart")
+            );
+            chart.set_series_formatter(
+                id,
+                Some(std::sync::Arc::new(
+                    crate::scales::CustomPriceFormatter::new(|_| "series".into()),
+                )),
+            );
+            assert_eq!(
+                chart.format_series_price(id, value).as_deref(),
+                Some("series")
+            );
+            chart.set_series_formatter(id, None);
+            chart.set_price_formatter(None);
+            if assignment == Some(SeriesScale::Right) {
+                chart.set_main_series_visible(false);
+                frame(&ctx, &mut chart, 0.3, vec![]);
+                assert_eq!(
+                    chart.series_price_map(id).unwrap().price_precision(),
+                    Some(2)
+                );
+                assert!(chart.remove_series(SeriesId::MAIN));
+                frame(&ctx, &mut chart, 0.4, vec![]);
+                assert_eq!(chart.last_price_map.price_precision(), Some(2));
+            }
+            #[cfg(feature = "ui")]
+            {
+                let saved = serde_json::to_string(&chart.snapshot().unwrap()).unwrap();
+                let mut restored = Chart::new(BarData::from_bars(data.clone()));
+                restored
+                    .restore(&serde_json::from_str(&saved).unwrap())
+                    .unwrap();
+                let restored_id = if id == SeriesId::MAIN {
+                    id
+                } else {
+                    restored.restored_series_id(id.0).unwrap()
+                };
+                restored.set_data(restored_id, data);
+                frame(&egui::Context::default(), &mut restored, 0.0, vec![]);
+                assert_eq!(
+                    restored.format_series_price(restored_id, value).as_deref(),
+                    Some(expected)
+                );
+            }
+        }
+    }
 }
 
 /// The magnet reaches a visible comparison through its own scale, so a series whose prices

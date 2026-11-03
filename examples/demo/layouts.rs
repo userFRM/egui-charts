@@ -390,7 +390,9 @@ impl DemoApp {
         let mut name = name.unwrap_or_else(|| "Unnamed".into());
         let base = name.clone();
         let mut suffix = 2;
-        while self.layout_tabs.iter().any(|t| t.name == name) {
+        while self.layout_tabs.iter().any(|t| t.name == name)
+            || (!duplicate && self.layout_is_saved(&name))
+        {
             name = format!("{base} {suffix}");
             suffix += 1;
         }
@@ -484,7 +486,7 @@ impl DemoApp {
                         self.toasts.error(error);
                         return;
                     }
-                    self.restore_layout(name, layout);
+                    self.restore_layout(name, layout, Ok(comparisons));
                     self.save_layout();
                 }
                 Err(error) => self.toasts.error(error),
@@ -551,7 +553,9 @@ impl DemoApp {
         Ok(SavedLayout { mode, charts })
     }
 
-    fn capture_comparisons(&self) -> Result<Vec<Vec<super::comparison::SavedComparison>>, String> {
+    pub(super) fn capture_comparisons(
+        &self,
+    ) -> Result<Vec<Vec<super::comparison::SavedComparison>>, String> {
         let active = super::comparison::capture(&self.chart, &self.comparisons, &self.spreads)?;
         let mut slots = self
             .extra_charts
@@ -585,12 +589,17 @@ impl DemoApp {
     }
 
     /// Shows a stored layout in the current tab, which takes its name.
-    fn restore_layout(&mut self, name: String, layout: SavedLayout) {
+    pub(super) fn restore_layout(
+        &mut self,
+        name: String,
+        layout: SavedLayout,
+        comparisons: Result<Vec<Vec<super::comparison::SavedComparison>>, String>,
+    ) -> bool {
         if let Some(index) = self.layout_tabs.iter().position(|t| t.name == name)
             && index != self.layout_tab
         {
             self.select_layout(index);
-            return;
+            return true;
         }
         if layout.charts.is_empty()
             || (layout.mode != ChartLayoutMode::Tabs
@@ -598,39 +607,39 @@ impl DemoApp {
         {
             self.toasts
                 .error("Could not open layout: invalid chart count");
-            return;
+            return false;
         }
         let groups = match self.storage.layout_groups(&name) {
             Ok(groups) => groups,
             Err(error) => {
                 self.toasts.error(error);
-                return;
+                return false;
             }
         };
-        let mut comparisons = match self.storage.comparisons(&name) {
+        let mut comparisons = match comparisons {
             Ok(saved) if saved.is_empty() => (0..layout.charts.len()).map(|_| Vec::new()).collect(),
             Ok(saved) if saved.len() == layout.charts.len() => saved,
             Ok(_) => {
                 self.toasts
                     .error("Could not open comparisons: invalid chart count");
-                return;
+                return false;
             }
             Err(error) => {
                 self.toasts.error(error);
-                return;
+                return false;
             }
         };
         for (saved, snapshot) in comparisons.iter().zip(&layout.charts) {
             if let Err(error) = super::comparison::validate(saved, snapshot.panes.len()) {
                 self.toasts.error(error);
-                return;
+                return false;
             }
         }
         for snapshot in &layout.charts {
             let mut check = Chart::new(egui_charts::model::BarData::new());
             if let Err(error) = check.restore(snapshot) {
                 self.toasts.error(format!("Could not open layout: {error}"));
-                return;
+                return false;
             }
         }
         self.restore_layout_groups(groups);
@@ -718,6 +727,7 @@ impl DemoApp {
             adjust_for_dividends: self.timeframe_toolbar.state.adjust_for_dividends,
             ..egui_charts::widget::settings::ChartSettingsState::from_chart(&self.chart)
         };
+        true
     }
 
     /// The settings the demo keeps between sessions.
@@ -732,12 +742,16 @@ impl DemoApp {
         settings.drawing_favorites_hidden = !toolbar.floating_visible;
         settings.drawing_favorites_pos = toolbar.floating_pos.map(|pos| (pos.x, pos.y));
         settings.magnet_hint_dismissed = toolbar.magnet_hint_dismissed;
-        settings.layout = menu
-            .curr_layout
-            .clone()
-            .filter(|name| menu.layouts.contains(name));
+        settings.layout = Some(self.layout_tabs[self.layout_tab].name.clone())
+            .filter(|name| self.layout_is_saved(name));
         settings.layout_autosave = menu.autosave;
         settings.layout_favorites = menu.favorites.clone();
+        settings.indicator_favorites = self
+            .indicator_dialog
+            .preferences()
+            .favorites
+            .into_iter()
+            .collect();
         settings.market_heatmap = self.market_heatmap.selection.clone();
         settings
     }
@@ -767,6 +781,11 @@ impl DemoApp {
         toolbar.magnet_hint_dismissed |= settings.magnet_hint_dismissed;
         self.top_toolbar.layout_menu.autosave = settings.layout_autosave;
         self.top_toolbar.layout_menu.favorites = settings.layout_favorites;
+        self.indicator_dialog.set_preferences(
+            egui_charts::ui::top_toolbar::components::indicator_dialog::IndicatorPreferences {
+                favorites: settings.indicator_favorites.into_iter().collect(),
+            },
+        );
         self.market_heatmap.selection = settings.market_heatmap;
         if let Some(layout) = settings.layout {
             self.top_toolbar.layout_menu.open(&layout);
@@ -782,7 +801,8 @@ impl DemoApp {
         }
         let previous = self.top_toolbar.layout_menu.curr_layout.clone();
         if let Some((name, layout)) = self.top_toolbar.layout_menu.poll(ctx) {
-            self.restore_layout(name, layout);
+            let comparisons = self.storage.comparisons(&name);
+            self.restore_layout(name, layout, comparisons);
         } else if self.top_toolbar.layout_menu.curr_layout != previous
             && let Some(name) = &self.top_toolbar.layout_menu.curr_layout
         {

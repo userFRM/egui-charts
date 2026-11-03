@@ -85,6 +85,8 @@ struct SavedOptions {
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(remote = "egui_charts::model::SeriesStyle")]
 struct SavedStyle {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    display_format: Option<egui_charts::model::SeriesDisplayFormat>,
     last_value_visible: bool,
     price_line_visible: bool,
     #[serde(with = "SavedPriceLineSource")]
