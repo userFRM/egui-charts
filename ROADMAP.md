@@ -289,6 +289,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Runtime symbol/interval changes reload the feed; explicit reload and reset paths invalidate old work.
 - [x] Public events report pointer, range, symbol, interval and data changes; opt-in operation notifications preserve each accepted direct data load or update, including unchanged updates, and distinguish appends, existing-bar updates and historical insertions. Compact state-change events and queue overflow reporting remain available. Custom menu entries and toolbar controls return application identifiers.
 - [x] Added price series, custom study-backed series and attached `Primitive` renderers support visibility, hit testing, scale participation and removal. Bar-series logical-range queries return stored slices and shared-scale distances, including gaps and fractional bounds outside the data. The demo menu's Samples entries demonstrate toggleable session backgrounds, axis labels and a custom range pane with pointer feedback.
+- [x] Live change markers on main and added bar series retain their configured rise and fall colours while fading linearly over their lifetime. Another changed close restarts the fade; expired markers are removed and stop requesting repaints.
 - [ ] Reset a stale manual price range when changing symbols.
 - [ ] Accept locale, formatters, storage and saved state as builder inputs.
 - [ ] Add bounded time-range requests for trades/depth and page older trades during scroll-back.
