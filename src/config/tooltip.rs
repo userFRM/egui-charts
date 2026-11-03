@@ -8,6 +8,10 @@
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 
+fn default_long_press_delay() -> std::time::Duration {
+    std::time::Duration::from_millis(500)
+}
+
 /// Tooltip display mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum TooltipMode {
@@ -48,8 +52,18 @@ pub struct TooltipOptions {
     /// data tooltip independently of the crosshair.
     pub enabled: bool,
 
-    /// Show values only while the primary pointer is held. Touch waits for a long press.
+    /// Show values while the primary pointer is held. Touch waits for `long_press_delay`
+    /// and exits according to `touch_exit_mode`, independently of live-edge following.
     pub on_long_press: bool,
+
+    /// Time a touch must remain still before activating the readout. Default: 500 ms.
+    #[serde(default = "default_long_press_delay")]
+    pub long_press_delay: std::time::Duration,
+
+    /// When to exit a touch readout activated by `on_long_press`.
+    /// Default: hide on release, preserving held-value behaviour.
+    #[serde(default)]
+    pub touch_exit_mode: super::TouchTrackingExitMode,
 
     /// Tooltip display mode
     pub mode: TooltipMode,
@@ -113,6 +127,8 @@ impl Default for TooltipOptions {
         Self {
             enabled: true,
             on_long_press: false,
+            long_press_delay: default_long_press_delay(),
+            touch_exit_mode: super::TouchTrackingExitMode::default(),
             mode: TooltipMode::Floating,
             show_ohlc: true,
             show_volume: true,

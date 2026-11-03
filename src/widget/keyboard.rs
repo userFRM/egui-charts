@@ -371,7 +371,12 @@ impl super::Chart {
         let pane_maps: Vec<_> = self
             .last_rendered_indicator_panes
             .iter()
-            .filter_map(|pane| Some((self.study_ids.get(pane.indicator_idx)?.0, pane.mapping)))
+            .filter_map(|pane| {
+                Some((
+                    self.study_ids.get(pane.indicator_idx)?.0,
+                    pane.mapping.clone(),
+                ))
+            })
             .collect();
         self.user_action(|chart| {
             chart.drawings.edit_selected(|drawing| {
