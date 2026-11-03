@@ -848,27 +848,12 @@ mod tests {
             let ctx = egui::Context::default();
             let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
             app.live.set_paused(true);
-            assert_eq!(
-                app.widget_bar
-                    .widgets
-                    .iter()
-                    .map(|widget| widget.id)
-                    .collect::<Vec<_>>(),
-                [5],
-                "order flow is available while sample panels start hidden"
-            );
+            assert!(app.widget_bar.widgets.is_empty());
             app.execute_search_command(&ctx, "samples");
-            assert_eq!(app.widget_bar.widgets.len(), 3);
+            assert_eq!(app.widget_bar.widgets.len(), 2);
             app.widget_bar.active_widget = Some(2);
             app.execute_search_command(&ctx, "samples");
-            assert_eq!(
-                app.widget_bar
-                    .widgets
-                    .iter()
-                    .map(|widget| widget.id)
-                    .collect::<Vec<_>>(),
-                [5]
-            );
+            assert!(app.widget_bar.widgets.is_empty());
             assert_eq!(app.widget_bar.active_widget, None);
             app.execute_search_command(&ctx, "samples");
 

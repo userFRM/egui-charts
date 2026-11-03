@@ -364,7 +364,7 @@ impl DemoApp {
                 if self.api_samples {
                     self.widget_bar.widgets.extend(super::sample_widgets());
                 } else {
-                    self.widget_bar.widgets.retain(|widget| widget.id == 5);
+                    self.widget_bar.widgets.clear();
                     self.widget_bar.active_widget = None;
                     if self.open_panel == Some(super::SidePanel::TimeAndSales) {
                         self.open_panel = None;
@@ -696,7 +696,7 @@ mod tests {
             .as_ref()
             .and_then(|update| {
                 update.nodes.iter().find_map(|(_, node)| {
-                    if node.label() == Some(label) {
+                    if node.label() == Some(label) && node.role() != egui::accesskit::Role::Label {
                         let rect = node.bounds()?;
                         Some(egui::pos2(
                             (rect.x0 + rect.x1) as f32 * 0.5,
@@ -764,6 +764,7 @@ mod tests {
                 "Liquidity heatmap",
                 "Largest order profile",
                 "Pause synthetic feed",
+                "Order flow",
                 "Research",
                 "Copy symbol",
             ]
@@ -776,7 +777,6 @@ mod tests {
                         "Object Tree",
                         "Data Window",
                         "Time and sales",
-                        "Order flow",
                         "Session notes",
                         "Keyboard shortcuts",
                     ])
@@ -841,6 +841,16 @@ mod tests {
             assert!(app.largest_order_profile);
             click_at_width(&mut app, &ctx, "Copy symbol", width);
             assert!(!egui::Popup::is_any_open(&ctx));
+            click_at_width(&mut app, &ctx, "Menu", width);
+            click_at_width(&mut app, &ctx, "Order flow", width);
+            assert!(app.open_panel == Some(super::super::SidePanel::OrderFlow));
+            assert!(app.widget_bar.active_widget.is_none());
+            assert!(!egui::Popup::is_any_open(&ctx));
+            app.execute_search_command(&ctx, "samples");
+            assert!(app.open_panel == Some(super::super::SidePanel::OrderFlow));
+            click_at_width(&mut app, &ctx, "Menu", width);
+            click_at_width(&mut app, &ctx, "Order flow", width);
+            assert!(app.open_panel.is_none());
         }
     }
 
