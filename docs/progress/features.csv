@@ -18,7 +18,7 @@ Builder API,Builder integration,Clean demo opening and saved opt-ins,done,librar
 Builder API,Builder integration,Custom drawing tools from a downstream crate,done,library,src/drawings/registry.rs;src/drawings/manager/mod.rs;src/drawings/manager/interaction.rs,
 Builder API,Builder integration,Custom indicator metadata,done,library,src/studies/indicator_trait.rs;src/studies/inputs.rs;src/studies/settings.rs;src/chart/rendering/indicator.rs;src/chart/rendering/axes/study_scale.rs,
 Builder API,Builder integration,Custom indicators from a downstream crate,done,library,src/studies/factory/mod.rs;src/ui/dialogs/indicator_dialog/dialog.rs;src/widget/studies.rs;src/studies/custom.rs;terminal/src/studies.rs,
-Builder API,Builder integration,Custom series types from a downstream crate,done,library,src/widget/primitives.rs;src/widget/pane/render/mod.rs;src/chart/primitives.rs;src/widget/frame/mod.rs;src/widget/pane/indicator/mod.rs;examples/demo/primitive_scene.rs;examples/demo/commands.rs,1936
+Builder API,Builder integration,Custom series types from a downstream crate,done,library,src/widget/primitives.rs;src/widget/pane/render/mod.rs;src/chart/primitives.rs;src/widget/frame/mod.rs;src/widget/pane/indicator/mod.rs;examples/demo/primitive_scene.rs;examples/demo/commands.rs;src/widget/events.rs,1936;1901
 Builder API,Builder integration,Desktop webview integration,missing,library,,
 Builder API,Builder integration,Embedding with a data feed,done,host,src/widget/builder.rs;src/widget/feed/mod.rs;src/widget/frame/mod.rs,
 Builder API,Builder integration,Full trading-terminal UI around the chart,partial,library,src/ui/app_state.rs;src/ui/trading/mod.rs;terminal/src/lib.rs;terminal/src/core.rs;terminal/src/services.rs;terminal/src/layout.rs;terminal/src/trading.rs;terminal/src/panels.rs;terminal/src/time.rs;terminal/src/alerts.rs;terminal/src/layouts.rs,205;383
@@ -78,7 +78,7 @@ Builder API,Save/load adapter,Study templates,done,library,src/studies/template.
 Builder API,Save/load adapter,User settings persistence,done,host,src/services/settings.rs,
 Builder API,Widget API and customization,Change interval at runtime,done,library,src/widget/feed/mod.rs;src/widget/events.rs,
 Builder API,Widget API and customization,Change symbol at runtime,done,library,src/widget/feed/mod.rs;src/scales/pricescale.rs;src/widget/events.rs,
-Builder API,Widget API and customization,Chart events,done,library,src/widget/events.rs;src/widget/crosshair.rs;src/widget/readout.rs;src/widget/feed/mod.rs;src/widget/series/mod.rs;src/widget/replay.rs;src/widget/frame/mod.rs;src/widget/pane/render/mod.rs,1864;1895;1896;1898
+Builder API,Widget API and customization,Chart events,done,library,src/widget/events.rs;src/widget/crosshair.rs;src/widget/readout.rs;src/widget/feed/mod.rs;src/widget/series/mod.rs;src/widget/replay.rs;src/widget/frame/mod.rs;src/widget/pane/render/mod.rs;src/chart/primitives.rs;src/widget/primitives.rs,1864;1895;1896;1898;1901
 Builder API,Widget API and customization,Chart synchronisation,done,library,src/widget/sync.rs;src/widget/layout.rs;src/model/timescale.rs;src/widget/frame/mod.rs,
 Builder API,Widget API and customization,Chart type switching,done,library,src/widget/builder.rs;src/chart/rendering/candles/mod.rs;src/widget/frame/mod.rs,
 Builder API,Widget API and customization,Chart without toolbars,done,library,Cargo.toml;src/lib.rs;src/widget/builder.rs;src/widget/frame/mod.rs,

@@ -960,20 +960,33 @@ impl Chart {
                             pos,
                         )
                     });
+                    let renderer_hit = pointer.and_then(|pos| {
+                        if !series_backgrounds.is_empty() {
+                            return crate::widget::primitives::primitive_at(
+                                pane_primitives().filter(|(item, _)| item.replaces),
+                                pos,
+                            );
+                        }
+                        members.iter().rev().fold(None, |best, id| {
+                            crate::widget::primitives::best_hit(
+                                best,
+                                crate::widget::primitives::primitive_at(
+                                    pane_primitives()
+                                        .filter(|(item, _)| item.replaces && item.series == *id),
+                                    pos,
+                                ),
+                            )
+                        })
+                    });
 
                     // Resolve a click on this pane: a hit on the line selects
                     // it, an empty-pane click clears the whole selection. A
                     // close-"x" click is handled above and must not also
                     // change the selection.
                     let study_at = |pos| {
-                        let renderer = (!series_backgrounds.is_empty())
-                            .then(|| {
-                                crate::widget::primitives::primitive_at(
-                                    pane_primitives().filter(|(item, _)| item.replaces),
-                                    pos,
-                                )
-                            })
-                            .flatten()
+                        let renderer = renderer_hit
+                            .as_ref()
+                            .filter(|_| !series_backgrounds.is_empty() && Some(pos) == pointer)
                             .and_then(|hit| match hit.target {
                                 crate::widget::PointerTarget::Element(id) => Some(id),
                                 _ => None,
@@ -985,16 +998,14 @@ impl Chart {
                                 .rev()
                                 .find_map(|id| {
                                     if self.has_renderer(*id) {
-                                        let hit = crate::widget::primitives::primitive_at(
-                                            pane_primitives().filter(|(item, _)| {
-                                                item.replaces && item.series == *id
-                                            }),
-                                            pos,
-                                        )?;
-                                        return match hit.target {
-                                            crate::widget::PointerTarget::Element(id) => Some(id),
-                                            _ => None,
-                                        };
+                                        return renderer_hit.as_ref().and_then(|hit| {
+                                            (Some(pos) == pointer
+                                                && hit.target
+                                                    == crate::widget::PointerTarget::Element(
+                                                        ChartElementId::Indicator(*id),
+                                                    ))
+                                            .then_some(ChartElementId::Indicator(*id))
+                                        });
                                     }
 
                                     if let Some(item) = self
@@ -1042,29 +1053,29 @@ impl Chart {
                         let drawing = self.drawings.hit_test(pos);
                         #[cfg(not(feature = "drawings"))]
                         let drawing: Option<usize> = None;
-                        let renderer = study_at(pos).and_then(|element| {
-                            let ChartElementId::Indicator(id) = element else {
-                                return None;
-                            };
-                            crate::widget::primitives::primitive_at(
-                                pane_primitives()
-                                    .filter(|(item, _)| item.replaces && item.series == id),
-                                pos,
-                            )
-                        });
-                        if let Some(hit) = primitive_hit.or(renderer).filter(|_| {
+                        let renderer = renderer_hit
+                            .as_ref()
+                            .filter(|hit| {
+                                study_at(pos).map(crate::widget::PointerTarget::Element)
+                                    == Some(hit.target)
+                            })
+                            .cloned();
+                        let hit = crate::widget::primitives::best_hit(primitive_hit, renderer);
+                        if let Some(hit) = hit.as_ref().filter(|_| {
                             drawing.is_none()
                                 && pane_response.hovered()
                                 && !pane_response.dragged()
                                 && !eraser_mode
                                 && !drawing_tool_active
                         }) {
-                            ui.ctx().set_cursor_icon(hit.cursor);
+                            ui.ctx().set_cursor_icon(hit.result.cursor);
                         }
                         self.host_events.target = drawing
                             .map(crate::widget::PointerTarget::Drawing)
-                            .or(primitive_hit.map(|hit| hit.target))
+                            .or(hit.as_ref().map(|hit| hit.target))
                             .or_else(|| study_at(pos).map(crate::widget::PointerTarget::Element));
+                        self.host_events.primitive_hit =
+                            hit.filter(|_| drawing.is_none()).map(|hit| hit.result);
                     }
 
                     // Draw selection handles when this pane is selected.
