@@ -225,7 +225,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 ### Toolbars, Dialogs and Panels
 
 - [x] Top toolbar with symbol search, comparison, interval/type selection, study, alert, replay, history, settings, save and layout actions.
-- [x] Symbol search supports text, type, exchange and source filters, pagination, keyboard navigation and host results; the terminal loads comparisons from the chart feed on shared percentage scales, separate scales or panes, and displays arithmetic spreads as candles in their own panes.
+- [x] Symbol search supports text, type, exchange and source filters, pagination, keyboard navigation and host results; the terminal loads comparisons from the chart feed on shared percentage scales, separate scales or panes, and displays arithmetic spreads as candles in their own panes. Demo spreads refresh when their components or display inputs change.
 - [x] Timeframe toolbar provides range presets, go-to-date, time zone, regular/extended session and adjustment requests. `Terminal` fits ranges to loaded history, navigates dates in the chart time zone, switches intervals and sessions, restores interval favourites, and requests host-supplied dividend adjustment.
 - [x] Drawing toolbar categories, cursor modes, snapping, repeated placement, locking and template actions; favourites can be stored.
 - [x] Chart settings apply backgrounds, grids, candle parts and colours, previous-close colouring, crosshair styling, session shading and watermarks.
@@ -233,7 +233,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Object tree supports selection, filtering, visibility, locks, ordering, rename, duplication, pane moves and bulk actions; a data window shows OHLCV and study values.
 - [x] Editable shortcut bindings are shared by chart input, help and menu hints; quick search uses a command palette. Hosts can append icon actions and submenus to the fixed top-left toolbar menu, even with its built-in entries hidden. The demo offers its readout, appearance, formatting and populated showcase samples there without adding a row above the chart. Every top-level entry has an icon and aligned label, with toggle checks and submenu arrows at the right, including phone panel actions.
 - [x] Watchlists support named lists, sections, sorting, row reordering, flags, symbol navigation and text import/export.
-- [x] Feed-backed panels render symbol details, news, calendars, hotlists, screener tables and grouped market heatmaps; `FinancialsPanel` charts and tabulates supplied financial figures. The demo offers Financials only for populated fixtures and opens a company sample from its Samples menu and quick search.
+- [x] Feed-backed panels render symbol details, news, calendars, hotlists, screener tables and grouped market heatmaps; `FinancialsPanel` charts and tabulates supplied financial figures. Demo quotes and symbol details share daily volume totals maintained as data changes. The demo offers Financials only for populated fixtures and opens a company sample from its Samples menu and quick search.
 - [ ] Assemble a terminal that owns component state, handles all actions and lets the application intercept them. `Terminal` also runs the widget bar and side panels, persists watchlists, routes panel symbol selections, derives performance and seasonality from chart bars, opens host-fed profile cards, trades through the supplied brokers and docks the account and strategy report. It also handles time controls, comparisons, spread selection and host-supplied dividend adjustment, and runs multi-chart grids, layout tabs, saved layouts, favourites, autosave and Ctrl+S. Remaining action groups and the demo migration are unfinished.
 - [x] Dock the supplied broker account and host strategy report in shared bottom tabs, with collapse, restore and maximise controls.
 - [ ] Open the study editor and replay-trading surfaces as tabs of the same bottom dock.
@@ -252,7 +252,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Main-series studies recalculate against replayed bars and drawing anchors remain stable.
 - [x] Floating replay controls, keyboard shortcuts, saved replay sessions and synchronised layout replay are exercised by the demo.
 - [x] `ReplayClock` merges timestamped trades, quotes and depth events across symbols, supports speed and seek, and routes through normal sinks.
-- [x] `RecordingWriter` and `RecordingReader` encode/decode versioned trade and depth events through supplied I/O streams.
+- [x] `RecordingWriter` and `RecordingReader` encode/decode versioned trade and depth events through supplied I/O streams. The demo keeps at most five minutes and 8 MiB of recorded events per symbol subscription, with book snapshots at retained boundaries, shows the available market replay range, and hides unrecorded live analytics during market playback.
 - [ ] Window additional-symbol/interval study histories to the replay cutoff.
 - [ ] Connect the standalone `ReplayToolbar` actions to the replay controller.
 
@@ -267,7 +267,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 
 ## Layouts and Persistence
 
-- [x] `ChartLayout` arranges up to 16 charts in grids or tabs, tracks the active chart, supports detached views and groups, and synchronises selected symbol, interval, time range and crosshair time. The demo saves group memberships, detached slots and synchronization switches with each layout.
+- [x] `ChartLayout` arranges up to 16 charts in grids or tabs, tracks the active chart, supports detached views and groups, and synchronises selected symbol, interval, time range and crosshair time. The demo saves group memberships, detached slots and synchronization switches with each layout. The demo retains hidden slot settings without advancing their feeds.
 - [x] Main-pane drawings synchronise between grouped charts by timestamp.
 - [x] `ChartSnapshot` saves symbol, interval, chart configuration, built-in studies, panes, scales, viewport and drawings in versioned documents; feed-backed comparisons and spreads reconnect on restore, and the dividend-adjustment choice persists. The demo also checkpoints the current unnamed workspace, including each chart's session choice, and restores it on reload without changing named-layout save behavior; an unreadable recovery document is retained and reported while a default chart opens.
 - [x] The terminal creates, copies, renames, lists, saves, opens and deletes layouts through supplied storage, with debounced autosave and Ctrl+S. Layout tabs keep independent charts and undo history; Tab and Shift+Tab cycle the visible chart slots, and new slots inherit the study limit.
@@ -282,7 +282,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 ## Data and Builder API
 
 - [x] `Chart::new` embeds static bars; `ChartBuilder` configures a chart, feed, symbol, interval, studies, theme and drawing registry. `Bar` accepts typed calendar dates for OHLCV, single-value and whitespace daily bars at midnight UTC, matching date-only imports.
-- [x] `Datafeed`, `Reply` and `Sink` provide asynchronous metadata/history and streaming bars, executions, quotes and depth, with per-symbol service declarations, stale-response rejection and subscription cancellation.
+- [x] `Datafeed`, `Reply` and `Sink` provide asynchronous metadata/history and streaming bars, executions, quotes and depth, with per-symbol service declarations, stale-response rejection and subscription cancellation. The demo generates and delivers recent history in scheduled batches and shows loading progress while input remains available.
 - [x] Scroll-back pages bar history; transient failures retry with bounded backoff and expose errors and status through `FeedState`.
 - [x] Shared validation sorts/deduplicates bars, rejects invalid OHLCV and counts rejected updates; out-of-order corrections update the affected history.
 - [x] Live trade aggregation supports time, execution-count, volume, delta and range intervals; resampling helpers accept session rules.

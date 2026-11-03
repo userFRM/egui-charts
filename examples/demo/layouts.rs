@@ -1075,6 +1075,7 @@ mod tests {
     fn chart_slots_and_layout_tabs_keep_independent_state() {
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        super::super::tests::settle(&mut app, &ctx);
         let mut drawing = egui_charts::drawings::Drawing::new(
             7,
             egui_charts::drawings::DrawingToolType::HorizontalLine,
@@ -1105,6 +1106,7 @@ mod tests {
             Default::default(),
         ));
         app.add_spread("AAPL-MSFT");
+        super::super::tests::finish_spreads(&mut app.chart, &mut app.spreads);
         app.layout.sync.sync_drawings = true;
         app.ensure_chart_slots(ChartLayoutMode::Four);
         for copy in &mut app.extra_charts {
@@ -1125,6 +1127,13 @@ mod tests {
             );
             assert_eq!(copy.chart.event_visibility(), app.chart.event_visibility());
             copy.chart.set_visible_bars(200);
+            for _ in 0..3 {
+                super::super::tests::finish_feed(&copy.live);
+                ctx.run_ui(egui::RawInput::default(), |ui| {
+                    copy.chart.show(ui);
+                })
+                .drop_without_applying_deltas();
+            }
             let output = ctx.run_ui(egui::RawInput::default(), |ui| {
                 copy.chart.show(ui);
             });
