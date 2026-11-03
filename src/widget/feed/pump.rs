@@ -42,13 +42,9 @@ impl Chart {
             .and_then(|instrument| instrument.tick_size);
         self.state.price_scale_mut().set_tick_size(tick_size);
         // Profile drawings read held trades on every time-based chart type.
-        let executions = self
-            .timeframe
-            .is_none_or(|timeframe| !timeframe.is_trade_based())
-            && (self.chart_type == ChartType::VolumeFootprint
-                || (self.chart_type == ChartType::SessionVolumeProfile
-                    && cfg!(feature = "studies"))
-                || (self.feed_link.is_some() && self.profile_drawings()));
+        let executions = self.chart_type == ChartType::VolumeFootprint
+            || (self.chart_type == ChartType::SessionVolumeProfile && cfg!(feature = "studies"))
+            || (self.feed_link.is_some() && self.profile_drawings());
         if let Some(link) = self
             .feed_link
             .as_mut()
@@ -105,6 +101,14 @@ impl Chart {
                     inputs.push(input.clone());
                 }
             }
+        }
+        if executions && link.clock.timeframe().is_some_and(|tf| tf.is_trade_based()) {
+            let (input, _) = link
+                .footprint_input
+                .get_or_insert_with(|| (crate::data::OrderFlowInput::footprint(), u64::MAX));
+            inputs.push(input.clone());
+        } else {
+            link.footprint_input = None;
         }
         if inputs.len() != link.study_inputs.len()
             || inputs
@@ -277,7 +281,9 @@ impl Chart {
                 bubbles.iter_mut().for_each(|b| b.fold(trade, added));
                 evicted |= !added;
                 if added {
-                    if let Some(flow) = footprint {
+                    if let Some(flow) = footprint
+                        && clock.timeframe().is_none_or(|tf| !tf.is_trade_based())
+                    {
                         let _ = flow.push(trade);
                     }
                     if clock.timeframe().is_none_or(|tf| !tf.is_trade_based()) {
@@ -390,6 +396,13 @@ impl Chart {
                 *seen = revision;
             }
         }
+        if let (Some((input, seen)), Some(flow)) = (&mut link.footprint_input, &mut link.footprint)
+        {
+            *seen = input.copy_footprint(flow, *seen);
+            if let Some(lost) = link.trades.lost_until() {
+                flow.drop_through(lost, link.trades.iter());
+            }
+        }
         self.scroll_back(&mut link);
         self.scroll_trades(&mut link);
         self.scroll_depth(&mut link);
@@ -398,12 +411,33 @@ impl Chart {
         self.feed_link = Some(link);
     }
 
-    /// Drops what the chart held for the old symbol or timeframe and asks for the new one.
+    /// Reloads bars and the subscription, retaining executions for a new interval on the same feed key.
     fn reload(&mut self, link: &mut FeedLink, clock: BarClock) {
         link.reload_pending = false;
+        let mut retain_trades = link.clock != clock
+            && link.extended_hours == self.extended_hours
+            && link.clock.sessions().with_timeframe(Timeframe::Min1)
+                == clock.sessions().with_timeframe(Timeframe::Min1)
+            && link.instrument.is_some();
         if let Some(id) = link.subscription.take() {
-            link.inbox.unsubscribe(id);
+            if let Some((symbol, reset, pending)) = link.inbox.unsubscribe_with_trades(id) {
+                retain_trades &= symbol == self.symbol;
+                if retain_trades {
+                    if reset {
+                        link.trades = Trades::new(TRADE_CAPACITY);
+                        link.trades_from_start = false;
+                    }
+                    link.trades.append(pending, &mut |_, _| ());
+                }
+            } else {
+                retain_trades = false;
+            }
             link.feed.unsubscribe(id);
+        } else {
+            retain_trades &= link
+                .instrument
+                .as_ref()
+                .is_some_and(|i| i.symbol == self.symbol);
         }
         // The feed-wide answer does not depend on the symbol or interval.
         let feed_wide = |request: &Request| matches!(request, Request::Capabilities);
@@ -415,13 +449,19 @@ impl Chart {
             .filter(|instrument| instrument.symbol == self.symbol);
         self.state.price_scale_mut().set_price_precision(None);
         self.state.price_scale_mut().set_tick_size(None);
-        link.trades = Trades::new(TRADE_CAPACITY);
+        if retain_trades {
+            link.trades.reanchor();
+        } else {
+            link.trades = Trades::new(TRADE_CAPACITY);
+        }
+        link.extended_hours = self.extended_hours;
         for study in self.studies.indicators() {
             for input in study.order_flow_inputs() {
                 input.clear();
             }
         }
         link.study_inputs.clear();
+        link.footprint_input = None;
         link.time = None;
         link.order_book = None;
         link.order_queue = None;
@@ -429,7 +469,7 @@ impl Chart {
         link.depth_complete = false;
         (link.bar_cursor, link.trade_cursor, link.depth_cursor) = (None, None, None);
         link.trades_complete = false;
-        link.trades_from_start = false;
+        link.trades_from_start &= retain_trades;
         self.set_quote(None);
         link.paging_stopped = false;
         let timeframe = self.timeframe.unwrap_or_default();

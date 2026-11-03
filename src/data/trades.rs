@@ -188,6 +188,19 @@ impl Trades {
         self.trades.iter().skip(self.paged)
     }
 
+    /// Starts a new subscription anchor while retaining executions, ids and loss evidence.
+    #[cfg(feature = "widget")]
+    pub(crate) fn reanchor(&mut self) {
+        self.paged = self.trades.len();
+        self.paged_until = self.trades.iter().map(|trade| trade.ts).max();
+        self.paged_without_id_until = self
+            .trades
+            .iter()
+            .filter(|trade| trade.id.is_none())
+            .map(|trade| trade.ts)
+            .max();
+    }
+
     /// An empty store of the same capacity, for the next drain.
     pub(crate) fn empty(&self) -> Self {
         Self::new(self.capacity)
