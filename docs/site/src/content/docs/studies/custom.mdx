@@ -15,7 +15,7 @@ This extension point is available without the built-in `studies` feature.
 ## Warm-up and missing values
 
 The scene calculates **close now minus close ten slots earlier**, in price
-units. It uses the [first chart's](/egui-charts/docs/first-chart/) sample bars,
+units. It uses the [first chart's](../first-chart.mdx) sample bars,
 with slots 35 through 38 replaced by
 [`Bar::whitespace`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.Bar.html#method.whitespace).
 The first ten outputs are missing because there is no earlier close. Outputs
@@ -40,12 +40,12 @@ This is an absolute change, so it does not divide by the earlier close.
 
 [`with_overlay(false)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.CustomIndicator.html#method.with_overlay)
 creates the lower pane. The default is a price overlay; use that for values
-expressed on the price scale. The [pane guide](/egui-charts/docs/panes/) covers
+expressed on the price scale. The [pane guide](../panes.mdx) covers
 moving and resizing a study after it has been added.
 
 Create this chart once and call
 [`show`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.show)
-each frame. Feed changes through the [series API](/egui-charts/docs/series/#lifecycle)
+each frame. Feed changes through the [series API](../series.mdx#lifecycle)
 or a [datafeed](/egui-charts/docs/studies/live-data/); the chart recalculates the
 study, including after older history is prepended. A closure recalculates the
 full slice. For large or frequently changing histories, implement
@@ -55,5 +55,5 @@ to recompute from the first changed bar, using
 where appropriate.
 
 For inputs, plot styles, additional symbols and other intervals, see the
-[study contracts](/egui-charts/docs/studies/) and
-[additional study data](/egui-charts/docs/study-data/).
+[study contracts](../studies.mdx) and
+[additional study data](../study-data.md).

@@ -46,7 +46,7 @@ The sample returns at most 200 bars per page from its 1,200-bar history.
 
 The chart merges pages and recalculates studies after prepending bars. In your
 host, fetch asynchronously and send the reply when ready. Do not block the UI
-while waiting for a remote response. See the [datafeed guide](/egui-charts/docs/data/)
+while waiting for a remote response. See the [datafeed guide](../data.mdx)
 for errors, retries, symbol metadata and lifecycle.
 
 ## Stream into the subscription
@@ -65,7 +65,7 @@ instead, replacing the same open time as that candle develops.
 Keep the chart and its studies alive while feeding them. Returning to the latest
 bar changes the viewport without clearing the loaded history. Try the
 [custom study](/egui-charts/docs/studies/custom/) or return to the
-[built-in study scene](/egui-charts/docs/studies/).
+[built-in study scene](../studies.mdx).
 
 ## Example download size
 
