@@ -123,7 +123,7 @@ fn crosshair_skips_ineligible_indices_without_removing_data() {
                 "{pane} {case:?}"
             );
             if let Some(pointer) = pointer {
-                assert_eq!(pointer.time, original[pointer.index as usize].time);
+                assert_eq!(pointer.time, Some(original[pointer.index as usize].time));
                 assert_eq!(pointer.pos, pos, "host retains the actual pointer position");
             }
             let lines = vertical_lines(&painted);
