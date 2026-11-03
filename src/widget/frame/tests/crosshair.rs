@@ -565,14 +565,147 @@ fn line_pulse_and_crosshair_marker_follow_their_bars() {
     }
 }
 
-/// Each series styles its hovered circle independently. On linear ranges 0..100 and
-/// 1000..3000, closes 25 and 2500 sit a quarter and three quarters up from the pane bottom.
+/// Crosshair marker options of one series: radius, fill, border colour and border width.
+type MarkerStyle = (f32, Option<egui::Color32>, Option<egui::Color32>, f32);
+
+/// Hovers bar 50 of a main line (blue, prices 0..100, radius 5 markers) and an added line
+/// (green, prices 1000..3000, radius 7 markers) in the same pane or its own. `setup` runs
+/// before the frame. Returns the marker circles, the hover x, and the main and added pane
+/// rects.
+fn hover_markers(
+    kind: crate::model::ChartType,
+    pane: bool,
+    styles: (MarkerStyle, MarkerStyle),
+    setup: impl FnOnce(&mut crate::widget::Chart, crate::widget::SeriesId),
+) -> (Vec<egui::epaint::CircleShape>, f32, egui::Rect, egui::Rect) {
+    use crate::model::{Bar, SeriesScale};
+    use crate::widget::{SeriesId, SeriesOptions};
+    use egui::Color32;
+
+    let ctx = egui::Context::default();
+    let mut chart = chart(&[10.0], &[25.0]);
+    chart.config.show_volume = false;
+    chart.config.background_color = Color32::LIGHT_GRAY;
+    chart.chart_options.tooltip.enabled = false;
+    chart.set_chart_type(kind);
+    let mut params = chart.chart_type_params().clone();
+    params.styles.line.color = Color32::BLUE;
+    params.styles.step_line.color = Color32::BLUE;
+    params.styles.line_with_markers.color = Color32::BLUE;
+    params.styles.area.line.color = Color32::BLUE;
+    params.styles.baseline.above.color = Color32::BLUE;
+    params.styles.baseline.below.color = Color32::BLUE;
+    let (main, extra) = styles;
+    params.styles.crosshair_marker_radius = main.0;
+    params.styles.crosshair_marker_fill = main.1;
+    params.styles.crosshair_marker_border_color = main.2;
+    params.styles.crosshair_marker_border_width = main.3;
+    chart.set_chart_type_params(params);
+    let added = chart.add_series(SeriesOptions {
+        chart_type: kind,
+        color: Color32::GREEN,
+        up_color: Color32::GREEN,
+        down_color: Color32::GREEN,
+        scale: SeriesScale::Left,
+        crosshair_marker_radius: extra.0,
+        crosshair_marker_fill: extra.1,
+        crosshair_marker_border_color: extra.2,
+        crosshair_marker_border_width: extra.3,
+        ..Default::default()
+    });
+    if pane {
+        let id = chart.add_pane();
+        assert!(chart.move_series_to_pane(added, id));
+    }
+    let times: Vec<_> = chart
+        .bars(SeriesId::MAIN)
+        .iter()
+        .map(|bar| bar.time)
+        .collect();
+    chart.set_data(
+        added,
+        times
+            .iter()
+            .map(|time| Bar::from_value(*time, 2500.0))
+            .collect(),
+    );
+    chart
+        .series_price_scale_mut(SeriesId::MAIN)
+        .unwrap()
+        .set_range(0.0, 100.0);
+    chart
+        .series_price_scale_mut(added)
+        .unwrap()
+        .set_range(1000.0, 3000.0);
+    setup(&mut chart, added);
+    frame(&ctx, &mut chart, 0.0, vec![Event::PointerGone]);
+    let map = chart.get_chart_mapping();
+    let added_rect = if pane {
+        chart
+            .pane_layout
+            .panes
+            .iter()
+            .find(|p| p.members.contains(&added))
+            .unwrap()
+            .rect
+    } else {
+        map.rect
+    };
+    let x = map.idx_to_x(50);
+    let hover = Pos2::new(x, map.rect.center().y);
+    let circles = shapes(&ctx, &mut chart, 0.1, vec![Event::PointerMoved(hover)])
+        .into_iter()
+        .filter_map(|shape| match shape {
+            Shape::Circle(circle) if circle.radius == 5.0 || circle.radius == 7.0 => Some(circle),
+            _ => None,
+        })
+        .collect();
+    (circles, x, map.rect, added_rect)
+}
+
+/// Each series styles its hovered circle independently, on its own scale and pane. On the
+/// linear ranges, closes 25 and 2500 sit a quarter and three quarters up their pane.
 #[test]
 fn crosshair_marker_styles_follow_each_series_and_scale() {
-    use crate::model::{Bar, ChartType, SeriesScale};
-    use crate::widget::{SeriesId, SeriesOptions};
+    use crate::model::ChartType;
     use egui::{Color32, Stroke};
 
+    let ring = crate::tokens::DESIGN_TOKENS.stroke.thick;
+    // Each row: main style, added style, and the expected fill and stroke of both circles,
+    // with `None` for a hidden marker. `None` colours resolve to the line colour and to the
+    // chart background, set to light gray.
+    let rows: [(MarkerStyle, MarkerStyle, _, _); 5] = [
+        (
+            (5.0, None, None, ring),
+            (7.0, None, None, ring),
+            Some((Color32::BLUE, Stroke::new(ring, Color32::LIGHT_GRAY))),
+            Some((Color32::GREEN, Stroke::new(ring, Color32::LIGHT_GRAY))),
+        ),
+        (
+            (5.0, Some(Color32::GOLD), Some(Color32::MAGENTA), 3.0),
+            (7.0, None, Some(Color32::CYAN), 0.0),
+            Some((Color32::GOLD, Stroke::new(3.0, Color32::MAGENTA))),
+            Some((Color32::GREEN, Stroke::NONE)),
+        ),
+        (
+            (5.0, Some(Color32::TRANSPARENT), Some(Color32::RED), 1.0),
+            (7.0, Some(Color32::YELLOW), None, 4.0),
+            Some((Color32::TRANSPARENT, Stroke::new(1.0, Color32::RED))),
+            Some((Color32::YELLOW, Stroke::new(4.0, Color32::LIGHT_GRAY))),
+        ),
+        (
+            (5.0, None, None, -1.0),
+            (7.0, None, None, f32::NAN),
+            Some((Color32::BLUE, Stroke::NONE)),
+            Some((Color32::GREEN, Stroke::NONE)),
+        ),
+        (
+            (0.0, None, None, ring),
+            (f32::NAN, None, None, ring),
+            None,
+            None,
+        ),
+    ];
     for kind in [
         ChartType::Line,
         ChartType::StepLine,
@@ -581,212 +714,71 @@ fn crosshair_marker_styles_follow_each_series_and_scale() {
         ChartType::Baseline,
     ] {
         for pane in [false, true] {
-            let ctx = egui::Context::default();
-            let mut chart = chart(&[10.0], &[25.0]);
-            chart.config.show_volume = false;
-            chart.chart_options.tooltip.enabled = false;
-            chart.set_chart_type(kind);
-            let bars = chart.bars(SeriesId::MAIN).to_vec();
-            let added = chart.add_series(SeriesOptions {
-                chart_type: kind,
-                color: Color32::GREEN,
-                up_color: Color32::GREEN,
-                down_color: Color32::GREEN,
-                scale: SeriesScale::Left,
-                ..Default::default()
-            });
-            if pane {
-                let id = chart.add_pane();
-                assert!(chart.move_series_to_pane(added, id));
-            }
-            let valued: Vec<_> = bars
-                .iter()
-                .map(|bar| Bar::from_value(bar.time, 2500.0))
-                .collect();
-            // (radius, custom fill, custom border, border width, main and added visibility,
-            //  crosshair hidden, added bar present, main bar valued).
-            for (step, case) in [
-                (5.0, None, None, 2.0, (true, true), false, true, true),
-                (
-                    5.0,
-                    Some(Color32::GOLD),
-                    None,
-                    2.0,
-                    (true, true),
-                    false,
-                    true,
-                    true,
-                ),
-                (
-                    5.0,
-                    None,
-                    Some(Color32::MAGENTA),
-                    2.0,
-                    (true, true),
-                    false,
-                    true,
-                    true,
-                ),
-                (5.0, None, None, 4.0, (true, true), false, true, true),
-                (
-                    5.0,
-                    Some(Color32::TRANSPARENT),
-                    Some(Color32::RED),
-                    3.0,
-                    (true, true),
-                    false,
-                    true,
-                    true,
-                ),
-                (5.0, None, None, 0.0, (true, true), false, true, true),
-                (5.0, None, None, -1.0, (true, true), false, true, true),
-                (1e40, None, None, 2.0, (true, true), false, true, true),
-                (5.0, None, None, 1e40, (true, true), false, true, true),
-                (0.0, None, None, 2.0, (true, true), false, true, true),
-                (-1.0, None, None, 2.0, (true, true), false, true, true),
-                (5.0, None, None, 2.0, (false, true), false, true, true),
-                (5.0, None, None, 2.0, (true, false), false, true, true),
-                (5.0, None, None, 2.0, (true, true), true, true, true),
-                (5.0, None, None, 2.0, (true, true), false, false, true),
-                (5.0, None, None, 2.0, (true, true), false, true, false),
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                let (radius, fill, border, width, visible, hidden, present, main_valued) = case;
-                let mut params = chart.chart_type_params().clone();
-                params.styles.line.color = Color32::BLUE;
-                params.styles.step_line.color = Color32::BLUE;
-                params.styles.line_with_markers.color = Color32::BLUE;
-                params.styles.area.line.color = Color32::BLUE;
-                params.styles.baseline.above.color = Color32::BLUE;
-                params.styles.baseline.below.color = Color32::BLUE;
-                let mut saved = serde_json::to_value(params).unwrap();
-                saved["styles"]["crosshair_marker_radius"] = serde_json::json!(radius);
-                saved["styles"]["crosshair_marker_fill"] = serde_json::json!(fill);
-                saved["styles"]["crosshair_marker_border_color"] = serde_json::json!(border);
-                saved["styles"]["crosshair_marker_border_width"] = serde_json::json!(width);
-                chart.set_chart_type_params(serde_json::from_value(saved).unwrap());
-                let mut options =
-                    serde_json::to_value(chart.series().find(|(id, _)| *id == added).unwrap().1)
-                        .unwrap();
-                options["crosshair_marker_radius"] =
-                    serde_json::json!(if radius > 0.0 && radius < 1e40 {
-                        7.0
-                    } else {
-                        radius
-                    });
-                options["crosshair_marker_fill"] = serde_json::json!(fill.map(|_| Color32::YELLOW));
-                options["crosshair_marker_border_color"] =
-                    serde_json::json!(border.map(|_| Color32::CYAN));
-                options["crosshair_marker_border_width"] = serde_json::json!(width + 1.0);
-                assert!(chart.set_series_options(added, serde_json::from_value(options).unwrap()));
-                let mut added_bars = valued.clone();
-                if !present {
-                    if pane {
-                        added_bars[50] = Bar::whitespace(added_bars[50].time);
-                    } else {
-                        added_bars.remove(50);
-                    }
-                }
-                chart.set_data(added, added_bars);
-                let mut main_bars = bars.clone();
-                if !main_valued {
-                    main_bars[50] = Bar::whitespace(main_bars[50].time);
-                }
-                chart.set_data(SeriesId::MAIN, main_bars);
-                chart.set_main_series_visible(visible.0);
-                chart.set_series_visible(added, visible.1);
-                chart.chart_options.crosshair.style = if hidden {
-                    crate::config::CrosshairStyle::Hidden
-                } else {
-                    crate::config::CrosshairStyle::Full
-                };
-                chart
-                    .series_price_scale_mut(SeriesId::MAIN)
-                    .unwrap()
-                    .set_range(0.0, 100.0);
-                chart
-                    .series_price_scale_mut(added)
-                    .unwrap()
-                    .set_range(1000.0, 3000.0);
-                let time = step as f64;
-                frame(&ctx, &mut chart, time, vec![Event::PointerGone]);
-                let map = chart.get_chart_mapping();
-                let rect = if pane {
-                    chart
-                        .pane_layout
-                        .panes
-                        .iter()
-                        .find(|p| p.members.contains(&added))
-                        .unwrap()
-                        .rect
-                } else {
-                    map.rect
-                };
-                let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
-                let painted = shapes(&ctx, &mut chart, time + 0.1, vec![Event::PointerMoved(pos)]);
-                let circles: Vec<_> = painted
-                    .iter()
-                    .filter_map(|shape| match shape {
-                        Shape::Circle(circle) if circle.radius == 5.0 || circle.radius == 7.0 => {
-                            Some(circle)
-                        }
-                        _ => None,
-                    })
-                    .collect();
-                let enabled = radius > 0.0 && (radius as f32).is_finite() && !hidden;
-                assert_eq!(
-                    circles.len(),
-                    usize::from(enabled && visible.0 && main_valued)
-                        + usize::from(enabled && visible.1 && present),
-                    "{kind:?}, pane {pane}, {case:?}: {circles:?}"
-                );
-                for (radius, valued, area, fraction, fill, border, width) in [
-                    (
-                        5.0,
-                        main_valued && visible.0,
-                        map.rect,
-                        0.25,
-                        fill.unwrap_or(Color32::BLUE),
-                        border,
-                        width,
-                    ),
-                    (
-                        7.0,
-                        present && visible.1,
-                        rect,
-                        0.75,
-                        fill.map_or(Color32::GREEN, |_| Color32::YELLOW),
-                        border.map(|_| Color32::CYAN),
-                        width + 1.0,
-                    ),
+            for (main, added, expect_main, expect_added) in rows {
+                let (circles, x, main_rect, added_rect) =
+                    hover_markers(kind, pane, (main, added), |_, _| {});
+                for (radius, rect, fraction, expected) in [
+                    (5.0, main_rect, 0.25, expect_main),
+                    (7.0, added_rect, 0.75, expect_added),
                 ] {
-                    if enabled && valued {
-                        let circle = circles
-                            .iter()
-                            .find(|circle| circle.radius == radius)
-                            .unwrap();
-                        let expected = Pos2::new(pos.x, area.bottom() - fraction * area.height());
-                        assert!(
-                            circle.center.distance(expected) < 0.01,
-                            "{kind:?}, {pane}: {circle:?} vs {expected:?}"
-                        );
-                        assert_eq!(circle.fill, fill);
-                        assert_eq!(
-                            circle.stroke,
-                            if width > 0.0 && (width as f32).is_finite() {
-                                Stroke::new(
-                                    width as f32,
-                                    border.unwrap_or(chart.config.background_color),
-                                )
-                            } else {
-                                Stroke::NONE
-                            }
-                        );
-                    }
+                    let found = circles.iter().find(|circle| circle.radius == radius);
+                    let case = format!("{kind:?}, pane {pane}, {main:?} {added:?}");
+                    let Some((fill, stroke)) = expected else {
+                        assert!(found.is_none(), "{case}: {found:?}");
+                        continue;
+                    };
+                    let circle = found.unwrap_or_else(|| panic!("{case}: {circles:?}"));
+                    let at = Pos2::new(x, rect.bottom() - fraction * rect.height());
+                    assert!(circle.center.distance(at) < 0.01, "{case}: {circle:?}");
+                    assert_eq!((circle.fill, circle.stroke), (fill, stroke), "{case}");
                 }
             }
+        }
+    }
+}
+
+/// Hidden series, a hidden crosshair, and a hovered time without a valued bar draw no marker
+/// for the affected series only.
+#[test]
+fn crosshair_marker_is_suppressed_for_hidden_and_missing_bars() {
+    use crate::model::{Bar, ChartType};
+    use crate::widget::SeriesId;
+
+    let style = (5.0, None, None, 2.0);
+    let added_style = (7.0, None, None, 2.0);
+    for pane in [false, true] {
+        // (hide main, hide added, hide crosshair, empty main bar, empty added bar) and the
+        // radii that remain.
+        let cases: [([bool; 5], &[f32]); 5] = [
+            ([true, false, false, false, false], &[7.0]),
+            ([false, true, false, false, false], &[5.0]),
+            ([false, false, true, false, false], &[]),
+            ([false, false, false, true, false], &[7.0]),
+            ([false, false, false, false, true], &[5.0]),
+        ];
+        for (flags, radii) in cases {
+            let (circles, ..) = hover_markers(
+                ChartType::Line,
+                pane,
+                (style, added_style),
+                |chart, added| {
+                    chart.set_main_series_visible(!flags[0]);
+                    chart.set_series_visible(added, !flags[1]);
+                    if flags[2] {
+                        chart.chart_options.crosshair.style = crate::config::CrosshairStyle::Hidden;
+                    }
+                    for (id, empty) in [(SeriesId::MAIN, flags[3]), (added, flags[4])] {
+                        let mut bars = chart.bars(id).to_vec();
+                        if empty {
+                            bars[50] = Bar::whitespace(bars[50].time);
+                        }
+                        chart.set_data(id, bars);
+                    }
+                },
+            );
+            let mut found: Vec<f32> = circles.iter().map(|circle| circle.radius).collect();
+            found.sort_by(f32::total_cmp);
+            assert_eq!(found, radii, "pane {pane}, {flags:?}");
         }
     }
 }

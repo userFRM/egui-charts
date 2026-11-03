@@ -1080,8 +1080,9 @@ impl Chart {
                         &options,
                         chart_rect.bottom(),
                     );
-                    if options.style != crate::config::CrosshairStyle::Hidden {
-                        let index = horizontal.x_to_idx_f64(pos.x).round().max(0.0) as usize;
+                    if let Some(index) = hovered
+                        && options.style != crate::config::CrosshairStyle::Hidden
+                    {
                         for item in &items {
                             self.paint_series_crosshair_marker(
                                 &painter, chart_rect, item, map, index,
