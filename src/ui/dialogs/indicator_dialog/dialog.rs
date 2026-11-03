@@ -10,10 +10,12 @@ use super::{
     types::{IndicatorCategory, IndicatorTab},
 };
 use crate::data::inbox::Inbox;
-use crate::data::{Datafeed, FeedCapabilities, FeedError, MetricSeries};
+use crate::data::{
+    Datafeed, FeedCapabilities, FeedError, MetricSeries, OptionChain, OptionChainQuery,
+};
 use crate::icons::icons;
 use crate::localization as l10n;
-use crate::model::Instrument;
+use crate::model::{FeedService, Instrument};
 use crate::studies::*;
 use crate::styles::focus::draw_focus_ring;
 use crate::theme::Theme;
@@ -66,6 +68,9 @@ pub struct IndicatorDialog {
     metric_catalog: Option<Arc<Inbox>>,
     metric_names: Vec<String>,
     metric_error: Option<FeedError>,
+    option_catalog: Option<Arc<Inbox>>,
+    option_profile_registered: bool,
+    option_error: Option<FeedError>,
     source: Option<StudySource>,
     source_error: Option<StudyError>,
     full: bool,
@@ -85,7 +90,9 @@ impl IndicatorDialog {
     /// Restrict studies in the factory's Order flow category to services explicitly declared
     /// for the resolved instrument. Pass [`Chart::feed_capabilities`](crate::widget::Chart::feed_capabilities)
     /// and [`Chart::instrument`](crate::widget::Chart::instrument) when they change. Missing
-    /// metadata declares no services. Other categories and saved favorites are unchanged.
+    /// metadata declares no services. The options profile is offered on Profiles only when the
+    /// instrument declares the option-chain service. Other categories and saved favorites are
+    /// unchanged.
     /// Until the first call every study is offered. Requirements are cached between updates.
     pub fn set_feed_capabilities(
         &mut self,
@@ -103,6 +110,7 @@ impl IndicatorDialog {
         }
         self.feed_capabilities = Some((capabilities.cloned(), instrument.cloned()));
         self.refresh_order_flow_availability();
+        self.clear_options();
     }
 
     fn refresh_order_flow_availability(&mut self) {
@@ -164,6 +172,9 @@ impl IndicatorDialog {
             metric_catalog: None,
             metric_names: Vec::new(),
             metric_error: None,
+            option_catalog: None,
+            option_profile_registered: false,
+            option_error: None,
             source: None,
             source_error: None,
             full: false,
@@ -174,13 +185,16 @@ impl IndicatorDialog {
     /// List and create the studies of `factory`, such as the built-ins and the host's own
     /// added with [`IndicatorFactory::register`]
     pub fn with_factory(mut self, factory: IndicatorFactory) -> Self {
+        self.option_catalog = None;
+        self.option_profile_registered = false;
         self.indicators = IndicatorInfo::from_factory(&factory);
         self.factory = factory;
         self.refresh_order_flow_availability();
         self
     }
 
-    /// List the metrics a feed offers for this instrument alongside the technical studies.
+    /// List the metrics and, when declared by `set_feed_capabilities`, the option-chain
+    /// profile a feed offers for this instrument alongside the technical studies.
     /// Replacing the feed or symbol discards pending replies from the previous source.
     pub fn set_metric_source(&mut self, feed: Option<Arc<dyn Datafeed>>, symbol: &str) {
         if match (&self.metric_source, &feed) {
@@ -190,6 +204,7 @@ impl IndicatorDialog {
         } {
             return;
         }
+        self.clear_options();
         self.metric_source = feed.map(|feed| (feed, symbol.to_owned()));
         self.metric_catalog = None;
         self.metric_error = None;
@@ -198,6 +213,81 @@ impl IndicatorDialog {
         }
         self.indicators = IndicatorInfo::from_factory(&self.factory);
         self.refresh_order_flow_availability();
+    }
+
+    fn clear_options(&mut self) {
+        self.option_catalog = None;
+        self.option_error = None;
+        if std::mem::take(&mut self.option_profile_registered) {
+            self.factory.unregister("Options Volume Profile");
+            self.indicators = IndicatorInfo::from_factory(&self.factory);
+        }
+    }
+
+    fn poll_options(&mut self, ctx: &egui::Context) {
+        let Some((feed, symbol)) = &self.metric_source else {
+            return;
+        };
+        let Some((Some(capabilities), Some(instrument))) = &self.feed_capabilities else {
+            return;
+        };
+        if symbol.is_empty()
+            || instrument.symbol != *symbol
+            || !capabilities.declares(FeedService::OptionChain, instrument)
+        {
+            return;
+        }
+        if self.option_catalog.is_none() {
+            let inbox = Arc::new(Inbox::default());
+            let ctx = ctx.clone();
+            inbox.set_waker(move || ctx.request_repaint());
+            feed.option_expiries(symbol, inbox.reply(0));
+            self.option_catalog = Some(inbox);
+        }
+        for (_, answer) in self.option_catalog.as_ref().unwrap().drain().answers {
+            let result = answer
+                .downcast::<Result<Vec<chrono::NaiveDate>, FeedError>>()
+                .map(|result| *result)
+                .unwrap_or(Err(FeedError::Unanswered));
+            match result {
+                Ok(mut dates) => {
+                    dates.sort_unstable();
+                    dates.dedup();
+                    let Some((&first, &last)) = dates.first().zip(dates.last()) else {
+                        continue;
+                    };
+                    if self.factory.has("Options Volume Profile") {
+                        continue;
+                    }
+                    let ctx = ctx.clone();
+                    let chain = OptionChain::new(
+                        &**feed,
+                        OptionChainQuery::new(symbol, first..=last),
+                        move || ctx.request_repaint(),
+                    )
+                    .expect("nonempty symbol and listed expiry range");
+                    let symbol = symbol.clone();
+                    self.factory.register_in(
+                        IndicatorFactory::PROFILES,
+                        "Options Volume Profile",
+                        move || {
+                            Box::new(
+                                OptionsVolumeProfile::from_chain(
+                                    chain.clone(),
+                                    &symbol,
+                                    dates.clone(),
+                                )
+                                .expect("validated options profile inputs"),
+                            )
+                        },
+                    );
+                    self.option_profile_registered = true;
+                    self.indicators = IndicatorInfo::from_factory(&self.factory);
+                }
+                Err(FeedError::NotSupported) => {}
+                Err(error) => self.option_error = Some(error),
+            }
+        }
     }
 
     fn poll_metrics(&mut self, ctx: &egui::Context) {
@@ -334,6 +424,7 @@ impl IndicatorDialog {
         }
 
         self.poll_metrics(ctx);
+        self.poll_options(ctx);
         let config = self.config.resolved(theme);
 
         // Escape clears a search before it closes the dialog.
@@ -372,6 +463,16 @@ impl IndicatorDialog {
                 "Metrics: {error}",
                 &[("error", format!("{}", error))],
             ));
+        }
+        if let Some(error) = &self.option_error {
+            ui.colored_label(
+                theme.ui.error,
+                l10n::format_text(
+                    ui.ctx(),
+                    "Options: {error}",
+                    &[("error", error.to_string())],
+                ),
+            );
         }
         if let Some(error) = &self.source_error {
             ui.colored_label(theme.ui.error, l10n::text(ui.ctx(), error.to_string()));
@@ -1613,5 +1714,303 @@ mod tests {
         assert_eq!(dialog.config.width, 900.0);
         assert_eq!(dialog.config.text_color, Color32::RED);
         assert_eq!(dialog.config.hover_color, hover);
+    }
+}
+
+#[cfg(test)]
+mod options_profile_tests {
+    use super::*;
+    use crate::data::{
+        HistoryPage, HistoryRequest, OptionChainQuery, OptionChainSink, OptionKind, OptionQuote,
+        ProfileDisplay, Reply,
+    };
+    use crate::model::{Bar, FeedService};
+    use chrono::{NaiveDate, TimeDelta, Utc};
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct Feed {
+        dates: Vec<NaiveDate>,
+        rows: Vec<OptionQuote>,
+        sink: Mutex<Option<OptionChainSink>>,
+    }
+    impl Datafeed for Feed {
+        fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
+            reply.send(Ok(HistoryPage::default()));
+        }
+        fn option_expiries(&self, _: &str, reply: Reply<Vec<NaiveDate>>) {
+            reply.send(Ok(self.dates.clone()));
+        }
+        fn option_chain(&self, _: OptionChainQuery, sink: OptionChainSink) {
+            sink.push(self.rows.clone()).unwrap();
+            *self.sink.lock().unwrap() = Some(sink);
+        }
+    }
+    fn quote(
+        expiry: NaiveDate,
+        strike: f64,
+        kind: OptionKind,
+        volume: f64,
+        interest: f64,
+    ) -> OptionQuote {
+        let mut row = OptionQuote::new(
+            format!("{expiry}-{strike}-{kind:?}"),
+            expiry,
+            strike,
+            kind,
+            Utc::now(),
+        );
+        row.volume = Some(volume);
+        row.open_interest = Some(interest);
+        row.multiplier = Some(100.0);
+        row
+    }
+    fn show(dialog: &mut IndicatorDialog, ctx: &egui::Context) {
+        dialog.open_tab(IndicatorTab::Profiles);
+        ctx.run_ui(Default::default(), |ui| {
+            dialog.show(ui.ctx(), &Theme::dark());
+        })
+        .drop_without_applying_deltas();
+    }
+    fn profile(feed: Arc<Feed>) -> Box<dyn Indicator> {
+        let mut dialog = IndicatorDialog::new();
+        dialog.set_metric_source(Some(feed), "SAMPLE");
+        dialog.set_feed_capabilities(
+            Some(&FeedCapabilities::new().with_services([FeedService::OptionChain])),
+            Some(&Instrument::new("SAMPLE").with_tick_size(0.01)),
+        );
+        show(&mut dialog, &egui::Context::default());
+        let mut study = dialog
+            .factory()
+            .create("Options Volume Profile")
+            .expect("declared option chains offer a profile");
+        let time = Utc::now();
+        study.calculate(
+            &(0..3)
+                .map(|i| Bar::new(time + TimeDelta::minutes(i), 105.0, 112.0, 98.0, 105.0, 1.0))
+                .collect::<Vec<_>>(),
+        );
+        study
+    }
+
+    #[test]
+    fn options_profile_expiries_keep_measures_separate_and_missing_fields_hidden() {
+        let today = Utc::now().date_naive();
+        let tomorrow = today.succ_opt().unwrap();
+        let later = today + TimeDelta::days(3);
+        let mut rows = Vec::new();
+        for (day, calls, puts, volume) in [
+            (today, 10.0, 6.0, 20.0),
+            (tomorrow, 30.0, 20.0, 100.0),
+            (later, 90.0, 80.0, 500.0),
+        ] {
+            rows.push(quote(day, 100.0, OptionKind::Call, volume, calls));
+            rows.push(quote(day, 100.0, OptionKind::Put, volume / 2.0, puts));
+        }
+        let feed = Arc::new(Feed {
+            dates: vec![later, today, tomorrow, today],
+            rows: rows.clone(),
+            ..Default::default()
+        });
+        let mut study = profile(feed.clone());
+        assert_eq!(study.volume_profiles(0..3)[0].profile.up(), [20.0]);
+        assert_eq!(study.plot_value(0, 0), Some(0.5));
+        study.set_input("measure", InputValue::Choice(1)).unwrap();
+        study.set_input("sides", InputValue::Choice(1)).unwrap();
+        assert_eq!(study.plot_value(0, 0), Some(0.6));
+        for (expiry, calls, puts) in [(0, 10.0, 6.0), (2, 30.0, 20.0), (4, 130.0, 106.0)] {
+            study
+                .set_input("expiry", InputValue::Choice(expiry))
+                .unwrap();
+            let plot = study.volume_profiles(0..3).remove(0);
+            assert_eq!(plot.config.display, ProfileDisplay::Delta);
+            assert_eq!(plot.profile.up(), [calls]);
+            assert_eq!(plot.profile.down(), [puts]);
+        }
+        study
+            .set_input(
+                "through_date",
+                InputValue::Text((today + TimeDelta::days(2)).to_string()),
+            )
+            .unwrap();
+        assert_eq!(study.volume_profiles(0..3)[0].profile.up(), [40.0]);
+        assert!(
+            study
+                .set_input("through_date", InputValue::Text("2026-02-30".into()))
+                .is_err()
+        );
+        assert!(study.set_input("expiry", InputValue::Choice(99)).is_err());
+        study.set_input("expiry", InputValue::Choice(0)).unwrap();
+        let sink = feed.sink.lock().unwrap().clone().unwrap();
+        rows[0].volume = Some(0.0);
+        rows[0].open_interest = None;
+        sink.push(rows.clone()).unwrap();
+        let measure = study
+            .inputs()
+            .into_iter()
+            .find(|input| input.id == "measure")
+            .unwrap();
+        assert!(matches!(measure.kind, InputKind::Choice(choices) if choices == ["Volume"]));
+        assert!(!study.inputs().iter().any(|input| input.id == "max_pain"));
+        assert_eq!(
+            study.volume_profiles(0..3)[0].profile.down(),
+            [10.0],
+            "missing interest falls back to the offered volume"
+        );
+        study.set_input("measure", InputValue::Choice(0)).unwrap();
+        assert_eq!(study.plot_value(0, 0), None, "zero calls have no ratio");
+        rows[0].volume = None;
+        sink.push(rows).unwrap();
+        assert!(
+            study.volume_profiles(0..3).is_empty(),
+            "unknown volume is not zero"
+        );
+        let mut interest_only = feed.rows[..2].to_vec();
+        for row in &mut interest_only {
+            row.volume = None;
+        }
+        sink.push(interest_only).unwrap();
+        assert_eq!(study.volume_profiles(0..3)[0].profile.up(), [10.0]);
+        assert_eq!(study.plot_value(0, 0), Some(0.6));
+        sink.push(Vec::new()).unwrap();
+        assert_eq!(study.plot_value(0, 0), None);
+    }
+
+    #[test]
+    fn options_profile_rows_follow_strikes_and_max_pain_updates_without_bars() {
+        let today = Utc::now().date_naive();
+        let rows = vec![
+            quote(today, 100.0, OptionKind::Call, 20.0, 1.0),
+            quote(today, 110.0, OptionKind::Put, 10.0, 2.0),
+        ];
+        let feed = Arc::new(Feed {
+            dates: vec![today],
+            rows: rows.clone(),
+            ..Default::default()
+        });
+        let mut study = profile(feed.clone());
+        let plot = study.volume_profiles(0..3).remove(0);
+        assert_eq!(
+            (plot.profile.up(), plot.profile.down()),
+            (&[20.0, 0.0][..], &[0.0, 10.0][..]),
+            "one row per listed strike, not per price tick"
+        );
+        let sink = feed.sink.lock().unwrap().clone().unwrap();
+        let mut offset = rows.clone();
+        offset[0].strike = 102.5;
+        offset[1].strike = 107.5;
+        sink.push(offset).unwrap();
+        let profile = study.volume_profiles(0..3).remove(0).profile;
+        let half = profile.row_height() / 2.0;
+        assert_eq!(
+            (profile.low() + half, profile.high() - half),
+            (102.5, 107.5),
+            "rows centre on strikes off a multiple of their spacing"
+        );
+        assert_eq!(study.plot_value(1, 0), None, "max pain starts off");
+        let legend =
+            |study: &dyn Indicator| ConfiguredStudy::new(study.clone_box()).legend_visible(1);
+        assert!(!legend(&*study), "no max pain readout while it is off");
+        study
+            .set_input("max_pain", InputValue::Toggle(true))
+            .unwrap();
+        assert!(legend(&*study));
+        // Payout at 100 and 110: 2,000 and 1,000; equal interest ties; a 300 call
+        // multiplier makes 110 cost 3,000; no interest ties at zero.
+        for (calls, puts, call_multiplier, expected) in [
+            (1.0, 2.0, 100.0, 110.0),
+            (2.0, 2.0, 100.0, 100.0),
+            (1.0, 2.0, 300.0, 100.0),
+            (0.0, 0.0, 100.0, 100.0),
+        ] {
+            let mut rows = rows.clone();
+            rows[0].open_interest = Some(calls);
+            rows[0].multiplier = Some(call_multiplier);
+            rows[1].open_interest = Some(puts);
+            sink.push(rows).unwrap();
+            assert_eq!(study.plot_value(1, 0), Some(expected));
+            assert_eq!(
+                study.plot_value(0, 0),
+                Some(0.5),
+                "volume ratio ignores interest"
+            );
+        }
+
+        use crate::chart::rendering::{ChartMapping, IndicatorRenderer, RenderContext};
+        use crate::scales::{PriceMap, PriceRange, PriceTransform};
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0));
+        let price = PriceMap::new(
+            PriceTransform {
+                mode: crate::scales::PriceScaleMode::Normal,
+                base: 100.0,
+            },
+            PriceRange::new(90.0, 120.0),
+            0.0,
+            300.0,
+            false,
+        );
+        let coords = ChartMapping::new(rect, 20.0, 0, 2, 3.0, price);
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(Default::default(), |ui| {
+            IndicatorRenderer::render(
+                &RenderContext::new(ui.painter(), rect),
+                &[study.clone_box()],
+                &[],
+                &price,
+                &coords,
+            );
+        });
+        assert!(
+            output.shapes.iter().any(|clipped| matches!(&clipped.shape, egui::Shape::Path(path)
+                if path.points.len() >= 2
+                    && path.points.iter().all(|point| (point.y - price.price_to_y(100.0)).abs() < 0.001))),
+            "live max pain level is painted"
+        );
+        output.drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn options_profile_browser_requires_matching_declared_chain_and_releases_subscriptions() {
+        let today = Utc::now().date_naive();
+        let feed = Arc::new(Feed {
+            dates: vec![today],
+            ..Default::default()
+        });
+        let mut dialog = IndicatorDialog::new();
+        dialog.set_metric_source(Some(feed.clone()), "SAMPLE");
+        let ctx = egui::Context::default();
+        let caps = FeedCapabilities::new().with_services([FeedService::OptionChain]);
+        for (capabilities, instrument, offered) in [
+            (None, None, false),
+            (Some(&caps), Some(Instrument::new("OTHER")), false),
+            (
+                Some(&caps),
+                Some(Instrument::new("SAMPLE").with_services([])),
+                false,
+            ),
+            (Some(&caps), Some(Instrument::new("SAMPLE")), true),
+            (None, None, false),
+        ] {
+            dialog.set_feed_capabilities(capabilities, instrument.as_ref());
+            show(&mut dialog, &ctx);
+            assert_eq!(dialog.factory().has("Options Volume Profile"), offered);
+            if offered {
+                let info = dialog
+                    .indicators()
+                    .iter()
+                    .find(|info| info.id == "Options Volume Profile")
+                    .unwrap();
+                assert_eq!(
+                    IndicatorDialog::destination(info),
+                    (IndicatorCategory::BuiltIns, IndicatorTab::Profiles)
+                );
+            }
+        }
+        dialog.set_feed_capabilities(Some(&caps), Some(&Instrument::new("SAMPLE")));
+        show(&mut dialog, &ctx);
+        assert!(dialog.factory().has("Options Volume Profile"));
+        dialog.set_metric_source(None, "SAMPLE");
+        assert!(!dialog.factory().has("Options Volume Profile"));
+        assert!(!feed.sink.lock().unwrap().as_ref().unwrap().is_active());
     }
 }

@@ -3,7 +3,6 @@
 use super::FeedError;
 use crate::model::{BarClock, OrderSide, Tick};
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::ops::RangeBounds;
 
@@ -43,20 +42,7 @@ impl FootprintLevel {
     }
 }
 
-/// How `studies::TradeProfile::nodes` (requires `studies`) chooses volume nodes.
-///
-/// The default compares each price row with its immediate neighbours, which is the most
-/// sensitive setting. Raising `smoothing` or `prominence` leaves only the broader nodes.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct NodeSensitivity {
-    /// Rows on each side of a row that are averaged with it before comparing; zero compares
-    /// the rows as traded. Untraded rows count as zero volume.
-    pub smoothing: u32,
-    /// Smallest rise of a peak above, or drop of a valley below, the higher respectively
-    /// lower of its neighbouring plateaus, as a share of the largest smoothed volume. NaN
-    /// counts as zero and values are clamped to 0..=1.
-    pub prominence: f64,
-}
+pub use crate::model::NodeSensitivity;
 
 /// One bar's executed volume and intrabar delta path, starting at zero.
 #[derive(Clone, Debug, PartialEq)]
