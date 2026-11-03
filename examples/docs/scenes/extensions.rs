@@ -11,9 +11,10 @@ pub fn volatility_smile() -> egui_charts::Chart {
 
     const FORWARD: f64 = 4500.0;
 
-    /// One value per strike from 3,800 to 5,200 in steps of 25, for an expiry `days` away.
+    /// Strikes from 3,800 to 5,200, 25 apart near the forward and 100 apart in the wings.
     fn smile(days: f64) -> Vec<Bar> {
         (0..=56)
+            .filter(|step| (16..=40).contains(step) || step % 4 == 0)
             .map(|step| 3800.0 + 25.0 * f64::from(step))
             .filter_map(|strike| {
                 Some(Bar::from_value(
@@ -69,7 +70,7 @@ pub fn volatility_smile() -> egui_charts::Chart {
     chart
 }
 
-/// Space two generated yield curves by month, including empty maturities.
+/// Space two generated yield curves by their actual maturity samples.
 pub fn yield_curve() -> egui_charts::Chart {
     use eframe::egui;
     use egui_charts::model::{Bar, BarData};
@@ -93,38 +94,25 @@ pub fn yield_curve() -> egui_charts::Chart {
         3.2 + 1.1 * (1.0 - (-years / 4.0).exp())
     }
 
-    let scale = MaturityScale::default();
-    let slots = scale.whitespace(360.0);
-    let all_slots = slots.len();
-    let mut chart = Chart::new(BarData::from_bars(slots));
-    chart.set_horizontal_scale(Some(Arc::new(scale)));
-    chart.set_symbol("Yield, %");
-    chart.config_mut().show_volume = false;
-    for (name, color, curve) in [
-        (
-            "Today",
-            egui::Color32::from_rgb(41, 98, 255),
-            today as fn(f64) -> f64,
-        ),
-        (
-            "A year ago",
-            egui::Color32::from_rgb(242, 54, 69),
-            a_year_ago,
-        ),
-    ] {
-        let series = chart.add_series(SeriesOptions {
-            name: name.into(),
-            color,
-            ..Default::default()
-        });
-        let bars = MATURITIES
+    let bars = |curve: fn(f64) -> f64| {
+        MATURITIES
             .iter()
             .filter_map(|&months| Some(Bar::from_value(key_time(months)?, curve(months))))
-            .collect();
-        chart.set_data(series, bars);
-    }
-    // Three more bars than slots leave room for the right offset.
-    chart.set_visible_bars(all_slots + 3);
+            .collect()
+    };
+    let mut chart = Chart::new(BarData::from_bars(bars(today)));
+    chart.set_chart_type(egui_charts::ChartType::Line);
+    chart.set_horizontal_scale(Some(Arc::new(MaturityScale::default())));
+    chart.set_symbol("Today, yield %");
+    chart.config_mut().show_volume = false;
+    let previous = chart.add_series(SeriesOptions {
+        name: "A year ago".into(),
+        color: egui::Color32::from_rgb(242, 54, 69),
+        ..Default::default()
+    });
+    chart.set_data(previous, bars(a_year_ago));
+    // Three spacing units beyond the samples leave room for the right offset.
+    chart.set_visible_bars(MATURITIES.len() + 3);
     chart
 }
 

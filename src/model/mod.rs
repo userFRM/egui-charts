@@ -62,7 +62,9 @@ pub use alert::{
 };
 pub use bar::{Bar, BarColors, BarData};
 #[cfg(feature = "widget")]
-pub(crate) use bar::{index_at, index_at_with_timeframe, time_at, time_at_with_timeframe};
+pub(crate) use bar::{
+    index_at, index_at_with_timeframe, numeric_positions, time_at, time_at_with_timeframe,
+};
 pub(crate) use bar::{last_with_value, percent_change};
 pub use box_size::{BoxSizeMethod, PriceBasedSource};
 pub use chart_style::{
@@ -120,7 +122,7 @@ pub use strategy::{
 pub use study::{InputValue, StudySource};
 pub use time_scale_event::{EventKind, EventVisibility, TimeScaleEvent};
 pub use timeframe::{Timeframe, TimeframeUnit};
-pub use timescale::{LogicalRange, TimeScale};
+pub use timescale::{LogicalRange, NumericPositions, TimeScale};
 pub use timezone::{TimezoneId, TimezoneOffset};
 pub(crate) use timezone::{local_instant, local_time};
 pub use tpo::{

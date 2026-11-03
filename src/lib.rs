@@ -249,6 +249,14 @@ pub struct SiteStudiesDoctests;
 pub struct SiteThemingDoctests;
 
 #[cfg(all(doctest, feature = "ui"))]
+#[doc = include_str!("../docs/site/src/content/docs/time-zones.mdx")]
+pub struct SiteTimeZonesDoctests;
+
+#[cfg(all(doctest, feature = "ui"))]
+#[doc = include_str!("../docs/site/src/content/docs/accessibility.mdx")]
+pub struct SiteAccessibilityDoctests;
+
+#[cfg(all(doctest, feature = "ui"))]
 #[doc = include_str!("../docs/site/src/content/docs/migration.mdx")]
 pub struct SiteMigrationDoctests;
 

@@ -78,7 +78,7 @@ pub(super) fn group_mapping(coords: &ChartMapping, factor: usize, start: usize) 
         right_offset: (coords.base_idx as f64 + coords.right_offset + 0.5) / factor as f64
             - 0.5
             - base as f64,
-        ..*coords
+        ..coords.clone()
     }
 }
 
