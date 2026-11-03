@@ -240,6 +240,10 @@ pub struct SiteStudiesDoctests;
 pub struct SiteThemingDoctests;
 
 #[cfg(all(doctest, feature = "ui"))]
+#[doc = include_str!("../docs/site/src/content/docs/migration.mdx")]
+pub struct SiteMigrationDoctests;
+
+#[cfg(all(doctest, feature = "ui"))]
 #[doc = include_str!("../docs/study-data.md")]
 pub struct StudyDataGuideDoctests;
 
