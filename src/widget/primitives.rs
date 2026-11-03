@@ -343,7 +343,7 @@ impl Chart {
                 }
                 let mut view = self.primitive_view(item.series, coords.clone());
                 let study = view.study?;
-                if !study.is_visible() || !study.is_overlay() {
+                if !study.is_visible() {
                     return None;
                 }
                 view.mapping = crate::chart::rendering::study_mapping(study, coords);
@@ -597,7 +597,7 @@ mod tests {
                 }
             }
         }
-        for pane in [false, true] {
+        for (pane, move_main) in [(false, false), (true, false), (false, true), (true, true)] {
             for kind in ["main", "bars", "study", "custom", "custom_volume"] {
                 for merged in [false, true] {
                     if kind == "custom_volume" && !cfg!(feature = "studies") {
@@ -662,6 +662,14 @@ mod tests {
                         assert!(chart.move_series_to_pane(other, destination));
                     }
                     chart.attach_primitive(other, probe(2));
+                    if move_main {
+                        let destination = if pane {
+                            chart.series_pane(id).unwrap()
+                        } else {
+                            chart.add_pane()
+                        };
+                        assert!(chart.move_series_to_pane(SeriesId::MAIN, destination));
+                    }
                     if merged {
                         let mut options = chart.chart_options().clone();
                         options.time_scale.min_bar_spacing = 0.0;
@@ -688,7 +696,7 @@ mod tests {
                     assert_eq!(
                         *log.lock().unwrap(),
                         expected,
-                        "{kind}, pane={pane}, merged={merged}"
+                        "{kind}, pane={pane}, move_main={move_main}, merged={merged}"
                     );
                     let actual: Vec<_> = painted
                         .iter()
@@ -697,7 +705,10 @@ mod tests {
                             _ => None,
                         })
                         .collect();
-                    assert_eq!(actual, colors, "paint order: {kind}, pane={pane}");
+                    assert_eq!(
+                        actual, colors,
+                        "paint order: {kind}, pane={pane}, move_main={move_main}"
+                    );
                     chart.set_series_visible(id, false);
                     chart.set_series_visible(other, false);
                     log.lock().unwrap().clear();
