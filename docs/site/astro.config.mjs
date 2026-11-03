@@ -34,13 +34,14 @@ export default defineConfig({
         { label: 'Status', link: '/progress/' },
         {
           label: 'Learning',
-          items: ['installation', 'first-chart', { slug: 'builder-guide', label: 'Builder tutorial' }, 'data-model', 'data'],
+          items: ['installation', 'first-chart', 'tutorial/second-series', { slug: 'builder-guide', label: 'Builder tutorial' }, 'data-model', 'data'],
         },
         {
           label: 'Chart concepts',
           items: [
             'chart-types',
             { slug: 'scales', label: 'Scales and interaction overview' },
+            'interaction',
             'price-scale',
             'time-scale',
             'horizontal-scales',
@@ -55,7 +56,9 @@ export default defineConfig({
         {
           label: 'Recipes',
           items: [
-            { label: 'Integration recipes', link: '/api-reference/#recipes' },
+            { slug: 'recipes', label: 'Integration recipes' },
+            'recipes/annotations', 'recipes/price-volume', 'recipes/host-readout',
+            'recipes/synchronized', 'recipes/export',
             'application-ui', 'replay', 'strategy-report', 'host-services', 'performance',
           ],
         },

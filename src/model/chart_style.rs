@@ -246,6 +246,13 @@ pub struct ChartTypeStyles {
     /// Line, Step line, Line with markers, Area and Baseline charts. Non-positive or non-finite
     /// radii hide it, the default.
     pub crosshair_marker_radius: f32,
+    /// Crosshair marker fill, including opacity. `None` uses the hovered point's line colour.
+    pub crosshair_marker_fill: Option<Color32>,
+    /// Crosshair marker border colour. `None` uses the chart background.
+    pub crosshair_marker_border_color: Option<Color32>,
+    /// Crosshair marker border width in logical points. Non-positive or non-finite widths
+    /// hide the border; the default is the design-token thick stroke.
+    pub crosshair_marker_border_width: f32,
     /// Pulse at the last price of the line-based charts.
     pub last_price_animation: LastPriceAnimation,
 }
@@ -264,6 +271,9 @@ impl Default for ChartTypeStyles {
             bars: BarsStyle::default(),
             kagi: KagiStyle::default(),
             crosshair_marker_radius: 0.0,
+            crosshair_marker_fill: None,
+            crosshair_marker_border_color: None,
+            crosshair_marker_border_width: DESIGN_TOKENS.stroke.thick,
             last_price_animation: LastPriceAnimation::Disabled,
         }
     }

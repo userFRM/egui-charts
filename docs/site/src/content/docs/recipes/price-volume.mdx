@@ -1,0 +1,49 @@
+---
+title: Price and volume
+---
+
+import Example from '../../../components/Example.astro';
+import source from '../../../../../../examples/docs/scenes/recipes.rs?raw';
+
+Price and volume have different units. Keep candles on the price pane and add
+a [column series](/egui-charts/docs/series/histogram/) on a separate pane. This makes the
+volume scale independent while both panes share the time axis and crosshair.
+
+## Build the volume series
+
+Apply this setup to the [first chart](../first-chart.mdx) once. It returns the
+volume series' stable
+[`SeriesId`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/series/selection/struct.SeriesId.html)
+for later updates. Each column's scalar is explicitly copied from the source
+bar's volume into
+[`Bar::from_value`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.Bar.html#method.from_value);
+column renderers use `close`, not the `volume` field.
+
+<Example scene="price-volume" title="Candles over an independent volume pane"
+  task="Move the pointer between price and volume. The lower pane reports volume units without stretching the price scale."
+  code={source.match(/pub fn price_volume\b[^]*?\n\}/)[0]} />
+
+[`show_volume = false`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.ChartConfig.html#structfield.show_volume)
+disables the built-in volume band so it is not drawn twice.
+[`add_pane`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.add_pane)
+and
+[`move_series_to_pane`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.move_series_to_pane)
+give the added series its own scale.
+[`columns_base: Some(0.0)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.SeriesOptions.html#structfield.columns_base)
+includes zero in the added series' autoscale. The scene uses a single colour
+for both rising and falling volumes; set per-bar colours if you want to colour
+by price direction.
+
+## Keep both series current
+
+For each incoming price bar, call
+[`update`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.update)
+on the main series and update the saved volume id with
+`Bar::from_value(bar.time, bar.volume)`. A matching timestamp replaces the forming
+column; a later timestamp appends one. Send the complete accumulated bar volume,
+not just the latest trade's quantity. Replace both histories when the instrument
+or interval changes.
+
+If the built-in volume band already meets your needs, keep it enabled and omit
+the extra series. See [panes](../panes.mdx) for height and separator options,
+and [historical and streaming data](../data.mdx) for the host feed contract.

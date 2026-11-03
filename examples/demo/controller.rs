@@ -2948,11 +2948,8 @@ impl DemoApp {
                                     .iter()
                                     .any(|spread| spread.loading(&extra.chart)))
                     });
+                // Paused charts still need frames to finish their comparison and spread feeds.
                 if loading {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label("Loading chart data…");
-                    });
                     ui.ctx().request_repaint();
                 }
                 if self.api_samples
@@ -3848,10 +3845,10 @@ mod tests {
         assert!(!app.live.loading());
     }
 
-    /// The initial history yields to input while the chart is paused, then finishes normally
-    /// and answers the symbol details from the complete history.
+    /// Cached bars paint immediately while bootstrap yields to input, then symbol details
+    /// use the complete history.
     #[test]
-    fn initial_history_shows_loading_and_keeps_keyboard_input_responsive() {
+    fn initial_history_is_visible_while_bootstrap_keeps_keyboard_input_responsive() {
         fn texts(
             app: &mut DemoApp,
             ctx: &egui::Context,
@@ -3880,9 +3877,16 @@ mod tests {
             texts
         }
         fn frame(app: &mut DemoApp, ctx: &egui::Context, events: Vec<egui::Event>) -> bool {
-            texts(app, ctx, events)
-                .iter()
-                .any(|(text, _)| text == "Loading chart data…")
+            let texts = texts(app, ctx, events);
+            assert!(
+                !app.chart.bars(SeriesId::MAIN).is_empty(),
+                "history must be visible on every frame, including the first"
+            );
+            assert!(
+                texts.iter().all(|(text, _)| !text.contains("Loading")),
+                "bootstrap must not paint a loading indicator"
+            );
+            app.live.loading()
         }
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
@@ -3891,7 +3895,7 @@ mod tests {
         app.live.set_paused(true);
         assert!(
             frame(&mut app, &ctx, Vec::new()),
-            "the first frame must expose the pending load"
+            "showing history must not finish bootstrap on the first frame"
         );
         assert!(frame(
             &mut app,
