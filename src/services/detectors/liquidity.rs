@@ -16,7 +16,7 @@ use crate::services::SignalEvent;
 /// Follows levels within ten ticks of their side's inside, and size added within five ticks.
 /// Automatic thresholds are four times the median positive displayed size within ten ticks
 /// on both sides at the current book update. An even count uses the mean of the middle pair.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct LiquidityRule {
     /// Size that opens a tracked level and identifies a large individual order.

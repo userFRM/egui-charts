@@ -30,6 +30,7 @@ impl Chart {
             )
             .on_hover_cursor(egui::CursorIcon::ResizeVertical);
         if response.dragged()
+            && self.chart_options.handle_scale.enabled
             && self
                 .chart_options
                 .handle_scale
@@ -50,6 +51,7 @@ impl Chart {
             ui.ctx().request_repaint();
         }
         if response.double_clicked()
+            && self.chart_options.handle_scale.enabled
             && self
                 .chart_options
                 .handle_scale

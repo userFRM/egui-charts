@@ -6,6 +6,42 @@ use egui::Color32;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+/// The units a series writes, independently of its price scale's transform.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum SeriesFormat {
+    /// Fixed decimal prices.
+    #[default]
+    Price,
+    /// Quantities abbreviated with K, M and B suffixes.
+    Volume,
+    /// Raw percentage units: 12.5 is written as 12.50%, without a base calculation.
+    Percentage,
+}
+
+/// Saved numeric display settings for a bar series. Values and scale modes stay unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SeriesDisplayFormat {
+    /// The units and suffix to display.
+    pub kind: SeriesFormat,
+    /// Decimal places, after abbreviation for volume.
+    pub precision: u8,
+    /// Smallest movement in raw units. Labels round to its nearest multiple, with halfway
+    /// values rounded away from zero; raw-price ticks use its multiples. Non-positive or
+    /// non-finite values are ignored, leaving precision to determine rounding and tick spacing.
+    pub min_move: f64,
+}
+
+impl Default for SeriesDisplayFormat {
+    fn default() -> Self {
+        Self {
+            kind: SeriesFormat::Price,
+            precision: 2,
+            min_move: 0.01,
+        }
+    }
+}
+
 /// The bar whose value a series' price line and last value label show.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum PriceLineSource {
@@ -87,6 +123,13 @@ impl Default for SeriesAlerts {
 /// series' labels and price lines.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SeriesStyle {
+    /// Raw-value display for ticks, tags, legends and readouts. `None` retains instrument or
+    /// scale formatting. Explicit series formatters take precedence, followed by the chart's
+    /// price formatter, then this declaration. Percentage and indexed scale modes keep their
+    /// transformed labels. A shared axis takes precision and minimum movement from its first
+    /// visible series; each series keeps its own tag and readout format.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_format: Option<SeriesDisplayFormat>,
     /// Label the last value on the price axis.
     pub last_value_visible: bool,
     /// Draw a horizontal line at the last value.
@@ -117,6 +160,7 @@ pub struct SeriesStyle {
 impl Default for SeriesStyle {
     fn default() -> Self {
         Self {
+            display_format: None,
             last_value_visible: true,
             price_line_visible: true,
             price_line_source: PriceLineSource::LastBar,

@@ -806,8 +806,11 @@ mod tests {
             ),
             Err(StudyError::CyclicSource)
         ));
-        let csv = chart.export_csv().unwrap();
-        assert!(csv.contains(",41.67"), "{csv}");
+        #[cfg(feature = "csv")]
+        {
+            let csv = chart.export_csv().unwrap();
+            assert!(csv.contains(",41.67"), "{csv}");
+        }
         chart.user_action(|chart| chart.remove_series(rsi));
         settle(&mut chart);
         assert_eq!(output(&chart, 3), None);
