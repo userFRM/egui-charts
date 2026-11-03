@@ -26,6 +26,218 @@ fn bars(prices: &[f64]) -> Vec<Bar> {
         .collect()
 }
 
+/// Last-value queries skip whitespace and use shared indices, each pane's scale and the
+/// value formatter. From a visible base of 100, 120 is +20% and a loaded 150 is +50%.
+/// A move from 100 to 130 forms three size-10 bricks with the same source timestamp.
+#[test]
+fn last_value_queries_select_loaded_or_visible_on_the_series_scale() {
+    use crate::model::{BarColors, LogicalRange};
+    use crate::scales::CustomPriceFormatter;
+    use std::sync::Arc;
+
+    for own_pane in [false, true] {
+        for (mode, visible_text, loaded_text) in [
+            (
+                PriceScaleMode::Normal,
+                ["120.000", "1,200.000"],
+                ["150.000", "1,500.000"],
+            ),
+            (
+                PriceScaleMode::Logarithmic,
+                ["120.000", "1,200.000"],
+                ["150.000", "1,500.000"],
+            ),
+            (PriceScaleMode::Percentage, ["+20.00%"; 2], ["+50.00%"; 2]),
+            (PriceScaleMode::IndexedTo100, ["120.00"; 2], ["150.00"; 2]),
+        ] {
+            let ctx = egui::Context::default();
+            let mut data = bars(&[100.0, 110.0, 120.0, 140.0, 150.0, 160.0]);
+            data[2].colors = Some(Box::new(BarColors {
+                color: Some(Color32::CYAN),
+                ..Default::default()
+            }));
+            data[4].open = 160.0;
+            data[4].high = 160.0;
+            data[5] = Bar::whitespace(data[5].time);
+            let mut chart = Chart::new(BarData::from_bars(data.clone()));
+            let id = chart.add_series(SeriesOptions {
+                scale: SeriesScale::Left,
+                color: Color32::MAGENTA,
+                ..Default::default()
+            });
+            chart.set_data(
+                id,
+                vec![
+                    data[0].clone(),
+                    data[2].clone(),
+                    data[4].clone(),
+                    data[5].clone(),
+                ]
+                .into_iter()
+                .map(|mut bar| {
+                    bar.open *= 10.0;
+                    bar.high *= 10.0;
+                    bar.low *= 10.0;
+                    bar.close *= 10.0;
+                    bar
+                })
+                .collect(),
+            );
+            let empty = chart.add_series(SeriesOptions::default());
+            if own_pane {
+                let pane = chart.add_pane();
+                assert!(chart.move_series_to_pane(id, pane));
+            }
+            assert_eq!(chart.series_last_value(id, PriceLineSource::LastBar), None);
+            for series in [SeriesId::MAIN, id] {
+                let scale = chart.series_price_scale_mut(series).unwrap();
+                scale.options_mut().mode = mode;
+                scale.set_price_precision(Some(3));
+            }
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            assert!(chart.set_visible_logical_range(LogicalRange::new(0.0, 2.0)));
+            frame(&ctx, &mut chart, 0.1, vec![]);
+            for series in [SeriesId::MAIN, id] {
+                let base = if series == id { 1000.0_f64 } else { 100.0_f64 };
+                let (low, high) = match mode {
+                    PriceScaleMode::Normal => (base, base * 2.0),
+                    PriceScaleMode::Logarithmic => (base.ln(), (base * 2.0).ln()),
+                    PriceScaleMode::Percentage => (0.0, 100.0),
+                    PriceScaleMode::IndexedTo100 => (100.0, 200.0),
+                };
+                chart
+                    .series_price_scale_mut(series)
+                    .unwrap()
+                    .set_range(low, high);
+            }
+            frame(&ctx, &mut chart, 0.2, vec![]);
+            for series in [SeriesId::MAIN, id] {
+                let added = usize::from(series == id);
+                for (source, value, index, expected_text, fraction) in [
+                    (
+                        PriceLineSource::LastVisible,
+                        [120.0, 1200.0][added],
+                        2.0,
+                        visible_text[added],
+                        0.2,
+                    ),
+                    (
+                        PriceLineSource::LastBar,
+                        [150.0, 1500.0][added],
+                        4.0,
+                        loaded_text[added],
+                        0.5,
+                    ),
+                ] {
+                    let last: crate::widget::SeriesLastValue =
+                        chart.series_last_value(series, source).unwrap();
+                    assert_eq!((last.value, last.index), (value, index));
+                    assert_eq!(last.text, expected_text, "{mode:?}");
+                    let expected_color = if source == PriceLineSource::LastVisible {
+                        Color32::CYAN
+                    } else if series == id {
+                        Color32::MAGENTA
+                    } else {
+                        chart.config.bearish_color
+                    };
+                    assert_eq!(last.color, expected_color);
+                    let (top, bottom) = chart.series_price_map(series).unwrap().extent();
+                    // ln(1.2)/ln(2) and ln(1.5)/ln(2), independently calculated.
+                    let fraction = if mode == PriceScaleMode::Logarithmic {
+                        if source == PriceLineSource::LastVisible {
+                            0.263_034_4
+                        } else {
+                            0.584_962_5
+                        }
+                    } else {
+                        fraction
+                    };
+                    assert!((last.coordinate - (bottom - (bottom - top) * fraction)).abs() < 0.001);
+                }
+                chart.set_series_formatter(
+                    series,
+                    Some(Arc::new(CustomPriceFormatter::new(|value| {
+                        format!("raw {value:.1}")
+                    }))),
+                );
+                chart.set_percentage_formatter(Some(Arc::new(CustomPriceFormatter::new(
+                    |value| format!("relative {value:.1}"),
+                ))));
+                let expected = match mode {
+                    PriceScaleMode::Normal | PriceScaleMode::Logarithmic => {
+                        ["raw 120.0", "raw 1200.0"][added]
+                    }
+                    PriceScaleMode::Percentage => "relative 20.0",
+                    PriceScaleMode::IndexedTo100 => "relative 120.0",
+                };
+                assert_eq!(
+                    chart
+                        .series_last_value(series, PriceLineSource::LastVisible)
+                        .unwrap()
+                        .text,
+                    expected
+                );
+                chart.set_series_formatter(series, None);
+                chart.set_percentage_formatter(None);
+            }
+            for source in [PriceLineSource::LastBar, PriceLineSource::LastVisible] {
+                for series in [empty, SeriesId(99), SeriesId::VOLUME] {
+                    assert_eq!(chart.series_last_value(series, source), None);
+                }
+            }
+            assert!(chart.set_series_visible(id, false));
+            chart.series_style_mut(id).unwrap().last_value_visible = false;
+            assert!(
+                chart
+                    .series_last_value(id, PriceLineSource::LastBar)
+                    .is_some()
+            );
+            assert!(chart.set_visible_logical_range(LogicalRange::new(10.0, 13.0)));
+            frame(&ctx, &mut chart, 0.3, vec![]);
+            for series in [SeriesId::MAIN, id] {
+                assert_eq!(
+                    chart.series_last_value(series, PriceLineSource::LastVisible),
+                    None,
+                    "{:?}",
+                    chart.visible_logical_range()
+                );
+            }
+            for series in [SeriesId::MAIN, id] {
+                for data in [vec![Bar::whitespace(data[5].time)], Vec::new()] {
+                    chart.set_data(series, data);
+                    for source in [PriceLineSource::LastBar, PriceLineSource::LastVisible] {
+                        assert_eq!(chart.series_last_value(series, source), None);
+                    }
+                }
+                assert!(chart.remove_series(series));
+                for source in [PriceLineSource::LastBar, PriceLineSource::LastVisible] {
+                    assert_eq!(chart.series_last_value(series, source), None);
+                }
+            }
+        }
+    }
+    let ctx = egui::Context::default();
+    let mut chart = Chart::new(BarData::from_bars(bars(&[100.0, 130.0])));
+    chart.set_chart_type(ChartType::Renko);
+    let mut params = chart.chart_type_params().clone();
+    params.renko_brick_size = 10.0;
+    chart.set_chart_type_params(params);
+    frame(&ctx, &mut chart, 0.0, vec![]);
+    assert_eq!(
+        chart
+            .state
+            .shown()
+            .iter()
+            .map(|bar| bar.close)
+            .collect::<Vec<_>>(),
+        [110.0, 120.0, 130.0]
+    );
+    let last = chart
+        .series_last_value(SeriesId::MAIN, PriceLineSource::LastVisible)
+        .unwrap();
+    assert_eq!((last.value, last.index), (130.0, 2.0));
+}
+
 /// Tick hooks see each axis separately in displayed units, while value labels keep
 /// using the individual hook. A move from 100 to 200 or 1000 to 2000 is +100%, index 200.
 #[test]
