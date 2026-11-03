@@ -132,8 +132,10 @@ to identify an individual object. It returns a
 [`PrimitiveHit`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/struct.PrimitiveHit.html)
 with the cursor, an optional object id, host data, a distance in UI points and a draw
 pass. Among custom hits, a later pass wins, then the shorter distance. Equal hits keep
-ordinary primitives ahead of series renderers, the latest attachment first. The winner
-is reported as `ChartPointer::primitive_hit` in hover, click and double-click events.
+ordinary primitives ahead of series renderers, the latest attachment first. When series
+backgrounds group foregrounds in attachment order, equal hits follow reverse attachment
+order across primitives and renderers. The winner is reported as
+`ChartPointer::primitive_hit` in hover, click and double-click events.
 Without an override, `hit_test` supplies a cursor-only hit on the series pass.
 
 A normal attachment reports
