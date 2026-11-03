@@ -198,7 +198,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Execution markers, rejection/fill notifications and execution sound intents.
 - [x] `StrategyReportPanel` accepts `StrategyReport` data and shows trade lists, equity/drawdown plots, performance metrics, supplied properties and chart navigation; trades export as CSV.
 - [x] `Backtest::update` processes new closed bars incrementally, retains observed forming-bar fills when tick recalculation is enabled, and rebuilds corrected history.
-- [x] `StrategyTester` selects factory strategies, reuses the study input editor, edits account and execution settings, requests history from the host and displays runs with labelled fill signals. Edits mark the report stale.
+- [x] `StrategyTester` selects factory strategies, reuses the study input editor, edits account and execution settings, requests history from the host and displays runs with labelled fill signals. Edits mark the report stale. The demo answers supported start-date and finer-fill requests from its synthetic history, explains interval and retention limits before execution, and preserves the last report on failure.
 - [x] Parameter optimisation previews bounded numeric grids, yields between execution batches, sorts trial results and applies selected inputs on native and web builds.
 - [x] `StrategyFactory` lists and creates built-in and host strategies with editable study inputs, defaults and bounds.
 - [x] `strategies::optimise` lazily runs every input combination on a fresh strategy with the same bars and settings, yielding its inputs and report performance; dropping the iterator stops further trials.
