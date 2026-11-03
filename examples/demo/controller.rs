@@ -4411,6 +4411,7 @@ mod tests {
     fn legacy_themes_follow_system_and_new_choices_survive_restart() {
         // Repeated construction used to overflow this stack before checking the saved theme.
         std::thread::Builder::new()
+            .name("theme-restarts".into())
             .stack_size(256 * 1024)
             .spawn(check_theme_restarts)
             .unwrap()
