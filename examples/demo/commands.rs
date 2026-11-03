@@ -3,8 +3,40 @@
 use super::{DemoApp, TopToolbarAction};
 use eframe::egui;
 use egui_charts::drawings::DrawingToolType;
+use egui_charts::icons::{Icon, icons};
 use egui_charts::studies::IndicatorFactory;
+use egui_charts::theme::ThemeExt;
 use egui_charts::ui_kit::command_palette::Command;
+use egui_charts::ui_kit::list_item::ListItem;
+
+pub(super) fn menu_item(
+    ui: &mut egui::Ui,
+    label: &str,
+    icon: &Icon,
+    trailing: Option<&Icon>,
+) -> egui::Response {
+    let response = ListItem::new().show_with_icon(ui, label, icon);
+    if let Some(trailing) = trailing {
+        let rect = egui::Rect::from_center_size(
+            response.rect.right_center() - egui::vec2(12.0, 0.0),
+            egui::Vec2::splat(12.0),
+        );
+        trailing
+            .as_image_tinted(rect.size(), ui.active_theme().ui.text)
+            .paint_at(ui, rect);
+    }
+    response
+}
+
+pub(super) fn menu_toggle(ui: &mut egui::Ui, label: &str, icon: &Icon, checked: &mut bool) {
+    let response = menu_item(ui, label, icon, checked.then_some(&icons::CHECK));
+    if response.clicked() {
+        *checked = !*checked;
+    }
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::Role::CheckBox, response.enabled(), *checked, label)
+    });
+}
 
 const SAMPLES: &[(&str, &str, &str)] = &[
     (
@@ -123,10 +155,6 @@ pub(super) fn quick_search_commands() -> Vec<Command> {
 
 impl DemoApp {
     pub(super) fn show_demo_controls(&mut self, ui: &mut egui::Ui) -> Option<&'static str> {
-        use egui_charts::icons::icons;
-        use egui_charts::theme::ThemeExt;
-        use egui_charts::ui_kit::list_item::ListItem;
-
         let mut command = None;
         for (label, icon) in [
             ("Readout", &icons::EYE),
@@ -134,14 +162,7 @@ impl DemoApp {
             ("Formatting", &icons::TEXT),
             ("Showcase", &icons::LAYOUT_GRID),
         ] {
-            let response = ListItem::new().show_with_icon(ui, label, icon);
-            let arrow = egui::Rect::from_center_size(
-                response.rect.right_center() - egui::vec2(12.0, 0.0),
-                egui::Vec2::splat(12.0),
-            );
-            icons::CHEVRON_RIGHT
-                .as_image_tinted(arrow.size(), ui.active_theme().ui.text)
-                .paint_at(ui, arrow);
+            let response = menu_item(ui, label, icon, Some(&icons::CHEVRON_RIGHT));
             egui::containers::menu::SubMenu::new()
                 .config(
                     egui::containers::menu::MenuConfig::new()
@@ -623,12 +644,21 @@ mod tests {
     }
 
     fn frame(app: &mut DemoApp, ctx: &egui::Context, events: Vec<egui::Event>) -> egui::FullOutput {
+        frame_at_width(app, ctx, events, 1440.0)
+    }
+
+    fn frame_at_width(
+        app: &mut DemoApp,
+        ctx: &egui::Context,
+        events: Vec<egui::Event>,
+        width: f32,
+    ) -> egui::FullOutput {
         use eframe::App;
         ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
-                    egui::vec2(1440.0, 900.0),
+                    egui::vec2(width, 900.0),
                 )),
                 events,
                 ..Default::default()
@@ -638,8 +668,12 @@ mod tests {
     }
 
     fn click(app: &mut DemoApp, ctx: &egui::Context, label: &str) {
+        click_at_width(app, ctx, label, 1440.0);
+    }
+
+    fn click_at_width(app: &mut DemoApp, ctx: &egui::Context, label: &str, width: f32) {
         ctx.enable_accesskit();
-        let output = frame(app, ctx, vec![]);
+        let output = frame_at_width(app, ctx, vec![], width);
         let pos = output
             .platform_output
             .accesskit_update
@@ -660,7 +694,7 @@ mod tests {
         output.drop_without_applying_deltas();
         let pos = pos.unwrap_or_else(|| panic!("missing control: {label}"));
         for pressed in [true, false] {
-            frame(
+            frame_at_width(
                 app,
                 ctx,
                 vec![
@@ -672,8 +706,103 @@ mod tests {
                         modifiers: egui::Modifiers::NONE,
                     },
                 ],
+                width,
             )
             .drop_without_applying_deltas();
+        }
+    }
+
+    #[test]
+    fn menu_labels_align_and_toggles_keep_their_state_and_position() {
+        for width in [393.0, 1440.0] {
+            let ctx = egui::Context::default();
+            let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+            app.live.set_paused(true);
+            app.enable_samples();
+            frame_at_width(&mut app, &ctx, vec![], width).drop_without_applying_deltas();
+            click_at_width(&mut app, &ctx, "Menu", width);
+            let label_pos = |output: &egui::FullOutput, label: &str| {
+                output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == label => Some(text.pos),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("missing menu label: {label}"))
+            };
+            let mut output = frame_at_width(&mut app, &ctx, vec![], width);
+            output.textures_delta.clear();
+            let origin = label_pos(&output, "Readout").x;
+            let pause_pos = label_pos(&output, "Pause synthetic feed");
+            for label in [
+                "Quick Search",
+                "Toggle Theme",
+                "Appearance",
+                "Formatting",
+                "Showcase",
+                "Liquidity heatmap",
+                "Largest order profile",
+                "Pause synthetic feed",
+                "Research",
+                "Copy symbol",
+            ]
+            .into_iter()
+            .chain(
+                (width < 600.0)
+                    .then_some([
+                        "Watchlist",
+                        "Alerts",
+                        "Object Tree",
+                        "Data Window",
+                        "Time and sales",
+                        "Order flow",
+                        "Session notes",
+                        "Keyboard shortcuts",
+                    ])
+                    .into_iter()
+                    .flatten(),
+            ) {
+                assert_eq!(label_pos(&output, label).x, origin, "{width}: {label}");
+            }
+            output.drop_without_applying_deltas();
+            click_at_width(&mut app, &ctx, "Largest order profile", width);
+            assert!(
+                !app.largest_order_profile,
+                "disabled profile must not toggle"
+            );
+            for paused in [false, true] {
+                click_at_width(&mut app, &ctx, "Pause synthetic feed", width);
+                assert_eq!(app.live.paused(), paused);
+                let mut output = frame_at_width(&mut app, &ctx, vec![], width);
+                output.textures_delta.clear();
+                assert_eq!(label_pos(&output, "Pause synthetic feed"), pause_pos);
+                let node = output
+                    .platform_output
+                    .accesskit_update
+                    .as_ref()
+                    .unwrap()
+                    .nodes
+                    .iter()
+                    .find(|(_, node)| node.label() == Some("Pause synthetic feed"))
+                    .unwrap();
+                assert_eq!(node.1.role(), egui::accesskit::Role::CheckBox);
+                assert_eq!(
+                    node.1.toggled(),
+                    Some(if paused {
+                        egui::accesskit::Toggled::True
+                    } else {
+                        egui::accesskit::Toggled::False
+                    })
+                );
+                output.drop_without_applying_deltas();
+            }
+            click_at_width(&mut app, &ctx, "Liquidity heatmap", width);
+            click_at_width(&mut app, &ctx, "Largest order profile", width);
+            assert!(app.liquidity_heatmap);
+            assert!(app.largest_order_profile);
+            click_at_width(&mut app, &ctx, "Copy symbol", width);
+            assert!(!egui::Popup::is_any_open(&ctx));
         }
     }
 

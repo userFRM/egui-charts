@@ -1639,6 +1639,9 @@ impl eframe::App for DemoApp {
 
 impl DemoApp {
     fn show_top_toolbar(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
+        use commands::{menu_item, menu_toggle};
+        use egui_charts::icons::icons;
+
         self.top_toolbar.sync_from_app_state(&self.state);
         self.top_toolbar.state.can_undo = self.chart.can_undo();
         self.top_toolbar.state.can_redo = self.chart.can_redo();
@@ -1668,40 +1671,66 @@ impl DemoApp {
                 let action = toolbar.show_with_menu(ui, &state, |ui| {
                     sample = self.show_demo_controls(ui);
                     ui.separator();
-                    ui.checkbox(&mut heatmap_enabled, "Liquidity heatmap");
-                    ui.add_enabled(heatmap_enabled, |ui: &mut egui::Ui| {
-                        ui.checkbox(&mut largest_profile, "Largest order profile")
+                    menu_toggle(
+                        ui,
+                        "Liquidity heatmap",
+                        &icons::LAYOUT_GRID,
+                        &mut heatmap_enabled,
+                    );
+                    ui.add_enabled_ui(heatmap_enabled, |ui| {
+                        menu_toggle(
+                            ui,
+                            "Largest order profile",
+                            &icons::CHART_SESSION_VOLUME_PROFILE,
+                            &mut largest_profile,
+                        );
                     });
-                    ui.add_enabled(self.replay.is_none(), |ui: &mut egui::Ui| {
-                        ui.checkbox(&mut paused, "Pause synthetic feed")
+                    ui.separator();
+                    ui.add_enabled_ui(self.replay.is_none(), |ui| {
+                        menu_toggle(ui, "Pause synthetic feed", &icons::MEDIA_PAUSE, &mut paused);
                     });
+                    ui.separator();
                     if ui.ctx().content_rect().width() < 600.0 {
-                        ui.separator();
-                        for (label, panel) in [
-                            ("Watchlist", SidePanel::Watchlist),
-                            ("Alerts", SidePanel::Alerts),
-                            ("Object Tree", SidePanel::ObjectTree),
-                            ("Data Window", SidePanel::DataWindow),
-                            ("Time and sales", SidePanel::TimeAndSales),
-                            ("Order flow", SidePanel::OrderFlow),
+                        for (label, panel, icon) in [
+                            (
+                                "Watchlist",
+                                SidePanel::Watchlist,
+                                &icons::WIDGET_BAR_WATCHLIST,
+                            ),
+                            ("Alerts", SidePanel::Alerts, &icons::ALERTS),
+                            (
+                                "Object Tree",
+                                SidePanel::ObjectTree,
+                                &icons::WIDGET_BAR_LAYERS,
+                            ),
+                            ("Data Window", SidePanel::DataWindow, &icons::TABLE),
+                            (
+                                "Time and sales",
+                                SidePanel::TimeAndSales,
+                                &icons::SETTINGS_EVENTS,
+                            ),
+                            ("Order flow", SidePanel::OrderFlow, &icons::SETTINGS_EVENTS),
                         ]
                         .into_iter()
-                        .filter(|(_, panel)| self.api_samples || *panel != SidePanel::TimeAndSales)
-                        {
-                            if ui.button(label).clicked() {
+                        .filter(|(_, panel, _)| {
+                            self.api_samples || *panel != SidePanel::TimeAndSales
+                        }) {
+                            if menu_item(ui, label, icon, None).clicked() {
                                 panel_action = Some(panel);
                                 ui.close();
                             }
                         }
                         for widget in &self.widget_bar.widgets {
                             if SidePanel::from_widget(widget.id).is_none()
-                                && ui.button(&widget.tooltip).clicked()
+                                && menu_item(ui, &widget.tooltip, &widget.icon, None).clicked()
                             {
                                 widget_action = Some(widget.id);
                                 ui.close();
                             }
                         }
-                        if ui.button("Keyboard shortcuts").clicked() {
+                        if menu_item(ui, "Keyboard shortcuts", &icons::WIDGET_BAR_HELP, None)
+                            .clicked()
+                        {
                             show_help = true;
                             ui.close();
                         }
@@ -1709,11 +1738,19 @@ impl DemoApp {
                     }
                     // Host actions live in the menu so the default strip keeps the
                     // built-in controls only.
-                    for (label, action) in [
-                        ("Research", TopToolbarAction::Host("research".into())),
-                        ("Copy symbol", TopToolbarAction::Host("copy-symbol".into())),
+                    for (label, icon, action) in [
+                        (
+                            "Research",
+                            &icons::QUICK_SEARCH,
+                            TopToolbarAction::Host("research".into()),
+                        ),
+                        (
+                            "Copy symbol",
+                            &icons::DUPLICATE,
+                            TopToolbarAction::Host("copy-symbol".into()),
+                        ),
                     ] {
-                        if ui.button(label).clicked() {
+                        if menu_item(ui, label, icon, None).clicked() {
                             menu_action = action;
                             ui.close();
                         }
