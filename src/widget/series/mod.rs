@@ -494,8 +494,12 @@ impl Chart {
         Some(id)
     }
 
-    /// Price lines of a bar series in drawing order, with their handles for editing.
-    /// Unknown ids and study ids yield no lines.
+    /// The price lines of a bar series in drawing order, with their handles for
+    /// [`price_line`](Self::price_line), [`update_price_line`](Self::update_price_line) and
+    /// [`remove_price_line`](Self::remove_price_line). The order is that of
+    /// [`set_price_lines`](Self::set_price_lines) followed by later
+    /// [`add_price_line`](Self::add_price_line) calls; an update keeps a line's place.
+    /// A series without lines, a study, an unknown id and a removed series yield no lines.
     pub fn price_lines(&self, series: SeriesId) -> impl Iterator<Item = (PriceLineId, &PriceLine)> {
         let lines = self
             .price_series
