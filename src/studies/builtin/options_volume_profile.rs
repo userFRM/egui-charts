@@ -301,7 +301,14 @@ impl Indicator for OptionsVolumeProfile {
         "Options Volume Profile"
     }
     fn desc(&self) -> &str {
-        "Call and put volume or open interest by strike, with expiry selection, put/call ratio and max pain"
+        match self.source {
+            ProfileSource::Volume(_) => {
+                "Call and put contract volume by strike, summed over the host's chosen expiries"
+            }
+            ProfileSource::Chain(..) => {
+                "Call and put volume or open interest by strike, with expiry selection, put/call ratio and max pain"
+            }
+        }
     }
     fn calculate(&mut self, data: &[Bar]) {
         self.values = IndicatorValues::missing(data.len());
