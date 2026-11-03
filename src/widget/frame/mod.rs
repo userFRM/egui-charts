@@ -3132,11 +3132,7 @@ impl Chart {
                             return Some(index);
                         }
                         self.crosshair_position(
-                            Pos2::new(
-                                coords.idx_to_x(index.floor() as usize)
-                                    + index.fract() as f32 * coords.bar_spacing,
-                                price_rect.center().y,
-                            ),
+                            Pos2::new(coords.index_to_x(index), price_rect.center().y),
                             &coords,
                         )
                         .map(|pos| coords.x_to_idx_f64(pos.x))

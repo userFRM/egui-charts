@@ -524,7 +524,7 @@ impl Chart {
                                                     &pane_mapping,
                                                 )
                                             } else {
-                                                pane_mapping
+                                                pane_mapping.clone()
                                             },
                                         ),
                                     )
@@ -679,13 +679,7 @@ impl Chart {
                                     } else {
                                         index.round()
                                     };
-                                Pos2::new(
-                                    coords
-                                        .to_mapping(plot, 0.0, 1.0)
-                                        .idx_to_x(index.floor() as usize)
-                                        + index.fract() as f32 * pane_mapping.bar_spacing,
-                                    plot.center().y,
-                                )
+                                Pos2::new(pane_mapping.index_to_x(index), plot.center().y)
                             })
                             .filter(|pos| plot.contains(*pos))
                     })

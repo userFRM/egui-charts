@@ -573,6 +573,9 @@ mod tests {
                 let mut chart = Chart::new(BarData::from_bars(bars));
                 chart.set_chart_type(crate::ChartType::LineWithMarkers);
                 chart.set_horizontal_scale(Some(scale.clone()));
+                chart.config_mut().conflation_threshold = Some(4.0);
+                assert_eq!(chart.prepare_conflation(0.01, 1.0), 1);
+                assert!(chart.merge_groups.groups.is_empty());
                 chart
                     .chart_options
                     .time_scale
