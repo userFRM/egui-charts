@@ -488,7 +488,6 @@ impl IndicatorPane {
                     &coords,
                 );
             }
-
             if !bar_series {
                 draw_primitives(plot_painter, PrimitivePass::Series);
             }

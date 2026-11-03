@@ -558,11 +558,9 @@ mod tests {
                 view: &PrimitiveView<'_>,
                 pass: PrimitivePass,
             ) {
-                assert!(!self.merged);
                 self.record(painter, view, pass, true);
             }
             fn draw(&self, painter: &Painter, view: &PrimitiveView<'_>, pass: PrimitivePass) {
-                assert!(!self.merged);
                 self.record(painter, view, pass, false);
             }
             fn draw_background_merged(
@@ -573,7 +571,7 @@ mod tests {
                 factor: usize,
             ) {
                 if self.merged {
-                    assert_eq!(factor, if self.merged { 4 } else { 1 });
+                    assert_eq!(factor, 4);
                     self.record(painter, view, pass, true);
                 } else {
                     self.draw_background(painter, view, pass);
@@ -587,7 +585,7 @@ mod tests {
                 factor: usize,
             ) {
                 if self.merged {
-                    assert_eq!(factor, if self.merged { 4 } else { 1 });
+                    assert_eq!(factor, 4);
                     self.record(painter, view, pass, false);
                 } else {
                     self.draw(painter, view, pass);

@@ -64,9 +64,9 @@ use std::ops::Range;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PrimitiveId(pub(crate) u64);
 
-/// When a primitive draws in its pane. A pass that paints backgrounds draws them all in
-/// attachment order, then its foregrounds in attachment order. Without background painting,
-/// existing series stacking is retained.
+/// When a primitive draws in its pane. Within a pass, every
+/// [`draw_background`](Primitive::draw_background) runs in attachment order before any
+/// [`draw`](Primitive::draw).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PrimitivePass {
     /// Behind the series and studies of the pane, above its background, grid and sessions.
