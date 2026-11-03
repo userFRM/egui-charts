@@ -66,6 +66,20 @@ pub struct SeriesOptions {
     /// Non-positive or non-finite radii hide markers.
     #[serde(default)]
     pub marker_radius: Option<f32>,
+    /// Crosshair marker radius in logical points for Line, Step line, Line with markers,
+    /// Area and Baseline. Non-positive or non-finite radii hide it, the default.
+    #[serde(default)]
+    pub crosshair_marker_radius: f32,
+    /// Crosshair marker fill, including opacity. `None` uses the hovered point's line colour.
+    #[serde(default)]
+    pub crosshair_marker_fill: Option<Color32>,
+    /// Crosshair marker border colour. `None` uses the chart background.
+    #[serde(default)]
+    pub crosshair_marker_border_color: Option<Color32>,
+    /// Crosshair marker border width in logical points. Non-positive or non-finite widths
+    /// hide the border; the default is the design-token thick stroke.
+    #[serde(default = "default_crosshair_marker_border_width")]
+    pub crosshair_marker_border_width: f32,
     /// Scale shared with the series carrying the same assignment in the price pane. In another
     /// pane the series uses that pane's scale.
     pub scale: SeriesScale,
@@ -75,6 +89,10 @@ pub struct SeriesOptions {
     /// Numeric display format, last value label, price line, base line and autoscale. By
     /// default the series labels its last value without a price line.
     pub style: SeriesStyle,
+}
+
+fn default_crosshair_marker_border_width() -> f32 {
+    DESIGN_TOKENS.stroke.thick
 }
 
 impl Default for SeriesOptions {
@@ -89,6 +107,10 @@ impl Default for SeriesOptions {
             baseline_style: None,
             width: 2.0,
             marker_radius: None,
+            crosshair_marker_radius: 0.0,
+            crosshair_marker_fill: None,
+            crosshair_marker_border_color: None,
+            crosshair_marker_border_width: default_crosshair_marker_border_width(),
             scale: SeriesScale::Right,
             columns_base: None,
             style: SeriesStyle {
@@ -154,6 +176,10 @@ impl SeriesOptions {
                     ..Default::default()
                 },
                 baseline,
+                crosshair_marker_radius: self.crosshair_marker_radius,
+                crosshair_marker_fill: self.crosshair_marker_fill,
+                crosshair_marker_border_color: self.crosshair_marker_border_color,
+                crosshair_marker_border_width: self.crosshair_marker_border_width,
                 ..Default::default()
             },
             columns_base: self.columns_base,

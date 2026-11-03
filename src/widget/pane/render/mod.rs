@@ -1143,6 +1143,15 @@ impl Chart {
                         &options,
                         chart_rect.bottom(),
                     );
+                    if let Some(index) = hovered
+                        && options.style != crate::config::CrosshairStyle::Hidden
+                    {
+                        for item in &items {
+                            self.paint_series_crosshair_marker(
+                                &painter, chart_rect, item, map, index,
+                            );
+                        }
+                    }
                 }
                 if !collapsed && let Some(axis_edge) = axis_edge {
                     #[cfg(feature = "drawings")]
