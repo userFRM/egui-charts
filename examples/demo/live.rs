@@ -590,18 +590,27 @@ impl LiveFeed {
             || sim.bootstrap.is_some()
             || !sim.history_requests.is_empty()
             || sim.streams.iter().any(LiveFeed::loading)
+            || self
+                .2
+                .as_ref()
+                .is_some_and(|market| market.lock().unwrap_or_else(|e| e.into_inner()).loading())
     }
 
     /// Advance only when called by the scheduled frame. Pausing freezes simulation time.
     pub(super) fn advance(&self, now: DateTime<Utc>) -> std::time::Duration {
         let mut sim = self.state();
+        let mut to_stream = self.2.as_ref().map_or(std::time::Duration::MAX, |market| {
+            market
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .advance(if sim.paused { sim.now } else { now })
+        });
         sim.streams.retain(|feed| {
             feed.state()
                 .subscription
                 .as_ref()
                 .is_none_or(|sub| sub.sink.is_active())
         });
-        let mut to_stream = std::time::Duration::MAX;
         for feed in &sim.streams {
             feed.set_paused(sim.paused);
             to_stream = to_stream.min(feed.advance(now));
@@ -671,12 +680,6 @@ impl LiveFeed {
         }
         if sim.paused {
             return std::time::Duration::from_secs(1);
-        }
-        if let Some(market) = &self.2 {
-            market
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .advance(now);
         }
         let metric_changed = sim.now.timestamp().div_euclid(300) != now.timestamp().div_euclid(300);
         if metric_changed {
@@ -2215,6 +2218,10 @@ mod tests {
         let now = "2026-10-23T19:07:05Z".parse().unwrap();
         let live = Arc::new(ready_feed("AAPL", now));
         live.set_paused(true);
+        for symbol in ["MSFT", "BTCUSD"] {
+            live.market_quote(symbol, now);
+        }
+        super::super::tests::finish_feed(&live);
         let quotes = Arc::new(DemoQuotes::new(live));
         let mut panel = WatchlistPanel::new(vec![Watchlist::from_text("Watchlist", "MSFT,BTCUSD")]);
         panel.set_service(quotes.clone());
@@ -2267,6 +2274,10 @@ mod tests {
         let now = "2026-10-23T22:07:05Z".parse().unwrap();
         let live = Arc::new(ready_feed("AAPL", now));
         live.set_paused(true);
+        for symbol in ["MSFT", "BTCUSD"] {
+            live.market_quote(symbol, now);
+        }
+        super::super::tests::finish_feed(&live);
         let quotes = Arc::new(DemoQuotes::new(live.clone()));
         let mut panel = WatchlistPanel::new(vec![Watchlist::from_text("Watchlist", "MSFT,BTCUSD")]);
         panel.set_service(quotes.clone());

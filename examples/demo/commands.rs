@@ -662,6 +662,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
         app.live.set_paused(true);
+        super::super::tests::settle(&mut app, &ctx);
         frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
         click(&mut app, &ctx, "Formatting");
         for label in [
@@ -680,6 +681,7 @@ mod tests {
         cc.storage = Some(&storage);
         let mut app = DemoApp::new(&cc);
         app.live.set_paused(true);
+        super::super::tests::settle(&mut app, &ctx);
         frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
         let time = "2024-03-13T14:30:00Z".parse().unwrap();
         assert!(app.chart.format_time(time).contains("Mär"));
@@ -715,6 +717,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
         app.live.set_paused(true);
+        super::super::tests::settle(&mut app, &ctx);
         app.execute_search_command(&ctx, "markers");
         assert!(app.keyboard_dialog_open());
         frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();

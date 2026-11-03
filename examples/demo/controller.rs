@@ -3881,6 +3881,7 @@ mod tests {
             true,
         );
         app.switch_symbol("AAPL");
+        settle(&mut app, &ctx);
         let original_symbol = app.state.symbol.clone();
         let original_type = app.chart.chart_type();
         let original_bars = app.chart.bars(SeriesId::MAIN).to_vec();
@@ -3888,6 +3889,7 @@ mod tests {
         let original_view = app.chart.get_time_scale_state();
         app.handle_top_toolbar(&ctx, TopToolbarAction::ChartStyleSelected(ChartType::Line));
         app.switch_symbol("BTCUSD");
+        settle(&mut app, &ctx);
         let new_bars = app.chart.bars(SeriesId::MAIN).to_vec();
         assert_ne!(original_bars, new_bars);
         app.start_replay();
@@ -4235,10 +4237,11 @@ mod tests {
     fn chart_click_selects_research_and_the_replay_start() {
         let ctx = egui::Context::default();
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
-        // Keep generated signal hitboxes away from the two chart click targets.
         let mut app = DemoApp::new_at(&cc, "2026-11-03T02:00:00Z".parse().unwrap(), true);
         finish_feed(&app.live);
         app.apply_session();
+        // Host signal buttons are separate click targets from the chart under test.
+        app.chart.set_signal_source(None);
         let frame = |app: &mut DemoApp, events| {
             finish_feed(&app.live);
             let mut output = ctx.run_ui(
