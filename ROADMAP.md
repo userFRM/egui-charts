@@ -150,9 +150,9 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 ### Footprints, Delta and Profiles
 
 - [x] `Footprint` aggregates bid, ask and unknown volume by bar and integer tick row, with execution-size filtering.
-- [x] Footprint cells support bid/ask, total volume, delta and delta-plus-volume modes, up to four columns per bar, profile or boxed rendering, automatic row grouping and opening/closing price ticks in a separate gutter; their values have clearance from underlying price guides.
+- [x] Footprint cells support bid/ask, total volume, delta and delta-plus-volume modes, up to four columns per bar, profile or boxed rendering, automatic or fixed-tick row grouping and opening/closing price ticks in a separate gutter; their values have clearance from underlying price guides, and fixed grouped rows fit within autoscale.
 - [x] Per-bar point of control, value area and horizontal/diagonal imbalance highlighting, with one inclusive minimum dominant-side volume for cells and stacked zones after row grouping; compact values fit detail columns and POC outlines recede in the overview.
-- [x] Public calculations and renderers expose stacked diagonal imbalance zones, unrevisited POC levels, volume clusters and per-bar statistics; annotation captions avoid footprint values, with compact overview marks and hover details. Statistics use shared row labels, aligned compact values, explicit percentages and ratios, and a zoom-in or resize notice when detail cannot fit.
+- [x] Public calculations and renderers expose stacked diagonal imbalance zones, unrevisited POC levels, volume clusters and per-bar statistics; annotation captions avoid footprint values, with compact overview marks and hover details. Statistics use selectable rows with shared labels, aligned compact values, explicit percentages and ratios, and a zoom-in or resize notice when detail cannot fit. Both Symbol dialogs expose footprint display, rows, levels, imbalances, annotations, numbers and statistics, plus execution-profile display, value area, developing POC and volume nodes. These settings save, restore and undo with the chart; footprint colours follow the theme until selected.
 - [x] Execution-based delta histograms and cumulative-delta candles, including intrabar extremes and configurable reset boundaries, render in a supplied pane mapping. The cumulative execution study offers optional confirmed divergence and exhaustion price markers, with study outputs for bar-close alerts.
 - [x] Trade profiles aggregate supplied ranges with bid/ask, volume or delta display, developing POC, value area and local volume nodes; public range editing supports merging and splitting.
 - [ ] Bound live footprint retention when trades are evicted, including accumulated bars and price levels.
@@ -160,7 +160,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Combined size-range delta labels its inclusive buckets; rolling volume/delta supports histograms.
 - [ ] Add threshold highlights for delta percentage and bid/ask ratio, and a minimum filter for delta POC.
 - [ ] Add fixed-cell, delta-fade and dominant-side colouring, abbreviated values, zero-display controls and value-scaled text.
-- [ ] Add footprint extreme bid/ask-ratio annotations and pullback highlights.
+- [x] Footprint extreme bid/ask-ratio annotations and pullback highlights are available in both Symbol dialogs, off by default.
 - [ ] Extend imbalance zones with horizontal mode, configurable duration and fresh/triggered state.
 - [ ] Correct unfinished-auction extreme tests and extend their levels beyond the originating bar.
 - [ ] Draw value-area boundary guides for execution-based profiles and expose node sensitivity, smoothing and empty-row valleys.

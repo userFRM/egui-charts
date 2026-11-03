@@ -492,15 +492,21 @@ impl Chart {
             self.config.show_time_labels && shared_time_axis.is_none(),
         );
         let time_axis_top = shared_time_axis.map_or(layout.price_rect.bottom(), |axis| axis.top());
-        let statistics_rect = footprint
-            .filter(|(_, config)| {
-                config.statistics
-                    && !self.chart_type.is_time_independent()
-                    && self.main_series_visible
-            })
-            .map(|_| {
+        let statistics_rows = if let Some((_, config)) = footprint {
+            config.statistics.then(|| config.statistics_rows.clone())
+        } else {
+            (self.chart_type == ChartType::VolumeFootprint
+                && self.chart_type_params.footprint_statistics)
+                .then(|| self.chart_type_params.footprint_statistics_rows.clone())
+        }
+        .filter(|rows| !rows.is_empty());
+        let statistics_rect = statistics_rows
+            .as_deref()
+            .filter(|_| !self.chart_type.is_time_independent() && self.main_series_visible)
+            .map(|rows| {
                 let bottom = layout.price_rect.bottom();
-                let height = 112.0_f32.min(layout.price_rect.height().max(0.0) * 0.4);
+                let height =
+                    (rows.len() as f32 * 12.0 + 4.0).min(layout.price_rect.height().max(0.0) * 0.4);
                 layout.price_rect.max.y -= height;
                 if self.shows_volume() {
                     layout.volume_rect =
@@ -887,6 +893,47 @@ impl Chart {
                 });
                 Some((flow.price_step(), flow.tick_size(), profiles))
             });
+        let fixed_footprint = self
+            .feed_link
+            .as_ref()
+            .and_then(|link| link.footprint.as_ref())
+            .filter(|_| {
+                self.main_series_visible
+                    && footprint.is_none()
+                    && self.replay.is_none()
+                    && self.chart_type == ChartType::VolumeFootprint
+                    && self.chart_type_params.footprint_row_ticks > 0
+            });
+        let footprint_prices = fixed_footprint
+            .into_iter()
+            .flat_map(|flow| {
+                let input_ticks = (flow.price_step() / flow.tick_size()).round() as u32;
+                let group = i64::from(
+                    self.chart_type_params
+                        .footprint_row_ticks
+                        .div_ceil(input_ticks)
+                        .clamp(1, 1_000_000),
+                );
+                let step = flow.price_step() * group as f64;
+                self.state.shown()[start_idx..end_idx]
+                    .iter()
+                    .filter(|bar| flow.complete_from().is_some_and(|from| bar.time >= from))
+                    .filter_map(|bar| flow.bar_at(bar.time))
+                    .filter_map(|bar| {
+                        bar.levels
+                            .first_key_value()
+                            .zip(bar.levels.last_key_value())
+                    })
+                    .flat_map(move |((&low, _), (&high, _))| {
+                        [
+                            low.div_euclid(group) as f64 * step - flow.tick_size() * 0.5,
+                            (high.div_euclid(group) as f64 + 1.0) * step - flow.tick_size() * 0.5,
+                        ]
+                    })
+            })
+            .filter(|price| price.is_finite())
+            .map(|price| [price, price])
+            .reduce(|a, b| [a[0].min(b[0]), a[1].max(b[1])]);
         #[cfg(feature = "studies")]
         let profile_prices = execution_profiles
             .iter()
@@ -957,6 +1004,7 @@ impl Chart {
                 .into_iter()
                 .chain(primitive_prices)
                 .chain(target_prices)
+                .chain(footprint_prices.into_iter().flatten())
                 .chain(profile_prices),
             series_values,
         );
@@ -1382,12 +1430,11 @@ impl Chart {
                         || (self.chart_type == ChartType::SessionVolumeProfile
                             && cfg!(feature = "studies")))
             });
-        let feed_config = feed.map(|_| FootprintConfig {
-            text_color: colors.text,
-            neutral_color: colors.text,
-            ask_color: colors.bullish,
-            bid_color: colors.bearish,
-            ..Default::default()
+        let feed_config = feed.map(|_| {
+            FootprintConfig::from_chart_params(
+                &self.chart_type_params,
+                [colors.bullish, colors.bearish, colors.text, colors.text],
+            )
         });
         let session_profiles = host.is_none() && self.chart_type == ChartType::SessionVolumeProfile;
         // Bars from the first execution on are drawn from executions, those before as
@@ -1803,14 +1850,15 @@ impl Chart {
                     }
                 }
                 if let Some(table) = statistics_rect
-                    && let Some((flow, config)) = host
+                    && let Some((flow, config)) = host.or_else(|| feed.zip(feed_config.as_ref()))
                 {
-                    crate::chart::overlays::render_footprint_statistics(
+                    crate::chart::overlays::render_footprint_statistics_rows(
                         &painter,
                         &self.get_chart_mapping().with_rect(table),
                         self.bars(super::SeriesId::MAIN),
                         flow,
                         config.text_color,
+                        statistics_rows.as_deref().unwrap(),
                     );
                 }
                 if let Some((_, Some(volume))) = &merged {
@@ -3356,3 +3404,189 @@ impl Chart {
 
 #[cfg(test)]
 mod tests;
+
+/// Saved settings drive feed footprints, selected statistics and session profiles together.
+#[cfg(all(test, feature = "ui"))]
+#[test]
+fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
+    use crate::data::{Datafeed, HistoryPage, HistoryRequest, Reply, TradePage, TradeRequest};
+    use crate::model::{Bar, ChartTypeParams, Instrument, OrderSide, Tick, Timeframe};
+    use crate::widget::{ChartBuilder, ChartSnapshot};
+    use chrono::{TimeDelta, Utc};
+    use egui::Shape;
+    struct Executions(bool);
+    impl Datafeed for Executions {
+        fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {
+            reply.send(Ok(Instrument::new(symbol).with_tick_size(1.0)));
+        }
+        fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
+            let time = "2026-01-05T10:00:00Z"
+                .parse::<chrono::DateTime<Utc>>()
+                .unwrap();
+            let high = if self.0 { 102.0 } else { 101.0 };
+            reply.send(Ok(HistoryPage::new(
+                vec![Bar::new(time, 100.0, high, 100.0, 101.0, 10.0)],
+                true,
+            )));
+        }
+        fn trades(&self, _: TradeRequest, reply: Reply<TradePage>) {
+            let time = "2026-01-05T10:00:00Z"
+                .parse::<chrono::DateTime<Utc>>()
+                .unwrap();
+            let levels = if self.0 {
+                vec![(100.0, 1.0), (101.0, 6.0), (102.0, 3.0)]
+            } else {
+                vec![(100.0, 2.0), (101.0, 3.0)]
+            };
+            reply.send(Ok(TradePage::new(
+                levels
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, (price, size))| {
+                        Tick::new(
+                            time + TimeDelta::seconds(i as i64),
+                            price,
+                            size,
+                            Some(if i == 0 {
+                                OrderSide::Sell
+                            } else {
+                                OrderSide::Buy
+                            }),
+                        )
+                    })
+                    .collect(),
+                true,
+            )));
+        }
+    }
+    let ctx = egui::Context::default();
+    let mut chart = ChartBuilder::new()
+        .with_feed(std::sync::Arc::new(Executions(false)))
+        .with_symbol("FLOW")
+        .with_timeframe(Timeframe::Min1)
+        .with_chart_type(ChartType::VolumeFootprint)
+        .build();
+    chart.set_server_time(Some(
+        "2026-01-05T10:02:00Z"
+            .parse::<chrono::DateTime<Utc>>()
+            .unwrap(),
+    ));
+    let draw = |chart: &mut Chart| {
+        chart.apply_synced_time_scale(160.0, 1.0);
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+                ..Default::default()
+            },
+            |ui| {
+                chart.show(ui);
+            },
+        );
+        output.textures_delta.clear();
+        output.shapes
+    };
+    for _ in 0..5 {
+        draw(&mut chart);
+    }
+    for (ticks, expected) in [(2, vec!["5"]), (1, vec!["2", "3"])] {
+        let params: ChartTypeParams = serde_json::from_value(serde_json::json!({
+            "footprint_modes": ["Volume"], "footprint_row_ticks": ticks,
+            "footprint_poc": false
+        }))
+        .unwrap();
+        chart.set_chart_type_params(params);
+        let shapes = draw(&mut chart);
+        let map = chart.get_chart_mapping();
+        assert!(map.price_to_y(99.5) <= map.rect.bottom());
+        assert!(map.price_to_y(101.5) >= map.rect.top());
+        let mut numbers: Vec<_> = shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                Shape::Text(text)
+                    if text.pos.x > map.idx_to_x(0) - 70.0
+                        && text.pos.x < map.idx_to_x(0) + 70.0
+                        && text.pos.y > map.rect.top() + 40.0
+                        && text.pos.y < map.rect.bottom() - 20.0 =>
+                {
+                    Some(text.galley.text().to_owned())
+                }
+                _ => None,
+            })
+            .collect();
+        numbers.sort();
+        assert_eq!(numbers, expected, "ticks per row {ticks}");
+        if ticks == 2 {
+            let flow = chart
+                .feed_link
+                .as_ref()
+                .unwrap()
+                .footprint
+                .as_ref()
+                .unwrap();
+            assert_eq!(
+                flow.price_step(),
+                1.0,
+                "display grouping keeps the source executions"
+            );
+        }
+    }
+    let params: ChartTypeParams = serde_json::from_value(serde_json::json!({
+        "footprint_modes": ["Delta"], "footprint_row_ticks": 1,
+        "footprint_statistics": true, "footprint_statistics_rows": ["Volume", "Delta"],
+        "profile": {"value_area": 0.5}
+    }))
+    .unwrap();
+    chart.user_action(|chart| chart.set_chart_type_params(params.clone()));
+    let shapes = draw(&mut chart);
+    let bottom = chart.get_rendered_price_rect().bottom();
+    let labels: Vec<_> = shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            Shape::Text(text) if text.pos.y >= bottom && text.pos.y < bottom + 28.0 => {
+                Some(text.galley.text().to_owned())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(labels, ["Vol", "Delta", "5", "1"]);
+    assert_eq!(chart.trade_profile_settings().value_area, Some(0.5));
+    let saved = serde_json::to_vec(&chart.snapshot().unwrap()).unwrap();
+    let snapshot: ChartSnapshot = serde_json::from_slice(&saved).unwrap();
+    let mut restored = Chart::new(crate::model::BarData::new());
+    restored.restore(&snapshot).unwrap();
+    assert_eq!(restored.chart_type_params(), &params);
+    assert!(chart.undo());
+    assert_eq!(chart.trade_profile_settings().value_area, Some(0.7));
+    assert!(chart.redo());
+    assert_eq!(chart.chart_type_params(), &params);
+    let mut profile = ChartBuilder::new()
+        .with_feed(std::sync::Arc::new(Executions(true)))
+        .with_symbol("PROFILE")
+        .with_timeframe(Timeframe::Min1)
+        .with_chart_type(ChartType::SessionVolumeProfile)
+        .build();
+    for _ in 0..5 {
+        draw(&mut profile);
+    }
+    for (share, high) in [(0.7, 102.5), (0.5, 101.5)] {
+        profile.set_chart_type_params(
+            serde_json::from_value(serde_json::json!({
+                "profile": {"value_area": share, "value_area_guides": true}
+            }))
+            .unwrap(),
+        );
+        let shapes = draw(&mut profile);
+        let map = profile.get_chart_mapping();
+        let left = map.idx_to_x(0) - map.bar_spacing * 0.45;
+        for edge in [100.5, high] {
+            assert!(
+                shapes.iter().any(|s| matches!(&s.shape,
+                Shape::LineSegment { points, .. }
+                    if (points[0].x - left).abs() < 0.01
+                    && (points[0].y - map.price_to_y(edge)).abs() < 0.01
+                    && points[0].y == points[1].y)),
+                "share {share}, edge {edge}"
+            );
+        }
+    }
+}
