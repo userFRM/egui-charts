@@ -367,9 +367,6 @@ pub struct DemoApp {
     live: Arc<LiveFeed>,
     /// Whether an object tree colour picker is editing a drawing, as one undo step.
     colour_drag: bool,
-    liquidity_heatmap: bool,
-    /// Whether the heatmap's profile shows the largest order at each price.
-    largest_order_profile: bool,
     menus: ChartMenus,
     last_chart_click: Option<egui_charts::widget::ChartPointer>,
     /// The latest crosshair payload of the active chart, from which the data window reads.
@@ -652,8 +649,6 @@ impl DemoApp {
             layout_tabs: vec![LayoutTab::unnamed()],
             layout_tab: 0,
             colour_drag: false,
-            liquidity_heatmap: false,
-            largest_order_profile: false,
             menus,
             last_chart_click: None,
             crosshair: None,
@@ -1013,10 +1008,7 @@ impl DemoApp {
             } else {
                 SessionType::RTH
             });
-        if self.liquidity_heatmap {
-            self.chart
-                .set_depth_history(Some(depth_history(spec.symbol)));
-        }
+        self.sync_depth_history();
     }
 
     fn regenerate_bars(&mut self) {
@@ -1317,6 +1309,7 @@ impl DemoApp {
             .set_notification_seconds(state.alerts.notification_seconds as f32);
         apply_settings_state(&state, &mut self.chart, &mut self.timeframe_toolbar);
         self.chart.end_user_action();
+        self.sync_depth_history();
         if news_changed {
             self.annotate();
         }
@@ -1668,10 +1661,28 @@ impl eframe::App for DemoApp {
 // ---------------------------------------------------------------------------
 
 impl DemoApp {
+    fn sync_depth_history(&mut self) {
+        if !ChartSettingsState::from_chart(&self.chart)
+            .order_flow
+            .show_heatmap
+        {
+            return;
+        }
+        let history = depth_history(self.chart.symbol());
+        if self
+            .chart
+            .depth_history(SeriesId::MAIN)
+            .is_none_or(|current| current.config().orders != history.config().orders)
+        {
+            self.chart.set_depth_history(Some(history));
+        }
+    }
+
     fn show_top_toolbar(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
         use commands::{menu_item, menu_toggle};
         use egui_charts::icons::icons;
 
+        self.sync_depth_history();
         self.top_toolbar.sync_from_app_state(&self.state);
         self.top_toolbar.state.can_undo = self.chart.can_undo();
         self.top_toolbar.state.can_redo = self.chart.can_redo();
@@ -1688,8 +1699,10 @@ impl DemoApp {
                 let mut panel_action = None;
                 let mut widget_action = None;
                 let mut show_help = false;
-                let mut heatmap_enabled = self.liquidity_heatmap;
-                let mut largest_profile = self.largest_order_profile;
+                let order_flow = ChartSettingsState::from_chart(&self.chart).order_flow;
+                let mut heatmap_enabled = order_flow.show_heatmap;
+                let mut largest_profile =
+                    order_flow.order_book.profile == BookProfile::LargestOrder;
                 let mut paused = self.live.paused();
                 let mut toolbar = std::mem::take(&mut self.top_toolbar);
                 let state = self.state.clone();
@@ -1702,7 +1715,7 @@ impl DemoApp {
                         &icons::LIQUIDITY_HEATMAP,
                         &mut heatmap_enabled,
                     );
-                    ui.add_enabled_ui(heatmap_enabled, |ui| {
+                    ui.add_enabled_ui(heatmap_enabled || order_flow.show_order_book, |ui| {
                         menu_toggle(
                             ui,
                             "Largest order profile",
@@ -1804,19 +1817,22 @@ impl DemoApp {
                     self.keyboard_shortcuts.toggle();
                 }
                 self.live.set_paused(paused);
-                if heatmap_enabled != self.liquidity_heatmap {
-                    self.liquidity_heatmap = heatmap_enabled;
-                    if heatmap_enabled {
-                        self.chart
-                            .set_depth_history(Some(depth_history(self.chart.symbol())));
-                    }
-                    self.chart.set_liquidity_heatmap(heatmap_enabled);
-                    self.chart
-                        .set_volume_bubbles(heatmap_enabled.then(Default::default));
+                if heatmap_enabled != order_flow.show_heatmap {
+                    self.chart.user_action(|chart| {
+                        chart.set_liquidity_heatmap(heatmap_enabled);
+                        chart.set_volume_bubbles(heatmap_enabled.then(Default::default));
+                    });
+                    self.sync_depth_history();
                 }
-                if largest_profile != self.largest_order_profile {
-                    self.largest_order_profile = largest_profile;
-                    self.chart.set_order_book_view(book_view(largest_profile));
+                if largest_profile != (order_flow.order_book.profile == BookProfile::LargestOrder) {
+                    let mut view = order_flow.order_book;
+                    view.profile = if largest_profile {
+                        BookProfile::LargestOrder
+                    } else {
+                        BookProfile::Total
+                    };
+                    self.chart
+                        .user_action(|chart| chart.set_order_book_view(view));
                 }
                 self.handle_top_toolbar(ui.ctx(), action);
                 self.handle_top_toolbar(ui.ctx(), menu_action);
@@ -1995,6 +2011,9 @@ impl DemoApp {
                     )
                     .color,
             });
+        let mut indicators = self.chart.indicators().peekable();
+        self.drawing_toolbar.state.hide_indicators =
+            indicators.peek().is_some() && indicators.all(|(_, study)| !study.is_visible());
         let drawings = &self.chart.drawings().drawings;
         self.drawing_toolbar.state.lock_all =
             !drawings.is_empty() && drawings.iter().all(|d| d.locked);
@@ -2078,7 +2097,7 @@ impl DemoApp {
                 let chart = &mut self.chart;
                 let ids: Vec<SeriesId> = chart.indicators().map(|(id, _)| id).collect();
                 for id in ids {
-                    chart.set_indicator_visible(id, false);
+                    chart.set_indicator_visible(id, !self.drawing_toolbar.state.hide_indicators);
                 }
                 return;
             }
@@ -3801,6 +3820,244 @@ mod tests {
     use egui_charts::model::{AlertSource, LineStyle};
     use egui_charts::ui::dialogs::DrawingProps;
     use egui_charts::ui::timeframe_toolbar::DateRange;
+
+    pub(super) fn ui_frame(
+        ctx: &egui::Context,
+        size: egui::Vec2,
+        events: Vec<egui::Event>,
+        mut draw: impl FnMut(&mut egui::Ui),
+    ) -> Vec<(String, egui::Rect)> {
+        let output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                events,
+                ..Default::default()
+            },
+            |ui| draw(ui),
+        );
+        let texts = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some((
+                    text.galley.text().to_owned(),
+                    egui::Rect::from_min_size(text.pos, text.galley.size()),
+                )),
+                _ => None,
+            })
+            .collect();
+        output.drop_without_applying_deltas();
+        texts
+    }
+
+    pub(super) fn ui_click(
+        ctx: &egui::Context,
+        size: egui::Vec2,
+        point: egui::Pos2,
+        mut draw: impl FnMut(&mut egui::Ui),
+    ) {
+        ui_frame(ctx, size, vec![egui::Event::PointerMoved(point)], &mut draw);
+        ui_frame(
+            ctx,
+            size,
+            [true, false]
+                .map(|pressed| egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                })
+                .to_vec(),
+            draw,
+        );
+    }
+
+    /// The toolbar's real flyout toggles studies in both directions, including after undo.
+    #[test]
+    fn hide_indicator_menu_restores_studies_and_follows_undo() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        let id = app
+            .chart
+            .add_indicator(Box::new(egui_charts::studies::SMA::new(7)));
+        let size = egui::vec2(1440.0, 900.0);
+        let choose = |app: &mut DemoApp, label: &str| {
+            app.drawing_toolbar.state.expanded_category = Some("Hide".into());
+            egui::Popup::open_id(&ctx, egui::Id::unique(("drawing_toolbar_flyout", "Hide")));
+            let mut texts = Vec::new();
+            for _ in 0..3 {
+                texts = ui_frame(&ctx, size, vec![], |ui| {
+                    app.show_drawing_toolbar(ui, app.theme.chart.bg)
+                });
+            }
+            let point = texts
+                .iter()
+                .find(|(text, _)| text == label)
+                .expect("hide menu row")
+                .1
+                .center();
+            ui_click(&ctx, size, point, |ui| {
+                app.show_drawing_toolbar(ui, app.theme.chart.bg)
+            });
+        };
+        for label in [
+            "Hide indicators",
+            "Hide indicators",
+            "Hide all",
+            "Hide indicators",
+        ] {
+            let visible = !app.chart.indicator(id).unwrap().is_visible();
+            choose(&mut app, label);
+            assert_eq!(
+                app.chart.indicator(id).unwrap().is_visible(),
+                visible,
+                "{label}"
+            );
+        }
+        app.handle_top_toolbar(&ctx, TopToolbarAction::Undo);
+        ui_frame(&ctx, size, vec![], |ui| {
+            app.show_drawing_toolbar(ui, app.theme.chart.bg)
+        });
+        assert!(app.drawing_toolbar.state.hide_indicators);
+        choose(&mut app, "Hide indicators");
+        assert!(app.chart.indicator(id).unwrap().is_visible());
+        app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
+        app.activate_chart_slot(1);
+        let other = app.chart.indicators().next().unwrap().0;
+        app.chart.set_indicator_visible(other, false);
+        ui_frame(&ctx, size, vec![], |ui| {
+            app.show_drawing_toolbar(ui, app.theme.chart.bg)
+        });
+        assert!(app.drawing_toolbar.state.hide_indicators);
+        app.activate_chart_slot(0);
+        ui_frame(&ctx, size, vec![], |ui| {
+            app.show_drawing_toolbar(ui, app.theme.chart.bg)
+        });
+        assert!(!app.drawing_toolbar.state.hide_indicators);
+        app.chart.set_indicator_visible(id, false);
+        app.handle_top_toolbar(&ctx, TopToolbarAction::Save);
+        app.poll_storage(&ctx);
+        app.chart.set_indicator_visible(id, true);
+        app.handle_layout_action(egui_charts::ui::top_toolbar::LayoutAction::Open(
+            "Unnamed".into(),
+        ));
+        app.poll_storage(&ctx);
+        let restored = app.chart.indicators().next().unwrap().0;
+        choose(&mut app, "Hide indicators");
+        assert!(app.chart.indicator(restored).unwrap().is_visible());
+    }
+
+    /// Menu picks read settings, restored charts and history instead of host-side flags.
+    #[test]
+    fn heatmap_menu_follows_settings_slots_history_and_symbol_depth() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        let size = egui::vec2(1440.0, 900.0);
+        let mut settings = ChartSettingsState::from_chart(&app.chart);
+        settings.order_flow.show_heatmap = true;
+        settings.order_flow.order_book.profile = BookProfile::LargestOrder;
+        settings.order_flow.order_book.quantity_unit = Some("lots".into());
+        app.apply_chart_settings(settings);
+        app.switch_symbol(live::ORDER_LEVEL_SYMBOL);
+        assert!(
+            app.chart
+                .depth_history(SeriesId::MAIN)
+                .unwrap()
+                .config()
+                .orders
+                .is_some()
+        );
+        app.switch_symbol("AAPL");
+        assert!(
+            app.chart
+                .depth_history(SeriesId::MAIN)
+                .unwrap()
+                .config()
+                .orders
+                .is_none()
+        );
+        let choose = |app: &mut DemoApp, label: &str| {
+            for _ in 0..3 {
+                ui_frame(&ctx, size, vec![], |ui| {
+                    app.show_top_toolbar(ui, app.theme.chart.bg)
+                });
+            }
+            ui_click(&ctx, size, egui::pos2(20.0, 20.0), |ui| {
+                app.show_top_toolbar(ui, app.theme.chart.bg)
+            });
+            let texts = ui_frame(&ctx, size, vec![], |ui| {
+                app.show_top_toolbar(ui, app.theme.chart.bg)
+            });
+            let point = texts
+                .iter()
+                .find(|(text, _)| text == label)
+                .expect("demo menu row")
+                .1
+                .center();
+            ui_click(&ctx, size, point, |ui| {
+                app.show_top_toolbar(ui, app.theme.chart.bg)
+            });
+            egui::Popup::close_all(&ctx);
+        };
+        choose(&mut app, "Largest order profile");
+        assert_eq!(app.chart.order_book_view().profile, BookProfile::Total);
+        assert_eq!(
+            app.chart.order_book_view().quantity_unit.as_deref(),
+            Some("lots")
+        );
+        app.handle_top_toolbar(&ctx, TopToolbarAction::Undo);
+        assert_eq!(
+            app.chart.order_book_view().profile,
+            BookProfile::LargestOrder
+        );
+        choose(&mut app, "Liquidity heatmap");
+        assert!(
+            !ChartSettingsState::from_chart(&app.chart)
+                .order_flow
+                .show_heatmap
+        );
+        app.handle_top_toolbar(&ctx, TopToolbarAction::Undo);
+        assert!(
+            ChartSettingsState::from_chart(&app.chart)
+                .order_flow
+                .show_heatmap
+        );
+        app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
+        app.activate_chart_slot(1);
+        app.chart.set_liquidity_heatmap(false);
+        choose(&mut app, "Liquidity heatmap");
+        assert!(
+            ChartSettingsState::from_chart(&app.chart)
+                .order_flow
+                .show_heatmap
+        );
+        app.activate_chart_slot(0);
+        choose(&mut app, "Liquidity heatmap");
+        assert!(
+            !ChartSettingsState::from_chart(&app.chart)
+                .order_flow
+                .show_heatmap
+        );
+        app.chart.set_liquidity_heatmap(true);
+        let mut view = app.chart.order_book_view();
+        view.profile = BookProfile::LargestOrder;
+        app.chart.set_order_book_view(view);
+        app.handle_top_toolbar(&ctx, TopToolbarAction::Save);
+        app.poll_storage(&ctx);
+        app.chart.set_liquidity_heatmap(false);
+        app.handle_layout_action(egui_charts::ui::top_toolbar::LayoutAction::Open(
+            "Unnamed".into(),
+        ));
+        app.poll_storage(&ctx);
+        choose(&mut app, "Largest order profile");
+        assert_eq!(app.chart.order_book_view().profile, BookProfile::Total);
+        choose(&mut app, "Liquidity heatmap");
+        assert!(
+            !ChartSettingsState::from_chart(&app.chart)
+                .order_flow
+                .show_heatmap
+        );
+    }
 
     pub(super) fn finish_feed(feed: &LiveFeed) {
         for _ in 0..10_000 {

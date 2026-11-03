@@ -806,7 +806,8 @@ mod tests {
             output.drop_without_applying_deltas();
             click_at_width(&mut app, &ctx, "Largest order profile", width);
             assert!(
-                !app.largest_order_profile,
+                app.chart.order_book_view().profile
+                    != egui_charts::chart::overlays::BookProfile::LargestOrder,
                 "disabled profile must not toggle"
             );
             for paused in [false, true] {
@@ -837,8 +838,15 @@ mod tests {
             }
             click_at_width(&mut app, &ctx, "Liquidity heatmap", width);
             click_at_width(&mut app, &ctx, "Largest order profile", width);
-            assert!(app.liquidity_heatmap);
-            assert!(app.largest_order_profile);
+            assert!(
+                super::super::ChartSettingsState::from_chart(&app.chart)
+                    .order_flow
+                    .show_heatmap
+            );
+            assert_eq!(
+                app.chart.order_book_view().profile,
+                egui_charts::chart::overlays::BookProfile::LargestOrder
+            );
             click_at_width(&mut app, &ctx, "Copy symbol", width);
             assert!(!egui::Popup::is_any_open(&ctx));
             click_at_width(&mut app, &ctx, "Menu", width);
