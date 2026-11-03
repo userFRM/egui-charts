@@ -9,6 +9,7 @@ use egui_charts::theme::ThemeExt;
 use egui_charts::ui_kit::command_palette::Command;
 use egui_charts::ui_kit::list_item::ListItem;
 
+/// A top-left menu row with an icon and an optional trailing icon at the right edge.
 pub(super) fn menu_item(
     ui: &mut egui::Ui,
     label: &str,
@@ -28,6 +29,7 @@ pub(super) fn menu_item(
     response
 }
 
+/// A menu row that flips `checked` on click and shows a check mark at the right while on.
 pub(super) fn menu_toggle(ui: &mut egui::Ui, label: &str, icon: &Icon, checked: &mut bool) {
     let response = menu_item(ui, label, icon, checked.then_some(&icons::CHECK));
     if response.clicked() {

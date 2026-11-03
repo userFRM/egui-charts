@@ -329,6 +329,7 @@ enum ScreenshotTarget {
 }
 
 /// App state surfaced to the toolbars via `ChartAppState`.
+#[derive(Clone)]
 pub struct DemoAppState {
     pub symbol: String,
     pub timeframe: Timeframe,
@@ -1662,12 +1663,7 @@ impl DemoApp {
                 let mut largest_profile = self.largest_order_profile;
                 let mut paused = self.live.paused();
                 let mut toolbar = std::mem::take(&mut self.top_toolbar);
-                let state = DemoAppState {
-                    symbol: self.state.symbol.clone(),
-                    timeframe: self.state.timeframe,
-                    chart_type: self.state.chart_type,
-                    replay_active: self.state.replay_active,
-                };
+                let state = self.state.clone();
                 let action = toolbar.show_with_menu(ui, &state, |ui| {
                     sample = self.show_demo_controls(ui);
                     ui.separator();
