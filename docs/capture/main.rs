@@ -11,14 +11,14 @@
 //! For byte-for-byte repeats on the software renderer, set `LP_NUM_THREADS=1` for both runs.
 //! Animated mode records hero, liquidity, drawings and replay as `<out-dir>/<scene>-<theme>/0000.png`, etc.
 //! It uses 20 fps at 0.75 pixels per point: 1120x800 logical points (840x600 pixels) for the hero and
-//! 880x660 logical points (660x495 pixels) for gallery tiles. Each eight-second
-//! loop plays a four-second trajectory and its rewind, returning data, pointer and viewport to their first frame.
+//! 880x660 logical points (660x495 pixels) for gallery tiles. Each eight-second loop plays a four-second
+//! trajectory and its rewind, returning data, pointer and viewport to the first frame, which is a fully settled view.
 //! The drawing loop starts with the completed line, so its first frame also works as a still.
 //! Axis labels use 18 logical pixels so gallery labels remain readable at about 430 pixels wide.
 //! Encode from the repository root (the sorted, zero-padded filenames are significant):
 //! `for d in <out-dir>/*/; do q=65; case $(basename "$d") in hero-*) q=50;; esac;
 //! img2webp -loop 0 -mixed -q "$q" -m 6 -d 50 "$d"*.png -o
-//! "docs/images/$(basename "$d").webp"; done`. The first frame is a fully settled view.
+//! "docs/images/$(basename "$d").webp"; done`.
 
 #[path = "../../examples/demo/controller.rs"]
 #[expect(dead_code, reason = "only the captured scenes are exercised")]

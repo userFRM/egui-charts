@@ -193,16 +193,13 @@ pub(super) fn shoot(scene: &Scene, light: bool, out: &Path) {
             scene.name
         );
     }
-    // Rewind the rendered trajectory, including the feed, without jumping the clock or rebuilding the UI.
-    for (offset, frame) in (0..HALF_FRAMES).rev().enumerate() {
+    // Rewind the rendered trajectory, including the feed, without jumping the clock or rebuilding the UI. The loop
+    // wraps from the last copy to frame 0, so frame 0 is not repeated at the end.
+    for (offset, frame) in (1..HALF_FRAMES).rev().enumerate() {
         std::fs::copy(
             out.join(format!("{frame:04}.png")),
             out.join(format!("{:04}.png", HALF_FRAMES + 1 + offset)),
         )
         .unwrap();
     }
-    assert_eq!(
-        std::fs::read(out.join("0000.png")).unwrap(),
-        std::fs::read(out.join("0160.png")).unwrap()
-    );
 }
