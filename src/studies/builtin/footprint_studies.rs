@@ -80,6 +80,10 @@ pub struct FootprintStudyConfig {
     pub unfinished_auctions: bool,
     /// Dominance multiple of an imbalance, normally 3 (300%).
     pub imbalance_ratio: f64,
+    /// Inclusive minimum dominant-side volume of each imbalance in a stack, in instrument
+    /// volume units after row grouping. Zero preserves all ratio signals; negative or
+    /// non-finite, none. The chart uses its footprint config's minimum for displayed zones.
+    pub imbalance_min_volume: f64,
     /// At least this many (and one) adjacent imbalances make a zone.
     pub stack: usize,
     /// Build imbalances from a side against the opposite side one price away, as the footprint
@@ -115,6 +119,7 @@ impl Default for FootprintStudyConfig {
             delta_poc: true,
             unfinished_auctions: true,
             imbalance_ratio: 3.0,
+            imbalance_min_volume: 0.0,
             stack: 3,
             diagonal: true,
             extend_bars: None,
@@ -281,7 +286,12 @@ pub(crate) fn footprint_studies_on_rows(
         ] {
             let mut run: Option<(i64, i64, usize)> = None;
             for row in bar.levels.values() {
-                let imbalance = bar.imbalance(row.level, config.imbalance_ratio, config.diagonal);
+                let imbalance = bar.imbalance(
+                    row.level,
+                    config.imbalance_ratio,
+                    config.diagonal,
+                    config.imbalance_min_volume,
+                );
                 let active = if side == 0 { imbalance.0 } else { imbalance.1 };
                 if let Some((low, high, count)) = run
                     && (!active || high.checked_add(1) != Some(row.level))
@@ -486,7 +496,7 @@ mod tests {
                         .values()
                         .next()
                         .unwrap()
-                        .imbalance(100, 1.1, false)
+                        .imbalance(100, 1.1, false, 0.0)
                 };
                 let share = [
                     (0, 100.0, 29.0 * scale, side),
@@ -513,10 +523,24 @@ mod tests {
                 .values()
                 .next()
                 .unwrap()
-                .imbalance(100, 1.1, false),
+                .imbalance(100, 1.1, false, 0.0),
             (false, true)
         );
         assert!(marked(&accumulated, &ratio(1.1), RatioAsk));
+        for (minimum, expected) in [(2.09, true), (2.1, false), (-1.0, false)] {
+            let config = FootprintStudyConfig {
+                diagonal: false,
+                stack: 1,
+                imbalance_ratio: 1.1,
+                imbalance_min_volume: minimum,
+                ..Default::default()
+            };
+            assert_eq!(
+                marked(&accumulated, &config, StackedAsk),
+                expected,
+                "minimum {minimum}"
+            );
+        }
         assert!(!marked(&lots(208, 190, 0.01), &ratio(1.1), RatioAsk));
         assert!(marked(&lots(129, 71, 0.1), &delta(29.0), DeltaAsk));
         // Delta POC: 100 nets +2 and 101 nets -3; at a tie of 3 the lower price wins.
@@ -606,5 +630,65 @@ mod tests {
             [(100, 102, None, Unvisited)]
         );
         assert!(found(&flow(&wall), &diagonal(true), StackedBid).is_empty());
+        // Dominant-side minimum: 9/1 passes the ratio but not a floor of 10; 12/4 passes both.
+        // Unknown volume and the opposite side cannot make up the minimum.
+        for (side, other, kind) in [(buy, sell, StackedAsk), (sell, buy, StackedBid)] {
+            for diagonal in [false, true] {
+                let opposite_price = if !diagonal {
+                    101.0
+                } else if side == buy {
+                    100.0
+                } else {
+                    102.0
+                };
+                for (dominant, opposite, minimum, expected) in [
+                    (9.0, 1.0, 0.0, true),
+                    (12.0, 4.0, 0.0, true),
+                    (9.0, 1.0, 10.0, false),
+                    (12.0, 4.0, 10.0, true),
+                    (10.0, 1.0, 10.0, true),
+                    (10.0, 4.0, 10.0, false),
+                ] {
+                    let trades = [
+                        (0, opposite_price, opposite, other),
+                        (0, opposite_price, 100.0, None),
+                        (1, 101.0, dominant, side),
+                        (2, 101.0, 100.0, None),
+                    ];
+                    let config = FootprintStudyConfig {
+                        diagonal,
+                        stack: 1,
+                        imbalance_min_volume: minimum,
+                        ..Default::default()
+                    };
+                    assert_eq!(
+                        marked(&trades, &config, kind),
+                        expected,
+                        "{side:?}, diagonal {diagonal}, {dominant}/{opposite}, minimum {minimum}"
+                    );
+                }
+            }
+        }
+        // Asks 12, 9, 15 against bids of 1 below form a stack at 101..103 until the middle
+        // row falls below the minimum.
+        let thin = [
+            (0, 100.0, 1.0, sell),
+            (1, 101.0, 1.0, sell),
+            (2, 102.0, 1.0, sell),
+            (3, 101.0, 12.0, buy),
+            (4, 102.0, 9.0, buy),
+            (5, 103.0, 15.0, buy),
+        ];
+        for (minimum, expected) in [(0.0, true), (10.0, false)] {
+            let config = FootprintStudyConfig {
+                imbalance_min_volume: minimum,
+                ..Default::default()
+            };
+            let zones = found(&flow(&thin), &config, StackedAsk);
+            assert_eq!(zones.len(), usize::from(expected), "minimum {minimum}");
+            if expected {
+                assert_eq!(zones, [(101, 103, None, Unvisited)]);
+            }
+        }
     }
 }
