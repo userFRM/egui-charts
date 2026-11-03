@@ -162,8 +162,16 @@ pub trait Indicator: Send {
     }
 
     /// Optional study help article, opened by the host from the legend or context menu.
+    /// Built-ins default to their API article; custom studies can supply a host URL.
     fn help_url(&self) -> Option<&str> {
-        None
+        #[cfg(feature = "studies")]
+        {
+            super::factory::builtin_help_url(self.name())
+        }
+        #[cfg(not(feature = "studies"))]
+        {
+            None
+        }
     }
 
     /// Colour inside a projected price band.

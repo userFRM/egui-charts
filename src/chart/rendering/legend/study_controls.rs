@@ -203,7 +203,7 @@ mod tests {
                             row,
                             controls,
                             egui::Id::unique("study"),
-                            &crate::studies::SMA::new(1),
+                            &crate::studies::CustomIndicator::new("Plain", |_| Vec::new()),
                         );
                         clicked = buttons.map(|response| response.clicked());
                         menu = opened;
