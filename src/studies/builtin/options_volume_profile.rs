@@ -123,12 +123,12 @@ impl OptionsVolumeProfile {
     /// Measures with missing figures in any selected contract are unavailable, never zero.
     /// Max pain needs every selected contract's open interest and multiplier. It minimises
     /// their combined intrinsic payout over listed strikes, choosing the lower strike on ties.
-    /// Returns `None` for an empty symbol/list or an invalid row height.
+    /// Each row spans the common increment of the selected strikes, one unit for a single strike.
+    /// Returns `None` for an empty symbol or expiry list.
     pub fn from_chain(
         chain: OptionChain,
         symbol: impl Into<String>,
         mut expiries: Vec<NaiveDate>,
-        row_size: f64,
     ) -> Option<Self> {
         let symbol = symbol.into();
         if symbol.is_empty() || expiries.is_empty() {
@@ -136,7 +136,7 @@ impl OptionsVolumeProfile {
         }
         expiries.sort_unstable();
         expiries.dedup();
-        let mut config = VolumeProfileConfig::default().with_row_size(Some(row_size))?;
+        let mut config = VolumeProfileConfig::default();
         config.display = ProfileDisplay::UpDown;
         Some(Self {
             through_date: *expiries.last()?,
@@ -159,13 +159,14 @@ impl OptionsVolumeProfile {
 
     fn refresh(&self) {
         let mut cache = self.cache.borrow_mut();
-        let values = match &self.source {
+        let (values, row_size) = match &self.source {
             ProfileSource::Volume(source) => {
                 let values = source.values();
                 if Arc::ptr_eq(&values, &cache.values) {
                     return;
                 }
-                values
+                let row_size = self.config.row_size().expect("fixed options row height");
+                (values, row_size)
             }
             ProfileSource::Chain(chain, expiries) => {
                 let rows = chain.rows();
@@ -197,13 +198,8 @@ impl OptionsVolumeProfile {
                     None
                 };
                 let interest =
-                    self.open_interest || (!cache.volume_available && cache.interest_available);
-                let available = if interest {
-                    cache.interest_available
-                } else {
-                    cache.volume_available
-                };
-                let values: Arc<[OptionsVolume]> = if available {
+                    cache.interest_available && (self.open_interest || !cache.volume_available);
+                let values: Arc<[OptionsVolume]> = if interest || cache.volume_available {
                     selected
                         .iter()
                         .map(|row| {
@@ -233,7 +229,8 @@ impl OptionsVolumeProfile {
                 };
                 cache.chain_rows = rows;
                 cache.day = Some(day);
-                values
+                let row_size = strike_step(&values);
+                (values, row_size)
             }
         };
         let calls: f64 = values.iter().map(|row| row.calls).sum();
@@ -241,13 +238,24 @@ impl OptionsVolumeProfile {
         cache.ratio = (calls > 0.0 && calls.is_finite() && puts.is_finite())
             .then_some(puts / calls)
             .filter(|ratio| ratio.is_finite());
-        cache.profile = VolumeProfile::from_options(
-            &values,
-            self.config.row_size().expect("fixed options row height"),
-        )
-        .map(Arc::new);
+        cache.profile = VolumeProfile::from_options(&values, row_size).map(Arc::new);
         cache.values = values;
     }
+}
+
+// The greatest common divisor of strike gaps, so every listed strike is a row centre.
+fn strike_step(rows: &[OptionsVolume]) -> f64 {
+    let mut strikes: Vec<_> = rows.iter().map(|row| row.strike).collect();
+    strikes.sort_by(f64::total_cmp);
+    let mut step = 0.0;
+    for gap in strikes.windows(2).map(|pair| pair[1] - pair[0]) {
+        let (mut a, mut b) = (gap, step);
+        while b > 1e-6 {
+            (a, b) = (b, a % b);
+        }
+        step = a;
+    }
+    if step > 1e-6 { step } else { 1.0 }
 }
 
 // Payout is convex: at each strike its slope increases by call plus put interest,

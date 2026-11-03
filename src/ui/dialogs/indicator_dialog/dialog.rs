@@ -90,7 +90,9 @@ impl IndicatorDialog {
     /// Restrict studies in the factory's Order flow category to services explicitly declared
     /// for the resolved instrument. Pass [`Chart::feed_capabilities`](crate::widget::Chart::feed_capabilities)
     /// and [`Chart::instrument`](crate::widget::Chart::instrument) when they change. Missing
-    /// metadata declares no services. Other categories and saved favorites are unchanged.
+    /// metadata declares no services. The options profile is offered on Profiles only when the
+    /// instrument declares the option-chain service. Other categories and saved favorites are
+    /// unchanged.
     /// Until the first call every study is offered. Requirements are cached between updates.
     pub fn set_feed_capabilities(
         &mut self,
@@ -265,10 +267,6 @@ impl IndicatorDialog {
                     )
                     .expect("nonempty symbol and listed expiry range");
                     let symbol = symbol.clone();
-                    let row_size = instrument
-                        .tick_size
-                        .filter(|size| size.is_finite() && *size > 0.0)
-                        .unwrap_or(1.0);
                     self.factory.register_in(
                         IndicatorFactory::PROFILES,
                         "Options Volume Profile",
@@ -278,7 +276,6 @@ impl IndicatorDialog {
                                     chain.clone(),
                                     &symbol,
                                     dates.clone(),
-                                    row_size,
                                 )
                                 .expect("validated options profile inputs"),
                             )
@@ -1780,7 +1777,7 @@ mod options_profile_tests {
         dialog.set_metric_source(Some(feed), "SAMPLE");
         dialog.set_feed_capabilities(
             Some(&FeedCapabilities::new().with_services([FeedService::OptionChain])),
-            Some(&Instrument::new("SAMPLE")),
+            Some(&Instrument::new("SAMPLE").with_tick_size(0.01)),
         );
         show(&mut dialog, &egui::Context::default());
         let mut study = dialog
@@ -1856,6 +1853,11 @@ mod options_profile_tests {
             .unwrap();
         assert!(matches!(measure.kind, InputKind::Choice(choices) if choices == ["Volume"]));
         assert!(!study.inputs().iter().any(|input| input.id == "max_pain"));
+        assert_eq!(
+            study.volume_profiles(0..3)[0].profile.down(),
+            [10.0],
+            "missing interest falls back to the offered volume"
+        );
         study.set_input("measure", InputValue::Choice(0)).unwrap();
         assert_eq!(study.plot_value(0, 0), None, "zero calls have no ratio");
         rows[0].volume = None;
@@ -1876,7 +1878,7 @@ mod options_profile_tests {
     }
 
     #[test]
-    fn options_profile_max_pain_matches_intrinsic_payout_and_updates_without_bars() {
+    fn options_profile_rows_follow_strikes_and_max_pain_updates_without_bars() {
         let today = Utc::now().date_naive();
         let rows = vec![
             quote(today, 100.0, OptionKind::Call, 20.0, 1.0),
@@ -1888,11 +1890,19 @@ mod options_profile_tests {
             ..Default::default()
         });
         let mut study = profile(feed.clone());
+        let plot = study.volume_profiles(0..3).remove(0);
+        assert_eq!(
+            (plot.profile.up(), plot.profile.down()),
+            (&[20.0, 0.0][..], &[0.0, 10.0][..]),
+            "one row per listed strike, not per price tick"
+        );
         assert_eq!(study.plot_value(1, 0), None, "max pain starts off");
         study
             .set_input("max_pain", InputValue::Toggle(true))
             .unwrap();
         let sink = feed.sink.lock().unwrap().clone().unwrap();
+        // Payout at 100 and 110: 2,000 and 1,000; equal interest ties; a 300 call
+        // multiplier makes 110 cost 3,000; no interest ties at zero.
         for (calls, puts, call_multiplier, expected) in [
             (1.0, 2.0, 100.0, 110.0),
             (2.0, 2.0, 100.0, 100.0),
@@ -1903,68 +1913,46 @@ mod options_profile_tests {
             rows[0].open_interest = Some(calls);
             rows[0].multiplier = Some(call_multiplier);
             rows[1].open_interest = Some(puts);
-            let payouts: Vec<_> = [100.0_f64, 110.0]
-                .into_iter()
-                .map(|settlement| {
-                    rows.iter()
-                        .map(|row| {
-                            let intrinsic = if row.kind == OptionKind::Call {
-                                settlement - row.strike
-                            } else {
-                                row.strike - settlement
-                            };
-                            intrinsic.max(0.0)
-                                * row.open_interest.unwrap()
-                                * row.multiplier.unwrap()
-                        })
-                        .sum::<f64>()
-                })
-                .collect();
-            if calls == 1.0 && call_multiplier == 100.0 {
-                assert_eq!(payouts, [2000.0, 1000.0]);
-            }
-            let best = if payouts[0] <= payouts[1] {
-                100.0
-            } else {
-                110.0
-            };
-            assert_eq!(best, expected);
             sink.push(rows).unwrap();
-            assert_eq!(study.plot_value(1, 0), Some(best));
+            assert_eq!(study.plot_value(1, 0), Some(expected));
             assert_eq!(
                 study.plot_value(0, 0),
                 Some(0.5),
                 "volume ratio ignores interest"
             );
-
-            use crate::chart::rendering::{ChartMapping, IndicatorRenderer, RenderContext};
-            use crate::scales::{PriceMap, PriceRange, PriceTransform};
-            let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0));
-            let price = PriceMap::new(
-                PriceTransform {
-                    mode: crate::scales::PriceScaleMode::Normal,
-                    base: 100.0,
-                },
-                PriceRange::new(90.0, 120.0),
-                0.0,
-                300.0,
-                false,
-            );
-            let coords = ChartMapping::new(rect, 20.0, 0, 2, 3.0, price);
-            let ctx = egui::Context::default();
-            let output = ctx.run_ui(Default::default(), |ui| {
-                IndicatorRenderer::render(
-                    &RenderContext::new(ui.painter(), rect),
-                    &[study.clone_box()],
-                    &[],
-                    &price,
-                    &coords,
-                );
-            });
-            assert!(output.shapes.iter().any(|clipped| matches!(&clipped.shape, egui::Shape::Path(path)
-                if path.points.len() >= 2 && path.points.iter().all(|point| (point.y - price.price_to_y(best)).abs() < 0.001))), "live max pain level is painted");
-            output.drop_without_applying_deltas();
         }
+
+        use crate::chart::rendering::{ChartMapping, IndicatorRenderer, RenderContext};
+        use crate::scales::{PriceMap, PriceRange, PriceTransform};
+        let rect = Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0));
+        let price = PriceMap::new(
+            PriceTransform {
+                mode: crate::scales::PriceScaleMode::Normal,
+                base: 100.0,
+            },
+            PriceRange::new(90.0, 120.0),
+            0.0,
+            300.0,
+            false,
+        );
+        let coords = ChartMapping::new(rect, 20.0, 0, 2, 3.0, price);
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(Default::default(), |ui| {
+            IndicatorRenderer::render(
+                &RenderContext::new(ui.painter(), rect),
+                &[study.clone_box()],
+                &[],
+                &price,
+                &coords,
+            );
+        });
+        assert!(
+            output.shapes.iter().any(|clipped| matches!(&clipped.shape, egui::Shape::Path(path)
+                if path.points.len() >= 2
+                    && path.points.iter().all(|point| (point.y - price.price_to_y(100.0)).abs() < 0.001))),
+            "live max pain level is painted"
+        );
+        output.drop_without_applying_deltas();
     }
 
     #[test]
