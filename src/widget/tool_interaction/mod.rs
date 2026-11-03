@@ -1207,7 +1207,7 @@ mod tests {
                 time += 0.1;
                 frame(&ctx, &mut chart, time, vec![]);
                 let map = if kind == "pane" {
-                    chart.get_rendered_indicator_panes()[0].mapping
+                    chart.get_rendered_indicator_panes()[0].mapping.clone()
                 } else {
                     chart.get_chart_mapping()
                 };

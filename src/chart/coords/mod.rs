@@ -13,11 +13,13 @@ use egui::{Pos2, Rect};
 /// - Prices ↔ Y screen coordinates
 ///
 /// Share the mapping with overlays and hit tests to keep them aligned with the pane.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct ChartMapping {
+    /// Numeric row positions shared with the time scale; `None` keeps ordinal spacing.
+    pub numeric_positions: Option<crate::model::NumericPositions>,
     /// The chart rectangle (rendering area)
     pub rect: Rect,
-    /// Spacing between bars in egui logical points.
+    /// Points per ordinal slot, or per mean numeric key gap.
     pub bar_spacing: f32,
     /// Index of the first visible bar
     pub start_idx: usize,
@@ -41,6 +43,7 @@ impl ChartMapping {
         price: PriceMap,
     ) -> Self {
         Self {
+            numeric_positions: None,
             rect,
             bar_spacing,
             start_idx,
@@ -59,7 +62,16 @@ impl ChartMapping {
     /// This is the canonical formula used everywhere.
     #[inline]
     pub fn idx_to_x(&self, bar_idx: usize) -> f32 {
-        let delta_from_right = (self.base_idx as f64 - bar_idx as f64) + self.right_offset;
+        self.index_to_x(bar_idx as f64)
+    }
+
+    /// Convert a fractional row index to X, including numeric sample positions.
+    pub fn index_to_x(&self, index: f64) -> f32 {
+        let position = self
+            .numeric_positions
+            .as_ref()
+            .map_or(index, |positions| positions.position(index));
+        let delta_from_right = (self.base_idx as f64 - position) + self.right_offset;
         (f64::from(self.rect.min.x) + f64::from(self.rect.width())
             - (delta_from_right + 0.5) * f64::from(self.bar_spacing)
             - 1.0) as f32
@@ -98,7 +110,10 @@ impl ChartMapping {
         let relative_x = f64::from(x) - f64::from(self.rect.min.x);
         let delta_from_right =
             (f64::from(self.rect.width()) - relative_x - 1.0) / f64::from(self.bar_spacing) - 0.5;
-        self.base_idx as f64 + (self.right_offset - delta_from_right)
+        let position = self.base_idx as f64 + (self.right_offset - delta_from_right);
+        self.numeric_positions
+            .as_ref()
+            .map_or(position, |positions| positions.index(position))
     }
 
     /// Check if an X coordinate is within the visible chart bounds.
@@ -189,8 +204,11 @@ impl ChartMapping {
     ///
     /// Only the x mapping and the bounds checks follow the new rect: `price`
     /// still maps onto its own pane.
-    pub fn with_rect(self, rect: Rect) -> Self {
-        Self { rect, ..self }
+    pub fn with_rect(&self, rect: Rect) -> Self {
+        Self {
+            rect,
+            ..self.clone()
+        }
     }
 }
 
@@ -246,7 +264,7 @@ mod tests {
                 base_idx: 999_999,
                 bar_spacing: 200.0,
                 right_offset,
-                ..mapping
+                ..mapping.clone()
             };
             assert_eq!(large.idx_to_x(index), 800.0);
             assert_eq!(large.x_to_idx(800.0), index);

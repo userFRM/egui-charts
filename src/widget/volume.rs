@@ -224,7 +224,7 @@ pub(super) fn mapping(
             rect.bottom(),
             false,
         ),
-        ..*coords
+        ..coords.clone()
     }
 }
 

@@ -14,11 +14,11 @@ pub(crate) fn study_mapping(study: &dyn Indicator, coords: &ChartMapping) -> Cha
                 .scale_mapping()
                 .unwrap_or(coords.price)
                 .with_bounds(coords.rect.top(), coords.rect.bottom()),
-            ..*coords
+            ..coords.clone()
         };
     }
     if study.scale() == StudyScale::Main {
-        return *coords;
+        return coords.clone();
     }
     let start = coords.x_to_idx(coords.rect.left()).saturating_sub(1);
     let end = coords.x_to_idx(coords.rect.right()).saturating_add(2);
@@ -77,7 +77,10 @@ pub(crate) fn study_mapping(study: &dyn Indicator, coords: &ChartMapping) -> Cha
         false,
     )
     .with_price_precision(Some(study.precision().unwrap_or(2).min(18) as u8));
-    ChartMapping { price, ..*coords }
+    ChartMapping {
+        price,
+        ..coords.clone()
+    }
 }
 
 /// Paint an independent study axis in its reserved gutter to the left of the plot.

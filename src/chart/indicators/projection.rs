@@ -10,11 +10,15 @@ pub(crate) fn projection_rect(
     if projection.bars.start >= projection.bars.end {
         return None;
     }
-    let x =
-        |index: f64| coords.idx_to_x(index as usize) + index.fract() as f32 * coords.bar_spacing;
     let rect = egui::Rect::from_two_pos(
-        egui::pos2(x(projection.bars.start), price_to_y(projection.top)),
-        egui::pos2(x(projection.bars.end), price_to_y(projection.bottom)),
+        egui::pos2(
+            coords.index_to_x(projection.bars.start),
+            price_to_y(projection.top),
+        ),
+        egui::pos2(
+            coords.index_to_x(projection.bars.end),
+            price_to_y(projection.bottom),
+        ),
     );
     (rect.min.is_finite() && rect.max.is_finite()).then_some(rect)
 }
