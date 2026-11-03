@@ -22,8 +22,8 @@ pub enum CursorDataPolicy {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct ChartPointer {
-    /// Stored timestamp of the nearest eligible slot, including a whitespace bar.
-    /// `None` without data or before the first or after the last stored slot.
+    /// Stored timestamp of the nearest eligible main or added-series point, including whitespace.
+    /// `None` without data or when the selected position has no stored point.
     pub time: Option<DateTime<Utc>>,
     /// Price on the main pane, or the value on the scale of the hovered pane or volume.
     pub price: f64,
@@ -31,29 +31,34 @@ pub struct ChartPointer {
     /// reports no position.
     pub series: SeriesId,
     /// Nearest slot in the rendered series, counting elements on price-based chart types.
-    /// Negative or past the last bar in whitespace.
+    /// Added points between main-series slots round to the nearest slot. Negative or past
+    /// the last bar in whitespace.
     pub index: isize,
     /// Pointer position in UI points, the coordinates of the chart's `Response::rect`.
     pub pos: Pos2,
     /// Pane counted from the top among the panes drawn, the price pane with its volume band
     /// included: `0` unless panes sit above the price pane.
     pub pane: usize,
-    /// Main series bar, or price-based element, at `index`, with its colours and payload: a
-    /// [whitespace](Bar::whitespace) bar in an empty slot, `None` without data or before the
-    /// first bar or after the last.
+    /// Main series bar, or price-based element, at `time`, with its colours and payload: a
+    /// [whitespace](Bar::whitespace) bar in an empty slot, `None` when the main series has no
+    /// point at that time or has been removed.
     pub bar: Option<Bar>,
-    /// Close of the last bar or element with a value before `index`, from which legends measure
-    /// the change.
+    /// Close of the last bar or element with a value before the selected main-series point,
+    /// from which legends measure the change. `None` when no main-series point is selected.
     pub previous_close: Option<f64>,
     /// Every series added with `add_series` or `add_comparison` that has a bar at `time`,
     /// including hidden series and their host payloads.
     pub series_bars: Vec<(SeriesId, Bar)>,
-    /// Study plots at `index`, each with its stable study id. Defaults to the visible plots
+    /// Study plots at the selected main-series point, each with its stable study id. Defaults to the visible plots
     /// returned by [`Chart::study_values_at`]; [`Chart::set_cursor_data_policy`] can include
-    /// hidden studies and plots. Missing values remain `None`.
+    /// hidden studies and plots. Missing values remain `None`; empty between main-series points.
     pub studies: Vec<(SeriesId, StudyValue)>,
-    /// The drawing, series or study line under the pointer, in the priority a click selects.
+    /// The drawing, primitive, series or study under the pointer. Custom hit priority is
+    /// documented by [`PrimitiveHit`](super::PrimitiveHit).
     pub target: Option<PointerTarget>,
+    /// The winning primitive or custom renderer's object, including its cursor and host data.
+    /// `target` identifies its primitive or series; `None` for drawings and built-in plots.
+    pub primitive_hit: Option<super::PrimitiveHit>,
     /// Modifier keys held during the event.
     pub modifiers: Modifiers,
     /// Device that produced the event.
@@ -82,6 +87,7 @@ impl ChartPointer {
             && self.previous_close == other.previous_close
             && self.studies == other.studies
             && self.target == other.target
+            && self.primitive_hit == other.primitive_hit
             && self.modifiers == other.modifiers
             && self.kind == other.kind
             && match (&self.bar, &other.bar) {
@@ -114,7 +120,7 @@ pub enum PointerTarget {
     Element(ChartElementId),
     /// A drawing, by its drawing id.
     Drawing(usize),
-    /// A primitive whose [`hit_test`](super::Primitive::hit_test) reports the pointer.
+    /// A primitive whose [`hit_test_result`](super::Primitive::hit_test_result) reports the pointer.
     Primitive(super::PrimitiveId),
 }
 
@@ -300,6 +306,7 @@ pub(super) struct HostEvents {
     input_frame: Option<(u64, Modifiers)>,
     /// What the pointer is over this frame, resolved while the plots are drawn.
     pub target: Option<PointerTarget>,
+    pub primitive_hit: Option<super::PrimitiveHit>,
     pub volume_map: Option<crate::scales::PriceMap>,
     #[cfg(feature = "drawings")]
     dropped_images: Vec<egui::DroppedFileHandle>,
@@ -420,6 +427,69 @@ impl Chart {
         }
     }
 
+    /// Selects from the same fractional positions used to paint added series.
+    fn pointer_time(&self, pos: Pos2) -> Option<(Option<DateTime<Utc>>, f64)> {
+        let shown = self.state.shown();
+        let coords = self.get_chart_mapping();
+        let index = coords.x_to_idx_f64(pos.x);
+        if shown.is_empty() {
+            return Some((None, index.round()));
+        }
+        let pointer_time = crate::model::time_at(shown, index)?;
+        let mut selected = self.crosshair_position(pos, &coords).map(|pos| {
+            let index = coords.x_to_idx_f64(pos.x).round();
+            let time =
+                (index >= 0.0 && index < shown.len() as f64).then(|| shown[index as usize].time);
+            (time, index)
+        });
+        let x_at = |index| {
+            self.state.time_scale().idx_to_coord_precise(
+                index,
+                coords.rect.left(),
+                coords.rect.width(),
+            )
+        };
+        let mut distance = selected.map_or(f32::INFINITY, |(_, index)| (x_at(index) - pos.x).abs());
+        let precision = f32::EPSILON
+            * coords
+                .rect
+                .left()
+                .abs()
+                .max(coords.rect.right().abs())
+                .max(1.0);
+        for item in &self.price_series {
+            let at = item.bars.partition_point(|bar| bar.time < pointer_time);
+            for side in [
+                &mut item.bars[..at].iter().rev() as &mut dyn Iterator<Item = &Bar>,
+                &mut item.bars[at..].iter(),
+            ] {
+                for bar in side {
+                    let Some(index) = crate::model::index_at(shown, bar.time) else {
+                        continue;
+                    };
+                    let x = x_at(index);
+                    let candidate_distance = (x - pos.x).abs();
+                    if candidate_distance > distance + precision {
+                        break;
+                    }
+                    if !coords.is_x_visible(x) {
+                        continue;
+                    }
+                    let main = shown.binary_search_by_key(&bar.time, |bar| bar.time).ok();
+                    if self.crosshair_time_eligible(bar.time, main)
+                        && (candidate_distance + precision < distance
+                            || selected
+                                .is_none_or(|(time, _)| time.is_none_or(|time| bar.time > time)))
+                    {
+                        selected = Some((Some(bar.time), index));
+                        distance = candidate_distance;
+                    }
+                }
+            }
+        }
+        selected
+    }
+
     fn prepare_pointer_input(&mut self, ui: &Ui) {
         let frame = ui.ctx().cumulative_frame_nr();
         if self.host_events.input_frame.map(|(at, _)| at) != Some(frame) {
@@ -517,15 +587,11 @@ impl Chart {
     ) -> Option<ChartPointer> {
         let plot = self.last_rendered_price_rect;
         let shown = self.state.shown();
-        let coords = self.get_chart_mapping();
-        let selected = if shown.is_empty() {
-            pos
-        } else {
-            self.crosshair_position(pos, &coords)?
-        };
-        let index = coords.x_to_idx_f64(selected.x).round();
-        let bar_at = (index >= 0.0 && index < shown.len() as f64).then_some(index as usize);
-        let time = bar_at.map(|index| shown[index].time);
+        let (time, index) = self.pointer_time(pos)?;
+        let index = index.round();
+        let bar_at = (index >= 0.0 && index < shown.len() as f64)
+            .then_some(index as usize)
+            .filter(|at| Some(shown[*at].time) == time);
         let magnet = |map: crate::scales::PriceMap, values: Vec<f64>| {
             if self.chart_options.crosshair.mode.snaps() {
                 crate::chart::rendering::snap_to_values(pos.y, &map, values)
@@ -552,7 +618,11 @@ impl Chart {
             let closes = group.members.iter().filter_map(|id| {
                 let item =
                     (self.price_series.iter()).find(|item| item.id == *id && item.visible)?;
-                bar_at.and_then(|index| self.series_close_at(item, index))
+                let at = item
+                    .bars
+                    .binary_search_by_key(&time?, |bar| bar.time)
+                    .ok()?;
+                (!item.bars[at].is_whitespace()).then_some(item.bars[at].close)
             });
             let values = group
                 .members
@@ -606,7 +676,9 @@ impl Chart {
             index: index as isize,
             pos,
             pane,
-            bar: bar_at.map(|index| shown[index].clone()),
+            bar: bar_at
+                .filter(|_| self.main_series_present)
+                .map(|index| shown[index].clone()),
             previous_close: bar_at
                 .and_then(|index| crate::model::last_with_value(&shown[..index]))
                 .map(|bar| bar.close),
@@ -625,6 +697,7 @@ impl Chart {
                 self.study_rows_at_with_policy(index, self.host_events.cursor_data_policy)
             }),
             target: self.host_events.target,
+            primitive_hit: self.host_events.primitive_hit.clone(),
             modifiers: origin
                 .as_ref()
                 .map_or_else(|| ui.input(|input| input.modifiers), |(_, keys)| *keys),
@@ -1011,6 +1084,123 @@ mod tests {
     use super::*;
     use crate::widget::test_frames::{chart, frame};
     use egui::{Context, Event};
+
+    /// Interleaved points occupy fractional main-series slots: minute 1 is at 0.5 between
+    /// minutes 0 and 2, and minute 3 is at 1.125 between minutes 2 and 10.
+    #[test]
+    fn cursor_events_resolve_interleaved_series_points() {
+        let start = "2024-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let bar = |minute, value| {
+            let mut bar = Bar::from_value(start + chrono::TimeDelta::minutes(minute), value);
+            bar.payload = Some(std::sync::Arc::new(
+                serde_json::json!({ "minute": minute, "value": value }),
+            ));
+            bar
+        };
+        for pane in [false, true] {
+            for main in ["valued", "whitespace", "removed"] {
+                let ctx = Context::default();
+                let mut chart = Chart::new(crate::model::BarData::from_bars(
+                    [0, 2, 10].map(|minute| bar(minute, 100.0)).to_vec(),
+                ));
+                chart.config.show_volume = false;
+                chart.config.show_ohlc_info = false;
+                #[cfg(feature = "studies")]
+                chart.add_indicator(Box::new(crate::studies::SMA::new(1)));
+                let series = chart.add_series(Default::default());
+                let hidden = chart.add_series(Default::default());
+                chart.set_series_visible(hidden, false);
+                chart.set_data(series, vec![bar(1, 120.0), bar(3, 130.0)]);
+                chart.set_data(hidden, vec![bar(1, 140.0), bar(4, 125.0)]);
+                if main == "whitespace" {
+                    chart.set_data(
+                        SeriesId::MAIN,
+                        [0, 2, 10]
+                            .map(|minute| Bar::whitespace(bar(minute, 100.0).time))
+                            .to_vec(),
+                    );
+                } else if main == "removed" {
+                    assert!(chart.remove_series(SeriesId::MAIN));
+                }
+                if pane {
+                    let id = chart.add_pane();
+                    assert!(chart.move_series_to_pane(series, id));
+                }
+                chart.state.time_scale_mut().set_bar_spacing(160.0);
+                chart.state.time_scale_mut().set_right_offset(0.0);
+                for time in [0.0, 0.1, 0.2] {
+                    frame(&ctx, &mut chart, time, vec![]);
+                }
+                for (step, (whitespace, hidden_indices, minute, index)) in [
+                    (false, false, 1, 0.5),
+                    (true, false, 3, 1.125),
+                    (false, true, 1, 0.5),
+                    (true, true, 1, 0.5),
+                    (false, false, 4, 1.25),
+                    (true, false, 4, 1.25),
+                    (true, true, 3, 1.25),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let mut options = chart.chart_options().clone();
+                    options.time_scale.ignore_whitespace_indices = whitespace;
+                    options.time_scale.ignore_hidden_indices = hidden_indices;
+                    chart.set_chart_options(options);
+                    let time = 1.0 + step as f64;
+                    frame(&ctx, &mut chart, time, vec![Event::PointerGone]);
+                    chart.drain_events().for_each(drop);
+                    let map = chart.get_chart_mapping();
+                    let value = match minute {
+                        1 => 120.0,
+                        3 => 130.0,
+                        _ => 125.0,
+                    };
+                    let pos = Pos2::new(
+                        map.idx_to_x(0) + index * map.bar_spacing,
+                        chart.series_price_map(series).unwrap().price_to_y(125.0),
+                    );
+                    frame(&ctx, &mut chart, time + 0.1, vec![Event::PointerMoved(pos)]);
+                    let pointer = chart
+                        .drain_events()
+                        .find_map(|event| match event {
+                            ChartEvent::CrosshairMoved(Some(pointer)) => Some(pointer),
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| panic!("{pane} {main} {step}: missing pointer"));
+                    assert_eq!(
+                        pointer.time,
+                        Some(bar(minute, value).time),
+                        "{pane} {main} {step}"
+                    );
+                    assert!(pointer.bar.is_none() && pointer.studies.is_empty());
+                    let selected_series = if minute == 4 { hidden } else { series };
+                    let mut expected = vec![(selected_series, bar(minute, value))];
+                    if minute == 1 {
+                        expected.push((hidden, bar(1, 140.0)));
+                    }
+                    assert_eq!(pointer.series_bars, expected);
+                    assert_eq!(pointer.pos, pos);
+                    assert_eq!(pointer.pane, usize::from(pane));
+                    frame(&ctx, &mut chart, time + 0.2, vec![]);
+                    assert!(
+                        !chart
+                            .drain_events()
+                            .any(|event| matches!(event, ChartEvent::CrosshairMoved(_)))
+                    );
+                    chart.update(selected_series, bar(minute, value + 1.0));
+                    frame(&ctx, &mut chart, time + 0.3, vec![]);
+                    assert!(chart.drain_events().any(|event| matches!(
+                        event,
+                        ChartEvent::CrosshairMoved(Some(updated))
+                            if updated.time == pointer.time
+                                && updated.series_bars[0] == (selected_series, bar(minute, value + 1.0))
+                    )));
+                    chart.update(selected_series, bar(minute, value));
+                }
+            }
+        }
+    }
 
     /// Separate inputs in one frame retain their coordinates and keys; state updates have no
     /// originating input, even with unrelated touches in that frame.
