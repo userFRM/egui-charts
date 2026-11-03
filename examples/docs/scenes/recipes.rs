@@ -108,7 +108,6 @@ impl HostReadout {
                 ui.label(format!("Clicked: {} UTC", time.format("%H:%M")));
             }
         });
-        chart.set_tooltip_enabled(true);
         chart.show(ui);
         for event in chart.drain_events() {
             match event {

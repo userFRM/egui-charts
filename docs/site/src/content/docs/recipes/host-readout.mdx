@@ -26,9 +26,10 @@ after `show`. The source below is the complete readout, including its imports.
   code={source.slice(source.indexOf('/// Keep the last local'), source.indexOf('/// Share UTC')).trim()} />
 
 The host legend appears above the chart; the additional tooltip follows the
-pointer. A click saves its timestamp in the host state. The scene keeps the
-built-in tooltip enabled with
-[`set_tooltip_enabled`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_tooltip_enabled).
+pointer. A click saves its timestamp in the host state. The built-in tooltip
+stays on by default;
+[`set_tooltip_enabled`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_tooltip_enabled)
+turns it off when the host readout replaces it.
 The saved main bar's close is a data value;
 [`ChartPointer::price`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.ChartPointer.html#structfield.price)
 is the pointer's value on the hovered pane and can be in volume or study units.
