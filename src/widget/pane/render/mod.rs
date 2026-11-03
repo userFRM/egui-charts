@@ -6,9 +6,11 @@ use crate::chart::indicators::{
 use crate::chart::selection::ChartElementId;
 use crate::chart::series::calculate_dot_interval;
 use crate::localization as l10n;
+use crate::scales::PriceMap;
 use crate::studies::{CustomIndicator, Indicator};
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
+use crate::widget::series::PriceSeries;
 use crate::widget::{
     Chart, IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneId, PaneInteraction,
 };
@@ -43,6 +45,12 @@ pub struct RenderedIndicatorPane {
     pub mapping: crate::chart::coords::ChartMapping,
 }
 
+/// Whether the initial pane draws `study` on a scale of its own, apart from the pane's fitted range.
+fn study_has_own_scale(study: &dyn Indicator) -> bool {
+    study.scale() == crate::studies::StudyScale::Independent
+        || (study.is_volume() && !matches!(study.scale(), crate::studies::StudyScale::Shared(_)))
+}
+
 impl Chart {
     /// The initial pane retains its overlay mappings when the main series leaves it.
     fn pane_study_mapping(
@@ -69,6 +77,22 @@ impl Chart {
             crate::chart::rendering::study_mapping(study, mapping)
         } else {
             mapping.clone()
+        }
+    }
+
+    /// The map of a bar series in `pane`: the initial pane keeps each series' own scale, other
+    /// panes share `shared`.
+    fn pane_series_map(
+        &self,
+        pane: PaneId,
+        item: &PriceSeries,
+        rect: Rect,
+        shared: PriceMap,
+    ) -> PriceMap {
+        if pane == PaneId::MAIN {
+            self.series_map(item, rect)
+        } else {
+            shared
         }
     }
 
@@ -401,11 +425,7 @@ impl Chart {
                     continue;
                 };
                 let study = studies.indicators()[idx].as_ref();
-                if pane_id == PaneId::MAIN
-                    && (study.scale() == crate::studies::StudyScale::Independent
-                        || (study.is_volume()
-                            && !matches!(study.scale(), crate::studies::StudyScale::Shared(_))))
-                {
+                if pane_id == PaneId::MAIN && study_has_own_scale(study) {
                     continue;
                 }
                 if study.is_visible()
@@ -477,11 +497,7 @@ impl Chart {
                         continue;
                     };
                     let study = studies.indicators()[idx].as_ref();
-                    if pane_id == PaneId::MAIN
-                        && (study.scale() == crate::studies::StudyScale::Independent
-                            || (study.is_volume()
-                                && !matches!(study.scale(), crate::studies::StudyScale::Shared(_))))
-                    {
+                    if pane_id == PaneId::MAIN && study_has_own_scale(study) {
                         continue;
                     }
                     if study.is_visible()
@@ -587,11 +603,7 @@ impl Chart {
                                 item,
                                 pos,
                                 pane_plot,
-                                if pane_id == PaneId::MAIN {
-                                    self.series_map(item, pane_plot)
-                                } else {
-                                    map
-                                },
+                                self.pane_series_map(pane_id, item, pane_plot, map),
                             )
                             .map(|_| *id)
                         } else {
@@ -877,11 +889,7 @@ impl Chart {
                             &painter,
                             interaction.chart_rect,
                             item,
-                            if pane_id == PaneId::MAIN {
-                                self.series_map(item, interaction.chart_rect)
-                            } else {
-                                map
-                            },
+                            self.pane_series_map(pane_id, item, interaction.chart_rect, map),
                         );
                         let view = self.primitive_view(item.id, pane_mapping.clone());
                         for primitive in self.primitives_of(item.id) {
@@ -1051,11 +1059,7 @@ impl Chart {
                                         item,
                                         pos,
                                         chart_rect,
-                                        if pane_id == PaneId::MAIN {
-                                            self.series_map(item, chart_rect)
-                                        } else {
-                                            map
-                                        },
+                                        self.pane_series_map(pane_id, item, chart_rect, map),
                                     )
                                     .map(|_| ChartElementId::Series(*id));
                             }
@@ -1223,11 +1227,7 @@ impl Chart {
                         self.series_axis_values(item)
                             .map(move |value| (item, value))
                     }) {
-                        let map = if pane_id == PaneId::MAIN {
-                            self.series_map(item, chart_rect)
-                        } else {
-                            map
-                        };
+                        let map = self.pane_series_map(pane_id, item, chart_rect, map);
                         if !map.range().contains(map.transform().to_scale(value)) {
                             continue;
                         }
