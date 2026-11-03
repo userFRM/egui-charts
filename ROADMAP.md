@@ -167,7 +167,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 
 ### Depth, Tape and Heatmap
 
-- [x] `OrderFlowPanel` edits detector rules and alert/sound choices, shows counts, and emits category visibility changes and sound intents; the demo connects its supplied executions and depth. Detectors start disabled; the demo opens with candles and volume, with optional markers, panels, alerts and sounds off, and restores saved opt-ins.
+- [x] `OrderFlowPanel` edits detector rules and alert/sound choices, shows counts, and emits category visibility changes and sound intents; the demo connects its supplied executions and depth. Detectors start disabled; the demo opens with candles and volume, with optional markers, panels, alerts and sounds off, and restores saved user choices. Showcase overlays and their widget entries stay in the current session, including when reopening saved layouts.
 - [x] Order-flow detectors count new detections in feed-time windows, keep loaded history silent, and deliver live and rising-edge count alerts through the notification service.
 - [x] Sequenced aggregated-depth snapshots/deltas and per-order add, modify, cancel and execute events, with gap detection and resynchronisation.
 - [x] Public order book and order queue retain tick-aware prices, best quotes and queue priority.
