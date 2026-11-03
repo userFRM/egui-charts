@@ -3,9 +3,74 @@
 //! [`TimeScale`] manages the mapping between logical bar indices and pixel
 //! coordinates on the horizontal axis.  It owns the bar spacing, scroll offset,
 //! and edge constraints that control which bars are visible.
+//! Numeric scales retain row indices and space them by their encoded key differences.
 //!
 //! [`LogicalRange`] represents a floating-point range of bar indices, which
 //! can be converted to a strict integer range for data-array slicing.
+
+#[cfg(feature = "widget")]
+use chrono::{DateTime, Utc};
+use std::sync::Arc;
+
+/// A snapshot of numeric sample positions, shared by the chart's coordinate mappings.
+///
+/// Obtained from the chart's time scale or rendering mapping. Logical indices still address
+/// rows; their positions are proportional to the encoded numeric keys. One spacing unit is
+/// the mean key gap, or one numeric unit for a single point.
+#[derive(Debug, Clone)]
+pub struct NumericPositions {
+    // Two edge slots retain both the first step and the later cadence of key interpolation.
+    points: Arc<[f64]>,
+    #[cfg(feature = "widget")]
+    pub(crate) unit: f64,
+    #[cfg(feature = "widget")]
+    origin: DateTime<Utc>,
+}
+
+impl NumericPositions {
+    #[cfg(feature = "widget")]
+    pub(crate) fn new(points: Vec<f64>, unit: f64, origin: DateTime<Utc>) -> Self {
+        Self {
+            points: points.into(),
+            unit,
+            origin,
+        }
+    }
+
+    #[cfg(feature = "widget")]
+    pub(crate) fn index_at(&self, time: DateTime<Utc>) -> f64 {
+        let elapsed = time - self.origin;
+        let seconds = elapsed.num_seconds() as f64 + f64::from(elapsed.subsec_nanos()) / 1e9;
+        self.index(seconds / self.unit)
+    }
+
+    pub(crate) fn position(&self, index: f64) -> f64 {
+        if self.points.len() < 2 || !index.is_finite() {
+            return index;
+        }
+        let at = (index + 2.0)
+            .floor()
+            .clamp(0.0, (self.points.len() - 2) as f64) as usize;
+        self.points[at] + (index + 2.0 - at as f64) * (self.points[at + 1] - self.points[at])
+    }
+
+    pub(crate) fn index(&self, position: f64) -> f64 {
+        if self.points.len() < 2 || !position.is_finite() {
+            return position;
+        }
+        let right = self
+            .points
+            .partition_point(|&point| point < position)
+            .clamp(1, self.points.len() - 1);
+        let gap = self.points[right] - self.points[right - 1];
+        right as f64 - 3.0
+            + if gap > 0.0 {
+                (position - self.points[right - 1]) / gap
+            } else {
+                0.0
+            }
+    }
+}
 
 /// A floating-point range of bar indices on the horizontal axis.
 ///
@@ -67,6 +132,10 @@ const MIN_BAR_SPACING: f32 = 1e-6;
 /// ```
 #[derive(Debug, Clone)]
 pub struct TimeScale {
+    /// Numeric positions, or ordinal spacing when absent.
+    numeric_positions: Option<NumericPositions>,
+    #[cfg(feature = "widget")]
+    numeric_revision: Option<(u64, usize, Option<chrono::DateTime<chrono::Utc>>)>,
     /// Bar spacing in pixels; retain fractional precision when fitting session gaps.
     bar_spacing: f64,
     /// Right offset in bars from the edge
@@ -93,6 +162,9 @@ impl TimeScale {
     /// Create new TimeScale with default settings
     pub fn new() -> Self {
         Self {
+            numeric_positions: None,
+            #[cfg(feature = "widget")]
+            numeric_revision: None,
             bar_spacing: 8.0,
             right_offset: 5.0, // Default: 5 bars of whitespace on the right
             live_right_offset: 2.5,
@@ -163,6 +235,39 @@ impl TimeScale {
         self.bar_cnt = count;
         // CRITICAL: Changing bar_cnt affects max_offset calculation in constraints
         self.apply_constraints();
+    }
+
+    /// Numeric sample positions used by this scale, or `None` for ordinal time charts.
+    pub fn numeric_positions(&self) -> Option<&NumericPositions> {
+        self.numeric_positions.as_ref()
+    }
+
+    #[cfg(feature = "widget")]
+    pub(crate) fn set_numeric_positions(&mut self, positions: Option<NumericPositions>) {
+        self.numeric_positions = positions;
+        self.numeric_revision = None;
+        self.apply_constraints();
+    }
+
+    #[cfg(feature = "widget")]
+    pub(crate) fn refresh_numeric_positions(&mut self, bars: &[crate::model::Bar], revision: u64) {
+        let key = (revision, bars.len(), bars.last().map(|bar| bar.time));
+        if self.numeric_positions.is_some() && self.numeric_revision != Some(key) {
+            self.numeric_positions = Some(crate::model::numeric_positions(bars));
+            self.numeric_revision = Some(key);
+        }
+    }
+
+    pub(crate) fn position(&self, index: f64) -> f64 {
+        self.numeric_positions
+            .as_ref()
+            .map_or(index, |positions| positions.position(index))
+    }
+
+    fn index(&self, position: f64) -> f64 {
+        self.numeric_positions
+            .as_ref()
+            .map_or(position, |positions| positions.index(position))
     }
 
     /// Set bar spacing (with clamping to constraints). Non-finite values are ignored.
@@ -262,7 +367,10 @@ impl TimeScale {
         let right_border = base_idx + self.right_offset;
         let left_border = right_border - bars_len + 1.0;
 
-        LogicalRange::new(left_border as f32, right_border as f32)
+        LogicalRange::new(
+            self.index(left_border) as f32,
+            self.index(right_border) as f32,
+        )
     }
 
     /// Convert logical index to x coord
@@ -284,7 +392,8 @@ impl TimeScale {
         rect_min_x: f32,
         rect_width: f32,
     ) -> f32 {
-        let delta_from_right = (self.base_idx() as f64 - index.into()) + self.right_offset;
+        let delta_from_right =
+            (self.base_idx() as f64 - self.position(index.into())) + self.right_offset;
         (f64::from(rect_min_x) + f64::from(rect_width)
             - (delta_from_right + 0.5) * self.bar_spacing
             - 1.0) as f32
@@ -303,7 +412,7 @@ impl TimeScale {
     pub fn coord_to_idx_precise(&self, x: f32, rect_min_x: f32, rect_width: f32) -> f64 {
         let relative_x = f64::from(x) - f64::from(rect_min_x);
         let delta_from_right = (f64::from(rect_width) - relative_x - 1.0) / self.bar_spacing - 0.5;
-        self.base_idx() as f64 + (self.right_offset - delta_from_right)
+        self.index(self.base_idx() as f64 + (self.right_offset - delta_from_right))
     }
 
     /// Fit fractional edges, centring spans that exceed the configured or fallback spacing cap.
@@ -311,6 +420,7 @@ impl TimeScale {
     /// exceeds the plot at the minimum spacing, and keeps the last bar's slot in view otherwise.
     #[cfg(feature = "widget")]
     pub(crate) fn fit_logical_range(&mut self, left: f64, right: f64, default_max: f64) {
+        let (left, right) = (self.position(left), self.position(right));
         let (min, max) = self.spacing_bounds();
         let max = if max > 0.0 { max } else { default_max.max(min) };
         let spacing = (self.width as f64 - 1.0) / (right - left);

@@ -145,7 +145,7 @@ impl Chart {
         {
             marks.paint(ctx.painter, |time, close| {
                 let index = crate::model::index_at(self.state.shown(), time)?;
-                let x = coords.idx_to_x(0) + index as f32 * coords.bar_spacing;
+                let x = coords.index_to_x(index);
                 Some(egui::Pos2::new(x, coords.price.price_to_y(close)))
             });
         }
@@ -174,7 +174,7 @@ impl Chart {
             );
         let mapping = ChartMapping {
             start_idx: 0,
-            ..*coords
+            ..coords.clone()
         };
         if self.chart_type.is_time_independent() {
             let mapped = crate::chart::rendering::candles::price_based::markers(

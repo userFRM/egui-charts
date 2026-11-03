@@ -96,6 +96,11 @@ const SAMPLES: &[(&str, &str, &str)] = &[
         "Analyst price targets",
         "Requires SAMPLE on the daily interval.",
     ),
+    (
+        "financials",
+        "Company financials",
+        "Synthetic income statement, balance sheet and statistics for AAPL.",
+    ),
 ];
 
 pub(super) fn quick_search_commands() -> Vec<Command> {
@@ -333,6 +338,11 @@ impl DemoApp {
                         );
                     }
                 }
+                return;
+            }
+            "financials" => {
+                self.switch_symbol("AAPL");
+                self.open_financials();
                 return;
             }
             "tape" | "markers" | "signals" => {
@@ -921,6 +931,52 @@ mod tests {
                 .iter()
                 .any(|line| line.title.as_deref() == Some("Sample line"))
         );
+    }
+
+    #[test]
+    fn financials_sample_opens_populated_pages_and_follows_symbol_availability() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        app.execute_search_command(&ctx, "financials");
+        assert_eq!(app.chart.symbol(), "AAPL");
+        assert_eq!(app.financials.as_ref().unwrap().0, "AAPL");
+        frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        for (page, row) in [
+            ("Income statement", "Total revenue"),
+            ("Balance sheet", "Total assets"),
+            ("Statistics", "Net margin %"),
+        ] {
+            click(&mut app, &ctx, page);
+            let output = frame(&mut app, &ctx, vec![]);
+            assert!(
+                output.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::Shape::Text(text) if text.galley.text() == row)),
+                "{page}"
+            );
+            output.drop_without_applying_deltas();
+        }
+        click(&mut app, &ctx, "Back to chart");
+        assert!(app.financials.is_none());
+        frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        assert_eq!(app.chart.symbol(), "AAPL");
+        assert!(!app.chart.state().shown().is_empty());
+        for (symbol, available) in [
+            ("MSFT", true),
+            ("BTCUSD", false),
+            ("EURUSD", false),
+            ("SPX", false),
+            ("SAMPLE", false),
+        ] {
+            app.execute_search_command(&ctx, "financials");
+            app.switch_symbol(symbol);
+            frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+            assert_eq!(app.financials.is_some(), available, "{symbol}");
+            if let Some((shown, _)) = &app.financials {
+                assert_eq!(shown, symbol);
+            }
+        }
     }
 
     #[test]
