@@ -260,7 +260,7 @@ impl OptionsVolumeProfile {
                         .flatten()
                 };
                 cache.exposure = exposure.and_then(|snapshot| {
-                    let rows = aggregate_exposure(&snapshot.rows)?;
+                    let rows = aggregate_exposure(&snapshot.rows, supplied.is_some())?;
                     let signs = if supplied.is_some() {
                         "Provider signs"
                     } else {
@@ -400,8 +400,14 @@ impl OptionsVolumeProfile {
     }
 }
 
-// Expiries share strike bars, but an unknown side in any expiry keeps that sum unknown.
-fn aggregate_exposure(rows: &[OptionExposureRow]) -> Option<Vec<StrikeExposure>> {
+// Computed gamma counts unusable contracts separately; an absent side must not erase
+// another expiry's known contribution. Provider omissions keep their sums unknown.
+fn aggregate_exposure(rows: &[OptionExposureRow], supplied: bool) -> Option<Vec<StrikeExposure>> {
+    let add = |a: Option<f64>, b: Option<f64>| match (a, b) {
+        (Some(a), Some(b)) => Some(a + b),
+        _ if supplied => None,
+        _ => a.or(b),
+    };
     let mut ordered: Vec<_> = rows.iter().collect();
     ordered.sort_by(|a, b| a.strike.total_cmp(&b.strike));
     let mut strikes: Vec<StrikeExposure> = Vec::new();
@@ -409,9 +415,9 @@ fn aggregate_exposure(rows: &[OptionExposureRow]) -> Option<Vec<StrikeExposure>>
         if let Some(previous) = strikes.last_mut()
             && previous.strike == row.strike
         {
-            previous.calls = previous.calls.zip(row.calls).map(|(a, b)| a + b);
-            previous.puts = previous.puts.zip(row.puts).map(|(a, b)| a + b);
-            previous.net = previous.net.zip(row.net).map(|(a, b)| a + b);
+            previous.calls = add(previous.calls, row.calls);
+            previous.puts = add(previous.puts, row.puts);
+            previous.net = add(previous.net, row.net);
         } else {
             strikes.push(StrikeExposure {
                 strike: row.strike,
@@ -1056,22 +1062,52 @@ mod tests {
                     Some(13.0)
                 );
                 assert_eq!(study.plot_value(5, 0), Some(0.0));
+                let mut unknown_call = OptionExposureRow::new(next, 100.0);
+                unknown_call.puts = Some(-2.0);
+                unknown_call.net = Some(-2.0);
+                snapshot.rows.push(unknown_call);
+                exposure_sink.push(snapshot.clone()).unwrap();
+                study.set_input("expiry", InputValue::Choice(3)).unwrap();
+                let plot = study.volume_profiles(0..1).remove(0);
+                let strike = &plot.profile.exposure.as_ref().unwrap().rows[0];
+                assert_eq!(strike.calls, None, "provider unknown stays unknown");
+                assert_eq!(strike.puts, Some(0.0));
+                assert_eq!(strike.net, Some(11.0));
                 snapshot.rows.clear();
                 snapshot.zero_gamma = None;
                 exposure_sink.push(snapshot).unwrap();
             } else {
-                let mut later = rows.clone();
-                later.iter_mut().for_each(|row| row.expiry = next);
-                rows.extend(later);
-                sink.push(rows).unwrap();
-                study.set_input("expiry", InputValue::Choice(3)).unwrap();
-                let plot = study.volume_profiles(0..1).remove(0);
-                assert_eq!(plot.profile.exposure().unwrap().rows.len(), 2);
-                let strikes = &plot.profile.exposure.as_ref().unwrap().rows;
-                assert_eq!(strikes.len(), 1);
-                assert!((strikes[0].net.unwrap() - 10.0).abs() < 1e-10);
-                study.set_input("expiry", InputValue::Choice(2)).unwrap();
-                assert!((study.plot_value(2, 0).unwrap() - 5.0).abs() < 1e-10);
+                for (separate_sides, calls, puts, net, later_net) in [
+                    (false, 24.0, -14.0, 10.0, 5.0),
+                    (true, 12.0, -7.0, 5.0, -7.0),
+                ] {
+                    let mut later = rows.clone();
+                    later.iter_mut().for_each(|row| row.expiry = next);
+                    let mut selected = rows.clone();
+                    if separate_sides {
+                        selected.truncate(1);
+                        selected.push(later[1].clone());
+                    } else {
+                        selected.extend(later);
+                    }
+                    sink.push(selected).unwrap();
+                    study.set_input("expiry", InputValue::Choice(3)).unwrap();
+                    let plot = study.volume_profiles(0..1).remove(0);
+                    assert_eq!(plot.profile.exposure().unwrap().rows.len(), 2);
+                    let strikes = &plot.profile.exposure.as_ref().unwrap().rows;
+                    assert_eq!(strikes.len(), 1);
+                    for (actual, expected) in [
+                        (strikes[0].calls, calls),
+                        (strikes[0].puts, puts),
+                        (strikes[0].net, net),
+                    ] {
+                        assert!(
+                            (actual.expect("known computed contribution") - expected).abs() < 1e-10
+                        );
+                    }
+                    study.set_input("expiry", InputValue::Choice(2)).unwrap();
+                    assert!((study.plot_value(2, 0).unwrap() - later_net).abs() < 1e-10);
+                }
                 sink.push(Vec::new()).unwrap();
             }
             assert!(study.volume_profiles(0..1).is_empty());
