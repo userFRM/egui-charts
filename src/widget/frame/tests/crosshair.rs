@@ -1,6 +1,291 @@
 use crate::widget::test_frames::{chart, frame, shapes};
 use egui::{Event, Pos2, Shape};
 
+/// Eligibility follows current data and visibility, independently of price snapping, across
+/// panes and host positioning. Distances are logical slots: at 50.5, 48 is nearer than 54;
+/// at 51 they tie, so 54 wins. An added value at 51 wins over either neighbour.
+#[test]
+fn crosshair_skips_ineligible_indices_without_removing_data() {
+    use crate::config::CrosshairMode;
+    use crate::model::{Bar, LineStyle};
+    use crate::widget::{ChartEvent, SeriesId, SeriesOptions};
+
+    let vertical_lines = |painted: &[Shape]| {
+        painted
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::LineSegment { points, stroke }
+                    if stroke.color == egui::Color32::MAGENTA && points[0].x == points[1].x =>
+                {
+                    Some(points[0].x)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    for pane in [false, true] {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[110.0]);
+        chart.config.show_volume = false;
+        let original = chart.bars(SeriesId::MAIN).to_vec();
+        let mut bars = original.clone();
+        for bar in &mut bars[49..54] {
+            *bar = Bar::whitespace(bar.time);
+        }
+        chart.set_data(SeriesId::MAIN, bars.clone());
+        let added = chart.add_series(SeriesOptions::default());
+        if pane {
+            let id = chart.add_pane();
+            assert!(chart.move_series_to_pane(added, id));
+        }
+        chart.set_data(added, vec![Bar::from_value(original[51].time, 105.0)]);
+        chart.chart_options.crosshair.vert_line_color = egui::Color32::MAGENTA;
+        chart.chart_options.crosshair.vert_line_style = LineStyle::Solid;
+        chart.chart_options.crosshair.horz_line_color = egui::Color32::MAGENTA;
+        chart.chart_options.crosshair.horz_line_style = LineStyle::Solid;
+        chart.chart_options.tooltip.enabled = false;
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        // (skip whitespace, skip hidden-only, main visible, added visible, added valued,
+        //  pointer index, expected index). These edits deliberately reuse the same chart.
+        for (step, case) in [
+            (false, false, true, false, true, 51.0, Some(51)),
+            (true, false, true, false, true, 51.0, Some(51)),
+            (false, true, true, false, true, 51.0, Some(52)),
+            (false, true, true, false, false, 51.0, Some(51)),
+            (true, true, true, false, true, 50.5, Some(48)),
+            (true, true, true, false, true, 51.0, Some(54)),
+            (true, true, true, true, true, 51.0, Some(51)),
+            (true, true, true, true, false, 51.0, Some(54)),
+            (true, true, true, true, true, 51.0, Some(51)),
+            (true, true, false, true, true, 48.0, Some(51)),
+            (true, true, false, false, true, 51.0, None),
+            (true, false, false, false, false, 51.0, Some(54)),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let (whitespace, hidden, main_visible, added_visible, valued, index, expected) = case;
+            let mut options = chart.chart_options().clone();
+            options.time_scale.ignore_whitespace_indices = whitespace;
+            options.time_scale.ignore_hidden_indices = hidden;
+            options.crosshair.mode = [
+                CrosshairMode::Normal,
+                CrosshairMode::Magnet,
+                CrosshairMode::MagnetClose,
+            ][step % 3];
+            chart.set_chart_options(options);
+            chart
+                .series_price_scale_mut(SeriesId::MAIN)
+                .unwrap()
+                .options_mut()
+                .mode = if step % 2 == 1 {
+                crate::scales::PriceScaleMode::Logarithmic
+            } else {
+                crate::scales::PriceScaleMode::Normal
+            };
+            chart.set_main_series_visible(main_visible);
+            chart.set_series_visible(added, added_visible);
+            chart.update(
+                added,
+                if valued {
+                    Bar::from_value(original[51].time, 105.0)
+                } else {
+                    Bar::whitespace(original[51].time)
+                },
+            );
+            let time = 1.0 + step as f64;
+            frame(&ctx, &mut chart, time, vec![Event::PointerGone]);
+            chart.drain_events().for_each(drop);
+            let map = chart.get_chart_mapping();
+            let y = if pane && added_visible {
+                chart.series_price_map(added).unwrap().price_to_y(105.0)
+            } else {
+                map.rect.center().y
+            };
+            let pos = Pos2::new(map.idx_to_x(50) + (index - 50.0) * map.bar_spacing, y);
+            let painted = shapes(&ctx, &mut chart, time + 0.1, vec![Event::PointerMoved(pos)]);
+            assert_eq!(
+                chart.get_hover_bar_idx(),
+                expected.map(|i| i as f64),
+                "{pane} {case:?}, pointer {pos:?}, before {map:?}, after {:?}",
+                chart.get_chart_mapping()
+            );
+            let pointer = chart
+                .drain_events()
+                .find_map(|event| match event {
+                    ChartEvent::CrosshairMoved(pointer) => Some(pointer),
+                    _ => None,
+                })
+                .flatten();
+            assert_eq!(
+                pointer.as_ref().map(|p| p.index),
+                expected.map(|i| i as isize),
+                "{pane} {case:?}"
+            );
+            if let Some(pointer) = pointer {
+                assert_eq!(pointer.time, original[pointer.index as usize].time);
+                assert_eq!(pointer.pos, pos, "host retains the actual pointer position");
+            }
+            let lines = vertical_lines(&painted);
+            if let Some(index) = expected {
+                assert!(
+                    painted.iter().any(|shape| matches!(shape,
+                        Shape::LineSegment { points, stroke }
+                            if stroke.color == egui::Color32::MAGENTA
+                                && points[0].y == points[1].y && points[0].y.is_finite()
+                    )),
+                    "{pane} {case:?}: missing horizontal crosshair"
+                );
+                assert!(!lines.is_empty(), "{pane} {case:?}");
+                assert!(
+                    lines
+                        .iter()
+                        .all(|x| (*x - map.idx_to_x(index)).abs() < 0.01),
+                    "{pane} {case:?}: {lines:?}"
+                );
+                let label = chart.format_time(original[index].time);
+                assert!(
+                    painted.iter().any(
+                        |shape| matches!(shape, Shape::Text(text) if text.galley.text() == label)
+                    ),
+                    "{pane} {case:?}: missing {label}"
+                );
+            } else {
+                assert!(lines.is_empty(), "{pane} {case:?}");
+                assert!(
+                    chart.last_crosshair.is_none(),
+                    "clear the previous sync position"
+                );
+            }
+            assert_eq!(chart.bars(SeriesId::MAIN).len(), bars.len());
+            assert!(chart.bars(SeriesId::MAIN)[51].is_whitespace());
+        }
+        chart.set_main_series_visible(true);
+        chart.set_series_visible(added, true);
+        chart.chart_options.time_scale.ignore_hidden_indices = true;
+        for (step, filter, index, expected) in [
+            (0, false, 50.5, 51),
+            (1, true, 50.5, 48),
+            (2, true, 51.0, 54),
+        ] {
+            chart.chart_options.time_scale.ignore_whitespace_indices = filter;
+            chart.chart_options.time_scale.ignore_hidden_indices = filter;
+            chart.set_synced_crosshair_bar_idx(Some(index));
+            let painted = shapes(
+                &ctx,
+                &mut chart,
+                20.0 + step as f64,
+                vec![Event::PointerGone],
+            );
+            assert_eq!(
+                chart.last_crosshair.map(|(time, _)| time),
+                Some(original[expected].time)
+            );
+            let label = chart.format_time(original[expected].time);
+            assert!(
+                painted
+                    .iter()
+                    .any(|shape| matches!(shape, Shape::Text(text) if text.galley.text() == label))
+            );
+            let lines = vertical_lines(&painted);
+            let x = chart.get_chart_mapping().idx_to_x(expected);
+            assert!(!lines.is_empty());
+            assert!(
+                lines.iter().all(|line| (*line - x).abs() < 0.01),
+                "{pane} {index}: {lines:?}"
+            );
+            assert!(
+                painted.iter().any(|shape| matches!(shape,
+                    Shape::LineSegment { points, stroke }
+                        if stroke.color == egui::Color32::MAGENTA && points[0].y == points[1].y
+                            && points[0].y.is_finite()
+                )),
+                "a synchronized whitespace slot keeps the horizontal crosshair"
+            );
+        }
+        // Replacing history fills a gap immediately; replacing all values clears the cursor.
+        chart.set_synced_crosshair_bar_idx(None);
+        bars[51] = original[51].clone();
+        let whitespace: Vec<_> = original
+            .iter()
+            .map(|bar| Bar::whitespace(bar.time))
+            .collect();
+        for (step, (data, expected)) in [
+            (bars.clone(), Some(51.0)),
+            (whitespace.clone(), None),
+            (bars.clone(), Some(51.0)),
+            (Vec::new(), None),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if data.is_empty() {
+                chart.set_data(added, Vec::new());
+            }
+            chart.set_data(SeriesId::MAIN, data);
+            let map = chart.get_chart_mapping();
+            frame(
+                &ctx,
+                &mut chart,
+                23.0 + step as f64,
+                vec![Event::PointerMoved(Pos2::new(
+                    map.idx_to_x(51),
+                    map.rect.center().y,
+                ))],
+            );
+            assert_eq!(chart.get_hover_bar_idx(), expected);
+            assert_eq!(chart.last_crosshair.is_some(), expected.is_some());
+        }
+        chart.set_data(SeriesId::MAIN, whitespace);
+        let study = chart.add_indicator(Box::new(crate::studies::CustomIndicator::new(
+            "Value in gap",
+            |bars| {
+                (0..bars.len())
+                    .map(|index| {
+                        if index == 51 {
+                            crate::studies::IndicatorValue::Single(105.0)
+                        } else {
+                            crate::studies::IndicatorValue::None
+                        }
+                    })
+                    .collect()
+            },
+        )));
+        for (step, (hidden, visible, plot_visible, expected)) in [
+            (true, true, true, Some(51.0)),
+            (true, false, true, None),
+            (false, false, true, Some(51.0)),
+            (true, true, false, None),
+            (false, true, false, Some(51.0)),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            chart.chart_options.time_scale.ignore_hidden_indices = hidden;
+            chart.set_indicator_visible(study, visible);
+            let indicator = chart.indicator_mut(study).unwrap();
+            let mut settings = indicator.settings();
+            settings.plots[0].visible = plot_visible;
+            indicator.apply_settings(&[], settings).unwrap();
+            let map = chart.get_chart_mapping();
+            frame(
+                &ctx,
+                &mut chart,
+                28.0 + step as f64,
+                vec![Event::PointerMoved(Pos2::new(
+                    map.idx_to_x(51),
+                    map.rect.center().y,
+                ))],
+            );
+            assert_eq!(
+                chart.get_hover_bar_idx(),
+                expected,
+                "study {hidden} {visible} {plot_visible}"
+            );
+        }
+    }
+}
+
 /// An update starts one last price pulse, loading does not, and a continuous pulse always
 /// runs; the crosshair marker sits on the line at the hovered bar's close.
 #[test]

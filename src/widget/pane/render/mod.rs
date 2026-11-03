@@ -443,6 +443,15 @@ impl Chart {
                 transform.to_scale(shared_range.0),
                 transform.to_scale(shared_range.1),
             );
+            let marker_map = pane_scale.map(transform, panel_rect.top(), panel_rect.bottom());
+            let marker_bounds: Vec<_> = series
+                .iter()
+                .flat_map(|at| {
+                    self.series_marker_bounds(ui.painter(), self.price_series[*at].id, marker_map)
+                })
+                .collect();
+            let pane_scale = &mut self.pane_layout.panes[pane_idx].scale;
+            Self::fit_marker_bounds(pane_scale, panel_rect, marker_bounds);
             let map = pane_scale
                 .map(transform, panel_rect.top(), panel_rect.bottom())
                 .with_thousands_sep(thousands_sep);
@@ -505,10 +514,17 @@ impl Chart {
                                         item,
                                         self.primitive_view(
                                             *id,
-                                            crate::chart::rendering::study_mapping(
-                                                study,
-                                                &pane_mapping,
-                                            ),
+                                            if matches!(
+                                                study.scale(),
+                                                crate::studies::StudyScale::Shared(_)
+                                            ) {
+                                                crate::chart::rendering::study_mapping(
+                                                    study,
+                                                    &pane_mapping,
+                                                )
+                                            } else {
+                                                pane_mapping
+                                            },
                                         ),
                                     )
                                 }),
@@ -654,16 +670,26 @@ impl Chart {
                         self.synced_crosshair_bar_idx
                             .filter(|index| index.is_finite() && *index >= 0.0)
                             .map(|index| {
+                                let index =
+                                    if self.chart_options.time_scale.ignore_whitespace_indices
+                                        || self.chart_options.time_scale.ignore_hidden_indices
+                                    {
+                                        index
+                                    } else {
+                                        index.round()
+                                    };
                                 Pos2::new(
                                     coords
                                         .to_mapping(plot, 0.0, 1.0)
-                                        .idx_to_x(index.round() as usize),
+                                        .idx_to_x(index.floor() as usize)
+                                        + index.fract() as f32 * pane_mapping.bar_spacing,
                                     plot.center().y,
                                 )
                             })
                             .filter(|pos| plot.contains(*pos))
                     })
-                    .filter(|_| !self.menu_open && !egui::Popup::is_any_open(ui.ctx()));
+                    .filter(|_| !self.menu_open && !egui::Popup::is_any_open(ui.ctx()))
+                    .and_then(|pos| self.crosshair_position(pos, &pane_mapping));
                 let mut crosshair_options = self.chart_options.crosshair.resolved(ui.ctx());
                 if eraser_mode && crosshair_options.style != crate::config::CrosshairStyle::Hidden {
                     crosshair_options.style = crate::config::CrosshairStyle::Arrow;
@@ -753,6 +779,7 @@ impl Chart {
                         .flat_map(|id| self.primitives_of(id))
                         .collect::<Vec<_>>(),
                     study.is_none() && id.is_some(),
+                    self.merge_groups.factor(),
                 ) {
                     if !collapsed
                         && let Some(item) =
@@ -764,7 +791,12 @@ impl Chart {
                         self.paint_series(&painter, interaction.chart_rect, item, map);
                         let view = self.primitive_view(item.id, pane_mapping);
                         for primitive in self.primitives_of(item.id) {
-                            primitive.draw(&painter, &view, crate::widget::PrimitivePass::Series);
+                            primitive.draw(
+                                &painter,
+                                &view,
+                                crate::widget::PrimitivePass::Series,
+                                self.merge_groups.factor(),
+                            );
                         }
                     }
                     self.measured_axis_width =
@@ -877,7 +909,12 @@ impl Chart {
                             })
                             .map(|item| {
                                 let mut view = self.primitive_view(item.series, pane_coords);
-                                if let Some(study) = view.study {
+                                if let Some(study) = view.study
+                                    && matches!(
+                                        study.scale(),
+                                        crate::studies::StudyScale::Shared(_)
+                                    )
+                                {
                                     view.mapping =
                                         crate::chart::rendering::study_mapping(study, &pane_coords);
                                 }
@@ -1187,7 +1224,12 @@ impl Chart {
                         && self.is_series_visible(item.series)
                 }) {
                     let view = self.primitive_view(item.series, pane_coords);
-                    item.draw(&painter, &view, crate::widget::PrimitivePass::Above);
+                    item.draw(
+                        &painter,
+                        &view,
+                        crate::widget::PrimitivePass::Above,
+                        self.merge_groups.factor(),
+                    );
                 }
             }
             if !collapsed {

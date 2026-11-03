@@ -172,16 +172,20 @@ impl Chart {
         self.date_format = date_format;
     }
 
-    /// Formats time axis marks with [`TimeFormatter::format`], which receives the
-    /// [`TickMarkType`](crate::scales::TickMarkType) of each mark, and crosshair, tooltip, forecast
-    /// date and [`format_time`](Self::format_time) labels with [`TimeFormatter::format_crosshair`].
+    /// Formats time axis marks with [`TimeFormatter::format_tick`], whose default calls
+    /// [`TimeFormatter::format`], and crosshair, tooltip, forecast date and
+    /// [`format_time`](Self::format_time) labels with [`TimeFormatter::format_crosshair`].
     ///
-    /// The formatter replaces the built-in one, the locale and the date format. It receives
+    /// `format_tick` receives the chart's locale in a
+    /// [`TickMarkContext`](crate::scales::TickMarkContext) and can return `None` to use the
+    /// built-in locale-aware text for that tick. Otherwise the
+    /// formatter replaces the built-in one, the locale and the date format. It receives
     /// wall-clock times in the chart's time zone, and the time scale's
     /// [`time_visible`](crate::config::TimeScaleOptions::time_visible) option still applies.
     /// `None` restores the built-in formatter.
     ///
     /// [`TimeFormatter::format`]: crate::scales::TimeFormatter::format
+    /// [`TimeFormatter::format_tick`]: crate::scales::TimeFormatter::format_tick
     /// [`TimeFormatter::format_crosshair`]: crate::scales::TimeFormatter::format_crosshair
     pub fn set_time_formatter(
         &mut self,
@@ -286,7 +290,7 @@ impl Chart {
             .map(|formatter| formatter.as_ref())
     }
 
-    pub(super) fn value_formatters(&self) -> rendering::ValueFormatters<'_> {
+    pub(crate) fn value_formatters(&self) -> rendering::ValueFormatters<'_> {
         rendering::ValueFormatters {
             price: self.series_price_formatter(super::SeriesId::MAIN),
             volume: self.volume_formatter.as_deref(),
@@ -504,6 +508,99 @@ mod tests {
                 "{left}..{right}"
             );
         }
+    }
+
+    #[test]
+    fn tick_context_tracks_locale_and_falls_back_without_changing_crosshair() {
+        use crate::model::{BarData, Timeframe};
+        use crate::scales::{TickMarkContext, TickMarkType, TimeFormatter, TimezoneMode};
+        use chrono::{DateTime, Utc};
+        use std::sync::Arc;
+
+        #[derive(Clone)]
+        struct Host;
+        impl TimeFormatter for Host {
+            fn format(&self, _: DateTime<Utc>, _: TickMarkType) -> String {
+                "legacy tick".into()
+            }
+            fn format_tick(&self, context: TickMarkContext<'_>) -> Option<String> {
+                match context.mark_type {
+                    TickMarkType::Year => Some(format!(
+                        "{} {}",
+                        context.locale.unwrap_or("default"),
+                        context.time.format("%Y-%m-%d %H:%M:%S%.3f")
+                    )),
+                    TickMarkType::TimeWithMilliseconds => Some(String::new()),
+                    _ => None,
+                }
+            }
+            fn format_crosshair(&self, time: DateTime<Utc>, _: i64) -> String {
+                format!("hover {}", time.format("%H:%M"))
+            }
+            fn clone_box(&self) -> Box<dyn TimeFormatter> {
+                Box::new(self.clone())
+            }
+        }
+
+        let time = "2024-02-29T19:00:01.123Z".parse().unwrap();
+        let mut chart = crate::widget::Chart::new(BarData::from_bars(vec![]));
+        chart.set_timeframe(Timeframe::Min1);
+        chart.chart_options.time_scale.timezone = TimezoneMode::Timezone("+05:45".parse().unwrap());
+        chart.set_time_formatter(Some(Arc::new(Host)));
+        chart.set_date_format(Some("%d.%m.%Y".into()));
+        // Add 5h45m by hand: leap day 19:00 UTC becomes March 1, 00:45 display time.
+        for (locale, prefix, month) in [
+            (Some("en-US"), "en-US", "Mar"),
+            (
+                Some("de-DE"),
+                "de-DE",
+                if cfg!(feature = "locales") {
+                    "Mär"
+                } else {
+                    "Mar"
+                },
+            ),
+            (Some("unknown"), "unknown", "Mar"),
+            (None, "default", "Mar"),
+        ] {
+            chart.set_locale(locale.map(str::to_owned));
+            let formatter = chart.build_time_formatter();
+            for formatter in [formatter.clone_box(), formatter] {
+                for (kind, expected) in [
+                    (
+                        TickMarkType::Year,
+                        format!("{prefix} 2024-03-01 00:45:01.123"),
+                    ),
+                    (TickMarkType::Month, month.into()),
+                    (TickMarkType::DayOfMonth, "01".into()),
+                    (TickMarkType::Time, "00:45".into()),
+                    (TickMarkType::TimeWithSeconds, "00:45:01".into()),
+                    (TickMarkType::TimeWithMilliseconds, String::new()),
+                ] {
+                    assert_eq!(
+                        formatter.format(time, kind),
+                        expected,
+                        "{locale:?}, {kind:?}"
+                    );
+                }
+                assert_eq!(formatter.format_crosshair(time, 60), "hover 00:45");
+            }
+            assert_eq!(chart.format_time(time), "hover 00:45");
+        }
+        chart.chart_options.time_scale.seconds_visible = false;
+        assert_eq!(
+            chart
+                .build_time_formatter()
+                .format(time, TickMarkType::TimeWithSeconds),
+            "00:45"
+        );
+        chart.chart_options.time_scale.time_visible = false;
+        assert_eq!(
+            chart
+                .build_time_formatter()
+                .format(time, TickMarkType::Time),
+            "hover 00:45"
+        );
     }
 
     #[test]
