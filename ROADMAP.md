@@ -47,7 +47,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Locale-aware date names and configurable date patterns. Forecast dates use the chart's display time zone and crosshair time formatter, including host formatting and clock visibility.
 - [x] Chart-owned panes share the time axis and support resizing, reordering, stretch sizing, collapse and maximise controls.
 - [x] Studies and added series can use separate panes and independent scales. The demo menu's Samples entries open synthetic strike and maturity charts with numeric crosshair readouts and preserve the price workspace on return.
-- [x] Scale settings control currency and unit labels, scale-mode and price-action buttons, price-to-bar ratio, label overlap and symbol, study and extended-session value colours.
+- [x] Scale settings control currency and unit labels, scale-mode and price-action buttons, price-to-bar ratio, label overlap and symbol, study and extended-session value colours. The demo menu converts synthetic USD prices to US cents through the host feed contract, including history, executions and book prices, and keeps the unit through replay and saved layouts.
 - [ ] Forward pan, wheel and pinch input to maximised study panes and support pane maximisation by double-click.
 - [ ] Apply the main-series-only autoscale quick setting and the left-axis scale-mode configuration field.
 - [x] Added-series value tags use configured scale precision when no formatter is supplied; saved numeric display declarations also control their tags and readouts.
@@ -253,7 +253,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Main-series studies recalculate against replayed bars and drawing anchors remain stable.
 - [x] Floating replay controls, keyboard shortcuts, saved replay sessions and synchronised layout replay are exercised by the demo.
 - [x] `ReplayClock` merges timestamped trades, quotes and depth events across symbols, supports speed and seek, and routes through normal sinks.
-- [x] `RecordingWriter` and `RecordingReader` encode/decode versioned trade and depth events through supplied I/O streams. The demo keeps at most five minutes and 8 MiB of recorded events per symbol subscription, with book snapshots at retained boundaries, shows the available market replay range, and hides unrecorded live analytics during market playback.
+- [x] `RecordingWriter` and `RecordingReader` encode/decode versioned trade and depth events through supplied I/O streams. The demo keeps at most five minutes and 8 MiB of recorded events per symbol subscription, with book snapshots at retained boundaries, shows the available market replay range, and hides unrecorded live analytics during market playback. Its menu saves a local recording with instrument metadata and imports it for deterministic playback on the matching chart; file size, event count and parsing batches are bounded, and invalid files leave the workspace intact.
 - [ ] Window additional-symbol/interval study histories to the replay cutoff.
 - [ ] Connect the standalone `ReplayToolbar` actions to the replay controller.
 
