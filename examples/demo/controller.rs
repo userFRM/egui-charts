@@ -272,7 +272,7 @@ impl SidePanel {
     ];
 
     /// Panels the demo renders behind a host rail entry, with the entry's id.
-    const HOSTED: [(SidePanel, u64); 2] = [(SidePanel::TimeAndSales, 4), (SidePanel::OrderFlow, 5)];
+    const HOSTED: [(SidePanel, u64); 1] = [(SidePanel::TimeAndSales, 4)];
 
     fn icon(self) -> Option<RightBarIcon> {
         Self::BUILT_IN
@@ -508,7 +508,7 @@ fn sample_widgets() -> [WidgetBarWidget; 2] {
     [
         WidgetBarWidget {
             id: 4,
-            icon: egui_charts::icons::icons::SETTINGS_EVENTS,
+            icon: egui_charts::icons::icons::WATCHLIST,
             tooltip: "Time and sales".into(),
             section: WidgetBarSection::Bottom,
         },
@@ -620,12 +620,6 @@ impl DemoApp {
             );
         });
         widget_bar.widgets.clear();
-        widget_bar.widgets.push(WidgetBarWidget {
-            id: 5,
-            icon: egui_charts::icons::icons::SETTINGS_EVENTS,
-            tooltip: "Order flow".into(),
-            section: WidgetBarSection::Bottom,
-        });
         if let Some(preferences) = cc
             .storage
             .and_then(|storage| eframe::get_value(storage, "interval_preferences"))
@@ -1711,6 +1705,10 @@ impl DemoApp {
                         menu_toggle(ui, "Pause synthetic feed", &icons::MEDIA_PAUSE, &mut paused);
                     });
                     ui.separator();
+                    if menu_item(ui, "Order flow", &icons::CHART_VOLUME_FOOTPRINT, None).clicked() {
+                        panel_action = Some(SidePanel::OrderFlow);
+                        ui.close();
+                    }
                     if ui.ctx().content_rect().width() < 600.0 {
                         for (label, panel, icon) in [
                             (
@@ -1725,12 +1723,7 @@ impl DemoApp {
                                 &icons::WIDGET_BAR_LAYERS,
                             ),
                             ("Data Window", SidePanel::DataWindow, &icons::TABLE),
-                            (
-                                "Time and sales",
-                                SidePanel::TimeAndSales,
-                                &icons::SETTINGS_EVENTS,
-                            ),
-                            ("Order flow", SidePanel::OrderFlow, &icons::SETTINGS_TRADING),
+                            ("Time and sales", SidePanel::TimeAndSales, &icons::WATCHLIST),
                         ]
                         .into_iter()
                         .filter(|(_, panel, _)| {
@@ -4672,8 +4665,7 @@ mod tests {
                         assert_eq!(restored.live.detectors().settings(), settings);
                         assert!(restored.open_panel == (!named).then_some(SidePanel::OrderFlow));
                         assert!(!restored.api_samples);
-                        assert_eq!(restored.widget_bar.widgets.len(), 1);
-                        assert_eq!(restored.widget_bar.widgets[0].id, 5);
+                        assert!(restored.widget_bar.widgets.is_empty());
                         let markers = restored.chart.markers(SeriesId::MAIN);
                         assert_eq!(markers.len(), 1, "named={named}, legacy={legacy}");
                         assert_eq!(markers[0].text.as_deref(), Some("Fill"));
@@ -4685,7 +4677,7 @@ mod tests {
                         assert_eq!(restored.chart.event_visibility(), &events);
                         restored.execute_search_command(&cc.egui_ctx, "signals");
                         assert!(restored.api_samples);
-                        assert_eq!(restored.widget_bar.widgets.len(), 3);
+                        assert_eq!(restored.widget_bar.widgets.len(), 2);
                         assert_eq!(restored.chart.markers(SeriesId::MAIN).len(), 2);
                     }
                 }
