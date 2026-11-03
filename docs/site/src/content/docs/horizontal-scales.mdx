@@ -84,6 +84,25 @@ samples. Bar spacing and scroll offsets use the mean key gap as one unit, or
 one key unit for a single sample. See the [time-scale guide](time-scale.mdx) for
 logical coordinates, fitting and screen conversions.
 
+## Categorical and structured keys
+
+[`CustomHorizontalScale::new(keys, format)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.CustomHorizontalScale.html)
+takes any `Ord` key, such as an enum whose declaration order is the category
+order, and a formatter shared by the axis and the crosshair. Hosts need not
+encode keys or manufacture dates: `value` and `marker` build a bar and an
+annotation from a key, `Chart::bar_at_key` finds a bar and `Chart::key_to_x`
+gives the screen position of a key. Categories are equally spaced by rank, so a
+category without a bar keeps its space.
+
+Share one domain across every series and annotation on the chart. The domain is
+immutable: include future categories before streaming values, or rebuild it and
+replace the bars and annotations together. An unknown key returns `None`, and
+a repeated key replaces the bar in its slot. The `time` method bridges to APIs
+that still take a timestamp; its result identifies a key within this domain and
+is not a date. The **Categorical keys** tab of the
+[primitives example](https://github.com/userFRM/egui-charts/blob/main/examples/primitives.rs)
+plots five ordered phases this way.
+
 ## Implement another label policy
 
 Implement `HorizontalScale` and pass it in an `Arc`:

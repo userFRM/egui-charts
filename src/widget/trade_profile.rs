@@ -10,7 +10,6 @@ use std::ops::{Range, RangeInclusive};
 
 #[derive(Clone, Default)]
 pub(super) struct TradeProfiles {
-    settings: TradeProfileSettings,
     context: Option<(String, BarClock)>,
     spans: Vec<RangeInclusive<DateTime<Utc>>>,
     splits: Vec<DateTime<Utc>>,
@@ -19,12 +18,12 @@ pub(super) struct TradeProfiles {
 impl Chart {
     /// Settings used when drawing [`crate::model::ChartType::SessionVolumeProfile`].
     pub fn trade_profile_settings(&self) -> &TradeProfileSettings {
-        &self.trade_profiles.settings
+        &self.chart_type_params.profile
     }
 
     /// Changes the session profile display without changing its executions or ranges.
     pub fn set_trade_profile_settings(&mut self, settings: TradeProfileSettings) {
-        self.trade_profiles.settings = settings;
+        self.chart_type_params.profile = settings;
     }
 
     /// Current execution-profile ranges, in time order, over the loaded main bars.

@@ -64,6 +64,7 @@ pub(super) struct ComparisonSnapshot {
 struct Simulation {
     symbol: String,
     tick_size: f64,
+    cents: bool,
     price_ticks: i64,
     random: u64,
     id: u64,
@@ -123,6 +124,7 @@ impl LiveFeed {
         let mut sim = Simulation {
             symbol: symbol.into(),
             tick_size,
+            cents: false,
             price_ticks: (spec.start_price / tick_size).round() as i64,
             random: 0x5eed_u64.wrapping_mul(spec.seed),
             id: 0,
@@ -193,6 +195,7 @@ impl LiveFeed {
             Mutex::new(Simulation {
                 symbol: sim.symbol.clone(),
                 tick_size: sim.tick_size,
+                cents: sim.cents,
                 price_ticks: sim.price_ticks,
                 random: sim.random,
                 id: sim.id,
@@ -237,6 +240,7 @@ impl LiveFeed {
             let paused = sim.paused;
             let continuous = sim.continuous;
             let adjusted = sim.adjusted;
+            let cents = sim.cents;
             let options = std::mem::take(&mut sim.options);
             let source = sim
                 .streams
@@ -262,6 +266,7 @@ impl LiveFeed {
             sim.paused = paused;
             sim.continuous = continuous;
             sim.adjusted = adjusted;
+            sim.set_price_unit(cents);
             sim.options = options;
             sim.streams = streams;
             for (query, sink) in &sim.options {
@@ -277,6 +282,17 @@ impl LiveFeed {
         for feed in &sim.streams {
             if feed.state().subscription.is_none() {
                 feed.set_view(session, adjusted);
+            }
+        }
+    }
+
+    /// Changes the synthetic source's price unit; sizes, times and integer tick positions stay put.
+    pub(super) fn set_price_unit(&self, cents: bool) {
+        let mut sim = self.state();
+        sim.set_price_unit(cents);
+        for feed in &sim.streams {
+            if feed.state().subscription.is_none() {
+                feed.set_price_unit(cents);
             }
         }
     }
@@ -403,11 +419,12 @@ impl LiveFeed {
 
     pub(super) fn read_recording(&self, events: &mut Vec<egui_charts::data::ReplayEvent>) {
         let sim = self.state();
-        if let Some(feed) = sim
-            .streams
-            .iter()
-            .find(|feed| feed.state().symbol == sim.symbol)
-        {
+        if let Some(feed) = sim.streams.iter().find(|feed| {
+            let source = feed.state();
+            source.symbol == sim.symbol
+                && source.cents == sim.cents
+                && source.adjusted == sim.adjusted
+        }) {
             feed.read_recording(events);
         } else {
             sim.capture.read_into(events);
@@ -424,6 +441,10 @@ impl LiveFeed {
             .with_price_decimals(if sim.tick_size < 0.01 { 4 } else { 2 })
             .with_tick_size(sim.tick_size)
             .with_native_timeframes([Timeframe::Min1, Timeframe::Day1]);
+        if sim.cents {
+            instrument.currency = None;
+            instrument.unit = Some("US cents".into());
+        }
         if DemoSymbol::has_hours(&sim.symbol) && !sim.continuous {
             instrument = instrument
                 .with_time_zone(us_equity_zone())
@@ -520,7 +541,7 @@ impl LiveFeed {
             let sim = self.state();
             Quote::new(
                 sim.price_ticks as f64 * sim.tick_size,
-                catalog(&sim.symbol)?.start_price,
+                catalog(&sim.symbol)?.start_price * if sim.cents { 100.0 } else { 1.0 },
                 now,
             )
         };
@@ -646,7 +667,10 @@ impl LiveFeed {
                     sub.timeframe,
                     sub.clock.clone(),
                     sub.extended_hours,
-                    sub.conversion.as_deref() == Some("adjusted"),
+                    matches!(
+                        sub.conversion.as_deref(),
+                        Some("adjusted" | "cents-adjusted")
+                    ),
                 ) {
                     if bar.time >= since {
                         sub.sink.push_bar(bar);
@@ -777,13 +801,51 @@ pub(super) fn price_decimals(symbol: &str) -> Option<u8> {
 }
 
 impl Simulation {
+    fn set_price_unit(&mut self, cents: bool) {
+        if self.cents == cents {
+            return;
+        }
+        let factor = if cents { 100.0 } else { 0.01 };
+        self.cents = cents;
+        self.tick_size *= factor;
+        for bar in &mut self.history {
+            bar.open *= factor;
+            bar.high *= factor;
+            bar.low *= factor;
+            bar.close *= factor;
+        }
+        for trade in &mut self.trades {
+            trade.price *= factor;
+        }
+        self.market = None;
+        self.orders = None;
+        self.capture = super::replay::Capture::new();
+        self.comparison_snapshot = None;
+    }
+
     fn history_page(&self, request: &HistoryRequest) -> HistoryPage {
-        let bars = self.archived_bars(
+        let mut bars = self.archived_bars(
             request.timeframe,
             request.clock.clone(),
             request.extended_hours,
-            request.conversion.as_deref() == Some("adjusted"),
+            matches!(
+                request.conversion.as_deref(),
+                Some("adjusted" | "cents-adjusted")
+            ),
         );
+        let cents = request
+            .conversion
+            .as_deref()
+            .is_some_and(|c| c.starts_with("cents"));
+        if cents != self.cents {
+            let factor = if cents { 100.0 } else { 0.01 };
+            for bar in &mut bars {
+                bar.open *= factor;
+                bar.high *= factor;
+                bar.low *= factor;
+                bar.close *= factor;
+            }
+        }
         super::feeds::history_page(&bars, request.since, request.before, request.count)
     }
 
@@ -1002,7 +1064,7 @@ impl Simulation {
                 self.streams.iter().find_map(|feed| {
                     let sim = feed.state();
                     let market = sim.market.as_ref()?;
-                    (sim.symbol == self.symbol).then(|| market.quote(ts))
+                    (sim.symbol == self.symbol && sim.cents == self.cents).then(|| market.quote(ts))
                 })
             })
     }
@@ -1388,15 +1450,18 @@ impl Datafeed for LiveFeed {
 
     fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {
         self.set_symbol(symbol);
+        self.set_price_unit(false);
         reply.send(Ok(self.instrument()));
     }
 
     fn resolve_converted(&self, symbol: &str, conversion: &str, reply: Reply<Instrument>) {
-        if conversion == "adjusted" {
-            self.resolve(symbol, reply);
-        } else {
+        if !matches!(conversion, "adjusted" | "cents" | "cents-adjusted") {
             reply.send(Err(FeedError::NotSupported));
+            return;
         }
+        self.set_symbol(symbol);
+        self.set_price_unit(conversion.starts_with("cents"));
+        reply.send(Ok(self.instrument()));
     }
 
     fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
@@ -1442,9 +1507,18 @@ impl Datafeed for LiveFeed {
         } else {
             SessionType::RTH
         };
+        feed.set_price_unit(
+            subscription
+                .conversion
+                .as_deref()
+                .is_some_and(|c| c.starts_with("cents")),
+        );
         feed.set_view(
             session,
-            subscription.conversion.as_deref() == Some("adjusted"),
+            matches!(
+                subscription.conversion.as_deref(),
+                Some("adjusted" | "cents-adjusted")
+            ),
         );
         feed.set_paused(false);
         self.1

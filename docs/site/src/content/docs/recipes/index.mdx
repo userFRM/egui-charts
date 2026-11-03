@@ -1,0 +1,35 @@
+---
+title: Integration recipes
+description: Complete chart integrations using your own data and the public widget API.
+---
+
+Start with [your first chart](../first-chart.mdx), then choose a task. These
+recipes target main, egui 0.37, and the `widget` feature. Every visual example
+runs locally in the page with fixed synthetic data. The displayed Rust is
+imported from the same [scene source](https://github.com/userFRM/egui-charts/blob/main/examples/docs/scenes/recipes.rs)
+that the docs application compiles.
+
+| Task | Result |
+| --- | --- |
+| [Add price lines and markers](/egui-charts/docs/recipes/annotations/) | A level and a clickable bar annotation |
+| [Show price and volume](/egui-charts/docs/recipes/price-volume/) | Candles and zero-based volume columns in separate panes |
+| [Build a host readout](/egui-charts/docs/recipes/host-readout/) | A legend and tooltip beside the built-in readout, from chart events |
+| [Synchronize two charts](/egui-charts/docs/recipes/synchronized/) | Shared UTC crosshair and viewport without range feedback |
+| [Export an image](/egui-charts/docs/recipes/export/) | Image bytes for a host file, clipboard or browser download |
+
+The [interaction guide](../interaction.mdx) explains pointer, keyboard, crosshair
+and event delivery. The [second-series tutorial](/egui-charts/docs/tutorial/second-series/)
+adds a host-fed comparison to your first chart. For historical and streaming
+data, continue with [a local feed](/egui-charts/docs/studies/live-data/).
+
+Each setup function accepts an existing chart. Keep that chart and any returned
+series handle or scene state between frames. The recipes use the dependencies
+from [installation](../installation.mdx) and need no accounts, network feed or
+storage service. For a native run from a source checkout:
+
+```sh
+cargo run --manifest-path examples/docs/Cargo.toml -- annotations
+```
+
+Replace `annotations` with the scene name printed above another recipe's code.
+Your application supplies real data and delivers exported bytes to the user.
