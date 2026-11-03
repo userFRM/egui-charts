@@ -173,6 +173,9 @@ fn series_display_formats_reach_ticks_tags_readouts_and_snapshots() {
                     chart.series_price_map(id).unwrap().price_precision(),
                     Some(2)
                 );
+                assert!(chart.remove_series(SeriesId::MAIN));
+                frame(&ctx, &mut chart, 0.4, vec![]);
+                assert_eq!(chart.last_price_map.price_precision(), Some(2));
             }
             #[cfg(feature = "ui")]
             {

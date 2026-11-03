@@ -300,8 +300,12 @@ impl Chart {
 
     /// First visible bar series owning an axis. The main series precedes added series.
     pub(super) fn series_axis_owner(&self, id: super::SeriesId) -> super::SeriesId {
-        let pane = self.series_pane(id);
-        let scale = self.series_scale(id);
+        let (pane, scale) = if id == super::SeriesId::MAIN {
+            // Removing the main series leaves its axis in the price pane.
+            (Some(super::PaneId::MAIN), Some(self.main_series_scale))
+        } else {
+            (self.series_pane(id), self.series_scale(id))
+        };
         if pane == Some(super::PaneId::MAIN)
             && scale == Some(self.main_series_scale)
             && self.main_series_present
