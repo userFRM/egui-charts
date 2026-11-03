@@ -571,21 +571,41 @@ fn inserted_bars_preserve_drawing_times_including_future_anchors() {
 
 /// A handle moves, restyles and removes only its own line, on the main series and on an
 /// added series. Replacing a series' lines or removing the series retires its handles, and a
-/// study takes no line. The moved line's tag and title use their own colours.
+/// study takes no line. The moved line's tag and title use their own colours. `price_lines`
+/// lists the current lines in drawing order after each edit, and each handle it returns
+/// resolves through `price_line`.
 #[test]
 fn price_line_handles_change_only_their_own_line() {
     use crate::model::PriceLine;
     use crate::widget::test_frames::{chart, shapes};
     use egui::{Color32, Shape};
 
+    let listed = |chart: &Chart, series| {
+        let lines: Vec<_> = chart
+            .price_lines(series)
+            .map(|(id, line)| (id, line.clone()))
+            .collect();
+        for (id, line) in &lines {
+            assert_eq!(chart.price_line(*id), Some(line));
+        }
+        lines
+    };
     let ctx = egui::Context::default();
     let mut chart = chart(&[100.0], &[110.0, 120.0]);
     chart.config.show_volume = false;
+    assert!(listed(&chart, SeriesId::MAIN).is_empty());
     let kept = PriceLine::new(105.0, Color32::GOLD);
     let kept_id = chart.add_price_line(SeriesId::MAIN, kept.clone()).unwrap();
     let moved = chart
         .add_price_line(SeriesId::MAIN, PriceLine::new(112.0, Color32::RED))
         .unwrap();
+    assert_eq!(
+        listed(&chart, SeriesId::MAIN)
+            .iter()
+            .map(|(id, _)| *id)
+            .collect::<Vec<_>>(),
+        [kept_id, moved]
+    );
     let (fill, text, title) = (
         Color32::from_rgb(10, 20, 30),
         Color32::from_rgb(200, 210, 220),
@@ -598,6 +618,10 @@ fn price_line_handles_change_only_their_own_line() {
     assert!(chart.update_price_line(moved, restyled.clone()));
     assert_eq!(chart.price_line(kept_id), Some(&kept));
     assert_eq!(chart.price_line(moved), Some(&restyled));
+    assert_eq!(
+        listed(&chart, SeriesId::MAIN),
+        [(kept_id, kept.clone()), (moved, restyled.clone())]
+    );
 
     frame(&ctx, &mut chart, 0.0, Vec::new());
     let painted = shapes(&ctx, &mut chart, 0.1, Vec::new());
@@ -621,16 +645,24 @@ fn price_line_handles_change_only_their_own_line() {
     assert!(!chart.remove_price_line(kept_id));
     assert!(!chart.update_price_line(kept_id, kept.clone()));
     assert_eq!(chart.price_line(moved), Some(&restyled));
+    assert_eq!(listed(&chart, SeriesId::MAIN), [(moved, restyled.clone())]);
     chart.set_price_lines(SeriesId::MAIN, vec![kept.clone()]);
     assert_eq!(chart.price_line(moved), None);
+    let reset = listed(&chart, SeriesId::MAIN);
+    assert_eq!(reset.len(), 1);
+    assert_ne!(reset[0].0, moved);
 
     let series = chart.add_series(crate::widget::SeriesOptions::default());
     let line = chart.add_price_line(series, kept.clone()).unwrap();
     assert!(chart.update_price_line(line, restyled.clone()));
     assert_eq!(chart.price_line(line), Some(&restyled));
+    assert_eq!(listed(&chart, series), [(line, restyled.clone())]);
+    assert_eq!(listed(&chart, SeriesId::MAIN), reset);
     assert!(chart.remove_series(series));
     assert_eq!(chart.price_line(line), None);
+    assert!(listed(&chart, series).is_empty());
     let study = chart.add_indicator(Box::new(SMA::new(3)));
+    assert!(listed(&chart, study).is_empty());
     assert_eq!(chart.add_price_line(study, kept), None);
 }
 

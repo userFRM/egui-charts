@@ -572,7 +572,7 @@ impl Chart {
         });
         // A button owns the whole gesture, including a drag that leaves the row. The chart's
         // own response goes back to the caller; the gesture handlers see a hover-only one.
-        let shown =
+        let mut shown =
             shared_plot.map_or_else(|| response.clone(), |plot| response.union(plot.clone()));
         let axis_corner = Rect::from_min_max(
             Pos2::new(
@@ -642,6 +642,46 @@ impl Chart {
                                     }))
                         })
             });
+        let hover_rect = shared_plot.map_or_else(
+            || {
+                Rect::from_min_max(
+                    Pos2::new(
+                        chart_rect.left(),
+                        self.pane_layout
+                            .panes
+                            .iter()
+                            .map(|pane| pane.rect.top())
+                            .fold(chart_rect.top(), f32::min),
+                    ),
+                    Pos2::new(chart_rect.right(), time_axis_top),
+                )
+            },
+            |plot| plot.rect,
+        );
+        let touch_readout_interaction = self.handle_touch_crosshair(
+            ui,
+            shown.id,
+            hover_rect,
+            is_drawing_interaction
+                || eraser_mode
+                || navigation_interaction
+                || realtime_interaction
+                || axis_interaction
+                || self.menu_open
+                || egui::Popup::is_any_open(ui.ctx())
+                || self.state.data().is_empty(),
+        );
+        let touch_readout = super::interaction::touch_crosshair(ui, shown.id);
+        if self.chart_options.tooltip.on_long_press
+            && self.chart_options.tooltip.enabled
+            && touch_readout.touch_input
+            && !is_drawing_interaction
+            && !eraser_mode
+        {
+            // The readout owns a touch hold, including when its delay differs from egui's.
+            response.flags.remove(egui::response::Flags::LONG_TOUCHED);
+            shown.flags.remove(egui::response::Flags::LONG_TOUCHED);
+        }
         if navigation_interaction || realtime_interaction || axis_interaction {
             response = ui.interact(
                 Rect::NOTHING,
@@ -715,7 +755,7 @@ impl Chart {
             price_axis_rect,
             time_axis_rect,
             chart_rect.min.x,
-            is_drawing_interaction,
+            is_drawing_interaction || touch_readout_interaction,
         );
 
         // Apply kinetic scrolling
@@ -787,6 +827,12 @@ impl Chart {
         if self.state.data().is_empty() {
             self.last_hover_bar_idx = None;
             self.last_crosshair = None;
+            self.last_rendered_price_rect = layout.price_rect;
+            self.last_rendered_volume_rect = Rect::NOTHING;
+            let scale = self.state.price_scale();
+            self.last_price_map = scale
+                .map(scale.transform(), chart_rect.top(), chart_rect.bottom())
+                .with_thousands_sep(self.config.thousands_sep);
             self.pump_marks(ui.ctx());
             painter.text(
                 rect.center(),
@@ -795,6 +841,7 @@ impl Chart {
                 egui::FontId::proportional(ui.active_theme().text.title),
                 self.config.text_color,
             );
+            self.record_host_click(ui, &response);
             return response;
         }
 
@@ -2668,27 +2715,32 @@ impl Chart {
                         - 8.0;
             }
         }
-        let hover_rect = shared_plot.map_or_else(
-            || Rect::from_min_max(price_rect.min, Pos2::new(price_rect.right(), time_axis_top)),
-            |plot| plot.rect,
-        );
-        let hover_pos = self
-            .axis_hover
-            .filter(|(_, tag)| {
-                ui.input(|input| {
-                    input.pointer.hover_pos().is_some_and(|pos| {
-                        cfg!(feature = "icons")
-                            && show_price_button
-                            && rendering::axes::crosshair_price_button_rect(*tag).contains(pos)
+        let hover_pos = if touch_readout.touch_input
+            && self.chart_options.tooltip.enabled
+            && self.chart_options.tooltip.on_long_press
+        {
+            touch_readout
+                .position
+                .filter(|pos| hover_rect.contains(*pos))
+        } else {
+            self.axis_hover
+                .filter(|(_, tag)| {
+                    ui.input(|input| {
+                        input.pointer.hover_pos().is_some_and(|pos| {
+                            cfg!(feature = "icons")
+                                && show_price_button
+                                && rendering::axes::crosshair_price_button_rect(*tag).contains(pos)
+                        })
                     })
                 })
-            })
-            .map(|(pos, _)| pos)
-            .or_else(|| {
-                ui.input(|input| input.pointer.hover_pos())
-                    .filter(|pos| hover_rect.contains(*pos) && ui.rect_contains_pointer(hover_rect))
-            })
-            .and_then(|pos| self.crosshair_position(pos, &coords));
+                .map(|(pos, _)| pos)
+                .or_else(|| {
+                    ui.input(|input| input.pointer.hover_pos()).filter(|pos| {
+                        hover_rect.contains(*pos) && ui.rect_contains_pointer(hover_rect)
+                    })
+                })
+        }
+        .and_then(|pos| self.crosshair_position(pos, &coords));
         let mut study_action = None;
         let mut series_action = None;
         let mut legend_bottom = price_rect.top() + 8.0;
@@ -2919,14 +2971,9 @@ impl Chart {
                 let mut tooltip_options = self.chart_options.tooltip.clone();
                 tooltip_options.enabled &= self.main_series_visible;
                 tooltip_options.show_volume &= self.chart_type.supports_volume();
-                let held = ui.input(|input| {
-                    input.pointer.primary_down()
-                        && (!input.any_touches()
-                            || input
-                                .pointer
-                                .press_start_time()
-                                .is_some_and(|start| input.time - start >= 0.5))
-                });
+                let held = touch_readout.position.is_some()
+                    || (!touch_readout.touch_input
+                        && ui.input(|input| input.pointer.primary_down()));
                 let held_values = tooltip_options.enabled
                     && tooltip_options.on_long_press
                     && held
@@ -3040,11 +3087,6 @@ impl Chart {
                     );
                 }
 
-                if tooltip_options.on_long_press
-                    && ui.input(|input| input.any_touches() && input.pointer.primary_down())
-                {
-                    ui.ctx().request_repaint();
-                }
                 if tooltip_options.enabled
                     && (!tooltip_options.on_long_press || held)
                     && !eraser_mode
@@ -3127,6 +3169,9 @@ impl Chart {
         } else {
             // Clear hover bar index when not hovering locally
             self.last_hover_bar_idx = None;
+            if touch_readout.touch_input {
+                self.last_crosshair = None;
+            }
 
             // Render synced crosshair from other charts (if available)
             {

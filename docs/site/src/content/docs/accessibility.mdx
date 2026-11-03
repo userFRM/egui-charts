@@ -1,0 +1,111 @@
+---
+title: Keyboard use and accessibility
+---
+
+The chart supplies keyboard navigation, a visible focus ring and a textual
+series summary. The host supplies the platform accessibility bridge, surrounding
+controls and any additional data table its users need.
+
+## Enter and leave a chart
+
+Use **Tab** to reach the chart and **Shift+Tab** to go backwards. Clicking or
+dragging it also requests focus when shortcuts are enabled; hovering alone does
+not. The focused chart keeps arrow keys for navigation. **Tab** and **Shift+Tab**
+continue through the remaining controls and out of the chart. **Escape** cancels
+the current interaction; it is not a substitute for Tab to leave the chart.
+
+The [presentation scene](theming.mdx#try-presentation-changes) has egui controls
+before the chart in the native example. In the web guide, tab from **Open full
+size** into the canvas, then tab again to return to the guide. Shift+Tab returns
+to the preceding link. The embed reserves Tab for browser navigation, so its
+painted egui controls need pointer input. The full-size link also lets you
+explore without an embedded frame; web hosts needing keyboard-operable settings
+should supply equivalent HTML controls.
+
+| Default key | Chart action |
+| --- | --- |
+| Left / Right | Pan by `pan_amount` bars. |
+| Ctrl+Left / Ctrl+Right (Command on macOS) | Pan by a page. |
+| + or = / -; Ctrl+Up / Ctrl+Down (Command on macOS) | Zoom in / out using `zoom_step`. |
+| Alt+R | Reset the chart view. |
+| Escape | Cancel an active interaction or selection. |
+
+[`KeyboardOptions`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.KeyboardOptions.html)
+is part of
+[`ChartOptions::keyboard`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.ChartOptions.html#structfield.keyboard).
+For a host that owns navigation:
+
+```rust
+use egui_charts::ChartBuilder;
+
+let mut chart = ChartBuilder::new().build();
+let mut options = chart.chart_options().clone();
+options.keyboard.enabled = false;
+chart.set_chart_options(options);
+```
+
+Disable chart shortcuts only when the host provides an accessible alternative.
+For custom keys, edit
+[`shortcuts_mut`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.shortcuts_mut).
+Host dialogs should call
+[`suppress_shortcuts`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.suppress_shortcuts)
+each pass while capturing keyboard input. Application actions such as symbol
+search are returned through
+[`take_shortcut_requests`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.take_shortcut_requests);
+the host must implement them. Keyboard pan and zoom do not provide a full
+keyboard equivalent for placing every drawing or inspecting every historical
+bar.
+
+## Screen reader output
+
+[`Chart::show`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.show)
+reports a `GraphicsDocument` named for the symbol. Its text includes chart type,
+interval when set, bar count and timestamp range, then the hovered bar or latest
+valued bar with OHLC, volume and study readouts. Empty history and whitespace
+have explicit text. The [translation lookup](theming.mdx#translate-the-interface)
+also supplies its names and message templates.
+
+The summary currently uses RFC 3339 UTC timestamps and instrument price
+precision (two decimals when unspecified). It does not mirror the chart's
+display zone or custom price/time/volume formatters. It is a summary node,
+not a navigable accessibility node for each candle. Provide a host data table
+or readout for detailed nonvisual historical inspection.
+
+For a native `eframe` application, enable **eframe's** `accesskit` feature in the
+host's existing dependency to connect egui's accessibility tree to the operating
+system. Enabling chart features alone does not install that bridge. A custom
+egui backend must supply its own accessibility integration; calling
+[`Context::enable_accesskit`](https://docs.rs/egui/0.37.0/egui/struct.Context.html#method.enable_accesskit)
+only enables tree generation.
+
+On the web, the rendered chart is a canvas. The guide's headings, links, source
+and example title are HTML and accessible to browser tools, but the canvas does
+not expose its painted candles or chart summary as an HTML table or ARIA tree.
+Do not assume the native accessibility opt-in makes that content available to a
+browser screen reader. Supply equivalent HTML controls and data readouts in
+the web host, and verify them with its supported browser and screen reader.
+
+## Text size and contrast
+
+Use the guide's theme picker to check light and dark reading. The running
+scene's **High contrast** toggle applies
+[`Theme::high_contrast`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/theme/struct.Theme.html#method.high_contrast)
+only to its chart. Custom colours still need contrast checks, and up/down colour
+alone should not carry information a user needs: retain OHLC text and labels.
+See [host fonts](theming.mdx#fonts-and-images) for glyph coverage and replacement.
+
+For an egui application, use
+[`Context::set_zoom_factor`](https://docs.rs/egui/0.37.0/egui/struct.Context.html#method.set_zoom_factor)
+with `2.0` for a 200% check; `1.0` restores the default. This scales the egui UI,
+including chart text. Browser zoom scales the guide's HTML separately from any
+host-defined chart typography. Allow sufficient chart height and use wrapping
+or scrolling for surrounding controls.
+
+When integrating, check the complete flow at 200% and at a 390 px viewport:
+
+- Read headings, prose, source and scale labels in both themes; source blocks may
+  scroll horizontally, while prose and controls should stay within the viewport.
+- Tab into the example, use arrows to pan, then tab out in both directions
+  without a mouse. Confirm the focus indicator remains visible.
+- In the native host, confirm the chart's name and latest values reach its
+  screen reader; in the web host, confirm the equivalent HTML readout is reachable.

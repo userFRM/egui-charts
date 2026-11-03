@@ -12,9 +12,15 @@ pub(super) struct Spread {
     expression: SymbolExpression,
     id: SeriesId,
     feeds: Vec<Arc<LiveFeed>>,
+    snapshot: Option<Vec<super::live::ComparisonSnapshot>>,
+    replay_time: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl Spread {
+    pub(super) fn loading(&self, chart: &Chart) -> bool {
+        chart.series_order(self.id).is_some() && self.feeds.iter().any(|feed| feed.loading())
+    }
+
     fn new(expression: SymbolExpression, id: SeriesId) -> Self {
         let now = chrono::Utc::now();
         let feeds = expression
@@ -26,12 +32,16 @@ impl Spread {
             expression,
             id,
             feeds,
+            snapshot: None,
+            replay_time: None,
         }
     }
 
     pub(super) fn copy(&self, chart: &mut Chart, source: &Chart) -> Option<Self> {
         Some(Self {
             expression: self.expression.clone(),
+            snapshot: None,
+            replay_time: None,
             id: copy_series(chart, source, self.id)?,
             feeds: self
                 .feeds
@@ -61,6 +71,8 @@ struct SavedOptions {
     color: egui::Color32,
     up_color: egui::Color32,
     down_color: egui::Color32,
+    #[serde(default)]
+    candle_border_width: f32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     baseline_style: Option<egui_charts::model::BaselineStyle>,
     width: f32,
@@ -253,17 +265,48 @@ fn copy_series(chart: &mut Chart, source: &Chart, id: SeriesId) -> Option<Series
 
 pub(super) fn refresh_spreads(chart: &mut Chart, spreads: &mut [Spread], paused: bool) {
     let timeframe = chart.timeframe().unwrap_or(Timeframe::Hour1);
+    let clock = chart.bar_clock();
+    let extended_hours = chart.extended_hours();
+    // Candle replay windows supplied series; market replay leaves host series to the host.
+    let replay_time = chart.replay_driver().and_then(|_| chart.replay_time());
+    let session = if !clock.has_session() {
+        egui_charts::ui::timeframe_toolbar::SessionType::Full24x7
+    } else if extended_hours {
+        egui_charts::ui::timeframe_toolbar::SessionType::ETH
+    } else {
+        egui_charts::ui::timeframe_toolbar::SessionType::RTH
+    };
     for spread in spreads {
         if chart.series_order(spread.id).is_none() {
+            continue;
+        }
+        for feed in &spread.feeds {
+            feed.set_view(session, chart.conversion() == Some("adjusted"));
+            feed.set_paused(paused);
+            feed.advance(chrono::Utc::now());
+        }
+        if spread.loading(chart) {
+            continue;
+        }
+        let key: Vec<_> = spread
+            .feeds
+            .iter()
+            .map(|feed| feed.comparison_snapshot(chart, spread.id))
+            .collect();
+        if spread.snapshot.as_ref() == Some(&key) && spread.replay_time == replay_time {
             continue;
         }
         let histories: Vec<_> = spread
             .feeds
             .iter()
             .map(|feed| {
-                feed.set_paused(paused);
-                feed.advance(chrono::Utc::now());
-                feed.snapshot(timeframe, chart.bar_clock(), chart.extended_hours())
+                let mut bars =
+                    feed.snapshot_before(timeframe, clock.clone(), extended_hours, replay_time);
+                if let Some(time) = replay_time {
+                    let end = bars.partition_point(|bar| bar.time < clock.bar_open(time));
+                    bars.truncate(end);
+                }
+                bars
             })
             .collect();
         let symbols = spread.expression.symbols();
@@ -272,7 +315,32 @@ pub(super) fn refresh_spreads(chart: &mut Chart, spreads: &mut [Spread], paused:
             Some(&histories[at][..])
         };
         if let Ok(bars) = spread.expression.bars(history) {
-            chart.set_data(spread.id, bars);
+            let loaded = chart.bars(spread.id);
+            let tail = loaded.len().saturating_sub(1);
+            if !loaded.is_empty()
+                && (replay_time.is_some() || chart.replay_time().is_none())
+                && bars.len() >= loaded.len()
+                && bars[..tail] == loaded[..tail]
+            {
+                let start = if bars[tail] == loaded[tail] {
+                    tail + 1
+                } else {
+                    tail
+                };
+                for bar in bars.into_iter().skip(start) {
+                    chart.update(spread.id, bar);
+                }
+            } else {
+                chart.set_data(spread.id, bars);
+            }
+            spread.replay_time = replay_time;
+            spread.snapshot = Some(
+                spread
+                    .feeds
+                    .iter()
+                    .map(|feed| feed.comparison_snapshot(chart, spread.id))
+                    .collect(),
+            );
         }
     }
 }
@@ -488,6 +556,7 @@ mod tests {
                 .map(|_| {
                     let id = chart.add_comparison("EURUSD", egui::Color32::BLUE);
                     let feed = LiveFeed::new("EURUSD", now);
+                    super::super::tests::finish_feed(&feed);
                     refresh(&mut chart, id, &feed);
                     assert!(!chart.bars(id).is_empty());
                     (id, feed)
@@ -558,6 +627,187 @@ mod tests {
         }
     }
 
+    /// Paused spreads leave loaded history intact, but trades, view changes and restoration
+    /// still update it. Replay moves window the retained bars without rebuilding the expression.
+    #[test]
+    fn unchanged_spreads_do_not_reload_history() {
+        use egui_charts::data::{MarketEvent, ReplayDriver, ReplayEvent};
+        use egui_charts::model::{BarData, Instrument, Tick};
+        use egui_charts::widget::ChartEvent;
+
+        let mut chart = Chart::new(BarData::new());
+        chart.set_timeframe(Timeframe::Min1);
+        let id = chart.add_comparison("AAPL-MSFT", egui::Color32::BLUE);
+        let now = "2026-10-23T14:30:00Z".parse().unwrap();
+        let mut spreads = vec![Spread {
+            expression: SymbolExpression::parse("AAPL-MSFT").unwrap(),
+            id,
+            feeds: ["AAPL", "MSFT"]
+                .into_iter()
+                .map(|symbol| Arc::new(LiveFeed::new(symbol, now)))
+                .collect(),
+            snapshot: None,
+            replay_time: None,
+        }];
+        for feed in &spreads[0].feeds {
+            super::super::tests::finish_feed(feed);
+        }
+        refresh_spreads(&mut chart, &mut spreads, true);
+        assert!(!chart.bars(id).is_empty());
+        let instrument = Instrument::new("SAMPLE")
+            .with_tick_size(0.01)
+            .with_time_zone(crate::sampledata::us_equity_zone())
+            .with_session(crate::sampledata::us_equity_session());
+        for sessions in [false, true] {
+            chart.set_instrument(sessions.then(|| instrument.clone()));
+            for timeframe in [Timeframe::Min1, Timeframe::Min5] {
+                chart.set_timeframe(timeframe);
+                for extended in [false, true] {
+                    chart.set_extended_hours(extended);
+                    refresh_spreads(&mut chart, &mut spreads, true);
+                    let histories: Vec<_> = spreads[0]
+                        .feeds
+                        .iter()
+                        .map(|feed| feed.snapshot(timeframe, chart.bar_clock(), extended))
+                        .collect();
+                    let expected = spreads[0]
+                        .expression
+                        .bars(|symbol| Some(&histories[usize::from(symbol == "MSFT")][..]))
+                        .unwrap();
+                    assert_eq!(chart.bars(id), expected);
+                    if sessions {
+                        assert!(chart.bars(id).iter().all(|bar| {
+                            crate::sampledata::us_equity_hours().is_open(bar.time, extended)
+                        }));
+                    }
+
+                    chart.drain_events().for_each(drop);
+                    for _ in 0..3 {
+                        refresh_spreads(&mut chart, &mut spreads, true);
+                    }
+                    assert!(
+                        !chart
+                            .drain_events()
+                            .any(|event| matches!(event, ChartEvent::DataLoaded { .. })),
+                        "unchanged spreads must not reload history"
+                    );
+                    for feed in &spreads[0].feeds {
+                        feed.set_paused(false);
+                        feed.advance(feed.now() + chrono::TimeDelta::seconds(2));
+                    }
+                    refresh_spreads(&mut chart, &mut spreads, true);
+                    let last = chart.bars(id).last().unwrap();
+                    let closes: Vec<_> = spreads[0]
+                        .feeds
+                        .iter()
+                        .map(|feed| {
+                            feed.snapshot(timeframe, chart.bar_clock(), extended)
+                                .last()
+                                .unwrap()
+                                .close
+                        })
+                        .collect();
+                    assert!((last.close - (closes[0] - closes[1])).abs() < 1e-9);
+                    chart.set_data(id, Vec::new());
+                    refresh_spreads(&mut chart, &mut spreads, true);
+                    assert!(
+                        !chart.bars(id).is_empty(),
+                        "restore must reload cleared bars"
+                    );
+                }
+            }
+        }
+        for time in [chrono::DateTime::UNIX_EPOCH, spreads[0].feeds[0].now()] {
+            chart.set_replay_time(Some(time));
+            chart.drain_events().for_each(drop);
+            refresh_spreads(&mut chart, &mut spreads, true);
+            chart.drain_events().for_each(drop);
+            refresh_spreads(&mut chart, &mut spreads, true);
+            assert!(
+                !chart
+                    .drain_events()
+                    .any(|event| matches!(event, ChartEvent::DataLoaded { .. })),
+                "a replay window must not repeatedly rebuild its source"
+            );
+        }
+        chart.set_replay_time(None);
+        refresh_spreads(&mut chart, &mut spreads, true);
+        let history = chart.bars(id).to_vec();
+        let events = [now - chrono::TimeDelta::minutes(30), now]
+            .into_iter()
+            .enumerate()
+            .map(|(sequence, time)| {
+                ReplayEvent::new(
+                    "SAMPLE",
+                    time,
+                    sequence as u64,
+                    MarketEvent::Trade(Tick::new(time, 100.0, 1.0, None)),
+                )
+            })
+            .collect();
+        let driver = Arc::new(ReplayDriver::new(events, vec![instrument.clone()]).unwrap());
+        chart.set_market_replay(Some(driver.clone()));
+        chart.set_instrument(Some(instrument));
+        for time in [
+            now - chrono::TimeDelta::minutes(20),
+            now - chrono::TimeDelta::minutes(10),
+            now - chrono::TimeDelta::minutes(30),
+        ] {
+            driver.seek(time);
+            refresh_spreads(&mut chart, &mut spreads, true);
+            let expected: Vec<_> = history
+                .iter()
+                .filter(|bar| {
+                    bar.time + chrono::TimeDelta::minutes(5)
+                        <= time + chrono::TimeDelta::nanoseconds(1)
+                })
+                .cloned()
+                .collect();
+            assert_eq!(
+                chart.bars(id),
+                expected,
+                "market replay must hide future spread bars"
+            );
+            chart.drain_events().for_each(drop);
+            refresh_spreads(&mut chart, &mut spreads, true);
+            assert!(
+                !chart
+                    .drain_events()
+                    .any(|event| matches!(event, ChartEvent::DataLoaded { .. })),
+                "a paused market replay must keep its spread history"
+            );
+        }
+        let trade = Timeframe::Ticks(std::num::NonZeroU64::MIN);
+        let first: Vec<_> = spreads[0]
+            .feeds
+            .iter()
+            .map(|feed| {
+                feed.snapshot(trade, egui_charts::model::BarClock::new(trade), true)[0].clone()
+            })
+            .collect();
+        assert_eq!(first[0].time, first[1].time);
+        chart.set_timeframe(Timeframe::Ticks(std::num::NonZeroU64::new(1000).unwrap()));
+        driver.seek(first[0].time + chrono::TimeDelta::nanoseconds(1));
+        refresh_spreads(&mut chart, &mut spreads, true);
+        assert_eq!(chart.bars(id).len(), 1);
+        let bar = &chart.bars(id)[0];
+        let expected = first[0].close - first[1].close;
+        assert!(
+            [bar.open, bar.high, bar.low, bar.close]
+                .iter()
+                .all(|value| (*value - expected).abs() < 1e-9),
+            "a count bar cannot use executions after the cursor"
+        );
+        chart.set_timeframe(Timeframe::Min5);
+        chart.set_market_replay(None);
+        refresh_spreads(&mut chart, &mut spreads, true);
+        assert_eq!(
+            chart.bars(id),
+            history,
+            "exiting market replay restores the spread"
+        );
+    }
+
     fn listed(app: &DemoApp) -> Vec<&str> {
         app.compare_dialog
             .compared_symbols
@@ -574,6 +824,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx));
         app.handle_comparison(CompareAction::AddSymbol("AAPL".into(), Default::default()));
+        super::super::tests::finish_feed(&app.comparisons[0].2);
         let id = app.comparisons[0].1;
         let colour = |app: &DemoApp, id| {
             app.chart

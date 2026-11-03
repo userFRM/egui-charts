@@ -51,10 +51,16 @@ impl DemoMarket {
     }
 
     /// Keeps retained executions moving even while their panels are hidden.
-    pub(super) fn advance(&mut self, now: DateTime<Utc>) {
-        for feed in self.feeds.values() {
-            feed.advance(now);
-        }
+    pub(super) fn advance(&mut self, now: DateTime<Utc>) -> std::time::Duration {
+        self.feeds
+            .values()
+            .map(|feed| feed.advance(now.max(feed.now())))
+            .min()
+            .unwrap_or(std::time::Duration::MAX)
+    }
+
+    pub(super) fn loading(&self) -> bool {
+        self.feeds.values().any(LiveFeed::loading)
     }
 
     fn source(&mut self, symbol: &str, now: DateTime<Utc>) -> &LiveFeed {
@@ -62,7 +68,7 @@ impl DemoMarket {
             .feeds
             .entry(symbol.to_owned())
             .or_insert_with(|| LiveFeed::generate(symbol, self.start));
-        feed.advance(now);
+        feed.advance(now.max(feed.now()));
         feed
     }
 
@@ -80,7 +86,11 @@ impl DemoMarket {
         {
             return Some(quote.clone());
         }
-        let quote = self.source(symbol, now).quote(now)?;
+        let feed = self.source(symbol, now);
+        if feed.loading() {
+            return None;
+        }
+        let quote = feed.quote(now)?;
         self.quotes.insert(symbol.to_owned(), (now, quote.clone()));
         Some(quote)
     }
@@ -831,6 +841,9 @@ mod tests {
         ctx: &egui::Context,
         events: Vec<egui::Event>,
     ) -> Vec<(String, egui::Rect)> {
+        super::super::tests::finish_feed(&app.live);
+        app.feed_market_panels(ctx);
+        super::super::tests::finish_feed(&app.live);
         app.feed_market_panels(ctx);
         app.trading.poll(ctx, &mut app.toasts);
         let output = ctx.run_ui(
@@ -926,6 +939,7 @@ mod tests {
         app.switch_symbol("EURUSD");
         app.watchlist = WatchlistPanel::new(vec![Watchlist::from_text("Other", "AAPL")]);
         app.watchlist.set_service(app.quotes.clone());
+        super::super::tests::finish_feed(&app.live);
         let before = app.live.quote(app.live.now()).unwrap();
         for _ in 0..4 {
             demo_frame(&mut app, &ctx, vec![]);
@@ -977,10 +991,19 @@ mod tests {
         ] {
             let start = at.parse().unwrap();
             let live = Arc::new(LiveFeed::new("SAMPLE", start));
+            super::super::tests::finish_feed(&live);
             let now = start + TimeDelta::seconds(2);
             live.advance(now);
             live.set_view(egui_charts::ui::timeframe_toolbar::SessionType::RTH, false);
             for symbol in ["MSFT", "BTCUSD"] {
+                if symbol == "MSFT" {
+                    assert!(live.market_quote(symbol, now).is_none());
+                    assert!(
+                        live.loading(),
+                        "panel histories must load in scheduled batches"
+                    );
+                }
+                super::super::tests::finish_feed(&live);
                 let before = live.market_quote(symbol, now).unwrap();
                 live.set_symbol(symbol);
                 let after = live.quote(now).unwrap();
@@ -1041,6 +1064,7 @@ mod tests {
         let price = app.live.quote(now).unwrap().last;
         app.paper.set_price("BTCUSD", price);
         let reference = LiveFeed::new("BTCUSD", now);
+        super::super::tests::finish_feed(&reference);
         reference.set_paused(false);
         let (at, trigger) = (1..=40)
             .find_map(|step| {
@@ -1085,9 +1109,11 @@ mod tests {
                 .any(|toast| toast.message.starts_with("Filled:"))
         );
         app.switch_symbol("MSFT");
+        super::super::tests::finish_feed(&app.live);
         app.watchlist = WatchlistPanel::new(vec![Watchlist::from_text("Other", "AAPL")]);
         app.watchlist.set_service(app.quotes.clone());
         app.live.set_paused(false);
+        super::super::tests::finish_feed(&app.live);
         app.live.advance(at);
         demo_frame(&mut app, &ctx, vec![]);
         assert!(
@@ -1106,6 +1132,7 @@ mod tests {
                 (next != trigger).then_some((time, next))
             })
             .expect("the position price moves again");
+        super::super::tests::finish_feed(&app.live);
         app.live.advance(next_time);
         demo_frame(&mut app, &ctx, vec![]);
         let output = ctx.run_ui(egui::RawInput::default(), |ui| {
@@ -1113,12 +1140,19 @@ mod tests {
         });
         // One unit bought at the trigger has unrealized P&L = current price - trigger.
         let pnl = format!("{:+.2}", next_price - trigger);
-        assert!(
-            output.shapes.iter().any(|shape| matches!(&shape.shape,
-            egui::Shape::Text(text) if text.galley.text().replace(',', "") == pnl)),
-            "the off-chart position must be revalued to {pnl}"
-        );
+        let texts: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().replace(',', "")),
+                _ => None,
+            })
+            .collect();
         output.drop_without_applying_deltas();
+        assert!(
+            texts.contains(&pnl),
+            "the off-chart position must be revalued to {pnl}: {texts:?}"
+        );
         // A known replay close must survive the catalog's unrelated live price sample.
         app.chart.set_data(
             egui_charts::widget::SeriesId::MAIN,
