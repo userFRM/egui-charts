@@ -320,12 +320,12 @@ pub fn calendar_history(
         .min(
             daily
                 .get(index + 1)
-                .map_or(DateTime::MAX_UTC, |next| next.time),
+                .map_or(DateTime::<Utc>::MAX_UTC, |next| next.time),
         )
         .min(
             minutes
                 .first()
-                .map_or(DateTime::MAX_UTC, |minute| minute.time),
+                .map_or(DateTime::<Utc>::MAX_UTC, |minute| minute.time),
         );
         let span = (end - bar.time).num_milliseconds();
         if span <= 0 {
