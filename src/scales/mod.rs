@@ -36,7 +36,7 @@ pub use pricescale_marks::{PriceMark, PriceMarkGenerator, PriceMarkGeneratorConf
 pub use study_format::StudyFormat;
 pub use time_formatter::{
     CustomTimeFormatter, DefaultTimeFormatter, LocaleTimeFormatter, RelativeTimeFormatter,
-    TimeFormatter, TimeFormatterBuilder, TimezoneMode,
+    TickMarkContext, TimeFormatter, TimeFormatterBuilder, TimezoneMode,
 };
 pub use timescale_marks::{
     TickMark, TickMarkGenerator, TickMarkGeneratorConfig, TickMarkType, TickMarkWeight,
