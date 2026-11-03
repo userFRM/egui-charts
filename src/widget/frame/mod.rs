@@ -787,6 +787,12 @@ impl Chart {
         if self.state.data().is_empty() {
             self.last_hover_bar_idx = None;
             self.last_crosshair = None;
+            self.last_rendered_price_rect = layout.price_rect;
+            self.last_rendered_volume_rect = Rect::NOTHING;
+            let scale = self.state.price_scale();
+            self.last_price_map = scale
+                .map(scale.transform(), chart_rect.top(), chart_rect.bottom())
+                .with_thousands_sep(self.config.thousands_sep);
             self.pump_marks(ui.ctx());
             painter.text(
                 rect.center(),
@@ -795,6 +801,7 @@ impl Chart {
                 egui::FontId::proportional(ui.active_theme().text.title),
                 self.config.text_color,
             );
+            self.record_host_click(ui, &response);
             return response;
         }
 
