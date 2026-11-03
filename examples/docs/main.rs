@@ -34,6 +34,10 @@ impl ExampleApp {
             "series-heikin" => scenes::chart_types::heikin(),
             "series-renko" => scenes::chart_types::renko(),
             "series-point-and-figure" => scenes::chart_types::point_and_figure(),
+            "volatility-smile" => scenes::extensions::volatility_smile(),
+            "yield-curve" => scenes::extensions::yield_curve(),
+            "primitives" => scenes::extensions::primitives(),
+            "custom-series" => scenes::extensions::custom_series(),
             "price-scale" => {
                 let mut chart = first_chart::first_chart();
                 scene = Scene::PriceScale(scenes::price_scale::PriceScale::new(&mut chart));
@@ -190,6 +194,10 @@ mod tests {
             "price-scale",
             "time-scale",
             "panes",
+            "volatility-smile",
+            "yield-curve",
+            "primitives",
+            "custom-series",
         ] {
             assert!(ExampleApp::new(name).is_some(), "{name}");
         }

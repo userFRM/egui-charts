@@ -1,0 +1,113 @@
+---
+title: Custom horizontal scales
+---
+
+import Example from '../../components/Example.astro';
+import source from '../../../../../examples/docs/scenes/extensions.rs?raw';
+
+The horizontal axis can represent option strikes, bond maturities or another
+ordered key. The chart still stores a timestamp in each
+[`Bar::time`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.Bar.html#structfield.time)
+and places bars in logical slots. A
+[`HorizontalScale`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/trait.HorizontalScale.html)
+chooses tick marks and formats horizontal labels; it does not change the slot
+spacing or the vertical price scale.
+
+## Encode numeric keys
+
+[`key_time(key)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/fn.key_time.html)
+encodes a number as seconds from the Unix epoch, rounded to nanoseconds.
+[`time_key(time)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/fn.time_key.html)
+decodes it. For example, strike `4500.0` becomes epoch plus 4,500 seconds;
+`30.0` months becomes epoch plus 30 seconds. These are ordering keys, not market
+timestamps. Check the returned `Option`: non-finite keys and values outside
+roughly ±9.2 billion are rejected. Choose units and precision that keep distinct
+keys distinct after nanosecond rounding, and supply bars in ascending key order.
+
+Use the same encoding for every series, whitespace bar and
+[`Marker::new`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.Marker.html#method.new)
+on that chart. A
+[`PriceLine`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.PriceLine.html)
+still refers to a **vertical value**, such as implied volatility in percent.
+Do not synchronize encoded keys with a chronological chart as if they were UTC
+market times; share a domain key only with charts using the same encoding.
+
+## Option strikes
+
+Install a scale with
+[`Chart::set_horizontal_scale(Some(Arc::new(scale)))`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_horizontal_scale).
+[`PriceHorizontalScale::precision`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.PriceHorizontalScale.html#structfield.precision)
+controls decimals on the axis and crosshair. The scale prioritizes round strikes
+when labels would overlap. Passing `None` restores the chart's time formatter.
+
+The generated smiles have strikes from 3,800 through 5,200 in steps of 25.
+Because every step is equal, one slot per strike gives proportional spacing.
+The **ATM** marker is anchored to strike 4,500; its horizontal price line marks
+the corresponding 30-day volatility. The curves are illustrative formulas,
+not an option pricing model or a source of market data.
+
+<Example scene="volatility-smile" title="Volatility smiles by option strike"
+  task="Hover the two expiries: the bottom label is a strike and the vertical values are IV in percent."
+  code={source.slice(source.indexOf('/// Compare'), source.indexOf('/// Space')).trim()} />
+
+## Maturities and whitespace slots
+
+[`MaturityScale`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.MaturityScale.html)
+uses **months** as its numeric unit. It formats `3` as `3M`, `30` as `2Y6M`,
+and `360` as `30Y`. Its defaults start at zero, put one month between slots,
+and reserve at least 120 months.
+
+Bars at maturities `1`, `12` and `360` alone would be three equally spaced
+slots. To make the distances proportional to maturity, give the **main series**
+[`MaturityScale::whitespace(360.0)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.MaturityScale.html#method.whitespace)
+and add the observed curves as separate line series with
+[`add_series`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.add_series)
+and [`set_data`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_data).
+The main series supplies 361 monthly slots, zero through 360 inclusive, without
+inventing yields. The curves' keys map onto those slots. Twelve months then
+span twelve slot widths; 360 months span thirty times that distance from zero.
+
+<Example scene="yield-curve" title="Yield curves with monthly whitespace"
+  task="Zoom into the short end, then zoom out: one year and thirty years retain their relative horizontal distances."
+  code={source.slice(source.indexOf('/// Space'), source.indexOf('/// Shade')).trim()} />
+
+[`base_resolution`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.MaturityScale.html#structfield.base_resolution)
+is the months between slots (zero is treated as one),
+[`start`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.MaturityScale.html#structfield.start)
+is the first maturity, and
+[`minimum_range`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.MaturityScale.html#structfield.minimum_range)
+is the minimum endpoint in months. Choose a grid covering the observations.
+For example, quarterly slots with `start: 0`, `base_resolution: 3` and
+`minimum_range: 12` contain `0, 3, 6, 9, 12`; `whitespace(20.0)` ends at 18,
+the last grid point no greater than 20. A finite requested endpoint is capped
+at 12,000 months before comparison with `minimum_range`. A non-finite request
+uses the minimum. The minimum itself is not capped, so keep host ranges bounded.
+When new data extends the curve, extend the main whitespace history too.
+
+For other domains, build a uniform main grid with
+[`Bar::whitespace`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.Bar.html#method.whitespace).
+An irregular strike list needs the same treatment if horizontal distances should
+represent strike differences. See the [time-scale guide](time-scale.mdx) for
+logical coordinates, fitting and screen conversions.
+
+## Implement another label policy
+
+Implement the two members of `HorizontalScale` and pass it in an `Arc`:
+
+- [`tick_marks`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/trait.HorizontalScale.html#tymethod.tick_marks)
+  receives ordered `(key, index)` points and a
+  [`TickMarkLayout`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.TickMarkLayout.html).
+  Return [`TickMark`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/struct.TickMark.html)
+  values at keys to label. Points include extrapolated whitespace; before-history
+  points can shift every supplied index, so use their order and differences,
+  rather than treating an index as a stable position in stored data. The renderer
+  places marks at their keys and skips overlapping labels.
+- [`format_crosshair`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/trait.HorizontalScale.html#tymethod.format_crosshair)
+  formats a key for the horizontal crosshair label. `bar_seconds` is useful for
+  clock precision; a numeric domain can ignore it.
+
+The trait requires `Send + Sync`. It supplies labels, while your application
+supplies keys and values. The scene setups are adapted from the native
+[volatility smile](https://github.com/userFRM/egui-charts/blob/main/examples/volatility_smile.rs)
+and [yield curve](https://github.com/userFRM/egui-charts/blob/main/examples/yield_curve.rs)
+examples; their native window startup stays in those examples.
