@@ -50,8 +50,9 @@ fn close_magnet_uses_visible_series_scales_for_line_label_and_event() {
         vec![IndicatorValue::Single(49.0); bars.len()]
     })));
     let pane = chart.add_pane();
-    // (chart type, main visible, added visible, added valued, added in another pane, second visible,
-    //  reverse added-series order, pointer in main-price units, expected main-price readout).
+    // (chart type, main visible, added visible, added valued, added in another pane,
+    //  second visible, reverse added-series order, pointer in main-price units,
+    //  expected main-price readout).
     for (step, case) in [
         (Candles, true, true, true, false, false, false, 49.0, 50.0),
         (Candles, true, false, true, false, false, false, 49.0, 75.0),
