@@ -755,14 +755,15 @@ mod tests {
                         }
                         second.lock().unwrap()[0].1.pass = PrimitivePass::Above;
                     }
-                    5 => second.lock().unwrap()[0].1.pass = PrimitivePass::Below,
-                    6 => pos.y += 8.0,
+                    5 => {
+                        second.lock().unwrap()[0].1.pass = PrimitivePass::Below;
+                        objects.lock().unwrap()[1].1.pass = PrimitivePass::Below;
+                    }
+                    6 => {
+                        pos.y += 8.0;
+                        objects.lock().unwrap()[1].1.pass = PrimitivePass::Above;
+                    }
                     _ => {}
-                }
-                if step == 5 {
-                    objects.lock().unwrap()[1].1.pass = PrimitivePass::Below;
-                } else if step == 6 {
-                    objects.lock().unwrap()[1].1.pass = PrimitivePass::Above;
                 }
                 chart.drain_events().for_each(drop);
                 let time = 1.0 + step as f64;
