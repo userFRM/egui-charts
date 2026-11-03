@@ -26,6 +26,112 @@ fn bars(prices: &[f64]) -> Vec<Bar> {
         .collect()
 }
 
+/// Added candles keep independent body, wick and inside-border colours in either pane.
+/// A zero width suppresses the border even when the bar supplies its colour.
+#[test]
+fn added_candle_borders_preserve_per_bar_colours_and_body_bounds() {
+    use crate::model::BarColors;
+
+    let mut legacy = serde_json::to_value(SeriesOptions::default()).unwrap();
+    legacy
+        .as_object_mut()
+        .unwrap()
+        .remove("candle_border_width");
+    assert_eq!(
+        serde_json::from_value::<SeriesOptions>(legacy)
+            .unwrap()
+            .candle_border_width,
+        0.0
+    );
+    for own_pane in [false, true] {
+        let ctx = egui::Context::default();
+        let mut chart = Chart::new(BarData::from_bars(bars(&[10.0, 20.0])));
+        let colours = [
+            [Color32::GREEN, Color32::BLUE, Color32::MAGENTA],
+            [Color32::RED, Color32::CYAN, Color32::GOLD],
+        ];
+        let data = bars(&[20.0, 10.0])
+            .into_iter()
+            .zip(colours)
+            .map(|(mut bar, [body, wick, border])| {
+                bar.open = 30.0 - bar.close;
+                bar.high = 25.0;
+                bar.low = 5.0;
+                bar.colors = Some(Box::new(BarColors {
+                    color: Some(body),
+                    wick: Some(wick),
+                    border: Some(border),
+                    ..Default::default()
+                }));
+                bar
+            })
+            .collect();
+        let id = chart.add_series(SeriesOptions {
+            chart_type: ChartType::Candles,
+            ..Default::default()
+        });
+        chart.set_data(id, data);
+        if own_pane {
+            let pane = chart.add_pane();
+            assert!(chart.move_series_to_pane(id, pane));
+        }
+        for (at, width) in [2.0, 0.0, -1.0, f32::NAN, f32::INFINITY]
+            .into_iter()
+            .enumerate()
+        {
+            let mut options = chart.series().next().unwrap().1.clone();
+            options.candle_border_width = width;
+            assert!(chart.set_series_options(id, options));
+            let painted =
+                crate::widget::test_frames::shapes(&ctx, &mut chart, at as f64 * 0.1, vec![]);
+            let map = chart.series_price_map(id).unwrap();
+            let body_width = chart.state.time_scale().bar_spacing() * chart.config.candle_width;
+            for (index, [body, wick, border]) in colours.into_iter().enumerate() {
+                let x = chart.index_to_x(index as f64).unwrap();
+                // Both 10 -> 20 and 20 -> 10 occupy the same price interval.
+                let expected = Rect::from_min_max(
+                    egui::pos2(x - body_width / 2.0, map.price_to_y(20.0)),
+                    egui::pos2(x + body_width / 2.0, map.price_to_y(10.0)),
+                );
+                assert!(
+                    painted.iter().any(|shape| matches!(shape,
+                        egui::Shape::Rect(rect) if rect.fill == body && rect.rect == expected
+                    )),
+                    "pane={own_pane}, width={width}: body {index}"
+                );
+                assert!(
+                    painted.iter().any(|shape| matches!(shape,
+                        egui::Shape::LineSegment { points, stroke }
+                            if stroke.color == wick && stroke.width == chart.config.wick_width
+                                && *points == [
+                                    egui::pos2(x, map.price_to_y(25.0)),
+                                    egui::pos2(x, map.price_to_y(5.0)),
+                                ]
+                    )),
+                    "pane={own_pane}, width={width}: wick {index}"
+                );
+                let borders: Vec<_> = painted
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        egui::Shape::Rect(rect) if rect.stroke.color == border => Some(rect),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    borders.len(),
+                    usize::from(width.is_finite() && width > 0.0),
+                    "pane={own_pane}, width={width}: border {index}"
+                );
+                for rect in borders {
+                    assert_eq!(rect.rect, expected);
+                    assert_eq!(rect.stroke.width, width);
+                    assert_eq!(rect.stroke_kind, egui::StrokeKind::Inside);
+                }
+            }
+        }
+    }
+}
+
 /// Saved display formats label raw units on shared and independent axes without transforming
 /// the data. A quarter-unit movement rounds 12.62 to 12.50, and 1500 / 1000 is 1.50K.
 #[test]

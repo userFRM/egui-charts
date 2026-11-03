@@ -3,6 +3,8 @@
 //! Time charts give each bar one ordinal slot. Numeric scales place keys in proportion to
 //! their values, without placeholder bars. The host encodes each numeric key with [`key_time`];
 //! [`PriceHorizontalScale`] and [`MaturityScale`] label the axis and crosshair from it.
+//! [`CustomHorizontalScale`] accepts ordered host keys directly, including categories and
+//! structured keys, and keeps their internal chart identities out of the host's data model.
 
 use super::time_formatter::TimeFormatter;
 use super::timescale_marks::{
@@ -11,6 +13,123 @@ use super::timescale_marks::{
 };
 use crate::model::Bar;
 use chrono::{DateTime, Duration, Utc};
+
+/// A domain of host keys with equally spaced ranks, ordered by [`Ord`] and labelled by a host
+/// formatter. An enum's declaration order can define category order; a struct can implement its
+/// own order.
+/// Equal keys share one identity, regardless of their labels. Duplicate domain entries are
+/// removed. Series replacements keep the last bar of a repeated key and live updates replace it.
+///
+/// Share the same domain across every series and annotation on a chart. The domain is immutable:
+/// include future categories before streaming values, or rebuild it and replace the bars and
+/// annotations together when the domain changes. Unknown keys return `None`; whitespace outside
+/// the domain has no label. Missing categories retain their rank's space without placeholder
+/// bars; their annotations interpolate between loaded neighbours.
+///
+/// [`Self::value`] and, with `widget`, `Self::marker` accept keys directly. [`Self::time`] is
+/// the bridge for OHLC bars, drawing timestamps and primitive axis labels; it is an internal
+/// identity, not a date to display or persist separately from this domain. [`Self::key`] recovers
+/// the original key from a bar or pointer event. `Chart::set_horizontal_scale` installs the domain.
+///
+/// ```
+/// use egui_charts::scales::CustomHorizontalScale;
+///
+/// #[derive(PartialEq, Eq, PartialOrd, Ord)]
+/// enum Phase { Open, Auction, Close }
+/// let scale = CustomHorizontalScale::new(
+///     [Phase::Close, Phase::Open, Phase::Auction],
+///     |key| match key {
+///         Phase::Open => "Open", Phase::Auction => "Auction", Phase::Close => "Close",
+///     }.to_owned(),
+/// );
+/// let bar = scale.value(&Phase::Auction, 103.0).unwrap();
+/// assert!(scale.key(bar.time) == Some(&Phase::Auction));
+/// ```
+pub struct CustomHorizontalScale<K> {
+    keys: Vec<K>,
+    format: Box<dyn Fn(&K) -> String + Send + Sync>,
+}
+
+impl<K: Ord> CustomHorizontalScale<K> {
+    /// Builds a domain sorted by key, with one entry per distinct key. Formatting never changes
+    /// ordering: distinct keys may have the same label.
+    pub fn new(
+        keys: impl IntoIterator<Item = K>,
+        format: impl Fn(&K) -> String + Send + Sync + 'static,
+    ) -> Self {
+        let mut keys: Vec<_> = keys.into_iter().collect();
+        keys.sort();
+        keys.dedup();
+        Self {
+            keys,
+            format: Box::new(format),
+        }
+    }
+
+    /// The internal chart identity of a key, or `None` for an unknown key. Use this for APIs
+    /// that still take a timestamp; hosts do not need to encode keys or manufacture dates.
+    pub fn time(&self, key: &K) -> Option<DateTime<Utc>> {
+        let index = self.keys.binary_search(key).ok()?;
+        DateTime::from_timestamp(index.try_into().ok()?, 0)
+    }
+
+    /// The host key of an exact chart identity, or `None` for an interpolated or unknown one.
+    pub fn key(&self, time: DateTime<Utc>) -> Option<&K> {
+        if time.timestamp_subsec_nanos() != 0 {
+            return None;
+        }
+        self.keys.get(usize::try_from(time.timestamp()).ok()?)
+    }
+
+    /// A single-value bar at `key`, suitable for line, area, baseline and column series.
+    /// Returns `None` for an unknown key. Stream it through `Chart::update` as any other bar.
+    pub fn value(&self, key: &K, value: f64) -> Option<Bar> {
+        Some(Bar::from_value(self.time(key)?, value))
+    }
+
+    /// A marker at `key`, with the normal marker defaults, or `None` for an unknown key.
+    #[cfg(feature = "widget")]
+    pub fn marker(&self, key: &K) -> Option<crate::model::Marker> {
+        Some(crate::model::Marker::new(self.time(key)?))
+    }
+}
+
+impl<K: Ord + Send + Sync> HorizontalScale for CustomHorizontalScale<K> {
+    fn is_numeric(&self) -> bool {
+        // Internal identities are ranks, so gaps retain missing categories without time rules.
+        true
+    }
+
+    fn tick_marks(
+        &self,
+        points: &[(DateTime<Utc>, usize)],
+        layout: &TickMarkLayout,
+    ) -> Vec<TickMark> {
+        let marks = points
+            .iter()
+            .filter_map(|&(time, index)| {
+                Some(TickMark {
+                    time,
+                    index,
+                    label: (self.format)(self.key(time)?),
+                    mark_type: TickMarkType::Time,
+                    weight: TickMarkWeight::new(1),
+                    bold: false,
+                })
+            })
+            .collect();
+        keep_spaced_by(
+            marks,
+            f64::from(layout.min_spacing / layout.bar_spacing),
+            layout.uniform_distribution,
+            |mark| time_key(mark.time),
+        )
+    }
+
+    fn format_crosshair(&self, key: DateTime<Utc>, _bar_seconds: i64) -> String {
+        self.key(key).map_or_else(String::new, &self.format)
+    }
+}
 
 /// Where the tick marks of a horizontal axis are laid out.
 #[derive(Debug, Clone, Copy, PartialEq)]
