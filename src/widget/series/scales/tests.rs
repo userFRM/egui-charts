@@ -1163,6 +1163,54 @@ fn series_scales_fit_visible_members_and_reserve_their_axes() {
         chart.state.price_scale_mut().reset();
         frame(&ctx, &mut chart, 0.2, vec![]);
         assert!(chart.state.price_scale().range().max < 200.0);
+        for id in [first, second] {
+            let idx = chart
+                .study_ids
+                .iter()
+                .position(|study| *study == id)
+                .unwrap();
+            let rendered = chart
+                .get_rendered_indicator_panes()
+                .iter()
+                .find(|rendered| rendered.indicator_idx == idx)
+                .unwrap();
+            assert_eq!(
+                chart.series_price_map(id).unwrap().range(),
+                rendered.mapping.price.range()
+            );
+        }
+        let host = chart.add_series(SeriesOptions {
+            scale: key,
+            ..Default::default()
+        });
+        chart.set_data(host, bars(&[220.0, 280.0]));
+        assert!(chart.move_series_to_pane(host, pane));
+        chart.set_series_formatter(
+            host,
+            Some(std::sync::Arc::new(
+                crate::scales::CustomPriceFormatter::new(|value| format!("b{value:.0}")),
+            )),
+        );
+        let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 0.25, vec![]);
+        if !matches!(key, SeriesScale::Overlay(_)) {
+            let plot = chart.get_rendered_price_rect();
+            assert!(
+                painted.iter().any(|shape| matches!(shape,
+                    egui::Shape::Text(text) if text.pos.y > plot.bottom()
+                        && (text.pos.x < plot.left() || text.pos.x > plot.right())
+                        && text.galley.text().starts_with('b') && text.galley.text() != "b280"
+                )),
+                "the bar series owns shared ticks as well as its last-value tag"
+            );
+        }
+        assert_eq!(
+            chart.series_price_map(first).unwrap().range(),
+            chart.series_price_scale(host).unwrap().range()
+        );
+        assert!(
+            chart.series_axis_keys().is_empty(),
+            "secondary axes stay out of the price pane"
+        );
         if key == SeriesScale::Left {
             assert!(chart.set_indicator_scale(
                 first,
@@ -1355,6 +1403,242 @@ fn series_move_between_panes_with_their_chart_type_and_scale() {
             )),
             "study axis settings must preserve comparison legend values"
         );
+    }
+}
+
+/// Secondary panes keep assigned ranges, axes and hit positions local through moves and saves.
+#[test]
+fn secondary_pane_assignments_keep_ranges_axes_and_queries_local() {
+    use crate::widget::ChartElementId;
+    use egui::{Event, Modifiers, PointerButton, Shape};
+
+    let history = |values: [f64; 2]| {
+        bars(
+            &values
+                .into_iter()
+                .flat_map(|value| [value; 15])
+                .collect::<Vec<_>>(),
+        )
+    };
+    let ctx = egui::Context::default();
+    let mut chart = Chart::new(BarData::from_bars(bars(&[100.0; 30])));
+    chart.config.show_volume = false;
+    chart.chart_options.hovered_series_on_top = false;
+    let pane = chart.add_pane();
+    let other = chart.add_pane();
+    let mut ids = Vec::new();
+    for (key, values, caption) in [
+        (SeriesScale::Left, [10.0, 20.0], "small"),
+        (SeriesScale::Right, [1000.0, 2000.0], "large"),
+        (SeriesScale::Overlay(7), [300.0, 600.0], "hidden"),
+        (SeriesScale::Left, [50.0, 60.0], "other"),
+    ] {
+        let id = chart.add_series(SeriesOptions {
+            name: caption.into(),
+            scale: key,
+            ..Default::default()
+        });
+        chart.set_data(id, history(values));
+        chart.set_series_formatter(
+            id,
+            Some(std::sync::Arc::new(
+                crate::scales::CustomPriceFormatter::new(move |value| {
+                    format!("{caption}:{value:.0}")
+                }),
+            )),
+        );
+        assert!(chart.move_series_to_pane(id, if ids.len() == 3 { other } else { pane }));
+        ids.push(id);
+    }
+    let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 0.0, vec![]);
+    // Each data span gains 10% on either side: 10..20 becomes 9..21.
+    for (&id, (low, high)) in
+        ids.iter()
+            .zip([(9.0, 21.0), (900.0, 2100.0), (270.0, 630.0), (49.0, 61.0)])
+    {
+        let range = chart.series_price_scale(id).unwrap().range();
+        assert!(
+            (range.min - low).abs() < 1e-9 && (range.max - high).abs() < 1e-9,
+            "{id:?}: {range:?}"
+        );
+    }
+    let plot = chart.get_rendered_price_rect();
+    for (id, prefix, left) in [(ids[0], "small:", true), (ids[1], "large:", false)] {
+        let map = chart.series_price_map(id).unwrap();
+        assert!(painted.iter().any(|shape| matches!(shape, Shape::Text(text)
+            if text.pos.y > plot.bottom() && text.pos.y < map.price_to_y(map.transform().to_price(map.range().min))
+                && text.galley.text().starts_with(prefix)
+                && if left { text.pos.x < plot.left() } else { text.pos.x > plot.right() }
+        )), "{prefix} axis");
+    }
+    assert!(
+        !painted.iter().any(|shape| matches!(shape, Shape::Text(text)
+            if text.pos.x > plot.right() && text.galley.text().starts_with("hidden:")
+        ))
+    );
+
+    for (id, precision, min_move) in [(ids[0], 3, 0.001), (ids[1], 1, 0.1), (ids[3], 2, 0.01)] {
+        chart.series_style_mut(id).unwrap().display_format = Some(SeriesDisplayFormat {
+            kind: SeriesFormat::Price,
+            precision,
+            min_move,
+        });
+    }
+    assert_eq!(
+        chart.series_price_map(ids[0]).unwrap().price_precision(),
+        Some(3)
+    );
+    assert_eq!(
+        chart.series_price_map(ids[1]).unwrap().price_precision(),
+        Some(1)
+    );
+
+    chart
+        .series_price_scale_mut(ids[0])
+        .unwrap()
+        .set_range(0.0, 40.0);
+    frame(&ctx, &mut chart, 0.1, vec![]);
+    let map = chart.series_price_map(ids[0]).unwrap();
+    // 20 is halfway through 0..40, so both conversions must reach the pane's midpoint.
+    let panel = chart
+        .pane_layout
+        .panes
+        .iter()
+        .find(|item| item.id == pane)
+        .unwrap()
+        .rect;
+    assert!((map.price_to_y(20.0) - panel.center().y).abs() < 1e-4);
+    assert!((map.y_to_price(panel.center().y) - 20.0).abs() < 1e-4);
+    let pos = Pos2::new(chart.get_chart_mapping().idx_to_x(20), map.price_to_y(20.0));
+    for (step, pressed) in [None, Some(true), Some(false)].into_iter().enumerate() {
+        let mut events = vec![Event::PointerMoved(pos)];
+        if let Some(pressed) = pressed {
+            events.push(Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            });
+        }
+        frame(&ctx, &mut chart, 0.2 + step as f64 * 0.1, events);
+    }
+    assert_eq!(
+        chart.selected_element(),
+        Some(ChartElementId::Series(ids[0]))
+    );
+    assert!(
+        chart.drain_events().any(|event| matches!(event,
+            crate::widget::ChartEvent::CrosshairMoved(Some(point))
+                if point.series == ids[0] && (point.price - 20.0).abs() < 1e-4
+        )),
+        "pointer values use their owner's assigned map"
+    );
+    assert!(chart.move_series_to_pane(ids[0], other));
+    frame(&ctx, &mut chart, 0.6, vec![]);
+    assert!(!chart.series_price_scale(ids[0]).unwrap().is_manual());
+    assert_eq!(
+        chart.series_price_map(ids[0]).unwrap().price_precision(),
+        Some(2)
+    );
+    assert_eq!(
+        chart.series_price_scale(ids[0]).unwrap().range(),
+        chart.series_price_scale(ids[3]).unwrap().range()
+    );
+    chart
+        .series_price_scale_mut(ids[0])
+        .unwrap()
+        .set_range(-10.0, 90.0);
+    assert!(chart.move_series_to_pane(ids[0], pane));
+    assert_eq!(
+        chart.series_price_map(ids[0]).unwrap().price_precision(),
+        Some(3)
+    );
+    assert_eq!(
+        chart.series_price_scale(ids[0]).unwrap().range(),
+        crate::scales::PriceRange::new(0.0, 40.0)
+    );
+
+    #[cfg(feature = "ui")]
+    {
+        chart.add_indicator(Box::new(crate::studies::RSI::new(100)));
+        frame(&ctx, &mut chart, 0.7, vec![Event::PointerGone]);
+        let snapshot =
+            serde_json::from_str(&serde_json::to_string(&chart.snapshot().unwrap()).unwrap())
+                .unwrap();
+        chart.restore(&snapshot).unwrap();
+        for (id, values) in
+            ids.iter_mut()
+                .zip([[10.0, 20.0], [1000.0, 2000.0], [300.0, 600.0], [50.0, 60.0]])
+        {
+            *id = chart.restored_series_id(id.0).unwrap();
+            chart.set_data(*id, history(values));
+        }
+        frame(&ctx, &mut chart, 1.0, vec![]);
+        assert_eq!(
+            chart.series_price_scale(ids[0]).unwrap().range(),
+            crate::scales::PriceRange::new(0.0, 40.0)
+        );
+        assert_eq!(
+            chart.series_price_scale(ids[3]).unwrap().range(),
+            crate::scales::PriceRange::new(-10.0, 90.0)
+        );
+        assert_eq!(
+            chart.series_price_scale(ids[1]).unwrap().range(),
+            crate::scales::PriceRange::new(900.0, 2100.0)
+        );
+        assert_eq!(
+            chart.series_price_scale(ids[2]).unwrap().range(),
+            crate::scales::PriceRange::new(270.0, 630.0)
+        );
+    }
+    chart.reset_chart_view();
+    for id in ids {
+        assert!(!chart.series_price_scale(id).unwrap().is_manual());
+    }
+}
+
+/// A secondary pane's own scale follows the price axis settings: it moves to the left axis
+/// when only that one is shown and draws no labels when both are hidden.
+#[test]
+fn secondary_pane_scale_follows_price_axis_visibility() {
+    for (right, left, side) in [
+        (true, false, Some(false)),
+        (false, true, Some(true)),
+        (false, false, None),
+    ] {
+        let ctx = egui::Context::default();
+        let mut chart = Chart::new(BarData::from_bars(bars(&[100.0; 30])));
+        chart.config.show_volume = false;
+        chart.config.show_right_axis = right;
+        chart.config.show_left_axis = left;
+        let pane = chart.add_pane();
+        let id = chart.add_series(SeriesOptions::default());
+        chart.set_data(id, bars(&[10.0; 30]));
+        chart.set_series_formatter(
+            id,
+            Some(std::sync::Arc::new(
+                crate::scales::CustomPriceFormatter::new(|value| format!("pane:{value:.0}")),
+            )),
+        );
+        assert!(chart.move_series_to_pane(id, pane));
+        let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 0.0, vec![]);
+        let plot = chart.get_rendered_price_rect();
+        let sides: Vec<_> = painted
+            .iter()
+            .filter_map(|shape| match shape {
+                egui::Shape::Text(text) if text.galley.text().starts_with("pane:") => {
+                    Some(text.pos.x < plot.left())
+                }
+                _ => None,
+            })
+            .collect();
+        match side {
+            Some(left) => assert!(
+                !sides.is_empty() && sides.iter().all(|side| *side == left),
+                "right {right}, left {left}: {sides:?}"
+            ),
+            None => assert!(sides.is_empty(), "hidden axes: {sides:?}"),
+        }
     }
 }
 
