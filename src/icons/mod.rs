@@ -373,6 +373,8 @@ pub mod icons {
     pub const FULLSCREEN: Icon = crate::icon_from_path!("ui/fullscreen.svg");
     /// Theme toggle SVG icon.
     pub const THEME_TOGGLE: Icon = crate::icon_from_path!("ui/theme-toggle.svg");
+    /// Horizontal liquidity bands with varying intensity across time and price.
+    pub const LIQUIDITY_HEATMAP: Icon = crate::icon_from_path!("ui/liquidity-heatmap.svg");
     /// Quick search SVG icon.
     pub const QUICK_SEARCH: Icon = crate::icon_from_path!("ui/search.svg");
     /// Magnifier with a lightning bolt for Quick Search, the command search.

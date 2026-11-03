@@ -49,22 +49,18 @@ pub(super) fn selected_theme(
 
 impl DemoApp {
     pub(super) fn show_appearance_controls(&mut self, ui: &mut egui::Ui) {
-        egui::Popup::menu(&ui.button("Appearance"))
-            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-            .show(|ui| {
-                let previous = self.theme_choice.clone();
-                ui.radio_value(&mut self.theme_choice, None, "System");
-                for (name, _) in egui_charts::theme::presets() {
-                    ui.radio_value(
-                        &mut self.theme_choice,
-                        Some(name.into()),
-                        appearance_label(name),
-                    );
-                }
-                if self.theme_choice != previous {
-                    self.update_theme(ui.ctx());
-                }
-            });
+        let previous = self.theme_choice.clone();
+        ui.radio_value(&mut self.theme_choice, None, "System");
+        for (name, _) in egui_charts::theme::presets() {
+            ui.radio_value(
+                &mut self.theme_choice,
+                Some(name.into()),
+                appearance_label(name),
+            );
+        }
+        if self.theme_choice != previous {
+            self.update_theme(ui.ctx());
+        }
     }
 }
 
@@ -101,30 +97,26 @@ impl Formatting {
 
 impl DemoApp {
     pub(super) fn show_formatting_controls(&mut self, ui: &mut egui::Ui) {
-        egui::Popup::menu(&ui.button("Formatting"))
-            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-            .show(|ui| {
-                let previous = self.formatting.clone();
-                ui.label("Date label language");
-                for (locale, name) in [
-                    (None, "English (default)"),
-                    (Some("de-DE"), "Deutsch"),
-                    (Some("fr-FR"), "Français"),
-                ] {
-                    ui.radio_value(&mut self.formatting.locale, locale.map(str::to_owned), name);
-                }
-                ui.small("Time zone is independent: use the zone selector below the chart.");
-                ui.separator();
-                ui.checkbox(&mut self.formatting.price, "Price: 123.456 u");
-                ui.checkbox(&mut self.formatting.percentage, "Percentage: +12.34 pct");
-                ui.checkbox(&mut self.formatting.volume, "Volume: 123456 units");
-                ui.small("Use the % scale button to see percentage axis labels.");
-                if ui.button("Restore default formatting").clicked() {
-                    self.formatting = Formatting::default();
-                }
-                if self.formatting != previous {
-                    self.apply_formatting();
-                }
-            });
+        let previous = self.formatting.clone();
+        ui.label("Date label language");
+        for (locale, name) in [
+            (None, "English (default)"),
+            (Some("de-DE"), "Deutsch"),
+            (Some("fr-FR"), "Français"),
+        ] {
+            ui.radio_value(&mut self.formatting.locale, locale.map(str::to_owned), name);
+        }
+        ui.small("Time zone is independent: use the zone selector below the chart.");
+        ui.separator();
+        ui.checkbox(&mut self.formatting.price, "Price: 123.456 u");
+        ui.checkbox(&mut self.formatting.percentage, "Percentage: +12.34 pct");
+        ui.checkbox(&mut self.formatting.volume, "Volume: 123456 units");
+        ui.small("Use the % scale button to see percentage axis labels.");
+        if ui.button("Restore default formatting").clicked() {
+            self.formatting = Formatting::default();
+        }
+        if self.formatting != previous {
+            self.apply_formatting();
+        }
     }
 }

@@ -188,13 +188,7 @@ pub(crate) fn mapped_drawings(
             drawing.color = style.color.to_srgba_unmultiplied();
             drawing.stroke_width = style.width;
             drawing.line_style = style.pattern;
-            drawing.update_screen_coords(
-                |bar: f32| {
-                    let index = bar as usize;
-                    coords.idx_to_x(index) + (bar - index as f32) * coords.bar_spacing
-                },
-                &price_to_y,
-            );
+            drawing.update_screen_coords(|bar: f32| coords.index_to_x(f64::from(bar)), &price_to_y);
             drawing
         })
         .collect()
@@ -207,10 +201,7 @@ pub(crate) fn paint_drawings(
     price: &crate::scales::PriceMap,
     coords: &crate::chart::coords::ChartMapping,
 ) {
-    let bar_to_x = |bar: f32| {
-        let index = bar as usize;
-        coords.idx_to_x(index) + (bar - index as f32) * coords.bar_spacing
-    };
+    let bar_to_x = |bar: f32| coords.index_to_x(f64::from(bar));
     let price_to_y = |p| price.price_to_y(p);
     let view = crate::drawings::rendering::ChartView {
         price_formatter: None,

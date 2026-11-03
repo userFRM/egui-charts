@@ -7,7 +7,7 @@ use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke};
 
 use super::helpers::valued_runs;
-use super::line::{draw_bar_line, with_line_type};
+use super::line::{draw_bar_line, draw_point_marker, line_color, with_line_type};
 use super::volume::render_volume_bars;
 use crate::chart::rendering::{RenderContext, StyleColors};
 use crate::model::{
@@ -52,6 +52,16 @@ pub(super) fn render_area(
     }
     draw_area_fill(painter, &fill_points, price_rect, style);
     draw_bar_line(painter, visible_data, &line_points, &style.line, false);
+    for (point, bar) in line_points.iter().zip(visible_data) {
+        if !bar.is_whitespace() {
+            draw_point_marker(
+                painter,
+                *point,
+                style.marker_radius,
+                line_color(bar, &style.line),
+            );
+        }
+    }
 
     if show_volume {
         render_volume_bars(
@@ -454,6 +464,20 @@ fn draw_baseline_segments(
             ..line.clone()
         };
         draw_baseline_line_part(painter, a, b, &line, distance);
+    }
+    for (point, bar) in points.iter().zip(data) {
+        if bar.is_whitespace() {
+            continue;
+        }
+        let own = bar.colors.as_deref();
+        let color = if above(*point, *point) {
+            own.and_then(|colors| colors.top_line)
+                .unwrap_or(style.above.color)
+        } else {
+            own.and_then(|colors| colors.bottom_line)
+                .unwrap_or(style.below.color)
+        };
+        draw_point_marker(painter, *point, style.marker_radius, color);
     }
 }
 

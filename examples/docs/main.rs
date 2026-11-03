@@ -17,7 +17,9 @@ enum Scene {
     Chart,
     PriceScale(scenes::price_scale::PriceScale),
     TimeScale,
+    Theme(scenes::theme::Presentation),
     Panes(scenes::panes::Panes),
+    Live(scenes::studies::LiveData),
 }
 
 impl ExampleApp {
@@ -34,6 +36,10 @@ impl ExampleApp {
             "series-heikin" => scenes::chart_types::heikin(),
             "series-renko" => scenes::chart_types::renko(),
             "series-point-and-figure" => scenes::chart_types::point_and_figure(),
+            "volatility-smile" => scenes::extensions::volatility_smile(),
+            "yield-curve" => scenes::extensions::yield_curve(),
+            "primitives" => scenes::extensions::primitives(),
+            "custom-series" => scenes::extensions::custom_series(),
             "price-scale" => {
                 let mut chart = first_chart::first_chart();
                 scene = Scene::PriceScale(scenes::price_scale::PriceScale::new(&mut chart));
@@ -43,9 +49,20 @@ impl ExampleApp {
                 scene = Scene::TimeScale;
                 first_chart::first_chart()
             }
+            "theme" => {
+                scene = Scene::Theme(scenes::theme::Presentation::default());
+                first_chart::first_chart()
+            }
             "panes" => {
                 let mut chart = first_chart::first_chart();
                 scene = Scene::Panes(scenes::panes::Panes::new(&mut chart));
+                chart
+            }
+            "studies" => scenes::studies::builtins(),
+            "custom-study" => scenes::studies::custom(),
+            "live-data" => {
+                let (chart, live) = scenes::studies::LiveData::new();
+                scene = Scene::Live(live);
                 chart
             }
             _ => return None,
@@ -100,7 +117,9 @@ impl eframe::App for ExampleApp {
                 Scene::Chart => {}
                 Scene::PriceScale(scene) => scene.show(ui, &mut self.chart),
                 Scene::TimeScale => scenes::time_scale::show(ui, &mut self.chart),
+                Scene::Theme(scene) => scene.show(ui, &mut self.chart),
                 Scene::Panes(scene) => scene.show(ui, &mut self.chart),
+                Scene::Live(scene) => scene.show(ui, &mut self.chart),
             }
             self.chart.show(ui);
         });
@@ -189,7 +208,15 @@ mod tests {
             "series-point-and-figure",
             "price-scale",
             "time-scale",
+            "theme",
             "panes",
+            "studies",
+            "custom-study",
+            "live-data",
+            "volatility-smile",
+            "yield-curve",
+            "primitives",
+            "custom-series",
         ] {
             assert!(ExampleApp::new(name).is_some(), "{name}");
         }

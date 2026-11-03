@@ -11,7 +11,7 @@ name = "egui-charts-docs"
 path = "main.rs"
 
 [dependencies]
-egui-charts = { path = "../..", default-features = false, features = ["widget"] }
+egui-charts = { path = "../..", default-features = false, features = ["widget", "studies"] }
 eframe = { version = "0.37.0", default-features = false, features = ["default_fonts", "glow"] }
 chrono = "0.4.43"
 

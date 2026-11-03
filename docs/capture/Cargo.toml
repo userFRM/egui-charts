@@ -12,11 +12,11 @@ name = "capture"
 path = "main.rs"
 
 [dependencies]
-egui-charts = { path = "../..", features = ["ui", "alert-engine", "strategies"] }
+egui-charts = { path = "../..", features = ["ui", "alert-engine", "strategies", "detectors"] }
 # The demo's dependencies, plus the offscreen renderer.
-eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "clipboard", "default_fonts", "glow", "links", "wgpu", "persistence"] }
+eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "default_fonts", "wgpu", "persistence"] }
 egui = { version = "0.37.0", features = ["monochrome_emoji_fonts"] }
-egui_extras = { version = "0.37.0", features = ["svg", "image", "file", "http"] }
+egui_extras = { version = "0.37.0", default-features = false, features = ["svg", "image"] }
 egui_kittest = { version = "0.37.0", features = ["wgpu", "eframe"] }
 chrono = "0.4.43"
 log = "0.4.29"

@@ -1,5 +1,5 @@
 use super::*;
-use crate::model::{BarData, LineStyle};
+use crate::model::{BarData, LineStyle, SeriesDisplayFormat, SeriesFormat};
 use crate::tokens::DESIGN_TOKENS;
 use crate::widget::test_frames::frame;
 use crate::widget::{PaneId, SeriesId, SeriesOptions};
@@ -24,6 +24,180 @@ fn bars(prices: &[f64]) -> Vec<Bar> {
             )
         })
         .collect()
+}
+
+/// Saved display formats label raw units on shared and independent axes without transforming
+/// the data. A quarter-unit movement rounds 12.62 to 12.50, and 1500 / 1000 is 1.50K.
+#[test]
+fn series_display_formats_reach_ticks_tags_readouts_and_snapshots() {
+    for (kind, value, step, expected) in [
+        (SeriesFormat::Price, 12.62, 0.25, "12.50"),
+        (SeriesFormat::Price, 12.625, 0.25, "12.75"),
+        (SeriesFormat::Price, -12.625, 0.25, "-12.75"),
+        (SeriesFormat::Volume, 1500.0, 1.0, "1.50K"),
+        (SeriesFormat::Volume, 1500.0, 3.0, "1.50K"),
+        (SeriesFormat::Percentage, 12.5, 0.25, "12.50%"),
+    ] {
+        for assignment in [
+            None,
+            Some(SeriesScale::Right),
+            Some(SeriesScale::Left),
+            Some(SeriesScale::Separate(1)),
+        ] {
+            let ctx = egui::Context::default();
+            let data = bars(&[value - step, value]);
+            let mut chart = Chart::new(BarData::from_bars(data.clone()));
+            chart
+                .series_price_scale_mut(SeriesId::MAIN)
+                .unwrap()
+                .set_price_precision(Some(4));
+            let id = assignment.map_or(SeriesId::MAIN, |scale| {
+                let id = chart.add_series(SeriesOptions {
+                    scale,
+                    ..Default::default()
+                });
+                chart.set_data(id, data.clone());
+                id
+            });
+            if assignment == Some(SeriesScale::Separate(1)) {
+                let pane = chart.add_pane();
+                assert!(chart.move_series_to_pane(id, pane));
+            }
+            chart.series_style_mut(id).unwrap().display_format = Some(SeriesDisplayFormat {
+                kind,
+                precision: 2,
+                min_move: step,
+            });
+            let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 0.0, vec![]);
+            assert_eq!(
+                chart.format_series_price(id, value).as_deref(),
+                Some(expected)
+            );
+            assert!(
+                painted.iter().any(|shape| matches!(shape,
+                    egui::Shape::Text(text) if text.galley.text() == expected
+                )),
+                "{kind:?} {assignment:?}: last-value tag"
+            );
+            assert_eq!(chart.bars(id), data);
+            let map = chart.series_price_map(id).unwrap();
+            assert_eq!(map.transform().mode, PriceScaleMode::Normal);
+            assert_eq!(
+                map.price_precision(),
+                if assignment == Some(SeriesScale::Right) {
+                    Some(4)
+                } else {
+                    Some(2)
+                }
+            );
+            let formatter = chart
+                .series_label_formatter(id, PriceScaleMode::Normal)
+                .unwrap();
+            assert_eq!(formatter.format(value), expected);
+            if id != SeriesId::MAIN {
+                assert_eq!(
+                    chart.series_tag_label(&chart.price_series[0], &map, value, true),
+                    expected
+                );
+            }
+            // On a shared axis the visible main series owns the ticks, while each series
+            // keeps its own tag and readout format.
+            if assignment != Some(SeriesScale::Right) {
+                let marks =
+                    crate::chart::rendering::axes::price_marks(&map, Some(formatter.as_ref()));
+                assert!(!marks.is_empty());
+                for adjacent in marks.windows(2) {
+                    assert_ne!(adjacent[0].label, adjacent[1].label);
+                }
+                for mark in marks {
+                    assert!((mark.price / step - (mark.price / step).round()).abs() < 1e-8);
+                    assert_eq!(mark.label, formatter.format(mark.price));
+                }
+            }
+            for mode in [
+                PriceScaleMode::Logarithmic,
+                PriceScaleMode::Percentage,
+                PriceScaleMode::IndexedTo100,
+            ] {
+                if mode == PriceScaleMode::Logarithmic && value <= 0.0 {
+                    continue;
+                }
+                chart.series_price_scale_mut(id).unwrap().options_mut().mode = mode;
+                frame(&ctx, &mut chart, 0.1, vec![]);
+                if mode == PriceScaleMode::Logarithmic {
+                    assert_eq!(
+                        chart.format_series_price(id, value).as_deref(),
+                        Some(expected)
+                    );
+                } else {
+                    // Explicit transformed-mode hooks receive scale units even with a raw declaration.
+                    chart.set_percentage_formatter(Some(std::sync::Arc::new(
+                        crate::scales::CustomPriceFormatter::new(|_| "transformed".into()),
+                    )));
+                    assert_eq!(
+                        chart.format_series_price(id, value).as_deref(),
+                        Some("transformed")
+                    );
+                    chart.set_percentage_formatter(None);
+                    assert_ne!(
+                        chart.format_series_price(id, value).as_deref(),
+                        Some(expected)
+                    );
+                }
+            }
+            chart.series_price_scale_mut(id).unwrap().options_mut().mode = PriceScaleMode::Normal;
+            frame(&ctx, &mut chart, 0.2, vec![]);
+            chart.set_price_formatter(Some(std::sync::Arc::new(
+                crate::scales::CustomPriceFormatter::new(|_| "chart".into()),
+            )));
+            assert_eq!(
+                chart.format_series_price(id, value).as_deref(),
+                Some("chart")
+            );
+            chart.set_series_formatter(
+                id,
+                Some(std::sync::Arc::new(
+                    crate::scales::CustomPriceFormatter::new(|_| "series".into()),
+                )),
+            );
+            assert_eq!(
+                chart.format_series_price(id, value).as_deref(),
+                Some("series")
+            );
+            chart.set_series_formatter(id, None);
+            chart.set_price_formatter(None);
+            if assignment == Some(SeriesScale::Right) {
+                chart.set_main_series_visible(false);
+                frame(&ctx, &mut chart, 0.3, vec![]);
+                assert_eq!(
+                    chart.series_price_map(id).unwrap().price_precision(),
+                    Some(2)
+                );
+                assert!(chart.remove_series(SeriesId::MAIN));
+                frame(&ctx, &mut chart, 0.4, vec![]);
+                assert_eq!(chart.last_price_map.price_precision(), Some(2));
+            }
+            #[cfg(feature = "ui")]
+            {
+                let saved = serde_json::to_string(&chart.snapshot().unwrap()).unwrap();
+                let mut restored = Chart::new(BarData::from_bars(data.clone()));
+                restored
+                    .restore(&serde_json::from_str(&saved).unwrap())
+                    .unwrap();
+                let restored_id = if id == SeriesId::MAIN {
+                    id
+                } else {
+                    restored.restored_series_id(id.0).unwrap()
+                };
+                restored.set_data(restored_id, data);
+                frame(&egui::Context::default(), &mut restored, 0.0, vec![]);
+                assert_eq!(
+                    restored.format_series_price(restored_id, value).as_deref(),
+                    Some(expected)
+                );
+            }
+        }
+    }
 }
 
 /// The magnet reaches a visible comparison through its own scale, so a series whose prices
@@ -840,6 +1014,141 @@ fn series_move_between_panes_with_their_chart_type_and_scale() {
     }
 }
 
+/// The main series can sit before, between or after added series; paint and selection use
+/// that order on every frame, including after restoring a serialized chart.
+#[test]
+fn main_series_order_controls_paint_and_selection() {
+    use crate::widget::ChartElementId;
+    use egui::{Event, Modifiers, PointerButton, Shape};
+
+    let ctx = egui::Context::default();
+    let data = bars(&[100.0, 105.0, 110.0].repeat(33));
+    let mut chart = Chart::new(BarData::from_bars(data.clone()));
+    chart.set_chart_type(ChartType::Line);
+    chart.config.show_volume = false;
+    chart.chart_options.hovered_series_on_top = false;
+    let colors = [Color32::RED, Color32::GREEN, Color32::BLUE];
+    let mut params = chart.chart_type_params().clone();
+    params.styles.line.color = colors[0];
+    chart.set_chart_type_params(params);
+    let mut ids = vec![SeriesId::MAIN];
+    for color in &colors[1..] {
+        let id = chart.add_series(SeriesOptions {
+            color: *color,
+            ..Default::default()
+        });
+        chart.set_data(id, data.clone());
+        ids.push(id);
+    }
+    assert_eq!(chart.series_order(SeriesId::MAIN), Some(0));
+    assert!(!chart.set_series_order(SeriesId(999), 0));
+
+    for (step, (moved, order, expected)) in [
+        (0, 0, [0, 1, 2]),
+        (0, 1, [1, 0, 2]),
+        (0, usize::MAX, [1, 2, 0]),
+        (2, 0, [2, 1, 0]),
+        (0, 0, [0, 2, 1]),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert!(chart.set_series_order(ids[moved], order));
+        for (position, index) in expected.iter().enumerate() {
+            assert_eq!(chart.series_order(ids[*index]), Some(position));
+        }
+        chart.clear_selection();
+        let time = step as f64;
+        let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, time, vec![]);
+        let drawn: Vec<_> = painted
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::Path(path) if path.points.len() == data.len() => colors
+                    .iter()
+                    .position(|color| path.stroke.color == egui::epaint::ColorMode::Solid(*color)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(drawn, expected, "paint at step {step}");
+        let mapping = chart.get_chart_mapping();
+        let pos = Pos2::new(mapping.idx_to_x(49), mapping.price_to_y(105.0));
+        assert!(
+            mapping.rect.contains(pos),
+            "click at {pos:?} in {:?}",
+            mapping.rect
+        );
+        for (input, pressed) in [None, Some(true), Some(false), None]
+            .into_iter()
+            .enumerate()
+        {
+            let mut events = vec![Event::PointerMoved(pos)];
+            if let Some(pressed) = pressed {
+                events.push(Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                });
+            }
+            frame(&ctx, &mut chart, time + (input + 1) as f64 * 0.1, events);
+        }
+        assert_eq!(
+            chart.selected_element(),
+            Some(ChartElementId::Series(ids[expected[2]])),
+            "selection at step {step}"
+        );
+        #[cfg(feature = "ui")]
+        {
+            let json = serde_json::to_string(&chart.snapshot().unwrap()).unwrap();
+            let snapshot: crate::widget::ChartSnapshot = serde_json::from_str(&json).unwrap();
+            if step == 0 {
+                let mut host_owned = snapshot.clone();
+                host_owned.series = None;
+                let mut preserved = Chart::new(BarData::from_bars(data.clone()));
+                let kept = preserved.add_series(SeriesOptions::default());
+                preserved.set_data(kept, data.clone());
+                preserved.restore(&host_owned).unwrap();
+                assert_eq!(preserved.series().count(), 1);
+                assert_eq!(preserved.bars(kept), data);
+            }
+            chart.restore(&snapshot).unwrap();
+            for id in &mut ids[1..] {
+                *id = chart.restored_series_id(id.0).unwrap();
+                chart.set_data(*id, data.clone());
+            }
+            for (position, index) in expected.iter().enumerate() {
+                assert_eq!(
+                    chart.series_order(ids[*index]),
+                    Some(position),
+                    "restored order"
+                );
+            }
+        }
+    }
+
+    let pane = chart.add_pane();
+    assert!(chart.move_series_to_pane(ids[1], pane));
+    assert_eq!(chart.series_order(ids[1]), Some(0));
+    assert!(chart.set_series_order(ids[1], usize::MAX));
+    assert!(chart.move_series_to_pane(ids[2], pane));
+    assert!(chart.set_series_order(ids[2], 0));
+    assert_eq!(chart.series_order(ids[1]), Some(1));
+    assert_eq!(chart.series_order(ids[2]), Some(0));
+    assert!(chart.move_series_to_pane(ids[2], PaneId::MAIN));
+    assert_eq!(chart.series_order(ids[0]), Some(0));
+    assert_eq!(chart.series_order(ids[2]), Some(1));
+    assert!(chart.set_series_visible(ids[2], false));
+    frame(&ctx, &mut chart, 6.0, vec![]);
+    assert_eq!(chart.series_order(ids[2]), Some(1));
+    assert!(chart.set_series_visible(ids[2], true));
+    assert!(chart.set_series_visible(ids[0], false));
+    assert_eq!(chart.series_order(ids[0]), Some(0));
+    assert!(chart.remove_series(ids[0]));
+    assert_eq!(chart.series_order(ids[0]), None);
+    assert_eq!(chart.series_order(ids[2]), Some(0));
+    assert!(!chart.set_series_order(ids[0], 0));
+}
+
 /// Bars can be popped from, and looked up in, any bar series; live changes are reported
 /// once per series in a row; the draw order can be changed.
 #[test]
@@ -938,7 +1247,7 @@ fn series_data_is_queried_popped_and_reported() {
         chart.series().map(|(id, _)| id).collect::<Vec<_>>(),
         [other, id]
     );
-    assert_eq!(chart.series_order(id), Some(1));
+    assert_eq!(chart.series_order(id), Some(2));
 
     let range = LogicalRange::new(0.0, 4.0);
     assert_eq!(chart.bars_in_logical_range(other, range), None);

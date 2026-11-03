@@ -74,7 +74,9 @@ pub struct SavedPane {
     /// Keep the pane when its last study leaves.
     #[serde(default)]
     pub preserve: bool,
-    /// Saved study and series ids in legend order; empty in version 1 layouts.
+    /// Saved study and series ids in legend order. In the price pane this is the draw order,
+    /// including the main series as id 0; older layouts leave it empty for the default order.
+    /// Empty in version 1 layouts.
     #[serde(default)]
     pub members: Vec<usize>,
     /// The pane's price scale, including its manual range.
@@ -103,6 +105,9 @@ pub struct ChartSnapshot {
     /// Visibility and style of the main series' alert levels; absent in older layouts.
     #[serde(default)]
     pub main_series_alerts: crate::model::SeriesAlerts,
+    /// Raw numeric display settings of the main series; absent in older layouts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub main_series_display_format: Option<crate::model::SeriesDisplayFormat>,
     /// The display settings of the settings dialog, the price scale's mode and margins included.
     pub settings: ChartSettingsState,
     /// Complete appearance settings; absent in version 1 layouts.
@@ -124,7 +129,8 @@ pub struct ChartSnapshot {
     /// The studies in the order they were added, including the volume study.
     pub studies: Vec<SavedStudy>,
     /// The bar series added to the chart in draw order, `None` in layouts saved before version
-    /// 3, which leave the chart's added series in place.
+    /// 3, which leave the chart's added series in place. When omitted, their saved main-pane
+    /// order references are ignored; the host retains ownership of those series.
     #[serde(default)]
     pub series: Option<Vec<SavedSeries>>,
     /// The markers and price lines of the main series, `None` in layouts saved before version 3.
@@ -246,6 +252,7 @@ impl Chart {
             chart_type_params: self.chart_type_params.clone(),
             main_series_visible: self.main_series_visible,
             main_series_alerts: self.main_series_style.alerts,
+            main_series_display_format: self.main_series_style.display_format,
             settings: {
                 let mut settings = ChartSettingsState::from_chart(self);
                 settings.adjust_for_dividends = self.dividend_adjusted();
@@ -284,7 +291,14 @@ impl Chart {
                         stretch: pane.stretch,
                         collapsed: pane.collapsed,
                         preserve: pane.preserve,
-                        members: pane.members.iter().map(|id| id.0).collect(),
+                        members: if *id == PaneId::MAIN {
+                            self.main_pane_order(self.pane_layout.main.clone())
+                                .iter()
+                                .map(|id| id.0)
+                                .collect()
+                        } else {
+                            pane.members.iter().map(|id| id.0).collect()
+                        },
                         scale: (*id != PaneId::MAIN).then(|| pane.scale.clone()),
                     }
                 })
@@ -342,6 +356,7 @@ impl Chart {
         self.set_chart_type_params(snapshot.chart_type_params.clone());
         self.set_main_series_visible(snapshot.main_series_visible);
         self.main_series_style.alerts = snapshot.main_series_alerts;
+        self.main_series_style.display_format = snapshot.main_series_display_format;
         snapshot
             .settings
             .apply_to_chart(self)
@@ -441,7 +456,7 @@ impl Chart {
                 .expect("restored pane");
             pane.collapsed = saved.collapsed;
             pane.preserve = saved.preserve;
-            if !saved.members.is_empty() {
+            if !saved.main && !saved.members.is_empty() {
                 pane.members.sort_by_key(|id| {
                     saved
                         .members
@@ -452,6 +467,19 @@ impl Chart {
             }
             if let Some(scale) = &saved.scale {
                 pane.scale = scale.clone();
+            }
+            if saved.main && !saved.members.is_empty() {
+                self.pane_layout.main = saved
+                    .members
+                    .iter()
+                    .filter_map(|id| {
+                        if *id == super::SeriesId::MAIN.0 {
+                            Some(super::SeriesId::MAIN)
+                        } else {
+                            self.restored_studies.get(id).copied().map(super::SeriesId)
+                        }
+                    })
+                    .collect();
             }
         }
         self.pane_layout.maximized = snapshot.maximized.map(|at| panes[&at]);
@@ -506,6 +534,39 @@ fn check(snapshot: &ChartSnapshot, factory: &IndicatorFactory) -> Result<Checked
         })
         .collect::<Result<Vec<_>, _>>()?;
     check_source_links(&snapshot.studies, &studies)?;
+    for (at, pane) in snapshot.panes.iter().enumerate() {
+        if !pane.main || pane.members.is_empty() {
+            continue;
+        }
+        let expected: std::collections::HashSet<_> = std::iter::once(super::SeriesId::MAIN.0)
+            .chain(
+                snapshot
+                    .studies
+                    .iter()
+                    .filter(|study| study.pane == at)
+                    .map(|study| study.id),
+            )
+            .chain(
+                snapshot
+                    .series
+                    .iter()
+                    .flatten()
+                    .filter(|series| series.pane == at)
+                    .map(|series| series.id),
+            )
+            .collect();
+        let actual: std::collections::HashSet<_> = pane.members.iter().copied().collect();
+        if !expected.is_subset(&actual)
+            || (snapshot.series.is_some() && actual != expected)
+            || actual.len() != pane.members.len()
+            || snapshot
+                .studies
+                .iter()
+                .any(|study| study.pane != at && actual.contains(&study.id))
+        {
+            return Err(RestoreError::Layout("Invalid price pane draw order"));
+        }
+    }
     snapshot
         .settings
         .validate()
@@ -529,6 +590,9 @@ fn check(snapshot: &ChartSnapshot, factory: &IndicatorFactory) -> Result<Checked
         .as_ref()
         .is_some_and(|scale| !valid_scale(scale))
         || snapshot.panes.iter().filter(|pane| pane.main).count() != 1
+        || snapshot.studies.iter().map(|study| study.id)
+            .chain(snapshot.series.iter().flatten().map(|series| series.id))
+            .any(|id| id == super::SeriesId::MAIN.0)
         || snapshot
             .studies
             .iter()
@@ -777,6 +841,7 @@ mod tests {
         );
         chart.set_price_lines(extra, vec![PriceLine::new(12.5, egui::Color32::BLUE)]);
         chart.move_series_to_pane(extra, chart.series_pane(rsi).unwrap());
+        chart.reorder_indicator(spread, super::super::VisualOrder::SendToBack);
         assert!(
             chart.snapshot().is_err(),
             "the built-in factory cannot rebuild Bar range"
@@ -805,6 +870,17 @@ mod tests {
             });
         assert!(restored.restore_with(&dangling, &factory).is_err());
         assert_eq!(restored.symbol(), "B");
+        for members in [vec![0, 0], vec![0, 999], vec![0], vec![spread.0]] {
+            let mut invalid = snapshot.clone();
+            invalid
+                .panes
+                .iter_mut()
+                .find(|pane| pane.main)
+                .unwrap()
+                .members = members;
+            assert!(restored.restore_with(&invalid, &factory).is_err());
+            assert_eq!(restored.symbol(), "B");
+        }
 
         restored.restore_with(&snapshot, &factory).unwrap();
         assert_eq!(restored.symbol(), "A");
@@ -814,6 +890,10 @@ mod tests {
             .collect();
         assert_eq!(names, ["Bar range", "RSI"]);
         let new_spread = restored.restored_series_id(spread.0).unwrap();
+        assert_eq!(
+            restored.pane_layout.main,
+            [new_spread, super::super::SeriesId::MAIN]
+        );
         let new_rsi = restored.restored_series_id(rsi.0).unwrap();
         assert_eq!(
             restored.indicator_mut(new_rsi).unwrap().source(),
@@ -836,6 +916,21 @@ mod tests {
         let lines = &restored.price_series[0].lines;
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].1.price, 12.5);
+
+        let mut legacy = snapshot.clone();
+        legacy
+            .panes
+            .iter_mut()
+            .find(|pane| pane.main)
+            .unwrap()
+            .members
+            .clear();
+        restored.restore_with(&legacy, &factory).unwrap();
+        let new_spread = restored.restored_series_id(spread.0).unwrap();
+        assert_eq!(
+            restored.pane_layout.main,
+            [super::super::SeriesId::MAIN, new_spread]
+        );
     }
 
     #[test]

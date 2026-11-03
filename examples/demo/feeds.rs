@@ -666,14 +666,52 @@ pub(super) fn heatmap_metrics() -> Vec<egui_charts::ui::widget_bar::MarketHeatma
     ]
 }
 
+fn financials_symbol(symbol: &str) -> Option<&'static DemoSymbol> {
+    DemoSymbol::catalog()
+        .iter()
+        .find(|spec| spec.symbol.eq_ignore_ascii_case(symbol))
+        .filter(|spec| !matches!(spec.exchange, "Crypto" | "Index" | "Forex" | "Synthetic"))
+}
+
+impl super::DemoApp {
+    /// Keeps Financials available only where the demo supplies figures.
+    pub(super) fn feed_financials(&mut self) {
+        let symbol = self.chart.symbol();
+        self.symbol_details
+            .set_financials_visible(financials_symbol(symbol).is_some());
+        if self.symbol_details.take_financials_request()
+            || self
+                .financials
+                .as_ref()
+                .is_some_and(|(shown, _)| shown != symbol)
+        {
+            self.open_financials();
+        }
+    }
+
+    /// Opens the current symbol's supplied pages, or returns to the chart when unavailable.
+    pub(super) fn open_financials(&mut self) {
+        let symbol = self.chart.symbol();
+        self.financials = financials(symbol).map(|data| {
+            let title = self
+                .chart
+                .instrument()
+                .and_then(|instrument| instrument.description.clone())
+                .unwrap_or_else(|| symbol.to_owned());
+            let panel = egui_charts::ui::financials::FinancialsPanel::new(title, Some(data));
+            (symbol.to_owned(), panel)
+        });
+        if self.financials.is_some() {
+            self.open_panel = None;
+        }
+    }
+}
+
 /// Synthetic financials for the catalog's stocks: five fiscal years scaled from the catalog price,
 /// one of them a loss, and dividends from the third year. Other symbols have none.
 pub(super) fn financials(symbol: &str) -> Option<egui_charts::ui::financials::CompanyFinancials> {
     use egui_charts::ui::financials::{CompanyFinancials, FinancialPage};
-    let spec = DemoSymbol::catalog()
-        .iter()
-        .find(|spec| spec.symbol.eq_ignore_ascii_case(symbol))
-        .filter(|spec| !matches!(spec.exchange, "Crypto" | "Index" | "Forex" | "Synthetic"))?;
+    let spec = financials_symbol(symbol)?;
     let growth = 1.0 + (spec.seed % 7) as f64 / 40.0;
     let margin = 0.08 + (spec.seed % 5) as f64 / 50.0;
     let revenue: Vec<f64> = (0..5)
