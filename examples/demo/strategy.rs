@@ -197,7 +197,6 @@ impl DemoApp {
                     )];
                 }
                 let bars = self.chart.bars(SeriesId::MAIN);
-                ui.label("Synthetic history: 26 years daily, about one week by minute; finer fills use retained executions.");
                 self.strategy_report.show(
                     ui,
                     &self.state.symbol,
