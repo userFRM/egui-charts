@@ -490,6 +490,15 @@ pub trait Indicator: Send {
         &[]
     }
 
+    /// Whether the study has results only with its
+    /// [`order_flow_inputs`](Self::order_flow_inputs), so that it cannot be calculated on the bars
+    /// of another interval or symbol, whose order flow the chart does not hold. The default is
+    /// whether it names any. A study that builds its results from the bars and refines them with
+    /// order flow where the chart holds it returns `false`, and keeps its Interval input.
+    fn needs_order_flow(&self) -> bool {
+        !self.order_flow_inputs().is_empty()
+    }
+
     /// Bring [`values`](Indicator::values) up to date after `data[from..]` changed or grew,
     /// given that `data[..from]` is unchanged since the previous call. The values equal those of
     /// [`calculate`](Indicator::calculate) on the same data, bit for bit. After bars are

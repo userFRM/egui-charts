@@ -602,7 +602,7 @@ impl Terminal {
             .with_timestamp(chart.format_time(bar.time))
             .with_prev_close(pointer.previous_close.unwrap_or(bar.open));
         info.studies = pointer.studies.iter().map(|(_, row)| row.clone()).collect();
-        info
+        info.with_chart_formatters(chart)
     }
 
     /// Follows the active chart's crosshair, which the data window drawn before the chart reads.

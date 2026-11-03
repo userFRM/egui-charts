@@ -421,6 +421,32 @@ impl OrderFlowInput {
         self
     }
 
+    /// Feed services read by this source. Book size with an order filter needs individual
+    /// orders; executions need trade-side classification only for side-dependent outputs.
+    pub fn services(&self) -> &'static [crate::model::FeedService] {
+        use crate::model::FeedService::*;
+        let state = self.state();
+        match state.source {
+            Source::Fixed(OrderFlowKind::Spread | OrderFlowKind::LevelsTradedThrough { .. }) => {
+                &[BestBidAsk]
+            }
+            Source::Fixed(OrderFlowKind::BookSize { .. }) if state.filter.is_some() => {
+                &[OrderDepth]
+            }
+            Source::Fixed(OrderFlowKind::BookSize { .. }) | Source::Book(_) => &[Depth],
+            Source::Footprint
+            | Source::Fixed(
+                OrderFlowKind::TradeRate { .. } | OrderFlowKind::AggressorRate { .. },
+            ) => &[LiveTrades],
+            Source::Fixed(
+                OrderFlowKind::LevelsExecuted { .. }
+                | OrderFlowKind::SizeDelta { .. }
+                | OrderFlowKind::FlowSum { .. }
+                | OrderFlowKind::FilteredCvd { .. },
+            ) => &[LiveTrades, TradeSides],
+        }
+    }
+
     /// The filter of book size, if it has one.
     pub(crate) fn order_filter(&self) -> Option<OrderFilter> {
         let state = self.state();
@@ -536,6 +562,17 @@ impl OrderFlowInput {
             None => BTreeMap::new(),
         };
         state.snapshot(bars, complete_from)
+    }
+
+    /// The calendar a footprint source opens its bars by: the clock of the first execution it
+    /// received since it was cleared or given another tick size. `None` while it holds no
+    /// footprint, and for other sources.
+    #[cfg(feature = "studies")]
+    pub(crate) fn footprint_clock(&self) -> Option<BarClock> {
+        self.state()
+            .footprint
+            .as_ref()
+            .map(|flow| flow.clock().clone())
     }
 
     /// Copies the books of a book source for the bars that open at or after `open`, with what
@@ -1240,6 +1277,85 @@ impl State {
 mod tests {
     use super::*;
     use crate::model::{OrderBook, OrderBookLevel, Timeframe};
+
+    #[test]
+    fn services_name_the_data_each_source_reads() {
+        use crate::model::FeedService::*;
+        use OrderFlowKind::*;
+        let book = BookSize {
+            levels: 5,
+            distance: 0.0,
+        };
+        let cases: [(_, &[crate::model::FeedService]); 13] = [
+            (OrderFlowInput::new(Spread), &[BestBidAsk]),
+            (
+                OrderFlowInput::new(LevelsTradedThrough { seconds: 0 }),
+                &[BestBidAsk],
+            ),
+            (OrderFlowInput::new(book), &[Depth]),
+            (
+                OrderFlowInput::new(book).with_order_filter(OrderFilter {
+                    min_size: 10.0,
+                    ..Default::default()
+                }),
+                &[OrderDepth],
+            ),
+            (
+                OrderFlowInput::new(book).with_order_filter(OrderFilter::default()),
+                &[Depth],
+            ),
+            (
+                OrderFlowInput::new(TradeRate {
+                    volume: false,
+                    seconds: 60,
+                    instant: 3,
+                }),
+                &[LiveTrades],
+            ),
+            (
+                OrderFlowInput::new(AggressorRate {
+                    seconds: 60,
+                    instant: 3,
+                }),
+                &[LiveTrades],
+            ),
+            (
+                OrderFlowInput::new(LevelsExecuted {
+                    seconds: 0,
+                    reversal: false,
+                }),
+                &[LiveTrades, TradeSides],
+            ),
+            (
+                OrderFlowInput::new(SizeDelta {
+                    ranges: [[0.0, 10.0]; 3],
+                }),
+                &[LiveTrades, TradeSides],
+            ),
+            (
+                OrderFlowInput::new(FlowSum { bars: 10 }),
+                &[LiveTrades, TradeSides],
+            ),
+            (
+                OrderFlowInput::new(FilteredCvd {
+                    min: 0.0,
+                    max: 10.0,
+                }),
+                &[LiveTrades, TradeSides],
+            ),
+            (OrderFlowInput::footprint(), &[LiveTrades]),
+            (
+                OrderFlowInput::book(5).with_order_filter(OrderFilter {
+                    min_size: 10.0,
+                    ..Default::default()
+                }),
+                &[Depth],
+            ),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(input.services(), expected);
+        }
+    }
 
     #[test]
     fn late_trades_do_not_clear_an_overflow_gap_early() {

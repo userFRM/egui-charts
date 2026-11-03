@@ -45,24 +45,37 @@ impl LayoutTab {
 }
 
 impl DemoApp {
+    pub(super) fn apply_formatting(&mut self) {
+        let saved = self
+            .layout_tabs
+            .iter_mut()
+            .filter_map(|tab| tab.workspace.as_mut());
+        for chart in std::iter::once(&mut self.chart)
+            .chain(self.extra_charts.iter_mut().map(|c| &mut c.chart))
+            .chain(saved.flat_map(|workspace| {
+                std::iter::once(&mut workspace.chart)
+                    .chain(workspace.extra.iter_mut().map(|c| &mut c.chart))
+            }))
+        {
+            self.formatting.apply(chart);
+        }
+    }
+
     pub(super) fn toggle_theme(&mut self, ctx: &egui::Context) {
-        self.theme_choice = Some(!self.theme.dark);
+        self.theme_choice = Some(if self.theme.dark { "light" } else { "dark" }.into());
         self.update_theme(ctx);
     }
 
     pub(super) fn update_theme(&mut self, ctx: &egui::Context) {
-        let dark = self
-            .theme_choice
-            .or_else(|| ctx.system_theme().map(|theme| theme == egui::Theme::Dark))
-            .unwrap_or(self.theme.dark);
-        if self.theme.dark == dark {
+        let theme = super::formatting::selected_theme(
+            self.theme_choice.as_deref(),
+            ctx.system_theme(),
+            self.theme.dark,
+        );
+        if self.theme == theme {
             return;
         }
-        self.theme = if dark {
-            egui_charts::theme::Theme::dark()
-        } else {
-            egui_charts::theme::Theme::light()
-        };
+        self.theme = theme;
         let saved = self
             .layout_tabs
             .iter_mut()
@@ -121,6 +134,7 @@ impl DemoApp {
             .with_drawing_registry(source.drawings().registry.clone())
             .with_visible_candles(0)
             .build();
+        self.formatting.apply(&mut chart);
         chart.set_main_series_visible(source.is_main_series_visible());
         chart.set_price_targets_visible(source.price_targets_visible());
         chart.set_signal_source(Some(if self.api_samples {
@@ -461,9 +475,14 @@ impl DemoApp {
                 .and_then(|layout| Ok((layout, self.capture_comparisons()?)))
             {
                 Ok((layout, comparisons)) => {
+                    let groups = self.layout_groups();
                     self.new_layout(Some(name));
                     let name = self.layout_tabs[self.layout_tab].name.clone();
-                    if let Err(error) = self.storage.save_comparisons(&name, &comparisons) {
+                    if let Err(error) = self
+                        .storage
+                        .save_layout_groups(&name, &groups)
+                        .and_then(|()| self.storage.save_comparisons(&name, &comparisons))
+                    {
                         self.toasts.error(error);
                         return;
                     }
@@ -552,6 +571,8 @@ impl DemoApp {
 
     fn save_comparisons(&self, name: &str) -> Result<(), String> {
         self.storage
+            .save_layout_groups(name, &self.layout_groups())?;
+        self.storage
             .save_comparisons(name, &self.capture_comparisons()?)
     }
 
@@ -588,6 +609,13 @@ impl DemoApp {
                 .error("Could not open layout: invalid chart count");
             return false;
         }
+        let groups = match self.storage.layout_groups(&name) {
+            Ok(groups) => groups,
+            Err(error) => {
+                self.toasts.error(error);
+                return false;
+            }
+        };
         let mut comparisons = match comparisons {
             Ok(saved) if saved.is_empty() => (0..layout.charts.len()).map(|_| Vec::new()).collect(),
             Ok(saved) if saved.len() == layout.charts.len() => saved,
@@ -614,6 +642,7 @@ impl DemoApp {
                 return false;
             }
         }
+        self.restore_layout_groups(groups);
         self.layout_tabs[self.layout_tab].name = name;
         if self.layout_slot >= layout.charts.len() {
             self.activate_chart_slot(0);
@@ -691,6 +720,7 @@ impl DemoApp {
             }
         }
         self.refresh_active_chart();
+        self.apply_formatting();
         self.settings_state = egui_charts::widget::settings::ChartSettingsState {
             alerts: self.settings_state.alerts.clone(),
             trading: self.trading.display.clone(),
@@ -704,9 +734,7 @@ impl DemoApp {
     pub(super) fn user_settings(&self) -> UserSettings {
         let menu = &self.top_toolbar.layout_menu;
         let mut settings = UserSettings::default();
-        settings.theme = self
-            .theme_choice
-            .map(|dark| if dark { "dark" } else { "light" }.into());
+        settings.theme = self.theme_choice.clone();
         settings.symbol = Some(self.state.symbol.clone());
         settings.interval = Some(self.state.timeframe);
         let toolbar = &self.drawing_toolbar.state;

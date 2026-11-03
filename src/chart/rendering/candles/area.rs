@@ -7,7 +7,7 @@ use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke};
 
 use super::helpers::valued_runs;
-use super::line::{draw_bar_line, with_line_type};
+use super::line::{draw_bar_line, draw_point_marker, line_color, with_line_type};
 use super::volume::render_volume_bars;
 use crate::chart::rendering::{RenderContext, StyleColors};
 use crate::model::{
@@ -52,6 +52,16 @@ pub(super) fn render_area(
     }
     draw_area_fill(painter, &fill_points, price_rect, style);
     draw_bar_line(painter, visible_data, &line_points, &style.line, false);
+    for (point, bar) in line_points.iter().zip(visible_data) {
+        if !bar.is_whitespace() {
+            draw_point_marker(
+                painter,
+                *point,
+                style.marker_radius,
+                line_color(bar, &style.line),
+            );
+        }
+    }
 
     if show_volume {
         render_volume_bars(
@@ -379,19 +389,67 @@ fn draw_baseline_segments(
     let mut fill = egui::Mesh::default();
     for &(a, b, _, bar) in &parts {
         let own = data[bar].colors.as_deref();
-        let color = if above(a, b) {
-            own.and_then(|colors| colors.top_fill)
-                .unwrap_or(style.above_fill)
+        let (edge, outer, at_base) = if above(a, b) {
+            (
+                coords.scale_to_y(coords.range().max),
+                own.and_then(|colors| colors.top_fill)
+                    .unwrap_or(style.above_fill),
+                own.and_then(|colors| colors.top_fill_at_base)
+                    .or(style.above_fill_at_base),
+            )
         } else {
-            own.and_then(|colors| colors.bottom_fill)
-                .unwrap_or(style.below_fill)
+            (
+                coords.scale_to_y(coords.range().min),
+                own.and_then(|colors| colors.bottom_fill)
+                    .unwrap_or(style.below_fill),
+                own.and_then(|colors| colors.bottom_fill_at_base)
+                    .or(style.below_fill_at_base),
+            )
         };
-        let n = fill.vertices.len() as u32;
-        for point in [a, b, Pos2::new(b.x, baseline_y), Pos2::new(a.x, baseline_y)] {
-            fill.colored_vertex(point, color);
+        let at_base = at_base.unwrap_or(outer);
+        let color_at = |y: f32| {
+            let span = baseline_y - edge;
+            let fraction = if span.abs() > f32::EPSILON {
+                ((y - edge) / span).clamp(0.0, 1.0)
+            } else {
+                1.0
+            };
+            outer.lerp_to_gamma(at_base, fraction)
+        };
+        let mut polygon = vec![a, b, Pos2::new(b.x, baseline_y), Pos2::new(a.x, baseline_y)];
+        // Clip before colouring: saturating an offscreen vertex's colour would distort the
+        // interpolated gradient inside the pane.
+        let (top, bottom) = coords.extent();
+        for (bound, keep_below) in [(top, true), (bottom, false)] {
+            let inside = |point: &Pos2| {
+                if keep_below {
+                    point.y >= bound
+                } else {
+                    point.y <= bound
+                }
+            };
+            if polygon.iter().all(inside) {
+                continue;
+            }
+            let mut clipped = Vec::new();
+            for (a, b) in polygon.iter().zip(polygon.iter().cycle().skip(1)) {
+                if inside(a) {
+                    clipped.push(*a);
+                }
+                if inside(a) != inside(b) {
+                    let t = (bound - a.y) / (b.y - a.y);
+                    clipped.push(Pos2::new(a.x + (b.x - a.x) * t, bound));
+                }
+            }
+            polygon = clipped;
         }
-        fill.add_triangle(n, n + 1, n + 2);
-        fill.add_triangle(n, n + 2, n + 3);
+        let n = fill.vertices.len() as u32;
+        for point in &polygon {
+            fill.colored_vertex(*point, color_at(point.y));
+        }
+        for i in 2..polygon.len() as u32 {
+            fill.add_triangle(n, n + i - 1, n + i);
+        }
     }
     painter.add(fill);
     for &(a, b, distance, bar) in &parts {
@@ -406,6 +464,20 @@ fn draw_baseline_segments(
             ..line.clone()
         };
         draw_baseline_line_part(painter, a, b, &line, distance);
+    }
+    for (point, bar) in points.iter().zip(data) {
+        if bar.is_whitespace() {
+            continue;
+        }
+        let own = bar.colors.as_deref();
+        let color = if above(*point, *point) {
+            own.and_then(|colors| colors.top_line)
+                .unwrap_or(style.above.color)
+        } else {
+            own.and_then(|colors| colors.bottom_line)
+                .unwrap_or(style.below.color)
+        };
+        draw_point_marker(painter, *point, style.marker_radius, color);
     }
 }
 
@@ -441,6 +513,137 @@ fn draw_baseline_line_part(
 mod tests {
     use super::*;
     use egui::{Context, LayerId, RawInput, pos2, vec2};
+
+    #[test]
+    fn baseline_gradients_keep_endpoints_crossings_and_point_overrides() {
+        use crate::model::BarColors;
+        use crate::scales::{PriceRange, PriceTransform};
+        // On a 0..100 pane with base 50, prices 75 and 25 are halfway along each
+        // gradient: (200 + 40) / 2 = 120. The point override fades 160 to 0, halfway 80.
+        let style: BaselineStyle = serde_json::from_value(serde_json::json!({
+            "above_fill": [0, 200, 0, 200], "above_fill_at_base": [0, 40, 0, 40],
+            "below_fill": [200, 0, 0, 200], "below_fill_at_base": [40, 0, 0, 40]
+        }))
+        .unwrap();
+        let own: BarColors = serde_json::from_value(serde_json::json!({
+            "top_fill": [0, 0, 160, 160], "top_fill_at_base": [0, 0, 0, 0],
+            "bottom_fill": [160, 160, 0, 160], "bottom_fill_at_base": [0, 0, 0, 0]
+        }))
+        .unwrap();
+        let mut bars: Vec<_> = [
+            100.0,
+            75.0,
+            50.0,
+            25.0,
+            0.0,
+            f64::NAN,
+            150.0,
+            75.0,
+            25.0,
+            -50.0,
+        ]
+        .into_iter()
+        .map(|price| {
+            if price.is_nan() {
+                Bar::whitespace(chrono::DateTime::UNIX_EPOCH)
+            } else {
+                Bar::from_value(chrono::DateTime::UNIX_EPOCH, price)
+            }
+        })
+        .collect();
+        bars[7].colors = Some(Box::new(own));
+        for inverted in [false, true] {
+            for line_type in [
+                crate::model::LineType::Simple,
+                crate::model::LineType::Curved,
+            ] {
+                let mut style = style.clone();
+                style.above.line_type = line_type;
+                let map = PriceMap::new(
+                    PriceTransform::default(),
+                    PriceRange::new(0.0, 100.0),
+                    0.0,
+                    100.0,
+                    inverted,
+                );
+                let ctx = Context::default();
+                let output = ctx.run_ui(RawInput::default(), |ui| {
+                    draw_baseline_segments(
+                        ui.painter(),
+                        &bars,
+                        0,
+                        &map,
+                        50.0,
+                        0.0,
+                        |i, _| i as f32 * 10.0,
+                        &style,
+                        PriceSource::Close,
+                    );
+                });
+                let mesh = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        Shape::Mesh(mesh) => Some(mesh.clone()),
+                        _ => None,
+                    })
+                    .unwrap();
+                output.drop_without_applying_deltas();
+                for triangle in mesh.indices.as_chunks::<3>().0 {
+                    let vertices = triangle.map(|i| &mesh.vertices[i as usize]);
+                    if vertices.iter().all(|v| v.pos.y == 50.0) {
+                        continue;
+                    }
+                    let xs = vertices.map(|v| v.pos.x);
+                    assert!(xs.iter().all(|x| *x <= 40.0) || xs.iter().all(|x| *x >= 60.0));
+                    let point_override = xs.iter().all(|x| (70.0..=80.0).contains(x));
+                    let price = |y| if inverted { y } else { 100.0 - y };
+                    let above = vertices.iter().map(|v| price(v.pos.y)).sum::<f32>() / 3.0 >= 50.0;
+                    for vertex in vertices {
+                        assert!(vertex.pos.is_finite());
+                        assert!((0.0..=100.0).contains(&vertex.pos.y));
+                        let distance = (price(vertex.pos.y) - 50.0).abs();
+                        let alpha = if point_override {
+                            3.2 * distance
+                        } else {
+                            40.0 + 3.2 * distance
+                        }
+                        .round() as u8;
+                        let expected = match (point_override, above) {
+                            (true, true) => [0, 0, alpha, alpha],
+                            (true, false) => [alpha, alpha, 0, alpha],
+                            (false, true) => [0, alpha, 0, alpha],
+                            (false, false) => [alpha, 0, 0, alpha],
+                        };
+                        assert_eq!(
+                            vertex.color.to_array(),
+                            expected,
+                            "{inverted} {line_type:?} {:?}",
+                            vertex.pos
+                        );
+                    }
+                }
+                for (x, price, expected) in [
+                    (0.0, 100.0, [0, 200, 0, 200]),
+                    (10.0, 75.0, [0, 120, 0, 120]),
+                    (10.0, 50.0, [0, 40, 0, 40]),
+                    (30.0, 50.0, [40, 0, 0, 40]),
+                    (30.0, 25.0, [120, 0, 0, 120]),
+                    (40.0, 0.0, [200, 0, 0, 200]),
+                    (70.0, 75.0, [0, 0, 80, 80]),
+                    (80.0, 25.0, [80, 80, 0, 80]),
+                ] {
+                    assert!(
+                        mesh.vertices
+                            .iter()
+                            .any(|v| v.pos == pos2(x, map.price_to_y(price))
+                                && v.color.to_array() == expected),
+                        "missing endpoint or midpoint at {x}, {price}, {inverted}, {line_type:?}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn baseline_dashes_keep_phase_across_short_segments_and_crossings() {

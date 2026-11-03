@@ -290,6 +290,63 @@ impl DemoStorage {
             )
     }
 
+    pub(super) fn save_sample_study(&self, title: &str, text: &str) {
+        self.documents
+            .lock()
+            .unwrap()
+            .insert(format!("sample-studies/{title}"), text.to_owned());
+        self.changed.store(true, Ordering::Relaxed);
+    }
+
+    pub(super) fn sample_study(&self, title: &str) -> Option<String> {
+        self.documents
+            .lock()
+            .unwrap()
+            .get(&format!("sample-studies/{title}"))
+            .cloned()
+    }
+
+    pub(super) fn sample_studies(&self) -> Vec<String> {
+        let mut names: Vec<_> = self
+            .documents
+            .lock()
+            .unwrap()
+            .keys()
+            .filter_map(|key| key.strip_prefix("sample-studies/").map(str::to_owned))
+            .collect();
+        names.sort();
+        names
+    }
+
+    pub(super) fn save_layout_groups(
+        &self,
+        name: &str,
+        groups: &super::replay::LayoutGroups,
+    ) -> Result<(), String> {
+        let document = serde_json::to_string(groups).map_err(|error| error.to_string())?;
+        self.documents
+            .lock()
+            .unwrap()
+            .insert(format!("layout-groups/{name}"), document);
+        self.changed.store(true, Ordering::Relaxed);
+        Ok(())
+    }
+
+    pub(super) fn layout_groups(
+        &self,
+        name: &str,
+    ) -> Result<Option<super::replay::LayoutGroups>, String> {
+        self.documents
+            .lock()
+            .unwrap()
+            .get(&format!("layout-groups/{name}"))
+            .map(|json| {
+                serde_json::from_str(json)
+                    .map_err(|error| format!("Could not open chart groups: {error}"))
+            })
+            .transpose()
+    }
+
     fn write(&self, kind: StoreKind, name: &str, document: Option<String>) {
         let mut documents = self.documents.lock().unwrap();
         match document {
@@ -334,6 +391,10 @@ impl Storage for DemoStorage {
                 .lock()
                 .unwrap()
                 .remove(&format!("layout-comparisons/{name}"));
+            self.documents
+                .lock()
+                .unwrap()
+                .remove(&format!("layout-groups/{name}"));
         }
         reply.send(Ok(()));
     }
