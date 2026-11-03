@@ -33,47 +33,6 @@ struct Workspace {
     slot: usize,
 }
 
-/// Samples belong to the running session, including in documents from earlier releases.
-fn remove_sample_annotations(snapshot: &mut egui_charts::widget::ChartSnapshot) {
-    use egui::Color32;
-    use egui_charts::model::{MarkerPos, MarkerShape};
-
-    let Some(annotations) = &mut snapshot.main_annotations else {
-        return;
-    };
-    annotations.markers.retain(|marker| {
-        let sample = marker.id.is_none()
-            && marker.tooltip.is_none()
-            && marker.size == 1.0
-            && marker.price.is_some()
-            && match marker.text.as_deref() {
-                Some("Fill") => {
-                    marker.shape == MarkerShape::Diamond
-                        && marker.position == MarkerPos::AtPriceMiddle
-                        && marker.color == Color32::from_rgb(41, 98, 255)
-                }
-                Some("Stop") => {
-                    marker.shape == MarkerShape::ArrowUp
-                        && marker.position == MarkerPos::AtPriceBottom
-                        && marker.color == Color32::from_rgb(242, 54, 69)
-                }
-                _ => false,
-            };
-        !sample
-    });
-    let level = Color32::from_rgb(255, 152, 0);
-    annotations.price_lines.retain(|line| {
-        !(line.title.as_deref() == Some("Demo level")
-            && line.color == level
-            && line.width == 1.0
-            && line.style == egui_charts::model::LineStyle::Dashed
-            && line.axis_label
-            && line.axis_label_color == Some(level)
-            && line.axis_label_text_color == Some(Color32::BLACK)
-            && line.title_color.is_none())
-    });
-}
-
 impl LayoutTab {
     pub fn unnamed() -> Self {
         Self {
@@ -678,7 +637,7 @@ impl DemoApp {
         }
         for snapshot in &mut layout.charts {
             if !self.api_samples {
-                remove_sample_annotations(snapshot);
+                super::marks::remove_samples(snapshot);
             }
             let mut check = Chart::new(egui_charts::model::BarData::new());
             if let Err(error) = check.restore(snapshot) {
