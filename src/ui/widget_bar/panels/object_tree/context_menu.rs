@@ -17,6 +17,7 @@ pub(super) fn render_item_menu(
 ) -> ObjectTreeAction {
     let mut action = ObjectTreeAction::None;
     let id = item.id;
+    let bar_series = item.source_type == SourceType::DataSource && item.series_id.is_some();
 
     if item.is_drawing() {
         ui.menu_button(l10n::text(ui.ctx(), "Move to folder"), |ui| {
@@ -63,7 +64,7 @@ pub(super) fn render_item_menu(
     }
 
     // Rename
-    if (item.is_drawing() || item.source_type == SourceType::DataSource)
+    if (item.is_drawing() || bar_series)
         && ui
             .selectable_label(false, l10n::text(ui.ctx(), "Rename…"))
             .clicked()
@@ -87,7 +88,7 @@ pub(super) fn render_item_menu(
     ui.separator();
 
     // Ordering for drawings and bar series.
-    if item.source_type == SourceType::Drawing || item.source_type == SourceType::DataSource {
+    if item.source_type == SourceType::Drawing || bar_series {
         if ui
             .selectable_label(false, l10n::text(ui.ctx(), "Bring to front"))
             .clicked()

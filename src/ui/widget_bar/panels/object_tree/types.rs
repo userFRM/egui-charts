@@ -233,7 +233,7 @@ impl SourceItem {
         }
     }
 
-    /// Create a new data source (main chart symbol)
+    /// Create a main or added bar-series data source.
     ///
     /// # Arguments
     ///
