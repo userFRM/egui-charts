@@ -6,14 +6,25 @@ use crate::model::Bar;
 use chrono::{DateTime, Utc};
 use egui::{Modifiers, PointerButton, Pos2, Ui};
 
+/// Which study plots are included in cursor and click payloads.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CursorDataPolicy {
+    /// Only visible studies and visible plots, matching chart readouts.
+    #[default]
+    Visible,
+    /// All computed study plots, including hidden studies and hidden plots.
+    /// This does not change rendering, autoscale or crosshair index eligibility.
+    IncludeHidden,
+}
+
 /// A chart cursor position with the data a host legend, tooltip or context action reads.
 /// Identical whitespace slots compare equal, including their colours and host payloads.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct ChartPointer {
-    /// Nearest eligible main or added-series point's timestamp, respecting the time-scale filters.
-    /// With both filters off, extrapolated into whitespace as in `visible_time_range`.
-    pub time: DateTime<Utc>,
+    /// Stored timestamp of the nearest eligible main or added-series point, including whitespace.
+    /// `None` without data or when the selected position has no stored point.
+    pub time: Option<DateTime<Utc>>,
     /// Price on the main pane, or the value on the scale of the hovered pane or volume.
     pub price: f64,
     /// `MAIN`, `VOLUME`, or the first series or study of another hovered pane. An empty pane
@@ -38,8 +49,9 @@ pub struct ChartPointer {
     /// Every series added with `add_series` or `add_comparison` that has a bar at `time`,
     /// including hidden series and their host payloads.
     pub series_bars: Vec<(SeriesId, Bar)>,
-    /// Visible study plots at the selected main-series point, as [`Chart::study_values_at`]
-    /// returns them, each with the id of its study. Empty between main-series points.
+    /// Study plots at the selected main-series point, each with its stable study id. Defaults to the visible plots
+    /// returned by [`Chart::study_values_at`]; [`Chart::set_cursor_data_policy`] can include
+    /// hidden studies and plots. Missing values remain `None`; empty between main-series points.
     pub studies: Vec<(SeriesId, StudyValue)>,
     /// The drawing, series or study line under the pointer, in the priority a click selects.
     pub target: Option<PointerTarget>,
@@ -47,10 +59,21 @@ pub struct ChartPointer {
     pub modifiers: Modifiers,
     /// Device that produced the event.
     pub kind: PointerKind,
+    /// Originating egui pointer or touch event, including button state or touch device, id,
+    /// phase and pressure when supplied by the integration. A matching touch takes precedence
+    /// over its emulated pointer event, and `pos` and `modifiers` are those of that event.
+    /// `None` means the position was recomputed from chart state without originating input.
+    pub origin: Option<egui::Event>,
 }
 
 impl PartialEq for ChartPointer {
     fn eq(&self, other: &Self) -> bool {
+        self.origin == other.origin && self.same_position(other)
+    }
+}
+
+impl ChartPointer {
+    fn same_position(&self, other: &Self) -> bool {
         self.time == other.time
             && self.price == other.price
             && self.series == other.series
@@ -142,8 +165,9 @@ pub enum ChartEvent {
     /// first non-zero size.
     TimeScaleResized(egui::Vec2),
     /// The local cursor moved or anything its pointer carries changed, such as the bar under a
-    /// stationary cursor or a held modifier; `None` means it left the plots or no eligible
-    /// crosshair index remains in view.
+    /// stationary cursor, held modifiers or touch details; `None` means it left the plots or
+    /// loaded data has no eligible crosshair index in view. Empty plots report a position
+    /// without a data time.
     /// Programmatically synchronized cursors do not emit this event.
     CrosshairMoved(Option<ChartPointer>),
     /// A primary or secondary click in a plot, including clicks selecting drawings or studies.
@@ -262,7 +286,8 @@ impl PartialEq for ImageRequest {
 
 #[derive(Default)]
 pub(super) struct HostEvents {
-    queue: std::collections::VecDeque<ChartEvent>,
+    // Queue growth should move handles, not large pointer snapshots.
+    queue: std::collections::VecDeque<Box<ChartEvent>>,
     dropped: usize,
     pub(super) data_operations: bool,
     range: Option<VisibleTimeRange>,
@@ -270,7 +295,10 @@ pub(super) struct HostEvents {
     time_scale_size: egui::Vec2,
     pointer: Option<ChartPointer>,
     kind: Option<PointerKind>,
+    cursor_data_policy: CursorDataPolicy,
     click_frames: [Option<u64>; 3],
+    modifiers: Modifiers,
+    input_frame: Option<(u64, Modifiers)>,
     /// What the pointer is over this frame, resolved while the plots are drawn.
     pub target: Option<PointerTarget>,
     pub volume_map: Option<crate::scales::PriceMap>,
@@ -284,11 +312,20 @@ impl HostEvents {
             self.queue.pop_front();
             self.dropped = self.dropped.saturating_add(1);
         }
-        self.queue.push_back(event);
+        self.queue.push_back(Box::new(event));
     }
 }
 
 impl Chart {
+    /// Selects the study data included in [`ChartEvent::CrosshairMoved`], [`ChartEvent::Click`]
+    /// and [`ChartEvent::DoubleClick`]. The default is [`CursorDataPolicy::Visible`].
+    ///
+    /// Takes effect on the next `show`, including for a stationary cursor. This changes only
+    /// host payloads; legends, tooltips, rendering and autoscale retain their visibility rules.
+    pub fn set_cursor_data_policy(&mut self, policy: CursorDataPolicy) {
+        self.host_events.cursor_data_policy = policy;
+    }
+
     /// Enables an additional [`ChartEvent::DataOperation`] for each accepted
     /// [`set_data`](Self::set_data) or [`update`](Self::update) call, in call order, including
     /// unchanged data. Disabled by default; changing this setting affects future calls and keeps
@@ -338,7 +375,7 @@ impl Chart {
         (dropped > 0)
             .then_some(ChartEvent::EventsDropped(dropped))
             .into_iter()
-            .chain(self.host_events.queue.drain(..))
+            .chain(self.host_events.queue.drain(..).map(|event| *event))
     }
 
     pub(super) fn data_loaded(&mut self, series: SeriesId) {
@@ -373,6 +410,7 @@ impl Chart {
             .queue
             .iter_mut()
             .rev()
+            .map(Box::as_mut)
             .find(|event| !matches!(event, ChartEvent::DataOperation { .. }))
             && *last == series
         {
@@ -384,13 +422,19 @@ impl Chart {
     }
 
     /// Selects from the same fractional positions used to paint added series.
-    fn pointer_time(&self, pos: Pos2) -> Option<(DateTime<Utc>, f64)> {
+    fn pointer_time(&self, pos: Pos2) -> Option<(Option<DateTime<Utc>>, f64)> {
         let shown = self.state.shown();
         let coords = self.get_chart_mapping();
-        let pointer_time = crate::model::time_at(shown, coords.x_to_idx_f64(pos.x))?;
-        let mut selected = self.crosshair_position(pos, &coords).and_then(|pos| {
+        let index = coords.x_to_idx_f64(pos.x);
+        if shown.is_empty() {
+            return Some((None, index.round()));
+        }
+        let pointer_time = crate::model::time_at(shown, index)?;
+        let mut selected = self.crosshair_position(pos, &coords).map(|pos| {
             let index = coords.x_to_idx_f64(pos.x).round();
-            Some((crate::model::time_at(shown, index)?, index))
+            let time =
+                (index >= 0.0 && index < shown.len() as f64).then(|| shown[index as usize].time);
+            (time, index)
         });
         let x_at = |index| {
             self.state.time_scale().idx_to_coord_precise(
@@ -428,9 +472,10 @@ impl Chart {
                     let main = shown.binary_search_by_key(&bar.time, |bar| bar.time).ok();
                     if self.crosshair_time_eligible(bar.time, main)
                         && (candidate_distance + precision < distance
-                            || selected.is_none_or(|(time, _)| bar.time > time))
+                            || selected
+                                .is_none_or(|(time, _)| time.is_none_or(|time| bar.time > time)))
                     {
-                        selected = Some((bar.time, index));
+                        selected = Some((Some(bar.time), index));
                         distance = candidate_distance;
                     }
                 }
@@ -439,14 +484,108 @@ impl Chart {
         selected
     }
 
-    fn pointer_at(&self, ui: &Ui, pos: Pos2) -> Option<ChartPointer> {
+    fn prepare_pointer_input(&mut self, ui: &Ui) {
+        let frame = ui.ctx().cumulative_frame_nr();
+        if self.host_events.input_frame.map(|(at, _)| at) != Some(frame) {
+            self.host_events.input_frame = Some((frame, self.host_events.modifiers));
+            self.host_events.modifiers = ui.input(|input| input.modifiers);
+        }
+    }
+
+    fn pointer_origin(
+        &self,
+        ui: &Ui,
+        pos: Pos2,
+        button: Option<PointerButton>,
+    ) -> Option<(egui::Event, Modifiers)> {
+        use egui::{Event, TouchPhase};
+
+        ui.input(|input| {
+            let events = &input.raw.events;
+            let initial = if events
+                .iter()
+                .any(|event| matches!(event, Event::ModifiersChanged(_)))
+            {
+                self.host_events.input_frame?.1
+            } else {
+                input.modifiers
+            };
+            let inputs = || {
+                events
+                    .iter()
+                    .enumerate()
+                    .scan(initial, |modifiers, (at, event)| {
+                        match event {
+                            Event::ModifiersChanged(keys)
+                            | Event::PointerButton {
+                                modifiers: keys, ..
+                            }
+                            | Event::Key {
+                                modifiers: keys, ..
+                            }
+                            | Event::MouseWheel {
+                                modifiers: keys, ..
+                            } => *modifiers = *keys,
+                            Event::WindowFocused(false) => *modifiers = Modifiers::NONE,
+                            _ => {}
+                        }
+                        Some((at, event, *modifiers))
+                    })
+            };
+            let (at, event, modifiers) = inputs()
+                .filter(|(_, event, _)| match event {
+                    Event::PointerMoved(point) | Event::Touch { pos: point, .. } => {
+                        button.is_none() && *point == pos
+                    }
+                    Event::PointerButton {
+                        pos: point,
+                        button: released,
+                        pressed,
+                        ..
+                    } => *point == pos && button.is_none_or(|b| b == *released && !pressed),
+                    _ => false,
+                })
+                .last()?;
+            // Integrations emit both touch and emulated pointer events, in either order.
+            let phase_matches = |phase: TouchPhase| match event {
+                Event::PointerMoved(_) => matches!(phase, TouchPhase::Start | TouchPhase::Move),
+                Event::PointerButton {
+                    button: PointerButton::Primary,
+                    pressed,
+                    ..
+                } => {
+                    if *pressed {
+                        phase == TouchPhase::Start
+                    } else {
+                        matches!(phase, TouchPhase::End | TouchPhase::Cancel)
+                    }
+                }
+                _ => false,
+            };
+            let touch = inputs()
+                .filter(|(_, candidate, _)| {
+                    matches!(candidate, Event::Touch { pos: point, phase, .. }
+                        if *point == pos && phase_matches(*phase))
+                })
+                .min_by_key(|(index, _, _)| index.abs_diff(at));
+            let (_, event, modifiers) = touch.unwrap_or((at, event, modifiers));
+            Some((event.clone(), modifiers))
+        })
+    }
+
+    fn pointer_at(
+        &self,
+        ui: &Ui,
+        pos: Pos2,
+        origin: Option<(egui::Event, Modifiers)>,
+    ) -> Option<ChartPointer> {
         let plot = self.last_rendered_price_rect;
         let shown = self.state.shown();
         let (time, index) = self.pointer_time(pos)?;
         let index = index.round();
         let bar_at = (index >= 0.0 && index < shown.len() as f64)
             .then_some(index as usize)
-            .filter(|at| shown[*at].time == time);
+            .filter(|at| Some(shown[*at].time) == time);
         let magnet = |map: crate::scales::PriceMap, values: Vec<f64>| {
             if self.chart_options.crosshair.mode.snaps() {
                 crate::chart::rendering::snap_to_values(pos.y, &map, values)
@@ -473,7 +612,10 @@ impl Chart {
             let closes = group.members.iter().filter_map(|id| {
                 let item =
                     (self.price_series.iter()).find(|item| item.id == *id && item.visible)?;
-                let at = item.bars.binary_search_by_key(&time, |bar| bar.time).ok()?;
+                let at = item
+                    .bars
+                    .binary_search_by_key(&time?, |bar| bar.time)
+                    .ok()?;
                 (!item.bars[at].is_whitespace()).then_some(item.bars[at].close)
             });
             let values = group
@@ -538,30 +680,35 @@ impl Chart {
                 .price_series
                 .iter()
                 .filter_map(|item| {
-                    let at = item.bars.binary_search_by_key(&time, |bar| bar.time).ok()?;
+                    let at = item
+                        .bars
+                        .binary_search_by_key(&time?, |bar| bar.time)
+                        .ok()?;
                     Some((item.id, item.bars[at].clone()))
                 })
                 .collect(),
-            studies: bar_at.map_or_else(Vec::new, |index| self.study_rows_at(index)),
-            target: self.host_events.target,
-            modifiers: ui.input(|input| input.modifiers),
-            kind: self.host_events.kind.unwrap_or_else(|| {
-                if ui.input(|input| {
-                    input.any_touches()
-                        || input
-                            .events
-                            .iter()
-                            .any(|event| matches!(event, egui::Event::Touch { .. }))
-                }) {
-                    PointerKind::Touch
-                } else {
-                    PointerKind::Mouse
-                }
+            studies: bar_at.map_or_else(Vec::new, |index| {
+                self.study_rows_at_with_policy(index, self.host_events.cursor_data_policy)
             }),
+            target: self.host_events.target,
+            modifiers: origin
+                .as_ref()
+                .map_or_else(|| ui.input(|input| input.modifiers), |(_, keys)| *keys),
+            kind: self.host_events.kind.unwrap_or_else(|| match &origin {
+                Some((egui::Event::Touch { .. }, _)) => PointerKind::Touch,
+                Some(_) => PointerKind::Mouse,
+                None => self
+                    .host_events
+                    .pointer
+                    .as_ref()
+                    .map_or(PointerKind::Mouse, |pointer| pointer.kind),
+            }),
+            origin: origin.map(|(event, _)| event),
         })
     }
 
     pub(super) fn record_host_events(&mut self, ui: &Ui) {
+        self.prepare_pointer_input(ui);
         #[cfg(feature = "drawings")]
         self.record_image_requests(ui);
         let range = self.visible_time_range();
@@ -589,10 +736,19 @@ impl Chart {
                     ui.max_rect().bottom(),
                 ),
             ))
-            .then(|| self.pointer_at(ui, pos))
+            .then(|| self.pointer_at(ui, pos, self.pointer_origin(ui, pos, None)))
             .flatten()
         });
-        if position != self.host_events.pointer {
+        let unchanged = match (&position, &self.host_events.pointer) {
+            (Some(position), Some(previous)) => {
+                // Button transitions alone do not move the cursor; changed touch details do.
+                position.same_position(previous)
+                    && (!matches!(position.origin, Some(egui::Event::Touch { .. }))
+                        || position.origin == previous.origin)
+            }
+            _ => position == self.host_events.pointer,
+        };
+        if !unchanged {
             self.host_events.pointer = position.clone();
             self.host_events.push(ChartEvent::CrosshairMoved(position));
         }
@@ -671,18 +827,32 @@ impl Chart {
     }
 
     pub(super) fn record_host_click(&mut self, ui: &Ui, response: &egui::Response) {
-        let Some(position) = response
-            .interact_pointer_pos()
-            .and_then(|pos| self.pointer_at(ui, pos))
-        else {
-            return;
-        };
+        self.prepare_pointer_input(ui);
         let frame = ui.ctx().cumulative_frame_nr();
         for (index, button) in [PointerButton::Primary, PointerButton::Secondary]
             .into_iter()
             .enumerate()
         {
             if response.clicked_by(button) && self.host_events.click_frames[index] != Some(frame) {
+                let pos = ui.input(|input| {
+                    input.raw.events.iter().rev().find_map(|event| match event {
+                        egui::Event::PointerButton {
+                            pos,
+                            button: released,
+                            pressed: false,
+                            ..
+                        } if *released == button => Some(*pos),
+                        _ => None,
+                    })
+                });
+                let Some(position) =
+                    pos.or_else(|| response.interact_pointer_pos())
+                        .and_then(|pos| {
+                            self.pointer_at(ui, pos, self.pointer_origin(ui, pos, Some(button)))
+                        })
+                else {
+                    continue;
+                };
                 self.host_events.click_frames[index] = Some(frame);
                 self.host_events.push(ChartEvent::Click {
                     position: position.clone(),
@@ -695,12 +865,13 @@ impl Chart {
                     if !response.double_clicked() && !response.triple_clicked() {
                         self.click_link(ui.ctx(), position.pos);
                     }
+                    if response.double_clicked() && self.host_events.click_frames[2] != Some(frame)
+                    {
+                        self.host_events.click_frames[2] = Some(frame);
+                        self.host_events.push(ChartEvent::DoubleClick { position });
+                    }
                 }
             }
-        }
-        if response.double_clicked() && self.host_events.click_frames[2] != Some(frame) {
-            self.host_events.click_frames[2] = Some(frame);
-            self.host_events.push(ChartEvent::DoubleClick { position });
         }
     }
 }
@@ -992,7 +1163,7 @@ mod tests {
                         .unwrap_or_else(|| panic!("{pane} {main} {step}: missing pointer"));
                     assert_eq!(
                         pointer.time,
-                        bar(minute, value).time,
+                        Some(bar(minute, value).time),
                         "{pane} {main} {step}"
                     );
                     assert!(pointer.bar.is_none() && pointer.studies.is_empty());
@@ -1020,6 +1191,473 @@ mod tests {
                     )));
                     chart.update(selected_series, bar(minute, value));
                 }
+            }
+        }
+    }
+
+    /// Separate inputs in one frame retain their coordinates and keys; state updates have no
+    /// originating input, even with unrelated touches in that frame.
+    #[test]
+    fn pointer_origins_match_each_notification() {
+        for (button, touch_first) in [
+            (PointerButton::Primary, true),
+            (PointerButton::Secondary, false),
+        ] {
+            let ctx = Context::default();
+            let mut chart = chart(&[100.0], &[200.0]);
+            chart.config.show_volume = false;
+            chart.config.show_ohlc_info = false;
+            chart.config.show_symbol_labels = false;
+            for t in [0.0, 0.1, 0.2] {
+                frame(&ctx, &mut chart, t, vec![]);
+            }
+            let map = chart.get_chart_mapping();
+            let click_pos = Pos2::new(map.idx_to_x(60), map.price_to_y(150.0));
+            let touch_pos = Pos2::new(map.idx_to_x(70), map.price_to_y(160.0));
+            let unrelated_pos = Pos2::new(map.idx_to_x(80), map.price_to_y(170.0));
+            // Modifiers can change while this chart is hidden.
+            ctx.run_ui(
+                egui::RawInput {
+                    time: Some(0.25),
+                    events: vec![Event::ModifiersChanged(Modifiers::SHIFT)],
+                    ..Default::default()
+                },
+                |_| {},
+            )
+            .drop_without_applying_deltas();
+            frame(&ctx, &mut chart, 0.3, vec![Event::PointerMoved(click_pos)]);
+            assert!(chart.drain_events().any(|event| matches!(event,
+                ChartEvent::CrosshairMoved(Some(pointer)) if pointer.modifiers == Modifiers::SHIFT
+                    && pointer.origin == Some(Event::PointerMoved(click_pos))
+            )));
+            frame(
+                &ctx,
+                &mut chart,
+                0.4,
+                vec![Event::PointerButton {
+                    pos: click_pos,
+                    button,
+                    pressed: true,
+                    modifiers: Modifiers::SHIFT,
+                }],
+            );
+            chart.drain_events().for_each(drop);
+            let release = Event::PointerButton {
+                pos: click_pos,
+                button,
+                pressed: false,
+                modifiers: Modifiers::SHIFT,
+            };
+            let touch = Event::Touch {
+                device_id: egui::TouchDeviceId(42),
+                id: egui::TouchId(7),
+                phase: egui::TouchPhase::Start,
+                pos: touch_pos,
+                force: Some(0.75),
+            };
+            let touch_inputs = vec![Event::ModifiersChanged(Modifiers::ALT), touch.clone()];
+            let pointer_inputs = vec![
+                release.clone(),
+                Event::ModifiersChanged(Modifiers::CTRL),
+                Event::PointerMoved(touch_pos),
+            ];
+            let mut inputs = if touch_first {
+                [touch_inputs, pointer_inputs].concat()
+            } else {
+                [pointer_inputs, touch_inputs].concat()
+            };
+            inputs.push(Event::ModifiersChanged(Modifiers::NONE));
+            frame(&ctx, &mut chart, 0.5, inputs);
+            let events = chart.drain_events().collect::<Vec<_>>();
+            let click = events
+                .iter()
+                .find_map(|event| match event {
+                    ChartEvent::Click {
+                        position,
+                        button: b,
+                    } if *b == button => Some(position),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!((click.pos, click.index), (click_pos, 60));
+            assert_eq!(
+                (click.modifiers, click.kind),
+                (Modifiers::SHIFT, PointerKind::Mouse)
+            );
+            assert_eq!(click.origin, Some(release));
+            let pointer = events
+                .iter()
+                .find_map(|event| match event {
+                    ChartEvent::CrosshairMoved(Some(pointer)) => Some(pointer),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!((pointer.pos, pointer.index), (touch_pos, 70));
+            assert_eq!(
+                (pointer.modifiers, pointer.kind),
+                (Modifiers::ALT, PointerKind::Touch)
+            );
+            assert_eq!(pointer.origin, Some(touch));
+
+            // Pressure and phase changes at a stationary position still carry their input.
+            for (step, phase) in [
+                egui::TouchPhase::Move,
+                egui::TouchPhase::End,
+                egui::TouchPhase::Cancel,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let touch = Event::Touch {
+                    device_id: egui::TouchDeviceId(42),
+                    id: egui::TouchId(7),
+                    phase,
+                    pos: touch_pos,
+                    force: Some(0.25),
+                };
+                frame(
+                    &ctx,
+                    &mut chart,
+                    0.6 + step as f64 * 0.1,
+                    vec![touch.clone()],
+                );
+                assert!(chart.drain_events().any(|event| matches!(event,
+                    ChartEvent::CrosshairMoved(Some(pointer)) if pointer.origin == Some(touch.clone())
+                        && pointer.pos == touch_pos && pointer.modifiers == Modifiers::NONE
+                )));
+            }
+            frame(
+                &ctx,
+                &mut chart,
+                0.82,
+                vec![
+                    Event::Touch {
+                        device_id: egui::TouchDeviceId(42),
+                        id: egui::TouchId(7),
+                        phase: egui::TouchPhase::Start,
+                        pos: touch_pos,
+                        force: Some(0.5),
+                    },
+                    Event::PointerButton {
+                        pos: touch_pos,
+                        button: PointerButton::Primary,
+                        pressed: true,
+                        modifiers: Modifiers::NONE,
+                    },
+                ],
+            );
+            chart.drain_events().for_each(drop);
+            let lift = Event::Touch {
+                device_id: egui::TouchDeviceId(42),
+                id: egui::TouchId(7),
+                phase: egui::TouchPhase::End,
+                pos: touch_pos,
+                force: Some(0.125),
+            };
+            frame(
+                &ctx,
+                &mut chart,
+                0.84,
+                vec![
+                    Event::PointerButton {
+                        pos: touch_pos,
+                        button: PointerButton::Primary,
+                        pressed: false,
+                        modifiers: Modifiers::NONE,
+                    },
+                    lift.clone(),
+                    Event::Touch {
+                        device_id: egui::TouchDeviceId(99),
+                        id: egui::TouchId(99),
+                        phase: egui::TouchPhase::End,
+                        pos: unrelated_pos,
+                        force: None,
+                    },
+                ],
+            );
+            assert!(chart.drain_events().any(|event| matches!(event,
+                ChartEvent::Click { position, button: PointerButton::Primary }
+                    if position.origin == Some(lift.clone()) && position.pos == touch_pos
+                        && position.kind == PointerKind::Touch
+            )));
+            let mut bars = chart.bars(SeriesId::MAIN).to_vec();
+            bars[70].payload = Some(std::sync::Arc::new(serde_json::json!({ "revision": 1 })));
+            chart.set_data(SeriesId::MAIN, bars);
+            chart.set_crosshair_position(Some((chart.bars(SeriesId::MAIN)[50].time, 125.0)));
+            frame(
+                &ctx,
+                &mut chart,
+                0.9,
+                vec![Event::Touch {
+                    device_id: egui::TouchDeviceId(99),
+                    id: egui::TouchId(99),
+                    phase: egui::TouchPhase::Start,
+                    pos: unrelated_pos,
+                    force: Some(1.0),
+                }],
+            );
+            assert!(chart.drain_events().any(|event| matches!(event,
+                ChartEvent::CrosshairMoved(Some(pointer)) if pointer.origin.is_none()
+                    && pointer.pos == touch_pos && pointer.index == 70
+            )));
+            frame(&ctx, &mut chart, 1.0, vec![]);
+            assert!(
+                !chart
+                    .drain_events()
+                    .any(|event| matches!(event, ChartEvent::CrosshairMoved(_)))
+            );
+            frame(&ctx, &mut chart, 1.1, vec![Event::PointerGone]);
+            chart.drain_events().for_each(drop);
+            chart.set_crosshair_position(Some((chart.bars(SeriesId::MAIN)[55].time, 130.0)));
+            frame(&ctx, &mut chart, 1.2, vec![]);
+            assert!(
+                !chart
+                    .drain_events()
+                    .any(|event| matches!(event, ChartEvent::CrosshairMoved(_)))
+            );
+        }
+    }
+
+    #[cfg(feature = "studies")]
+    #[test]
+    fn cursor_data_policy_includes_hidden_values_without_changing_the_chart() {
+        use crate::studies::{CustomIndicator, IndicatorValue};
+        use crate::widget::test_frames::shapes;
+
+        let ctx = Context::default();
+        let mut chart = chart(&[10.0], &[20.0]);
+        chart.config.show_volume = false;
+        let mut ids = Vec::new();
+        for _ in 0..2 {
+            // Equal names still identify two different studies. The second plot's value
+            // is 100 * 20 = 2000, far outside the visible bars' 10..20 price range.
+            let id = chart.add_indicator(Box::new(
+                CustomIndicator::new("Pair", |bars| {
+                    bars.iter()
+                        .enumerate()
+                        .map(|(index, bar)| match index {
+                            72 => IndicatorValue::None,
+                            71 => IndicatorValue::Multiple(vec![bar.close, f64::NAN]),
+                            _ => IndicatorValue::Multiple(vec![bar.close, bar.close * 100.0]),
+                        })
+                        .collect()
+                })
+                .with_line_count(2)
+                .with_line_names(vec!["close".into(), "scaled".into()]),
+            ));
+            let study = chart.indicator_mut(id).unwrap();
+            let mut settings = study.settings();
+            settings.plots[1].visible = false;
+            study.apply_settings(&[], settings).unwrap();
+            ids.push(id);
+        }
+        chart.set_indicator_visible(ids[1], false);
+        for time in [0.0, 0.1, 0.2] {
+            frame(&ctx, &mut chart, time, vec![]);
+        }
+        chart.set_visible_logical_range(crate::model::LogicalRange::new(60.0, 115.0));
+        frame(&ctx, &mut chart, 0.3, vec![]);
+        for (step, index) in [70, 71, 72, 110].into_iter().enumerate() {
+            let time = 1.0 + step as f64;
+            let pos = Pos2::new(
+                chart.get_chart_mapping().idx_to_x(index),
+                chart.last_rendered_price_rect.center().y,
+            );
+            frame(&ctx, &mut chart, time, vec![Event::PointerMoved(pos)]);
+            let painted = shapes(&ctx, &mut chart, time + 0.1, vec![]);
+            let readout = chart.study_values_at(index);
+            let range = chart.state.price_scale().range();
+            let visible = readout
+                .iter()
+                .cloned()
+                .map(|row| (ids[0], row))
+                .collect::<Vec<_>>();
+            assert_eq!(chart.host_events.pointer.as_ref().unwrap().studies, visible);
+            chart.drain_events().for_each(drop);
+
+            chart.set_cursor_data_policy(CursorDataPolicy::IncludeHidden);
+            let included = shapes(&ctx, &mut chart, time + 0.2, vec![]);
+            assert_eq!(included, painted, "painted shapes at {index}");
+            assert_eq!(chart.state.price_scale().range(), range);
+            assert_eq!(chart.study_values_at(index), readout);
+            let pointer = chart.host_events.pointer.clone().unwrap();
+            let actual = pointer
+                .studies
+                .iter()
+                .map(|(id, row)| (*id, row.plot.as_str(), row.value))
+                .collect::<Vec<_>>();
+            let expected = if index == 110 {
+                Vec::new()
+            } else {
+                ids.iter()
+                    .flat_map(|&id| {
+                        [
+                            (id, "close", (index != 72).then_some(20.0)),
+                            (id, "scaled", (index == 70).then_some(2000.0)),
+                        ]
+                    })
+                    .collect()
+            };
+            assert_eq!(actual, expected, "cursor values at {index}");
+            let events = chart.drain_events().collect::<Vec<_>>();
+            assert_eq!(
+                events,
+                if index == 110 {
+                    vec![]
+                } else {
+                    vec![ChartEvent::CrosshairMoved(Some(pointer.clone()))]
+                }
+            );
+            frame(&ctx, &mut chart, time + 0.3, vec![]);
+            assert_eq!(chart.drain_events().count(), 0);
+            for pressed in [true, false] {
+                frame(
+                    &ctx,
+                    &mut chart,
+                    time + 0.4,
+                    vec![Event::PointerButton {
+                        pos,
+                        button: PointerButton::Primary,
+                        pressed,
+                        modifiers: Modifiers::NONE,
+                    }],
+                );
+            }
+            assert!(chart.drain_events().any(|event| matches!(
+                event, ChartEvent::Click { position, .. } if position.studies == pointer.studies
+            )));
+            chart.set_cursor_data_policy(CursorDataPolicy::Visible);
+            frame(&ctx, &mut chart, time + 0.5, vec![]);
+            assert_eq!(chart.host_events.pointer.as_ref().unwrap().studies, visible);
+        }
+    }
+
+    /// Plot positions survive missing history; only stored slots supply a data time.
+    #[test]
+    fn pointer_events_keep_positions_without_data_times() {
+        for (empty, filtered) in [(false, false), (true, false), (true, true)] {
+            for secondary in [false, true] {
+                let ctx = Context::default();
+                let mut chart = chart(&[100.0], &[200.0]);
+                let mut bars = chart.bars(SeriesId::MAIN)[..3].to_vec();
+                bars[1] = Bar::whitespace(bars[1].time);
+                bars[2].time += chrono::Duration::days(3);
+                if empty {
+                    bars.clear();
+                }
+                chart.set_data(SeriesId::MAIN, bars.clone());
+                chart.config.show_volume = false;
+                chart.config.show_ohlc_info = false;
+                chart.config.show_symbol_labels = false;
+                chart.chart_options.time_scale.ignore_whitespace_indices = filtered;
+                chart.chart_options.time_scale.ignore_hidden_indices = filtered;
+                let owner = if secondary {
+                    let series = chart.add_series(Default::default());
+                    chart.set_data(series, bars.clone());
+                    let pane = chart.add_pane();
+                    assert!(chart.move_series_to_pane(series, pane));
+                    series
+                } else {
+                    SeriesId::MAIN
+                };
+                for time in [0.0, 0.1, 0.2] {
+                    frame(&ctx, &mut chart, time, vec![]);
+                }
+                if !empty {
+                    assert!(
+                        chart
+                            .set_visible_logical_range(crate::model::LogicalRange::new(-2.0, 5.0,))
+                    );
+                    frame(&ctx, &mut chart, 0.3, vec![]);
+                }
+                chart.drain_events().for_each(drop);
+                for (step, index) in [-1, 0, 1, 2, 3].into_iter().enumerate() {
+                    let map = chart.get_chart_mapping();
+                    let y = if secondary {
+                        chart.pane_layout.panes[1].rect.center().y
+                    } else {
+                        200.0
+                    };
+                    let x = if empty {
+                        300.0 + step as f32 * 10.0
+                    } else {
+                        map.idx_to_x(0) + index as f32 * map.bar_spacing
+                    };
+                    let pos = egui::pos2(x, y);
+                    let time = 1.0 + step as f64;
+                    frame(&ctx, &mut chart, time, vec![Event::PointerMoved(pos)]);
+                    let pointer = chart
+                        .drain_events()
+                        .find_map(|event| match event {
+                            ChartEvent::CrosshairMoved(pointer) => pointer,
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| panic!("missing position: {empty} {secondary} {index}"));
+                    let bar = usize::try_from(index).ok().and_then(|i| bars.get(i));
+                    assert_eq!(pointer.time, bar.map(|bar| bar.time));
+                    assert_eq!(
+                        (pointer.pos, pointer.pane, pointer.series),
+                        (pos, usize::from(secondary), owner)
+                    );
+                    assert!(pointer.price.is_finite());
+                    assert_eq!(
+                        pointer.bar.as_ref().map(|bar| bar.time),
+                        bar.map(|bar| bar.time)
+                    );
+                    assert_eq!(
+                        pointer.bar.as_ref().map(Bar::is_whitespace),
+                        bar.map(Bar::is_whitespace)
+                    );
+                    assert_eq!(
+                        pointer.series_bars.len(),
+                        usize::from(secondary && bar.is_some())
+                    );
+                    if !empty {
+                        assert_eq!(pointer.index, index);
+                    }
+                    for button in [PointerButton::Primary, PointerButton::Secondary] {
+                        let mut expected = pointer.clone();
+                        expected.origin = Some(Event::PointerButton {
+                            pos,
+                            button,
+                            pressed: false,
+                            modifiers: Modifiers::NONE,
+                        });
+                        for pressed in [true, false] {
+                            frame(
+                                &ctx,
+                                &mut chart,
+                                time + 0.1,
+                                vec![Event::PointerButton {
+                                    pos,
+                                    button,
+                                    pressed,
+                                    modifiers: Modifiers::NONE,
+                                }],
+                            );
+                        }
+                        assert!(
+                            chart.drain_events().any(|event| event
+                                == ChartEvent::Click {
+                                    position: expected.clone(),
+                                    button,
+                                }),
+                            "missing click: {empty} {secondary} {index}"
+                        );
+                    }
+                    frame(&ctx, &mut chart, time + 0.2, vec![]);
+                    assert!(
+                        !chart
+                            .drain_events()
+                            .any(|event| matches!(event, ChartEvent::CrosshairMoved(_)))
+                    );
+                }
+                frame(&ctx, &mut chart, 7.0, vec![Event::PointerGone]);
+                assert!(
+                    chart
+                        .drain_events()
+                        .any(|event| event == ChartEvent::CrosshairMoved(None))
+                );
             }
         }
     }
@@ -1254,7 +1892,7 @@ mod tests {
             let Some(ChartEvent::CrosshairMoved(Some(pointer))) = events.last() else {
                 panic!("{events:?}")
             };
-            assert_eq!(pointer.time, bars[70].time);
+            assert_eq!(pointer.time, Some(bars[70].time));
             assert_eq!(pointer.series, SeriesId::MAIN);
             assert!(
                 (pointer.price - price).abs() < 0.001,
@@ -1280,6 +1918,13 @@ mod tests {
             frame(&ctx, &mut chart, 1.2, vec![]);
             assert_eq!(chart.drain_events().count(), 0);
             for button in [PointerButton::Primary, PointerButton::Secondary] {
+                let mut expected = expected.clone();
+                expected.origin = Some(Event::PointerButton {
+                    pos,
+                    button,
+                    pressed: false,
+                    modifiers: Modifiers::NONE,
+                });
                 for pressed in [true, false] {
                     frame(
                         &ctx,
@@ -1326,7 +1971,7 @@ mod tests {
                     panic!("above={above}, maximized={maximized}: {events:?}")
                 };
                 assert_eq!(pointer.series, id);
-                assert_eq!(pointer.time, bars[70].time);
+                assert_eq!(pointer.time, Some(bars[70].time));
                 assert!((pointer.price - 50.0).abs() < 0.001);
                 assert_eq!(pointer.pane, usize::from(!above));
                 assert_eq!(
@@ -1337,7 +1982,13 @@ mod tests {
                         .map(|row| (id, row))
                         .collect::<Vec<_>>()
                 );
-                let expected = pointer.clone();
+                let mut expected = pointer.clone();
+                expected.origin = Some(Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Modifiers::NONE,
+                });
                 for pressed in [true, false] {
                     frame(
                         &ctx,

@@ -231,6 +231,7 @@ impl Chart {
                 |ui| self.show_internal(ui, Some(time_axis), maximized_plot.as_ref(), footprint),
             )
             .inner;
+        let touch_readout = crate::widget::interaction::touch_crosshair(ui, response.id);
 
         let mut host_clicks = Vec::new();
         let studies = if self.chart_type.is_time_independent() {
@@ -244,12 +245,13 @@ impl Chart {
 
         // Get coordinate parameters from time scale for x-axis alignment
         let time_scale = self.state.time_scale();
-        let coords = IndicatorCoordParams::new(
+        let mut coords = IndicatorCoordParams::new(
             time_scale.bar_spacing(),
             time_scale.right_offset_precise(),
             self.state.shown().len().saturating_sub(1),
             start_idx,
         );
+        coords.numeric_positions = time_scale.numeric_positions().cloned();
 
         let horizontal = coords.to_mapping(plot, 0.0, 1.0);
         let displayed_range =
@@ -526,7 +528,7 @@ impl Chart {
                                                     &pane_mapping,
                                                 )
                                             } else {
-                                                pane_mapping
+                                                pane_mapping.clone()
                                             },
                                         ),
                                     )
@@ -661,14 +663,19 @@ impl Chart {
                 let key = (pane_id, id);
                 panel.overlay = paint_row > 0;
                 panel.axis_tags = axis_tags.clone();
-                let mut hover = self
-                    .axis_hover
-                    .map(|(pos, _)| pos)
-                    .or_else(|| {
+                let hover = if touch_readout.touch_input
+                    && self.chart_options.tooltip.enabled
+                    && self.chart_options.tooltip.on_long_press
+                {
+                    touch_readout.position
+                } else {
+                    self.axis_hover.map(|(pos, _)| pos).or_else(|| {
                         ui.input(|input| input.pointer.hover_pos()).filter(|pos| {
                             hover_rect.contains(*pos) && ui.rect_contains_pointer(hover_rect)
                         })
                     })
+                };
+                let mut hover = hover
                     .or_else(|| {
                         self.synced_crosshair_bar_idx
                             .filter(|index| index.is_finite() && *index >= 0.0)
@@ -681,13 +688,7 @@ impl Chart {
                                     } else {
                                         index.round()
                                     };
-                                Pos2::new(
-                                    coords
-                                        .to_mapping(plot, 0.0, 1.0)
-                                        .idx_to_x(index.floor() as usize)
-                                        + index.fract() as f32 * pane_mapping.bar_spacing,
-                                    plot.center().y,
-                                )
+                                Pos2::new(pane_mapping.index_to_x(index), plot.center().y)
                             })
                             .filter(|pos| plot.contains(*pos))
                     })
@@ -754,7 +755,7 @@ impl Chart {
                     &mut child,
                     indicator,
                     self.state.shown(),
-                    coords,
+                    coords.clone(),
                     Some(plot.x_range()),
                     collapsed,
                     if matches!(
@@ -792,7 +793,7 @@ impl Chart {
                             .painter()
                             .with_clip_rect(interaction.chart_rect.intersect(ui.clip_rect()));
                         self.paint_series(&painter, interaction.chart_rect, item, map);
-                        let view = self.primitive_view(item.id, pane_mapping);
+                        let view = self.primitive_view(item.id, pane_mapping.clone());
                         for primitive in self.primitives_of(item.id) {
                             primitive.draw(
                                 &painter,
@@ -817,10 +818,20 @@ impl Chart {
                         menu,
                     } = interaction;
 
-                    let pane_response = match &maximized_plot {
+                    let mut pane_response = match &maximized_plot {
                         Some(plot) => pane_response.union(plot.clone()),
                         None => pane_response.interact(Sense::click_and_drag()),
                     };
+                    if self.chart_options.tooltip.enabled
+                        && self.chart_options.tooltip.on_long_press
+                        && touch_readout.touch_input
+                        && !drawing_tool_active
+                        && !eraser_mode
+                    {
+                        pane_response
+                            .flags
+                            .remove(egui::response::Flags::LONG_TOUCHED);
+                    }
 
                     // A click on the legend's close "x" removes this study or series.
                     let close_clicked = close_response.as_ref().is_some_and(|r| r.clicked());
@@ -911,7 +922,8 @@ impl Chart {
                                     && self.is_series_visible(item.series)
                             })
                             .map(|item| {
-                                let mut view = self.primitive_view(item.series, pane_coords);
+                                let mut view =
+                                    self.primitive_view(item.series, pane_coords.clone());
                                 if let Some(study) = view.study
                                     && matches!(
                                         study.scale(),
@@ -1045,7 +1057,7 @@ impl Chart {
                         }
                     }
 
-                    drawing_response = Some((pane_response, chart_rect, pane_coords));
+                    drawing_response = Some((pane_response, chart_rect, pane_coords.clone()));
                     // Store the pane info for hit testing by platform
                     if let Some(idx) = study {
                         self.last_rendered_indicator_panes
@@ -1055,7 +1067,7 @@ impl Chart {
                                 chart_rect,
                                 y_min,
                                 y_max,
-                                coords,
+                                coords: coords.clone(),
                                 mapping: pane_coords,
                             });
                     }
@@ -1226,7 +1238,7 @@ impl Chart {
                         .contains(&item.series)
                         && self.is_series_visible(item.series)
                 }) {
-                    let view = self.primitive_view(item.series, pane_coords);
+                    let view = self.primitive_view(item.series, pane_coords.clone());
                     item.draw(
                         &painter,
                         &view,

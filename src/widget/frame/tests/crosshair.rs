@@ -1,6 +1,55 @@
 use crate::widget::test_frames::{chart, frame, shapes};
 use egui::{Event, Pos2, Shape};
 
+#[test]
+fn synced_crosshair_filters_numeric_gaps_by_screen_distance() {
+    use crate::model::{Bar, BarData, LineStyle, LogicalRange};
+    use crate::scales::{PriceHorizontalScale, key_time};
+    use crate::widget::{Chart, SeriesOptions};
+    use std::sync::Arc;
+
+    let bars = vec![
+        Bar::from_value(key_time(100.0).unwrap(), 10.0),
+        Bar::whitespace(key_time(110.0).unwrap()),
+        Bar::from_value(key_time(140.0).unwrap(), 12.0),
+    ];
+    let ctx = egui::Context::default();
+    let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+    chart.set_horizontal_scale(Some(Arc::new(PriceHorizontalScale::default())));
+    chart.config_mut().show_volume = false;
+    chart.chart_options.time_scale.ignore_whitespace_indices = true;
+    chart.chart_options.time_scale.ignore_hidden_indices = true;
+    chart.chart_options.crosshair.vert_line_color = egui::Color32::MAGENTA;
+    chart.chart_options.crosshair.vert_line_style = LineStyle::Solid;
+    let added = chart.add_series(SeriesOptions::default());
+    let pane = chart.add_pane();
+    assert!(chart.move_series_to_pane(added, pane));
+    chart.set_data(added, bars);
+    frame(&ctx, &mut chart, 0.0, vec![]);
+    assert!(chart.set_visible_logical_range(LogicalRange::new(-0.5, 2.5)));
+    // Index 1.4 is key 122: key 140 is closer than key 100, across the empty key 110.
+    chart.set_synced_crosshair_bar_idx(Some(1.4));
+    let painted = shapes(&ctx, &mut chart, 0.1, vec![Event::PointerGone]);
+    let expected = chart.index_to_x(2.0).unwrap();
+    assert_eq!(chart.last_crosshair.map(|(time, _)| time), key_time(140.0));
+    let lines: Vec<_> = painted
+        .iter()
+        .filter_map(|shape| match shape {
+            Shape::LineSegment { points, stroke }
+                if stroke.color == egui::Color32::MAGENTA && points[0].x == points[1].x =>
+            {
+                Some(points[0].x)
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(
+        lines.len() >= 2,
+        "main and added pane crosshairs: {lines:?}"
+    );
+    assert!(lines.iter().all(|x| (*x - expected).abs() < 0.01));
+}
+
 /// Main prices 0..100 and added prices 0..2000 share screen heights: the added close
 /// of 1000 sits at main price 50. Only closes compete, with main then draw-order ties.
 #[test]
@@ -268,7 +317,7 @@ fn crosshair_skips_ineligible_indices_without_removing_data() {
                 "{pane} {case:?}"
             );
             if let Some(pointer) = pointer {
-                assert_eq!(pointer.time, original[pointer.index as usize].time);
+                assert_eq!(pointer.time, Some(original[pointer.index as usize].time));
                 assert_eq!(pointer.pos, pos, "host retains the actual pointer position");
             }
             let lines = vertical_lines(&painted);
@@ -603,6 +652,180 @@ fn held_values_follow_press_release_and_switch() {
                 );
                 assert!(painted.iter().any(|shape| matches!(shape, Shape::Text(text)
                     if text.galley.text() == "110.00" && text.galley.job.sections[0].format.color == egui::Color32::BLUE)));
+            }
+        }
+    }
+}
+
+/// Touch holds respect their delay, move without panning, and exit by release or a later tap.
+/// Short taps, cancelled contacts and a pan started before the delay cannot latch a readout.
+#[test]
+fn touch_readout_tracks_and_exits_without_following_the_live_edge() {
+    use crate::config::TouchTrackingExitMode;
+    use egui::TouchPhase::{Cancel, End, Move, Start};
+
+    for panes in [false, true] {
+        for mode in [
+            TouchTrackingExitMode::OnTouchEnd,
+            TouchTrackingExitMode::OnNextTap,
+        ] {
+            let ctx = egui::Context::default();
+            ctx.options_mut(|options| options.input_options.max_click_duration = 0.3);
+            let mut chart = chart(&[100.0], &[110.0, 120.0]);
+            chart.config.show_volume = false;
+            chart.chart_options.tooltip.on_long_press = true;
+            chart.chart_options.tooltip.long_press_delay = std::time::Duration::from_millis(800);
+            chart.chart_options.tooltip.touch_exit_mode = mode;
+            chart.chart_options.crosshair.vert_line_color = egui::Color32::MAGENTA;
+            let pane_series = panes.then(|| {
+                let id = chart.add_series(Default::default());
+                chart.set_data(id, chart.bars(crate::widget::SeriesId::MAIN).to_vec());
+                let pane = chart.add_pane();
+                assert!(chart.move_series_to_pane(id, pane));
+                id
+            });
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            chart.apply_synced_time_scale(6.0, -10.0);
+            frame(&ctx, &mut chart, 0.1, vec![]);
+            let viewport = chart.get_time_scale_state();
+            let map = chart.get_chart_mapping();
+            let y = pane_series.map_or(map.rect.center().y, |id| {
+                chart.series_price_map(id).unwrap().price_to_y(115.0)
+            });
+            let point = |index| Pos2::new(map.idx_to_x(index), y);
+            let touch = |phase, index| {
+                let pos = point(index);
+                let mut events = vec![
+                    Event::Touch {
+                        device_id: egui::TouchDeviceId(1),
+                        id: egui::TouchId(1),
+                        phase,
+                        pos,
+                        force: None,
+                    },
+                    Event::PointerMoved(pos),
+                ];
+                if phase != Move {
+                    events.push(Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: phase == Start,
+                        modifiers: Default::default(),
+                    });
+                }
+                if matches!(phase, End | Cancel) {
+                    events.push(Event::PointerGone);
+                }
+                events
+            };
+            let latched = mode == TouchTrackingExitMode::OnNextTap;
+            let jitter = point(50) + egui::vec2(2.0, 1.0);
+            for (time, events, expected, index) in [
+                (1.0, touch(Start, 50), false, 50),
+                (
+                    1.4,
+                    vec![
+                        Event::Touch {
+                            device_id: egui::TouchDeviceId(1),
+                            id: egui::TouchId(1),
+                            phase: Move,
+                            pos: jitter,
+                            force: None,
+                        },
+                        Event::PointerMoved(jitter),
+                    ],
+                    false,
+                    50,
+                ),
+                (1.7, vec![], false, 50),
+                (1.81, vec![], true, 50),
+                (1.9, touch(Move, 54), true, 54),
+                (2.0, touch(End, 55), latched, 55),
+                (2.1, vec![], latched, 55),
+                (2.2, touch(Start, 60), latched, 55),
+                (2.3, touch(End, 60), false, 60),
+                (3.0, touch(Start, 50), false, 50),
+                (3.1, touch(End, 50), false, 50),
+                (4.0, touch(Start, 50), false, 50),
+                (4.81, vec![], true, 50),
+                (4.9, touch(Cancel, 50), false, 50),
+                (5.8, vec![], false, 50),
+                (6.0, touch(Start, 50), false, 50),
+                (6.1, touch(Cancel, 50), false, 50),
+                (6.9, vec![], false, 50),
+                (7.0, touch(Start, 50), false, 50),
+                (7.81, vec![], true, 50),
+                (
+                    7.9,
+                    vec![Event::Touch {
+                        device_id: egui::TouchDeviceId(1),
+                        id: egui::TouchId(2),
+                        phase: Start,
+                        pos: point(60),
+                        force: None,
+                    }],
+                    false,
+                    50,
+                ),
+                (8.8, vec![], false, 50),
+                (
+                    8.9,
+                    vec![Event::Touch {
+                        device_id: egui::TouchDeviceId(1),
+                        id: egui::TouchId(2),
+                        phase: End,
+                        pos: point(60),
+                        force: None,
+                    }],
+                    false,
+                    50,
+                ),
+                (9.0, touch(End, 50), false, 50),
+            ] {
+                let painted = shapes(&ctx, &mut chart, time, events);
+                assert_eq!(
+                    painted.iter().any(|shape| matches!(shape, Shape::Text(text)
+                        if text.galley.text() == "Open")),
+                    expected,
+                    "{mode:?}, panes {panes}, time {time}"
+                );
+                assert_eq!(
+                    painted.iter().any(|shape| matches!(shape,
+                        Shape::LineSegment { points, stroke }
+                            if stroke.color == egui::Color32::MAGENTA && points[0].x == points[1].x
+                    )),
+                    expected,
+                    "crosshair: {mode:?}, panes {panes}, time {time}"
+                );
+                if expected {
+                    assert_eq!(chart.last_hover_bar_idx, Some(index as f64));
+                    let close = chart.state.shown()[index].close;
+                    assert!(painted.iter().any(|shape| matches!(shape, Shape::Text(text)
+                        if text.galley.text() == format!("{close:.2}"))));
+                }
+                assert_eq!(chart.get_time_scale_state(), viewport, "time {time}");
+                assert!(!chart.tracking_mode_active);
+                assert!(
+                    chart.take_right_click().is_none(),
+                    "a hold belongs to the readout"
+                );
+            }
+            frame(&ctx, &mut chart, 10.0, touch(Start, 50));
+            frame(&ctx, &mut chart, 10.1, touch(Move, 54));
+            for (time, events) in [(10.9, vec![]), (11.0, touch(End, 54)), (11.1, vec![])] {
+                let painted = shapes(&ctx, &mut chart, time, events);
+                assert!(
+                    !painted.iter().any(|shape| matches!(shape, Shape::Text(text)
+                    if text.galley.text() == "Open")),
+                    "a pan cannot become a hold"
+                );
+            }
+            if !panes {
+                assert_ne!(
+                    chart.get_time_scale_state(),
+                    viewport,
+                    "touch panning still works"
+                );
             }
         }
     }

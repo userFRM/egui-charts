@@ -494,8 +494,12 @@ impl Chart {
         Some(id)
     }
 
-    /// Price lines of a bar series in drawing order, with their handles for editing.
-    /// Unknown ids and study ids yield no lines.
+    /// The price lines of a bar series in drawing order, with their handles for
+    /// [`price_line`](Self::price_line), [`update_price_line`](Self::update_price_line) and
+    /// [`remove_price_line`](Self::remove_price_line). The order is that of
+    /// [`set_price_lines`](Self::set_price_lines) followed by later
+    /// [`add_price_line`](Self::add_price_line) calls; an update keeps a line's place.
+    /// A series without lines, a study, an unknown id and a removed series yield no lines.
     pub fn price_lines(&self, series: SeriesId) -> impl Iterator<Item = (PriceLineId, &PriceLine)> {
         let lines = self
             .price_series
@@ -737,9 +741,9 @@ impl Chart {
         self.project_drawing_points();
     }
 
-    /// Scrolls to the live edge when the view was near it and a bar was appended, or the last
-    /// bar replaced while the options allow shifting on whitespace replacement. Returns whether
-    /// it did.
+    /// Scrolls to the live edge when the view was near it and a bar was appended, or a
+    /// whitespace tail gained a value while the options allow shifting on whitespace
+    /// replacement. Returns whether it did.
     fn follow_live_edge(&mut self, before: Edge) -> bool {
         let bars = &self.state.data().bars;
         let tail = before.tail.as_ref().zip(bars.last());
@@ -748,12 +752,10 @@ impl Chart {
         // either, since the bar indices and the base index both grow by their count.
         let appended =
             bars.len() > before.len && tail.is_some_and(|(old, new)| new.time > old.time);
-        // Bitwise, so that the NaN close of an unchanged whitespace bar is unchanged.
-        let tail_changed = tail.is_some_and(|(old, new)| {
-            old.time != new.time || old.close.to_bits() != new.close.to_bits()
-        });
+        let whitespace_replaced =
+            tail.is_some_and(|(old, new)| old.is_whitespace() && !new.is_whitespace());
         let options = &self.chart_options.time_scale;
-        let shift_for_whitespace = tail_changed
+        let shift_for_whitespace = whitespace_replaced
             && !appended
             && options.allow_shift_visible_range_on_whitespace_replacement;
         let follow = options.shift_visible_range_on_new_bar

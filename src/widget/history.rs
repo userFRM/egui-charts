@@ -354,7 +354,8 @@ impl Chart {
                     .collect();
             }
         }
-        if action.view == Some(self.get_time_scale_state()) {
+        // A symbol's asynchronous history can change its view after this action ends.
+        if action.symbol.is_none() && action.view == Some(self.get_time_scale_state()) {
             action.view = None;
         }
         if action.config.as_ref() == Some(&self.config) {
@@ -1480,6 +1481,25 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn symbol_navigation_restores_the_view_after_later_feed_updates() {
+        let mut chart = chart(&[10.0, 11.0], &[20.0, 21.0]);
+        chart.set_symbol("AAA");
+        chart.apply_synced_time_scale(8.0, -30.0);
+        let before = chart.get_time_scale_state();
+        chart.user_action(|chart| chart.set_symbol("BBB"));
+        assert_eq!(chart.get_time_scale_state(), before);
+        // Feed completion and navigation happen after the symbol action was recorded.
+        chart.apply_synced_time_scale(7.0, -100.0);
+        let after = chart.get_time_scale_state();
+        assert!(chart.undo());
+        assert_eq!(chart.symbol(), "AAA");
+        assert_eq!(chart.get_time_scale_state(), before);
+        assert!(chart.redo());
+        assert_eq!(chart.symbol(), "BBB");
+        assert_eq!(chart.get_time_scale_state(), after);
     }
 
     /// A user's symbol navigation and comparison edits undo and redo in order, each step finding
