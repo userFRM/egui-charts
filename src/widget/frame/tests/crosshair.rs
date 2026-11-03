@@ -1,6 +1,185 @@
 use crate::widget::test_frames::{chart, frame, shapes};
 use egui::{Event, Pos2, Shape};
 
+#[test]
+fn programmatic_crosshair_uses_the_target_series_scale_and_pane() {
+    use crate::model::{Bar, LineStyle, SeriesScale};
+    use crate::scales::CustomPriceFormatter;
+    use crate::widget::{ImageExportOptions, SeriesId, SeriesOptions};
+
+    for (scale, secondary, inverted, above) in [
+        (Some(SeriesScale::Left), false, false, false),
+        (None, false, false, false),
+        (Some(SeriesScale::Left), false, true, false),
+        (Some(SeriesScale::Overlay(1)), false, false, false),
+        (Some(SeriesScale::Left), true, false, false),
+        (Some(SeriesScale::Left), true, false, true),
+    ] {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[200.0]);
+        chart.config.show_volume = false;
+        chart.chart_options.tooltip.enabled = false;
+        chart.chart_options.crosshair.vert_line_color = egui::Color32::MAGENTA;
+        chart.chart_options.crosshair.horz_line_color = egui::Color32::MAGENTA;
+        chart.chart_options.crosshair.vert_line_style = LineStyle::Solid;
+        chart.chart_options.crosshair.horz_line_style = LineStyle::Solid;
+        let id = scale.map_or(SeriesId::MAIN, |scale| {
+            let id = chart.add_series(SeriesOptions {
+                scale,
+                ..Default::default()
+            });
+            let bars = chart
+                .bars(SeriesId::MAIN)
+                .iter()
+                .enumerate()
+                .map(|(i, bar)| Bar::from_value(bar.time, if i % 2 == 0 { 1000.0 } else { 2000.0 }))
+                .collect();
+            chart.set_data(id, bars);
+            if secondary {
+                let pane = chart.add_pane();
+                chart.move_series_to_pane(id, pane);
+                if above {
+                    chart.move_pane(pane, 0);
+                }
+            }
+            id
+        });
+        chart.set_series_formatter(
+            id,
+            Some(std::sync::Arc::new(CustomPriceFormatter::new(|price| {
+                format!("target {price:.2}")
+            }))),
+        );
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let price = if scale.is_some() { 1375.0 } else { 137.5 };
+        let target_scale = chart.series_price_scale_mut(id).unwrap();
+        target_scale.set_range(
+            if scale.is_some() { 1000.0 } else { 100.0 },
+            if scale.is_some() { 2000.0 } else { 200.0 },
+        );
+        target_scale.options_mut().invert_scale = inverted;
+        let time = chart.bars(SeriesId::MAIN)[50].time;
+        let label = format!("target {price:.2}");
+        let lines = |painted: &[Shape], horizontal| {
+            painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::LineSegment { points, stroke }
+                        if stroke.color == egui::Color32::MAGENTA
+                            && if horizontal {
+                                points[0].y == points[1].y
+                            } else {
+                                points[0].x == points[1].x
+                            } =>
+                    {
+                        Some(*points)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        chart.set_series_crosshair_position(id, Some((time, price)));
+        let painted = shapes(&ctx, &mut chart, 0.1, vec![Event::PointerGone]);
+        let main = chart.get_rendered_price_rect();
+        let pane = if secondary {
+            chart
+                .pane_layout
+                .panes
+                .iter()
+                .find(|pane| pane.members.contains(&id))
+                .unwrap()
+                .rect
+        } else {
+            main
+        };
+        // 137.5 in [100, 200], or 1375 in [1000, 2000], is 3/8 up the range.
+        let expected_y = pane.top() + pane.height() * if inverted { 0.375 } else { 0.625 };
+        let horizontal = lines(&painted, true);
+        assert_eq!(horizontal.len(), 1, "{scale:?} {secondary} {inverted}");
+        assert!(
+            (horizontal[0][0].y - expected_y).abs() < 0.02,
+            "{horizontal:?}, expected {expected_y}"
+        );
+        let vertical = lines(&painted, false);
+        let x = chart.get_chart_mapping().idx_to_x(50);
+        assert!(!vertical.is_empty());
+        assert!(vertical.iter().all(|line| (line[0].x - x).abs() < 0.02));
+        assert!(painted.iter().any(|shape| matches!(shape, Shape::Text(text) if text.galley.text() == chart.format_time(time))));
+        let tag = painted.iter().find_map(|shape| match shape {
+            Shape::Text(text) if text.galley.text() == label => Some(text),
+            _ => None,
+        });
+        let axis = secondary || scale != Some(SeriesScale::Overlay(1));
+        assert_eq!(tag.is_some(), axis, "{scale:?} {secondary}");
+        if let Some(tag) = tag {
+            assert!(pane.y_range().contains(tag.pos.y));
+            if scale == Some(SeriesScale::Left) && !secondary {
+                assert!(tag.pos.x < main.left());
+            }
+        }
+        let mut snapshot = chart.export_snapshot(
+            &ctx,
+            &ImageExportOptions {
+                include_crosshair: true,
+                ..Default::default()
+            },
+        );
+        let exported = shapes(&ctx, &mut snapshot, 0.2, vec![]);
+        assert_eq!(lines(&exported, true), horizontal);
+        // The pointer wins, then the saved host position returns when the pointer leaves.
+        for (step, rect) in [Some(main), secondary.then_some(pane)]
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            let pointer = Pos2::new(x, rect.top() + rect.height() * 0.25);
+            let painted = shapes(
+                &ctx,
+                &mut chart,
+                0.3 + step as f64 * 0.2,
+                vec![Event::PointerMoved(pointer)],
+            );
+            assert_eq!(chart.get_hover_bar_idx(), Some(50.0));
+            assert!(
+                !painted
+                    .iter()
+                    .any(|shape| matches!(shape, Shape::Text(text) if text.galley.text() == label))
+            );
+            let painted = shapes(
+                &ctx,
+                &mut chart,
+                0.4 + step as f64 * 0.2,
+                vec![Event::PointerGone],
+            );
+            assert_eq!(lines(&painted, true), horizontal);
+        }
+        for (step, position) in [
+            None,
+            Some((time, f64::NAN)),
+            Some((time, f64::INFINITY)),
+            Some((time, f64::NEG_INFINITY)),
+            Some((time - chrono::TimeDelta::days(100), price)),
+            Some((time + chrono::TimeDelta::days(100), price)),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            chart.set_series_crosshair_position(id, Some((time, price)));
+            chart.set_series_crosshair_position(id, position);
+            let painted = shapes(&ctx, &mut chart, 1.0 + step as f64, vec![]);
+            assert!(lines(&painted, true).is_empty());
+            assert!(lines(&painted, false).is_empty());
+            assert!(chart.last_crosshair.is_none());
+        }
+        chart.set_series_crosshair_position(id, Some((time, price)));
+        chart.remove_series(id);
+        let painted = shapes(&ctx, &mut chart, 10.0, vec![]);
+        assert!(lines(&painted, true).is_empty());
+        assert!(lines(&painted, false).is_empty());
+        assert!(chart.last_crosshair.is_none());
+    }
+}
+
 /// Eligibility follows current data and visibility, independently of price snapping, across
 /// panes and host positioning. Distances are logical slots: at 50.5, 48 is nearer than 54;
 /// at 51 they tie, so 54 wins. An added value at 51 wins over either neighbour.

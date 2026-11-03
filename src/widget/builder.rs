@@ -226,7 +226,9 @@ impl Chart {
             synced_crosshair_bar_idx: None,
             synced_crosshair_period: None,
             synced_crosshair_price: None,
+            synced_crosshair_series: None,
             last_crosshair: None,
+            last_crosshair_series: None,
             last_hover_bar_idx: None,
             // Marks (Widget API)
             marks: Default::default(),

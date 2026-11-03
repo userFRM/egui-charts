@@ -658,14 +658,17 @@ impl Chart {
                 let key = (pane_id, id);
                 panel.overlay = paint_row > 0;
                 panel.axis_tags = axis_tags.clone();
-                let mut hover = self
-                    .axis_hover
-                    .map(|(pos, _)| pos)
-                    .or_else(|| {
-                        ui.input(|input| input.pointer.hover_pos()).filter(|pos| {
-                            hover_rect.contains(*pos) && ui.rect_contains_pointer(hover_rect)
-                        })
+                let pointer = self.axis_hover.map(|(pos, _)| pos).or_else(|| {
+                    ui.input(|input| input.pointer.hover_pos()).filter(|pos| {
+                        hover_rect.contains(*pos) && ui.rect_contains_pointer(hover_rect)
                     })
+                });
+                let host_position = pointer.is_none() && self.synced_crosshair_price.is_some();
+                let target_pane = self
+                    .synced_crosshair_series
+                    .is_some_and(|target| members.contains(&target));
+                let target_panel = target_pane && id == self.synced_crosshair_series;
+                let mut hover = pointer
                     .or_else(|| {
                         self.synced_crosshair_bar_idx
                             .filter(|index| index.is_finite() && *index >= 0.0)
@@ -683,10 +686,17 @@ impl Chart {
                                         .to_mapping(plot, 0.0, 1.0)
                                         .idx_to_x(index.floor() as usize)
                                         + index.fract() as f32 * pane_mapping.bar_spacing,
-                                    plot.center().y,
+                                    if target_panel {
+                                        panel
+                                            .price_map
+                                            .unwrap_or(map)
+                                            .price_to_y(self.synced_crosshair_price.unwrap_or(0.0))
+                                    } else {
+                                        plot.center().y
+                                    },
                                 )
                             })
-                            .filter(|pos| plot.contains(*pos))
+                            .filter(|pos| plot.x_range().contains(pos.x))
                     })
                     .filter(|_| !self.menu_open && !egui::Popup::is_any_open(ui.ctx()))
                     .and_then(|pos| self.crosshair_position(pos, &pane_mapping));
@@ -695,7 +705,18 @@ impl Chart {
                     crosshair_options.style = crate::config::CrosshairStyle::Arrow;
                 }
 
-                if panel.overlay {
+                if host_position {
+                    crosshair_options.mode = crate::config::CrosshairMode::Normal;
+                    if !target_panel {
+                        crosshair_options.horz_line_visible = false;
+                        if crosshair_options.style == crate::config::CrosshairStyle::Dot {
+                            crosshair_options.style = crate::config::CrosshairStyle::Arrow;
+                        }
+                    }
+                }
+                if panel.overlay && !(host_position && target_panel)
+                    || host_position && target_pane && !target_panel
+                {
                     hover = None;
                 } else if crosshair_options.mode.snaps() {
                     if let Some(pos) = &mut hover

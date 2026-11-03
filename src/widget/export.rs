@@ -540,7 +540,12 @@ impl Chart {
         chart.theme_override = Some(theme);
         if let Some((time, price)) = self.last_crosshair.filter(|_| options.include_crosshair) {
             match price {
-                Some(price) => chart.set_crosshair_position(Some((time, price))),
+                Some(price) => match self.last_crosshair_series {
+                    Some(series) => {
+                        chart.set_series_crosshair_position(series, Some((time, price)))
+                    }
+                    None => chart.set_crosshair_position(Some((time, price))),
+                },
                 None => {
                     chart.set_synced_crosshair_time(Some(time));
                     chart.chart_options.crosshair.horz_line_visible = false;
