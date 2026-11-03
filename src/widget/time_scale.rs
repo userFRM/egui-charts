@@ -831,13 +831,16 @@ mod tests {
             vec![egui::Event::PointerMoved(hover)],
         ));
         assert!(hovered.contains(&"4475".to_owned()), "{hovered:?}");
-        let csv = chart.export_csv().unwrap();
-        assert_eq!(
-            csv.lines()
-                .nth(1)
-                .and_then(|row| row.split_once(','))
-                .map(|(key, _)| key),
-            Some("4400")
-        );
+        #[cfg(feature = "csv")]
+        {
+            let csv = chart.export_csv().unwrap();
+            assert_eq!(
+                csv.lines()
+                    .nth(1)
+                    .and_then(|row| row.split_once(','))
+                    .map(|(key, _)| key),
+                Some("4400")
+            );
+        }
     }
 }

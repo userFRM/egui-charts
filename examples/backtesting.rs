@@ -59,6 +59,7 @@ fn main() {
             .max_drawdown
             .expect("sample has a valid equity curve")
     );
+    #[cfg(feature = "csv")]
     println!("{}", report.trades_csv());
     let comparison = report.comparison(&bars);
     println!("Buy-and-hold return: {:?}", comparison.buy_and_hold_return);

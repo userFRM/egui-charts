@@ -534,9 +534,15 @@ impl Chart {
     }
 
     pub(in crate::widget) fn series_map(&self, item: &PriceSeries, rect: Rect) -> PriceMap {
-        self.secondary_scale(item.options.scale)
-            .map(self.series_transform(item), rect.top(), rect.bottom())
-            .with_thousands_sep(self.config.thousands_sep)
+        self.series_display_map(
+            item.id,
+            self.secondary_scale(item.options.scale).map(
+                self.series_transform(item),
+                rect.top(),
+                rect.bottom(),
+            ),
+        )
+        .with_thousands_sep(self.config.thousands_sep)
     }
 
     pub(in crate::widget) fn secondary_axis_values(

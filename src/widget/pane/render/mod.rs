@@ -456,6 +456,9 @@ impl Chart {
             let map = pane_scale
                 .map(transform, panel_rect.top(), panel_rect.bottom())
                 .with_thousands_sep(thousands_sep);
+            let map = series.first().map_or(map, |at| {
+                self.series_display_map(self.price_series[*at].id, map)
+            });
             let mut drawing_response = None;
             let mut axis_tags = Vec::new();
             let hovered = self.last_hover_bar_idx.and_then(|index| {

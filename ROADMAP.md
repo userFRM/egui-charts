@@ -16,7 +16,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Heikin-Ashi, Renko, Kagi, line break, point and figure, and range-bar transformations and rendering.
 - [x] Renko box sizing and wicks, line-break lookback, and price-based chart parameters are configurable.
 - [x] Market Profile (TPO) uses exchange sessions or calendar days, with letters or blocks, initial balance, point of control, value area and composite profiles; autoscale fits the full displayed distributions and cropped profiles retain their session and central-level readouts. POC, value-area and midpoint captions keep a gutter at the first or offscreen session opening, separate nearby levels and reveal their prices on hover.
-- [x] Volume Footprint and Session Volume Profile aggregate supplied executions on time-based intervals with an instrument tick size; unsupported intervals and bars without retained trades use candles. Session profiles require `studies`; autoscale includes their full price rows after range edits, and manual crops retain session and POC/value-area readouts.
+- [x] Volume Footprint and Session Volume Profile aggregate supplied executions on time-based intervals with an instrument tick size; unsupported intervals and bars without retained trades use candles. Session profiles require `studies`; autoscale includes their full price rows after range edits, and manual crops retain session and POC/value-area readouts. Hosts can restrict the chart type menu and favourite strip to declared historical or live executions for the resolved instrument; unavailable favourites stay saved.
 - [ ] Change Kagi line thickness at shoulder and waist crossings within a continuing leg.
 - [ ] Expose the standalone point-and-figure close-only source in chart parameters and settings.
 - [x] Range charts build their bars from the supplied executions, falling back to the OHLC approximation while the chart holds none; `Chart::range_bar_source` reports which one is shown.
@@ -28,12 +28,12 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 
 - [x] Cursor-centred wheel zoom, horizontal pan, drag pan, touch pan and pinch zoom. Scroll and scale gesture groups can be disabled independently without changing their individual permissions; disabling scrolling stops its momentum, and the scale switch also covers axis drags and resets in every pane.
 - [x] Touch drags can start kinetic scrolling with configurable damping.
-- [x] Axis drag scaling, double-click reset, box zoom and optional chart-owned navigation buttons.
-- [x] Cross, dot and arrow cursor modes, styled crosshair lines, price/time labels and OHLC snapping. Independent time-scale filters exclude whitespace and hidden-only values from crosshair indices without removing stored data; visible series and study values keep their slots eligible.
-- [x] Main-pane crosshair snapping includes visible studies on the main scale for time-based charts.
+- [x] Axis drag scaling, double-click reset, box zoom and optional chart-owned navigation buttons. Live updates preserve the view on valued bars; filling a whitespace tail follows only when both shift options are enabled and the view is near the live edge. Appended bars retain their new-bar follow policy.
+- [x] Cross, dot and arrow cursor modes, styled crosshair lines, price/time labels and OHLC snapping. Both lines and both axis labels have independent visibility switches; hidden mode suppresses every crosshair element. Independent time-scale filters exclude whitespace and hidden-only values from crosshair indices without removing stored data; visible series and study values keep their slots eligible.
+- [x] Main-pane crosshair snapping includes visible studies and added series on their own scales for time-based charts. Close-only snapping compares visible main and added-series closes on every chart type, preferring the main series and then added-series draw order on equal screen distances.
 - [x] Hover readouts and the data window show bar and study values.
 - [ ] Allow mouse drags to start kinetic scrolling.
-- [ ] Include comparison series and price-based chart studies in main-pane crosshair snapping.
+- [ ] Include price-based chart studies and added-series values in broader main-pane magnet snapping.
 - [ ] Correct box-zoom overlay alpha and use theme colours.
 - [ ] Add the instrument title to the floating historical readout.
 - [ ] Provide a table view of loaded bars and study values.
@@ -43,14 +43,14 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Linear, logarithmic, percentage, indexed-to-100 and inverted price scales, autoscale, manual ranges and scale options. Marker autoscaling reserves room for shapes, outlines and labels of visible markers positioned from bars or prices at their configured size on main and secondary panes; hidden markers and disabled autoscaling add no room.
 - [x] Time-axis tick hierarchy, price marks that default to the instrument tick grid with host overrides, exchange time zones, session breaks and extended-hours shading.
 - [x] Linear numeric horizontal scales for strikes and maturities use actual sample keys without placeholder bars; series, panes, ticks and cursor conversions share their positions. Time charts retain ordinal spacing.
-- [x] Chart-wide time, price, percentage and volume formatters, plus per-series price formatters. Time tick hooks receive the current locale and display-time context and can defer individual ticks to the normal locale-aware text without changing crosshair formatting. Drawing prices and price changes use their pane's raw-price formatter, including measurements, forecasts, projections, position levels and rectangle heights.
+- [x] Chart-wide time, price, percentage and volume formatters, plus per-series price formatters. Saved series styles declare price, abbreviated volume or raw percentage display with precision and minimum movement, independently of scale transforms. Explicit series and chart price formatters take precedence; a shared axis takes tick settings from its first visible series, and each series retains its own tags and readouts. Time tick hooks receive the current locale and display-time context and can defer individual ticks to the normal locale-aware text without changing crosshair formatting. Drawing prices and price changes use their pane's raw-price formatter, including measurements, forecasts, projections, position levels and rectangle heights.
 - [x] Locale-aware date names and configurable date patterns. Forecast dates use the chart's display time zone and crosshair time formatter, including host formatting and clock visibility.
 - [x] Chart-owned panes share the time axis and support resizing, reordering, stretch sizing, collapse and maximise controls.
 - [x] Studies and added series can use separate panes and independent scales. The demo menu's Samples entries open synthetic strike and maturity charts with numeric crosshair readouts and preserve the price workspace on return.
 - [x] Scale settings control currency and unit labels, scale-mode and price-action buttons, price-to-bar ratio, label overlap and symbol, study and extended-session value colours.
 - [ ] Forward pan, wheel and pinch input to maximised study panes and support pane maximisation by double-click.
 - [ ] Apply the main-series-only autoscale quick setting and the left-axis scale-mode configuration field.
-- [ ] Use configured scale precision for added-series value tags when no formatter is supplied.
+- [x] Added-series value tags use configured scale precision when no formatter is supplied; saved numeric display declarations also control their tags and readouts.
 - [ ] Draw independent symbol-name and study-name tags on the price scale.
 - [ ] Apply scale font-size, scale-line colour and pane-button visibility settings.
 
@@ -104,7 +104,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 
 ### Calculations and Rendering
 
-- [x] `IndicatorFactory` registers 204 indicators with default features and accepts downstream registrations; the study picker groups its built-in results on Indicators, Profiles, Patterns and Order flow pages, each offered only while it has an accepted study.
+- [x] `IndicatorFactory` registers 204 indicators with default features and accepts downstream registrations; the study picker groups its built-in results on Indicators, Profiles, Patterns and Order flow pages, each offered only while it has an accepted study. Hosts can restrict Order flow entries, including search and favourites, to the feed services each study's inputs read; requirements are cached when feed metadata or the factory changes. Other categories keep their existing availability.
 - [x] Moving-average families include SMA, EMA, WMA, HMA, ALMA, KAMA and configurable combinations, ribbons and crossing markers.
 - [x] Momentum and trend studies include RSI, MACD, Stochastic, ADX, SuperTrend, Ichimoku and Parabolic SAR.
 - [x] Volatility and channel studies include Bollinger Bands, ATR, Keltner, Donchian and historical volatility.
@@ -258,8 +258,8 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 
 ### Export
 
-- [x] `Chart::export_csv` exports OHLCV and study values with timestamps and missing-value handling.
-- [x] `Chart::export_png` renders an isolated chart frame on the CPU after font initialisation; export controls include size, title, timestamp, crosshair and transparency.
+- [x] `Chart::export_csv` (the default-enabled `csv` feature) exports OHLCV and study values with timestamps and missing-value handling.
+- [x] `Chart::export_png` (the default-enabled `png-export` feature) renders an isolated chart frame on the CPU after font initialisation; export controls include size, title, timestamp, crosshair and transparency.
 - [x] Export dialog and demo actions save images/data or copy images through application facilities. The demo exports either the active chart or the visible arrangement as PNG or SVG, with shared image options and opted-in trading overlays. The terminal's file callback returns save errors and carries a host request to open an exported image.
 - [ ] Capture composed panels, trading overlays, external textures and feed-backed order-flow visuals in a complete terminal image.
 - [ ] Add an export watermark switch, vector image output and print/PDF output.
@@ -297,14 +297,14 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 
 ## Infrastructure
 
-- [x] Feature layers separate the engine, built-in studies, widget, drawings, icons and terminal UI; engine and study calculations need no egui.
+- [x] Feature layers separate the engine, built-in studies, widget, drawings, icons and terminal UI; engine and study calculations need no egui. CSV I/O and PNG export are optional, enabled by default and by `ui`; icons alone install only their embedded image loader.
 - [x] `Theme` provides editable palettes with dark, light and high-contrast presets; shared tokens cover sizing, spacing, corners and colours.
 - [x] Host translation lookup with English fallback, locale/date formatters and optional named time zones. The demo persists independent language and number-format samples and applies host formatting to its data window and exported chart. The demo selects light, dark, high contrast or system appearance, preserves explicit choices and follows later system changes.
 - [x] The demo exposes floating, tracking and magnifier readouts, hover or hold activation, lens size and zoom; magnified candles stay inside the circular lens. Its annotation editor creates, edits and removes series markers and price lines, controls marker fitting and layering, and configures live change-marker duration.
 - [x] Accessibility roles/states, keyboard focus and a textual bar/study readout.
 - [x] Reusable `ui_kit` buttons, inputs, colour pickers, dialogs, lists, tabs, panels, command palette and toast components.
 - [x] Native and browser examples and CI checks cover library, feature combinations and demo builds.
-- [x] The guide and site landing page share light and dark navigation and a live sample chart with consistent text sizing and a compact readout at phone widths. The first-chart, series, price scale, time scale and panes guides embed isolated widget scenes beside their compiled setup source, with theme synchronization, keyboard exit and a loading fallback; the full demo stays at `/demo/`. Version labels distinguish main (0.3 in development, egui 0.37) from published 0.2.0 (egui 0.33.3), with grouped topic navigation, integration recipes and direct links to API members. The series guide separates data, renderer, style, identity and lifecycle, classifies every main chart type and documents added-series restrictions, with runnable family examples. The documentation build checks local guide and API pages and anchors, including after site assembly. Release notes are generated from the root changelog, and a migration guide takes published 0.2.0 applications to main with compiled replacement examples.
+- [x] The guide and site landing page share light and dark navigation and a live sample chart with consistent text sizing and a compact readout at phone widths. The first-chart, series, price scale, time scale, panes, horizontal scale and rendering extension guides embed isolated widget scenes beside their compiled setup source, with theme synchronization, keyboard exit and a loading fallback; the full demo stays at `/demo/`. Version labels distinguish main (0.3 in development, egui 0.37) from published 0.2.0 (egui 0.33.3), with grouped topic navigation, integration recipes and direct links to API members. The series guide separates data, renderer, style, identity and lifecycle, classifies every main chart type and documents added-series restrictions, with runnable family examples. The horizontal-scale guide covers encoded strike and maturity keys and proportional whitespace grids; the extension guides cover primitive lifecycle, draw passes, axes, hit testing and study-backed custom series. The documentation build checks local guide and API pages and anchors, including after site assembly. Release notes are generated from the root changelog, and a migration guide takes published 0.2.0 applications to main with compiled replacement examples.
 - [ ] Route remaining direct English UI labels through the translation lookup.
 - [ ] Make session-quote/volume tags and marker outlines fully theme-configurable.
 - [ ] Add a runnable desktop-webview integration example.

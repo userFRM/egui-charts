@@ -450,14 +450,13 @@ impl Chart {
         shared_plot: Option<&Response>,
         footprint: Option<(&Footprint, &FootprintConfig)>,
     ) -> Response {
-        // Register the SVG and icon image loaders once per context so the
-        // embedded icons used by the toolbars and panels decode without the
-        // host app having to wire egui_extras itself.
+        // Register the icon loader once per context, and the general SVG loader for UI images.
         #[cfg(feature = "icons")]
         {
             let ctx = ui.ctx().clone();
             let loaders_installed = egui::Id::unique("egui_charts::image_loaders_installed");
             if !ctx.data(|d| d.get_temp::<bool>(loaders_installed).unwrap_or(false)) {
+                #[cfg(feature = "ui")]
                 egui_extras::install_image_loaders(&ctx);
                 crate::icons::install_loader(&ctx);
                 ctx.data_mut(|d| d.insert_temp(loaders_installed, true));
@@ -1063,14 +1062,19 @@ impl Chart {
             .price_scale_mut()
             .update_bar_ratio(bar_spacing, price_rect.height());
         let price_map = self
-            .state
-            .price_scale()
-            .map(transform, price_rect.min.y, price_rect.max.y)
+            .series_display_map(
+                super::SeriesId::MAIN,
+                self.state
+                    .price_scale()
+                    .map(transform, price_rect.min.y, price_rect.max.y),
+            )
             .with_thousands_sep(self.config.thousands_sep);
 
         self.update_shared_study_maps(price_rect);
-        let price_formatter =
-            self.series_label_formatter(super::SeriesId::MAIN, price_map.transform().mode);
+        let price_formatter = self.series_label_formatter(
+            self.series_axis_owner(super::SeriesId::MAIN),
+            price_map.transform().mode,
+        );
 
         // Store the final price mapping and rects for external use (selection dots, hit testing)
         self.last_price_map = price_map;
@@ -2956,6 +2960,7 @@ impl Chart {
                 let mut main_options = crosshair_options;
                 if volume_rect.contains(hover_pos) {
                     main_options.horz_line_visible = false;
+                    main_options.horz_label_visible = false;
                     if main_options.style == crate::config::CrosshairStyle::Dot {
                         main_options.style = crate::config::CrosshairStyle::Arrow;
                     }
