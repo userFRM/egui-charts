@@ -52,8 +52,12 @@ pub struct ChartPointer {
     /// returned by [`Chart::study_values_at`]; [`Chart::set_cursor_data_policy`] can include
     /// hidden studies and plots. Missing values remain `None`.
     pub studies: Vec<(SeriesId, StudyValue)>,
-    /// The drawing, series or study line under the pointer, in the priority a click selects.
+    /// The drawing, primitive, series or study under the pointer. Custom hit priority is
+    /// documented by [`PrimitiveHit`](super::PrimitiveHit).
     pub target: Option<PointerTarget>,
+    /// The winning primitive or custom renderer's object, including its cursor and host data.
+    /// `target` identifies its primitive or series; `None` for drawings and built-in plots.
+    pub primitive_hit: Option<super::PrimitiveHit>,
     /// Modifier keys held during the event.
     pub modifiers: Modifiers,
     /// Device that produced the event.
@@ -71,6 +75,7 @@ impl PartialEq for ChartPointer {
             && self.previous_close == other.previous_close
             && self.studies == other.studies
             && self.target == other.target
+            && self.primitive_hit == other.primitive_hit
             && self.modifiers == other.modifiers
             && self.kind == other.kind
             && match (&self.bar, &other.bar) {
@@ -103,7 +108,7 @@ pub enum PointerTarget {
     Element(ChartElementId),
     /// A drawing, by its drawing id.
     Drawing(usize),
-    /// A primitive whose [`hit_test`](super::Primitive::hit_test) reports the pointer.
+    /// A primitive whose [`hit_test_result`](super::Primitive::hit_test_result) reports the pointer.
     Primitive(super::PrimitiveId),
 }
 
@@ -285,6 +290,7 @@ pub(super) struct HostEvents {
     click_frames: [Option<u64>; 3],
     /// What the pointer is over this frame, resolved while the plots are drawn.
     pub target: Option<PointerTarget>,
+    pub primitive_hit: Option<super::PrimitiveHit>,
     pub volume_map: Option<crate::scales::PriceMap>,
     #[cfg(feature = "drawings")]
     dropped_images: Vec<egui::DroppedFileHandle>,
@@ -515,6 +521,7 @@ impl Chart {
                 self.study_rows_at_with_policy(index, self.host_events.cursor_data_policy)
             }),
             target: self.host_events.target,
+            primitive_hit: self.host_events.primitive_hit.clone(),
             modifiers: ui.input(|input| input.modifiers),
             kind: self.host_events.kind.unwrap_or_else(|| {
                 if ui.input(|input| {
