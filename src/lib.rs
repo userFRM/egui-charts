@@ -28,7 +28,7 @@
 //! Enable `widget` for a chart without application UI or built-in studies:
 //!
 //! ```toml
-//! egui-charts = { version = "0.3", default-features = false, features = ["widget"] }
+//! egui-charts = { git = "https://github.com/userFRM/egui-charts", branch = "main", default-features = false, features = ["widget"] }
 //! ```
 //!
 //! Create the chart once with bars ordered from oldest to newest, then call

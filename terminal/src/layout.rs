@@ -8,11 +8,11 @@ use egui_charts::ui_kit::notifications::NotificationPanel;
 pub(super) enum Region {
     /// Above the top toolbar, such as the layout tabs.
     Top,
-    /// The left edge: the 54 point drawing toolbar panel.
+    /// The left edge: the 54 point drawing toolbar, then the dock across the remaining width.
     Left,
     /// The right edge: the 49 point widget bar and the side panel beside it.
     Right,
-    /// The bottom edge: the dock, then the 39 point bottom bar panel.
+    /// The bottom edge: the 39 point bottom bar above the dock.
     Bottom,
     /// Over the chart area, after the charts are drawn.
     Chart,
