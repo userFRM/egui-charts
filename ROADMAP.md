@@ -238,7 +238,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Dock the supplied broker account and host strategy report in shared bottom tabs, with collapse, restore and maximise controls.
 - [ ] Open the study editor and replay-trading surfaces as tabs of the same bottom dock.
 - [ ] Open the drawing toolbar's colour popup from a visible control and render its saved favourites bar.
-- [ ] Persist and restore indicator favourites in the assembled UI.
+- [x] The terminal and demo persist indicator favourites, restore them in the browser and toolbar, and retain stars for temporarily unavailable studies.
 - [ ] Show and route the standalone floating selection toolbar's settings, duplicate, lock, visibility, delete and colour actions.
 - [ ] Connect the standalone quick settings menu, its scale-settings action and all of its configuration fields.
 - [ ] Handle the series context menu's Copy price action.
@@ -269,7 +269,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 
 - [x] `ChartLayout` arranges up to 16 charts in grids or tabs, tracks the active chart, supports detached views and groups, and synchronises selected symbol, interval, time range and crosshair time. The demo saves group memberships, detached slots and synchronization switches with each layout.
 - [x] Main-pane drawings synchronise between grouped charts by timestamp.
-- [x] `ChartSnapshot` saves symbol, interval, chart configuration, built-in studies, panes, scales, viewport and drawings in versioned documents; feed-backed comparisons and spreads reconnect on restore, and the dividend-adjustment choice persists.
+- [x] `ChartSnapshot` saves symbol, interval, chart configuration, built-in studies, panes, scales, viewport and drawings in versioned documents; feed-backed comparisons and spreads reconnect on restore, and the dividend-adjustment choice persists. The demo also checkpoints the current unnamed workspace, including each chart's session choice, and restores it on reload without changing named-layout save behavior; an unreadable recovery document is retained and reported while a default chart opens.
 - [x] The terminal creates, copies, renames, lists, saves, opens and deletes layouts through supplied storage, with debounced autosave and Ctrl+S. Layout tabs keep independent charts and undo history; Tab and Shift+Tab cycle the visible chart slots, and new slots inherit the study limit.
 - [x] Chart, study and drawing template catalogues support named save, replace, apply and delete operations; the terminal wires indicator templates to host storage and applies their studies, links and shared panes as one undoable edit.
 - [x] `SettingsStore` persists preferences with debouncing, failed-write retry and error reporting.
