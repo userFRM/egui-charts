@@ -547,6 +547,8 @@ pub(super) fn hotlist(query: &HotlistQuery, live: &LiveFeed) -> Vec<HotlistEntry
 pub(super) struct DemoNotifications(
     Mutex<(Vec<Notification>, Option<Events<Notification>>)>,
     Mutex<Vec<std::sync::Weak<egui_charts::services::OrderFlowDetectors>>>,
+    /// News delivery must not depend on whether the bounded log still contains the headline.
+    Mutex<BTreeMap<String, DateTime<Utc>>>,
 );
 
 impl DemoNotifications {
@@ -575,6 +577,11 @@ impl DemoNotifications {
 
     /// Keep supplied headlines quiet on repeated viewport requests.
     pub(super) fn notify_event(&self, symbol: &str, event: &egui_charts::model::TimeScaleEvent) {
+        let mut latest = self.2.lock().unwrap_or_else(|e| e.into_inner());
+        if latest.get(symbol).is_some_and(|time| *time >= event.time) {
+            return;
+        }
+        latest.insert(symbol.to_owned(), event.time);
         let mut entry = Notification::new(event.time, &event.title);
         entry.body = event.details.clone();
         entry.symbol = Some(symbol.into());
@@ -1020,6 +1027,41 @@ mod tests {
                 actual.period
             );
         }
+    }
+
+    #[test]
+    fn evicted_news_stays_quiet_when_history_is_reloaded_or_replayed() {
+        use egui_charts::model::{EventKind, TimeScaleEvent};
+        let notifications = DemoNotifications::default();
+        let event = |minute| TimeScaleEvent {
+            id: format!("sample-{minute}"),
+            time: DateTime::UNIX_EPOCH + TimeDelta::minutes(minute),
+            kind: EventKind::News,
+            title: format!("Headline {minute}"),
+            details: "Synthetic news".into(),
+        };
+        for minute in 0..120 {
+            notifications.notify_event("SAMPLE", &event(minute));
+        }
+        notifications.notify_event("SAMPLE", &event(0));
+        notifications.notify_event("SAMPLE", &event(119));
+        let state = notifications.0.lock().unwrap();
+        assert_eq!(state.0.len(), 100);
+        assert_eq!(state.0.last().unwrap().time, event(119).time);
+        drop(state);
+        notifications.notify_event("BTCUSD", &event(0));
+        assert_eq!(
+            notifications
+                .0
+                .lock()
+                .unwrap()
+                .0
+                .last()
+                .unwrap()
+                .symbol
+                .as_deref(),
+            Some("BTCUSD")
+        );
     }
 
     fn demo_frame(

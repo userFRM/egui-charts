@@ -1,11 +1,13 @@
 //! Synthetic annotations and scheduled events for the demo's own bars.
 
-use super::{DemoApp, DemoSymbol};
+use super::{DemoApp, DemoSymbol, LiveFeed};
+use chrono::Datelike;
 use egui::{Color32, Vec2};
 use egui_charts::data::Reply;
 use egui_charts::drawings::FontWeight;
 use egui_charts::model::{
-    Bar, ChangeMarkers, EventKind, Marker, MarkerPos, MarkerShape, PriceLine, TimeScaleEvent,
+    BarClock, ChangeMarkers, EventKind, Marker, MarkerPos, MarkerShape, PriceLine, TimeScaleEvent,
+    Timeframe,
 };
 use egui_charts::services::{Marks, MarksPage, MarksRequest};
 use egui_charts::widget::{SeriesId, Watermark, WatermarkLine};
@@ -21,7 +23,8 @@ impl DemoApp {
         let samples = self.api_samples;
         self.refresh_strategy_signals();
         self.chart.set_mark_source(Some(Arc::new(DemoMarks {
-            bars: self.bars.clone(),
+            live: self.live.clone(),
+            extended_hours: self.chart.extended_hours(),
             samples,
             notifications: self
                 .chart
@@ -108,22 +111,67 @@ impl DemoApp {
     }
 }
 
-/// Time-axis events every 40 bars and, with `samples`, a signal mark on each of those bars.
+/// Time-axis events at a stable cadence per interval, with symbol/time identities.
+/// Requests read the current feed, including newly streamed and older daily bars.
 pub(super) struct DemoMarks {
-    pub bars: Vec<Bar>,
+    pub live: Arc<LiveFeed>,
+    pub extended_hours: bool,
     pub samples: bool,
     pub notifications: Option<Arc<super::feeds::DemoNotifications>>,
 }
 
 impl Marks for DemoMarks {
     fn marks(&self, request: MarksRequest, reply: Reply<MarksPage>) {
+        reply.send(Ok(self.annotations(&request)));
+    }
+}
+
+impl DemoMarks {
+    fn annotations(&self, request: &MarksRequest) -> MarksPage {
         let mut page = MarksPage::default();
-        for (index, bar) in
-            self.bars.iter().enumerate().filter(|(i, bar)| {
-                i % 40 == 0 && bar.time >= request.from && bar.time <= request.to
-            })
-        {
-            let kind = match (index / 40) % 6 {
+        let Some(spec) = DemoSymbol::catalog()
+            .iter()
+            .find(|spec| spec.symbol.eq_ignore_ascii_case(&request.symbol))
+        else {
+            return page;
+        };
+        let other = (self.live.instrument().symbol != spec.symbol).then(|| {
+            let feed = self.live.fork();
+            feed.set_symbol(spec.symbol);
+            feed
+        });
+        let live = other.as_ref().unwrap_or(&self.live);
+        let instrument = live.instrument();
+        let extended = self.extended_hours;
+        let mut clock = BarClock::new(request.timeframe);
+        if let Some(session) = instrument.session {
+            clock = clock.with_session(crate::sampledata::us_equity_zone(), session, extended);
+        }
+        let bars = live.snapshot(request.timeframe, clock, extended);
+        let first = bars.partition_point(|bar| bar.time < request.from);
+        let end = bars.partition_point(|bar| bar.time <= request.to.min(live.now()));
+        for bar in &bars[first..end.max(first)] {
+            let months = i64::from(bar.time.year() - 1970) * 12 + i64::from(bar.time.month0());
+            let index = match request.timeframe {
+                Timeframe::Month1 => months,
+                Timeframe::Months(count) => months.div_euclid(i64::from(count.get())),
+                Timeframe::Week1 => (bar.time.timestamp().div_euclid(86_400) - 4).div_euclid(7),
+                Timeframe::Weeks(count) => (bar.time.timestamp().div_euclid(86_400) - 4)
+                    .div_euclid(7 * i64::from(count.get())),
+                timeframe => bar
+                    .time
+                    .timestamp_millis()
+                    .div_euclid(timeframe.duration_ms().max(1)),
+            } - spec.seed as i64;
+            if index.rem_euclid(40) != 0
+                || page
+                    .events
+                    .last()
+                    .is_some_and(|event| event.time == bar.time)
+            {
+                continue;
+            }
+            let kind = match index.div_euclid(40).rem_euclid(6) {
                 0 => EventKind::Dividend,
                 1 => EventKind::Split,
                 2 => EventKind::Earnings,
@@ -132,7 +180,7 @@ impl Marks for DemoMarks {
                 _ => EventKind::Idea,
             };
             page.events.push(TimeScaleEvent {
-                id: format!("demo-event-{index}"),
+                id: format!("demo-event-{}-{}", spec.symbol, bar.time.timestamp_millis()),
                 time: bar.time,
                 kind,
                 title: format!("Synthetic {} event", kind.label()),
@@ -141,7 +189,7 @@ impl Marks for DemoMarks {
             if kind == EventKind::News
                 && let Some(notifications) = &self.notifications
             {
-                notifications.notify_event(&request.symbol, page.events.last().unwrap());
+                notifications.notify_event(spec.symbol, page.events.last().unwrap());
             }
             if self.samples {
                 page.bar_marks.push(
@@ -150,6 +198,82 @@ impl Marks for DemoMarks {
                 );
             }
         }
-        reply.send(Ok(page));
+        page
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeDelta;
+
+    #[test]
+    fn annotations_follow_live_time_and_paged_history_with_stable_ids() {
+        let now = "2026-11-03T15:00:00Z".parse().unwrap();
+        let live = Arc::new(LiveFeed::new("SAMPLE", now));
+        super::super::tests::finish_feed(&live);
+        let source = DemoMarks {
+            live: live.clone(),
+            extended_hours: false,
+            samples: true,
+            notifications: None,
+        };
+        let mut request = MarksRequest {
+            symbol: "SAMPLE".into(),
+            timeframe: Timeframe::Min1,
+            from: now - TimeDelta::hours(2),
+            to: now,
+        };
+        let initial = source.annotations(&request);
+        assert!(!initial.events.is_empty());
+        request.from = now + TimeDelta::minutes(1);
+        request.to = now + TimeDelta::minutes(41);
+        assert!(
+            source.annotations(&request).events.is_empty(),
+            "future events wait for synthetic time"
+        );
+        for minute in 1..=41 {
+            live.advance(now + TimeDelta::minutes(minute));
+        }
+        let advanced = source.annotations(&request);
+        assert!(
+            !advanced.events.is_empty(),
+            "the attached source must acquire new live events"
+        );
+        assert_eq!(advanced.events.len(), advanced.bar_marks.len());
+        assert!(advanced.events.iter().all(|event| event.time > now));
+        request.from = now - TimeDelta::hours(2);
+        request.to = now;
+        assert_eq!(
+            source.annotations(&request).events,
+            initial.events,
+            "streaming must not shift existing event identities"
+        );
+        request.timeframe = Timeframe::Day1;
+        request.from = now - TimeDelta::days(1000);
+        request.to = now - TimeDelta::days(900);
+        let older = source.annotations(&request);
+        assert!(!older.events.is_empty());
+        assert_eq!(source.annotations(&request).events, older.events);
+        request.symbol = "BTCUSD".into();
+        let other = source.annotations(&request);
+        assert!(!other.events.is_empty());
+        assert!(
+            other
+                .events
+                .iter()
+                .all(|event| event.id.starts_with("demo-event-BTCUSD-"))
+        );
+        request.symbol = "SAMPLE".into();
+        assert_eq!(source.annotations(&request).events, older.events);
+        assert_eq!(
+            older
+                .events
+                .iter()
+                .map(|event| &event.id)
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            older.events.len()
+        );
     }
 }
