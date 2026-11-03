@@ -378,30 +378,11 @@ impl Chart {
         if ctx.cumulative_pass_nr() == 0 {
             return Err(ExportError::NoFrame);
         }
-        let mut chart = self.export_snapshot();
-        chart.config.skip_background = options.transparent_background;
-        chart.config.show_symbol_labels &= options.include_title;
-        if !options.include_watermark {
-            chart.config.show_watermark = false;
-            chart.watermark = None;
-        }
-        let mut theme = self
+        let mut chart = self.export_snapshot(ctx, options);
+        let theme = chart
             .theme_override
             .clone()
             .unwrap_or_else(|| ctx.active_theme());
-        if options.transparent_background {
-            theme.chart.bg = egui::Color32::TRANSPARENT;
-        }
-        chart.theme_override = Some(theme.clone());
-        if let Some((time, price)) = self.last_crosshair.filter(|_| options.include_crosshair) {
-            match price {
-                Some(price) => chart.set_crosshair_position(Some((time, price))),
-                None => {
-                    chart.set_synced_crosshair_time(Some(time));
-                    chart.chart_options.crosshair.horz_line_visible = false;
-                }
-            }
-        }
         let image_ctx = egui::Context::default();
         image_ctx.set_global_style(ctx.global_style());
         crate::theme::apply_to_egui(&image_ctx, &theme);
@@ -525,7 +506,39 @@ impl Chart {
         svg.map_err(ExportError::Unsupported)
     }
 
-    fn export_snapshot(&self) -> Self {
+    /// A frozen chart for a multi-chart image layout, with the same background, title,
+    /// watermark and crosshair choices as [`Self::export_image`]. Show it inside the callback
+    /// of [`Self::export_layout_image`], [`Self::export_layout_png`] or [`Self::export_layout_svg`].
+    /// No storage or live subscriptions are attached; the original chart stays unchanged.
+    pub fn export_snapshot(&self, ctx: &egui::Context, options: &ImageExportOptions) -> Self {
+        let mut chart = self.frozen_export_snapshot();
+        chart.config.skip_background = options.transparent_background;
+        chart.config.show_symbol_labels &= options.include_title;
+        if !options.include_watermark {
+            chart.config.show_watermark = false;
+            chart.watermark = None;
+        }
+        let mut theme = self
+            .theme_override
+            .clone()
+            .unwrap_or_else(|| ctx.active_theme());
+        if options.transparent_background {
+            theme.chart.bg = egui::Color32::TRANSPARENT;
+        }
+        chart.theme_override = Some(theme);
+        if let Some((time, price)) = self.last_crosshair.filter(|_| options.include_crosshair) {
+            match price {
+                Some(price) => chart.set_crosshair_position(Some((time, price))),
+                None => {
+                    chart.set_synced_crosshair_time(Some(time));
+                    chart.chart_options.crosshair.horz_line_visible = false;
+                }
+            }
+        }
+        chart
+    }
+
+    fn frozen_export_snapshot(&self) -> Self {
         let mut chart = Chart::with_config(Default::default(), self.config.clone());
         chart.state = self.state.clone();
         chart.chart_options = self.chart_options.clone();
@@ -835,7 +848,7 @@ mod tests {
         }))));
         chart.pump_marks(&ctx);
 
-        let mut snapshot = chart.export_snapshot();
+        let mut snapshot = chart.frozen_export_snapshot();
         assert_eq!(snapshot.time_scale_events.len(), 1);
         test_frames::frame(&ctx, &mut snapshot, 0.1, vec![]);
         let value = |chart: &Chart| {
@@ -901,7 +914,7 @@ mod tests {
         chart.pump_marks(&ctx);
         assert_eq!(source.calls.load(Ordering::Relaxed), 1);
 
-        let mut snapshot = chart.export_snapshot();
+        let mut snapshot = chart.frozen_export_snapshot();
         assert!(snapshot.mark_source.is_none());
         assert_eq!(snapshot.event_visibility(), chart.event_visibility());
         assert_eq!(snapshot.time_scale_events.len(), 2);

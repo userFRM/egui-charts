@@ -514,10 +514,17 @@ impl Chart {
                                         item,
                                         self.primitive_view(
                                             *id,
-                                            crate::chart::rendering::study_mapping(
-                                                study,
-                                                &pane_mapping,
-                                            ),
+                                            if matches!(
+                                                study.scale(),
+                                                crate::studies::StudyScale::Shared(_)
+                                            ) {
+                                                crate::chart::rendering::study_mapping(
+                                                    study,
+                                                    &pane_mapping,
+                                                )
+                                            } else {
+                                                pane_mapping
+                                            },
                                         ),
                                     )
                                 }),
@@ -772,6 +779,7 @@ impl Chart {
                         .flat_map(|id| self.primitives_of(id))
                         .collect::<Vec<_>>(),
                     study.is_none() && id.is_some(),
+                    self.merge_groups.factor(),
                 ) {
                     if !collapsed
                         && let Some(item) =
@@ -783,7 +791,12 @@ impl Chart {
                         self.paint_series(&painter, interaction.chart_rect, item, map);
                         let view = self.primitive_view(item.id, pane_mapping);
                         for primitive in self.primitives_of(item.id) {
-                            primitive.draw(&painter, &view, crate::widget::PrimitivePass::Series);
+                            primitive.draw(
+                                &painter,
+                                &view,
+                                crate::widget::PrimitivePass::Series,
+                                self.merge_groups.factor(),
+                            );
                         }
                     }
                     self.measured_axis_width =
@@ -896,7 +909,12 @@ impl Chart {
                             })
                             .map(|item| {
                                 let mut view = self.primitive_view(item.series, pane_coords);
-                                if let Some(study) = view.study {
+                                if let Some(study) = view.study
+                                    && matches!(
+                                        study.scale(),
+                                        crate::studies::StudyScale::Shared(_)
+                                    )
+                                {
                                     view.mapping =
                                         crate::chart::rendering::study_mapping(study, &pane_coords);
                                 }
@@ -1206,7 +1224,12 @@ impl Chart {
                         && self.is_series_visible(item.series)
                 }) {
                     let view = self.primitive_view(item.series, pane_coords);
-                    item.draw(&painter, &view, crate::widget::PrimitivePass::Above);
+                    item.draw(
+                        &painter,
+                        &view,
+                        crate::widget::PrimitivePass::Above,
+                        self.merge_groups.factor(),
+                    );
                 }
             }
             if !collapsed {
