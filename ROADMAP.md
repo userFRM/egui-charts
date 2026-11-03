@@ -42,14 +42,14 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 
 - [x] Linear, logarithmic, percentage, indexed-to-100 and inverted price scales, autoscale, manual ranges and scale options. Marker autoscaling reserves room for shapes, outlines and labels of visible markers positioned from bars or prices at their configured size on main and secondary panes; hidden markers and disabled autoscaling add no room.
 - [x] Time-axis tick hierarchy, price marks that default to the instrument tick grid with host overrides, exchange time zones, session breaks and extended-hours shading.
-- [x] Chart-wide time, price, percentage and volume formatters, plus per-series price formatters. Time tick hooks receive the current locale and display-time context and can defer individual ticks to the normal locale-aware text without changing crosshair formatting. Drawing prices and price changes use their pane's raw-price formatter, including measurements, forecasts, projections, position levels and rectangle heights.
+- [x] Chart-wide time, price, percentage and volume formatters, plus per-series price formatters. Saved series styles declare price, abbreviated volume or raw percentage display with precision and minimum movement, independently of scale transforms. Explicit series and chart price formatters take precedence; a shared axis takes tick settings from its first visible series, and each series retains its own tags and readouts. Time tick hooks receive the current locale and display-time context and can defer individual ticks to the normal locale-aware text without changing crosshair formatting. Drawing prices and price changes use their pane's raw-price formatter, including measurements, forecasts, projections, position levels and rectangle heights.
 - [x] Locale-aware date names and configurable date patterns. Forecast dates use the chart's display time zone and crosshair time formatter, including host formatting and clock visibility.
 - [x] Chart-owned panes share the time axis and support resizing, reordering, stretch sizing, collapse and maximise controls.
 - [x] Studies and added series can use separate panes and independent scales. The demo menu's Samples entries open synthetic strike and maturity charts with numeric crosshair readouts and preserve the price workspace on return.
 - [x] Scale settings control currency and unit labels, scale-mode and price-action buttons, price-to-bar ratio, label overlap and symbol, study and extended-session value colours.
 - [ ] Forward pan, wheel and pinch input to maximised study panes and support pane maximisation by double-click.
 - [ ] Apply the main-series-only autoscale quick setting and the left-axis scale-mode configuration field.
-- [ ] Use configured scale precision for added-series value tags when no formatter is supplied.
+- [x] Added-series value tags use configured scale precision when no formatter is supplied; saved numeric display declarations also control their tags and readouts.
 - [ ] Draw independent symbol-name and study-name tags on the price scale.
 - [ ] Apply scale font-size, scale-line colour and pane-button visibility settings.
 
