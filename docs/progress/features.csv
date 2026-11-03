@@ -44,8 +44,8 @@ Builder API,Datafeed API,End of history and gap signalling,done,host,src/data/mo
 Builder API,Datafeed API,Error and retry signalling,done,host,src/widget/series/mod.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/widget/feed/mod.rs,
 Builder API,Datafeed API,Extended hours,done,host,src/model/instrument.rs;src/data/mod.rs;examples/demo/sampledata.rs;examples/demo/live.rs;src/widget/feed/mod.rs;examples/demo/controller.rs;src/widget/frame/mod.rs;src/widget/frame/sessions.rs,
 Builder API,Datafeed API,HTTP history and streaming adapter,done,host,src/data/http/mod.rs;src/data/http/protocol.rs;src/services/search.rs;examples/network_feed.rs,
-Builder API,Datafeed API,History paging when scrolling back,done,host,src/widget/feed/mod.rs;src/widget/studies_data.rs;src/data/merge.rs;src/widget/feed/pump.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/widget/frame/mod.rs,
-Builder API,Datafeed API,History request parameters,done,host,src/data/mod.rs;src/widget/feed/mod.rs;examples/demo/feeds.rs;examples/demo/live.rs,
+Builder API,Datafeed API,History paging when scrolling back,done,host,src/widget/feed/mod.rs;src/widget/studies_data.rs;src/data/merge.rs;src/widget/feed/pump.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/widget/frame/mod.rs;examples/demo/sampledata.rs;examples/demo/live.rs,1926
+Builder API,Datafeed API,History request parameters,done,host,src/data/mod.rs;src/widget/feed/mod.rs;examples/demo/feeds.rs;examples/demo/live.rs;examples/demo/sampledata.rs,1926
 Builder API,Datafeed API,Host data feed contract,done,host,src/data/mod.rs;src/widget/builder.rs;src/widget/feed/mod.rs;src/data/inbox/sink.rs;src/data/merge.rs;src/prelude.rs,
 Builder API,Datafeed API,Interval resampling,done,library,src/data/mod.rs;src/data/resample.rs;src/model/clock.rs;src/model/session/exchange.rs,
 Builder API,Datafeed API,Live bar stream lifecycle,done,host,src/widget/feed/mod.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/data/merge.rs;src/model/clock.rs;examples/demo/live.rs;examples/demo/controller.rs;examples/demo/comparison.rs,1923
@@ -902,7 +902,7 @@ Terminal,Templates and layouts,Share a layout by link,done,host,src/services/sha
 Terminal,Templates and layouts,Snapshot: copy image to clipboard,done,library,src/ui/export.rs;src/ui/top_toolbar/toolbar.rs,
 Terminal,Templates and layouts,Snapshot: download the chart image,done,library,src/widget/export.rs;src/ui/top_toolbar/toolbar.rs;Cargo.toml,1963
 Terminal,Templates and layouts,Sync between charts,done,library,src/widget/layout.rs;src/widget/layout/drawings.rs;src/widget/sync.rs;src/model/timescale.rs;src/widget/frame/mod.rs,
-Terminal,Toolbars and panels,Bottom time bar,done,library,src/ui/timeframe_toolbar/toolbar.rs;src/ui/top_toolbar/buttons.rs;src/theme/mod.rs;terminal/src/time.rs;src/model/date_range.rs;src/ui/timeframe_toolbar/range_switcher.rs;terminal/src/compare.rs;src/widget/feed/mod.rs;src/data/mod.rs;src/model/instrument.rs,
+Terminal,Toolbars and panels,Bottom time bar,done,library,src/ui/timeframe_toolbar/toolbar.rs;src/ui/top_toolbar/buttons.rs;src/theme/mod.rs;terminal/src/time.rs;src/model/date_range.rs;src/ui/timeframe_toolbar/range_switcher.rs;terminal/src/compare.rs;src/widget/feed/mod.rs;src/data/mod.rs;src/model/instrument.rs;examples/demo/feeds.rs;examples/demo/controller.rs;examples/demo/sampledata.rs,1926
 Terminal,Toolbars and panels,Chart settings button and applying the dialog,done,library,src/ui/top_toolbar/toolbar.rs;src/widget/settings/apply.rs,
 Terminal,Toolbars and panels,Chart type menu,done,library,src/ui/top_toolbar/toolbar.rs;src/ui/top_toolbar/components/chart_type_selector.rs,
 Terminal,Toolbars and panels,Compare / add symbol dialog,done,library,src/ui/dialogs/symbol_search/compare.rs;src/ui/dialogs/symbol_search/row.rs;src/ui/dialogs/symbol_search/service.rs;terminal/src/compare.rs;src/widget/series/options.rs;src/widget/studies_data.rs,
@@ -967,7 +967,7 @@ Terminal,Watchlists and screeners,Sections inside a list,done,library,src/ui/wid
 Terminal,Watchlists and screeners,Share a list by link,done,host,src/services/sharing.rs;src/ui/share_controls.rs;src/ui/widget_bar/panels/watchlist.rs,
 Terminal,Watchlists and screeners,Sort by column and drag to reorder,done,library,src/ui/widget_bar/panels/watchlist.rs,
 Terminal,Watchlists and screeners,Stock screener,done,host,src/ui/widget_bar/panels/screener.rs;src/data/market.rs;src/services/storage.rs;src/ui/dialogs/templates/store.rs;examples/demo/feeds.rs;examples/demo/live.rs;examples/demo/controller.rs,
-Terminal,Watchlists and screeners,Symbol details panel,done,host,src/ui/widget_bar/panels/symbol_details.rs;src/data/mod.rs;src/ui/widget_bar/panels/market_details.rs;examples/demo/feeds.rs;examples/demo/controller.rs;examples/demo/live.rs;src/ui/financials.rs;examples/demo/commands.rs,1921
+Terminal,Watchlists and screeners,Symbol details panel,done,host,src/ui/widget_bar/panels/symbol_details.rs;src/data/mod.rs;src/ui/widget_bar/panels/market_details.rs;examples/demo/feeds.rs;examples/demo/controller.rs;examples/demo/live.rs;src/ui/financials.rs;examples/demo/commands.rs;examples/demo/sampledata.rs,1921;1926
 Terminal,Watchlists and screeners,Watchlist panel in the right toolbar,done,host,src/ui/widget_bar/toolbar.rs;src/ui/widget_bar/panels/watchlist.rs;src/theme/presets.rs,
 Studies,Strategy tester,Live strategy updates,done,library,src/strategies/live.rs;src/strategies/backtest.rs;src/strategies/mod.rs,
 Terminal,Alerts,Strategy order fill alerts,done,library,src/model/alert.rs;src/services/alerts.rs;src/services/alert_engine.rs;src/strategies/live.rs;examples/demo/strategy_live.rs,
