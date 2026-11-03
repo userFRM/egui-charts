@@ -808,7 +808,7 @@ impl Simulation {
         let factor = if cents { 100.0 } else { 0.01 };
         self.cents = cents;
         self.tick_size *= factor;
-        for bar in &mut self.history {
+        for bar in self.history.iter_mut().chain(&mut self.daily_history) {
             bar.open *= factor;
             bar.high *= factor;
             bar.low *= factor;
@@ -1667,6 +1667,41 @@ mod tests {
             }
         }
         panic!("retained executions did not finish loading");
+    }
+
+    #[test]
+    fn price_unit_changes_include_the_daily_archive() {
+        let now = "2026-11-03T15:00:00Z".parse().unwrap();
+        let feed = LiveFeed::generate("SAMPLE", now);
+        let histories: Vec<_> = [Timeframe::Day1, Timeframe::Week1, Timeframe::Month1]
+            .into_iter()
+            .map(|timeframe| {
+                let bars = feed.snapshot(timeframe, BarClock::new(timeframe), false);
+                assert!(bars.len() > 300);
+                (timeframe, bars)
+            })
+            .collect();
+        for cents in [true, false] {
+            feed.set_price_unit(cents);
+            let factor = if cents { 100.0 } else { 1.0 };
+            for (timeframe, raw) in &histories {
+                let bars = feed.snapshot(*timeframe, BarClock::new(*timeframe), false);
+                assert_eq!(raw.len(), bars.len());
+                for (usd, converted) in raw.iter().zip(&bars) {
+                    assert_eq!((usd.time, usd.volume), (converted.time, converted.volume));
+                    for (usd, converted) in
+                        [usd.open, usd.high, usd.low, usd.close].into_iter().zip([
+                            converted.open,
+                            converted.high,
+                            converted.low,
+                            converted.close,
+                        ])
+                    {
+                        assert!((usd * factor - converted).abs() < 1e-7);
+                    }
+                }
+            }
+        }
     }
 
     #[test]
