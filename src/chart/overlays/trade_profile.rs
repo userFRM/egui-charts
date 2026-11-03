@@ -2,40 +2,13 @@
 
 use crate::chart::coords::ChartMapping;
 use crate::chart::overlays::{FootprintConfig, FootprintMode};
-use crate::data::NodeSensitivity;
 use crate::model::Bar;
 use crate::studies::TradeProfile;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Align2, FontId, Painter, Rect, Stroke, pos2};
 
-/// Display settings of the chart's execution-based session profiles.
-/// Defaults retain the stacked session histogram, with optional annotations hidden.
-#[derive(Clone, Debug)]
-pub struct TradeProfileSettings {
-    /// Bid/ask stacks, total volume or signed delta; `DeltaVolume` also draws signed delta.
-    pub mode: FootprintMode,
-    /// Trace the total-volume POC after each complete execution bar.
-    pub developing_poc: bool,
-    /// Volume-node smoothing and prominence; `None` hides the node labels.
-    pub nodes: Option<NodeSensitivity>,
-    /// Share of total volume shaded as the contiguous value area; `None` hides it.
-    pub value_area: Option<f64>,
-    /// Draw guides at the outer edges of the value area.
-    pub value_area_guides: bool,
-}
-
-impl Default for TradeProfileSettings {
-    fn default() -> Self {
-        Self {
-            mode: FootprintMode::BidAsk,
-            developing_poc: false,
-            nodes: None,
-            value_area: Some(0.7),
-            value_area_guides: false,
-        }
-    }
-}
+pub use crate::model::TradeProfileSettings;
 
 /// Draws bid/ask stacks, total volume or signed delta profiles, their POC, value area,
 /// developing POC and volume nodes. `step` is the footprint's grouped price step and
