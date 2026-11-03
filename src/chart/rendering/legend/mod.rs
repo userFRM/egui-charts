@@ -1228,12 +1228,12 @@ mod mark_tests {
                     Default::default(),
                 );
                 // Without image loaders the instrument's logo stays unreadable.
-                #[cfg(feature = "icons")]
+                #[cfg(feature = "ui")]
                 {
                     egui_extras::install_image_loaders(&ctx);
                     ctx.include_bytes("bytes://logo.svg", br#"<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18"><circle cx="9" cy="9" r="9" fill="blue"/></svg>"#);
                 }
-                let logo_ready = logo && cfg!(feature = "icons");
+                let logo_ready = logo && cfg!(feature = "ui");
                 let mut instrument = Instrument::new(symbol);
                 if logo {
                     instrument = instrument.with_logo("bytes://logo.svg");
@@ -1516,7 +1516,7 @@ mod layout_tests {
             for width in [160.0, 300.0, 387.0, 400.0, 599.0, 600.0, 1200.0, 1440.0] {
                 let ctx = Context::default();
                 #[cfg(feature = "icons")]
-                egui_extras::install_image_loaders(&ctx);
+                crate::icons::install_loader(&ctx);
                 apply_to_egui(&ctx, &theme);
                 let plot = Rect::from_min_size(Pos2::new(52.0, 40.0), Vec2::new(width, 400.0));
                 let badge = ctx.load_texture(

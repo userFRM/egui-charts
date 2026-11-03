@@ -243,8 +243,9 @@ impl Chart {
     /// Overrides raw-price formatting for one bar series, including `MAIN`. This affects
     /// readouts, price tags, ticks and the prices drawings in its pane print; percentage and
     /// indexed scales retain the chart's percentage formatter. `None` restores chart-wide
-    /// formatting. Returns false for an unknown series. A shared axis uses the first visible
-    /// series' formatter.
+    /// formatting, then the saved [`SeriesStyle::display_format`](crate::model::SeriesStyle::display_format).
+    /// Returns false for an unknown series. A shared axis uses the first visible series'
+    /// formatter. Custom text does not replace the declaration's tick spacing.
     pub fn set_series_formatter(
         &mut self,
         id: super::SeriesId,
@@ -275,11 +276,12 @@ impl Chart {
                 .series_formatters
                 .get(&id)
                 .cloned()
-                .or_else(|| self.price_formatter.clone()),
+                .or_else(|| self.price_formatter.clone())
+                .or_else(|| Some(std::sync::Arc::new(self.series_style(id)?.display_format?))),
         }
     }
 
-    /// The host's formatter for raw prices of series `id`: its own, else the chart's.
+    /// Raw-value formatting: the series' host hook, the chart's, then the saved declaration.
     pub(super) fn series_price_formatter(
         &self,
         id: super::SeriesId,
@@ -288,6 +290,47 @@ impl Chart {
             .get(&id)
             .or(self.price_formatter.as_ref())
             .map(|formatter| formatter.as_ref())
+            .or_else(|| {
+                self.series_style(id)?
+                    .display_format
+                    .as_ref()
+                    .map(|format| format as &dyn crate::scales::PriceFormatter)
+            })
+    }
+
+    /// First visible bar series owning an axis. The main series precedes added series.
+    pub(super) fn series_axis_owner(&self, id: super::SeriesId) -> super::SeriesId {
+        let (pane, scale) = if id == super::SeriesId::MAIN {
+            // Removing the main series leaves its axis in the price pane.
+            (Some(super::PaneId::MAIN), Some(self.main_series_scale))
+        } else {
+            (self.series_pane(id), self.series_scale(id))
+        };
+        if pane == Some(super::PaneId::MAIN)
+            && scale == Some(self.main_series_scale)
+            && self.main_series_present
+            && self.main_series_visible
+        {
+            return super::SeriesId::MAIN;
+        }
+        self.price_series
+            .iter()
+            .find(|item| {
+                item.visible
+                    && self.series_pane(item.id) == pane
+                    && (pane != Some(super::PaneId::MAIN) || Some(item.options.scale) == scale)
+            })
+            .map_or(id, |item| item.id)
+    }
+
+    pub(super) fn series_display_map(
+        &self,
+        id: super::SeriesId,
+        map: crate::scales::PriceMap,
+    ) -> crate::scales::PriceMap {
+        self.series_style(self.series_axis_owner(id))
+            .and_then(|style| style.display_format)
+            .map_or(map, |format| map.with_display_format(format))
     }
 
     pub(crate) fn value_formatters(&self) -> rendering::ValueFormatters<'_> {

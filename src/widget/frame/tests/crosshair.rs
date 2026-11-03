@@ -1,6 +1,200 @@
 use crate::widget::test_frames::{chart, frame, shapes};
 use egui::{Event, Pos2, Shape};
 
+#[test]
+fn synced_crosshair_filters_numeric_gaps_by_screen_distance() {
+    use crate::model::{Bar, BarData, LineStyle, LogicalRange};
+    use crate::scales::{PriceHorizontalScale, key_time};
+    use crate::widget::{Chart, SeriesOptions};
+    use std::sync::Arc;
+
+    let bars = vec![
+        Bar::from_value(key_time(100.0).unwrap(), 10.0),
+        Bar::whitespace(key_time(110.0).unwrap()),
+        Bar::from_value(key_time(140.0).unwrap(), 12.0),
+    ];
+    let ctx = egui::Context::default();
+    let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+    chart.set_horizontal_scale(Some(Arc::new(PriceHorizontalScale::default())));
+    chart.config_mut().show_volume = false;
+    chart.chart_options.time_scale.ignore_whitespace_indices = true;
+    chart.chart_options.time_scale.ignore_hidden_indices = true;
+    chart.chart_options.crosshair.vert_line_color = egui::Color32::MAGENTA;
+    chart.chart_options.crosshair.vert_line_style = LineStyle::Solid;
+    let added = chart.add_series(SeriesOptions::default());
+    let pane = chart.add_pane();
+    assert!(chart.move_series_to_pane(added, pane));
+    chart.set_data(added, bars);
+    frame(&ctx, &mut chart, 0.0, vec![]);
+    assert!(chart.set_visible_logical_range(LogicalRange::new(-0.5, 2.5)));
+    // Index 1.4 is key 122: key 140 is closer than key 100, across the empty key 110.
+    chart.set_synced_crosshair_bar_idx(Some(1.4));
+    let painted = shapes(&ctx, &mut chart, 0.1, vec![Event::PointerGone]);
+    let expected = chart.index_to_x(2.0).unwrap();
+    assert_eq!(chart.last_crosshair.map(|(time, _)| time), key_time(140.0));
+    let lines: Vec<_> = painted
+        .iter()
+        .filter_map(|shape| match shape {
+            Shape::LineSegment { points, stroke }
+                if stroke.color == egui::Color32::MAGENTA && points[0].x == points[1].x =>
+            {
+                Some(points[0].x)
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(
+        lines.len() >= 2,
+        "main and added pane crosshairs: {lines:?}"
+    );
+    assert!(lines.iter().all(|x| (*x - expected).abs() < 0.01));
+}
+
+/// Main prices 0..100 and added prices 0..2000 share screen heights: the added close
+/// of 1000 sits at main price 50. Only closes compete, with main then draw-order ties.
+#[test]
+fn close_magnet_uses_visible_series_scales_for_line_label_and_event() {
+    use crate::config::CrosshairMode;
+    use crate::model::ChartType::{Candles, Renko};
+    use crate::model::{Bar, LineStyle, SeriesScale};
+    use crate::studies::{CustomIndicator, IndicatorValue};
+    use crate::widget::{ChartEvent, PaneId, SeriesId, SeriesOptions};
+
+    let ctx = egui::Context::default();
+    let mut chart = chart(&[10.0], &[90.0]);
+    chart.config.show_volume = false;
+    chart.chart_options.tooltip.enabled = false;
+    chart.set_crosshair_mode(CrosshairMode::MagnetClose);
+    chart.chart_options.crosshair.horz_line_color = egui::Color32::MAGENTA;
+    chart.chart_options.crosshair.horz_line_style = LineStyle::Solid;
+    chart.chart_options.crosshair.label_text_color = egui::Color32::MAGENTA;
+    let mut bars = chart.bars(SeriesId::MAIN).to_vec();
+    for bar in &mut bars {
+        bar.open = 20.0;
+        bar.close = 75.0;
+    }
+    // A final 600-point rise yields 60 ten-point bricks for the price-based case.
+    bars[99].close = 675.0;
+    bars[99].high = 690.0;
+    chart.set_data(SeriesId::MAIN, bars.clone());
+    let mut params = chart.chart_type_params().clone();
+    params.renko_brick_size = 10.0;
+    chart.set_chart_type_params(params);
+    let added = chart.add_series(SeriesOptions {
+        chart_type: Candles,
+        scale: SeriesScale::Left,
+        ..Default::default()
+    });
+    let second = chart.add_series(SeriesOptions {
+        scale: SeriesScale::Left,
+        ..Default::default()
+    });
+    chart.set_data(
+        second,
+        bars.iter()
+            .map(|bar| Bar::from_value(bar.time, 1500.0))
+            .collect(),
+    );
+    chart.add_indicator(Box::new(CustomIndicator::new("Nearby study", |bars| {
+        vec![IndicatorValue::Single(49.0); bars.len()]
+    })));
+    let pane = chart.add_pane();
+    // (chart type, main visible, added visible, added valued, added in another pane,
+    //  second visible, reverse added-series order, pointer in main-price units,
+    //  expected main-price readout).
+    for (step, case) in [
+        (Candles, true, true, true, false, false, false, 49.0, 50.0),
+        (Candles, true, false, true, false, false, false, 49.0, 75.0),
+        (Candles, true, true, false, false, false, false, 49.0, 75.0),
+        (Candles, false, true, true, false, false, false, 49.0, 50.0),
+        (Candles, false, false, true, false, false, false, 49.0, 49.0),
+        (Candles, true, true, true, true, false, false, 49.0, 75.0),
+        (Candles, true, true, true, false, false, false, 20.0, 50.0),
+        (Candles, true, true, true, false, false, false, 10.0, 50.0),
+        (Candles, true, true, true, false, false, false, 90.0, 75.0),
+        (Candles, true, true, true, false, false, false, 62.5, 75.0),
+        (Candles, false, true, true, false, true, false, 62.5, 50.0),
+        (Candles, false, true, true, false, true, true, 62.5, 75.0),
+        (Renko, false, true, true, false, false, false, 49.0, 50.0),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (kind, main, visible, valued, elsewhere, second_visible, reverse, pointer, expected) =
+            case;
+        chart.set_chart_type(kind);
+        chart.set_series_order(if reverse { second } else { added }, 0);
+        chart.set_main_series_visible(main);
+        chart.set_series_visible(added, visible);
+        chart.set_series_visible(second, second_visible);
+        chart.move_series_to_pane(added, if elsewhere { pane } else { PaneId::MAIN });
+        chart.set_data(
+            added,
+            bars.iter()
+                .map(|bar| {
+                    if valued {
+                        Bar::new(bar.time, 400.0, 1800.0, 200.0, 1000.0, 1.0)
+                    } else {
+                        Bar::whitespace(bar.time)
+                    }
+                })
+                .collect(),
+        );
+        chart
+            .series_price_scale_mut(SeriesId::MAIN)
+            .unwrap()
+            .set_range(0.0, 100.0);
+        chart
+            .series_price_scale_mut(second)
+            .unwrap()
+            .set_range(0.0, 2000.0);
+        let time = step as f64;
+        frame(&ctx, &mut chart, time, vec![Event::PointerGone]);
+        chart.drain_events().for_each(drop);
+        let map = chart.get_chart_mapping();
+        // Independent linear interpolation, without using the price mapping under test.
+        let y = |price: f64| map.rect.bottom() - (price / 100.0) as f32 * map.rect.height();
+        let pos = Pos2::new(map.idx_to_x(50), y(pointer));
+        let painted = shapes(&ctx, &mut chart, time + 0.1, vec![Event::PointerMoved(pos)]);
+        let lines: Vec<_> = painted
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::LineSegment { points, stroke }
+                    if stroke.color == egui::Color32::MAGENTA && points[0].y == points[1].y =>
+                {
+                    Some(points[0].y)
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(!lines.is_empty(), "{case:?}");
+        assert!(
+            lines.iter().all(|line| (*line - y(expected)).abs() < 0.01),
+            "{case:?}: {lines:?}"
+        );
+        let label = format!("{expected:.2}");
+        assert!(
+            painted.iter().any(|shape| matches!(shape, Shape::Text(text)
+            if text.galley.text() == label
+                && text.galley.job.sections[0].format.color == egui::Color32::MAGENTA)),
+            "{case:?}: missing label {label}"
+        );
+        let point = chart
+            .drain_events()
+            .find_map(|event| match event {
+                ChartEvent::CrosshairMoved(Some(point)) => Some(point),
+                _ => None,
+            })
+            .unwrap();
+        assert!(
+            (point.price - expected).abs() < 0.001,
+            "{case:?}: {point:?}"
+        );
+        assert_eq!(point.series, SeriesId::MAIN);
+        assert_eq!(point.pane, 0);
+    }
+}
+
 /// Eligibility follows current data and visibility, independently of price snapping, across
 /// panes and host positioning. Distances are logical slots: at 50.5, 48 is nearer than 54;
 /// at 51 they tie, so 54 wins. An added value at 51 wins over either neighbour.

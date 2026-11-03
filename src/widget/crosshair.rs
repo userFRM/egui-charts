@@ -106,17 +106,7 @@ impl Chart {
         if !mode.snaps() {
             return pos;
         }
-        if mode == CrosshairMode::MagnetClose {
-            if let Some(bar) = self
-                .state
-                .shown()
-                .get(index)
-                .filter(|bar| self.main_series_visible && !bar.is_whitespace())
-            {
-                pos.y = map.price_to_y(bar.close);
-            }
-            return pos;
-        }
+        let close_only = mode == CrosshairMode::MagnetClose;
         // Candidates are pointer-space heights, so each value goes through its own scale.
         let ohlc = self
             .state
@@ -124,7 +114,11 @@ impl Chart {
             .get(index)
             .filter(|bar| self.main_series_visible && !bar.is_whitespace())
             .into_iter()
-            .flat_map(|bar| [bar.open, bar.high, bar.low, bar.close])
+            .flat_map(|bar| {
+                [bar.open, bar.high, bar.low, bar.close]
+                    .into_iter()
+                    .skip(if close_only { 3 } else { 0 })
+            })
             .map(|value| map.price_to_y(value));
         let time_based = !self.chart_type.is_time_independent();
         let coords = ChartMapping {
@@ -136,7 +130,8 @@ impl Chart {
             .iter()
             .zip(self.studies.indicators())
             .filter(|(id, study)| {
-                time_based
+                !close_only
+                    && time_based
                     && study.is_visible()
                     && study.is_overlay()
                     && !study.is_volume()
@@ -160,7 +155,7 @@ impl Chart {
         let rect = self.last_rendered_price_rect;
         let series = self
             .main_pane_series()
-            .filter(|_| time_based)
+            .filter(|_| time_based || close_only)
             .filter_map(|item| {
                 let scale = self.series_map(item, rect);
                 self.series_close_at(item, index)
