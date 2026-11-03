@@ -288,12 +288,14 @@ impl HostEvents {
 }
 
 impl Chart {
-    /// Enables an additional [`ChartEvent::DataOperation`] for each accepted [`set_data`](Self::set_data)
-    /// or [`update`](Self::update) call, in call order, including unchanged data. Disabled by
-    /// default; changing this setting affects future calls and keeps already queued events.
+    /// Enables an additional [`ChartEvent::DataOperation`] for each accepted
+    /// [`set_data`](Self::set_data) or [`update`](Self::update) call, in call order, including
+    /// unchanged data. Disabled by default; changing this setting affects future calls and keeps
+    /// already queued events.
     /// Compact state-change notifications remain available in either mode.
     ///
-    /// Invalid updates emit no operation event and increment [`FeedState::rejected_bars`](crate::data::FeedState::rejected_bars).
+    /// Invalid updates emit no operation event and increment
+    /// [`FeedState::rejected_bars`](crate::data::FeedState::rejected_bars).
     /// A full replacement still emits one after dropping invalid bars, even if none remain.
     /// Unknown, removed, volume and study series accept no data and emit no operation event.
     /// During replay, updates are classified against the retained history, including future bars.
