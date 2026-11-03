@@ -152,6 +152,8 @@ impl LiveFeed {
     }
 
     pub(super) fn fork(&self) -> Self {
+        let detectors = Arc::new(egui_charts::services::OrderFlowDetectors::new());
+        detectors.set_settings(self.1.settings());
         let sim = self.state();
         Self(
             Mutex::new(Simulation {
@@ -180,7 +182,7 @@ impl LiveFeed {
                 capture: super::replay::Capture::new(),
                 orders: None,
             }),
-            Arc::default(),
+            detectors,
             self.2.clone(),
         )
     }
@@ -741,7 +743,13 @@ impl Simulation {
     fn trade(&mut self) {
         let random_step = (self.random() % 11) as i64 - 5;
         // Six rapid fills periodically sweep the order-level symbol, alternating direction.
-        let sweep = self.symbol == ORDER_LEVEL_SYMBOL && self.id % 1_000 < 6;
+        let sweep = self.symbol == ORDER_LEVEL_SYMBOL
+            && self.id % 1_000 < 6
+            && self
+                .capture
+                .detectors
+                .as_ref()
+                .is_some_and(|detectors| detectors.settings().stop_runs.enabled);
         let step = if sweep {
             if (self.id / 1_000).is_multiple_of(2) {
                 1
@@ -1735,6 +1743,29 @@ mod tests {
         assert!(book.best_bid().is_some() && book.best_ask().is_some());
     }
 
+    #[test]
+    fn opening_state_gates_synthetic_stop_runs() {
+        let now = "2026-10-23T14:00:00Z".parse().unwrap();
+        for enabled in [false, true] {
+            let feed = LiveFeed::new(ORDER_LEVEL_SYMBOL, now);
+            let detectors = feed.detectors();
+            let mut settings = detectors.settings();
+            settings.stop_runs.enabled = enabled;
+            detectors.set_settings(settings);
+            let mut sim = feed.state();
+            sim.capture.detectors = Some(detectors);
+            sim.id = 1_000;
+            sim.next_trade = now;
+            let mut rapid = true;
+            for _ in 0..6 {
+                let time = sim.next_trade;
+                sim.trade();
+                rapid &= sim.next_trade - time == TimeDelta::milliseconds(10);
+            }
+            assert_eq!(rapid, enabled);
+        }
+    }
+
     /// Guards the two kinds of demo feed: the futures contract keeps the chart's book of
     /// individual orders without one rejected event, with orders in both demo size tiers and of
     /// both recent and older placement, and the other instruments keep aggregate depth.
@@ -1747,6 +1778,9 @@ mod tests {
             let feed = Arc::new(LiveFeed::new(symbol, start));
             let detectors = feed.detectors();
             let mut settings = detectors.settings();
+            settings.big_trades.enabled = true;
+            settings.stop_runs.enabled = true;
+            settings.liquidity.enabled = true;
             settings.big_trades.rule.threshold = egui_charts::services::Threshold::Fixed(10.0);
             settings.liquidity.rule.threshold = egui_charts::services::Threshold::Fixed(10.0);
             settings.liquidity.alert = true;

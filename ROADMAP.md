@@ -11,12 +11,12 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 `ChartType` offers 21 chart types, with the rendering limits listed below.
 
 - [x] Candles, OHLC bars, hollow candles and volume candles, with configurable rising and falling colours.
-- [x] Line, line with markers, step line, area, HLC area, baseline, columns and high-low charts; line and area charts accept a `PriceSource`. Baseline fills accept independent colours at the pane edge and the base on each price side, including point overrides, while older settings keep flat fills.
+- [x] Line, line with markers, step line, area, HLC area, baseline, columns and high-low charts; line and area charts accept a `PriceSource`. Baseline fills accept independent colours at the pane edge and the base on each price side, including point overrides, while older settings keep flat fills. Area and baseline plots support point markers with independent radii for main and added series.
 - [x] Main-series conflation has a configurable physical-pixel threshold or can be disabled. `Chart::prepare_conflation` prepares the shared render cache before a dense view; groups retain price extremes, gaps and per-bar colours and refresh after data, price-source or grouping changes.
 - [x] Heikin-Ashi, Renko, Kagi, line break, point and figure, and range-bar transformations and rendering.
 - [x] Renko box sizing and wicks, line-break lookback, and price-based chart parameters are configurable.
 - [x] Market Profile (TPO) uses exchange sessions or calendar days, with letters or blocks, initial balance, point of control, value area and composite profiles; autoscale fits the full displayed distributions and cropped profiles retain their session and central-level readouts. POC, value-area and midpoint captions keep a gutter at the first or offscreen session opening, separate nearby levels and reveal their prices on hover.
-- [x] Volume Footprint and Session Volume Profile aggregate supplied executions on time-based intervals with an instrument tick size; unsupported intervals and bars without retained trades use candles. Session profiles require `studies`; autoscale includes their full price rows after range edits, and manual crops retain session and POC/value-area readouts.
+- [x] Volume Footprint and Session Volume Profile aggregate supplied executions on time-based intervals with an instrument tick size; unsupported intervals and bars without retained trades use candles. Session profiles require `studies`; autoscale includes their full price rows after range edits, and manual crops retain session and POC/value-area readouts. Hosts can restrict the chart type menu and favourite strip to declared historical or live executions for the resolved instrument; unavailable favourites stay saved.
 - [ ] Change Kagi line thickness at shoulder and waist crossings within a continuing leg.
 - [ ] Expose the standalone point-and-figure close-only source in chart parameters and settings.
 - [x] Range charts build their bars from the supplied executions, falling back to the OHLC approximation while the chart holds none; `Chart::range_bar_source` reports which one is shown.
@@ -26,7 +26,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 
 ### Pan, Zoom and Cursor
 
-- [x] Cursor-centred wheel zoom, horizontal pan, drag pan, touch pan and pinch zoom.
+- [x] Cursor-centred wheel zoom, horizontal pan, drag pan, touch pan and pinch zoom. Scroll and scale gesture groups can be disabled independently without changing their individual permissions; disabling scrolling stops its momentum, and the scale switch also covers axis drags and resets in every pane.
 - [x] Touch drags can start kinetic scrolling with configurable damping.
 - [x] Axis drag scaling, double-click reset, box zoom and optional chart-owned navigation buttons.
 - [x] Cross, dot and arrow cursor modes, styled crosshair lines, price/time labels and OHLC snapping. Independent time-scale filters exclude whitespace and hidden-only values from crosshair indices without removing stored data; visible series and study values keep their slots eligible.
@@ -103,7 +103,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 
 ### Calculations and Rendering
 
-- [x] `IndicatorFactory` registers 204 indicators with default features and accepts downstream registrations; the study picker groups its built-in results on Indicators, Profiles, Patterns and Order flow pages, each offered only while it has an accepted study.
+- [x] `IndicatorFactory` registers 204 indicators with default features and accepts downstream registrations; the study picker groups its built-in results on Indicators, Profiles, Patterns and Order flow pages, each offered only while it has an accepted study. Hosts can restrict Order flow entries, including search and favourites, to the feed services each study's inputs read; requirements are cached when feed metadata or the factory changes. Other categories keep their existing availability.
 - [x] Moving-average families include SMA, EMA, WMA, HMA, ALMA, KAMA and configurable combinations, ribbons and crossing markers.
 - [x] Momentum and trend studies include RSI, MACD, Stochastic, ADX, SuperTrend, Ichimoku and Parabolic SAR.
 - [x] Volatility and channel studies include Bollinger Bands, ATR, Keltner, Donchian and historical volatility.
@@ -132,7 +132,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 
 - [x] `Indicator` and `IndicatorRegistry` calculate without egui; `CustomIndicator` accepts downstream calculation code.
 - [x] Typed inputs with validation, mutable settings, plot styles, fills, offsets, precision, visibility and independent scale metadata. Multi-output legends identify each value and wrap in narrow panes; order-flow quantity readouts follow instrument precision.
-- [x] Additional-symbol and additional-interval histories, source selection and confirmed/developing value alignment.
+- [x] Additional-symbol and additional-interval histories, source selection and confirmed/developing value alignment. Volume profiles and zones span chart bars sharing their time; markers appear on the last such bar once the chart values reach their source bar.
 - [x] Incremental updates or scheduled recalculation as chart data changes.
 - [x] Applied-study editor with Inputs, Style and Visibility pages and atomic validated changes.
 - [x] Study templates capture inputs and presentation; built-in studies reconstruct through `StudyTemplate`.
@@ -150,7 +150,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 
 - [x] `Footprint` aggregates bid, ask and unknown volume by bar and integer tick row, with execution-size filtering.
 - [x] Footprint cells support bid/ask, total volume, delta and delta-plus-volume modes, up to four columns per bar, profile or boxed rendering, automatic row grouping and opening/closing price ticks in a separate gutter; their values have clearance from underlying price guides.
-- [x] Per-bar point of control, value area and horizontal/diagonal imbalance highlighting; compact values fit detail columns and POC outlines recede in the overview.
+- [x] Per-bar point of control, value area and horizontal/diagonal imbalance highlighting, with one inclusive minimum dominant-side volume for cells and stacked zones after row grouping; compact values fit detail columns and POC outlines recede in the overview.
 - [x] Public calculations and renderers expose stacked diagonal imbalance zones, unrevisited POC levels, volume clusters and per-bar statistics; annotation captions avoid footprint values, with compact overview marks and hover details. Statistics use shared row labels, aligned compact values, explicit percentages and ratios, and a zoom-in or resize notice when detail cannot fit.
 - [x] Execution-based delta histograms and cumulative-delta candles, including intrabar extremes and configurable reset boundaries, render in a supplied pane mapping. The cumulative execution study offers optional confirmed divergence and exhaustion price markers, with study outputs for bar-close alerts.
 - [x] Trade profiles aggregate supplied ranges with bid/ask, volume or delta display, developing POC, value area and local volume nodes; public range editing supports merging and splitting.
@@ -166,7 +166,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 
 ### Depth, Tape and Heatmap
 
-- [x] `OrderFlowPanel` edits detector rules and alert/sound choices, shows counts, and emits category visibility changes and sound intents; the demo connects its supplied executions and depth.
+- [x] `OrderFlowPanel` edits detector rules and alert/sound choices, shows counts, and emits category visibility changes and sound intents; the demo connects its supplied executions and depth. Detectors start disabled; the demo opens with candles and volume, with optional markers, panels, alerts and sounds off, and restores saved opt-ins.
 - [x] Order-flow detectors count new detections in feed-time windows, keep loaded history silent, and deliver live and rising-edge count alerts through the notification service.
 - [x] Sequenced aggregated-depth snapshots/deltas and per-order add, modify, cancel and execute events, with gap detection and resynchronisation.
 - [x] Public order book and order queue retain tick-aware prices, best quotes and queue priority.
@@ -257,8 +257,8 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 
 ### Export
 
-- [x] `Chart::export_csv` exports OHLCV and study values with timestamps and missing-value handling.
-- [x] `Chart::export_png` renders an isolated chart frame on the CPU after font initialisation; export controls include size, title, timestamp, crosshair and transparency.
+- [x] `Chart::export_csv` (the default-enabled `csv` feature) exports OHLCV and study values with timestamps and missing-value handling.
+- [x] `Chart::export_png` (the default-enabled `png-export` feature) renders an isolated chart frame on the CPU after font initialisation; export controls include size, title, timestamp, crosshair and transparency.
 - [x] Export dialog and demo actions save images/data or copy images through application facilities. The demo exports either the active chart or the visible arrangement as PNG or SVG, with shared image options and opted-in trading overlays. The terminal's file callback returns save errors and carries a host request to open an exported image.
 - [ ] Capture composed panels, trading overlays, external textures and feed-backed order-flow visuals in a complete terminal image.
 - [ ] Add an export watermark switch, vector image output and print/PDF output.
@@ -287,22 +287,23 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Live trade aggregation supports time, execution-count, volume, delta and range intervals; resampling helpers accept session rules.
 - [x] Optional per-series bar limits bound retained history; feed queues coalesce updates and bound pending trades/depth.
 - [x] Runtime symbol/interval changes reload the feed; explicit reload and reset paths invalidate old work.
-- [x] Public events report pointer, range, symbol, interval and data changes. Pointer notifications retain the originating button or touch details, position and modifiers, with no input origin for state-driven updates; custom menu entries and toolbar controls return application identifiers.
+- [x] Public events report pointer, range, symbol, interval and data changes. Pointer notifications retain the originating button or touch details, position and modifiers, with no input origin for state-driven updates. Opt-in operation notifications preserve each accepted direct data load or update, including unchanged updates, and distinguish appends, existing-bar updates and historical insertions. Compact state-change events and queue overflow reporting remain available. Custom menu entries and toolbar controls return application identifiers.
 - [x] Added price series, custom study-backed series and attached `Primitive` renderers support visibility, hit testing, scale participation and removal. Bar-series logical-range queries return stored slices and shared-scale distances, including gaps and fractional bounds outside the data. The demo menu's Samples entries demonstrate toggleable session backgrounds, axis labels and a custom range pane with pointer feedback.
+- [x] Live change markers on main and added bar series retain their configured rise and fall colours while fading linearly over their lifetime. Another changed close restarts the fade; expired markers are removed and stop requesting repaints.
 - [ ] Reset a stale manual price range when changing symbols.
 - [ ] Accept locale, formatters, storage and saved state as builder inputs.
 - [ ] Add bounded time-range requests for trades/depth and page older trades during scroll-back.
 
 ## Infrastructure
 
-- [x] Feature layers separate the engine, built-in studies, widget, drawings, icons and terminal UI; engine and study calculations need no egui.
+- [x] Feature layers separate the engine, built-in studies, widget, drawings, icons and terminal UI; engine and study calculations need no egui. CSV I/O and PNG export are optional, enabled by default and by `ui`; icons alone install only their embedded image loader.
 - [x] `Theme` provides editable palettes with dark, light and high-contrast presets; shared tokens cover sizing, spacing, corners and colours.
 - [x] Host translation lookup with English fallback, locale/date formatters and optional named time zones. The demo persists independent language and number-format samples and applies host formatting to its data window and exported chart. The demo selects light, dark, high contrast or system appearance, preserves explicit choices and follows later system changes.
 - [x] The demo exposes floating, tracking and magnifier readouts, hover or hold activation, lens size and zoom; magnified candles stay inside the circular lens. Its annotation editor creates, edits and removes series markers and price lines, controls marker fitting and layering, and configures live change-marker duration.
 - [x] Accessibility roles/states, keyboard focus and a textual bar/study readout.
 - [x] Reusable `ui_kit` buttons, inputs, colour pickers, dialogs, lists, tabs, panels, command palette and toast components.
 - [x] Native and browser examples and CI checks cover library, feature combinations and demo builds.
-- [x] The guide and site landing page share light and dark navigation and a live sample chart with consistent text sizing and a compact readout at phone widths. The first-chart guide embeds an isolated widget scene beside its compiled setup source, with theme synchronization, keyboard exit and a loading fallback; the full demo stays at `/demo/`. Version labels distinguish main (0.3 in development, egui 0.37) from published 0.2.0 (egui 0.33.3), with grouped topic navigation, integration recipes and direct links to API members. The documentation build checks local guide and API pages and anchors, including after site assembly.
+- [x] The guide and site landing page share light and dark navigation and a live sample chart with consistent text sizing and a compact readout at phone widths. The first-chart, series, price scale, time scale and panes guides embed isolated widget scenes beside their compiled setup source, with theme synchronization, keyboard exit and a loading fallback; the full demo stays at `/demo/`. Version labels distinguish main (0.3 in development, egui 0.37) from published 0.2.0 (egui 0.33.3), with grouped topic navigation, integration recipes and direct links to API members. The series guide separates data, renderer, style, identity and lifecycle, classifies every main chart type and documents added-series restrictions, with runnable family examples. The documentation build checks local guide and API pages and anchors, including after site assembly. Release notes are generated from the root changelog, and a migration guide takes published 0.2.0 applications to main with compiled replacement examples.
 - [ ] Route remaining direct English UI labels through the translation lookup.
 - [ ] Make session-quote/volume tags and marker outlines fully theme-configurable.
 - [ ] Add a runnable desktop-webview integration example.
