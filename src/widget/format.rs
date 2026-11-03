@@ -302,12 +302,13 @@ impl Chart {
     pub(super) fn series_axis_owner(&self, id: super::SeriesId) -> super::SeriesId {
         let (pane, scale) = if id == super::SeriesId::MAIN {
             // Removing the main series leaves its axis in the price pane.
-            (Some(super::PaneId::MAIN), Some(self.main_series_scale))
+            (Some(self.main_series_pane()), Some(self.main_series_scale))
         } else {
             (self.series_pane(id), self.series_scale(id))
         };
-        if pane == Some(super::PaneId::MAIN)
-            && scale == Some(self.main_series_scale)
+        if pane == Some(self.main_series_pane())
+            && (scale == Some(self.main_series_scale)
+                || self.main_series_pane() != super::PaneId::MAIN)
             && self.main_series_present
             && self.main_series_visible
         {

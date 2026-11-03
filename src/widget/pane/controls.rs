@@ -123,10 +123,10 @@ impl Chart {
         let hovered = self.pane_buttons_visible(ui, rect);
         let rect = Rect::from_min_max(rect.min + egui::vec2(0.0, 24.0), rect.max);
         if self.has_panes() {
-            self.pane_maximize_button(ui, PaneId::MAIN, rect, plot);
+            self.pane_maximize_button(ui, self.main_series_pane(), rect, plot);
         }
         let movable: Vec<_> = self
-            .pane_series(PaneId::MAIN)
+            .pane_series(self.main_series_pane())
             .into_iter()
             .filter(|id| *id != SeriesId::MAIN)
             .collect();

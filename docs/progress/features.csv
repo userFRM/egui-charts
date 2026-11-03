@@ -213,7 +213,7 @@ Chart,Panes,Maximize pane,done,library,src/widget/pane/mod.rs;src/widget/pane/co
 Chart,Panes,"Move indicator to another pane, merge, or new pane",done,library,src/widget/pane/mod.rs;src/widget/pane/controls.rs,
 Chart,Panes,Move pane up or down,done,library,src/widget/pane/mod.rs;src/widget/pane/controls.rs,
 Chart,Panes,Per-pane price scales,done,library,src/widget/pane/render/mod.rs;src/widget/pane/mod.rs;src/widget/pane/controls.rs;src/widget/series/options.rs;src/widget/series/scales/mod.rs;src/chart/rendering/markers.rs;src/widget/frame/mod.rs;src/scales/pricescale.rs,
-Chart,Panes,Programmatic pane and series API,done,library,src/widget/pane/mod.rs;src/widget/series/options.rs;src/widget/series/mod.rs,
+Chart,Panes,Programmatic pane and series API,done,library,src/widget/pane/mod.rs;src/widget/series/options.rs;src/widget/series/mod.rs;src/widget/frame/mod.rs;src/widget/pane/render/mod.rs;src/widget/events.rs;src/widget/snapshot.rs;src/widget/series/scales/mod.rs;src/widget/volume.rs,1867
 Chart,Panes,Remove pane,done,library,src/widget/pane/mod.rs;src/widget/pane/controls.rs;src/widget/pane/render/mod.rs,
 Chart,Panes,Resize panes by dragging the separator,done,library,src/widget/pane/mod.rs;src/widget/pane/controls.rs;src/widget/pane/render/mod.rs,
 Chart,Panes,Separate indicator panes,done,library,src/widget/pane/mod.rs;src/widget/pane/render/mod.rs,

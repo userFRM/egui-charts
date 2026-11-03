@@ -638,7 +638,7 @@ impl IndicatorPane {
         })
     }
 
-    pub(super) fn calculate_y_range(
+    pub(in crate::widget) fn calculate_y_range(
         &self,
         indicator: &dyn Indicator,
         visible_range: &Range<usize>,

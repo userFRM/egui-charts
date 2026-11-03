@@ -281,7 +281,9 @@ impl Chart {
         let mut other = std::collections::HashMap::<SeriesScale, Vec<_>>::new();
         for item in self.main_pane_series() {
             let bounds = self.series_marker_bounds(painter, item.id, self.series_map(item, rect));
-            if item.options.scale == self.main_series_scale {
+            if item.options.scale == self.main_series_scale
+                || self.main_series_pane() != PaneId::MAIN
+            {
                 main.extend(bounds);
             } else {
                 other.entry(item.options.scale).or_default().extend(bounds);
@@ -296,7 +298,16 @@ impl Chart {
     }
 
     fn series_transform(&self, item: &PriceSeries) -> PriceTransform {
-        let mode = self.secondary_scale(item.options.scale).options().mode;
+        if self.main_series_pane() != PaneId::MAIN
+            && self.series_pane(item.id) == Some(self.main_series_pane())
+        {
+            return self.state.price_scale().transform();
+        }
+        let mode = self
+            .series_price_scale(item.id)
+            .expect("present series")
+            .options()
+            .mode;
         let range = self.series_range(item);
         let base = item.bars[range]
             .iter()
@@ -309,9 +320,9 @@ impl Chart {
     pub(in crate::widget) fn main_pane_series(
         &self,
     ) -> impl DoubleEndedIterator<Item = &PriceSeries> {
-        self.price_series
-            .iter()
-            .filter(|item| item.visible && !self.in_pane(item.id))
+        self.price_series.iter().filter(|item| {
+            item.visible && self.series_pane(item.id) == Some(self.main_series_pane())
+        })
     }
 
     /// The close of `item` at the time of the shown bar `bar`, if it has a bar then.
@@ -374,8 +385,8 @@ impl Chart {
         PriceTransform::new(self.secondary_scale(key).options().mode, base)
     }
 
-    /// Fits every independent range and returns the secondary values sharing the main range.
-    pub(in crate::widget) fn fit_secondary_series(&mut self) -> Vec<f64> {
+    /// Fits the independent ranges in `pane` and returns values sharing its primary range.
+    pub(in crate::widget) fn fit_secondary_series(&mut self, pane: PaneId) -> Vec<f64> {
         let keys: Vec<_> = self
             .studies
             .indicators()
@@ -390,13 +401,20 @@ impl Chart {
         }
         let mut values =
             std::collections::HashMap::<SeriesScale, (PriceTransform, f64, f64)>::new();
-        for item in self.main_pane_series() {
+        for item in self
+            .price_series
+            .iter()
+            .filter(|item| item.visible && self.series_pane(item.id) == Some(pane))
+        {
             let transform = self.series_transform(item);
-            let entry = values.entry(item.options.scale).or_insert((
-                transform,
-                f64::INFINITY,
-                f64::NEG_INFINITY,
-            ));
+            let key = if pane != PaneId::MAIN {
+                self.main_series_scale
+            } else {
+                item.options.scale
+            };
+            let entry = values
+                .entry(key)
+                .or_insert((transform, f64::INFINITY, f64::NEG_INFINITY));
             let markers = self.marker_prices(&item.markers, &[], item.marker_options);
             for value in self
                 .series_fit(item)
@@ -426,7 +444,7 @@ impl Chart {
                 continue;
             };
             if !study.is_visible()
-                || self.in_pane(id)
+                || self.series_pane(id) != Some(pane)
                 || (key == self.main_series_scale
                     && (!autoscale || self.config.scale_price_chart_only))
             {
@@ -480,7 +498,7 @@ impl Chart {
                     return None;
                 };
                 let pane = self.series_pane(id)?;
-                if pane == PaneId::MAIN {
+                if pane == self.main_series_pane() {
                     return Some(self.secondary_scale(key).map(
                         self.shared_study_transform(study.as_ref(), key),
                         rect.top(),
@@ -534,13 +552,25 @@ impl Chart {
     }
 
     pub(in crate::widget) fn series_map(&self, item: &PriceSeries, rect: Rect) -> PriceMap {
+        if self.main_series_pane() != PaneId::MAIN
+            && self.series_pane(item.id) == Some(self.main_series_pane())
+        {
+            return self
+                .series_display_map(
+                    item.id,
+                    self.state.price_scale().map(
+                        self.state.price_scale().transform(),
+                        rect.top(),
+                        rect.bottom(),
+                    ),
+                )
+                .with_thousands_sep(self.config.thousands_sep);
+        }
         self.series_display_map(
             item.id,
-            self.secondary_scale(item.options.scale).map(
-                self.series_transform(item),
-                rect.top(),
-                rect.bottom(),
-            ),
+            self.series_price_scale(item.id)
+                .expect("present series")
+                .map(self.series_transform(item), rect.top(), rect.bottom()),
         )
         .with_thousands_sep(self.config.thousands_sep)
     }
@@ -551,7 +581,10 @@ impl Chart {
         rect: Rect,
     ) -> impl Iterator<Item = AxisValue> + '_ {
         self.main_pane_series()
-            .filter(move |item| item.options.scale == key)
+            .filter(move |item| {
+                item.options.scale == key
+                    || (key == self.main_series_scale && self.main_series_pane() != PaneId::MAIN)
+            })
             .flat_map(move |item| {
                 let map = self.series_map(item, rect);
                 self.series_axis_values(item)
@@ -623,7 +656,11 @@ impl Chart {
 
     pub(in crate::widget) fn series_axis_keys(&self) -> Vec<SeriesScale> {
         let mut keys = Vec::new();
-        for item in self.main_pane_series() {
+        for item in self
+            .price_series
+            .iter()
+            .filter(|item| item.visible && self.series_pane(item.id) == Some(PaneId::MAIN))
+        {
             let key = item.options.scale;
             if key != self.main_series_scale
                 && !matches!(key, SeriesScale::Overlay(_))

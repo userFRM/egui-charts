@@ -201,7 +201,7 @@ impl Chart {
     /// The view of a primitive drawn in the main pane, from the main pane's mapping. `None`
     /// when its series is hidden or a study in a pane of its own.
     fn main_view(&self, series: SeriesId, coords: &ChartMapping) -> Option<PrimitiveView<'_>> {
-        if self.in_pane(series) {
+        if self.series_pane(series) != Some(self.main_series_pane()) {
             return None;
         }
         let mapping = if series == SeriesId::MAIN {
@@ -215,7 +215,6 @@ impl Chart {
             let idx = self.study_ids.iter().position(|id| *id == series)?;
             let study = self.rendered_studies().indicators().get(idx)?;
             (study.is_visible()
-                && study.is_overlay()
                 && (!study.is_volume()
                     || matches!(study.scale(), crate::studies::StudyScale::Shared(_))))
             .then(|| crate::chart::rendering::study_mapping(study.as_ref(), coords))?
@@ -275,11 +274,11 @@ impl Chart {
             prices.extend(self.primitive_prices(SeriesId::MAIN));
         }
         for (idx, id) in self.study_ids.iter().enumerate() {
-            if studies.get(idx).is_some_and(|study| {
-                study.is_visible()
-                    && study.is_overlay()
-                    && study.scale() == crate::studies::StudyScale::Main
-            }) && self.study_autoscale[idx]
+            if self.series_pane(*id) == Some(self.main_series_pane())
+                && studies.get(idx).is_some_and(|study| {
+                    study.is_visible() && study.scale() == crate::studies::StudyScale::Main
+                })
+                && self.study_autoscale[idx]
                 && !self.config.scale_price_chart_only
             {
                 prices.extend(self.primitive_prices(*id));

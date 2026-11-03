@@ -662,10 +662,14 @@ impl Chart {
                 .pane_layout
                 .panes
                 .iter()
-                .find(|pane| pane.members.contains(&id))
+                .find(|pane| Some(pane.id) == self.series_pane(id))
             {
-                Some(pane) => &pane.scale,
-                None => self.secondary_scale(scale),
+                Some(pane) if pane.id == PaneId::MAIN && scale != self.main_series_scale => {
+                    self.secondary_scale(scale)
+                }
+                Some(pane) if pane.id != self.main_series_pane() => &pane.scale,
+                Some(pane) if pane.id != PaneId::MAIN => self.state.price_scale(),
+                _ => self.secondary_scale(scale),
             },
         )
     }
@@ -675,14 +679,16 @@ impl Chart {
     /// Range bounds use scale units, such as percent in percentage mode.
     pub fn series_price_scale_mut(&mut self, id: SeriesId) -> Option<&mut PriceScale> {
         let scale = self.series_scale(id)?;
-        if let Some(at) = self
-            .pane_layout
-            .panes
-            .iter()
-            .position(|pane| pane.members.contains(&id))
-        {
+        if let Some(at) = self.pane_layout.panes.iter().position(|pane| {
+            Some(pane.id) == self.series_pane(id)
+                && pane.id != self.main_series_pane()
+                && (pane.id != PaneId::MAIN || scale == self.main_series_scale)
+        }) {
             Some(&mut self.pane_layout.panes[at].scale)
-        } else if scale == self.main_series_scale {
+        } else if scale == self.main_series_scale
+            || (self.series_pane(id) == Some(self.main_series_pane())
+                && self.main_series_pane() != PaneId::MAIN)
+        {
             Some(self.state.price_scale_mut())
         } else {
             self.series_scales.get_mut(&scale)
@@ -694,12 +700,25 @@ impl Chart {
     /// and the y coordinates of the chart's [`Ui`](egui::Ui). `None` for an absent series, or
     /// before its pane is first drawn.
     pub fn series_price_map(&self, id: SeriesId) -> Option<PriceMap> {
-        if self.series_pane(id)? != PaneId::MAIN {
+        let pane = self.series_pane(id)?;
+        if pane == PaneId::MAIN
+            && pane != self.main_series_pane()
+            && self.series_scale(id)? != self.main_series_scale
+        {
+            let item = self.price_series.iter().find(|item| item.id == id)?;
             return self
                 .pane_layout
                 .panes
                 .iter()
-                .find(|pane| pane.members.contains(&id) && pane.rect.is_positive())
+                .find(|pane| pane.id == PaneId::MAIN && pane.rect.is_positive())
+                .map(|pane| self.series_map(item, pane.rect));
+        }
+        if pane != self.main_series_pane() {
+            return self
+                .pane_layout
+                .panes
+                .iter()
+                .find(|pane| Some(pane.id) == self.series_pane(id) && pane.rect.is_positive())
                 .map(|pane| {
                     self.series_display_map(id, pane.price_map())
                         .with_thousands_sep(self.config.thousands_sep)
