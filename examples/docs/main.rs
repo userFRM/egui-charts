@@ -17,6 +17,7 @@ enum Scene {
     Chart,
     PriceScale(scenes::price_scale::PriceScale),
     TimeScale,
+    Theme(scenes::theme::Presentation),
     Panes(scenes::panes::Panes),
 }
 
@@ -45,6 +46,10 @@ impl ExampleApp {
             }
             "time-scale" => {
                 scene = Scene::TimeScale;
+                first_chart::first_chart()
+            }
+            "theme" => {
+                scene = Scene::Theme(scenes::theme::Presentation::default());
                 first_chart::first_chart()
             }
             "panes" => {
@@ -104,6 +109,7 @@ impl eframe::App for ExampleApp {
                 Scene::Chart => {}
                 Scene::PriceScale(scene) => scene.show(ui, &mut self.chart),
                 Scene::TimeScale => scenes::time_scale::show(ui, &mut self.chart),
+                Scene::Theme(scene) => scene.show(ui, &mut self.chart),
                 Scene::Panes(scene) => scene.show(ui, &mut self.chart),
             }
             self.chart.show(ui);
@@ -193,6 +199,7 @@ mod tests {
             "series-point-and-figure",
             "price-scale",
             "time-scale",
+            "theme",
             "panes",
             "volatility-smile",
             "yield-curve",
