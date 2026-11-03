@@ -17,7 +17,7 @@ use crate::services::SignalEvent;
 /// within 100 ms, or replenishes an executed order within 100 ms without preserving priority.
 /// Aggregate depth estimates refills from executed volume divided by the opening displayed size,
 /// minus one.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct IcebergRule {
     /// Refills needed before reporting. Must be at least one.
