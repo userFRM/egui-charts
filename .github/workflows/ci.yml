@@ -104,14 +104,13 @@ jobs:
     timeout-minutes: 20
     strategy:
       fail-fast: false
-      # The full suite runs once on Linux stable; the other platforms run the all-features library
-      # tests, which exercise every module. The minimum supported Rust version only needs to
-      # compile, which the check job proves.
+      # Linux splits the feature subsets into the jobs below; every platform keeps the
+      # all-features library tests. The check job proves the minimum supported Rust version.
       matrix:
         include:
-          - { os: ubuntu-latest, rust: stable, full: true }
-          - { os: macos-latest, rust: stable, full: false }
-          - { os: windows-latest, rust: stable, full: false }
+          - { os: ubuntu-latest, rust: stable }
+          - { os: macos-latest, rust: stable }
+          - { os: windows-latest, rust: stable }
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
@@ -122,35 +121,50 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Run library tests (all features)
         run: cargo test --all-features --lib
-      - name: Run library tests (no default features)
-        if: matrix.full
-        run: cargo test --no-default-features --lib
-      - name: Run library tests (CSV only)
-        if: matrix.full
-        run: cargo test --no-default-features --features csv --lib
-      - name: Run library tests (widget only)
-        if: matrix.full
-        run: cargo test --no-default-features --features widget --lib
-      - name: Run library tests (PNG export only)
-        if: matrix.full
-        run: cargo test --no-default-features --features png-export --lib
-      - name: Run library tests (icons only)
-        if: matrix.full
-        run: cargo test --no-default-features --features icons --lib
-      - name: Run example tests
-        if: matrix.full
-        run: cargo test --all-features --example scripting --example backtesting --example network_feed
-      - name: Run library tests (UI without named time zones)
-        if: matrix.full
-        run: cargo test --no-default-features --features ui --lib
-      - name: Run doc tests (all features)
-        if: matrix.full
-        run: cargo test --doc --all-features
       - name: Run doc tests (no default features)
         run: cargo test --doc --no-default-features
+
+  test-features:
+    if: github.event.pull_request.draft != true
+    name: Test (Linux feature subsets and examples)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Run library tests (no default features)
+        run: cargo test --no-default-features --lib
+      - name: Run library tests (CSV only)
+        run: cargo test --no-default-features --features csv --lib
+      - name: Run library tests (widget only)
+        run: cargo test --no-default-features --features widget --lib
+      - name: Run library tests (PNG export only)
+        run: cargo test --no-default-features --features png-export --lib
+      - name: Run library tests (icons only)
+        run: cargo test --no-default-features --features icons --lib
+      - name: Run example tests
+        run: cargo test --all-features --example scripting --example backtesting --example network_feed
+      - name: Run doc tests (all features)
+        run: cargo test --doc --all-features
       - name: Run doc tests (widget only)
-        if: matrix.full
         run: cargo test --doc --no-default-features --features widget
+
+  test-ui:
+    if: github.event.pull_request.draft != true
+    name: Test (Linux UI without named time zones)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Run library tests (UI without named time zones)
+        run: cargo test --no-default-features --features ui --lib
 
   wasm-test:
     if: github.event.pull_request.draft != true
@@ -241,14 +255,22 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$fail"
 
-  performance:
-    name: Chart performance regressions
+  performance-measure:
+    name: Measure chart performance (${{ matrix.revision }})
     if: (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch') && github.event.pull_request.draft != true
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        revision: [base, head]
+    outputs:
+      base: ${{ steps.measure.outputs.base }}
+      head: ${{ steps.measure.outputs.head }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/checkout@v7
+        if: matrix.revision == 'base'
         with:
           # A run started by hand compares against the default branch.
           ref: ${{ github.event.pull_request.base.sha || github.event.repository.default_branch }}
@@ -258,12 +280,12 @@ jobs:
           toolchain: 1.95.0
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: |
-            . -> target
-            performance-base -> target
+          key: ${{ matrix.revision }}
+          workspaces: ${{ matrix.revision == 'base' && 'performance-base' || '.' }} -> target
       - name: Install Valgrind
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends valgrind
-      - name: Build the same workloads against both libraries
+      - name: Use the same workloads for the base library
+        if: matrix.revision == 'base'
         run: |
           cp -r benches/frame benches/regression performance-base/benches/
           cp benches/frame_time.rs performance-base/benches/frame_time.rs
@@ -283,14 +305,46 @@ jobs:
           if ! grep -q 'fn add_synced_drawing.*-> Result' performance-base/src/drawings/manager/edit.rs; then
             sed -i 's/\.expect("bench drawings are valid")//' performance-base/benches/frame_time.rs
           fi
-          cargo build --release --locked --bench frame_time --message-format=json-render-diagnostics > performance-head.json
-          cargo build --release --locked --manifest-path performance-base/Cargo.toml --bench frame_time --message-format=json-render-diagnostics > performance-base.json
-      - name: Reject instruction growth over five percent
+      - name: Build the head workload
+        if: matrix.revision == 'head'
+        run: cargo build --release --locked --bench frame_time --message-format=json-render-diagnostics > performance.json
+      - name: Build the base workload
+        if: matrix.revision == 'base'
+        run: cargo build --release --locked --manifest-path performance-base/Cargo.toml --bench frame_time --message-format=json-render-diagnostics > performance.json
+      - name: Measure instructions
+        id: measure
+        env:
+          REVISION: ${{ matrix.revision }}
         run: |
-          base=$(jq -r 'select(.target.name == "frame_time" and .executable) | .executable' performance-base.json)
-          head=$(jq -r 'select(.target.name == "frame_time" and .executable) | .executable' performance-head.json)
+          bench=$(jq -r 'select(.target.name == "frame_time" and .executable) | .executable' performance.json)
+          bash benches/check-regressions.sh --measure "$bench" > performance-counts.txt
+          {
+            echo "$REVISION<<COUNTS"
+            cat performance-counts.txt
+            echo COUNTS
+          } >> "$GITHUB_OUTPUT"
+
+  performance:
+    name: Chart performance regressions
+    needs: performance-measure
+    if: "!cancelled() && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch') && github.event.pull_request.draft != true"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Test instruction comparison
+        run: python3 benches/check-regressions-test.py
+      - name: Reject instruction growth over five percent
+        env:
+          MEASUREMENT_RESULT: ${{ needs.performance-measure.result }}
+          BASE_COUNTS: ${{ needs.performance-measure.outputs.base }}
+          HEAD_COUNTS: ${{ needs.performance-measure.outputs.head }}
+        run: |
+          test "$MEASUREMENT_RESULT" = success
+          printf '%s\n' "$BASE_COUNTS" > performance-base.txt
+          printf '%s\n' "$HEAD_COUNTS" > performance-head.txt
           set -o pipefail
-          bash benches/check-regressions.sh "$base" "$head" 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+          bash benches/check-regressions.sh --compare performance-base.txt performance-head.txt 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
 
   native-demo:
     if: github.event.pull_request.draft != true
