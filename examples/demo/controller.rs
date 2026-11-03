@@ -520,7 +520,7 @@ fn sample_widgets() -> [WidgetBarWidget; 2] {
 }
 
 impl DemoApp {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Box<Self> {
         Self::new_at(cc, chrono::Utc::now(), false)
     }
 
@@ -528,7 +528,7 @@ impl DemoApp {
         cc: &eframe::CreationContext<'_>,
         now: chrono::DateTime<chrono::Utc>,
         paused: bool,
-    ) -> Self {
+    ) -> Box<Self> {
         // Register egui's image loaders so the embedded SVG toolbar icons decode.
         egui_extras::install_image_loaders(&cc.egui_ctx);
         cc.egui_ctx.include_bytes(SAMPLE_LOGO, SAMPLE_LOGO_SVG);
@@ -630,7 +630,8 @@ impl DemoApp {
 
         let alert_live = Arc::new(live.fork());
         alert_live.set_view(SessionType::RTH, false);
-        let mut app = Self {
+        // Keep the controller off callers' stacks, including tests that restart it.
+        let mut app = Box::new(Self {
             chart,
             order_flow: egui_charts::ui::widget_bar::OrderFlowPanel::new(live.detectors()),
             live,
@@ -810,7 +811,7 @@ impl DemoApp {
             api_samples: false,
             annotation_editor: false,
             annotation_series: SeriesId::MAIN,
-        };
+        });
         app.drawing_toolbar
             .set_control_visible(egui_charts::ui::Control::Trading, false);
         app.settings_dialog
@@ -4146,7 +4147,7 @@ mod tests {
         };
         frame(&mut app.chart);
         let mut storage = AppStorage::default();
-        eframe::App::save(&mut app, &mut storage);
+        eframe::App::save(&mut *app, &mut storage);
         let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
         cc.storage = Some(&storage);
         let mut restored = DemoApp::new(&cc);
@@ -4225,7 +4226,7 @@ mod tests {
         app.stop_replay();
         assert!(app.extra_charts[0].chart.replay_time().is_none());
         let mut storage = AppStorage::default();
-        eframe::App::save(&mut app, &mut storage);
+        eframe::App::save(&mut *app, &mut storage);
         let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
         cc.storage = Some(&storage);
         let mut restored = DemoApp::new(&cc);
@@ -4297,6 +4298,16 @@ mod tests {
 
     #[test]
     fn legacy_themes_follow_system_and_new_choices_survive_restart() {
+        // Repeated construction used to overflow this stack before checking the saved theme.
+        std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(check_theme_restarts)
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    fn check_theme_restarts() {
         use eframe::App;
         use egui_charts::drawings::DrawingToolType;
         let cases = [

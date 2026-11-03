@@ -409,7 +409,7 @@ fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
         .wgpu()
         .build_eframe(|cc| {
             let now = "2026-10-27T19:29:50Z".parse().unwrap();
-            DemoApp::new_at(cc, now, true)
+            *DemoApp::new_at(cc, now, true)
         });
     h.run_steps(3);
     let ctx = h.ctx.clone();
