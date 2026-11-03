@@ -22,27 +22,92 @@ env:
   RUSTFLAGS: -Dwarnings
 
 jobs:
-  semver:
+  changes:
     if: github.event.pull_request.draft != true
+    name: Check changed inputs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      base: ${{ steps.inputs.outputs.base }}
+      rust: ${{ steps.inputs.outputs.rust }}
+      terminal: ${{ steps.inputs.outputs.terminal }}
+      native: ${{ steps.inputs.outputs.native }}
+      fmt: ${{ steps.inputs.outputs.fmt }}
+      docs: ${{ steps.inputs.outputs.docs }}
+      security: ${{ steps.inputs.outputs.security }}
+      counts: ${{ steps.inputs.outputs.counts }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Classify changed inputs
+        id: inputs
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha || format('origin/{0}', github.event.repository.default_branch) }}
+          HEAD_REF: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          base=$(git merge-base "$BASE_REF" "$HEAD_REF")
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          git diff --name-only --no-renames -z "$base" "$HEAD_REF" > changed-paths
+          rust=false terminal=false native=false fmt=false docs=false security=false counts=false
+          while IFS= read -r -d '' path; do
+            case "$path" in
+              README.md|ROADMAP.md) docs=true counts=true ;;
+              docs/builder-guide.md|docs/study-data.md|docs/strategy-report.md|docs/site/src/content/docs/*.mdx) docs=true ;;
+              *.md|docs/site/*|docs/progress/*) ;;
+              terminal/*) terminal=true fmt=true security=true ;;
+              examples/demo/*) native=true fmt=true security=true ;;
+              examples/docs/*|docs/capture/*|fuzz/*) fmt=true security=true ;;
+              deny.toml) security=true ;;
+              .github/workflows/ci.yml) rust=true terminal=true native=true ;;
+              tests/*|benches/*|examples/*|.github/check-module-cycles.py) rust=true ;;
+              .github/workflows/*|.github/ISSUE_TEMPLATE/*|.github/dependabot.yml|.github/FUNDING.yml) ;;
+              *) rust=true terminal=true native=true ;;
+            esac
+          done < changed-paths
+          if [[ $rust == true ]]; then
+            fmt=true docs=true security=true counts=true
+          fi
+          # Main and manual or reusable runs always exercise the complete suite.
+          if [[ $EVENT_NAME != pull_request ]]; then
+            rust=true terminal=true native=true fmt=true docs=true security=true counts=true
+          fi
+          printf '%s\n' "rust=$rust" "terminal=$terminal" "native=$native" "fmt=$fmt" \
+            "docs=$docs" "security=$security" "counts=$counts" >> "$GITHUB_OUTPUT"
+
+  semver:
+    needs: changes
+    if: "!cancelled() && github.event.pull_request.draft != true"
     name: Public API compatibility
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      - name: Check input classification
+        shell: bash
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+        run: test "$CHANGES_RESULT" = success
       - uses: actions/checkout@v7
+        if: needs.changes.outputs.rust == 'true'
       - uses: dtolnay/rust-toolchain@stable
+        if: needs.changes.outputs.rust == 'true'
       - name: Resolve the latest published crate version
+        if: needs.changes.outputs.rust == 'true'
         id: baseline
         shell: bash
         run: |
           version=$(curl --fail --silent --show-error --retry 3 -A "egui-charts-ci (https://github.com/userFRM/egui-charts)" https://crates.io/api/v1/crates/egui-charts | jq -er '.crate.newest_version')
           echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Check the declared release against the published API
+        if: needs.changes.outputs.rust == 'true'
         uses: obi1kenobi/cargo-semver-checks-action@v2
         with:
           baseline-version: ${{ steps.baseline.outputs.version }}
 
   check:
-    if: github.event.pull_request.draft != true
+    needs: changes
+    if: "!cancelled() && github.event.pull_request.draft != true"
     name: Check (${{ matrix.rust }})
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -50,55 +115,65 @@ jobs:
       matrix:
         rust: [stable, 1.95.0]
     steps:
+      - name: Check input classification
+        shell: bash
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+        run: test "$CHANGES_RESULT" = success
       - uses: actions/checkout@v7
+        if: needs.changes.outputs.rust == 'true'
       - uses: dtolnay/rust-toolchain@master
+        if: needs.changes.outputs.rust == 'true'
         with:
           toolchain: ${{ matrix.rust }}
           components: clippy
       - uses: Swatinem/rust-cache@v2
+        if: needs.changes.outputs.rust == 'true'
       # Clippy with --all-targets compiles each configuration, so it doubles as the build check.
       # The minimum supported Rust version only needs to prove it compiles the full feature set.
       - name: Check module dependencies
-        if: matrix.rust == 'stable'
+        if: needs.changes.outputs.rust == 'true' && matrix.rust == 'stable'
         run: python3 .github/check-module-cycles.py
       - name: Clippy (all features)
+        if: needs.changes.outputs.rust == 'true'
         run: cargo clippy --all-features --all-targets -- -D warnings
       - name: Clippy (default)
-        if: matrix.rust == 'stable'
+        if: needs.changes.outputs.rust == 'true' && matrix.rust == 'stable'
         run: cargo clippy --all-targets -- -D warnings
       - name: Clippy (headless engine)
-        if: matrix.rust == 'stable'
+        if: needs.changes.outputs.rust == 'true' && matrix.rust == 'stable'
         run: cargo clippy --no-default-features --all-targets -- -D warnings
       - name: Clippy (widget only)
-        if: matrix.rust == 'stable'
+        if: needs.changes.outputs.rust == 'true' && matrix.rust == 'stable'
         run: cargo clippy --no-default-features --features widget --all-targets -- -D warnings
       - name: Clippy (CSV only)
-        if: matrix.rust == 'stable'
+        if: needs.changes.outputs.rust == 'true' && matrix.rust == 'stable'
         run: cargo clippy --no-default-features --features csv --all-targets -- -D warnings
       - name: Clippy (PNG export only)
-        if: matrix.rust == 'stable'
+        if: needs.changes.outputs.rust == 'true' && matrix.rust == 'stable'
         run: cargo clippy --no-default-features --features png-export --all-targets -- -D warnings
       - name: Clippy (icons only)
-        if: matrix.rust == 'stable'
+        if: needs.changes.outputs.rust == 'true' && matrix.rust == 'stable'
         run: cargo clippy --no-default-features --features icons --all-targets -- -D warnings
       - name: Clippy (widget with drawings)
-        if: matrix.rust == 'stable'
+        if: needs.changes.outputs.rust == 'true' && matrix.rust == 'stable'
         run: cargo clippy --no-default-features --features widget,drawings --all-targets -- -D warnings
       - name: Clippy (studies only)
-        if: matrix.rust == 'stable'
+        if: needs.changes.outputs.rust == 'true' && matrix.rust == 'stable'
         run: cargo clippy --no-default-features --features studies --all-targets -- -D warnings
       - name: Clippy (alert engine only)
-        if: matrix.rust == 'stable'
+        if: needs.changes.outputs.rust == 'true' && matrix.rust == 'stable'
         run: cargo clippy --no-default-features --features alert-engine --all-targets -- -D warnings
       - name: Clippy (order-flow detectors only)
-        if: matrix.rust == 'stable'
+        if: needs.changes.outputs.rust == 'true' && matrix.rust == 'stable'
         run: cargo clippy --no-default-features --features detectors --all-targets -- -D warnings
       - name: Clippy (strategies only)
-        if: matrix.rust == 'stable'
+        if: needs.changes.outputs.rust == 'true' && matrix.rust == 'stable'
         run: cargo clippy --no-default-features --features strategies --all-targets -- -D warnings
 
   test:
-    if: github.event.pull_request.draft != true
+    needs: changes
+    if: "!cancelled() && github.event.pull_request.draft != true"
     name: Test (${{ matrix.os }}, ${{ matrix.rust }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
@@ -112,62 +187,103 @@ jobs:
           - { os: macos-latest, rust: stable }
           - { os: windows-latest, rust: stable }
     steps:
+      - name: Check input classification
+        shell: bash
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+        run: test "$CHANGES_RESULT" = success
       - uses: actions/checkout@v7
+        if: needs.changes.outputs.docs == 'true'
       - uses: dtolnay/rust-toolchain@master
+        if: needs.changes.outputs.docs == 'true'
         with:
           toolchain: ${{ matrix.rust }}
       - uses: Swatinem/rust-cache@v2
+        if: needs.changes.outputs.docs == 'true'
         with:
+          shared-key: native-${{ matrix.os }}-${{ matrix.rust }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Run library tests (all features)
+        if: needs.changes.outputs.rust == 'true'
         run: cargo test --all-features --lib
       - name: Run doc tests (no default features)
+        if: needs.changes.outputs.docs == 'true'
         run: cargo test --doc --no-default-features
 
   test-features:
-    if: github.event.pull_request.draft != true
+    needs: changes
+    if: "!cancelled() && github.event.pull_request.draft != true"
     name: Test (Linux feature subsets and examples)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      - name: Check input classification
+        shell: bash
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+        run: test "$CHANGES_RESULT" = success
       - uses: actions/checkout@v7
+        if: needs.changes.outputs.docs == 'true'
       - uses: dtolnay/rust-toolchain@stable
+        if: needs.changes.outputs.docs == 'true'
       - uses: Swatinem/rust-cache@v2
+        if: needs.changes.outputs.docs == 'true'
         with:
+          shared-key: native-ubuntu-latest-stable
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Run library tests (no default features)
+        if: needs.changes.outputs.rust == 'true'
         run: cargo test --no-default-features --lib
       - name: Run library tests (CSV only)
+        if: needs.changes.outputs.rust == 'true'
         run: cargo test --no-default-features --features csv --lib
       - name: Run library tests (widget only)
+        if: needs.changes.outputs.rust == 'true'
         run: cargo test --no-default-features --features widget --lib
       - name: Run library tests (PNG export only)
+        if: needs.changes.outputs.rust == 'true'
         run: cargo test --no-default-features --features png-export --lib
       - name: Run library tests (icons only)
+        if: needs.changes.outputs.rust == 'true'
         run: cargo test --no-default-features --features icons --lib
       - name: Run example tests
+        if: needs.changes.outputs.rust == 'true'
         run: cargo test --all-features --example scripting --example backtesting --example network_feed
       - name: Run doc tests (all features)
+        if: needs.changes.outputs.docs == 'true'
         run: cargo test --doc --all-features
       - name: Run doc tests (widget only)
+        if: needs.changes.outputs.docs == 'true'
         run: cargo test --doc --no-default-features --features widget
 
   test-ui:
-    if: github.event.pull_request.draft != true
+    needs: changes
+    if: "!cancelled() && github.event.pull_request.draft != true"
     name: Test (Linux UI without named time zones)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      - name: Check input classification
+        shell: bash
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+        run: test "$CHANGES_RESULT" = success
       - uses: actions/checkout@v7
+        if: needs.changes.outputs.rust == 'true'
       - uses: dtolnay/rust-toolchain@stable
+        if: needs.changes.outputs.rust == 'true'
       - uses: Swatinem/rust-cache@v2
+        if: needs.changes.outputs.rust == 'true'
         with:
+          shared-key: native-ubuntu-latest-stable
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Run library tests (UI without named time zones)
+        if: needs.changes.outputs.rust == 'true'
         run: cargo test --no-default-features --features ui --lib
 
   wasm-test:
-    if: github.event.pull_request.draft != true
+    needs: changes
+    if: "!cancelled() && github.event.pull_request.draft != true"
     name: Test (headless Chrome, ${{ matrix.features }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -176,43 +292,65 @@ jobs:
       matrix:
         features: [all, widget]
     steps:
+      - name: Check input classification
+        shell: bash
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+        run: test "$CHANGES_RESULT" = success
       - uses: actions/checkout@v7
+        if: needs.changes.outputs.rust == 'true'
       - uses: dtolnay/rust-toolchain@stable
+        if: needs.changes.outputs.rust == 'true'
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
+        if: needs.changes.outputs.rust == 'true'
       - uses: taiki-e/install-action@v2
+        if: needs.changes.outputs.rust == 'true'
         with:
           tool: wasm-pack
       - name: Run browser widget tests
+        if: needs.changes.outputs.rust == 'true'
         run: >-
           wasm-pack test --headless --chrome --lib
           ${{ matrix.features == 'all' && '--all-features' || '--no-default-features --features widget' }}
       - name: Build the network feed example for the browser
-        if: matrix.features == 'widget'
+        if: needs.changes.outputs.rust == 'true' && matrix.features == 'widget'
         run: cargo clippy --target wasm32-unknown-unknown --no-default-features --features widget,http --example network_feed -- -D warnings
 
   bare-chart:
-    if: github.event.pull_request.draft != true
+    needs: changes
+    if: "!cancelled() && github.event.pull_request.draft != true"
     name: Bare chart size and frame cost
     # Pinned image and compiler: the figures move with the code, the lockfile, the MSRV and the runner.
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
+      - name: Check input classification
+        shell: bash
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+        run: test "$CHANGES_RESULT" = success
       - uses: actions/checkout@v7
+        if: needs.changes.outputs.rust == 'true'
       - uses: dtolnay/rust-toolchain@master
+        if: needs.changes.outputs.rust == 'true'
         with:
           toolchain: 1.95.0
       - uses: Swatinem/rust-cache@v2
+        if: needs.changes.outputs.rust == 'true'
       - name: Install Valgrind
+        if: needs.changes.outputs.rust == 'true'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends valgrind
       - name: Build
+        if: needs.changes.outputs.rust == 'true'
         env:
           CARGO_PROFILE_RELEASE_STRIP: symbols
         run: >-
           cargo build --release --locked --no-default-features --features widget
           --example bare_chart --bench bare_chart --message-format=json-render-diagnostics > build.json
       - name: Compare with benches/bare_chart.baseline
+        if: needs.changes.outputs.rust == 'true'
         run: |
           bench=$(jq -r 'select(.target.kind == ["bench"] and .executable) | .executable' build.json)
           size=$(stat -c %s target/release/examples/bare_chart)
@@ -257,7 +395,8 @@ jobs:
 
   performance-measure:
     name: Measure chart performance (${{ matrix.revision }})
-    if: (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch') && github.event.pull_request.draft != true
+    needs: changes
+    if: "!cancelled() && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'push') && github.event.pull_request.draft != true"
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
@@ -265,27 +404,50 @@ jobs:
       matrix:
         revision: [base, head]
     outputs:
-      base: ${{ steps.measure.outputs.base }}
-      head: ${{ steps.measure.outputs.head }}
+      base: ${{ steps.counts.outputs.base }}
+      head: ${{ steps.counts.outputs.head }}
     steps:
+      - name: Check input classification
+        shell: bash
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+        run: test "$CHANGES_RESULT" = success
       - uses: actions/checkout@v7
-      - uses: actions/checkout@v7
-        if: matrix.revision == 'base'
+        if: needs.changes.outputs.rust == 'true' && (matrix.revision == 'head' || github.event_name != 'push')
+      - name: Identify measurement cache
+        if: needs.changes.outputs.rust == 'true' && (matrix.revision == 'head' || github.event_name != 'push')
+        id: measurement
+        env:
+          MEASURED_SHA: ${{ matrix.revision == 'base' && needs.changes.outputs.base || github.sha }}
+          WORKLOAD_HASH: ${{ hashFiles('benches/frame_time.rs', 'benches/frame/**', 'benches/regression/**', 'benches/check-regressions.sh', 'examples/bare_chart.rs', '.github/workflows/ci.yml') }}
+        run: |
+          echo "key=performance-v1-ubuntu-24.04-1.95.0-${ImageVersion}-$(getconf GNU_LIBC_VERSION)-$WORKLOAD_HASH-$MEASURED_SHA" >> "$GITHUB_OUTPUT"
+      - name: Restore base measurement
+        if: needs.changes.outputs.rust == 'true' && matrix.revision == 'base' && github.event_name != 'push'
+        id: cached
+        uses: actions/cache/restore@v5
         with:
-          # A run started by hand compares against the default branch.
-          ref: ${{ github.event.pull_request.base.sha || github.event.repository.default_branch }}
+          path: performance-counts.txt
+          key: ${{ steps.measurement.outputs.key }}
+      - uses: actions/checkout@v7
+        if: needs.changes.outputs.rust == 'true' && matrix.revision == 'base' && github.event_name != 'push' && steps.cached.outputs.cache-hit != 'true'
+        with:
+          ref: ${{ needs.changes.outputs.base }}
           path: performance-base
       - uses: dtolnay/rust-toolchain@master
+        if: needs.changes.outputs.rust == 'true' && (matrix.revision == 'head' || github.event_name != 'push') && steps.cached.outputs.cache-hit != 'true'
         with:
           toolchain: 1.95.0
       - uses: Swatinem/rust-cache@v2
+        if: needs.changes.outputs.rust == 'true' && (matrix.revision == 'head' || github.event_name != 'push') && steps.cached.outputs.cache-hit != 'true'
         with:
           key: ${{ matrix.revision }}
           workspaces: ${{ matrix.revision == 'base' && 'performance-base' || '.' }} -> target
       - name: Install Valgrind
+        if: needs.changes.outputs.rust == 'true' && (matrix.revision == 'head' || github.event_name != 'push') && steps.cached.outputs.cache-hit != 'true'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends valgrind
       - name: Use the same workloads for the base library
-        if: matrix.revision == 'base'
+        if: needs.changes.outputs.rust == 'true' && matrix.revision == 'base' && github.event_name != 'push' && steps.cached.outputs.cache-hit != 'true'
         run: |
           cp -r benches/frame benches/regression performance-base/benches/
           cp benches/frame_time.rs performance-base/benches/frame_time.rs
@@ -306,35 +468,55 @@ jobs:
             sed -i 's/\.expect("bench drawings are valid")//' performance-base/benches/frame_time.rs
           fi
       - name: Build the head workload
-        if: matrix.revision == 'head'
+        if: needs.changes.outputs.rust == 'true' && matrix.revision == 'head'
         run: cargo build --release --locked --bench frame_time --message-format=json-render-diagnostics > performance.json
       - name: Build the base workload
-        if: matrix.revision == 'base'
+        if: needs.changes.outputs.rust == 'true' && matrix.revision == 'base' && github.event_name != 'push' && steps.cached.outputs.cache-hit != 'true'
         run: cargo build --release --locked --manifest-path performance-base/Cargo.toml --bench frame_time --message-format=json-render-diagnostics > performance.json
       - name: Measure instructions
-        id: measure
-        env:
-          REVISION: ${{ matrix.revision }}
+        if: needs.changes.outputs.rust == 'true' && (matrix.revision == 'head' || github.event_name != 'push') && steps.cached.outputs.cache-hit != 'true'
         run: |
           bench=$(jq -r 'select(.target.name == "frame_time" and .executable) | .executable' performance.json)
           bash benches/check-regressions.sh --measure "$bench" > performance-counts.txt
+      - name: Publish instruction counts
+        if: needs.changes.outputs.rust == 'true' && (matrix.revision == 'head' || github.event_name != 'push')
+        id: counts
+        env:
+          REVISION: ${{ matrix.revision }}
+        run: |
+          # Validate cached counts with the same comparison that guards pull requests.
+          bash benches/check-regressions.sh --compare performance-counts.txt performance-counts.txt > /dev/null
           {
             echo "$REVISION<<COUNTS"
             cat performance-counts.txt
             echo COUNTS
           } >> "$GITHUB_OUTPUT"
+      - name: Save main measurement
+        if: matrix.revision == 'head' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v5
+        with:
+          path: performance-counts.txt
+          key: ${{ steps.measurement.outputs.key }}
 
   performance:
     name: Chart performance regressions
-    needs: performance-measure
+    needs: [changes, performance-measure]
     if: "!cancelled() && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch') && github.event.pull_request.draft != true"
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
+      - name: Check input classification
+        shell: bash
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+        run: test "$CHANGES_RESULT" = success
       - uses: actions/checkout@v7
+        if: needs.changes.outputs.rust == 'true'
       - name: Test instruction comparison
+        if: needs.changes.outputs.rust == 'true'
         run: python3 benches/check-regressions-test.py
       - name: Reject instruction growth over five percent
+        if: needs.changes.outputs.rust == 'true'
         env:
           MEASUREMENT_RESULT: ${{ needs.performance-measure.result }}
           BASE_COUNTS: ${{ needs.performance-measure.outputs.base }}
@@ -347,7 +529,8 @@ jobs:
           bash benches/check-regressions.sh --compare performance-base.txt performance-head.txt 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
 
   native-demo:
-    if: github.event.pull_request.draft != true
+    needs: changes
+    if: "!cancelled() && github.event.pull_request.draft != true"
     name: Native demo (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -356,90 +539,145 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     steps:
+      - name: Check input classification
+        shell: bash
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+        run: test "$CHANGES_RESULT" = success
       - uses: actions/checkout@v7
+        if: needs.changes.outputs.native == 'true'
       - uses: dtolnay/rust-toolchain@stable
+        if: needs.changes.outputs.native == 'true'
       - uses: Swatinem/rust-cache@v2
+        if: needs.changes.outputs.native == 'true'
         with:
           workspaces: examples/demo
       - name: Install Linux graphics and window tools
-        if: runner.os == 'Linux'
+        if: needs.changes.outputs.native == 'true' && runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y xvfb xdotool mesa-vulkan-drivers libxkbcommon-x11-0
       - name: Build native demo
+        if: needs.changes.outputs.native == 'true'
         run: cargo build --locked --manifest-path examples/demo/Cargo.toml
       - name: Test demo controller
+        if: needs.changes.outputs.native == 'true'
         run: cargo test --locked --manifest-path examples/demo/Cargo.toml
       - name: Start native demo on Linux
-        if: runner.os == 'Linux'
+        if: needs.changes.outputs.native == 'true' && runner.os == 'Linux'
         env:
           WGPU_BACKEND: vulkan
         run: xvfb-run -a -e /dev/stderr examples/demo/smoke-native.sh examples/demo/target/debug/egui-charts-demo
 
   terminal:
-    if: github.event.pull_request.draft != true
+    needs: changes
+    if: "!cancelled() && github.event.pull_request.draft != true"
     name: Terminal package
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      - name: Check input classification
+        shell: bash
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+        run: test "$CHANGES_RESULT" = success
       - uses: actions/checkout@v7
+        if: needs.changes.outputs.terminal == 'true'
       - uses: dtolnay/rust-toolchain@stable
+        if: needs.changes.outputs.terminal == 'true'
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+        if: needs.changes.outputs.terminal == 'true'
         with:
           workspaces: terminal
       - name: Clippy
+        if: needs.changes.outputs.terminal == 'true'
         run: cargo clippy --locked --manifest-path terminal/Cargo.toml --all-targets -- -D warnings
       - name: Test
+        if: needs.changes.outputs.terminal == 'true'
         run: cargo test --locked --manifest-path terminal/Cargo.toml
 
   fmt:
-    if: github.event.pull_request.draft != true
+    needs: changes
+    if: "!cancelled() && github.event.pull_request.draft != true"
     name: Format
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Check input classification
+        shell: bash
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+        run: test "$CHANGES_RESULT" = success
       - uses: actions/checkout@v7
+        if: needs.changes.outputs.fmt == 'true'
       - uses: dtolnay/rust-toolchain@stable
+        if: needs.changes.outputs.fmt == 'true'
         with:
           components: rustfmt
       - run: cargo fmt --all -- --check
+        if: needs.changes.outputs.fmt == 'true'
       - name: Check the crates outside the workspace
+        if: needs.changes.outputs.fmt == 'true'
         run: for m in examples/demo examples/docs terminal docs/capture fuzz; do cargo fmt --manifest-path $m/Cargo.toml -- --check || exit 1; done
 
   doc:
-    if: github.event.pull_request.draft != true
+    needs: changes
+    if: "!cancelled() && github.event.pull_request.draft != true"
     name: Documentation
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Check input classification
+        shell: bash
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+        run: test "$CHANGES_RESULT" = success
       - uses: actions/checkout@v7
+        if: needs.changes.outputs.docs == 'true'
       - uses: dtolnay/rust-toolchain@stable
+        if: needs.changes.outputs.docs == 'true'
       - uses: Swatinem/rust-cache@v2
+        if: needs.changes.outputs.docs == 'true'
       - name: Check docs build
+        if: needs.changes.outputs.docs == 'true'
         run: cargo doc --no-deps --all-features
         env:
           RUSTDOCFLAGS: -Dwarnings
       - name: Check docs build (no default features)
+        if: needs.changes.outputs.docs == 'true'
         run: cargo doc --no-deps --no-default-features
         env:
           RUSTDOCFLAGS: -Dwarnings
       - name: Check docs build (widget only)
+        if: needs.changes.outputs.docs == 'true'
         run: cargo doc --no-deps --no-default-features --features widget
         env:
           RUSTDOCFLAGS: -Dwarnings
+      - name: Check documented catalogue counts
+        if: needs.changes.outputs.counts == 'true' && needs.changes.outputs.rust != 'true'
+        run: cargo test --all-features --lib stated_counts_match_code
 
   security:
-    if: github.event.pull_request.draft != true
+    needs: changes
+    if: "!cancelled() && github.event.pull_request.draft != true"
     name: Security audit
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      - name: Check input classification
+        shell: bash
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+        run: test "$CHANGES_RESULT" = success
       - uses: actions/checkout@v7
+        if: needs.changes.outputs.security == 'true'
       - uses: dtolnay/rust-toolchain@stable
+        if: needs.changes.outputs.security == 'true'
       # The library loads only its embedded SVG icons, the engine without
       # default features must not depend on egui or a windowing backend, and
       # the bare chart must not depend on the icon loader or export codecs.
       - name: Check dependency tree
+        if: needs.changes.outputs.security == 'true'
         run: |
           default=$(cargo tree --locked -e normal --prefix none)
           headless=$(cargo tree --locked -e normal --no-default-features --prefix none)
@@ -460,9 +698,11 @@ jobs:
           (cd examples/demo && cargo tree --locked > /dev/null)
           (cd examples/docs && cargo tree --locked > /dev/null)
       - uses: taiki-e/install-action@v2
+        if: needs.changes.outputs.security == 'true'
         with:
           tool: cargo-deny@0.19.0
       - name: Check advisories, duplicate versions and licences
+        if: needs.changes.outputs.security == 'true'
         run: |
           cargo deny --all-features --locked check advisories bans licenses
           cargo deny --manifest-path examples/demo/Cargo.toml --all-features --locked check advisories bans licenses
