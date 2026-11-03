@@ -1,34 +1,62 @@
 //! Isolated guide scenes with deterministic bars, also runnable natively.
 
 mod first_chart;
-mod scenes {
-    pub mod chart_types;
-    pub mod series;
-}
+mod scenes;
 
 use eframe::egui;
 use egui_charts::Chart;
 
-fn scene(name: &str) -> Option<Chart> {
-    Some(match name {
-        "first-chart" => first_chart::first_chart(),
-        "series" => scenes::series::lifecycle(),
-        "series-candles" => scenes::series::candles(),
-        "series-line" => scenes::series::line(),
-        "series-area" => scenes::series::area(),
-        "series-baseline" => scenes::series::baseline(),
-        "series-histogram" => scenes::series::histogram(),
-        "series-heikin" => scenes::chart_types::heikin(),
-        "series-renko" => scenes::chart_types::renko(),
-        "series-point-and-figure" => scenes::chart_types::point_and_figure(),
-        _ => return None,
-    })
-}
-
 struct ExampleApp {
     chart: Chart,
+    scene: Scene,
     #[cfg(target_arch = "wasm32")]
     dark: Option<bool>,
+}
+
+enum Scene {
+    Chart,
+    PriceScale(scenes::price_scale::PriceScale),
+    TimeScale,
+    Panes(scenes::panes::Panes),
+}
+
+impl ExampleApp {
+    fn new(name: &str) -> Option<Self> {
+        let mut scene = Scene::Chart;
+        let chart = match name {
+            "first-chart" => first_chart::first_chart(),
+            "series" => scenes::series::lifecycle(),
+            "series-candles" => scenes::series::candles(),
+            "series-line" => scenes::series::line(),
+            "series-area" => scenes::series::area(),
+            "series-baseline" => scenes::series::baseline(),
+            "series-histogram" => scenes::series::histogram(),
+            "series-heikin" => scenes::chart_types::heikin(),
+            "series-renko" => scenes::chart_types::renko(),
+            "series-point-and-figure" => scenes::chart_types::point_and_figure(),
+            "price-scale" => {
+                let mut chart = first_chart::first_chart();
+                scene = Scene::PriceScale(scenes::price_scale::PriceScale::new(&mut chart));
+                chart
+            }
+            "time-scale" => {
+                scene = Scene::TimeScale;
+                first_chart::first_chart()
+            }
+            "panes" => {
+                let mut chart = first_chart::first_chart();
+                scene = Scene::Panes(scenes::panes::Panes::new(&mut chart));
+                chart
+            }
+            _ => return None,
+        };
+        Some(Self {
+            chart,
+            scene,
+            #[cfg(target_arch = "wasm32")]
+            dark: None,
+        })
+    }
 }
 
 impl eframe::App for ExampleApp {
@@ -67,7 +95,15 @@ impl eframe::App for ExampleApp {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(250));
         }
-        egui::CentralPanel::default().show(ui, |ui| self.chart.show(ui));
+        egui::CentralPanel::default().show(ui, |ui| {
+            match &mut self.scene {
+                Scene::Chart => {}
+                Scene::PriceScale(scene) => scene.show(ui, &mut self.chart),
+                Scene::TimeScale => scenes::time_scale::show(ui, &mut self.chart),
+                Scene::Panes(scene) => scene.show(ui, &mut self.chart),
+            }
+            self.chart.show(ui);
+        });
     }
 }
 
@@ -84,13 +120,17 @@ fn main() -> eframe::Result {
             .dyn_into::<web_sys::HtmlCanvasElement>()
             .unwrap();
         wasm_bindgen_futures::spawn_local(async move {
-            let result = match scene(&root.get_attribute("data-scene").unwrap_or_default()) {
-                Some(chart) => {
+            let result = match root
+                .get_attribute("data-scene")
+                .as_deref()
+                .and_then(ExampleApp::new)
+            {
+                Some(app) => {
                     eframe::WebRunner::new()
                         .start(
                             canvas,
                             eframe::WebOptions::default(),
-                            Box::new(move |_| Ok(Box::new(ExampleApp { chart, dark: None }))),
+                            Box::new(|_| Ok(Box::new(app))),
                         )
                         .await
                 }
@@ -118,17 +158,41 @@ fn main() -> eframe::Result {
     }
     #[cfg(not(target_arch = "wasm32"))]
     eframe::run_native(
-        "First chart",
+        "Guide example",
         Default::default(),
         Box::new(|_| {
-            Ok(Box::new(ExampleApp {
-                chart: scene(
-                    &std::env::args()
-                        .nth(1)
-                        .unwrap_or_else(|| "first-chart".into()),
-                )
-                .expect("unknown example scene"),
-            }))
+            let name = std::env::args()
+                .nth(1)
+                .unwrap_or_else(|| "first-chart".into());
+            let app = ExampleApp::new(&name).ok_or("Unknown example scene")?;
+            Ok(Box::new(app))
         }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_guide_scene_can_start() {
+        for name in [
+            "first-chart",
+            "series",
+            "series-candles",
+            "series-line",
+            "series-area",
+            "series-baseline",
+            "series-histogram",
+            "series-heikin",
+            "series-renko",
+            "series-point-and-figure",
+            "price-scale",
+            "time-scale",
+            "panes",
+        ] {
+            assert!(ExampleApp::new(name).is_some(), "{name}");
+        }
+        assert!(ExampleApp::new("unknown").is_none());
+    }
 }
