@@ -210,10 +210,9 @@ pub(crate) fn footprint_column_width(bar_spacing: f32, config: &FootprintConfig)
 /// For the chart widget use [`crate::widget::Chart::show_footprint`] to keep cells below its
 /// legend and cursor. Standalone hosts supply their pane mapping and source bars from the
 /// footprint's clock and grouping anchor; trade-based bars keep their exact allocated opens.
-/// Text layout uses
-/// egui's galley cache; rows below the minimum height
-/// never request a layout. Row bands extend half an instrument tick below their first
-/// tick and above their last tick, including grouped rows. Fractional volumes below 100 retain
+/// Text layout uses egui's galley cache; rows below the minimum height never request a layout.
+/// Row bands extend half an instrument tick below their first tick and above their last tick,
+/// including grouped rows. Fractional volumes below 100 retain
 /// up to three decimals; nonzero magnitudes below 0.001 use scientific notation. Only display
 /// grouping runs during painting. Cells under a point wide are too narrow to read and are skipped
 /// before looking up executions. A price spine occupies a separate gutter to the left of each

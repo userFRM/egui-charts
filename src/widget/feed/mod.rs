@@ -229,7 +229,17 @@ impl FeedLink {
         if let Some(first) = first {
             flow.received_from(first);
         }
-        if let Some((input, _)) = &self.footprint_input {
+        if let Some(cutoff) = before.filter(|_| trade_based) {
+            // A cutoff can fall inside a sink allocation, so the live bars are summed again up to
+            // it. Their anchor is known only while the whole live stream is held.
+            if self.trades.lost_until().is_none() {
+                let mut live = Footprint::new(self.clock.clone(), tick_size, 1).ok()?;
+                for trade in self.trades.live().take_while(|trade| trade.ts < cutoff) {
+                    let _ = live.push(trade);
+                }
+                flow.copy_trade_bars(&live, None);
+            }
+        } else if let Some((input, _)) = &self.footprint_input {
             input.copy_footprint(&mut flow, u64::MAX);
             if let Some(lost) = self.trades.lost_until() {
                 flow.drop_through(lost, trades());

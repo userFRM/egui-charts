@@ -5,7 +5,8 @@
 //! when both carry ids. Otherwise time decides: a page adds a trade at the instant of the oldest
 //! held trade only if it and every held trade at that instant carry ids, and a live trade is
 //! dropped if a page added a trade at or after it and the two do not both carry ids. Trades
-//! sharing the boundary instant may be lost but are never counted twice.
+//! sharing the boundary instant may be lost but are never counted twice. The first page after a
+//! new subscription on a retained tape also fills the time between the tape and the live stream.
 
 use crate::model::{OrderSide, Tick, next_revision};
 use chrono::{DateTime, Utc};
@@ -140,6 +141,8 @@ pub(crate) struct Trades {
     /// Time of the newest trade without an id a page added: any live trade at or before it may
     /// repeat it.
     paged_without_id_until: Option<DateTime<Utc>>,
+    /// Newest retained trade, until the next page fills the time after it.
+    retained_until: Option<DateTime<Utc>>,
     /// Time of the newest trade dropped to stay within `capacity`: evidence before it is incomplete.
     lost_until: Option<DateTime<Utc>>,
     /// Changes whenever a trade is added or evicted.
@@ -156,6 +159,7 @@ impl Trades {
             paged: 0,
             paged_until: None,
             paged_without_id_until: None,
+            retained_until: None,
             lost_until: None,
             revision: next_revision(),
         }
@@ -199,6 +203,7 @@ impl Trades {
             .filter(|trade| trade.id.is_none())
             .map(|trade| trade.ts)
             .max();
+        self.retained_until = self.paged_until;
     }
 
     /// An empty store of the same capacity, for the next drain.
@@ -305,6 +310,7 @@ impl Trades {
         }
         // Stable, so trades sharing a time keep the feed's order.
         page.sort_by_key(|trade| trade.ts);
+        self.fill_gap(&mut page, changed);
         if let Some(oldest) = self.trades.iter().map(|trade| trade.ts).min() {
             let ids_at_oldest = (self.trades.iter())
                 .filter(|held| held.ts == oldest)
@@ -343,6 +349,41 @@ impl Trades {
             self.trades.push_front(trade);
         }
         rejected
+    }
+
+    /// Moves the trades of `page` after the retained tape and before the live stream between
+    /// them: nothing streamed while the subscription changed. The oldest go beyond capacity.
+    fn fill_gap(&mut self, page: &mut Vec<Tick>, changed: &mut impl FnMut(&Tick, bool)) {
+        let Some(until) = self.retained_until.take() else {
+            return;
+        };
+        let live_from = self.trades.iter().skip(self.paged).map(|t| t.ts).min();
+        let (gap, older): (Vec<_>, Vec<_>) = std::mem::take(page)
+            .into_iter()
+            .partition(|t| t.ts > until && live_from.is_none_or(|from| t.ts < from));
+        *page = older;
+        if gap.is_empty() {
+            return;
+        }
+        let live: Vec<_> = self.trades.drain(self.paged..).collect();
+        for id in live.iter().filter_map(|trade| trade.id) {
+            self.ids.remove(&id);
+        }
+        for trade in gap {
+            self.paged_until = self.paged_until.max(Some(trade.ts));
+            if trade.id.is_none() {
+                self.paged_without_id_until = self.paged_without_id_until.max(Some(trade.ts));
+            }
+            self.insert(trade, changed);
+        }
+        self.paged = self.trades.len();
+        for trade in live {
+            self.insert(trade, &mut |trade, added| {
+                if !added {
+                    changed(trade, false);
+                }
+            });
+        }
     }
 }
 

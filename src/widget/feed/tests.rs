@@ -946,6 +946,21 @@ fn footprint_trade_intervals_follow_pages_streams_and_interval_changes() {
             }
             let image = chart.feed_link.as_ref().unwrap().frozen();
             assert_eq!(image.footprint.as_ref().unwrap().bars(), flow.bars());
+            // A replay cutoff keeps the executions before it, and only those, on their own anchors.
+            let link = chart.feed_link.as_ref().unwrap();
+            let replayed = |cutoff| {
+                let flow = link.footprint(Some(cutoff)).unwrap();
+                flow.bars()
+                    .values()
+                    .map(|bar| (bar.volume(), bar.delta()))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(replayed(live_start), expected, "{interval}: replay");
+            assert_eq!(
+                replayed(live_start + TimeDelta::nanoseconds(1)),
+                got,
+                "{interval}: replay"
+            );
             // The last execution is still queued when the interval changes.
             let queued = Tick::new(start + TimeDelta::seconds(2), 120.0, 1.0, Some(Buy));
             sink.push_tick(queued.clone());
@@ -1042,6 +1057,54 @@ fn footprint_trade_intervals_follow_pages_streams_and_interval_changes() {
                 );
             }
         }
+    }
+}
+
+/// The page answering an interval change holds what traded between the two subscriptions, and
+/// repeating the retained executions does not end the scroll-back for older ones.
+#[test]
+fn an_interval_change_page_fills_the_retained_tape() {
+    let start = bars(1)[0].time;
+    let fill = |second, size| Tick::new(start + TimeDelta::seconds(second), 100.0, size, None);
+    for (page, volume) in [
+        (vec![fill(0, 1.0), fill(1, 2.0)], 3.0),
+        (vec![fill(0, 1.0), fill(1, 2.0), fill(2, 4.0)], 7.0),
+    ] {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        chart.set_timeframe(Timeframe::Min1);
+        chart.set_chart_type(ChartType::VolumeFootprint);
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+        frames.run(&mut chart);
+        let answer = |fills| {
+            let reply = feed.trades.lock().unwrap().pop().unwrap();
+            reply.send(Ok(TradePage::new(fills, false)));
+        };
+        answer(vec![fill(0, 1.0)]);
+        feed.sink().push_tick(fill(1, 2.0));
+        frames.run(&mut chart);
+        chart.set_timeframe(Timeframe::Min5);
+        frames.run(&mut chart);
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+        frames.run(&mut chart);
+        answer(page);
+        frames.run(&mut chart);
+        let flow = chart
+            .feed_link
+            .as_ref()
+            .unwrap()
+            .footprint
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            flow.bars().values().map(|bar| bar.volume()).sum::<f64>(),
+            volume
+        );
+        assert!(!chart.feed.trade_history_complete);
     }
 }
 

@@ -41,7 +41,7 @@ impl Chart {
             .instrument()
             .and_then(|instrument| instrument.tick_size);
         self.state.price_scale_mut().set_tick_size(tick_size);
-        // Profile drawings read held trades on every time-based chart type.
+        // Profile drawings read held trades on every chart type.
         let executions = self.chart_type == ChartType::VolumeFootprint
             || (self.chart_type == ChartType::SessionVolumeProfile && cfg!(feature = "studies"))
             || (self.feed_link.is_some() && self.profile_drawings());
@@ -411,7 +411,8 @@ impl Chart {
         self.feed_link = Some(link);
     }
 
-    /// Reloads bars and the subscription, retaining executions for a new interval on the same feed key.
+    /// Reloads bars and the subscription, retaining executions for a new interval on the same
+    /// feed key.
     fn reload(&mut self, link: &mut FeedLink, clock: BarClock) {
         link.reload_pending = false;
         let mut retain_trades = link.clock != clock
@@ -677,9 +678,9 @@ impl Chart {
     }
 
     /// Puts a page of older trades in front of the held ones. A page that ends history, names a
-    /// continuation, or adds nothing new cannot move the boundary, so the same request is never
-    /// repeated. A page that ends history also confirms that the held trades start where trade
-    /// history starts.
+    /// continuation, or adds nothing before a boundary it was asked for cannot move it, so the
+    /// same request is never repeated. A page that ends history also confirms that the held trades
+    /// start where trade history starts.
     fn apply_trades(&mut self, link: &mut FeedLink, asked: &TradeRequest, page: TradePage) {
         let empty = page.trades.is_empty();
         let continuation = page.continue_before.filter(|_| empty);
@@ -709,7 +710,9 @@ impl Chart {
         }
         link.trade_cursor = continuation;
         link.trades_complete |=
-            end || (continuation.is_none() && !changed) || link.trades.room() == 0;
+            // The latest page can repeat a retained tape without reaching its oldest execution.
+            end || (continuation.is_none() && !changed && asked.before.is_some())
+                || link.trades.room() == 0;
     }
 
     /// The start of the range to ask for below `before`: the time `scroll_to_time` is heading
