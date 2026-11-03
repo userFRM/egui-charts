@@ -83,7 +83,7 @@ impl eframe::App for BasicChartApp {
             self.chart.show(ui);
             for event in self.chart.drain_events() {
                 if let ChartEvent::Click { position, .. } = event {
-                    self.last_click = Some((position.time, position.price));
+                    self.last_click = position.time.map(|time| (time, position.price));
                     ui.ctx().request_repaint();
                 }
             }
