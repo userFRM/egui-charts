@@ -86,10 +86,22 @@ struct SavedOptions {
     width: f32,
     #[serde(default)]
     marker_radius: Option<f32>,
+    #[serde(default)]
+    crosshair_marker_radius: f32,
+    #[serde(default)]
+    crosshair_marker_fill: Option<egui::Color32>,
+    #[serde(default)]
+    crosshair_marker_border_color: Option<egui::Color32>,
+    #[serde(default = "default_crosshair_marker_border_width")]
+    crosshair_marker_border_width: f32,
     scale: SeriesScale,
     columns_base: Option<f64>,
     #[serde(with = "SavedStyle")]
     style: egui_charts::model::SeriesStyle,
+}
+
+fn default_crosshair_marker_border_width() -> f32 {
+    SeriesOptions::default().crosshair_marker_border_width
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -293,7 +305,8 @@ pub(super) fn refresh_spreads(chart: &mut Chart, spreads: &mut [Spread], paused:
             feed.set_paused(paused);
             feed.advance(chrono::Utc::now());
         }
-        if spread.loading(chart) {
+        // Seed empty spreads from cached history before their executions finish loading.
+        if spread.loading(chart) && !chart.bars(spread.id).is_empty() {
             continue;
         }
         let key: Vec<_> = spread
@@ -657,6 +670,20 @@ mod tests {
             snapshot: None,
             replay_time: None,
         }];
+        refresh_spreads(&mut chart, &mut spreads, true);
+        assert!(
+            !chart.bars(id).is_empty(),
+            "a new spread must show cached history before bootstrap finishes"
+        );
+        assert!(spreads[0].loading(&chart));
+        chart.drain_events().for_each(drop);
+        refresh_spreads(&mut chart, &mut spreads, true);
+        assert!(
+            !chart
+                .drain_events()
+                .any(|event| matches!(event, ChartEvent::DataLoaded { .. })),
+            "loading spreads must retain their cached history"
+        );
         for feed in &spreads[0].feeds {
             super::super::tests::finish_feed(feed);
         }

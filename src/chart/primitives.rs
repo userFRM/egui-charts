@@ -58,14 +58,17 @@ use crate::studies::Indicator;
 use chrono::{DateTime, Utc};
 use egui::{Color32, CursorIcon, Painter, Pos2, Rect};
 use std::ops::Range;
+use std::sync::Arc;
 
 /// Identifies a primitive attached to a chart, for
 /// [`Chart::detach_primitive`](crate::widget::Chart::detach_primitive) and pointer targets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PrimitiveId(pub(crate) u64);
 
-/// When a primitive draws in its pane.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// When a primitive draws in its pane. Within a pass, every
+/// [`draw_background`](Primitive::draw_background) runs in attachment order before any
+/// [`draw`](Primitive::draw).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PrimitivePass {
     /// Behind the series and studies of the pane, above its background, grid and sessions.
     Below,
@@ -74,6 +77,44 @@ pub enum PrimitivePass {
     /// Above the series, studies and drawings of the pane. In the main pane it stays below the
     /// crosshair and legend.
     Above,
+}
+
+/// A primitive or custom renderer's object under the pointer.
+///
+/// Among custom hits, later draw passes win (`Above`, `Series`, `Below`), then the
+/// shortest distance in UI points. Equal hits keep ordinary primitives ahead of series
+/// renderers, the latest attached primitive first, and renderers in series visual order.
+/// When series backgrounds group foregrounds in attachment order, equal custom hits also
+/// follow reverse attachment order across primitives and renderers.
+/// Drawings retain priority; built-in series still follow series visual order.
+/// Within a renderer, return its best object using these same pass and distance rules,
+/// breaking ties in reverse paint order. Object ids are local to the pointer's target.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PrimitiveHit {
+    /// Cursor to display while hovering the object.
+    pub cursor: CursorIcon,
+    /// Host identity of the individual object, if the renderer distinguishes objects.
+    pub object_id: Option<String>,
+    /// Host-defined information about the hit, shared with hover and click payloads.
+    pub data: Option<Arc<serde_json::Value>>,
+    /// Distance from the pointer to the object in UI points. Hits with negative or
+    /// non-finite distances are ignored.
+    pub distance: f32,
+    /// Draw pass of the hit object, used before distance when ranking custom hits.
+    pub pass: PrimitivePass,
+}
+
+impl PrimitiveHit {
+    /// A cursor-only hit on the series pass, at distance zero.
+    pub fn new(cursor: CursorIcon) -> Self {
+        Self {
+            cursor,
+            object_id: None,
+            data: None,
+            distance: 0.0,
+            pass: PrimitivePass::Series,
+        }
+    }
 }
 
 /// The pane and scale a primitive draws on in the current frame.
@@ -153,7 +194,14 @@ pub struct TimeAxisLabel {
 /// the main series, an added bar series or an overlay study draws in the main pane; one attached
 /// to a study in a pane of its own draws in that pane. See the [module](self) documentation.
 pub trait Primitive: Send {
-    /// Draws in `pass` with `painter`, clipped to the plot area of the pane.
+    /// Draws the background of `pass`, clipped to the plot area of the pane. All participating
+    /// backgrounds draw in attachment order before any foreground in that pass.
+    /// The chart may defer these shapes; painter indices must stay within this hook.
+    fn draw_background(&self, painter: &Painter, view: &PrimitiveView<'_>, pass: PrimitivePass) {
+        let _ = (painter, view, pass);
+    }
+
+    /// Draws the foreground of `pass` with `painter`, clipped to the plot area of the pane.
     fn draw(&self, painter: &Painter, view: &PrimitiveView<'_>, pass: PrimitivePass) {
         let _ = (painter, view, pass);
     }
@@ -172,6 +220,19 @@ pub trait Primitive: Send {
     ) {
         let _ = factor;
         self.draw(painter, view, pass);
+    }
+
+    /// Draws the background with the same grouping factor as [`draw_merged`](Self::draw_merged).
+    /// The default calls [`draw_background`](Self::draw_background).
+    fn draw_background_merged(
+        &self,
+        painter: &Painter,
+        view: &PrimitiveView<'_>,
+        pass: PrimitivePass,
+        factor: usize,
+    ) {
+        let _ = factor;
+        self.draw_background(painter, view, pass);
     }
 
     /// Labels for the price axis of the pane, placed at their prices next to the chart's own
@@ -216,6 +277,16 @@ pub trait Primitive: Send {
     fn hit_test(&self, pos: Pos2, view: &PrimitiveView<'_>) -> Option<CursorIcon> {
         let _ = (pos, view);
         None
+    }
+
+    /// Identifies the hit object and supplies its cursor, distance, draw pass and host data.
+    /// The chart reports the winning result as
+    /// [`ChartPointer::primitive_hit`](crate::widget::ChartPointer::primitive_hit).
+    ///
+    /// The default wraps [`hit_test`](Self::hit_test) in [`PrimitiveHit::new`], preserving
+    /// cursor-only implementations. Override this hook to distinguish or rank objects.
+    fn hit_test_result(&self, pos: Pos2, view: &PrimitiveView<'_>) -> Option<PrimitiveHit> {
+        self.hit_test(pos, view).map(PrimitiveHit::new)
     }
 
     /// Called once, at the first frame after the primitive was attached to `series`. `ctx` is

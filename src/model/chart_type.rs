@@ -347,6 +347,136 @@ impl fmt::Display for ChartType {
     }
 }
 
+/// Numbers shown in a footprint column.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FootprintMode {
+    /// Sell volume on the left, buy volume on the right.
+    BidAsk,
+    /// All executed volume, including unknown sides.
+    Volume,
+    /// Buy minus sell volume.
+    Delta,
+    /// Delta followed by total volume.
+    DeltaVolume,
+    /// Only the larger of the sell and buy volume of the row, at the left of the cell when sells
+    /// dominate and at the right when buys do, centred on a tie. The other side stays out.
+    DominantSide,
+}
+
+/// What determines a footprint cell's colour.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FootprintColor {
+    /// Volume relative to the largest row of this bar.
+    Volume,
+    /// Delta as a fraction of the row's classified volume.
+    Delta,
+    /// Dominant bid or ask side, using the configured comparison.
+    Imbalance,
+    /// The neutral colour for every cell, whatever was traded.
+    Fixed,
+    /// The buy colour for a positive delta and the sell colour for a negative one, with the
+    /// opacity growing with the delta's absolute size relative to the bar's largest. A zero delta
+    /// takes the neutral colour at full opacity.
+    DeltaOpacity,
+}
+
+/// How `studies::TradeProfile::nodes` (requires `studies`) chooses volume nodes.
+///
+/// The default compares each price row with its immediate neighbours, which is the most
+/// sensitive setting. Raising `smoothing` or `prominence` leaves only the broader nodes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct NodeSensitivity {
+    /// Rows on each side of a row that are averaged with it before comparing; zero compares
+    /// the rows as traded. Untraded rows count as zero volume.
+    pub smoothing: u32,
+    /// Smallest rise of a peak above, or drop of a valley below, the higher respectively
+    /// lower of its neighbouring plateaus, as a share of the largest smoothed volume. NaN
+    /// counts as zero and values are clamped to 0..=1.
+    pub prominence: f64,
+}
+
+/// Display settings of the chart's execution-based session profiles.
+/// Defaults retain the stacked session histogram, with optional annotations hidden.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TradeProfileSettings {
+    /// Bid/ask stacks, total volume or signed delta; `DeltaVolume` also draws signed delta.
+    pub mode: FootprintMode,
+    /// Trace the total-volume POC after each complete execution bar.
+    pub developing_poc: bool,
+    /// Volume-node smoothing and prominence; `None` hides the node labels.
+    pub nodes: Option<NodeSensitivity>,
+    /// Share of total volume shaded as the contiguous value area; `None` hides it.
+    pub value_area: Option<f64>,
+    /// Draw guides at the outer edges of the value area.
+    pub value_area_guides: bool,
+}
+
+impl Default for TradeProfileSettings {
+    fn default() -> Self {
+        Self {
+            mode: FootprintMode::BidAsk,
+            developing_poc: false,
+            nodes: None,
+            value_area: Some(0.7),
+            value_area_guides: false,
+        }
+    }
+}
+
+/// A row of the per-bar execution statistics table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FootprintStatistic {
+    /// Total executed volume, including unknown sides.
+    Volume,
+    /// Sell volume.
+    Bid,
+    /// Buy volume.
+    Ask,
+    /// Buy volume minus sell volume.
+    Delta,
+    /// Minimum running delta within the bar.
+    MinDelta,
+    /// Maximum running delta within the bar.
+    MaxDelta,
+    /// Running delta across complete bars.
+    CumulativeDelta,
+    /// Delta divided by total volume, in percent.
+    DeltaPercent,
+    /// Buy volume divided by sell volume.
+    AskBidRatio,
+}
+
+impl FootprintStatistic {
+    /// All available rows in their display order.
+    pub const ALL: [Self; 9] = [
+        Self::Volume,
+        Self::Bid,
+        Self::Ask,
+        Self::Delta,
+        Self::MinDelta,
+        Self::MaxDelta,
+        Self::CumulativeDelta,
+        Self::DeltaPercent,
+        Self::AskBidRatio,
+    ];
+
+    /// Shared table label.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Volume => "Vol",
+            Self::Bid => "Bid",
+            Self::Ask => "Ask",
+            Self::Delta => "Delta",
+            Self::MinDelta => "Min",
+            Self::MaxDelta => "Max",
+            Self::CumulativeDelta => "CVD",
+            Self::DeltaPercent => "Delta %",
+            Self::AskBidRatio => "Ask/Bid",
+        }
+    }
+}
+
 /// Where the Baseline chart draws its base line.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum BaselineLevel {
@@ -356,11 +486,65 @@ pub enum BaselineLevel {
     PercentOfPane(f32),
 }
 
-/// The parameters of the chart types that need them. Sizes are in price units and are used as
-/// given; a size the chart cannot use is reported on the chart instead of being replaced.
+/// Parameters and display settings retained when changing chart types. Price-based sizes are
+/// in price units and used as given; an unusable size is reported instead of being replaced.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ChartTypeParams {
+    /// Footprint: up to four content columns.
+    pub footprint_modes: Vec<FootprintMode>,
+    /// Footprint: proportional volume profiles behind the numbers.
+    pub footprint_profile: bool,
+    /// Footprint: cell colouring rule.
+    pub footprint_color_by: FootprintColor,
+    /// Footprint: buy, sell, text and neutral colours. None follows the chart theme.
+    pub footprint_colors: [Option<egui::Color32>; 4],
+    /// Footprint: instrument ticks per row; zero groups automatically with zoom.
+    pub footprint_row_ticks: u32,
+    /// Footprint: outline the highest-volume row.
+    pub footprint_poc: bool,
+    /// Footprint: share of volume in the value area; None hides it.
+    pub footprint_value_area: Option<f64>,
+    /// Footprint: dominance multiple for imbalances.
+    pub footprint_imbalance_ratio: f64,
+    /// Footprint: minimum dominant-side volume after grouping.
+    pub footprint_imbalance_min_volume: f64,
+    /// Footprint: compare opposite sides one price row apart.
+    pub footprint_diagonal: bool,
+    /// Footprint: mark stacked imbalance zones.
+    pub footprint_stacked_imbalances: bool,
+    /// Footprint: adjacent imbalances required for a zone.
+    pub footprint_stack: usize,
+    /// Footprint: extend volume POCs until revisited.
+    pub footprint_naked_poc: bool,
+    /// Footprint: mark the largest absolute delta row.
+    pub footprint_delta_poc: bool,
+    /// Footprint: extend unfinished highs and lows until revisited.
+    pub footprint_unfinished_auctions: bool,
+    /// Footprint: minimum share of bar volume for a cluster; None hides clusters.
+    pub footprint_cluster_share: Option<f64>,
+    /// Footprint: maximum extreme-row volume for a single print; None hides them.
+    pub footprint_single_print_max: Option<f64>,
+    /// Footprint: minimum absolute delta percentage for a bar marker; None hides it.
+    pub footprint_delta_percent: Option<f64>,
+    /// Footprint: minimum buy/sell or sell/buy multiple for a bar marker; None hides it.
+    pub footprint_ratio: Option<f64>,
+    /// Footprint: write the ask/bid ratios at the bar extremes.
+    pub footprint_extreme_ratio: bool,
+    /// Footprint: outline rows between the close and the extreme beyond it.
+    pub footprint_pullback: bool,
+    /// Footprint: prefer abbreviated numbers.
+    pub footprint_abbreviate: bool,
+    /// Footprint: write zero values rather than leaving them blank.
+    pub footprint_show_zero: bool,
+    /// Footprint: preferred minimum and maximum font sizes in points, within 8 to 24.
+    pub footprint_font_size: [f32; 2],
+    /// Footprint: show the selected statistics rows below the price pane.
+    pub footprint_statistics: bool,
+    /// Footprint: statistics rows in display order; an empty list hides the table.
+    pub footprint_statistics_rows: Vec<FootprintStatistic>,
+    /// Execution-based session profile display settings.
+    pub profile: TradeProfileSettings,
     /// Independent line, area and baseline styles, retained across chart type changes.
     pub styles: super::ChartTypeStyles,
     /// Renko: method resolved once from loaded history, then frozen while bars stream.
@@ -427,6 +611,37 @@ pub struct ChartTypeParams {
 impl Default for ChartTypeParams {
     fn default() -> Self {
         Self {
+            footprint_modes: vec![FootprintMode::BidAsk],
+            footprint_profile: true,
+            footprint_color_by: FootprintColor::Delta,
+            footprint_colors: [None; 4],
+            footprint_row_ticks: 0,
+            footprint_poc: true,
+            footprint_value_area: Some(0.7),
+            footprint_imbalance_ratio: 3.0,
+            footprint_imbalance_min_volume: 0.0,
+            footprint_diagonal: true,
+            footprint_stacked_imbalances: false,
+            footprint_stack: 3,
+            footprint_naked_poc: false,
+            footprint_delta_poc: false,
+            footprint_unfinished_auctions: false,
+            footprint_cluster_share: None,
+            footprint_single_print_max: None,
+            footprint_delta_percent: None,
+            footprint_ratio: None,
+            footprint_extreme_ratio: false,
+            footprint_pullback: false,
+            footprint_abbreviate: false,
+            footprint_show_zero: true,
+            footprint_font_size: [10.0, 10.0],
+            footprint_statistics: false,
+            footprint_statistics_rows: vec![
+                FootprintStatistic::Volume,
+                FootprintStatistic::Delta,
+                FootprintStatistic::DeltaPercent,
+            ],
+            profile: TradeProfileSettings::default(),
             styles: super::ChartTypeStyles::default(),
             renko_size_method: super::BoxSizeMethod::Fixed,
             kagi_size_method: super::BoxSizeMethod::Fixed,
@@ -558,6 +773,69 @@ impl ChartTypeParams {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saved_execution_settings_keep_choices_and_legacy_defaults() {
+        let settings = serde_json::json!({
+            "footprint_modes": ["Delta"], "footprint_row_ticks": 2,
+            "footprint_value_area": 0.010003969988090037,
+            "footprint_statistics": true, "footprint_statistics_rows": ["Volume", "Delta"],
+            "footprint_colors": [[12, 34, 56, 255], null, null, null],
+            "profile": {"mode": "Volume", "value_area": 0.5, "developing_poc": true,
+                "nodes": {"smoothing": 2, "prominence": 0.1}}
+        });
+        let params: ChartTypeParams = serde_json::from_value(settings.clone()).unwrap();
+        let saved = serde_json::to_value(&params).unwrap();
+        for (name, expected) in settings.as_object().unwrap() {
+            if name == "profile" {
+                for (field, expected) in expected.as_object().unwrap() {
+                    assert_eq!(&saved[name][field], expected);
+                }
+            } else {
+                assert_eq!(&saved[name], expected);
+            }
+        }
+        assert_eq!(
+            serde_json::from_value::<ChartTypeParams>(saved).unwrap(),
+            params
+        );
+        #[cfg(feature = "ui")]
+        {
+            let mut series = crate::chart::series::SeriesSettings {
+                chart_type: ChartType::VolumeFootprint,
+                chart_type_params: params.clone(),
+                ..Default::default()
+            };
+            egui::Context::default()
+                .run_ui(egui::RawInput::default(), |ui| {
+                    crate::ui::dialogs::series_settings::SymbolTab::show(ui, &mut series);
+                })
+                .drop_without_applying_deltas();
+            assert_eq!(
+                series.chart_type_params, params,
+                "opening settings keeps saved values"
+            );
+        }
+        let legacy: ChartTypeParams = serde_json::from_str(r#"{"tpo_row_ticks":2}"#).unwrap();
+        let legacy = serde_json::to_value(legacy).unwrap();
+        assert_eq!(legacy["footprint_statistics"], false);
+        assert_eq!(legacy["footprint_row_ticks"], 0);
+        assert_eq!(
+            legacy["footprint_colors"],
+            serde_json::json!([null, null, null, null])
+        );
+        for field in [
+            "footprint_stacked_imbalances",
+            "footprint_naked_poc",
+            "footprint_delta_poc",
+            "footprint_unfinished_auctions",
+            "footprint_extreme_ratio",
+            "footprint_pullback",
+        ] {
+            assert_eq!(legacy[field], false);
+        }
+        assert_eq!(legacy["profile"]["value_area"], 0.7);
+    }
 
     #[test]
     fn saved_tpo_settings_apply_the_balance_window_and_keep_legacy_defaults() {
