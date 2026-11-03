@@ -50,6 +50,7 @@ pub enum CrosshairStyle {
 /// Crosshair options
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
+#[serde(default)]
 pub struct CrosshairOptions {
     /// Crosshair mode
     pub mode: CrosshairMode,
@@ -81,8 +82,17 @@ pub struct CrosshairOptions {
     /// Horizontal line width
     pub horz_line_width: f32,
 
-    /// Show labels
+    /// Show axis labels, subject to each label's visibility switch.
     pub label_visible: bool,
+
+    /// Show the time-axis label independently of the vertical line. Default: true.
+    /// `label_visible` must also be true; `CrosshairStyle::Hidden` hides every element.
+    pub vert_label_visible: bool,
+
+    /// Show the price-axis label independently of the horizontal line. Default: true.
+    /// Also applies to volume and study values. `label_visible` must also be true;
+    /// `CrosshairStyle::Hidden` hides every element.
+    pub horz_label_visible: bool,
 
     /// Background of the vertical line's label on the time axis (`Color32::PLACEHOLDER`:
     /// active theme)
@@ -110,6 +120,8 @@ impl Default for CrosshairOptions {
             vert_line_width: 1.0,
             horz_line_width: 1.0,
             label_visible: true,
+            vert_label_visible: true,
+            horz_label_visible: true,
             vert_label_background_color: Color32::PLACEHOLDER,
             horz_label_background_color: Color32::PLACEHOLDER,
             label_text_color: Color32::PLACEHOLDER,
