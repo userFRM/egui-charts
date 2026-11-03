@@ -71,7 +71,10 @@ pub use chart_style::{
     AreaStyle, BarsStyle, BaselineStyle, CandlesStyle, ChartTypeStyles, HlcAreaStyle, KagiStyle,
     LastPriceAnimation, LinePlotStyle, LineType,
 };
-pub use chart_type::{BaselineLevel, ChartType, ChartTypeCategory, ChartTypeParams};
+pub use chart_type::{
+    BaselineLevel, ChartType, ChartTypeCategory, ChartTypeParams, FootprintColor, FootprintMode,
+    FootprintStatistic, NodeSensitivity, TradeProfileSettings,
+};
 pub use clock::BarClock;
 pub use color::ColorType;
 pub use date_range::DateRange;

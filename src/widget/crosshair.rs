@@ -52,7 +52,7 @@ impl Chart {
                 candidate
             };
             let x = coords.idx_to_x(candidate);
-            if self.crosshair_index_eligible(candidate) {
+            if self.crosshair_time_eligible(bars[candidate].time, Some(candidate)) {
                 pos.x = x;
                 return Some(pos);
             }
@@ -60,14 +60,14 @@ impl Chart {
         None
     }
 
-    fn crosshair_index_eligible(&self, index: usize) -> bool {
+    pub(super) fn crosshair_time_eligible(
+        &self,
+        time: chrono::DateTime<chrono::Utc>,
+        index: Option<usize>,
+    ) -> bool {
         let options = &self.chart_options.time_scale;
-        let bar = &self.state.shown()[index];
         let series = self.price_series.iter().filter_map(|item| {
-            let at = item
-                .bars
-                .binary_search_by_key(&bar.time, |bar| bar.time)
-                .ok()?;
+            let at = item.bars.binary_search_by_key(&time, |bar| bar.time).ok()?;
             Some((item.visible, !item.bars[at].is_whitespace()))
         });
         let studies = self
@@ -81,15 +81,18 @@ impl Chart {
                         plot.plot_type,
                         crate::studies::PlotType::BarColor
                             | crate::studies::PlotType::BackgroundColor
-                    ) && study.plot_value(line, index).is_some_and(f64::is_finite);
+                    ) && index
+                        .and_then(|index| study.plot_value(line, index))
+                        .is_some_and(f64::is_finite);
                     (study.is_visible() && plot.visible, valued)
                 })
             });
         let mut valued = false;
-        for (visible, has_value) in
-            std::iter::once((self.main_series_visible, !bar.is_whitespace()))
-                .chain(series)
-                .chain(studies)
+        let main_value = self.main_series_present
+            && index.is_some_and(|index| !self.state.shown()[index].is_whitespace());
+        for (visible, has_value) in std::iter::once((self.main_series_visible, main_value))
+            .chain(series)
+            .chain(studies)
         {
             if has_value {
                 if visible || !options.ignore_hidden_indices {

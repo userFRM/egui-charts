@@ -428,7 +428,7 @@ mod tests {
         fn flush(&mut self) {}
     }
 
-    fn restart(ctx: &egui::Context, storage: &AppStorage) -> DemoApp {
+    fn restart(ctx: &egui::Context, storage: &AppStorage) -> Box<DemoApp> {
         let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
         cc.storage = Some(storage);
         let mut app = DemoApp::new_at(&cc, "2026-10-27T19:29:50Z".parse().unwrap(), true);
