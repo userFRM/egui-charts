@@ -7,7 +7,7 @@ Create the chart once and call
 [`Chart::show`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.show)
 on every frame. The widget handles chart gestures; your host handles application
 actions and reads notifications after `show`. Try the
-[host readout recipe](https://userfrm.github.io/egui-charts/docs/recipes/host-readout/) for a running event consumer.
+[host readout recipe](/egui-charts/docs/recipes/host-readout/) for a running event consumer.
 
 ## Pointer and touch
 
@@ -79,7 +79,7 @@ places a cursor using UTC time and raw price. For multiple charts, forward UTC
 time with
 [`set_synced_crosshair_time`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_synced_crosshair_time);
 programmatic synchronized cursors do not emit local pointer moves. See the
-[synchronization recipe](https://userfrm.github.io/egui-charts/docs/recipes/synchronized/) for range forwarding and
+[synchronization recipe](/egui-charts/docs/recipes/synchronized/) for range forwarding and
 clearing cursors on exit.
 
 ## Drain events once per frame
@@ -88,7 +88,7 @@ After `show`, iterate
 [`drain_events`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.drain_events)
 in one host dispatcher. It removes pending notifications. Forward each event
 to the host components that need it; repeated drains do not broadcast it again.
-The [complete readout scene](https://userfrm.github.io/egui-charts/docs/recipes/host-readout/#show-drain-then-draw-the-host-tooltip)
+The [complete readout scene](/egui-charts/docs/recipes/host-readout/#show-drain-then-draw-the-host-tooltip)
 demonstrates this order and a wildcard arm for the non-exhaustive
 [`ChartEvent`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/enum.ChartEvent.html)
 enum.
@@ -122,6 +122,6 @@ can be included with
 [`CursorDataPolicy`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/enum.CursorDataPolicy.html)
 without changing what the chart paints or autoscales.
 
-Use the [annotation recipe](https://userfrm.github.io/egui-charts/docs/recipes/annotations/) for host marker ids and
+Use the [annotation recipe](/egui-charts/docs/recipes/annotations/) for host marker ids and
 the [host contracts](https://github.com/userFRM/egui-charts/blob/main/docs/chart-api.md) for the full payload and formatting
-rules. The [recipe index](https://userfrm.github.io/egui-charts/docs/recipes/) links the complete integrations.
+rules. The [recipe index](/egui-charts/docs/recipes/) links the complete integrations.
