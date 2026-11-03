@@ -32,6 +32,8 @@ maudio = "0.1.15"
 eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "clipboard", "glow", "links", "x11", "wayland"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+# Check recording size before the browser allocates its bytes.
+rfd = { version = "0.17.2", features = ["file-handle-inner"] }
 wasm-bindgen = "0.2.108"
 wasm-bindgen-futures = "0.4.58"
 web-sys = { version = "0.3.85", features = ["Window", "Document", "Element", "HtmlCanvasElement", "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url", "AudioContext", "AudioBuffer", "AudioBufferSourceNode", "AudioDestinationNode", "AudioNode", "AudioContextState"] }

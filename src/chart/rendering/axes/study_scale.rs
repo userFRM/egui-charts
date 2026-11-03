@@ -146,22 +146,19 @@ pub(crate) fn render_study_axis(
         }
     }
     let mut occupied = Vec::new();
-    for (y, color, label) in labels
-        .into_iter()
-        .chain(coords.price.marks().into_iter().map(|mark| {
-            let relative = matches!(
-                coords.price.transform().mode,
-                crate::scales::PriceScaleMode::Percentage
-                    | crate::scales::PriceScaleMode::IndexedTo100
-            );
-            let label = if relative {
-                relative_formatter.map_or(mark.label, |formatter| formatter.format_tick(mark.price))
-            } else {
-                study.format_value(mark.price)
-            };
-            (mark.y_coord, None, label)
-        }))
-    {
+    let relative = matches!(
+        coords.price.transform().mode,
+        crate::scales::PriceScaleMode::Percentage | crate::scales::PriceScaleMode::IndexedTo100
+    );
+    let marks = super::price_marks(&coords.price, relative_formatter.filter(|_| relative));
+    for (y, color, label) in labels.into_iter().chain(marks.into_iter().map(|mark| {
+        let label = if relative {
+            mark.label
+        } else {
+            study.format_value(mark.price)
+        };
+        (mark.y_coord, None, label)
+    })) {
         let galley = painter.layout_no_wrap(
             label,
             font.clone(),

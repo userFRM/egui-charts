@@ -4,6 +4,19 @@ Create charts once and call [`Chart::show`](https://userfrm.github.io/egui-chart
 and streaming data and owns network connections, files, accounts and script execution.
 The library computes studies and strategy metrics and renders the supplied data.
 
+Continue from [your first chart](site/src/content/docs/first-chart.mdx) with the
+[second-series tutorial](https://userfrm.github.io/egui-charts/docs/tutorial/second-series/).
+The [interaction guide](site/src/content/docs/interaction.mdx) covers pointer,
+keyboard, crosshair and draining events. Choose a complete runnable recipe:
+
+| Task | Recipe |
+|---|---|
+| Add host annotations | [Price lines and markers](https://userfrm.github.io/egui-charts/docs/recipes/annotations/) |
+| Separate price and volume units | [Price and volume](https://userfrm.github.io/egui-charts/docs/recipes/price-volume/) |
+| Read chart events into host UI | [Host legend and tooltip](https://userfrm.github.io/egui-charts/docs/recipes/host-readout/) |
+| Share cursor and view between charts | [Synchronize two charts](https://userfrm.github.io/egui-charts/docs/recipes/synchronized/) |
+| Receive image bytes and deliver them | [Export an image](https://userfrm.github.io/egui-charts/docs/recipes/export/) |
+
 ## History and streaming
 
 For data already in memory, construct a chart from ordered UTC bars:
