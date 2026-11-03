@@ -112,6 +112,17 @@ fn close_at(bars: &[Bar], clock: &BarClock, slot: DateTime<Utc>) -> Option<(Date
 }
 
 impl Chart {
+    /// Live change marker settings of a bar series, or `None` when disabled or absent.
+    pub fn change_markers(&self, series: SeriesId) -> Option<ChangeMarkers> {
+        if let Some(item) = self.price_series.iter().find(|item| item.id == series) {
+            item.change_marks.as_ref().map(|marks| marks.options)
+        } else if series == SeriesId::MAIN && self.main_series_present {
+            self.change_marks.as_ref().map(|marks| marks.options)
+        } else {
+            None
+        }
+    }
+
     /// Marks, for `options.duration` after each live update, where the close of `series` rose
     /// or fell against the close of the bar the update replaced: a dot at the new close with a
     /// chevron above it for a rise and below it for a fall. Updates that leave the close

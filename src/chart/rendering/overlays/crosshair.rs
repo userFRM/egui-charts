@@ -86,7 +86,7 @@ pub fn render_crosshair_with_options(
     let mut pos = hover_pos;
     if let Some((idx, candle)) = bar {
         pos.x = coords.idx_to_x(idx);
-        if options.mode.snaps() && context.rect.contains(hover_pos) {
+        if options.mode.snaps() && context.rect.contains(hover_pos) && !candle.is_whitespace() {
             let price = if options.mode == CrosshairMode::MagnetClose {
                 candle.close
             } else {

@@ -538,6 +538,17 @@ impl OrderFlowInput {
         state.snapshot(bars, complete_from)
     }
 
+    /// The calendar a footprint source opens its bars by: the clock of the first execution it
+    /// received since it was cleared or given another tick size. `None` while it holds no
+    /// footprint, and for other sources.
+    #[cfg(feature = "studies")]
+    pub(crate) fn footprint_clock(&self) -> Option<BarClock> {
+        self.state()
+            .footprint
+            .as_ref()
+            .map(|flow| flow.clock().clone())
+    }
+
     /// Copies the books of a book source for the bars that open at or after `open`, with what
     /// they cover. Empty for other sources.
     pub fn books_from(&self, open: DateTime<Utc>) -> OrderFlowBars<BarBook> {

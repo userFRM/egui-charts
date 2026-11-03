@@ -420,6 +420,12 @@ impl Footprint {
         self.step
     }
 
+    /// The calendar the bars open by.
+    #[cfg(feature = "studies")]
+    pub(crate) fn clock(&self) -> &BarClock {
+        &self.clock
+    }
+
     /// The level a trade at `price` falls in: the nearest tick, grouped downwards. `None` when
     /// the price is not finite or the level overflows.
     pub fn level_of(&self, price: f64) -> Option<i64> {
