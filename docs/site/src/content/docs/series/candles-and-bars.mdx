@@ -1,0 +1,54 @@
+---
+title: Candles and bars
+---
+
+import Example from '../../../components/Example.astro';
+import source from '../../../../../../examples/docs/scenes/series.rs?raw';
+
+Use OHLC when the open, high, low and close within each interval matter. The
+[series overview](../series.mdx) explains how to add, update, hide and remove a
+series; the [input table](../chart-types.mdx#inputs-for-every-main-chart-type)
+covers every renderer.
+
+## Data
+
+[`Bar::new(time, open, high, low, close, volume)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.Bar.html#method.new)
+stores one interval at its UTC open time. High must be at least the open and
+close; low must be at most both. Volume must be finite and nonnegative; use zero
+if unavailable. For example, `(100, 105, 98, 103, 800)` has a body from 100 to
+103, a wick from 98 to 105 and rising colour under the default open/close rule.
+
+[`ChartType`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/enum.ChartType.html)
+offers `Candles`, `Bars`, `HollowCandles`, `VolumeCandles` and `HighLow`.
+Bars draw an open tick on the left and a close tick on the right. Hollow candles
+are hollow when close is above open. Volume candles scale body width against the
+largest visible bar volume; zero volume gives a body as thin as the wick.
+High-low draws the interval's range.
+
+## Style and running result
+
+This scene uses the fixed history from [your first chart](../first-chart.mdx).
+Its candles use close versus previous close for direction. Pan, zoom and inspect
+the bars; the input history stays the same.
+
+<Example scene="series-candles" title="Candles coloured by previous close"
+  task="Inspect candle bodies and wicks across the synthetic one-minute history."
+  code={source.slice(0, source.indexOf('///')) + source.match(/pub fn candles\b[^]*?\n\}/)[0]} />
+
+The compiled setup is in [series.rs](https://github.com/userFRM/egui-charts/blob/main/examples/docs/scenes/series.rs).
+[`ChartTypeStyles::candles`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.ChartTypeStyles.html#structfield.candles)
+holds [`CandlesStyle`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.CandlesStyle.html):
+body visibility, wick visibility and colouring by previous close.
+[`BarsStyle`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.BarsStyle.html)
+controls the open tick and thin bars. Apply these through
+[`Chart::set_chart_type_params`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_chart_type_params).
+
+Main-series colours, wick width and candle border width live in
+[`ChartConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.ChartConfig.html#structfield.bullish_color).
+[`BarColors`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.BarColors.html)
+can override a bar's body, wick and border. Added OHLC series use
+[`SeriesOptions::up_color`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.SeriesOptions.html#structfield.up_color)
+and `down_color`; they do not expose the main series' candle/bar style switches.
+All five types can be [added series](../chart-types.mdx#added-series-restrictions).
+
+For smoothed OHLC, continue to [Heikin-Ashi](/egui-charts/docs/chart-types/transforms/#heikin-ashi).
