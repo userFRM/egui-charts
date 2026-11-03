@@ -64,6 +64,8 @@ struct SavedOptions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     baseline_style: Option<egui_charts::model::BaselineStyle>,
     width: f32,
+    #[serde(default)]
+    marker_radius: Option<f32>,
     scale: SeriesScale,
     columns_base: Option<f64>,
     #[serde(with = "SavedStyle")]
@@ -73,6 +75,8 @@ struct SavedOptions {
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(remote = "egui_charts::model::SeriesStyle")]
 struct SavedStyle {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    display_format: Option<egui_charts::model::SeriesDisplayFormat>,
     last_value_visible: bool,
     price_line_visible: bool,
     #[serde(with = "SavedPriceLineSource")]

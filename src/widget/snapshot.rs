@@ -103,6 +103,9 @@ pub struct ChartSnapshot {
     /// Visibility and style of the main series' alert levels; absent in older layouts.
     #[serde(default)]
     pub main_series_alerts: crate::model::SeriesAlerts,
+    /// Raw numeric display settings of the main series; absent in older layouts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub main_series_display_format: Option<crate::model::SeriesDisplayFormat>,
     /// The display settings of the settings dialog, the price scale's mode and margins included.
     pub settings: ChartSettingsState,
     /// Complete appearance settings; absent in version 1 layouts.
@@ -246,6 +249,7 @@ impl Chart {
             chart_type_params: self.chart_type_params.clone(),
             main_series_visible: self.main_series_visible,
             main_series_alerts: self.main_series_style.alerts,
+            main_series_display_format: self.main_series_style.display_format,
             settings: {
                 let mut settings = ChartSettingsState::from_chart(self);
                 settings.adjust_for_dividends = self.dividend_adjusted();
@@ -342,6 +346,7 @@ impl Chart {
         self.set_chart_type_params(snapshot.chart_type_params.clone());
         self.set_main_series_visible(snapshot.main_series_visible);
         self.main_series_style.alerts = snapshot.main_series_alerts;
+        self.main_series_style.display_format = snapshot.main_series_display_format;
         snapshot
             .settings
             .apply_to_chart(self)
