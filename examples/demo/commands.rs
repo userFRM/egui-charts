@@ -1,4 +1,4 @@
-//! Sample capabilities and commands shared by the showcase menu and quick search.
+//! Demo menu controls and sample commands shared with quick search.
 
 use super::{DemoApp, TopToolbarAction};
 use eframe::egui;
@@ -122,25 +122,39 @@ pub(super) fn quick_search_commands() -> Vec<Command> {
 }
 
 impl DemoApp {
-    pub(super) fn show_showcase(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::top("demo_showcase")
-            .resizable(false)
-            .default_size(28.0)
-            .min_size(28.0)
-            .frame(
-                super::panel_frame(self.theme.ui.panel_bg)
-                    .inner_margin(egui::Margin::symmetric(8, 2)),
-            )
-            .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    self.show_readout_controls(ui);
-                    self.show_appearance_controls(ui);
-                    self.show_formatting_controls(ui);
-                    if let Some(id) = sample_menu(ui, "Showcase") {
-                        self.execute_search_command(ui.ctx(), id);
-                    }
+    pub(super) fn show_demo_controls(&mut self, ui: &mut egui::Ui) -> Option<&'static str> {
+        use egui_charts::icons::icons;
+        use egui_charts::theme::ThemeExt;
+        use egui_charts::ui_kit::list_item::ListItem;
+
+        let mut command = None;
+        for (label, icon) in [
+            ("Readout", &icons::EYE),
+            ("Appearance", &icons::THEME_TOGGLE),
+            ("Formatting", &icons::TEXT),
+            ("Showcase", &icons::LAYOUT_GRID),
+        ] {
+            let response = ListItem::new().show_with_icon(ui, label, icon);
+            let arrow = egui::Rect::from_center_size(
+                response.rect.right_center() - egui::vec2(12.0, 0.0),
+                egui::Vec2::splat(12.0),
+            );
+            icons::CHEVRON_RIGHT
+                .as_image_tinted(arrow.size(), ui.active_theme().ui.text)
+                .paint_at(ui, arrow);
+            egui::containers::menu::SubMenu::new()
+                .config(
+                    egui::containers::menu::MenuConfig::new()
+                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside),
+                )
+                .show(ui, &response, |ui| match label {
+                    "Readout" => self.show_readout_controls(ui),
+                    "Appearance" => self.show_appearance_controls(ui),
+                    "Formatting" => self.show_formatting_controls(ui),
+                    _ => command = sample_menu(ui),
                 });
-            });
+        }
+        command
     }
 
     fn enable_samples(&mut self) {
@@ -337,21 +351,19 @@ pub(super) enum SampleScene {
     Extensions(super::primitive_scene::PrimitiveScene),
 }
 
-/// Sample destinations shared by the application menu, showcase strip and open scenes.
-pub(super) fn sample_menu(ui: &mut egui::Ui, label: &str) -> Option<&'static str> {
+/// Sample destinations shared by the application menu and open scenes.
+fn sample_menu(ui: &mut egui::Ui) -> Option<&'static str> {
     let mut command = None;
-    ui.menu_button(label, |ui| {
-        ui.set_max_width(360.0);
-        ui.label("Explore the demo's synthetic data");
-        ui.separator();
-        for &(id, label, description) in SAMPLES {
-            if ui.button(label).clicked() {
-                command = Some(id);
-                ui.close();
-            }
-            ui.small(description);
+    ui.set_max_width(360.0);
+    ui.label("Explore the demo's synthetic data");
+    ui.separator();
+    for &(id, label, description) in SAMPLES {
+        if ui.button(label).clicked() {
+            command = Some(id);
+            ui.close();
         }
-    });
+        ui.small(description);
+    }
     command
 }
 
@@ -364,7 +376,7 @@ impl DemoApp {
         let mut command = None;
         egui::Panel::top("sample_chooser").show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
-                command = sample_menu(ui, "Samples");
+                command = ui.menu_button("Samples", sample_menu).inner.flatten();
                 if ui.button("Return to price chart").clicked() {
                     command = Some("price-workspace");
                 }
@@ -626,18 +638,27 @@ mod tests {
     }
 
     fn click(app: &mut DemoApp, ctx: &egui::Context, label: &str) {
+        ctx.enable_accesskit();
         let output = frame(app, ctx, vec![]);
         let pos = output
-            .shapes
-            .iter()
-            .find_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) if text.galley.text() == label => {
-                    Some(text.pos + text.galley.size() * 0.5)
-                }
-                _ => None,
-            })
-            .unwrap_or_else(|| panic!("missing control: {label}"));
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .and_then(|update| {
+                update.nodes.iter().find_map(|(_, node)| {
+                    if node.label() == Some(label) {
+                        let rect = node.bounds()?;
+                        Some(egui::pos2(
+                            (rect.x0 + rect.x1) as f32 * 0.5,
+                            (rect.y0 + rect.y1) as f32 * 0.5,
+                        ))
+                    } else {
+                        None
+                    }
+                })
+            });
         output.drop_without_applying_deltas();
+        let pos = pos.unwrap_or_else(|| panic!("missing control: {label}"));
         for pressed in [true, false] {
             frame(
                 app,
@@ -663,6 +684,7 @@ mod tests {
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
         app.live.set_paused(true);
         frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        click(&mut app, &ctx, "Menu");
         click(&mut app, &ctx, "Formatting");
         for label in [
             "Deutsch",
@@ -705,6 +727,7 @@ mod tests {
         let svg = app.chart.export_svg(&ctx, &Default::default()).unwrap();
         assert!(svg.contains(" u"));
         assert!(svg.contains(" units"));
+        click(&mut app, &ctx, "Menu");
         click(&mut app, &ctx, "Formatting");
         click(&mut app, &ctx, "Restore default formatting");
         assert!(app.chart.format_time(time).contains("Mar"));
@@ -765,6 +788,26 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
         app.live.set_paused(true);
+        frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        click(&mut app, &ctx, "Menu");
+        click(&mut app, &ctx, "Readout");
+        click(&mut app, &ctx, "Magnifier");
+        click(&mut app, &ctx, "Hold to inspect");
+        assert_eq!(
+            egui_charts::config::TooltipMode::Magnifier,
+            app.chart.chart_options().tooltip.mode
+        );
+        assert!(app.chart.chart_options().tooltip.on_long_press);
+        egui::Popup::close_all(&ctx);
+        click(&mut app, &ctx, "Menu");
+        click(&mut app, &ctx, "Appearance");
+        click(&mut app, &ctx, "High contrast");
+        assert_eq!(app.theme_choice.as_deref(), Some("high-contrast"));
+        egui::Popup::close_all(&ctx);
+        click(&mut app, &ctx, "Menu");
+        click(&mut app, &ctx, "Showcase");
+        click(&mut app, &ctx, "Time and sales");
+        assert!(app.api_samples);
         for id in ["tape", "signals", "markers", "tape"] {
             app.execute_search_command(&ctx, id);
             assert!(app.api_samples, "{id}");

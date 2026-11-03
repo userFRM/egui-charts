@@ -98,7 +98,7 @@ Builder API,Widget API and customization,Screenshots,done,library,src/widget/exp
 Builder API,Widget API and customization,Series and scale API facade,done,library,src/widget/series/options.rs;src/widget/series/scales/mod.rs;src/widget/time_scale.rs;src/widget/series/mod.rs,1863
 Builder API,Widget API and customization,Style overrides,partial,library,src/widget/mod.rs;src/widget/builder.rs;src/config/chart.rs;src/widget/frame/mod.rs,
 Builder API,Widget API and customization,Themes and custom colour schemes,done,library,src/widget/mod.rs;src/theme/context.rs;src/chart/rendering/markers.rs;src/config/chart.rs;src/widget/palette.rs;src/model/markers.rs;src/theme/presets.rs;src/theme/style.rs;src/widget/frame/mod.rs;examples/demo/formatting.rs;examples/demo/layouts.rs,1940
-Builder API,Widget API and customization,Toolbar customisation,done,library,src/ui/top_toolbar/host.rs;src/ui/top_toolbar/toolbar.rs;src/ui/top_toolbar/config.rs;src/ui/top_toolbar/buttons.rs,
+Builder API,Widget API and customization,Toolbar customisation,done,library,src/ui/top_toolbar/host.rs;src/ui/top_toolbar/toolbar.rs;src/ui/top_toolbar/config.rs;src/ui/top_toolbar/buttons.rs,1994
 Builder API,Widget API and customization,UI component visibility,done,library,src/ui/app_state.rs;src/ui/top_toolbar/toolbar.rs;src/config/interaction.rs;src/ui/context_menu/mod.rs;src/ui/context_menu/chart_menus/mod.rs,
 Builder API,Widget API and customization,Visible range get and set,done,library,src/widget/sync.rs;src/widget/time_scale.rs;src/scales/pricescale.rs;src/model/bar/time.rs;src/model/timescale.rs,
 Builder API,Widget API and customization,Widget constructor options,partial,library,src/widget/builder.rs;src/widget/stored_drawings.rs;src/widget/frame/mod.rs,
@@ -906,7 +906,7 @@ Terminal,Toolbars and panels,Chart type menu,done,library,src/ui/top_toolbar/too
 Terminal,Toolbars and panels,Compare / add symbol dialog,done,library,src/ui/dialogs/symbol_search/compare.rs;src/ui/dialogs/symbol_search/row.rs;src/ui/dialogs/symbol_search/service.rs;terminal/src/compare.rs;src/widget/series/options.rs;src/widget/studies_data.rs,
 Terminal,Toolbars and panels,Custom intervals,done,library,src/ui/top_toolbar/components/timeframe_selector/mod.rs;src/ui/top_toolbar/toolbar.rs;src/model/timeframe.rs;src/model/session/exchange.rs;terminal/src/time.rs,
 Terminal,Toolbars and panels,Data window,done,library,src/ui/widget_bar/panels/object_tree/data_window.rs;src/scales/horizontal.rs;src/scales/time_formatter.rs;terminal/src/panels.rs;src/widget/frame/mod.rs;terminal/src/drawings.rs,1939
-Terminal,Toolbars and panels,Demo showcase menu,done,library,examples/demo/commands.rs;examples/demo/controller.rs,1943
+Terminal,Toolbars and panels,Demo showcase menu,done,library,examples/demo/commands.rs;examples/demo/controller.rs;examples/demo/annotations.rs;examples/demo/formatting.rs;src/ui/top_toolbar/toolbar.rs,1943;1994
 Terminal,Toolbars and panels,Depth ladder for analysis without a trading account,missing,library,,
 Terminal,Toolbars and panels,Favourite drawing tools floating bar,partial,library,src/ui/drawing_toolbar/toolbar/mod.rs;src/ui/drawing_toolbar/toolbar/floating.rs;src/ui/drawing_toolbar/state.rs;src/ui/drawing_toolbar/utilities/favorites.rs;src/services/settings.rs;examples/demo/layouts.rs,
 Terminal,Toolbars and panels,Favourite intervals pinned to the toolbar,done,library,src/ui/top_toolbar/toolbar.rs;src/ui/top_toolbar/components/timeframe_selector/mod.rs;terminal/src/time.rs,
