@@ -6,10 +6,14 @@
 //! actions. Layouts live in host memory; templates use application storage. Controls that need
 //! a trading account are hidden.
 
+#[path = "annotations.rs"]
+mod annotations;
 #[path = "audio.rs"]
 mod audio;
 #[path = "commands.rs"]
 mod commands;
+#[path = "formatting.rs"]
+mod formatting;
 #[path = "images.rs"]
 mod images;
 #[path = "interval.rs"]
@@ -369,7 +373,8 @@ pub struct DemoApp {
     pub bars: Vec<Bar>,
     pub theme: Theme,
     /// No explicit choice follows the system appearance without saving its current value.
-    theme_choice: Option<bool>,
+    theme_choice: Option<String>,
+    formatting: formatting::Formatting,
 
     // Persistent toolbars.
     pub(crate) top_toolbar: TopToolbar,
@@ -437,7 +442,7 @@ pub struct DemoApp {
     paper_reset: bool,
     // Watchlists and time and sales, fed by synthetic quotes and the live feed's executions.
     watchlist: WatchlistPanel,
-    quotes: Arc<live::DemoQuotes>,
+    quotes: Arc<feeds::DemoQuotes>,
     // Text pasted for a watchlist import, while its window is open.
     watchlist_import: Option<String>,
     /// Whether the wide watchlist window is open.
@@ -484,6 +489,8 @@ pub struct DemoApp {
     /// Whether the sample panels, markers, change marks, bar marks and demo level are on, from the
     /// quick search.
     api_samples: bool,
+    annotation_editor: bool,
+    annotation_series: SeriesId,
 }
 
 fn sample_widgets() -> [WidgetBarWidget; 2] {
@@ -518,17 +525,9 @@ impl DemoApp {
         cc.egui_ctx.include_bytes(SAMPLE_LOGO, SAMPLE_LOGO_SVG);
 
         // Earlier releases saved active palettes without an explicit choice.
-        let theme_choice = cc
-            .storage
-            .and_then(|storage| eframe::get_value(storage, "theme_choice"));
-        let dark = theme_choice
-            .or_else(|| {
-                cc.egui_ctx
-                    .system_theme()
-                    .map(|theme| theme == egui::Theme::Dark)
-            })
-            .unwrap_or(false);
-        let theme = if dark { Theme::dark() } else { Theme::light() };
+        let theme_choice = formatting::load_theme_choice(cc.storage);
+        let theme =
+            formatting::selected_theme(theme_choice.as_deref(), cc.egui_ctx.system_theme(), false);
         let timeframe = Timeframe::Min1;
         let symbol = "SAMPLE";
         let mut options = egui_charts::config::ChartOptions::default();
@@ -544,7 +543,7 @@ impl DemoApp {
         options.time_scale.seconds_visible = true;
         let live = Arc::new(LiveFeed::new(symbol, now));
         live.set_paused(paused);
-        let quotes = Arc::new(live::DemoQuotes::new(live.clone()));
+        let quotes = Arc::new(feeds::DemoQuotes::new(live.clone()));
         let mut chart = egui_charts::ChartBuilder::new()
             .with_feed(live.clone())
             .with_symbol(symbol)
@@ -648,6 +647,10 @@ impl DemoApp {
             bars: Vec::new(),
             theme,
             theme_choice,
+            formatting: cc
+                .storage
+                .and_then(|storage| eframe::get_value(storage, "demo_formatting"))
+                .unwrap_or_default(),
             top_toolbar,
             drawing_toolbar: DrawingToolbar::default(),
             selection_toolbar: FloatingSelectionToolbar::new(),
@@ -793,6 +796,8 @@ impl DemoApp {
             toasts: Toasts::new(),
             demo_level: None,
             api_samples: false,
+            annotation_editor: false,
+            annotation_series: SeriesId::MAIN,
         };
         app.drawing_toolbar
             .set_control_visible(egui_charts::ui::Control::Trading, false);
@@ -802,6 +807,7 @@ impl DemoApp {
         app.study_templates
             .templates
             .set_storage(app.storage.clone());
+        app.apply_formatting();
         app.drawing_templates
             .templates
             .set_storage(app.storage.clone());
@@ -1368,9 +1374,12 @@ impl DemoApp {
 
 impl eframe::App for DemoApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        if let Some(dark) = self.theme_choice {
-            eframe::set_value(storage, "theme_choice", &dark);
-        }
+        eframe::set_value(
+            storage,
+            "theme_choice",
+            &self.theme_choice.as_deref().unwrap_or("system"),
+        );
+        eframe::set_value(storage, "demo_formatting", &self.formatting);
         let current = self.user_settings();
         self.settings.flush(&current);
         eframe::set_value(
@@ -1512,6 +1521,7 @@ impl eframe::App for DemoApp {
         self.refresh_layout_menu();
         self.show_top_toolbar(ui, panel_bg);
         self.layout.sync = self.top_toolbar.chart_grid_selector.sync.clone();
+        self.show_showcase(ui);
         self.show_drawing_toolbar(ui, panel_bg);
         self.show_widget_bar(ui, panel_bg);
         self.trading.show_ticket(ui, &self.chart);
@@ -1525,20 +1535,36 @@ impl eframe::App for DemoApp {
         }
         self.show_strategy_report(ui, panel_bg);
         self.show_bottom_toolbar(ui, panel_bg);
+        let groups = self.layout_groups();
         self.show_chart(ui, panel_bg);
+        if self.layout_groups() != groups {
+            self.grid_edits = self.grid_edits.wrapping_add(1);
+        }
         self.show_replay_control(&ctx);
         self.show_replay_start(&ctx);
+        self.show_annotation_editor(&ctx);
         self.show_dialogs(&ctx);
         self.show_watchlist_import(&ctx);
         self.show_wide_watchlist(&ctx);
 
         // Transient status notice.
         self.show_notice(ui);
-        if let Some(dark) = self.theme_choice
-            && let Some(storage) = frame.storage_mut()
-            && eframe::get_value::<bool>(storage, "theme_choice") != Some(dark)
+        if let Some(storage) = frame.storage_mut()
+            && eframe::get_value::<String>(storage, "theme_choice").as_deref()
+                != Some(self.theme_choice.as_deref().unwrap_or("system"))
         {
-            eframe::set_value(storage, "theme_choice", &dark);
+            eframe::set_value(
+                storage,
+                "theme_choice",
+                &self.theme_choice.as_deref().unwrap_or("system"),
+            );
+            storage.flush();
+        }
+        if let Some(storage) = frame.storage_mut()
+            && eframe::get_value::<formatting::Formatting>(storage, "demo_formatting").as_ref()
+                != Some(&self.formatting)
+        {
+            eframe::set_value(storage, "demo_formatting", &self.formatting);
             storage.flush();
         }
         self.storage.flush(frame.storage_mut());
@@ -2269,7 +2295,7 @@ impl DemoApp {
             .with_timestamp(self.chart.format_time(bar.time))
             .with_prev_close(pointer.previous_close.unwrap_or(bar.open));
         info.studies = pointer.studies.iter().map(|(_, row)| row.clone()).collect();
-        info
+        info.with_chart_formatters(&self.chart)
     }
 
     fn handle_object_tree(&mut self, action: ObjectTreeAction, sources: &[SourceItem]) {
@@ -2323,7 +2349,7 @@ impl DemoApp {
             .iter_mut()
             .flat_map(|universe| &mut universe.entries)
         {
-            if let Some(quote) = live::watchlist_quote(&entry.symbol, now) {
+            if let Some(quote) = self.live.market_quote(&entry.symbol, now) {
                 let change = (quote.last - quote.prev_close) / quote.prev_close * 100.0;
                 entry.values.insert("change".into(), change);
                 entry.values.insert("price".into(), quote.last);
@@ -2341,6 +2367,11 @@ impl DemoApp {
             }
         }
         self.watchlist.set_selected(&selected);
+        self.feed_paper_prices();
+        if self.quotes.set_live(self.live.clone()) {
+            self.screener.set_feed(self.live.clone());
+            self.hotlists.set_feed(self.live.clone());
+        }
         self.quotes.publish(now);
         self.watchlist.poll(ctx);
         self.symbol_details.set_instrument(
@@ -2350,10 +2381,7 @@ impl DemoApp {
                 .cloned()
                 .unwrap_or_else(|| egui_charts::model::Instrument::new(&chart_symbol)),
         );
-        let quoted = (self.watchlist.symbols())
-            .find(|symbol| symbol.eq_ignore_ascii_case(&chart_symbol))
-            .unwrap_or(&chart_symbol);
-        if let Some(quote) = self.watchlist.quote(quoted).cloned() {
+        if let Some(quote) = self.live.quote(now) {
             self.symbol_details.set_quote(quote.clone());
             self.trading.set_quote(&chart_symbol, quote);
         }
@@ -2840,20 +2868,19 @@ impl DemoApp {
                 if self.chart.take_event_click().is_some() {
                     self.notify("Synthetic session: generated example data");
                 }
-                if let Some(bar) = self
-                    .chart
-                    .bars(SeriesId::MAIN)
-                    .iter()
-                    .rfind(|bar| !bar.is_whitespace())
+                if self.replay.is_some()
+                    && let Some(bar) = self
+                        .chart
+                        .bars(SeriesId::MAIN)
+                        .iter()
+                        .rfind(|bar| !bar.is_whitespace())
                 {
                     self.paper.set_price(self.chart.symbol(), bar.close);
-                    if self.replay.is_some() {
-                        // Replay has no historical spread; its close prices both broker and ticket.
-                        self.trading.set_quote(
-                            self.chart.symbol(),
-                            egui_charts::model::Quote::new(bar.close, bar.close, bar.time),
-                        );
-                    }
+                    // Replay has no historical spread; its close prices both broker and ticket.
+                    self.trading.set_quote(
+                        self.chart.symbol(),
+                        egui_charts::model::Quote::new(bar.close, bar.close, bar.time),
+                    );
                 }
                 if let Some(side) = self.chart.take_quote_action() {
                     if !self.trading.has_broker() {
@@ -3272,6 +3299,7 @@ impl DemoApp {
     fn keyboard_dialog_open(&self) -> bool {
         self.keyboard_shortcuts.is_open
             || self.data_table.is_open
+            || self.annotation_editor
             || self.quick_search.is_open()
             || self.symbol_search.is_open()
             || self.compare_dialog.is_open
@@ -4217,7 +4245,7 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct AppStorage(std::collections::HashMap<String, String>);
+    pub(super) struct AppStorage(std::collections::HashMap<String, String>);
 
     impl eframe::Storage for AppStorage {
         fn get_string(&self, key: &str) -> Option<String> {
@@ -4347,6 +4375,54 @@ mod tests {
                     restored.chart.config().bearish_color,
                     restored.theme.chart.candle_down
                 );
+            }
+        }
+
+        let ctx = egui::Context::default();
+        let mut storage = AppStorage::default();
+        for old in [false, true] {
+            eframe::set_value(&mut storage, "theme_choice", &old);
+            let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+            cc.storage = Some(&storage);
+            let mut app = DemoApp::new(&cc);
+            assert_eq!(
+                app.theme.dark, old,
+                "explicit boolean preferences still load"
+            );
+            app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
+            for (command, expected) in [
+                ("appearance:high-contrast", Theme::high_contrast()),
+                ("appearance:light", Theme::light()),
+                ("appearance:dark", Theme::dark()),
+            ] {
+                app.execute_search_command(&ctx, command);
+                assert_eq!(app.theme, expected);
+                assert_eq!(app.chart.config().background_color, expected.chart.bg);
+                assert_eq!(
+                    app.extra_charts[0].chart.config().background_color,
+                    expected.chart.bg
+                );
+                app.save(&mut storage);
+                let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+                cc.storage = Some(&storage);
+                assert_eq!(DemoApp::new(&cc).theme, expected);
+            }
+            app.execute_search_command(&ctx, "appearance:system");
+            app.save(&mut storage);
+            for system in [egui::Theme::Dark, egui::Theme::Light] {
+                ctx.run_ui(
+                    egui::RawInput {
+                        system_theme: Some(system),
+                        ..Default::default()
+                    },
+                    |_| {},
+                )
+                .drop_without_applying_deltas();
+                let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+                cc.storage = Some(&storage);
+                let restored = DemoApp::new(&cc);
+                assert_eq!(restored.theme.dark, system == egui::Theme::Dark);
+                assert_eq!(restored.user_settings().theme, None);
             }
         }
     }
@@ -5233,6 +5309,13 @@ mod tests {
             .set_range(100.0, 200.0);
         app.add_spread("AAPL-MSFT");
         app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
+        app.layout.set_sync_group(0, Some("A".into()));
+        app.layout.set_sync_group(1, Some("B".into()));
+        app.layout.set_detached(1, true);
+        app.layout.sync.sync_symbol = true;
+        app.layout.sync.sync_timeframe = true;
+        app.layout.sync.sync_time_axis = false;
+        app.top_toolbar.chart_grid_selector.sync = app.layout.sync.clone();
         for _ in 0..3 {
             ctx.run_ui(Default::default(), |ui| {
                 app.chart.show(ui);
@@ -5261,6 +5344,13 @@ mod tests {
         app.poll_storage(&ctx);
         assert_eq!(app.settings_state.alerts, settings.alerts);
         let saved = |app: &DemoApp| {
+            assert_eq!(app.layout.sync_group(0), Some("A"));
+            assert_eq!(app.layout.sync_group(1), Some("B"));
+            assert!(app.layout.is_detached(1));
+            assert!(app.layout.sync.sync_symbol);
+            assert!(app.layout.sync.sync_timeframe);
+            assert!(!app.layout.sync.sync_time_axis);
+            assert_eq!(app.top_toolbar.chart_grid_selector.sync, app.layout.sync);
             assert_eq!(app.chart.chart_type(), ChartType::Line);
             assert_eq!(app.comparisons.len(), 2);
             assert_eq!(

@@ -45,7 +45,9 @@ pub use indicator::IndicatorRenderer;
 pub(crate) use indicator::paint_study_plot;
 pub use legend::{Legend, LegendStatus, QuoteSide, StudyAction};
 pub(crate) use legend::{SeriesAction, study_controls};
-pub(crate) use markers::{render_change_mark, render_event_badges, render_event_breaks};
+pub(crate) use markers::{
+    marker_bounds, render_change_mark, render_event_badges, render_event_breaks,
+};
 pub use markers::{render_event_band, render_markers};
 pub use overlays::{
     StudyValue, ValueFormatters, render_crosshair_full, render_crosshair_with_options,
