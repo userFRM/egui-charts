@@ -11,7 +11,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 `ChartType` offers 21 chart types, with the rendering limits listed below.
 
 - [x] Candles, OHLC bars, hollow candles and volume candles, with configurable rising and falling colours.
-- [x] Line, line with markers, step line, area, HLC area, baseline, columns and high-low charts; line and area charts accept a `PriceSource`. Baseline fills accept independent colours at the pane edge and the base on each price side, including point overrides, while older settings keep flat fills.
+- [x] Line, line with markers, step line, area, HLC area, baseline, columns and high-low charts; line and area charts accept a `PriceSource`. Baseline fills accept independent colours at the pane edge and the base on each price side, including point overrides, while older settings keep flat fills. Area and baseline plots support point markers with independent radii for main and added series.
 - [x] Main-series conflation has a configurable physical-pixel threshold or can be disabled. `Chart::prepare_conflation` prepares the shared render cache before a dense view; groups retain price extremes, gaps and per-bar colours and refresh after data, price-source or grouping changes.
 - [x] Heikin-Ashi, Renko, Kagi, line break, point and figure, and range-bar transformations and rendering.
 - [x] Renko box sizing and wicks, line-break lookback, and price-based chart parameters are configurable.
