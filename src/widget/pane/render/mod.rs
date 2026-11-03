@@ -536,23 +536,16 @@ impl Chart {
                     .y
                     + ui.active_theme().spacing.md;
                 legend_offset += legend_row_height;
-                panels.push((entry, indicator, panel, legend_row_height));
+                panels.push((entry, indicator, panel, legend_row_height, assignment));
             }
-            panels.sort_by_key(|(entry, _, _, _)| entry.is_some_and(|(id, _)| Some(id) == on_top));
-            for (paint_row, (entry, indicator, mut panel, legend_row_height)) in
+            panels.sort_by_key(|(entry, ..)| entry.is_some_and(|(id, _)| Some(id) == on_top));
+            for (paint_row, (entry, indicator, mut panel, legend_row_height, assignment)) in
                 panels.into_iter().enumerate()
             {
                 let id = entry.map(|(id, _)| id);
                 let study = entry.and_then(|(_, idx)| idx);
                 let key = (pane_id, id);
                 panel.overlay = paint_row > 0;
-                let assignment = id
-                    .and_then(|id| self.series_scale(id))
-                    .or_else(|| match indicator.scale() {
-                        crate::studies::StudyScale::Shared(key) => Some(key),
-                        _ => None,
-                    })
-                    .unwrap_or(crate::model::SeriesScale::Right);
                 panel.axis_tags = scale_tags.get(&assignment).cloned().unwrap_or_default();
                 let axis_owner = series
                     .iter()
