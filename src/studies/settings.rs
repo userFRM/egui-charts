@@ -315,6 +315,10 @@ impl StudySettingsSnapshot {
 
 /// A study with editable presentation, used automatically by the chart.
 /// Hosts composing their own chart can wrap built-in or custom studies the same way.
+///
+/// Calculated on another interval or symbol, a study's volume profiles and zones span the chart
+/// bars that share time with their bars, its markers sit on the last such chart bar once the
+/// values on the chart reach their bar, and its labels are hidden.
 #[derive(Clone)]
 pub struct ConfiguredStudy {
     study: Box<dyn Indicator>,
@@ -333,6 +337,12 @@ pub struct ConfiguredStudy {
     clock: crate::model::BarClock,
     aligned: Option<IndicatorValues>,
     aligned_bars: Vec<Option<usize>>,
+    /// For each chart bar, the bars of another interval or symbol that share its time, by which
+    /// the study's profiles, zones and markers are placed on chart bars.
+    spans: Vec<std::ops::Range<usize>>,
+    /// The study's markers and zones on chart bars while it runs on another interval or symbol.
+    aligned_markers: Vec<super::IndicatorMarker>,
+    aligned_zones: Vec<super::StudyZone>,
 }
 
 impl ConfiguredStudy {
@@ -363,13 +373,16 @@ impl ConfiguredStudy {
             clock: crate::model::BarClock::new(Timeframe::Min1),
             aligned: None,
             aligned_bars: Vec::new(),
+            spans: Vec::new(),
+            aligned_markers: Vec::new(),
+            aligned_zones: Vec::new(),
         }
     }
     /// Whether the study can be calculated on another interval: it reads one source, or the bars
-    /// alone, without data of its own to request or the chart's trades.
+    /// alone, without data of its own to request or order flow it cannot do without.
     fn runs_on_other_bars(&self) -> bool {
         self.study.source().is_some()
-            || (self.study.data_requests().is_empty() && self.study.order_flow_inputs().is_empty())
+            || (self.study.data_requests().is_empty() && !self.study.needs_order_flow())
     }
     fn update_price(&mut self, data: &[Bar], from: usize) {
         self.aligned = None;
@@ -584,6 +597,9 @@ impl Indicator for ConfiguredStudy {
         let Some(source) = sources.iter().find(|source| &source.request == request) else {
             self.aligned = Some(IndicatorValues::missing(data.len()));
             self.aligned_bars.clear();
+            self.spans.clear();
+            self.aligned_markers.clear();
+            self.aligned_zones.clear();
             return;
         };
         self.instrument_precision = source
@@ -623,9 +639,39 @@ impl Indicator for ConfiguredStudy {
             aligned.push(super::IndicatorValue::Multiple(values));
         }
         self.aligned = Some(aligned);
+        self.spans = spans_of(data, &self.clock, source);
+        // A marker appears once the values on the chart reach its bar (Wait for interval close).
+        let shown = self.aligned_bars.iter().flatten().max().copied();
+        self.aligned_markers = self
+            .study
+            .markers()
+            .iter()
+            .filter(|marker| shown >= Some(marker.bar))
+            .filter_map(|marker| {
+                let bars = chart_bars(&self.spans, &(marker.bar..marker.bar.saturating_add(1)))?;
+                Some(super::IndicatorMarker {
+                    bar: bars.end - 1,
+                    ..*marker
+                })
+            })
+            .collect();
+        self.aligned_zones = self
+            .study
+            .zones()
+            .iter()
+            .filter_map(|zone| {
+                Some(super::StudyZone {
+                    bars: chart_bars(&self.spans, &zone.bars)?,
+                    ..zone.clone()
+                })
+            })
+            .collect();
     }
     fn order_flow_inputs(&self) -> &[crate::data::OrderFlowInput] {
         self.study.order_flow_inputs()
+    }
+    fn needs_order_flow(&self) -> bool {
+        self.study.needs_order_flow()
     }
 
     fn calculate(&mut self, data: &[Bar]) {
@@ -998,13 +1044,32 @@ impl Indicator for ConfiguredStudy {
         self.study.marker_style()
     }
     fn markers(&self) -> &[super::IndicatorMarker] {
-        self.study.markers()
+        if self.aligned.is_some() {
+            &self.aligned_markers
+        } else {
+            self.study.markers()
+        }
     }
     fn volume_profiles(&self, visible: std::ops::Range<usize>) -> Vec<crate::data::StudyProfile> {
-        self.study.volume_profiles(visible)
+        if self.aligned.is_none() {
+            return self.study.volume_profiles(visible);
+        }
+        // Source bars of a study on another interval or symbol are not chart bars.
+        self.study
+            .volume_profiles(source_bars(&self.spans, &visible))
+            .into_iter()
+            .filter_map(|mut plot| {
+                plot.bars = chart_bars(&self.spans, &plot.bars)?;
+                Some(plot)
+            })
+            .collect()
     }
     fn zones(&self) -> &[super::StudyZone] {
-        self.study.zones()
+        if self.aligned.is_some() {
+            &self.aligned_zones
+        } else {
+            self.study.zones()
+        }
     }
     fn zones_cover_whole_bars(&self) -> bool {
         self.study.zones_cover_whole_bars()
@@ -1092,6 +1157,60 @@ impl Indicator for ConfiguredStudy {
     fn clone_box(&self) -> Box<dyn Indicator> {
         Box::new(self.clone())
     }
+}
+
+/// For each of the chart's bars `data`, opened by `clock`, the bars of `source` that share its
+/// time: those that open before it closes and close after it opens. A bar of an interval not
+/// measured in time lasts until the next one opens, and the last one without end.
+fn spans_of(
+    data: &[Bar],
+    clock: &crate::model::BarClock,
+    source: &super::StudyData<'_>,
+) -> Vec<std::ops::Range<usize>> {
+    let close = |by: &crate::model::BarClock, bars: &[Bar], at: usize| {
+        by.next_open(by.bar_open(bars[at].time))
+            .or_else(|| bars.get(at + 1).map(|bar| bar.time))
+            .unwrap_or(chrono::DateTime::<chrono::Utc>::MAX_UTC)
+    };
+    let (mut first, mut end) = (0, 0);
+    data.iter()
+        .enumerate()
+        .map(|(at, bar)| {
+            let (open, until) = (clock.bar_open(bar.time), close(clock, data, at));
+            while first < source.bars.len() && close(&source.clock, source.bars, first) <= open {
+                first += 1;
+            }
+            end = end.max(first);
+            while end < source.bars.len() && source.clock.bar_open(source.bars[end].time) < until {
+                end += 1;
+            }
+            first..end
+        })
+        .collect()
+}
+
+/// The chart bars that share time with the source bars `bars`, from the `spans` of each chart
+/// bar; `None` when no chart bar does.
+fn chart_bars(
+    spans: &[std::ops::Range<usize>],
+    bars: &std::ops::Range<usize>,
+) -> Option<std::ops::Range<usize>> {
+    let start = spans.partition_point(|span| span.end <= bars.start);
+    let end = spans.partition_point(|span| span.start < bars.end);
+    (bars.start < bars.end && start < end).then_some(start..end)
+}
+
+/// The source bars that share time with the chart bars `bars`: from the first source bar of the
+/// first chart bar to the last of the last, from the `spans` of each chart bar.
+fn source_bars(
+    spans: &[std::ops::Range<usize>],
+    bars: &std::ops::Range<usize>,
+) -> std::ops::Range<usize> {
+    let end = bars.end.min(spans.len());
+    if bars.start >= end {
+        return 0..0;
+    }
+    spans[bars.start].start..spans[end - 1].end
 }
 
 #[cfg(all(test, feature = "studies"))]
@@ -1263,6 +1382,160 @@ mod tests {
         }
         let breadth = ConfiguredStudy::new(Box::new(super::super::AdvanceDeclineRatio::default()));
         assert!(!ids(&breadth).contains(&"calculation_timeframe".to_owned()));
+    }
+
+    /// Volume profiles, zones and markers of a study calculated on a finer or a coarser interval
+    /// lie on the chart bars that share time with their bars, a marker once the values on the chart
+    /// reach its bar, and none are left when the other history is missing.
+    #[test]
+    fn profiles_zones_and_markers_of_another_interval_lie_on_their_chart_bars() {
+        use super::super::{
+            CrossDirection, IndicatorMarker, StudyData, StudyZone, VolProfileSession,
+            VolProfileVisible,
+        };
+        // Markers on the second and the last bar, and a zone from the one to the other.
+        #[derive(Clone, Default)]
+        struct Marks {
+            values: IndicatorValues,
+            markers: Vec<IndicatorMarker>,
+            zones: Vec<StudyZone>,
+        }
+        impl Indicator for Marks {
+            fn name(&self) -> &str {
+                "Marks"
+            }
+            fn calculate(&mut self, data: &[Bar]) {
+                self.values = IndicatorValues::missing(data.len());
+                let last = data.len().saturating_sub(1);
+                let marker = |bar| IndicatorMarker {
+                    bar,
+                    value: 100.0,
+                    direction: CrossDirection::Up,
+                };
+                let zone = StudyZone {
+                    bars: 1..last + 1,
+                    top: 101.0,
+                    bottom: 100.0,
+                    plot: 0,
+                };
+                (self.markers, self.zones) = if last > 1 {
+                    (vec![marker(1), marker(last)], vec![zone])
+                } else {
+                    (Vec::new(), Vec::new())
+                };
+            }
+            fn values(&self) -> &IndicatorValues {
+                &self.values
+            }
+            fn colors(&self) -> Vec<Color32> {
+                vec![Color32::WHITE]
+            }
+            fn set_colors(&mut self, _: Vec<Color32>) {}
+            fn set_visible(&mut self, _: bool) {}
+            fn markers(&self) -> &[IndicatorMarker] {
+                &self.markers
+            }
+            fn zones(&self) -> &[StudyZone] {
+                &self.zones
+            }
+            fn clone_box(&self) -> Box<dyn Indicator> {
+                Box::new(self.clone())
+            }
+        }
+        // Bar i opens i intervals after 23:50 UTC on 6 March, so midnight starts a second
+        // session, and trades a volume of 1 from 100 + i to 101 + i.
+        let start: chrono::DateTime<chrono::Utc> = "2026-03-06T23:50:00Z".parse().unwrap();
+        let bars = |count: i32, interval: Timeframe| -> Vec<Bar> {
+            (0..count)
+                .map(|i| {
+                    let low = 100.0 + f64::from(i);
+                    let time = start + interval.duration() * i;
+                    Bar::new(time, low, low + 1.0, low, low + 1.0, 1.0)
+                })
+                .collect()
+        };
+        let profiles = |study: &ConfiguredStudy, visible| -> Vec<_> {
+            study
+                .volume_profiles(visible)
+                .into_iter()
+                .map(|plot| {
+                    let rows = &plot.profile;
+                    (plot.bars, rows.low(), rows.high(), rows.volume().to_vec())
+                })
+                .collect()
+        };
+        for (name, [chart, other], sessions, (view, visible), markers, zones) in [
+            (
+                "finer",
+                [(4, Timeframe::Min5), (20, Timeframe::Min1)],
+                [
+                    (0..2, 100.0, 110.0, vec![10.0]),
+                    (2..4, 110.0, 120.0, vec![10.0]),
+                ],
+                (1..3, (1..3, 105.0, 115.0, vec![10.0])),
+                vec![0, 3],
+                0..4,
+            ),
+            (
+                "coarser",
+                [(20, Timeframe::Min1), (4, Timeframe::Min5)],
+                [
+                    (0..10, 100.0, 102.0, vec![2.0]),
+                    (10..20, 102.0, 104.0, vec![2.0]),
+                ],
+                (3..12, (0..15, 100.0, 103.0, vec![3.0])),
+                vec![9],
+                5..20,
+            ),
+        ] {
+            let (interval, source_interval) = (chart.1, other.1);
+            let (chart, source) = (bars(chart.0, interval), bars(other.0, source_interval));
+            let calculated = |inner: Box<dyn Indicator>| {
+                let mut study = ConfiguredStudy::new(inner);
+                study.set_timeframe(interval);
+                let other = InputValue::Timeframe(Some(source_interval));
+                study.set_input("calculation_timeframe", other).unwrap();
+                let data = StudyData {
+                    request: study.data_requests().remove(0),
+                    bars: &source,
+                    clock: crate::model::BarClock::new(source_interval),
+                    instrument: None,
+                    timeframe: source_interval,
+                };
+                study.update_data(&chart, 0, &[data]);
+                study
+            };
+            let mut studies = [
+                calculated(Box::new(VolProfileSession::new(1))),
+                calculated(Box::new(VolProfileVisible::new(1))),
+                calculated(Box::<Marks>::default()),
+            ];
+            assert_eq!(profiles(&studies[0], 0..chart.len()), sessions, "{name}");
+            assert_eq!(profiles(&studies[1], view), [visible], "{name}");
+            let marked: Vec<_> = studies[2]
+                .markers()
+                .iter()
+                .map(|marker| marker.bar)
+                .collect();
+            assert_eq!(marked, markers, "{name}");
+            let zone = StudyZone {
+                bars: zones,
+                top: 101.0,
+                bottom: 100.0,
+                plot: 0,
+            };
+            assert_eq!(studies[2].zones(), [zone], "{name}");
+            for study in &mut studies {
+                study.update_data(&chart, 0, &[]);
+            }
+            for study in &studies {
+                assert!(profiles(study, 0..chart.len()).is_empty(), "{name}");
+                assert!(
+                    study.markers().is_empty() && study.zones().is_empty(),
+                    "{name}"
+                );
+            }
+        }
     }
 
     #[test]

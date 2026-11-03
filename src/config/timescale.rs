@@ -1,8 +1,8 @@
 //! Time-scale (X-axis) options.
 //!
 //! [`TimeScaleOptions`] configures bar spacing, scroll constraints, edge
-//! fixing, time-label visibility and spacing, the axis size and border, and the
-//! [`TimezoneMode`] used to convert UTC timestamps before rendering axis labels.
+//! fixing, crosshair index eligibility, time-label visibility and spacing, the axis size and
+//! border, and the [`TimezoneMode`] used to convert UTC timestamps before rendering axis labels.
 
 use crate::scales::TimezoneMode;
 use egui::Color32;
@@ -62,6 +62,19 @@ pub struct TimeScaleOptions {
     /// is replacing an existing whitespace time point on the chart.
     /// Default: false
     pub allow_shift_visible_range_on_whitespace_replacement: bool,
+
+    /// Exclude slots with no values in any bar series or study plot from crosshair selection.
+    /// The nearest eligible slot is selected; equal distances prefer the later slot.
+    /// Stored data and time-axis marks are unchanged. Default: false.
+    #[serde(default)]
+    pub ignore_whitespace_indices: bool,
+
+    /// Exclude slots whose values belong only to hidden series or study plots from crosshair
+    /// selection. Slots with no values are controlled by `ignore_whitespace_indices`.
+    /// With both filters enabled, any visible value keeps a slot eligible. If no eligible
+    /// slot is in view, no crosshair is shown or reported. Default: false.
+    #[serde(default)]
+    pub ignore_hidden_indices: bool,
 
     /// Include the clock in intraday time-scale and crosshair labels.
     /// Default: true
@@ -123,6 +136,8 @@ impl Default for TimeScaleOptions {
             right_bar_stays_on_scroll: false,
             shift_visible_range_on_new_bar: true,
             allow_shift_visible_range_on_whitespace_replacement: false,
+            ignore_whitespace_indices: false,
+            ignore_hidden_indices: false,
             time_visible: true,
             seconds_visible: true,
             ticks_visible: false,

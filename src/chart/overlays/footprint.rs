@@ -73,6 +73,10 @@ pub struct FootprintConfig {
     pub min_text_height: f32,
     /// Dominance multiple, normally 3 (300%).
     pub imbalance_ratio: f64,
+    /// Inclusive minimum dominant-side volume for cell imbalances and stacked zones, in
+    /// instrument volume units after row grouping. Overrides the study config's minimum when
+    /// drawn by the chart. Zero preserves all ratio signals; negative or non-finite, none.
+    pub imbalance_min_volume: f64,
     /// Compare to the opposite side one price away instead of at the same price.
     pub diagonal: bool,
     /// Outline the highest-volume row when its cells are large enough for the stroke.
@@ -123,6 +127,7 @@ impl Default for FootprintConfig {
             auto_row_height: Some(16.0),
             min_text_height: 12.0,
             imbalance_ratio: 3.0,
+            imbalance_min_volume: 0.0,
             diagonal: true,
             show_poc: true,
             value_area: Some(0.7),
@@ -332,8 +337,12 @@ pub fn render_footprint(
                     None,
                 ];
                 if config.color_by == FootprintColor::Imbalance
-                    && shown.imbalance(row.level, config.imbalance_ratio, config.diagonal)
-                        == (true, true)
+                    && shown.imbalance(
+                        row.level,
+                        config.imbalance_ratio,
+                        config.diagonal,
+                        config.imbalance_min_volume,
+                    ) == (true, true)
                 {
                     let (bid, ask) = fill.split_left_right_at_x(fill.center().x);
                     fills[1] = Some((bid, config.bid_color.gamma_multiply(0.5)));
@@ -649,7 +658,12 @@ fn cell_color(
                 .lerp_to_gamma(config.ask_color, share as f32)
         }
         FootprintColor::Imbalance => {
-            match bar.imbalance(row.level, config.imbalance_ratio, config.diagonal) {
+            match bar.imbalance(
+                row.level,
+                config.imbalance_ratio,
+                config.diagonal,
+                config.imbalance_min_volume,
+            ) {
                 (true, false) => config.bid_color,
                 (false, true) => config.ask_color,
                 _ => config.neutral_color,
@@ -835,6 +849,10 @@ pub(crate) fn render_footprint_annotations(
     let Some(settings) = &config.studies else {
         return;
     };
+    let settings = crate::studies::FootprintStudyConfig {
+        imbalance_min_volume: config.imbalance_min_volume,
+        ..settings.clone()
+    };
     let complete = flow.complete_from();
     let source: Vec<_> = bars
         .iter()
@@ -847,7 +865,7 @@ pub(crate) fn render_footprint_annotations(
     let studies = painter.ctx().data_mut(|data| {
         let cache = data
             .get_temp_mut_or_default::<FootprintStudyCache>(chart_id.with("footprint_annotations"));
-        if cache.config.as_ref() != Some(settings)
+        if cache.config.as_ref() != Some(&settings)
             || cache.source.len() != source.len()
             || !cache
                 .source
@@ -864,8 +882,8 @@ pub(crate) fn render_footprint_annotations(
                 .map(|(bar, group)| (group_bar(bar, *group), *group))
                 .collect();
             let rows: Vec<_> = grouped.iter().map(|(bar, group)| (bar, *group)).collect();
-            cache.studies = crate::studies::footprint_studies_on_rows(&rows, settings).into();
-            cache.config = Some(settings.clone());
+            cache.studies = crate::studies::footprint_studies_on_rows(&rows, &settings).into();
+            cache.config = Some(settings);
         }
         cache.studies.clone()
     });
@@ -1343,25 +1361,32 @@ mod tests {
             ..Default::default()
         };
         let ctx = egui::Context::default();
-        let mut output = ctx.run_ui(
-            egui::RawInput {
-                screen_rect: Some(rect),
-                ..Default::default()
-            },
-            |ui| render_footprint(ui.painter(), &map, &bars, &dual, &config),
-        );
-        output.textures_delta.clear();
-        for color in [config.bid_color, config.ask_color] {
-            assert!(
-                output.shapes.iter().any(|shape| match &shape.shape {
-                    Shape::Mesh(mesh) => mesh
-                        .vertices
-                        .iter()
-                        .any(|v| v.color == color.gamma_multiply(0.5)),
-                    _ => false,
-                }),
-                "both diagonal sides must be visible"
+        for (minimum, bid, ask) in [(0.0, true, true), (10.0, false, true), (13.0, false, false)] {
+            let config = FootprintConfig {
+                imbalance_min_volume: minimum,
+                ..config.clone()
+            };
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(rect),
+                    ..Default::default()
+                },
+                |ui| render_footprint(ui.painter(), &map, &bars, &dual, &config),
             );
+            output.textures_delta.clear();
+            for (color, expected) in [(config.bid_color, bid), (config.ask_color, ask)] {
+                assert_eq!(
+                    output.shapes.iter().any(|shape| match &shape.shape {
+                        Shape::Mesh(mesh) => mesh
+                            .vertices
+                            .iter()
+                            .any(|v| v.color == color.gamma_multiply(0.5)),
+                        _ => false,
+                    }),
+                    expected,
+                    "each diagonal side must reach minimum {minimum}"
+                );
+            }
         }
         // Fractional executions must not be labelled as zero in any display mode.
         let mut small = Footprint::new(BarClock::new(Timeframe::Min1), 0.25, 1).unwrap();
@@ -1432,6 +1457,110 @@ mod tests {
                 }),
                 "missing {expected}"
             );
+        }
+    }
+
+    /// The same minimum gates grouped cells and zones, and changing it refreshes cached zones.
+    #[cfg(feature = "studies")]
+    #[test]
+    fn imbalance_minimum_applies_after_grouping_to_cells_and_zones() {
+        let time = "2026-01-05T10:00:00Z".parse().unwrap();
+        let bars = [Bar::new(time, 100.0, 107.0, 100.0, 107.0, 39.0)];
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(240.0, 160.0));
+        let map = ChartMapping::new(
+            rect,
+            120.0,
+            0,
+            0,
+            0.0,
+            PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(98.0, 110.0),
+                0.0,
+                160.0,
+                false,
+            ),
+        );
+        for ticks in [1, 2] {
+            let ctx = egui::Context::default();
+            let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, ticks).unwrap();
+            // Each raw row has less than 10 on either side; pairs sum to asks 12, 9, 15
+            // against bids of 1 one grouped row below.
+            for (price, bid, ask) in [
+                (100.0, 1.0, 0.0),
+                (102.0, 1.0, 12.0),
+                (104.0, 1.0, 9.0),
+                (106.0, 0.0, 15.0),
+            ] {
+                for offset in [0.0, 1.0] {
+                    for (size, side) in [(bid / 2.0, OrderSide::Sell), (ask / 2.0, OrderSide::Buy)]
+                    {
+                        flow.push(&Tick::new(time, price + offset, size, Some(side)))
+                            .unwrap();
+                    }
+                }
+            }
+            for (minimum, middle, zone) in [
+                (0.0, true, true),
+                (9.0, true, true),
+                (10.0, false, false),
+                (0.0, true, true),
+            ] {
+                let config = FootprintConfig {
+                    color_by: FootprintColor::Imbalance,
+                    profile: false,
+                    value_area: None,
+                    show_poc: false,
+                    auto_row_height: (ticks == 1).then_some(20.0),
+                    imbalance_min_volume: minimum,
+                    studies: Some(crate::studies::FootprintStudyConfig {
+                        naked_poc: false,
+                        delta_poc: false,
+                        unfinished_auctions: false,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                };
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(rect),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        render_footprint(ui.painter(), &map, &bars, &flow, &config);
+                        render_footprint_annotations(
+                            ui.painter(),
+                            &map,
+                            &bars,
+                            &flow,
+                            &config,
+                            egui::Id::unique("minimum"),
+                        );
+                    },
+                );
+                output.textures_delta.clear();
+                for (price, active) in [(102.0, true), (104.0, middle), (106.0, true)] {
+                    let top = map.price_to_y(price + 1.5);
+                    let color = if active {
+                        config.ask_color
+                    } else {
+                        config.neutral_color
+                    }
+                    .gamma_multiply(0.5);
+                    let filled = output.shapes.iter().any(|s| match &s.shape {
+                        Shape::Mesh(mesh) => mesh
+                            .vertices
+                            .iter()
+                            .any(|v| (v.pos.y - top).abs() < 0.01 && v.color == color),
+                        _ => false,
+                    });
+                    assert!(filled, "ticks {ticks}, minimum {minimum}, price {price}");
+                }
+                let has_zone = output.shapes.iter().any(
+                    |s| matches!(&s.shape, Shape::Rect(r) if r.stroke.color == config.ask_color),
+                );
+                assert_eq!(has_zone, zone, "ticks {ticks}, minimum {minimum}");
+            }
         }
     }
 

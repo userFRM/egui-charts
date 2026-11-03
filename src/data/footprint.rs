@@ -207,16 +207,25 @@ impl FootprintBar {
 
     /// (bid, ask) dominance at `level`, comparing horizontally or to the adjacent price.
     /// Missing adjacent prices and the outer diagonals do not signal an imbalance.
-    /// A positive side against a zero opposite side is imbalanced. Ratios below 1 or
-    /// non-finite ratios produce no signals.
-    pub fn imbalance(&self, level: i64, ratio: f64, diagonal: bool) -> (bool, bool) {
+    /// A positive side against a zero opposite side is imbalanced. The dominant side needs at
+    /// least `min_volume`, inclusive and with the ratio's rounding tolerance; zero keeps every
+    /// ratio signal. Ratios below 1, negative minima or non-finite values produce no signals.
+    pub fn imbalance(
+        &self,
+        level: i64,
+        ratio: f64,
+        diagonal: bool,
+        min_volume: f64,
+    ) -> (bool, bool) {
         let Some(row) = self.levels.get(&level) else {
             return (false, false);
         };
-        if !ratio.is_finite() || ratio < 1.0 {
+        if !ratio.is_finite() || ratio < 1.0 || !min_volume.is_finite() || min_volume < 0.0 {
             return (false, false);
         }
-        let dominant = |a: f64, b: f64| a > b && meets_threshold(a / ratio, b);
+        let dominant = |a: f64, b: f64| {
+            a > b && meets_threshold(a, min_volume) && meets_threshold(a / ratio, b)
+        };
         if !diagonal {
             return (dominant(row.bid, row.ask), dominant(row.ask, row.bid));
         }
@@ -420,6 +429,12 @@ impl Footprint {
         self.step
     }
 
+    /// The calendar the bars open by.
+    #[cfg(feature = "studies")]
+    pub(crate) fn clock(&self) -> &BarClock {
+        &self.clock
+    }
+
     /// The level a trade at `price` falls in: the nearest tick, grouped downwards. `None` when
     /// the price is not finite or the level overflows.
     pub fn level_of(&self, price: f64) -> Option<i64> {
@@ -616,8 +631,8 @@ mod tests {
         assert_eq!(bar.poc(), Some(401));
         // POC 8, choose upper neighbour 7 over lower 5, then lower 5: 20 >= 16.8.
         assert_eq!(bar.value_area(0.7), Some((400, 402)));
-        assert_eq!(bar.imbalance(401, 1.5, true), (false, true));
-        assert_eq!(bar.imbalance(403, 1.5, true), (false, true));
+        assert_eq!(bar.imbalance(401, 1.5, true, 0.0), (false, true));
+        assert_eq!(bar.imbalance(403, 1.5, true, 0.0), (false, true));
         assert_eq!(bar.delta_percent(), Some(7.0 / 24.0 * 100.0));
         let snapshot = flow.bars().clone();
         for trade in [

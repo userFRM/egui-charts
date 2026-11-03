@@ -60,6 +60,9 @@ impl Default for LinePlotStyle {
 pub struct AreaStyle {
     /// Line drawn along the edge of the fill.
     pub line: LinePlotStyle,
+    /// Point marker radius in logical points. Non-positive or non-finite radii hide markers,
+    /// the default. Each marker takes its point's line colour.
+    pub marker_radius: f32,
     /// Fill at the top of the gradient, including opacity.
     pub top_fill: Color32,
     /// Fill at the bottom of the gradient, including opacity.
@@ -76,6 +79,7 @@ impl Default for AreaStyle {
         let color = DESIGN_TOKENS.semantic.brand.accent;
         Self {
             line: LinePlotStyle::default(),
+            marker_radius: 0.0,
             top_fill: Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 115),
             bottom_fill: Color32::TRANSPARENT,
             relative_gradient: true,
@@ -84,7 +88,7 @@ impl Default for AreaStyle {
     }
 }
 
-/// The Baseline chart's independent colours on either side of its base.
+/// The Baseline chart's independent colours and vertical fills on either side of its base.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BaselineStyle {
@@ -92,10 +96,18 @@ pub struct BaselineStyle {
     pub above: LinePlotStyle,
     /// Line below the base in price units.
     pub below: LinePlotStyle,
-    /// Fill above the base, including opacity.
+    /// Point marker radius in logical points. Non-positive or non-finite radii hide markers,
+    /// the default. Each marker takes its point's line colour on its side of the base.
+    pub marker_radius: f32,
+    /// Fill at the pane's high-price edge, including opacity, also on an inverted scale.
     pub above_fill: Color32,
-    /// Fill below the base, including opacity.
+    /// Fill at the pane's low-price edge, including opacity.
     pub below_fill: Color32,
+    /// Fill at the base on its higher-price side. `None` uses `above_fill` for a flat fill.
+    /// The gradient interpolates in screen space between the pane edge and the base.
+    pub above_fill_at_base: Option<Color32>,
+    /// Fill at the base on its lower-price side. `None` uses `below_fill` for a flat fill.
+    pub below_fill_at_base: Option<Color32>,
 }
 
 impl Default for BaselineStyle {
@@ -111,8 +123,11 @@ impl Default for BaselineStyle {
                 color: down,
                 ..Default::default()
             },
+            marker_radius: 0.0,
             above_fill: Color32::from_rgba_unmultiplied(up.r(), up.g(), up.b(), 30),
             below_fill: Color32::from_rgba_unmultiplied(down.r(), down.g(), down.b(), 30),
+            above_fill_at_base: None,
+            below_fill_at_base: None,
         }
     }
 }
@@ -250,6 +265,45 @@ impl Default for ChartTypeStyles {
             kagi: KagiStyle::default(),
             crosshair_marker_radius: 0.0,
             last_price_animation: LastPriceAnimation::Disabled,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::BarColors;
+
+    #[test]
+    fn baseline_saved_colours_keep_legacy_flat_fills_and_gradient_endpoints() {
+        for gradient in [false, true] {
+            let mut saved = serde_json::json!({
+                "above_fill": [0, 200, 0, 200], "below_fill": [200, 0, 0, 200]
+            });
+            let mut point = serde_json::json!({
+                "top_fill": [0, 0, 160, 160], "bottom_fill": [160, 160, 0, 160]
+            });
+            if gradient {
+                saved["above_fill_at_base"] = serde_json::json!([0, 40, 0, 40]);
+                saved["below_fill_at_base"] = serde_json::json!([40, 0, 0, 40]);
+                point["top_fill_at_base"] = serde_json::json!([0, 0, 0, 0]);
+                point["bottom_fill_at_base"] = serde_json::json!([0, 0, 0, 0]);
+            }
+            let style: BaselineStyle = serde_json::from_value(saved.clone()).unwrap();
+            let own: BarColors = serde_json::from_value(point.clone()).unwrap();
+            let restored = serde_json::to_value(&style).unwrap();
+            let restored_point = serde_json::to_value(&own).unwrap();
+            for (original, restored) in [(&saved, &restored), (&point, &restored_point)] {
+                for (key, color) in original.as_object().unwrap() {
+                    assert_eq!(&restored[key], color, "{key}");
+                }
+            }
+            for key in ["above_fill_at_base", "below_fill_at_base"] {
+                assert_eq!(restored[key], saved[key]);
+            }
+            for key in ["top_fill_at_base", "bottom_fill_at_base"] {
+                assert_eq!(restored_point[key], point[key]);
+            }
         }
     }
 }

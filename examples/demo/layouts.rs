@@ -45,24 +45,37 @@ impl LayoutTab {
 }
 
 impl DemoApp {
+    pub(super) fn apply_formatting(&mut self) {
+        let saved = self
+            .layout_tabs
+            .iter_mut()
+            .filter_map(|tab| tab.workspace.as_mut());
+        for chart in std::iter::once(&mut self.chart)
+            .chain(self.extra_charts.iter_mut().map(|c| &mut c.chart))
+            .chain(saved.flat_map(|workspace| {
+                std::iter::once(&mut workspace.chart)
+                    .chain(workspace.extra.iter_mut().map(|c| &mut c.chart))
+            }))
+        {
+            self.formatting.apply(chart);
+        }
+    }
+
     pub(super) fn toggle_theme(&mut self, ctx: &egui::Context) {
-        self.theme_choice = Some(!self.theme.dark);
+        self.theme_choice = Some(if self.theme.dark { "light" } else { "dark" }.into());
         self.update_theme(ctx);
     }
 
     pub(super) fn update_theme(&mut self, ctx: &egui::Context) {
-        let dark = self
-            .theme_choice
-            .or_else(|| ctx.system_theme().map(|theme| theme == egui::Theme::Dark))
-            .unwrap_or(self.theme.dark);
-        if self.theme.dark == dark {
+        let theme = super::formatting::selected_theme(
+            self.theme_choice.as_deref(),
+            ctx.system_theme(),
+            self.theme.dark,
+        );
+        if self.theme == theme {
             return;
         }
-        self.theme = if dark {
-            egui_charts::theme::Theme::dark()
-        } else {
-            egui_charts::theme::Theme::light()
-        };
+        self.theme = theme;
         let saved = self
             .layout_tabs
             .iter_mut()
@@ -121,11 +134,14 @@ impl DemoApp {
             .with_drawing_registry(source.drawings().registry.clone())
             .with_visible_candles(0)
             .build();
+        self.formatting.apply(&mut chart);
         chart.set_main_series_visible(source.is_main_series_visible());
         chart.set_price_targets_visible(source.price_targets_visible());
-        if self.api_samples {
-            chart.set_signal_source(Some(live.clone()));
-        }
+        chart.set_signal_source(Some(if self.api_samples {
+            live.clone() as Arc<dyn egui_charts::services::Signals>
+        } else {
+            live.detectors()
+        }));
         chart.set_data(SeriesId::MAIN, source.state().data().bars.clone());
         chart.set_event_visibility(source.event_visibility().clone());
         chart.set_mark_source(Some(Arc::new(super::marks::DemoMarks {
@@ -457,9 +473,14 @@ impl DemoApp {
                 .and_then(|layout| Ok((layout, self.capture_comparisons()?)))
             {
                 Ok((layout, comparisons)) => {
+                    let groups = self.layout_groups();
                     self.new_layout(Some(name));
                     let name = self.layout_tabs[self.layout_tab].name.clone();
-                    if let Err(error) = self.storage.save_comparisons(&name, &comparisons) {
+                    if let Err(error) = self
+                        .storage
+                        .save_layout_groups(&name, &groups)
+                        .and_then(|()| self.storage.save_comparisons(&name, &comparisons))
+                    {
                         self.toasts.error(error);
                         return;
                     }
@@ -546,6 +567,8 @@ impl DemoApp {
 
     fn save_comparisons(&self, name: &str) -> Result<(), String> {
         self.storage
+            .save_layout_groups(name, &self.layout_groups())?;
+        self.storage
             .save_comparisons(name, &self.capture_comparisons()?)
     }
 
@@ -577,6 +600,13 @@ impl DemoApp {
                 .error("Could not open layout: invalid chart count");
             return;
         }
+        let groups = match self.storage.layout_groups(&name) {
+            Ok(groups) => groups,
+            Err(error) => {
+                self.toasts.error(error);
+                return;
+            }
+        };
         let mut comparisons = match self.storage.comparisons(&name) {
             Ok(saved) if saved.is_empty() => (0..layout.charts.len()).map(|_| Vec::new()).collect(),
             Ok(saved) if saved.len() == layout.charts.len() => saved,
@@ -603,6 +633,7 @@ impl DemoApp {
                 return;
             }
         }
+        self.restore_layout_groups(groups);
         self.layout_tabs[self.layout_tab].name = name;
         if self.layout_slot >= layout.charts.len() {
             self.activate_chart_slot(0);
@@ -680,6 +711,7 @@ impl DemoApp {
             }
         }
         self.refresh_active_chart();
+        self.apply_formatting();
         self.settings_state = egui_charts::widget::settings::ChartSettingsState {
             alerts: self.settings_state.alerts.clone(),
             trading: self.trading.display.clone(),
@@ -692,9 +724,7 @@ impl DemoApp {
     pub(super) fn user_settings(&self) -> UserSettings {
         let menu = &self.top_toolbar.layout_menu;
         let mut settings = UserSettings::default();
-        settings.theme = self
-            .theme_choice
-            .map(|dark| if dark { "dark" } else { "light" }.into());
+        settings.theme = self.theme_choice.clone();
         settings.symbol = Some(self.state.symbol.clone());
         settings.interval = Some(self.state.timeframe);
         let toolbar = &self.drawing_toolbar.state;
@@ -793,15 +823,27 @@ mod tests {
             let ctx = egui::Context::default();
             let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
             app.live.set_paused(true);
-            assert!(
-                app.widget_bar.widgets.is_empty(),
-                "sample panels start hidden"
+            assert_eq!(
+                app.widget_bar
+                    .widgets
+                    .iter()
+                    .map(|widget| widget.id)
+                    .collect::<Vec<_>>(),
+                [5],
+                "order flow is available while sample panels start hidden"
             );
             app.execute_search_command(&ctx, "samples");
-            assert_eq!(app.widget_bar.widgets.len(), 2);
+            assert_eq!(app.widget_bar.widgets.len(), 3);
             app.widget_bar.active_widget = Some(2);
             app.execute_search_command(&ctx, "samples");
-            assert!(app.widget_bar.widgets.is_empty());
+            assert_eq!(
+                app.widget_bar
+                    .widgets
+                    .iter()
+                    .map(|widget| widget.id)
+                    .collect::<Vec<_>>(),
+                [5]
+            );
             assert_eq!(app.widget_bar.active_widget, None);
             app.execute_search_command(&ctx, "samples");
 

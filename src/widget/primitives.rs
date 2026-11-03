@@ -40,12 +40,13 @@ fn seen(revision: u64, bars: &[Bar]) -> Seen {
 }
 
 impl Attached {
-    pub(super) fn draw(&self, painter: &Painter, view: &PrimitiveView<'_>, pass: PrimitivePass) {
-        let factor = if view.mapping.numeric_positions.is_some() {
-            1
-        } else {
-            super::merge::factor(view.mapping.bar_spacing, painter.ctx().pixels_per_point())
-        };
+    pub(super) fn draw(
+        &self,
+        painter: &Painter,
+        view: &PrimitiveView<'_>,
+        pass: PrimitivePass,
+        factor: usize,
+    ) {
         self.get().draw_merged(painter, view, pass, factor);
     }
 
@@ -304,7 +305,7 @@ impl Chart {
             .main_primitives(coords)
             .filter(|(item, _)| pass != PrimitivePass::Series || !item.replaces)
         {
-            item.draw(&painter, &view, pass);
+            item.draw(&painter, &view, pass, self.merge_groups.factor());
         }
     }
 }

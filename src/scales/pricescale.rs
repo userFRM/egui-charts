@@ -664,6 +664,12 @@ impl PriceMap {
         (self.top, self.bottom)
     }
 
+    /// Whether scale values increase down the pane.
+    #[cfg(feature = "widget")]
+    pub(crate) fn is_inverted(&self) -> bool {
+        self.inverted
+    }
+
     /// Converts a price to a y coordinate.
     #[inline]
     pub fn price_to_y(&self, price: f64) -> f32 {
