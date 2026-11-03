@@ -64,7 +64,9 @@ use std::ops::Range;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PrimitiveId(pub(crate) u64);
 
-/// When a primitive draws in its pane.
+/// When a primitive draws in its pane. A pass that paints backgrounds draws them all in
+/// attachment order, then its foregrounds in attachment order. Without background painting,
+/// existing series stacking is retained.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PrimitivePass {
     /// Behind the series and studies of the pane, above its background, grid and sessions.
@@ -153,7 +155,14 @@ pub struct TimeAxisLabel {
 /// the main series, an added bar series or an overlay study draws in the main pane; one attached
 /// to a study in a pane of its own draws in that pane. See the [module](self) documentation.
 pub trait Primitive: Send {
-    /// Draws in `pass` with `painter`, clipped to the plot area of the pane.
+    /// Draws the background of `pass`, clipped to the plot area of the pane. All participating
+    /// backgrounds draw in attachment order before any foreground in that pass.
+    /// The chart may defer these shapes; painter indices must stay within this hook.
+    fn draw_background(&self, painter: &Painter, view: &PrimitiveView<'_>, pass: PrimitivePass) {
+        let _ = (painter, view, pass);
+    }
+
+    /// Draws the foreground of `pass` with `painter`, clipped to the plot area of the pane.
     fn draw(&self, painter: &Painter, view: &PrimitiveView<'_>, pass: PrimitivePass) {
         let _ = (painter, view, pass);
     }
@@ -172,6 +181,19 @@ pub trait Primitive: Send {
     ) {
         let _ = factor;
         self.draw(painter, view, pass);
+    }
+
+    /// Draws the background with the same grouping factor as [`draw_merged`](Self::draw_merged).
+    /// The default calls [`draw_background`](Self::draw_background).
+    fn draw_background_merged(
+        &self,
+        painter: &Painter,
+        view: &PrimitiveView<'_>,
+        pass: PrimitivePass,
+        factor: usize,
+    ) {
+        let _ = factor;
+        self.draw_background(painter, view, pass);
     }
 
     /// Labels for the price axis of the pane, placed at their prices next to the chart's own
