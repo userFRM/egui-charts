@@ -6,16 +6,24 @@
 //! actions. Layouts live in host memory; templates use application storage. Controls that need
 //! a trading account are hidden.
 
+#[path = "annotations.rs"]
+mod annotations;
 #[path = "audio.rs"]
 mod audio;
 #[path = "commands.rs"]
 mod commands;
+#[path = "formatting.rs"]
+mod formatting;
 #[path = "images.rs"]
 mod images;
 #[path = "interval.rs"]
 mod interval;
 #[path = "layouts.rs"]
 mod layouts;
+#[path = "numeric_scenes.rs"]
+mod numeric_scenes;
+#[path = "primitive_scene.rs"]
+mod primitive_scene;
 use egui_charts::widget::ChartLayout;
 use layouts::{DemoChart, LayoutTab};
 
@@ -31,6 +39,8 @@ mod storage;
 mod strategy;
 #[path = "strategy_live.rs"]
 mod strategy_live;
+#[path = "study_editor.rs"]
+mod study_editor;
 #[path = "templates.rs"]
 mod templates;
 use egui_charts::services::StoreKind;
@@ -369,7 +379,8 @@ pub struct DemoApp {
     pub bars: Vec<Bar>,
     pub theme: Theme,
     /// No explicit choice follows the system appearance without saving its current value.
-    theme_choice: Option<bool>,
+    theme_choice: Option<String>,
+    formatting: formatting::Formatting,
 
     // Persistent toolbars.
     pub(crate) top_toolbar: TopToolbar,
@@ -395,6 +406,8 @@ pub struct DemoApp {
     study_templates: TemplateDialog<StudyTemplateSet>,
     drawing_templates: TemplateDialog<DrawingTemplate>,
     quick_search: egui_charts::ui_kit::command_palette::CommandPaletteHandler,
+    sample_scene: Option<commands::SampleScene>,
+    sample_study: study_editor::SampleStudyEditor,
     alert_dialog: AlertDialog,
     drawing_props: DrawingPropertiesDialog,
     keyboard_shortcuts: KeyboardShortcutsDialog,
@@ -407,6 +420,7 @@ pub struct DemoApp {
     // A study copied in this session, kept across symbols and intervals.
     copied_study: Option<String>,
     export_dialog: ExportDialog,
+    export_arrangement: bool,
     date_picker: DatePicker,
 
     // A finished host-run sample, independent of subsequent chart navigation.
@@ -437,7 +451,7 @@ pub struct DemoApp {
     paper_reset: bool,
     // Watchlists and time and sales, fed by synthetic quotes and the live feed's executions.
     watchlist: WatchlistPanel,
-    quotes: Arc<live::DemoQuotes>,
+    quotes: Arc<feeds::DemoQuotes>,
     // Text pasted for a watchlist import, while its window is open.
     watchlist_import: Option<String>,
     /// Whether the wide watchlist window is open.
@@ -484,6 +498,8 @@ pub struct DemoApp {
     /// Whether the sample panels, markers, change marks, bar marks and demo level are on, from the
     /// quick search.
     api_samples: bool,
+    annotation_editor: bool,
+    annotation_series: SeriesId,
 }
 
 fn sample_widgets() -> [WidgetBarWidget; 2] {
@@ -518,17 +534,9 @@ impl DemoApp {
         cc.egui_ctx.include_bytes(SAMPLE_LOGO, SAMPLE_LOGO_SVG);
 
         // Earlier releases saved active palettes without an explicit choice.
-        let theme_choice = cc
-            .storage
-            .and_then(|storage| eframe::get_value(storage, "theme_choice"));
-        let dark = theme_choice
-            .or_else(|| {
-                cc.egui_ctx
-                    .system_theme()
-                    .map(|theme| theme == egui::Theme::Dark)
-            })
-            .unwrap_or(false);
-        let theme = if dark { Theme::dark() } else { Theme::light() };
+        let theme_choice = formatting::load_theme_choice(cc.storage);
+        let theme =
+            formatting::selected_theme(theme_choice.as_deref(), cc.egui_ctx.system_theme(), false);
         let timeframe = Timeframe::Min1;
         let symbol = "SAMPLE";
         let mut options = egui_charts::config::ChartOptions::default();
@@ -544,7 +552,7 @@ impl DemoApp {
         options.time_scale.seconds_visible = true;
         let live = Arc::new(LiveFeed::new(symbol, now));
         live.set_paused(paused);
-        let quotes = Arc::new(live::DemoQuotes::new(live.clone()));
+        let quotes = Arc::new(feeds::DemoQuotes::new(live.clone()));
         let mut chart = egui_charts::ChartBuilder::new()
             .with_feed(live.clone())
             .with_symbol(symbol)
@@ -648,6 +656,10 @@ impl DemoApp {
             bars: Vec::new(),
             theme,
             theme_choice,
+            formatting: cc
+                .storage
+                .and_then(|storage| eframe::get_value(storage, "demo_formatting"))
+                .unwrap_or_default(),
             top_toolbar,
             drawing_toolbar: DrawingToolbar::default(),
             selection_toolbar: FloatingSelectionToolbar::new(),
@@ -673,6 +685,8 @@ impl DemoApp {
             quick_search: egui_charts::ui_kit::command_palette::CommandPaletteHandler::new(
                 commands::quick_search_commands(),
             ),
+            sample_scene: None,
+            sample_study: Default::default(),
             alert_dialog: AlertDialog::new(),
             drawing_props: DrawingPropertiesDialog::new(),
             keyboard_shortcuts: KeyboardShortcutsDialog::new(),
@@ -683,6 +697,7 @@ impl DemoApp {
             copied_drawing: None,
             copied_study: None,
             export_dialog: ExportDialog::new().with_formats(EXPORT_FORMATS),
+            export_arrangement: false,
             date_picker: DatePicker::new(),
             strategy_report: Default::default(),
             live_strategy: None,
@@ -793,6 +808,8 @@ impl DemoApp {
             toasts: Toasts::new(),
             demo_level: None,
             api_samples: false,
+            annotation_editor: false,
+            annotation_series: SeriesId::MAIN,
         };
         app.drawing_toolbar
             .set_control_visible(egui_charts::ui::Control::Trading, false);
@@ -802,6 +819,7 @@ impl DemoApp {
         app.study_templates
             .templates
             .set_storage(app.storage.clone());
+        app.apply_formatting();
         app.drawing_templates
             .templates
             .set_storage(app.storage.clone());
@@ -1214,7 +1232,15 @@ impl DemoApp {
         }
 
         // Export dialog (screenshot / CSV).
-        match self.export_dialog.show(ctx) {
+        match self.export_dialog.show_with(ctx, |ui, format| {
+            if !format.is_data_format() {
+                ui.horizontal(|ui| {
+                    ui.label("Image scope");
+                    ui.radio_value(&mut self.export_arrangement, false, "Active chart");
+                    ui.radio_value(&mut self.export_arrangement, true, "Visible arrangement");
+                });
+            }
+        }) {
             ExportResponse::Export { config, save_path } => self.run_export(ctx, config, save_path),
             ExportResponse::Closed | ExportResponse::None => {}
         }
@@ -1324,8 +1350,8 @@ impl DemoApp {
         image: &egui_charts::widget::ImageExportOptions,
         save_path: Option<std::path::PathBuf>,
     ) {
-        match self.chart.export_svg(ctx, image) {
-            Ok(svg) => self.write_export(save_path, "svg", svg.as_bytes()),
+        match self.export_image_bytes(ctx, image, ExportFormat::Svg, self.export_arrangement) {
+            Ok(svg) => self.write_export(save_path, "svg", &svg),
             Err(error) => self.export_failed(save_path.is_some(), error.to_string()),
         }
     }
@@ -1368,9 +1394,12 @@ impl DemoApp {
 
 impl eframe::App for DemoApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        if let Some(dark) = self.theme_choice {
-            eframe::set_value(storage, "theme_choice", &dark);
-        }
+        eframe::set_value(
+            storage,
+            "theme_choice",
+            &self.theme_choice.as_deref().unwrap_or("system"),
+        );
+        eframe::set_value(storage, "demo_formatting", &self.formatting);
         let current = self.user_settings();
         self.settings.flush(&current);
         eframe::set_value(
@@ -1500,18 +1529,23 @@ impl eframe::App for DemoApp {
             .rect_filled(ui.max_rect(), 0.0, self.theme.ui.border);
 
         // Dialogs consume their keys before chart commands and the replay transport.
-        if !self.keyboard_dialog_open() {
+        if self.sample_scene.is_none() && !self.keyboard_dialog_open() {
             let action = self.replay_control.shortcut(&ctx);
             self.handle_replay_control(action);
             self.handle_keyboard(&ctx);
         }
-        if self.keyboard_dialog_open() {
+        if self.sample_scene.is_none() && self.keyboard_dialog_open() {
             self.chart.suppress_shortcuts(&ctx);
+        }
+        if self.show_samples(ui) {
+            self.storage.flush(frame.storage_mut());
+            return;
         }
         self.show_layout_tabs(ui);
         self.refresh_layout_menu();
         self.show_top_toolbar(ui, panel_bg);
         self.layout.sync = self.top_toolbar.chart_grid_selector.sync.clone();
+        self.show_showcase(ui);
         self.show_drawing_toolbar(ui, panel_bg);
         self.show_widget_bar(ui, panel_bg);
         self.trading.show_ticket(ui, &self.chart);
@@ -1524,21 +1558,38 @@ impl eframe::App for DemoApp {
             self.show_account_panel(ui, panel_bg);
         }
         self.show_strategy_report(ui, panel_bg);
+        self.show_sample_study(ui);
         self.show_bottom_toolbar(ui, panel_bg);
+        let groups = self.layout_groups();
         self.show_chart(ui, panel_bg);
+        if self.layout_groups() != groups {
+            self.grid_edits = self.grid_edits.wrapping_add(1);
+        }
         self.show_replay_control(&ctx);
         self.show_replay_start(&ctx);
+        self.show_annotation_editor(&ctx);
         self.show_dialogs(&ctx);
         self.show_watchlist_import(&ctx);
         self.show_wide_watchlist(&ctx);
 
         // Transient status notice.
         self.show_notice(ui);
-        if let Some(dark) = self.theme_choice
-            && let Some(storage) = frame.storage_mut()
-            && eframe::get_value::<bool>(storage, "theme_choice") != Some(dark)
+        if let Some(storage) = frame.storage_mut()
+            && eframe::get_value::<String>(storage, "theme_choice").as_deref()
+                != Some(self.theme_choice.as_deref().unwrap_or("system"))
         {
-            eframe::set_value(storage, "theme_choice", &dark);
+            eframe::set_value(
+                storage,
+                "theme_choice",
+                &self.theme_choice.as_deref().unwrap_or("system"),
+            );
+            storage.flush();
+        }
+        if let Some(storage) = frame.storage_mut()
+            && eframe::get_value::<formatting::Formatting>(storage, "demo_formatting").as_ref()
+                != Some(&self.formatting)
+        {
+            eframe::set_value(storage, "demo_formatting", &self.formatting);
             storage.flush();
         }
         self.storage.flush(frame.storage_mut());
@@ -1574,6 +1625,7 @@ impl DemoApp {
             .show(ui, |ui| {
                 use egui_charts::ui_kit::buttons::IconButton;
                 let mut menu_action = TopToolbarAction::None;
+                let mut sample = None;
                 let mut panel_action = None;
                 let mut widget_action = None;
                 let mut show_help = false;
@@ -1643,6 +1695,7 @@ impl DemoApp {
                                     ui.close();
                                 }
                             }
+                            sample = commands::sample_menu(ui, "Samples");
                         });
                     },
                     |_| {},
@@ -1676,6 +1729,9 @@ impl DemoApp {
                 }
                 self.handle_top_toolbar(ui.ctx(), action);
                 self.handle_top_toolbar(ui.ctx(), menu_action);
+                if let Some(id) = sample {
+                    self.execute_search_command(ui.ctx(), id);
+                }
             });
     }
 
@@ -2269,7 +2325,7 @@ impl DemoApp {
             .with_timestamp(self.chart.format_time(bar.time))
             .with_prev_close(pointer.previous_close.unwrap_or(bar.open));
         info.studies = pointer.studies.iter().map(|(_, row)| row.clone()).collect();
-        info
+        info.with_chart_formatters(&self.chart)
     }
 
     fn handle_object_tree(&mut self, action: ObjectTreeAction, sources: &[SourceItem]) {
@@ -2323,7 +2379,7 @@ impl DemoApp {
             .iter_mut()
             .flat_map(|universe| &mut universe.entries)
         {
-            if let Some(quote) = live::watchlist_quote(&entry.symbol, now) {
+            if let Some(quote) = self.live.market_quote(&entry.symbol, now) {
                 let change = (quote.last - quote.prev_close) / quote.prev_close * 100.0;
                 entry.values.insert("change".into(), change);
                 entry.values.insert("price".into(), quote.last);
@@ -2341,6 +2397,11 @@ impl DemoApp {
             }
         }
         self.watchlist.set_selected(&selected);
+        self.feed_paper_prices();
+        if self.quotes.set_live(self.live.clone()) {
+            self.screener.set_feed(self.live.clone());
+            self.hotlists.set_feed(self.live.clone());
+        }
         self.quotes.publish(now);
         self.watchlist.poll(ctx);
         self.symbol_details.set_instrument(
@@ -2350,10 +2411,7 @@ impl DemoApp {
                 .cloned()
                 .unwrap_or_else(|| egui_charts::model::Instrument::new(&chart_symbol)),
         );
-        let quoted = (self.watchlist.symbols())
-            .find(|symbol| symbol.eq_ignore_ascii_case(&chart_symbol))
-            .unwrap_or(&chart_symbol);
-        if let Some(quote) = self.watchlist.quote(quoted).cloned() {
+        if let Some(quote) = self.live.quote(now) {
             self.symbol_details.set_quote(quote.clone());
             self.trading.set_quote(&chart_symbol, quote);
         }
@@ -2840,20 +2898,19 @@ impl DemoApp {
                 if self.chart.take_event_click().is_some() {
                     self.notify("Synthetic session: generated example data");
                 }
-                if let Some(bar) = self
-                    .chart
-                    .bars(SeriesId::MAIN)
-                    .iter()
-                    .rfind(|bar| !bar.is_whitespace())
+                if self.replay.is_some()
+                    && let Some(bar) = self
+                        .chart
+                        .bars(SeriesId::MAIN)
+                        .iter()
+                        .rfind(|bar| !bar.is_whitespace())
                 {
                     self.paper.set_price(self.chart.symbol(), bar.close);
-                    if self.replay.is_some() {
-                        // Replay has no historical spread; its close prices both broker and ticket.
-                        self.trading.set_quote(
-                            self.chart.symbol(),
-                            egui_charts::model::Quote::new(bar.close, bar.close, bar.time),
-                        );
-                    }
+                    // Replay has no historical spread; its close prices both broker and ticket.
+                    self.trading.set_quote(
+                        self.chart.symbol(),
+                        egui_charts::model::Quote::new(bar.close, bar.close, bar.time),
+                    );
                 }
                 if let Some(side) = self.chart.take_quote_action() {
                     if !self.trading.has_broker() {
@@ -3272,6 +3329,7 @@ impl DemoApp {
     fn keyboard_dialog_open(&self) -> bool {
         self.keyboard_shortcuts.is_open
             || self.data_table.is_open
+            || self.annotation_editor
             || self.quick_search.is_open()
             || self.symbol_search.is_open()
             || self.compare_dialog.is_open
@@ -3432,8 +3490,12 @@ impl DemoApp {
             return;
         };
         let result = self
-            .trading
-            .export_png(&self.chart, ctx, &options)
+            .export_image_bytes(
+                ctx,
+                &options,
+                ExportFormat::Png,
+                self.export_dialog.is_open() && self.export_arrangement,
+            )
             .map_err(|error| error.to_string())
             .and_then(|png| match target {
                 ScreenshotTarget::File(path) => self.save_screenshot(&png, path),
@@ -3969,7 +4031,8 @@ mod tests {
     fn chart_click_selects_research_and_the_replay_start() {
         let ctx = egui::Context::default();
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
-        let mut app = DemoApp::new(&cc);
+        // Keep generated signal hitboxes away from the two chart click targets.
+        let mut app = DemoApp::new_at(&cc, "2026-11-03T02:00:00Z".parse().unwrap(), true);
         let frame = |app: &mut DemoApp, events| {
             let mut output = ctx.run_ui(
                 egui::RawInput {
@@ -4217,7 +4280,7 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct AppStorage(std::collections::HashMap<String, String>);
+    pub(super) struct AppStorage(std::collections::HashMap<String, String>);
 
     impl eframe::Storage for AppStorage {
         fn get_string(&self, key: &str) -> Option<String> {
@@ -4347,6 +4410,54 @@ mod tests {
                     restored.chart.config().bearish_color,
                     restored.theme.chart.candle_down
                 );
+            }
+        }
+
+        let ctx = egui::Context::default();
+        let mut storage = AppStorage::default();
+        for old in [false, true] {
+            eframe::set_value(&mut storage, "theme_choice", &old);
+            let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+            cc.storage = Some(&storage);
+            let mut app = DemoApp::new(&cc);
+            assert_eq!(
+                app.theme.dark, old,
+                "explicit boolean preferences still load"
+            );
+            app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
+            for (command, expected) in [
+                ("appearance:high-contrast", Theme::high_contrast()),
+                ("appearance:light", Theme::light()),
+                ("appearance:dark", Theme::dark()),
+            ] {
+                app.execute_search_command(&ctx, command);
+                assert_eq!(app.theme, expected);
+                assert_eq!(app.chart.config().background_color, expected.chart.bg);
+                assert_eq!(
+                    app.extra_charts[0].chart.config().background_color,
+                    expected.chart.bg
+                );
+                app.save(&mut storage);
+                let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+                cc.storage = Some(&storage);
+                assert_eq!(DemoApp::new(&cc).theme, expected);
+            }
+            app.execute_search_command(&ctx, "appearance:system");
+            app.save(&mut storage);
+            for system in [egui::Theme::Dark, egui::Theme::Light] {
+                ctx.run_ui(
+                    egui::RawInput {
+                        system_theme: Some(system),
+                        ..Default::default()
+                    },
+                    |_| {},
+                )
+                .drop_without_applying_deltas();
+                let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+                cc.storage = Some(&storage);
+                let restored = DemoApp::new(&cc);
+                assert_eq!(restored.theme.dark, system == egui::Theme::Dark);
+                assert_eq!(restored.user_settings().theme, None);
             }
         }
     }
@@ -4859,6 +4970,10 @@ mod tests {
             "Chart settings",
             "Sample backtest",
             "Export chart",
+            "Volatility smile",
+            "Yield curve",
+            "Primitives and custom series",
+            "Sample study editor",
         ]
         .into_iter()
         .flat_map(|query| {
@@ -4871,7 +4986,10 @@ mod tests {
             let ctx = egui::Context::default();
             let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
             app.live.set_paused(true);
-            if query == "RSI" {
+            if matches!(
+                query,
+                "RSI" | "Volatility smile" | "Yield curve" | "Primitives and custom series"
+            ) {
                 app.chart.user_action(|chart| {
                     let dm = chart.drawings_mut();
                     let tool = egui_charts::drawings::DrawingToolType::TrendLine;
@@ -4992,6 +5110,162 @@ mod tests {
                     assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
                         egui::Shape::Text(text) if text.galley.text().starts_with("Error:"))));
                     output.drop_without_applying_deltas();
+                }
+                "Volatility smile"
+                | "Yield curve"
+                | "Primitives and custom series"
+                | "Sample study editor" => {
+                    let label = match query {
+                        "Volatility smile" => "30-day IV, %",
+                        "Yield curve" => "Today",
+                        "Primitives and custom series" => "Bar range, price units",
+                        _ => "Sample study editor",
+                    };
+                    let bars = app.chart.bars(SeriesId::MAIN).to_vec();
+                    let studies: Vec<_> = app.chart.indicators().map(|(id, _)| id).collect();
+                    let range = app.chart.get_time_scale_state();
+                    let can_undo = app.chart.can_undo();
+                    let mut found = false;
+                    for _ in 0..3 {
+                        let output = ctx.run_ui(
+                            RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(
+                                    egui::Pos2::ZERO,
+                                    egui::vec2(1440.0, 900.0),
+                                )),
+                                ..Default::default()
+                            },
+                            |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+                        );
+                        found |= output.shapes.iter().any(|shape| {
+                            matches!(&shape.shape,
+                            egui::Shape::Text(text) if text.galley.text().contains(label))
+                        });
+                        output.drop_without_applying_deltas();
+                    }
+                    assert!(found, "{query} must show {label}");
+                    if query == "Primitives and custom series" {
+                        let frame = |app: &mut DemoApp, events| {
+                            ctx.run_ui(
+                                RawInput {
+                                    events,
+                                    ..Default::default()
+                                },
+                                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+                            )
+                        };
+                        let output = frame(&mut app, Vec::new());
+                        let head = output
+                            .shapes
+                            .iter()
+                            .filter_map(|shape| match &shape.shape {
+                                egui::Shape::Circle(circle)
+                                    if circle.fill == egui::Color32::from_rgb(255, 152, 0)
+                                        && shape.clip_rect.contains(circle.center) =>
+                                {
+                                    Some(circle.center)
+                                }
+                                _ => None,
+                            })
+                            .max_by(|left, right| left.y.total_cmp(&right.y))
+                            .expect("custom range heads are visible");
+                        output.drop_without_applying_deltas();
+                        let output = frame(&mut app, vec![Event::PointerMoved(head)]);
+                        let cursor = output.platform_output.cursor_icon;
+                        output.drop_without_applying_deltas();
+                        assert_eq!(cursor, egui::CursorIcon::PointingHand);
+                        for enabled in [false, true] {
+                            for control in ["Session background", "Custom range series"] {
+                                let output = frame(&mut app, Vec::new());
+                                let point = output
+                                    .shapes
+                                    .iter()
+                                    .find_map(|shape| match &shape.shape {
+                                        egui::Shape::Text(text)
+                                            if text.galley.text() == control =>
+                                        {
+                                            Some(text.pos + text.galley.size() / 2.0)
+                                        }
+                                        _ => None,
+                                    })
+                                    .unwrap();
+                                output.drop_without_applying_deltas();
+                                frame(
+                                    &mut app,
+                                    vec![
+                                        Event::PointerMoved(point),
+                                        Event::PointerButton {
+                                            pos: point,
+                                            button: egui::PointerButton::Primary,
+                                            pressed: true,
+                                            modifiers: Modifiers::NONE,
+                                        },
+                                        Event::PointerButton {
+                                            pos: point,
+                                            button: egui::PointerButton::Primary,
+                                            pressed: false,
+                                            modifiers: Modifiers::NONE,
+                                        },
+                                    ],
+                                )
+                                .drop_without_applying_deltas();
+                            }
+                            let output = frame(&mut app, Vec::new());
+                            for needle in ["Open ", "Bar range, price units"] {
+                                let visible = output.shapes.iter().any(|shape| {
+                                    matches!(&shape.shape,
+                                    egui::Shape::Text(text) if text.galley.text().contains(needle))
+                                });
+                                assert_eq!(visible, enabled, "{needle}");
+                            }
+                            output.drop_without_applying_deltas();
+                        }
+                    }
+                    if query != "Sample study editor" {
+                        if query == "Volatility smile" && same_frame && toolbar {
+                            app.keyboard_shortcuts.open();
+                        }
+                        for (events, modifiers) in [
+                            (vec![key(Key::Home, Modifiers::NONE)], Modifiers::NONE),
+                            (vec![key(Key::K, Modifiers::COMMAND)], Modifiers::COMMAND),
+                            (
+                                vec![Event::Text("Return to price chart".into())],
+                                Modifiers::NONE,
+                            ),
+                            (vec![key(Key::Enter, Modifiers::NONE)], Modifiers::NONE),
+                        ] {
+                            ctx.run_ui(
+                                RawInput {
+                                    events: std::iter::once(Event::ModifiersChanged(modifiers))
+                                        .chain(events)
+                                        .collect(),
+                                    ..Default::default()
+                                },
+                                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+                            )
+                            .drop_without_applying_deltas();
+                            assert_eq!(
+                                app.chart.get_time_scale_state(),
+                                range,
+                                "sample keys must not move the hidden workspace"
+                            );
+                        }
+                        let output = ctx.run_ui(RawInput::default(), |ui| {
+                            app.ui(ui, &mut eframe::Frame::_new_kittest())
+                        });
+                        assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+                            egui::Shape::Text(text) if text.galley.text() == "Return to price chart")));
+                        output.drop_without_applying_deltas();
+                        app.execute_search_command(&ctx, "price-workspace");
+                        assert_eq!(app.chart.bars(SeriesId::MAIN), bars);
+                        assert_eq!(
+                            app.chart.indicators().map(|(id, _)| id).collect::<Vec<_>>(),
+                            studies
+                        );
+                        assert_eq!(app.chart.get_time_scale_state(), range);
+                        assert_eq!(app.chart.drawings().drawings.len(), 1);
+                        assert_eq!(app.chart.can_undo(), can_undo);
+                    }
                 }
                 _ => assert!(app.settings_dialog.is_open),
             }
@@ -5233,6 +5507,13 @@ mod tests {
             .set_range(100.0, 200.0);
         app.add_spread("AAPL-MSFT");
         app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
+        app.layout.set_sync_group(0, Some("A".into()));
+        app.layout.set_sync_group(1, Some("B".into()));
+        app.layout.set_detached(1, true);
+        app.layout.sync.sync_symbol = true;
+        app.layout.sync.sync_timeframe = true;
+        app.layout.sync.sync_time_axis = false;
+        app.top_toolbar.chart_grid_selector.sync = app.layout.sync.clone();
         for _ in 0..3 {
             ctx.run_ui(Default::default(), |ui| {
                 app.chart.show(ui);
@@ -5261,6 +5542,13 @@ mod tests {
         app.poll_storage(&ctx);
         assert_eq!(app.settings_state.alerts, settings.alerts);
         let saved = |app: &DemoApp| {
+            assert_eq!(app.layout.sync_group(0), Some("A"));
+            assert_eq!(app.layout.sync_group(1), Some("B"));
+            assert!(app.layout.is_detached(1));
+            assert!(app.layout.sync.sync_symbol);
+            assert!(app.layout.sync.sync_timeframe);
+            assert!(!app.layout.sync.sync_time_axis);
+            assert_eq!(app.top_toolbar.chart_grid_selector.sync, app.layout.sync);
             assert_eq!(app.chart.chart_type(), ChartType::Line);
             assert_eq!(app.comparisons.len(), 2);
             assert_eq!(

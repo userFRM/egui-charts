@@ -61,6 +61,8 @@ struct SavedOptions {
     color: egui::Color32,
     up_color: egui::Color32,
     down_color: egui::Color32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    baseline_style: Option<egui_charts::model::BaselineStyle>,
     width: f32,
     scale: SeriesScale,
     columns_base: Option<f64>,
@@ -350,6 +352,7 @@ impl DemoApp {
             })
             .map(str::to_owned)
         else {
+            self.notify("All demo symbols are already shown. Remove one before adding a pane.");
             return;
         };
         let feed = Arc::new(LiveFeed::new(&symbol, chrono::Utc::now()));
