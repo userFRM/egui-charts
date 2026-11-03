@@ -192,6 +192,23 @@ struct Executions {
     complete: bool,
 }
 
+#[cfg(any(feature = "studies", feature = "widget"))]
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct StrikeExposure {
+    pub strike: f64,
+    pub calls: Option<f64>,
+    pub puts: Option<f64>,
+    pub net: Option<f64>,
+}
+
+#[cfg(any(feature = "studies", feature = "widget"))]
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ExposureProfile {
+    pub snapshot: super::OptionExposure,
+    pub rows: Vec<StrikeExposure>,
+    pub note: String,
+}
+
 /// Volume traded at each price row of bars or host-supplied option strikes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct VolumeProfile {
@@ -210,6 +227,9 @@ pub struct VolumeProfile {
     executions: Option<Executions>,
     /// Built from option strikes by [`Self::from_options`].
     options: bool,
+    // Signed figures and their readout for an options exposure overlay; row volumes bound it.
+    #[cfg(any(feature = "studies", feature = "widget"))]
+    pub(crate) exposure: Option<Arc<ExposureProfile>>,
 }
 
 fn valid_bar(bar: &Bar) -> bool {
@@ -275,6 +295,8 @@ impl VolumeProfile {
             down: vec![0.0; count as usize],
             executions: None,
             options: true,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            exposure: None,
         };
         let mut total = 0.0;
         for v in data {
@@ -340,6 +362,8 @@ impl VolumeProfile {
                 complete,
             }),
             options: false,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            exposure: None,
         };
         for (&level, row) in &bar.levels {
             let i = (level - first) as usize;
@@ -428,6 +452,8 @@ impl VolumeProfile {
             down: vec![0.0; rows],
             executions: None,
             options: false,
+            #[cfg(any(feature = "studies", feature = "widget"))]
+            exposure: None,
         };
         bars.iter().for_each(|bar| profile.add(bar));
         Some(profile)

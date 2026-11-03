@@ -16,7 +16,7 @@ const AXIS_TICK_LENGTH: f32 = 3.0;
 /// Paints the price labels on the right side into `slot`, using smart tick mark generation and
 /// leaving out the labels the `tags` (the price line, last price and crosshair tags) would cut
 /// through. `axis` sets the border, tick marks and label clipping. A host `formatter` writes the
-/// labels with [`PriceFormatter::format_tick`].
+/// labels with [`PriceFormatter::format_ticks`].
 pub fn render_price_labels(
     context: &RenderContext,
     price_scale: &PriceMap,
@@ -50,7 +50,7 @@ pub fn render_price_labels_at_pos(
     slot: ShapeIdx,
     formatter: Option<&dyn PriceFormatter>,
 ) {
-    let mut marks = price_marks(price_scale, formatter);
+    let mut marks = price_scale.marks();
 
     // Determine positioning based on scale position
     let (edge, side, alignment) = match position {
@@ -81,19 +81,16 @@ pub fn render_price_labels_at_pos(
             marks.extend(edges.map(|y| {
                 let value = price_scale.y_to_scale(y);
                 PriceMark {
-                    price: value,
-                    label: match formatter {
-                        Some(formatter) => {
-                            formatter.format_tick(price_scale.transform().axis_value(value))
-                        }
-                        None => price_scale.label(value, tick_decimals(price_scale, y), None),
-                    },
+                    price: price_scale.transform().axis_value(value),
+                    label: price_scale.label(value, tick_decimals(price_scale, y), None),
                     y_coord: y,
                     weight: 0,
                 }
             }));
+            marks.sort_by(|a, b| a.price.total_cmp(&b.price));
         }
     }
+    format_price_marks(&mut marks, formatter);
 
     let painter = if axis.hide_clipped_labels {
         context.painter.clone()
@@ -153,18 +150,30 @@ pub fn render_price_labels_at_pos(
 }
 
 /// Price axis marks of `price_scale` from the "nice numbers" generator, labelled with
-/// [`PriceFormatter::format_tick`] when the host supplies a `formatter`.
+/// [`PriceFormatter::format_ticks`] when the host supplies a `formatter`.
 pub(crate) fn price_marks(
     price_scale: &PriceMap,
     formatter: Option<&dyn PriceFormatter>,
 ) -> Vec<PriceMark> {
     let mut marks = price_scale.marks();
+    format_price_marks(&mut marks, formatter);
+    marks
+}
+
+fn format_price_marks(marks: &mut [PriceMark], formatter: Option<&dyn PriceFormatter>) {
     if let Some(formatter) = formatter {
-        for mark in &mut marks {
-            mark.label = formatter.format_tick(mark.price);
+        let prices: Vec<_> = marks.iter().map(|mark| mark.price).collect();
+        let labels = formatter.format_ticks(&prices);
+        if labels.len() == marks.len() {
+            for (mark, label) in marks.iter_mut().zip(labels) {
+                mark.label = label;
+            }
+        } else {
+            for mark in marks {
+                mark.label = formatter.format_tick(mark.price);
+            }
         }
     }
-    marks
 }
 
 /// Whether a label at `rect` is left out: a tag takes the place of the axis labels it overlaps.

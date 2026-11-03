@@ -208,6 +208,7 @@ impl Chart {
         self.follow_chart_theme(&ui.active_theme());
         self.host_events.volume_map = None;
         self.host_events.target = None;
+        self.host_events.primitive_hit = None;
         self.apply_config_scale_mode();
         #[cfg(feature = "studies")]
         self.sync_volume_study(ui.ctx());
@@ -926,7 +927,10 @@ impl Chart {
                 let first = flow.complete_from()?;
                 let candles =
                     self.state.shown()[start_idx..end_idx].partition_point(|bar| bar.time < first);
-                let ranges = self.execution_profile_ranges(start_idx + candles..end_idx)?;
+                let settings = self.trade_profile_settings();
+                let extend = settings.extend_poc || settings.extend_vah || settings.extend_val;
+                let profile_start = if extend { 0 } else { start_idx + candles };
+                let ranges = self.execution_profile_ranges(profile_start..end_idx)?;
                 let mapping = self.get_chart_mapping().with_rect(price_rect);
                 let bars = &self.state.data().bars;
                 let mut profiles = crate::studies::trade_profiles(flow, &ranges);
@@ -934,11 +938,15 @@ impl Chart {
                     let first = bars.partition_point(|b| b.time < profile.range.start);
                     let end = bars.partition_point(|b| b.time < profile.range.end);
                     first < end
-                        && mapping.idx_to_x(end - 1) >= price_rect.left()
                         && mapping.idx_to_x(first) - mapping.bar_spacing * 0.45
                             <= price_rect.right()
                 });
-                Some((flow.price_step(), flow.tick_size(), profiles))
+                // Sessions left of the view only draw their extensions.
+                let shown = profiles.partition_point(|profile| {
+                    let end = bars.partition_point(|b| b.time < profile.range.end);
+                    mapping.idx_to_x(end - 1) < price_rect.left()
+                });
+                Some((flow.price_step(), flow.tick_size(), profiles, shown))
             });
         let fixed_footprint = self
             .feed_link
@@ -981,8 +989,8 @@ impl Chart {
         #[cfg(feature = "studies")]
         let profile_prices = execution_profiles
             .iter()
-            .flat_map(|(step, tick, profiles)| {
-                profiles.iter().flat_map(move |profile| {
+            .flat_map(|(step, tick, profiles, shown)| {
+                profiles[*shown..].iter().flat_map(move |profile| {
                     profile
                         .volume
                         .levels
@@ -1539,6 +1547,13 @@ impl Chart {
             });
 
         self.paint_primitives(&painter, &coords, PrimitivePass::Below);
+        let series_backgrounds = primitives::backgrounds(
+            &clipped_painter,
+            self.main_pass_primitives(&coords),
+            PrimitivePass::Series,
+            factor,
+        );
+        let grouped_primitives = !series_backgrounds.is_empty();
         let studies = if self.chart_type.is_time_independent() {
             &self.element_studies.studies
         } else {
@@ -1593,20 +1608,35 @@ impl Chart {
             .input(|input| input.pointer.interact_pos())
             .filter(|pos| chart_rect.contains(*pos));
         let primitive_hit = pointer.and_then(|pos| {
-            primitives::primitive_at(
-                self.main_primitives(&coords)
-                    .filter(|(item, _)| !item.replaces),
-                pos,
-            )
-        });
-        let renderer_hit = pointer.and_then(|pos| {
-            self.pane_layout.main.iter().rev().find_map(|id| {
+            if grouped_primitives {
+                primitives::primitive_at(self.main_pass_primitives(&coords), pos)
+            } else {
                 primitives::primitive_at(
                     self.main_primitives(&coords)
-                        .filter(|(item, _)| item.replaces && item.series == *id),
+                        .filter(|(item, _)| !item.replaces),
                     pos,
                 )
-            })
+            }
+        });
+        let renderer_hit = pointer.and_then(|pos| {
+            if grouped_primitives {
+                primitives::primitive_at(
+                    self.main_pass_primitives(&coords)
+                        .filter(|(item, _)| item.replaces),
+                    pos,
+                )
+            } else {
+                self.pane_layout.main.iter().rev().fold(None, |best, id| {
+                    primitives::best_hit(
+                        best,
+                        primitives::primitive_at(
+                            self.main_primitives(&coords)
+                                .filter(|(item, _)| item.replaces && item.series == *id),
+                            pos,
+                        ),
+                    )
+                })
+            }
         });
         let rendered: Vec<_> = self
             .study_ids
@@ -1643,6 +1673,7 @@ impl Chart {
         });
         let element_at = |pos: Pos2| {
             let renderer = renderer_hit
+                .as_ref()
                 .filter(|_| Some(pos) == pointer)
                 .and_then(|hit| {
                     if let super::PointerTarget::Element(id) = hit.target {
@@ -1673,6 +1704,9 @@ impl Chart {
                 .iter()
                 .flatten()
                 .find_map(|(at, hit)| (*at == pos).then_some(*hit).flatten());
+            if grouped_primitives && renderer.is_some() {
+                return renderer;
+            }
             hit.into_iter()
                 .chain(secondary)
                 .chain(renderer)
@@ -1753,12 +1787,14 @@ impl Chart {
                 );
             }
             if self.has_renderer(*id) {
-                let view = self.primitive_view(
-                    *id,
-                    crate::chart::rendering::study_mapping(study.as_ref(), &coords),
-                );
-                for item in self.primitives_of(*id).filter(|item| item.replaces) {
-                    item.draw(&clipped_painter, &view, PrimitivePass::Series, factor);
+                if !grouped_primitives {
+                    let view = self.primitive_view(
+                        *id,
+                        crate::chart::rendering::study_mapping(study.as_ref(), &coords),
+                    );
+                    for item in self.primitives_of(*id).filter(|item| item.replaces) {
+                        item.draw(&clipped_painter, &view, PrimitivePass::Series, factor);
+                    }
                 }
             } else {
                 rendering::IndicatorRenderer::render(
@@ -1881,14 +1917,15 @@ impl Chart {
                         );
                     }
                     #[cfg(feature = "studies")]
-                    if session_profiles && let Some((step, tick, profiles)) = &execution_profiles {
+                    if session_profiles
+                        && let (Some((_, _, profiles, _)), Some(flow)) = (&execution_profiles, feed)
+                    {
                         crate::chart::overlays::render_session_volume_profiles(
                             &clipped_painter,
                             &mapping,
                             bars,
                             profiles,
-                            *step,
-                            *tick,
+                            flow,
                             self.trade_profile_settings(),
                         );
                     }
@@ -1981,7 +2018,19 @@ impl Chart {
             .show_price_targets
             .then(|| painter.add(egui::Shape::Noop));
 
-        self.paint_primitives(&painter, &coords, PrimitivePass::Series);
+        primitives::paint_backgrounds(&clipped_painter, series_backgrounds);
+        if grouped_primitives {
+            for (item, view) in self.main_pass_primitives(&coords) {
+                item.draw(&clipped_painter, &view, PrimitivePass::Series, factor);
+            }
+        } else {
+            for (item, view) in self
+                .main_primitives(&coords)
+                .filter(|(item, _)| !item.replaces)
+            {
+                item.draw(&clipped_painter, &view, PrimitivePass::Series, factor);
+            }
+        }
 
         // Resolve a click on the main chart area into a selection. Overlay
         // indicators take priority over the series beneath them; an empty-area
@@ -2063,26 +2112,32 @@ impl Chart {
             let drawing = self.drawings.hit_test(pos);
             #[cfg(not(feature = "drawings"))]
             let drawing: Option<usize> = None;
-            if let Some(hit) = primitive_hit
-                .or(renderer_hit.filter(|hit| {
-                    element_at(pos).map(|(id, _)| super::PointerTarget::Element(id))
-                        == Some(hit.target)
-                }))
-                .filter(|_| {
-                    drawing.is_none()
-                        && response.hovered()
-                        && !response.dragged()
-                        && !self.zoom_mode_active
-                        && !eraser_mode
-                        && !drawing_tool_active
-                })
-            {
-                ui.ctx().set_cursor_icon(hit.cursor);
+            let hit = primitives::best_hit(
+                primitive_hit,
+                renderer_hit
+                    .as_ref()
+                    .filter(|hit| {
+                        element_at(pos).map(|(id, _)| super::PointerTarget::Element(id))
+                            == Some(hit.target)
+                    })
+                    .cloned(),
+            );
+            if let Some(hit) = hit.as_ref().filter(|_| {
+                drawing.is_none()
+                    && response.hovered()
+                    && !response.dragged()
+                    && !self.zoom_mode_active
+                    && !eraser_mode
+                    && !drawing_tool_active
+            }) {
+                ui.ctx().set_cursor_icon(hit.result.cursor);
             }
             self.host_events.target = drawing
                 .map(super::PointerTarget::Drawing)
-                .or(primitive_hit.map(|hit| hit.target))
+                .or(hit.as_ref().map(|hit| hit.target))
                 .or_else(|| element_at(pos).map(|(id, _)| super::PointerTarget::Element(id)));
+            self.host_events.primitive_hit =
+                hit.filter(|_| drawing.is_none()).map(|hit| hit.result);
         }
 
         // Draw selection handles for whichever element is currently selected on
@@ -2647,7 +2702,9 @@ impl Chart {
                 .finish_drawing_action(&mut self.drawings, drawing_history);
         }
         self.paint_marks(&clipped_price_ctx, &coords, MarkerZOrder::Top);
-        self.paint_primitives(&painter, &coords, PrimitivePass::Above);
+        if !self.hide_foreground {
+            self.paint_primitives(&painter, &coords, PrimitivePass::Above);
+        }
 
         // Placed after the drawings handled this frame's input, so a dragged line's tags move
         // with it in the same frame.
@@ -2908,8 +2965,8 @@ impl Chart {
             self.main_pane_series(),
         );
         #[cfg(feature = "studies")]
-        if let Some((step, tick, profiles)) = &execution_profiles {
-            for profile in profiles {
+        if let Some((step, tick, profiles, shown)) = &execution_profiles {
+            for profile in &profiles[*shown..] {
                 let levels = &profile.volume.levels;
                 let Some(((&low, _), (&high, _))) =
                     levels.first_key_value().zip(levels.last_key_value())
@@ -3073,28 +3130,38 @@ impl Chart {
                 );
                 if let Some(index) = index
                     .filter(|_| crosshair_options.style != crate::config::CrosshairStyle::Hidden)
-                    .filter(|_| self.main_series_visible)
                 {
-                    let bar = &self.state.shown()[index];
-                    let value = self
-                        .config
-                        .price_source
-                        .compute(bar.open, bar.high, bar.low, bar.close);
-                    if let Some(color) = rendering::candles::line_color_at(
-                        self.chart_type,
-                        &self.chart_type_params.styles,
-                        self.chart_type_params.baseline,
-                        &price_map,
-                        price_rect,
-                        value,
-                        bar,
-                    ) {
-                        rendering::candles::render_crosshair_marker(
-                            &painter.with_clip_rect(price_rect),
-                            Pos2::new(coords.idx_to_x(index), price_map.price_to_y(value)),
-                            self.chart_type_params.styles.crosshair_marker_radius,
-                            color,
-                            self.config.background_color,
+                    if self.main_series_visible {
+                        let bar = &self.state.shown()[index];
+                        let value = self
+                            .config
+                            .price_source
+                            .compute(bar.open, bar.high, bar.low, bar.close);
+                        if let Some(color) = rendering::candles::line_color_at(
+                            self.chart_type,
+                            &self.chart_type_params.styles,
+                            self.chart_type_params.baseline,
+                            &price_map,
+                            price_rect,
+                            value,
+                            bar,
+                        ) {
+                            rendering::candles::render_crosshair_marker(
+                                &painter.with_clip_rect(price_rect),
+                                Pos2::new(coords.idx_to_x(index), price_map.price_to_y(value)),
+                                &self.chart_type_params.styles,
+                                color,
+                                self.config.background_color,
+                            );
+                        }
+                    }
+                    for item in self.main_pane_series() {
+                        self.paint_series_crosshair_marker(
+                            &painter,
+                            price_rect,
+                            item,
+                            self.series_map(item, price_rect),
+                            index,
                         );
                     }
                 }

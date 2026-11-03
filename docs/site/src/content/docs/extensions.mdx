@@ -64,7 +64,11 @@ Choose the pass explicitly to avoid drawing the same geometry three times:
 | [`Series`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/enum.PrimitivePass.html#variant.Series) | Above series and studies; below drawings |
 | [`Above`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/enum.PrimitivePass.html#variant.Above) | Above series, studies and drawings; still below the main pane's crosshair and legend |
 
-Several attachments draw in attachment order within a pass. Read geometry from
+Several attachments draw in attachment order within a pass. Override
+[`draw_background`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/trait.Primitive.html#method.draw_background)
+to paint a backdrop: every background in a pass draws before any `draw`, so a later
+attachment's backdrop never covers an earlier attachment's foreground.
+`draw_background_merged` receives the merge factor like `draw_merged`. Read geometry from
 the current view instead of caching screen coordinates across pan, zoom or resize:
 
 - [`view.visible`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/struct.PrimitiveView.html#structfield.visible)
@@ -119,8 +123,20 @@ that lollipop stems remain inside their pane's automatic range.
 receives the pointer in egui screen points and the current view. Return a
 [`CursorIcon`](https://docs.rs/egui/0.37.0/egui/enum.CursorIcon.html) for a hit,
 or `None` to let testing continue. Reuse the drawing geometry so the hit area
-follows pan and zoom. Drawings have priority, then attached primitives in reverse
-attachment order, then built-in series and studies.
+follows pan and zoom. Drawings have priority, then attached primitives, then
+built-in series and studies.
+
+Override
+[`hit_test_result`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/trait.Primitive.html#method.hit_test_result)
+to identify an individual object. It returns a
+[`PrimitiveHit`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/struct.PrimitiveHit.html)
+with the cursor, an optional object id, host data, a distance in UI points and a draw
+pass. Among custom hits, a later pass wins, then the shorter distance. Equal hits keep
+ordinary primitives ahead of series renderers, the latest attachment first. When series
+backgrounds group foregrounds in attachment order, equal hits follow reverse attachment
+order across primitives and renderers. The winner is reported as
+`ChartPointer::primitive_hit` in hover, click and double-click events.
+Without an override, `hit_test` supplies a cursor-only hit on the series pass.
 
 A normal attachment reports
 [`PointerTarget::Primitive(id)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/enum.PointerTarget.html#variant.Primitive)

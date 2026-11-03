@@ -1,0 +1,127 @@
+---
+title: Interaction and events
+description: Pointer gestures, keyboard focus, crosshair modes and draining host notifications.
+---
+
+Create the chart once and call
+[`Chart::show`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.show)
+on every frame. The widget handles chart gestures; your host handles application
+actions and reads notifications after `show`. Try the
+[host readout recipe](/egui-charts/docs/recipes/host-readout/) for a running event consumer.
+
+## Pointer and touch
+
+| Input | Default chart action |
+| --- | --- |
+| Move over a plot | Inspect the nearest time slot with the crosshair and readouts |
+| Drag the plot with the primary button | Pan the view |
+| Vertical mouse wheel | Zoom the time scale around the pointer |
+| Horizontal wheel or Shift+wheel | Scroll the time scale |
+| Drag the time or price axis | Change that axis' scale |
+| Double-click the time axis | Return to the latest bars |
+| Double-click a price axis | Restore autoscale |
+| Touch drag or pinch | Pan or zoom when the corresponding handler is enabled |
+
+Wheel input over a price axis scales prices instead. Configure
+[`ChartOptions::handle_scroll`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.ChartOptions.html#structfield.handle_scroll)
+and
+[`handle_scale`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.ChartOptions.html#structfield.handle_scale)
+by cloning
+[`chart_options`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.chart_options),
+editing the copy and applying it with
+[`set_chart_options`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_chart_options).
+Their group `enabled` switches preserve the individual gesture choices.
+[`TrackingModeOptions`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.TrackingModeOptions.html)
+controls when touch tracking exits. Active [drawing tools](drawings.mdx) can
+consume plot gestures for placing and editing their points.
+
+Pointer notifications retain egui button or touch input in
+[`ChartPointer::origin`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.ChartPointer.html#structfield.origin),
+including event-time position and modifiers, and touch identity, phase and
+pressure when supplied by the integration. State-driven updates have no origin.
+Hosts that know a device is a pen can call
+[`set_pointer_kind`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_pointer_kind)
+before `show`; `None` restores egui's mouse/touch detection.
+
+## Keyboard focus
+
+Click a chart or enter it with Tab. Tab and Shift+Tab leave it for the next or
+previous focusable host control. Shortcuts apply to the focused chart while
+editable text and dialogs keep their own input. Left and Right pan, command/control
+plus Up or Down zooms, Home moves to the first bar and End returns to the live
+edge. Escape cancels the current interaction. The
+[accessibility guide](accessibility.mdx#enter-and-leave-a-chart) covers focus and
+native versus canvas accessibility.
+
+[`ShortcutMap`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.ShortcutMap.html)
+contains editable key bindings. Read or replace them with
+[`shortcuts`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.shortcuts)
+and
+[`shortcuts_mut`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.shortcuts_mut).
+Drain
+[`take_shortcut_requests`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.take_shortcut_requests)
+separately for host commands such as opening symbol search or saving an image.
+Those requests are not chart events.
+
+## Crosshair modes and host positions
+
+[`set_crosshair_mode`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_crosshair_mode)
+selects
+[`CrosshairMode`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/enum.CrosshairMode.html):
+`Normal` snaps time to a slot and follows the pointer's value; `Magnet` snaps
+to nearby visible OHLC, study or added-series values; `MagnetClose` prefers
+visible closes on price panes. Appearance is independent:
+[`CrosshairStyle::Hidden`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/enum.CrosshairStyle.html#variant.Hidden)
+hides lines and axis tags while readouts still follow the pointer.
+
+[`set_crosshair_position`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_crosshair_position)
+places a cursor using UTC time and raw price. For multiple charts, forward UTC
+time with
+[`set_synced_crosshair_time`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_synced_crosshair_time);
+programmatic synchronized cursors do not emit local pointer moves. See the
+[synchronization recipe](/egui-charts/docs/recipes/synchronized/) for range forwarding and
+clearing cursors on exit.
+
+## Drain events once per frame
+
+After `show`, iterate
+[`drain_events`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.drain_events)
+in one host dispatcher. It removes pending notifications. Forward each event
+to the host components that need it; repeated drains do not broadcast it again.
+The [complete readout scene](/egui-charts/docs/recipes/host-readout/#show-drain-then-draw-the-host-tooltip)
+demonstrates this order and a wildcard arm for the non-exhaustive
+[`ChartEvent`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/enum.ChartEvent.html)
+enum.
+
+| Notification | Host use |
+| --- | --- |
+| `CrosshairMoved(Some(pointer))` / `CrosshairMoved(None)` | Update or clear a host legend or tooltip |
+| `Click`, `DoubleClick`, `MarkClick` | Route the button, position or host marker id to an action |
+| `VisibleRangeChanged`, `VisibleLogicalRangeChanged`, `TimeScaleResized` | Observe UTC edges, slot ranges and layout size |
+| `DataLoaded`, `DataUpdated` | Refresh host state after accepted history or changed bars |
+| `SeriesAdded`, `SeriesRemoved` | Start or stop the host producer for that stable series id |
+| `SymbolChanged`, `TimeframeChanged` | Update host controls for the chart's instrument and interval |
+| `EventsDropped(count)` | Resynchronize the host from current chart state |
+
+The queue retains 1,024 notifications. If the host falls behind, the oldest are
+dropped and the next drain starts with `EventsDropped`. Compact data events can
+coalesce; they are not an audit log. Opt in to
+[`set_data_operation_notifications`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_data_operation_notifications)
+for a separate `DataOperation` event for each accepted direct `set_data` or
+`update`, including unchanged input. That opt-in does not report feed replies.
+
+## Read a pointer without inventing data
+
+[`ChartPointer`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.ChartPointer.html)
+carries screen coordinates, pane identity and value even on an empty plot.
+Its `time` is the optional timestamp of a stored slot, including whitespace;
+it is absent outside loaded history. Its main bar can be missing or whitespace,
+and added-series entries require a matching timestamp. Keep those cases absent
+in the UI. Study plots have stable ids and optional values. Hidden study values
+can be included with
+[`CursorDataPolicy`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/enum.CursorDataPolicy.html)
+without changing what the chart paints or autoscales.
+
+Use the [annotation recipe](/egui-charts/docs/recipes/annotations/) for host marker ids and
+the [host contracts](https://github.com/userFRM/egui-charts/blob/main/docs/chart-api.md) for the full payload and formatting
+rules. The [recipe index](/egui-charts/docs/recipes/) links the complete integrations.
