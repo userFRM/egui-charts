@@ -61,6 +61,8 @@ struct SavedOptions {
     color: egui::Color32,
     up_color: egui::Color32,
     down_color: egui::Color32,
+    #[serde(default)]
+    candle_border_width: f32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     baseline_style: Option<egui_charts::model::BaselineStyle>,
     width: f32,
