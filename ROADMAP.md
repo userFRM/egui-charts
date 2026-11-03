@@ -257,8 +257,8 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 
 ### Export
 
-- [x] `Chart::export_csv` exports OHLCV and study values with timestamps and missing-value handling.
-- [x] `Chart::export_png` renders an isolated chart frame on the CPU after font initialisation; export controls include size, title, timestamp, crosshair and transparency.
+- [x] `Chart::export_csv` (the default-enabled `csv` feature) exports OHLCV and study values with timestamps and missing-value handling.
+- [x] `Chart::export_png` (the default-enabled `png-export` feature) renders an isolated chart frame on the CPU after font initialisation; export controls include size, title, timestamp, crosshair and transparency.
 - [x] Export dialog and demo actions save images/data or copy images through application facilities. The demo exports either the active chart or the visible arrangement as PNG or SVG, with shared image options and opted-in trading overlays. The terminal's file callback returns save errors and carries a host request to open an exported image.
 - [ ] Capture composed panels, trading overlays, external textures and feed-backed order-flow visuals in a complete terminal image.
 - [ ] Add an export watermark switch, vector image output and print/PDF output.
@@ -296,7 +296,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 
 ## Infrastructure
 
-- [x] Feature layers separate the engine, built-in studies, widget, drawings, icons and terminal UI; engine and study calculations need no egui.
+- [x] Feature layers separate the engine, built-in studies, widget, drawings, icons and terminal UI; engine and study calculations need no egui. CSV I/O and PNG export are optional, enabled by default and by `ui`; icons alone install only their embedded image loader.
 - [x] `Theme` provides editable palettes with dark, light and high-contrast presets; shared tokens cover sizing, spacing, corners and colours.
 - [x] Host translation lookup with English fallback, locale/date formatters and optional named time zones. The demo persists independent language and number-format samples and applies host formatting to its data window and exported chart. The demo selects light, dark, high contrast or system appearance, preserves explicit choices and follows later system changes.
 - [x] The demo exposes floating, tracking and magnifier readouts, hover or hold activation, lens size and zoom; magnified candles stay inside the circular lens. Its annotation editor creates, edits and removes series markers and price lines, controls marker fitting and layering, and configures live change-marker duration.
