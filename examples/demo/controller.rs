@@ -329,6 +329,7 @@ enum ScreenshotTarget {
 }
 
 /// App state surfaced to the toolbars via `ChartAppState`.
+#[derive(Clone)]
 pub struct DemoAppState {
     pub symbol: String,
     pub timeframe: Timeframe,
@@ -1576,7 +1577,6 @@ impl eframe::App for DemoApp {
         self.refresh_layout_menu();
         self.show_top_toolbar(ui, panel_bg);
         self.layout.sync = self.top_toolbar.chart_grid_selector.sync.clone();
-        self.show_showcase(ui);
         self.show_drawing_toolbar(ui, panel_bg);
         self.show_widget_bar(ui, panel_bg);
         self.trading.show_ticket(ui, &self.chart);
@@ -1644,6 +1644,9 @@ impl eframe::App for DemoApp {
 
 impl DemoApp {
     fn show_top_toolbar(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
+        use commands::{menu_item, menu_toggle};
+        use egui_charts::icons::icons;
+
         self.top_toolbar.sync_from_app_state(&self.state);
         self.top_toolbar.state.can_undo = self.chart.can_undo();
         self.top_toolbar.state.can_redo = self.chart.can_redo();
@@ -1655,7 +1658,6 @@ impl DemoApp {
                 ..egui::Margin::ZERO
             }))
             .show(ui, |ui| {
-                use egui_charts::ui_kit::buttons::IconButton;
                 let mut menu_action = TopToolbarAction::None;
                 let mut sample = None;
                 let mut panel_action = None;
@@ -1664,74 +1666,103 @@ impl DemoApp {
                 let mut heatmap_enabled = self.liquidity_heatmap;
                 let mut largest_profile = self.largest_order_profile;
                 let mut paused = self.live.paused();
-                let action = self.top_toolbar.show_with_slots(
-                    ui,
-                    &self.state,
-                    |ui| {
-                        let response =
-                            IconButton::new(&egui_charts::ui::top_toolbar::buttons::MENU_ICON)
-                                .icon_scale(24.0 / 28.0)
-                                .tooltip("Menu")
-                                .show(ui);
-                        egui::Popup::menu(&response).show(|ui| {
-                            ui.checkbox(&mut heatmap_enabled, "Liquidity heatmap");
-                            ui.add_enabled(heatmap_enabled, |ui: &mut egui::Ui| {
-                                ui.checkbox(&mut largest_profile, "Largest order profile")
-                            });
-                            ui.add_enabled(self.replay.is_none(), |ui: &mut egui::Ui| {
-                                ui.checkbox(&mut paused, "Pause synthetic feed")
-                            });
-                            if ui.ctx().content_rect().width() < 600.0 {
-                                ui.separator();
-                                for (label, panel) in [
-                                    ("Watchlist", SidePanel::Watchlist),
-                                    ("Alerts", SidePanel::Alerts),
-                                    ("Object Tree", SidePanel::ObjectTree),
-                                    ("Data Window", SidePanel::DataWindow),
-                                    ("Time and sales", SidePanel::TimeAndSales),
-                                    ("Order flow", SidePanel::OrderFlow),
-                                ]
-                                .into_iter()
-                                .filter(|(_, panel)| {
-                                    self.api_samples || *panel != SidePanel::TimeAndSales
-                                }) {
-                                    if ui.button(label).clicked() {
-                                        panel_action = Some(panel);
-                                        ui.close();
-                                    }
-                                }
-                                for widget in &self.widget_bar.widgets {
-                                    if SidePanel::from_widget(widget.id).is_none()
-                                        && ui.button(&widget.tooltip).clicked()
-                                    {
-                                        widget_action = Some(widget.id);
-                                        ui.close();
-                                    }
-                                }
-                                if ui.button("Keyboard shortcuts").clicked() {
-                                    show_help = true;
-                                    ui.close();
-                                }
-                                ui.separator();
+                let mut toolbar = std::mem::take(&mut self.top_toolbar);
+                let state = self.state.clone();
+                let action = toolbar.show_with_menu(ui, &state, |ui| {
+                    sample = self.show_demo_controls(ui);
+                    ui.separator();
+                    menu_toggle(
+                        ui,
+                        "Liquidity heatmap",
+                        &icons::LIQUIDITY_HEATMAP,
+                        &mut heatmap_enabled,
+                    );
+                    ui.add_enabled_ui(heatmap_enabled, |ui| {
+                        menu_toggle(
+                            ui,
+                            "Largest order profile",
+                            &icons::CHART_SESSION_VOLUME_PROFILE,
+                            &mut largest_profile,
+                        );
+                    });
+                    ui.separator();
+                    ui.add_enabled_ui(self.replay.is_none(), |ui| {
+                        menu_toggle(ui, "Pause synthetic feed", &icons::MEDIA_PAUSE, &mut paused);
+                    });
+                    ui.separator();
+                    if ui.ctx().content_rect().width() < 600.0 {
+                        for (label, panel, icon) in [
+                            (
+                                "Watchlist",
+                                SidePanel::Watchlist,
+                                &icons::WIDGET_BAR_WATCHLIST,
+                            ),
+                            ("Alerts", SidePanel::Alerts, &icons::ALERTS),
+                            (
+                                "Object Tree",
+                                SidePanel::ObjectTree,
+                                &icons::WIDGET_BAR_LAYERS,
+                            ),
+                            ("Data Window", SidePanel::DataWindow, &icons::TABLE),
+                            (
+                                "Time and sales",
+                                SidePanel::TimeAndSales,
+                                &icons::SETTINGS_EVENTS,
+                            ),
+                            ("Order flow", SidePanel::OrderFlow, &icons::SETTINGS_TRADING),
+                        ]
+                        .into_iter()
+                        .filter(|(_, panel, _)| {
+                            self.api_samples || *panel != SidePanel::TimeAndSales
+                        }) {
+                            if menu_item(ui, label, icon, None).clicked() {
+                                panel_action = Some(panel);
+                                ui.close();
                             }
-                            // Host actions live in the menu so the default strip keeps the
-                            // built-in controls only.
-                            for (label, action) in [
-                                ("Quick search", TopToolbarAction::OpenQuickSearch),
-                                ("Switch theme", TopToolbarAction::ThemeToggle),
-                                ("Research", TopToolbarAction::Host("research".into())),
-                                ("Copy symbol", TopToolbarAction::Host("copy-symbol".into())),
-                            ] {
-                                if ui.button(label).clicked() {
-                                    menu_action = action;
-                                    ui.close();
-                                }
+                        }
+                        for widget in &self.widget_bar.widgets {
+                            // A note page distinguishes Session notes from Formatting here.
+                            let icon = if widget.id == 2 {
+                                &icons::NOTE
+                            } else {
+                                &widget.icon
+                            };
+                            if SidePanel::from_widget(widget.id).is_none()
+                                && menu_item(ui, &widget.tooltip, icon, None).clicked()
+                            {
+                                widget_action = Some(widget.id);
+                                ui.close();
                             }
-                            sample = commands::sample_menu(ui, "Samples");
-                        });
-                    },
-                    |_| {},
-                );
+                        }
+                        if menu_item(ui, "Keyboard shortcuts", &icons::WIDGET_BAR_HELP, None)
+                            .clicked()
+                        {
+                            show_help = true;
+                            ui.close();
+                        }
+                        ui.separator();
+                    }
+                    // Host actions live in the menu so the default strip keeps the
+                    // built-in controls only.
+                    for (label, icon, action) in [
+                        (
+                            "Research",
+                            &icons::QUICK_SEARCH,
+                            TopToolbarAction::Host("research".into()),
+                        ),
+                        (
+                            "Copy symbol",
+                            &icons::DUPLICATE,
+                            TopToolbarAction::Host("copy-symbol".into()),
+                        ),
+                    ] {
+                        if menu_item(ui, label, icon, None).clicked() {
+                            menu_action = action;
+                            ui.close();
+                        }
+                    }
+                });
+                self.top_toolbar = toolbar;
                 if let Some(panel) = panel_action {
                     self.open_panel = (self.open_panel != Some(panel)).then_some(panel);
                     self.widget_bar.active_widget = None;
@@ -1774,10 +1805,12 @@ impl DemoApp {
                     ctx.copy_text(self.chart.symbol().to_string());
                 }
                 if id == "research" {
-                    if let Some(click) = &self.last_chart_click {
+                    if let Some(click) = &self.last_chart_click
+                        && let Some(time) = click.time
+                    {
                         self.toasts.info(format!(
                             "Host action: {id}, last chart click: {}, price: {:.4}",
-                            click.time.to_rfc3339(),
+                            time.to_rfc3339(),
                             click.price
                         ));
                     } else {
@@ -3010,8 +3043,11 @@ impl DemoApp {
                     ctx.request_repaint();
                 }
                 egui_charts::widget::ChartEvent::Click { position, button } => {
-                    if button == egui::PointerButton::Primary && position.series == SeriesId::MAIN {
-                        replay_click.get_or_insert(position.time);
+                    if button == egui::PointerButton::Primary
+                        && position.series == SeriesId::MAIN
+                        && let Some(time) = position.time
+                    {
+                        replay_click.get_or_insert(time);
                     }
                     self.last_chart_click = Some(position);
                 }
@@ -3068,7 +3104,9 @@ impl DemoApp {
                 bar.open, bar.high, bar.low, bar.close, bar.volume
             ))
             .on_hover_ui(|ui| {
-                ui.label(pointer.time.to_rfc3339());
+                if let Some(time) = pointer.time {
+                    ui.label(time.to_rfc3339());
+                }
                 ui.label(format!("Bar {} · Pane {}", pointer.index, pointer.pane));
                 for (id, bar) in &pointer.series_bars {
                     ui.label(format!("Series {}: {:.2}", id.0, bar.close));
@@ -4120,7 +4158,7 @@ mod tests {
         let replay = app.replay.as_ref().unwrap();
         assert_eq!(replay.state.curr_bar, index);
         assert!(!replay.state.is_playing());
-        assert_eq!(app.last_chart_click.as_ref().unwrap().time, time);
+        assert_eq!(app.last_chart_click.as_ref().unwrap().time, Some(time));
         app.handle_top_toolbar(&ctx, TopToolbarAction::Host("research".into()));
         let message = &app.toasts.toasts().last().unwrap().message;
         assert!(message.contains(&time.to_rfc3339()), "{message}");
@@ -7451,7 +7489,10 @@ mod tests {
                         )),
                         "{labels:?}"
                     );
-                    assert!(labels.contains(&pointer.time.to_rfc3339()), "{labels:?}");
+                    assert!(
+                        labels.contains(&pointer.time.unwrap().to_rfc3339()),
+                        "{labels:?}"
+                    );
                     assert!(
                         labels.iter().any(|label| label.starts_with("SMA: SMA(2) ")),
                         "{labels:?}"

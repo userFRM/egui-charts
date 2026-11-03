@@ -228,6 +228,23 @@ impl Chart {
                 self.add_study_pane(id);
             }
         }
+        let main = std::mem::take(&mut self.pane_layout.main);
+        self.pane_layout.main = self.main_pane_order(main);
+        if self.pane_layout.maximized.is_some_and(|id| {
+            id != PaneId::MAIN
+                && !self
+                    .pane_layout
+                    .panes
+                    .iter()
+                    .any(|pane| pane.id == id && self.pane_shown(pane))
+        }) {
+            self.pane_layout.maximized = None;
+        }
+    }
+
+    /// The price pane's draw order, including series and studies added since its last frame.
+    /// Accepts the existing order to reuse its allocation on each frame.
+    pub(super) fn main_pane_order(&self, mut main: Vec<SeriesId>) -> Vec<SeriesId> {
         let overlays: Vec<_> = self
             .study_ids
             .iter()
@@ -235,8 +252,12 @@ impl Chart {
             .filter(|(_, study)| study.is_overlay())
             .map(|(id, _)| *id)
             .collect();
-        let series: Vec<_> = self.main_pane_series().map(|item| item.id).collect();
-        let main = &mut self.pane_layout.main;
+        let series: Vec<_> = self
+            .price_series
+            .iter()
+            .filter(|item| !self.in_pane(item.id))
+            .map(|item| item.id)
+            .collect();
         main.retain(|id| *id == SeriesId::MAIN || overlays.contains(id) || series.contains(id));
         if !main.contains(&SeriesId::MAIN) {
             main.insert(0, SeriesId::MAIN);
@@ -250,23 +271,14 @@ impl Chart {
             if !main.contains(&id) {
                 main.insert(after.min(main.len()), id);
             }
-            after = main.iter().position(|member| *member == id).unwrap_or(0) + 1;
+            after = after.max(main.iter().position(|member| *member == id).unwrap_or(0) + 1);
         }
         for id in overlays {
             if !main.contains(&id) {
                 main.push(id);
             }
         }
-        if self.pane_layout.maximized.is_some_and(|id| {
-            id != PaneId::MAIN
-                && !self
-                    .pane_layout
-                    .panes
-                    .iter()
-                    .any(|pane| pane.id == id && self.pane_shown(pane))
-        }) {
-            self.pane_layout.maximized = None;
-        }
+        main
     }
 
     /// The pane height the study `id` prefers, if it declares a usable one.
