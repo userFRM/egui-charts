@@ -105,6 +105,8 @@ impl Chart {
         self.set_synced_crosshair_for_series(None, period, price);
     }
 
+    /// As [`Self::set_synced_crosshair`], with the price read on the scale of the bar series
+    /// `series`; a series that is not present clears the position.
     pub(super) fn set_synced_crosshair_for_series(
         &mut self,
         series: Option<super::SeriesId>,

@@ -24,7 +24,8 @@ pub struct ImageExportOptions {
     /// Omit the chart and header backgrounds, retaining plot and drawing colours.
     pub transparent_background: bool,
     /// Draw the crosshair where the pointer last placed it over the plots, or where
-    /// [`Chart::set_crosshair_position`] or a synchronized chart placed it since.
+    /// [`Chart::set_crosshair_position`], [`Chart::set_series_crosshair_position`] or a
+    /// synchronized chart placed it since.
     pub include_crosshair: bool,
     /// Pixels of the textures the host binds itself, by the id its images use, so
     /// `Chart::export_png` and [`Chart::export_svg`] can draw them with `png-export`.
