@@ -1058,6 +1058,7 @@ mod tests {
         );
         // The chart selects the right-clicked series before the host handles its action.
         app.chart.set_series_visible(restored, true);
+        app.chart.series_price_scale_mut(restored).unwrap().reset();
         super::super::tests::settle(&mut app, &ctx);
         for _ in 0..3 {
             ui_frame(&ctx, size, vec![], |ui| {
