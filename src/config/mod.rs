@@ -21,7 +21,7 @@ pub use crosshair::{CrosshairMode, CrosshairOptions, CrosshairStyle};
 pub use drawing_tool::{DrawingInteractionMode, DrawingToolType, ParseToolTypeError};
 pub use interaction::{
     AxisDoubleClickResetOptions, AxisPressedMouseMoveOptions, HandleScaleOptions,
-    HandleScrollOptions, TrackingModeExitMode, TrackingModeOptions,
+    HandleScrollOptions, TouchTrackingExitMode, TrackingModeExitMode, TrackingModeOptions,
 };
 pub use keyboard::{KeyboardAction, KeyboardOptions};
 pub use kinetic::KineticScrollOptions;
