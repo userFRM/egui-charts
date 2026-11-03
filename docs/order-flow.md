@@ -262,8 +262,10 @@ applies.
 Enable `detectors` and connect [`services::OrderFlowDetectors`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/services/struct.OrderFlowDetectors.html) through [`Chart::set_signal_source`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_signal_source).
 Track each instrument with its tick size, then push the same symbol-tagged [`MarketEvent`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/enum.MarketEvent.html) to the
 chart and the service. Historical trades go through [`push_history`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/services/struct.OrderFlowDetectors.html#method.push_history); the host supplies all data.
-Settings hold separate enable, alert and sound choices for each detector. Alert delivery is a
-host integration; these choices do not themselves send notifications.
+Settings hold separate enable, alert and sound choices for each detector, all off until the host
+sets them; [`DetectorSettings::validate`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/services/struct.DetectorSettings.html#method.validate) checks settings restored from storage before
+[`set_settings`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/services/struct.OrderFlowDetectors.html#method.set_settings) applies them. Alert delivery is a host integration; these choices do not
+themselves send notifications.
 
 Stop runs require five same-side fills, each no more than 20 ms after its predecessor, travelling
 at least three ticks without reversing. When any aggressor ids are known, three distinct ids are
