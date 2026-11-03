@@ -12,9 +12,10 @@ npm run build
 The output is `docs/site/dist/`, with base `/egui-charts/docs/`. For live editing,
 run `npm run dev`. After editing a shared guide, restart it to reload that source.
 
-Author site pages in `src/content/docs/*.mdx`. The seven shared `docs/*.md` guides
-stay in place: `prepare-guides.mjs` adds front matter in ignored build inputs.
-`guides.mjs` maps their sources and routes. Edit links always point at the original
+Author site pages in `src/content/docs/*.mdx`. Shared `docs/*.md` guides and the
+root `CHANGELOG.md` stay in place: `prepare-guides.mjs` adds front matter in ignored
+build inputs. `guides.mjs` maps their routes, repository-relative sources and edit
+paths; generator tests run with the build. Edit links always point at the original
 source on `main`. `remark-docs.mjs` converts relative source links to site routes
 and hides Rust documentation setup lines. Source links still work on GitHub.
 

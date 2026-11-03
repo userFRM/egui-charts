@@ -4059,7 +4059,8 @@ mod tests {
     fn chart_click_selects_research_and_the_replay_start() {
         let ctx = egui::Context::default();
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
-        let mut app = DemoApp::new(&cc);
+        // Keep generated signal hitboxes away from the two chart click targets.
+        let mut app = DemoApp::new_at(&cc, "2026-11-03T02:00:00Z".parse().unwrap(), true);
         let frame = |app: &mut DemoApp, events| {
             let mut output = ctx.run_ui(
                 egui::RawInput {

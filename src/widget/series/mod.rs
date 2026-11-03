@@ -8,7 +8,7 @@ pub use options::SeriesOptions;
 pub(super) use options::{PriceSeries, SeriesLegend, base_line};
 
 use super::change_marks::ChangeMarks;
-use super::{Chart, ChartElementId, SeriesId};
+use super::{Chart, ChartElementId, DataOperation, SeriesId};
 use crate::data::FeedState;
 use crate::data::merge::{Merged, Origin, merge, valid};
 use crate::model::{
@@ -67,13 +67,15 @@ impl Chart {
     /// and near the live edge the view follows a new last bar, as with [`update`](Self::update).
     ///
     /// Bar series accept data; unknown ids and study ids are ignored with a warning.
+    /// See [`set_data_operation_notifications`](Self::set_data_operation_notifications) to
+    /// observe every accepted call, including empty and unchanged replacements.
     pub fn set_data(&mut self, series: SeriesId, bars: Vec<Bar>) {
         if (series == SeriesId::MAIN && self.main_series_present
             || self.price_series.iter().any(|item| item.id == series))
             && self.replay.is_some()
         {
             self.replay_set_data(series, bars);
-            self.data_loaded(series);
+            self.data_set(series);
             return;
         }
         if let Some(at) = self.price_series.iter().position(|item| item.id == series) {
@@ -86,14 +88,14 @@ impl Chart {
                 marks.clear();
             }
             item.feed.rejected_bars += rejected;
-            self.data_loaded(series);
+            self.data_set(series);
             return;
         }
         if !self.main_series_present || !holds_bars(series, "set_data") {
             return;
         }
         self.replace_main_data(bars);
-        self.data_loaded(series);
+        self.data_set(series);
     }
 
     pub(super) fn replace_main_data(&mut self, bars: Vec<Bar>) {
@@ -126,7 +128,27 @@ impl Chart {
     /// bar is reported by [`ChartEvent::DataUpdated`](super::ChartEvent::DataUpdated).
     ///
     /// Bar series accept data; unknown ids and study ids are ignored with a warning.
+    /// See [`set_data_operation_notifications`](Self::set_data_operation_notifications) to
+    /// observe every accepted call, including unchanged updates.
     pub fn update(&mut self, series: SeriesId, bar: Bar) {
+        let operation = if self.host_events.data_operations && valid(&bar) {
+            let clock = self.clock();
+            let slot = clock.bar_open(bar.time);
+            let bars = self
+                .replay
+                .as_ref()
+                .and_then(|replay| replay.bars.get(&series))
+                .map_or_else(|| self.bars(series), Vec::as_slice);
+            Some(
+                match bars.binary_search_by_key(&slot, |bar| clock.bar_open(bar.time)) {
+                    Ok(_) => DataOperation::Update(bar.time),
+                    Err(at) if at == bars.len() => DataOperation::Append(bar.time),
+                    Err(_) => DataOperation::Insert(bar.time),
+                },
+            )
+        } else {
+            None
+        };
         let changed = if (series == SeriesId::MAIN && self.main_series_present
             || self.price_series.iter().any(|item| item.id == series))
             && self.replay.is_some()
@@ -154,10 +176,13 @@ impl Chart {
                 .first_changed
                 .is_some()
         } else {
-            false
+            return;
         };
         if changed {
             self.data_updated(series);
+        }
+        if let Some(operation) = operation {
+            self.data_operation(series, operation);
         }
     }
 
