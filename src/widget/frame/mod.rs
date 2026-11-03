@@ -936,7 +936,10 @@ impl Chart {
                 let first = flow.complete_from()?;
                 let candles =
                     self.state.shown()[start_idx..end_idx].partition_point(|bar| bar.time < first);
-                let ranges = self.execution_profile_ranges(start_idx + candles..end_idx)?;
+                let settings = self.trade_profile_settings();
+                let extend = settings.extend_poc || settings.extend_vah || settings.extend_val;
+                let profile_start = if extend { 0 } else { start_idx + candles };
+                let ranges = self.execution_profile_ranges(profile_start..end_idx)?;
                 let mapping = self.get_chart_mapping().with_rect(price_rect);
                 let bars = &self.state.data().bars;
                 let mut profiles = crate::studies::trade_profiles(flow, &ranges);
@@ -944,11 +947,15 @@ impl Chart {
                     let first = bars.partition_point(|b| b.time < profile.range.start);
                     let end = bars.partition_point(|b| b.time < profile.range.end);
                     first < end
-                        && mapping.idx_to_x(end - 1) >= price_rect.left()
                         && mapping.idx_to_x(first) - mapping.bar_spacing * 0.45
                             <= price_rect.right()
                 });
-                Some((flow.price_step(), flow.tick_size(), profiles))
+                // Sessions left of the view only draw their extensions.
+                let shown = profiles.partition_point(|profile| {
+                    let end = bars.partition_point(|b| b.time < profile.range.end);
+                    mapping.idx_to_x(end - 1) < price_rect.left()
+                });
+                Some((flow.price_step(), flow.tick_size(), profiles, shown))
             });
         let fixed_footprint = self
             .feed_link
@@ -991,8 +998,8 @@ impl Chart {
         #[cfg(feature = "studies")]
         let profile_prices = execution_profiles
             .iter()
-            .flat_map(|(step, tick, profiles)| {
-                profiles.iter().flat_map(move |profile| {
+            .flat_map(|(step, tick, profiles, shown)| {
+                profiles[*shown..].iter().flat_map(move |profile| {
                     profile
                         .volume
                         .levels
@@ -1944,14 +1951,15 @@ impl Chart {
                         );
                     }
                     #[cfg(feature = "studies")]
-                    if session_profiles && let Some((step, tick, profiles)) = &execution_profiles {
+                    if session_profiles
+                        && let (Some((_, _, profiles, _)), Some(flow)) = (&execution_profiles, feed)
+                    {
                         crate::chart::overlays::render_session_volume_profiles(
                             &clipped_painter,
                             &mapping,
                             bars,
                             profiles,
-                            *step,
-                            *tick,
+                            flow,
                             self.trade_profile_settings(),
                         );
                     }
@@ -2998,8 +3006,8 @@ impl Chart {
             self.main_pane_series(),
         );
         #[cfg(feature = "studies")]
-        if let Some((step, tick, profiles)) = &execution_profiles {
-            for profile in profiles {
+        if let Some((step, tick, profiles, shown)) = &execution_profiles {
+            for profile in &profiles[*shown..] {
                 let levels = &profile.volume.levels;
                 let Some(((&low, _), (&high, _))) =
                     levels.first_key_value().zip(levels.last_key_value())

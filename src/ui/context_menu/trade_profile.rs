@@ -236,6 +236,7 @@ mod tests {
                 nodes: Some(crate::data::NodeSensitivity::default()),
                 value_area: Some(0.6),
                 value_area_guides: true,
+                ..Default::default()
             });
             let mut menus = ChartMenus::default();
             let frame = |chart: &mut Chart, menus: &mut ChartMenus, events| {
