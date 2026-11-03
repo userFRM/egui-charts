@@ -46,7 +46,7 @@ impl Chart {
         }
         for pane in &mut self.pane_layout.panes {
             pane.scale.reset();
-            for scale in pane.scales.values_mut() {
+            for (_, scale) in &mut pane.scales {
                 scale.reset();
             }
         }

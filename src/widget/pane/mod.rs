@@ -96,9 +96,8 @@ pub(super) struct Pane {
     pub(super) preserve: bool,
     pub(super) collapsed: Option<bool>,
     pub(super) scale: crate::scales::PriceScale,
-    /// Named assignments other than the pane's default right scale.
-    pub(super) scales:
-        std::collections::HashMap<crate::model::SeriesScale, crate::scales::PriceScale>,
+    /// Named assignments other than the pane's default right scale, in creation order.
+    pub(super) scales: Vec<(crate::model::SeriesScale, crate::scales::PriceScale)>,
     /// Panel rect in the last frame; [`Rect::NOTHING`] when the pane was not drawn.
     pub(super) rect: Rect,
 }
@@ -113,7 +112,7 @@ impl Pane {
             preserve: false,
             collapsed: None,
             scale: Self::new_scale(),
-            scales: Default::default(),
+            scales: Vec::new(),
             rect: Rect::NOTHING,
         }
     }
@@ -135,7 +134,10 @@ impl Pane {
         if key == crate::model::SeriesScale::Right {
             &self.scale
         } else {
-            self.scales.get(&key).unwrap_or(&self.scale)
+            self.scales
+                .iter()
+                .find(|(item, _)| *item == key)
+                .map_or(&self.scale, |(_, scale)| scale)
         }
     }
 
@@ -146,7 +148,14 @@ impl Pane {
         if key == crate::model::SeriesScale::Right {
             &mut self.scale
         } else {
-            self.scales.entry(key).or_insert_with(Self::new_scale)
+            let at = match self.scales.iter().position(|(item, _)| *item == key) {
+                Some(at) => at,
+                None => {
+                    self.scales.push((key, Self::new_scale()));
+                    self.scales.len() - 1
+                }
+            };
+            &mut self.scales[at].1
         }
     }
 

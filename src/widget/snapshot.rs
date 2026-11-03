@@ -303,11 +303,7 @@ impl Chart {
                             pane.members.iter().map(|id| id.0).collect()
                         },
                         scale: (*id != PaneId::MAIN).then(|| pane.scale.clone()),
-                        scales: pane
-                            .scales
-                            .iter()
-                            .map(|(key, scale)| (*key, scale.clone()))
-                            .collect(),
+                        scales: pane.scales.clone(),
                     }
                 })
                 .collect(),
