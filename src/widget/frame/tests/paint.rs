@@ -1011,3 +1011,198 @@ fn volume_uses_themes_alpha_and_pitch_above_a_configured_baseline() {
         }
     }
 }
+
+/// Saved settings drive feed footprints, selected statistics and session profiles together.
+#[cfg(feature = "ui")]
+#[test]
+fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
+    use crate::data::{Datafeed, HistoryPage, HistoryRequest, Reply, TradePage, TradeRequest};
+    use crate::model::{
+        Bar, ChartType, ChartTypeParams, FootprintMode, FootprintStatistic, Instrument, OrderSide,
+        Tick, Timeframe, TradeProfileSettings,
+    };
+    use crate::widget::{Chart, ChartBuilder, ChartSnapshot};
+    use chrono::{TimeDelta, Utc};
+    struct Executions(bool);
+    impl Datafeed for Executions {
+        fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {
+            reply.send(Ok(Instrument::new(symbol).with_tick_size(1.0)));
+        }
+        fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
+            let time = "2026-01-05T10:00:00Z"
+                .parse::<chrono::DateTime<Utc>>()
+                .unwrap();
+            let high = if self.0 { 102.0 } else { 101.0 };
+            reply.send(Ok(HistoryPage::new(
+                vec![Bar::new(time, 100.0, high, 100.0, 101.0, 10.0)],
+                true,
+            )));
+        }
+        fn trades(&self, _: TradeRequest, reply: Reply<TradePage>) {
+            let time = "2026-01-05T10:00:00Z"
+                .parse::<chrono::DateTime<Utc>>()
+                .unwrap();
+            let levels = if self.0 {
+                vec![(100.0, 1.0), (101.0, 6.0), (102.0, 3.0)]
+            } else {
+                vec![(100.0, 2.0), (101.0, 3.0)]
+            };
+            reply.send(Ok(TradePage::new(
+                levels
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, (price, size))| {
+                        Tick::new(
+                            time + TimeDelta::seconds(i as i64),
+                            price,
+                            size,
+                            Some(if i == 0 {
+                                OrderSide::Sell
+                            } else {
+                                OrderSide::Buy
+                            }),
+                        )
+                    })
+                    .collect(),
+                true,
+            )));
+        }
+    }
+    let ctx = egui::Context::default();
+    let mut chart = ChartBuilder::new()
+        .with_feed(std::sync::Arc::new(Executions(false)))
+        .with_symbol("FLOW")
+        .with_timeframe(Timeframe::Min1)
+        .with_chart_type(ChartType::VolumeFootprint)
+        .build();
+    chart.set_server_time(Some(
+        "2026-01-05T10:02:00Z"
+            .parse::<chrono::DateTime<Utc>>()
+            .unwrap(),
+    ));
+    let draw = |chart: &mut Chart| {
+        chart.apply_synced_time_scale(160.0, 1.0);
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+                ..Default::default()
+            },
+            |ui| {
+                chart.show(ui);
+            },
+        );
+        output.textures_delta.clear();
+        output.shapes
+    };
+    for _ in 0..5 {
+        draw(&mut chart);
+    }
+    for (ticks, expected) in [(2, vec!["5"]), (1, vec!["2", "3"])] {
+        chart.set_chart_type_params(ChartTypeParams {
+            footprint_modes: vec![FootprintMode::Volume],
+            footprint_row_ticks: ticks,
+            footprint_poc: false,
+            ..Default::default()
+        });
+        let shapes = draw(&mut chart);
+        let map = chart.get_chart_mapping();
+        assert!(map.price_to_y(99.5) <= map.rect.bottom());
+        assert!(map.price_to_y(101.5) >= map.rect.top());
+        let mut numbers: Vec<_> = shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                Shape::Text(text)
+                    if text.pos.x > map.idx_to_x(0) - 70.0
+                        && text.pos.x < map.idx_to_x(0) + 70.0
+                        && text.pos.y > map.rect.top() + 40.0
+                        && text.pos.y < map.rect.bottom() - 20.0 =>
+                {
+                    Some(text.galley.text().to_owned())
+                }
+                _ => None,
+            })
+            .collect();
+        numbers.sort();
+        assert_eq!(numbers, expected, "ticks per row {ticks}");
+        if ticks == 2 {
+            let flow = chart
+                .feed_link
+                .as_ref()
+                .unwrap()
+                .footprint
+                .as_ref()
+                .unwrap();
+            assert_eq!(
+                flow.price_step(),
+                1.0,
+                "display grouping keeps the source executions"
+            );
+        }
+    }
+    let params = ChartTypeParams {
+        footprint_modes: vec![FootprintMode::Delta],
+        footprint_row_ticks: 1,
+        footprint_statistics: true,
+        footprint_statistics_rows: vec![FootprintStatistic::Volume, FootprintStatistic::Delta],
+        profile: TradeProfileSettings {
+            value_area: Some(0.5),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    chart.user_action(|chart| chart.set_chart_type_params(params.clone()));
+    let shapes = draw(&mut chart);
+    let bottom = chart.get_rendered_price_rect().bottom();
+    let labels: Vec<_> = shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            Shape::Text(text) if text.pos.y >= bottom && text.pos.y < bottom + 28.0 => {
+                Some(text.galley.text().to_owned())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(labels, ["Vol", "Delta", "5", "1"]);
+    assert_eq!(chart.trade_profile_settings().value_area, Some(0.5));
+    let saved = serde_json::to_vec(&chart.snapshot().unwrap()).unwrap();
+    let snapshot: ChartSnapshot = serde_json::from_slice(&saved).unwrap();
+    let mut restored = Chart::new(crate::model::BarData::new());
+    restored.restore(&snapshot).unwrap();
+    assert_eq!(restored.chart_type_params(), &params);
+    assert!(chart.undo());
+    assert_eq!(chart.trade_profile_settings().value_area, Some(0.7));
+    assert!(chart.redo());
+    assert_eq!(chart.chart_type_params(), &params);
+    let mut profile = ChartBuilder::new()
+        .with_feed(std::sync::Arc::new(Executions(true)))
+        .with_symbol("PROFILE")
+        .with_timeframe(Timeframe::Min1)
+        .with_chart_type(ChartType::SessionVolumeProfile)
+        .build();
+    for _ in 0..5 {
+        draw(&mut profile);
+    }
+    for (share, high) in [(0.7, 102.5), (0.5, 101.5)] {
+        profile.set_chart_type_params(ChartTypeParams {
+            profile: TradeProfileSettings {
+                value_area: Some(share),
+                value_area_guides: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let shapes = draw(&mut profile);
+        let map = profile.get_chart_mapping();
+        let left = map.idx_to_x(0) - map.bar_spacing * 0.45;
+        for edge in [100.5, high] {
+            assert!(
+                shapes.iter().any(|s| matches!(&s.shape,
+                Shape::LineSegment { points, .. }
+                    if (points[0].x - left).abs() < 0.01
+                    && (points[0].y - map.price_to_y(edge)).abs() < 0.01
+                    && points[0].y == points[1].y)),
+                "share {share}, edge {edge}"
+            );
+        }
+    }
+}

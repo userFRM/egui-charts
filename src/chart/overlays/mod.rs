@@ -13,7 +13,9 @@ pub use footprint::{
     FootprintColor, FootprintConfig, FootprintMode, pullback_range, render_footprint,
     render_footprint_statistics,
 };
-pub(crate) use footprint::{footprint_column_width, render_footprint_statistics_rows};
+pub(crate) use footprint::{
+    fixed_row_group, footprint_column_width, render_footprint_statistics_rows,
+};
 mod heatmap_strip;
 mod liquidity_heatmap;
 pub use liquidity_heatmap::{LiquidityHeatmap, LiquidityHeatmapConfig};

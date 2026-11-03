@@ -20,7 +20,8 @@ impl SymbolTab {
         ui.space_md();
         match settings.chart_type {
             ChartType::VolumeFootprint => {
-                Self::footprint(ui, &mut settings.chart_type_params);
+                let candles = [settings.bullish_color, settings.bearish_color];
+                Self::footprint(ui, &mut settings.chart_type_params, candles);
                 return;
             }
             ChartType::SessionVolumeProfile => {
@@ -164,7 +165,8 @@ impl SymbolTab {
         .to_owned()
     }
 
-    fn footprint(ui: &mut Ui, params: &mut ChartTypeParams) {
+    /// `candles` are the chart's up and down colours, which unset buy and sell colours follow.
+    fn footprint(ui: &mut Ui, params: &mut ChartTypeParams, [up, down]: [Color32; 2]) {
         ui.strong(l10n::text(ui.ctx(), "Footprint"));
         Self::section(ui, "Display", true, |ui| {
             let label = ui.label(l10n::text(ui.ctx(), "Columns"));
@@ -221,12 +223,12 @@ impl SymbolTab {
                 );
             });
             ui.end_row();
-            let theme = ui.active_theme();
+            let text = ui.active_theme().chart.axis_text;
             for (i, (name, default)) in [
-                ("Buy colour", theme.chart.candle_up),
-                ("Sell colour", theme.chart.candle_down),
-                ("Text colour", theme.chart.axis_text),
-                ("Neutral colour", theme.chart.axis_text),
+                ("Buy colour", up),
+                ("Sell colour", down),
+                ("Text colour", text),
+                ("Neutral colour", text),
             ]
             .into_iter()
             .enumerate()
@@ -374,13 +376,13 @@ impl SymbolTab {
                 ui.add(
                     egui::DragValue::new(&mut params.footprint_font_size[i])
                         .range(8.0..=24.0)
-                        .suffix(" pt"),
+                        .suffix(l10n::text(ui.ctx(), " pt")),
                 )
                 .labelled_by(label.id);
                 ui.end_row();
             }
         });
-        Self::section(ui, "Bar statistics", true, |ui| {
+        Self::section(ui, "Statistics", true, |ui| {
             Self::switch(ui, "Bar statistics", &mut params.footprint_statistics);
             if params.footprint_statistics {
                 for row in FootprintStatistic::ALL {
@@ -393,11 +395,11 @@ impl SymbolTab {
                     let was_enabled = enabled;
                     Self::switch(ui, name, &mut enabled);
                     if enabled != was_enabled {
-                        if enabled {
-                            params.footprint_statistics_rows.push(row);
-                        } else {
-                            params.footprint_statistics_rows.retain(|r| *r != row);
-                        }
+                        let rows = &params.footprint_statistics_rows;
+                        params.footprint_statistics_rows = FootprintStatistic::ALL
+                            .into_iter()
+                            .filter(|r| if *r == row { enabled } else { rows.contains(r) })
+                            .collect();
                     }
                 }
             }

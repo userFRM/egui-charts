@@ -618,11 +618,17 @@ fn volume_text(value: f64, abbreviate: bool) -> String {
     }
 }
 
+/// Input rows per displayed row holding at least `row_ticks` instrument ticks; zero keeps the
+/// input rows.
+pub(crate) fn fixed_row_group(flow: &Footprint, row_ticks: u32) -> i64 {
+    let input_ticks = (flow.price_step() / flow.tick_size()).round() as u32;
+    i64::from(row_ticks.div_ceil(input_ticks).clamp(1, 1_000_000))
+}
+
 fn row_group(mapping: &ChartMapping, bar: &Bar, flow: &Footprint, config: &FootprintConfig) -> i64 {
     let raw_height =
         (mapping.price_to_y(bar.close + flow.price_step()) - mapping.price_to_y(bar.close)).abs();
-    let input_ticks = (flow.price_step() / flow.tick_size()).round() as u32;
-    let manual = i64::from(config.row_ticks.div_ceil(input_ticks).clamp(1, 1_000_000));
+    let manual = fixed_row_group(flow, config.row_ticks);
     config
         .auto_row_height
         .filter(|h| h.is_finite() && *h > 0.0)
@@ -1235,13 +1241,13 @@ mod tests {
                     false,
                 ),
             );
-            let config: FootprintConfig = serde_json::from_value(serde_json::json!({
-                "auto_row_height": auto,
-                "row_ticks": manual,
-                "show_poc": false,
-                "value_area": null,
-            }))
-            .unwrap();
+            let config = FootprintConfig {
+                auto_row_height: auto,
+                row_ticks: manual,
+                show_poc: false,
+                value_area: None,
+                ..Default::default()
+            };
             let mut output = egui::Context::default().run_ui(
                 egui::RawInput {
                     screen_rect: Some(rect),
