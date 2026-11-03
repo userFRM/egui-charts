@@ -287,7 +287,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Live trade aggregation supports time, execution-count, volume, delta and range intervals; resampling helpers accept session rules.
 - [x] Optional per-series bar limits bound retained history; feed queues coalesce updates and bound pending trades/depth.
 - [x] Runtime symbol/interval changes reload the feed; explicit reload and reset paths invalidate old work.
-- [x] Public events report pointer, range, symbol, interval and data changes; custom menu entries and toolbar controls return application identifiers.
+- [x] Public events report pointer, range, symbol, interval and data changes; custom menu entries and toolbar controls return application identifiers. Cursor and click payloads can include hidden study plots with stable study ids through `Chart::set_cursor_data_policy`; visible readouts, rendering and autoscale keep their visibility rules, and missing values stay absent.
 - [x] Added price series, custom study-backed series and attached `Primitive` renderers support visibility, hit testing, scale participation and removal. Bar-series logical-range queries return stored slices and shared-scale distances, including gaps and fractional bounds outside the data. The demo menu's Samples entries demonstrate toggleable session backgrounds, axis labels and a custom range pane with pointer feedback.
 - [ ] Reset a stale manual price range when changing symbols.
 - [ ] Accept locale, formatters, storage and saved state as builder inputs.
