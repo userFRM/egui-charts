@@ -366,7 +366,13 @@ impl Chart {
                 return None;
             }
             let mut view = self.primitive_view(item.series, coords.clone());
-            if let Some(study) = view.study
+            if let Some(series) = self
+                .price_series
+                .iter()
+                .find(|series| series.id == item.series)
+            {
+                view.mapping.price = self.series_map(series, coords.rect);
+            } else if let Some(study) = view.study
                 && matches!(study.scale(), crate::studies::StudyScale::Shared(_))
             {
                 view.mapping = crate::chart::rendering::study_mapping(study, coords);

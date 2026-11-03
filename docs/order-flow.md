@@ -220,8 +220,9 @@ let best_bid = books.bars.get(&open).and_then(|book| book.bids.first());
 
 The chart gives both its instrument's tick size (hosts without a feed call [`set_tick_size`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.OrderFlowInput.html#method.set_tick_size)),
 builds the footprint from the executions it receives and from the trades it still holds when the
-source is connected, and passes each synchronized book update before coalescing. Both keep only
-bars of an interval measured in time. [`OrderFlowBars`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.OrderFlowBars.html) says what a copy covers: [`complete_from`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.OrderFlowBars.html#structfield.complete_from) is
+source is connected, and passes each synchronized book update before coalescing. The footprint
+follows the chart's bars on every interval, and the book keeps only bars of an interval measured
+in time. [`OrderFlowBars`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.OrderFlowBars.html) says what a copy covers: [`complete_from`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.OrderFlowBars.html#structfield.complete_from) is
 the oldest bar held in full, since a bar cut by retention or data loss is left out rather than
 shown short, and a later bar that is absent had no executions or no book; [`cutoff`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.OrderFlowBars.html#structfield.cutoff) is the replay
 cutoff; [`revision`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.OrderFlowBars.html#structfield.revision) changes whenever the bars may have. A bar's book is the one after its last

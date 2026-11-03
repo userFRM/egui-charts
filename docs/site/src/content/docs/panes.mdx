@@ -37,10 +37,12 @@ accepts an added series or study and its destination
 It returns `false` for the main series, unknown IDs or a custom study that
 rejects the placement. Use `PaneId::MAIN` to move an added series back.
 
-In the main pane, the added series follows
+In every pane, the added series follows
 [`SeriesOptions::scale`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.SeriesOptions.html#structfield.scale).
-In a lower pane, it uses that pane's scale. This is why the scene assigns volume
-an independent scale for its return to the main pane. Change its active scale
+Each pane keeps its own scale for every assignment, so a moved series joins the
+destination pane's scale with the same assignment, with that scale's options and
+range. The scene assigns volume an independent scale so that it does not share
+the price axis on its return to the main pane. Change its active scale
 through [`series_price_scale_mut`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.series_price_scale_mut),
 as in the [price scale guide](price-scale.mdx).
 
