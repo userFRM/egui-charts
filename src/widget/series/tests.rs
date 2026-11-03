@@ -659,6 +659,226 @@ fn marker_options_fit_and_layer_the_markers() {
     }
 }
 
+/// Autoscaling fits the painted shape, outline and multiline text at both edges, at the
+/// configured size, on shared and independent scales and in a separate pane. Manual ranges,
+/// disabled autoscaling, hidden series and markers outside the horizontal view keep their fit.
+/// Flat data and flat line scales also fit oversized above-bar markers.
+#[test]
+fn marker_autoscale_keeps_shapes_and_text_inside_each_pane() {
+    use crate::model::{MarkerOptions, MarkerPos, MarkerShape, SeriesScale};
+    use crate::scales::{PriceScaleMargins, PriceScaleMode};
+    use crate::widget::test_frames::{chart, shapes};
+    use egui::{Color32, Shape};
+
+    for placement in ["main", "shared", "independent", "pane", "flat", "line"] {
+        for mode in [
+            PriceScaleMode::Normal,
+            PriceScaleMode::Logarithmic,
+            PriceScaleMode::Percentage,
+            PriceScaleMode::IndexedTo100,
+        ] {
+            for inverted in [false, true] {
+                let ctx = egui::Context::default();
+                let flat = placement == "flat";
+                let large = flat || placement == "line";
+                let mut chart = chart(&[if flat { 110.0 } else { 100.0 }], &[110.0]);
+                chart.config.show_volume = false;
+                chart.config.show_ohlc_info = false;
+                chart.config.right_axis_scale_mode = mode;
+                let bars = chart.bars(SeriesId::MAIN).to_vec();
+                let id = if matches!(placement, "main" | "flat") {
+                    SeriesId::MAIN
+                } else {
+                    let id = chart.add_series(crate::widget::SeriesOptions {
+                        chart_type: if placement == "line" {
+                            crate::model::ChartType::Line
+                        } else {
+                            crate::model::ChartType::Candles
+                        },
+                        scale: if matches!(placement, "independent" | "line") {
+                            SeriesScale::Left
+                        } else {
+                            SeriesScale::Right
+                        },
+                        ..Default::default()
+                    });
+                    chart.set_data(id, bars.clone());
+                    if placement == "pane" {
+                        let pane = chart.add_pane();
+                        assert!(chart.move_series_to_pane(id, pane));
+                        chart.set_pane_stretch_factor(pane, 3.0);
+                    }
+                    id
+                };
+                let options = chart.series_price_scale_mut(id).unwrap().options_mut();
+                options.mode = mode;
+                options.invert_scale = inverted;
+                options.scale_margins = PriceScaleMargins {
+                    top: 0.0,
+                    bottom: 0.0,
+                };
+                frame(&ctx, &mut chart, 0.0, Vec::new());
+                chart.set_visible_bars(40);
+                chart.set_start_idx(40);
+                frame(&ctx, &mut chart, 0.1, Vec::new());
+                let baseline = chart.series_price_scale(id).unwrap().range();
+                let mut marks = Vec::new();
+                for (i, shape) in [
+                    MarkerShape::Circle,
+                    MarkerShape::Square,
+                    MarkerShape::ArrowUp,
+                    MarkerShape::ArrowDown,
+                    MarkerShape::TriangleUp,
+                    MarkerShape::TriangleDown,
+                    MarkerShape::Diamond,
+                    MarkerShape::Star,
+                    MarkerShape::Cross,
+                    MarkerShape::Flag,
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    for (edge, price, position) in [
+                        (0, 110.0, MarkerPos::AboveBar),
+                        (1, 100.0, MarkerPos::BelowBar),
+                        (2, 110.0, MarkerPos::AtPriceTop),
+                        (3, 100.0, MarkerPos::AtPriceBottom),
+                        (4, 110.0, MarkerPos::AtPriceMiddle),
+                        (5, 100.0, MarkerPos::AtPriceMiddle),
+                    ] {
+                        if large && position != MarkerPos::AboveBar {
+                            continue;
+                        }
+                        marks.push(
+                            Marker::new(bars[45 + i * 2].time)
+                                .with_shape(shape)
+                                .with_color(Color32::RED)
+                                .with_size(if large { 10.0 } else { 2.0 })
+                                .with_text(if large {
+                                    format!("edge {i}/{edge}")
+                                } else {
+                                    format!("edge {i}/{edge}\nannotation")
+                                })
+                                .at_price(price, position),
+                        );
+                    }
+                }
+                chart.set_markers(id, marks.clone());
+                chart.set_marker_options(
+                    id,
+                    MarkerOptions {
+                        auto_scale: false,
+                        ..Default::default()
+                    },
+                );
+                frame(&ctx, &mut chart, 0.2, Vec::new());
+                assert_eq!(chart.series_price_scale(id).unwrap().range(), baseline);
+                chart.set_marker_options(id, MarkerOptions::default());
+                frame(&ctx, &mut chart, 0.3, Vec::new());
+                let painted = shapes(&ctx, &mut chart, 0.4, Vec::new());
+                let pane = chart.series_pane(id).unwrap();
+                let rect = if pane == crate::widget::PaneId::MAIN {
+                    chart.get_rendered_price_rect()
+                } else {
+                    chart
+                        .pane_layout
+                        .panes
+                        .iter()
+                        .find(|p| p.id == pane)
+                        .unwrap()
+                        .rect
+                };
+                let mut labels = 0;
+                let mut bounds = Vec::new();
+                let mut in_marker = false;
+                for shape in &painted {
+                    let marker = match shape {
+                        Shape::Circle(c) => c.fill == Color32::RED,
+                        Shape::Rect(r) => r.fill == Color32::RED || r.stroke.color == Color32::RED,
+                        Shape::Path(p) => {
+                            p.fill == Color32::RED
+                                || p.stroke.color == egui::epaint::ColorMode::Solid(Color32::RED)
+                        }
+                        Shape::LineSegment { stroke, .. } => stroke.color == Color32::RED,
+                        Shape::Text(t) if t.galley.text().starts_with("edge ") => {
+                            labels += 1;
+                            true
+                        }
+                        _ => false,
+                    };
+                    in_marker |= marker;
+                    if in_marker {
+                        bounds.push(shape.visual_bounding_rect());
+                    }
+                    if matches!(shape, Shape::Text(t) if t.galley.text().starts_with("edge ")) {
+                        in_marker = false;
+                    }
+                }
+                assert_eq!(
+                    labels,
+                    marks.len(),
+                    "{placement} {mode:?} inverted {inverted}"
+                );
+                for bounds in bounds {
+                    assert!(
+                        bounds.top() >= rect.top() - 0.01
+                            && bounds.bottom() <= rect.bottom() + 0.01,
+                        "{placement} {mode:?} inverted {inverted}: {bounds:?} outside {rect:?}"
+                    );
+                }
+                let fitted = chart.series_price_scale(id).unwrap().range();
+                frame(&ctx, &mut chart, 0.5, Vec::new());
+                assert_eq!(
+                    chart.series_price_scale(id).unwrap().range(),
+                    fitted,
+                    "no frame-to-frame growth"
+                );
+                chart.set_marker_options(
+                    id,
+                    MarkerOptions {
+                        auto_scale: false,
+                        ..Default::default()
+                    },
+                );
+                frame(&ctx, &mut chart, 0.51, Vec::new());
+                assert_eq!(chart.series_price_scale(id).unwrap().range(), baseline);
+                chart.set_marker_options(id, MarkerOptions::default());
+                let manual = if baseline.min == baseline.max {
+                    crate::scales::PriceRange::new(baseline.min - 0.01, baseline.max + 0.01)
+                } else {
+                    baseline
+                };
+                chart
+                    .series_price_scale_mut(id)
+                    .unwrap()
+                    .set_range(manual.min, manual.max);
+                frame(&ctx, &mut chart, 0.6, Vec::new());
+                assert_eq!(chart.series_price_scale(id).unwrap().range(), manual);
+                chart.series_price_scale_mut(id).unwrap().reset();
+                chart.set_markers(
+                    id,
+                    vec![
+                        Marker::new(bars[0].time)
+                            .at_price(1e6, MarkerPos::AtPriceMiddle)
+                            .with_size(100.0)
+                            .with_text("offscreen"),
+                    ],
+                );
+                frame(&ctx, &mut chart, 0.7, Vec::new());
+                assert_eq!(chart.series_price_scale(id).unwrap().range(), baseline);
+                if placement != "pane" {
+                    let main_baseline = chart.state.price_scale().range();
+                    chart.set_markers(id, marks);
+                    chart.set_series_visible(id, false);
+                    frame(&ctx, &mut chart, 0.8, Vec::new());
+                    assert_eq!(chart.state.price_scale().range(), main_baseline);
+                    assert_eq!(chart.series_price_scale(id).unwrap().range(), baseline);
+                }
+            }
+        }
+    }
+}
+
 /// A live update that raises or lowers the close of a stored bar marks its new close in the
 /// rise or the fall colour, replacing the bar's previous mark, on the main and on an added
 /// series. An unchanged close, a new bar and replaced history add no mark, and a mark goes

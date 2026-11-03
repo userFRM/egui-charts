@@ -421,6 +421,17 @@ impl Chart {
         }
     }
 
+    /// Marker fitting and layering of a bar series, or `None` for an absent series.
+    pub fn marker_options(&self, series: SeriesId) -> Option<MarkerOptions> {
+        if let Some(item) = self.price_series.iter().find(|item| item.id == series) {
+            Some(item.marker_options)
+        } else if series == SeriesId::MAIN && self.main_series_present {
+            Some(self.marker_options)
+        } else {
+            None
+        }
+    }
+
     /// Sets whether the markers of `series` widen its autoscaled price range and where they
     /// are painted. The main series' options also apply to the bar marks of a mark source.
     ///
@@ -456,6 +467,22 @@ impl Chart {
             .push((id, line));
         self.next_price_line += 1;
         Some(id)
+    }
+
+    /// Price lines of a bar series in drawing order, with their handles for editing.
+    /// Unknown ids and study ids yield no lines.
+    pub fn price_lines(&self, series: SeriesId) -> impl Iterator<Item = (PriceLineId, &PriceLine)> {
+        let lines = self
+            .price_series
+            .iter()
+            .find(|item| item.id == series)
+            .map(|item| item.lines.as_slice())
+            .or_else(|| {
+                (series == SeriesId::MAIN && self.main_series_present)
+                    .then_some(self.price_lines.as_slice())
+            })
+            .unwrap_or_default();
+        lines.iter().map(|(id, line)| (*id, line))
     }
 
     /// The price line of `id`, or `None` once it is removed, replaced by
