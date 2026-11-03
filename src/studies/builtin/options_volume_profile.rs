@@ -13,7 +13,7 @@ use crate::model::{Bar, Instrument};
 use crate::studies::{
     Indicator, IndicatorValues, InputKind, InputValue, PlotStyle, StudyError, StudyInput,
 };
-use chrono::{NaiveDate, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use egui::Color32;
 use std::cell::RefCell;
 use std::ops::Range;
@@ -31,6 +31,8 @@ struct CachedProfile {
     net: Option<f64>,
     ratio: Option<f64>,
     pain: Option<f64>,
+    expected_move: Option<(NaiveDate, [f64; 2])>,
+    move_time: Option<i64>,
     volume_available: bool,
     interest_available: bool,
     pain_available: bool,
@@ -64,6 +66,9 @@ pub struct OptionsVolumeProfile {
     exposure: Option<OptionExposureHandle>,
     exposure_levels: [bool; 3],
     max_pain: bool,
+    expected_move: bool,
+    move_iv: bool,
+    as_of: Option<DateTime<Utc>>,
     symbol: String,
     matching_instrument: bool,
     config: VolumeProfileConfig,
@@ -120,6 +125,9 @@ impl OptionsVolumeProfile {
             exposure: None,
             exposure_levels: [false; 3],
             max_pain: false,
+            expected_move: false,
+            move_iv: false,
+            as_of: None,
             symbol,
             matching_instrument: true,
             config,
@@ -144,6 +152,14 @@ impl OptionsVolumeProfile {
     /// Gamma uses [`OptionExposure::gamma`], with net bars by default and optional call and
     /// put walls. Missing contracts are counted in the readout. Attach a provider observation
     /// with [`Self::with_exposure`]; its signs and net values take precedence, even if empty.
+    /// Expected move is off by default. Its method defaults to the ATM call mid plus put mid;
+    /// ATM is the nearest listed strike, lower on a tie. Both bid/ask pairs must be present
+    /// and uncrossed. Implied volatility instead uses price × IV × sqrt(calendar days / 365),
+    /// with the mean of available ATM call/put IVs. The centre is the newest supplied
+    /// underlying price for that expiry; neither method substitutes last trades or bar closes.
+    /// A date cutoff uses the last selected expiry. Dates end at the next UTC midnight;
+    /// live bands age with UTC time, historical bands with the chain query's `as_of` instant.
+    /// Missing inputs or an expired date remove both bounds and their expiry/method label.
     /// Returns `None` for an empty symbol or expiry list.
     pub fn from_chain(
         chain: OptionChain,
@@ -159,6 +175,7 @@ impl OptionsVolumeProfile {
         let mut config = VolumeProfileConfig::default();
         config.display = ProfileDisplay::UpDown;
         Some(Self {
+            as_of: chain.query().as_of,
             through_date: *expiries.last()?,
             source: ProfileSource::Chain(chain, expiries),
             expiries: Expiries::Nearest,
@@ -168,6 +185,8 @@ impl OptionsVolumeProfile {
             exposure: None,
             exposure_levels: [false; 3],
             max_pain: false,
+            expected_move: false,
+            move_iv: false,
             symbol,
             matching_instrument: true,
             config,
@@ -220,7 +239,25 @@ impl OptionsVolumeProfile {
             }
             ProfileSource::Chain(chain, expiries) => {
                 let rows = chain.rows();
-                let day = Utc::now().date_naive();
+                let now = self.as_of.unwrap_or_else(Utc::now);
+                let day = now.date_naive();
+                let same_rows = Arc::ptr_eq(&rows, &cache.chain_rows);
+                let nearest = || expiries.iter().copied().find(|date| *date >= day);
+                if self.expected_move && (!same_rows || cache.move_time != Some(now.timestamp())) {
+                    let expiry = match self.expiries {
+                        Expiries::Nearest => nearest(),
+                        Expiries::One(date) => Some(date),
+                        Expiries::Through => expiries
+                            .iter()
+                            .rev()
+                            .copied()
+                            .find(|date| *date >= day && *date <= self.through_date),
+                    };
+                    cache.expected_move = expiry.and_then(|date| {
+                        expected_move(&rows, date, now, self.move_iv).map(|band| (date, band))
+                    });
+                    cache.move_time = Some(now.timestamp());
+                }
                 let supplied = self
                     .exposure
                     .as_ref()
@@ -230,11 +267,10 @@ impl OptionsVolumeProfile {
                     (None, None) => true,
                     _ => false,
                 };
-                if Arc::ptr_eq(&rows, &cache.chain_rows) && cache.day == Some(day) && same_exposure
-                {
+                if same_rows && cache.day == Some(day) && same_exposure {
                     return;
                 }
-                let nearest = expiries.iter().copied().find(|date| *date >= day);
+                let nearest = nearest();
                 let selected_expiry = |expiry| {
                     expiries.binary_search(&expiry).is_ok()
                         && match self.expiries {
@@ -398,6 +434,64 @@ impl OptionsVolumeProfile {
         cache.profile = VolumeProfile::from_options(&values, row_size).map(Arc::new);
         cache.values = values;
     }
+
+    fn move_band(&self) -> Option<(NaiveDate, [f64; 2])> {
+        if !self.visible || !self.matching_instrument || !self.expected_move {
+            return None;
+        }
+        self.refresh();
+        self.cache.borrow().expected_move
+    }
+}
+
+fn expected_move(
+    rows: &[OptionQuote],
+    expiry: NaiveDate,
+    now: DateTime<Utc>,
+    implied: bool,
+) -> Option<[f64; 2]> {
+    let end = expiry.succ_opt()?.and_hms_opt(0, 0, 0)?.and_utc();
+    if now >= end {
+        return None;
+    }
+    let rows = || rows.iter().filter(|row| row.expiry == expiry);
+    let price = rows()
+        .filter(|row| row.underlying_price.is_some())
+        .max_by_key(|row| row.time)?
+        .underlying_price?;
+    let strike = rows()
+        .min_by(|a, b| {
+            (a.strike - price)
+                .abs()
+                .total_cmp(&(b.strike - price).abs())
+                .then_with(|| a.strike.total_cmp(&b.strike))
+        })?
+        .strike;
+    let contract = |kind| {
+        rows()
+            .filter(|row| row.strike == strike && row.kind == kind)
+            .max_by(|a, b| a.time.cmp(&b.time).then_with(|| b.symbol.cmp(&a.symbol)))
+    };
+    let (call, put) = (contract(OptionKind::Call), contract(OptionKind::Put));
+    let width = if implied {
+        let iv = match (
+            call.and_then(|row| row.implied_volatility),
+            put.and_then(|row| row.implied_volatility),
+        ) {
+            (Some(a), Some(b)) => a * 0.5 + b * 0.5,
+            (a, b) => a.or(b)?,
+        };
+        let days = (end - now).num_milliseconds() as f64 / 86_400_000.0;
+        price * iv * (days / 365.0).sqrt()
+    } else {
+        let mid = |row: &OptionQuote| {
+            let (bid, ask) = (row.bid?, row.ask?);
+            (bid <= ask).then_some(bid * 0.5 + ask * 0.5)
+        };
+        mid(call?)? + mid(put?)?
+    };
+    let band = [price - width, price + width];
+    band.iter().all(|value| value.is_finite()).then_some(band)
 }
 
 // Computed gamma counts unusable contracts separately; an absent side must not erase
@@ -568,6 +662,8 @@ impl Indicator for OptionsVolumeProfile {
                 "Call wall".into(),
                 "Put wall".into(),
                 "Zero gamma".into(),
+                "Expected low".into(),
+                "Expected high".into(),
             ]
         } else {
             Vec::new()
@@ -575,7 +671,7 @@ impl Indicator for OptionsVolumeProfile {
     }
     fn plot_style(&self, line: usize) -> PlotStyle {
         PlotStyle {
-            visible: line == 1 || (3..=5).contains(&line),
+            visible: line == 1 || (3..=7).contains(&line),
             color: self.colors[usize::from(line == 1 || line == 4)],
             width: 1.0,
             pattern: crate::model::LineStyle::Solid,
@@ -583,6 +679,9 @@ impl Indicator for OptionsVolumeProfile {
         }
     }
     fn legend_visible(&self, line: usize) -> bool {
+        if (6..=7).contains(&line) {
+            return self.expected_move;
+        }
         self.refresh();
         if self.gamma_selected(&self.cache.borrow()) {
             line == 2 || (3..=5).contains(&line) && self.exposure_levels[line - 3]
@@ -593,6 +692,9 @@ impl Indicator for OptionsVolumeProfile {
     fn plot_value(&self, line: usize, bar: usize) -> Option<f64> {
         if !self.visible || !self.matching_instrument || bar >= self.values.len() {
             return None;
+        }
+        if (6..=7).contains(&line) {
+            return self.move_band().map(|(_, band)| band[line - 6]);
         }
         self.refresh();
         let cache = self.cache.borrow();
@@ -612,6 +714,26 @@ impl Indicator for OptionsVolumeProfile {
             1 if self.max_pain => cache.pain,
             _ => None,
         }
+    }
+    fn fills(&self) -> Vec<crate::studies::StudyFill> {
+        if self.move_band().is_none() {
+            return Vec::new();
+        }
+        vec![crate::studies::StudyFill {
+            first: crate::studies::FillBoundary::Plot(6),
+            second: crate::studies::FillBoundary::Plot(7),
+            color: self.colors[0].gamma_multiply(0.16),
+            inverted_color: None,
+        }]
+    }
+    fn plot_label(&self) -> Option<(usize, String)> {
+        let (expiry, _) = self.move_band()?;
+        let method = if self.move_iv {
+            "Implied volatility"
+        } else {
+            "ATM straddle"
+        };
+        Some((7, format!("Expected move\n{expiry}\n{method}")))
     }
     fn value_format(&self) -> crate::scales::StudyFormat {
         crate::scales::StudyFormat::Fixed(2)
@@ -639,6 +761,20 @@ impl Indicator for OptionsVolumeProfile {
             Expiries::Through => 1 + dates.len(),
         };
         let mut inputs = vec![
+            StudyInput::new(
+                "expected_move",
+                "Expected move",
+                InputValue::Toggle(self.expected_move),
+                InputKind::Toggle,
+            )
+            .with_default(InputValue::Toggle(false)),
+            StudyInput::new(
+                "move_method",
+                "Expected move method",
+                InputValue::Choice(usize::from(self.move_iv)),
+                InputKind::Choice(vec!["ATM straddle".into(), "Implied volatility".into()]),
+            )
+            .with_default(InputValue::Choice(0)),
             StudyInput::new(
                 "expiry",
                 "Expiry",
@@ -779,6 +915,8 @@ impl Indicator for OptionsVolumeProfile {
                 }
             }
             ("max_pain", InputValue::Toggle(enabled)) => self.max_pain = enabled,
+            ("expected_move", InputValue::Toggle(enabled)) => self.expected_move = enabled,
+            ("move_method", InputValue::Choice(choice)) => self.move_iv = choice == 1,
             ("call_wall", InputValue::Toggle(enabled)) => self.exposure_levels[0] = enabled,
             ("put_wall", InputValue::Toggle(enabled)) => self.exposure_levels[1] = enabled,
             ("zero_gamma", InputValue::Toggle(enabled)) => self.exposure_levels[2] = enabled,
@@ -836,6 +974,194 @@ mod tests {
         fn option_exposure(&self, _: OptionExposureQuery, sink: OptionExposureSink) {
             *self.1.lock().unwrap() = Some(sink);
         }
+    }
+
+    /// ATM ties use the lower listed strike even when its quotes are incomplete. Neither
+    /// a different strike, last trade nor another expiry may fill a missing input.
+    #[test]
+    fn expected_move_tracks_expiry_method_and_snapshot_replacement() {
+        let expiry = NaiveDate::from_ymd_opt(2024, 4, 1).unwrap();
+        let next = expiry + chrono::TimeDelta::days(4);
+        let end = expiry
+            .succ_opt()
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc();
+        let time = end - chrono::TimeDelta::hours(2190); // 91.25 calendar days.
+        let rows = |expiry, time| {
+            [105.0, 95.0]
+                .into_iter()
+                .flat_map(|strike| {
+                    [OptionKind::Call, OptionKind::Put].map(|kind| {
+                        let mut row = OptionQuote::new(
+                            format!("{expiry}-{strike}-{kind:?}"),
+                            expiry,
+                            strike,
+                            kind,
+                            time,
+                        );
+                        row.underlying_price = Some(100.0);
+                        row.bid = Some(if kind == OptionKind::Call { 2.0 } else { 3.0 });
+                        row.ask = row.bid.map(|bid| bid + 2.0);
+                        row.last = Some(999.0);
+                        row.implied_volatility =
+                            Some(if kind == OptionKind::Call { 0.1 } else { 0.3 });
+                        if strike == 105.0 {
+                            row.ask = Some(99.0);
+                            row.implied_volatility = Some(0.9);
+                        }
+                        row
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        let feed = ChainFeed::default();
+        let mut query = OptionChainQuery::new("SAMPLE", expiry..=next);
+        query.as_of = Some(time);
+        let chain = OptionChain::new(&feed, query, || {}).unwrap();
+        let sink = feed.0.lock().unwrap().clone().unwrap();
+        let mut quotes = rows(expiry, time);
+        let mut later = rows(next, time);
+        for row in &mut later {
+            row.bid = Some(5.0);
+            row.ask = Some(6.0);
+        }
+        quotes.extend(later);
+        sink.push(quotes).unwrap();
+        let mut study =
+            OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry, next]).unwrap();
+        let bars = vec![Bar::new(time, 100.0, 101.0, 99.0, 100.0, 1.0); 2];
+        study.calculate(&bars);
+        assert_eq!(study.plot_value(6, 0), None);
+        assert!(study.fills().is_empty());
+        assert!(study.plot_label().is_none());
+        study
+            .set_input("expected_move", InputValue::Toggle(true))
+            .unwrap();
+        for (method, bounds, label) in [
+            (0, [93.0, 107.0], "ATM straddle"),
+            (1, [90.0, 110.0], "Implied volatility"),
+        ] {
+            study
+                .set_input("move_method", InputValue::Choice(method))
+                .unwrap();
+            for (line, expected) in [6, 7].into_iter().zip(bounds) {
+                assert!((study.plot_value(line, 0).unwrap() - expected).abs() < 1e-10);
+                assert_eq!(
+                    study.clone_box().plot_value(line, 1),
+                    study.plot_value(line, 0)
+                );
+                assert!(study.plot_style(line).visible);
+                assert!(study.legend_visible(line));
+            }
+            let (_, text) = study.plot_label().unwrap();
+            assert!(text.contains(&expiry.to_string()) && text.contains(label));
+            let fill = study.fills().remove(0);
+            assert!(matches!(fill.first, crate::studies::FillBoundary::Plot(6)));
+            assert!(matches!(fill.second, crate::studies::FillBoundary::Plot(7)));
+        }
+        study
+            .set_input("move_method", InputValue::Choice(0))
+            .unwrap();
+        for selection in [2, 3] {
+            // One later expiry or all expiries through its date.
+            study
+                .set_input("expiry", InputValue::Choice(selection))
+                .unwrap();
+            assert_eq!(study.plot_value(6, 0), Some(89.0));
+            assert_eq!(study.plot_value(7, 0), Some(111.0));
+            assert!(study.plot_label().unwrap().1.contains(&next.to_string()));
+        }
+
+        for (as_of, present) in [
+            (end - chrono::TimeDelta::milliseconds(1), true),
+            (end, false),
+            (end + chrono::TimeDelta::milliseconds(1), false),
+        ] {
+            let mut query = OptionChainQuery::new("SAMPLE", expiry..=expiry);
+            query.as_of = Some(as_of);
+            let chain = OptionChain::new(&feed, query, || {}).unwrap();
+            feed.0
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .push(rows(expiry, as_of))
+                .unwrap();
+            let mut study =
+                OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry]).unwrap();
+            study.calculate(&bars);
+            study.set_input("expiry", InputValue::Choice(1)).unwrap();
+            study
+                .set_input("expected_move", InputValue::Toggle(true))
+                .unwrap();
+            assert_eq!(study.plot_value(6, 0).is_some(), present, "{as_of}");
+            assert_eq!(study.plot_label().is_some(), present, "{as_of}");
+        }
+
+        // Live snapshots can change quotes without appending an underlying bar.
+        let expiry = Utc::now().date_naive().succ_opt().unwrap();
+        let chain = OptionChain::new(
+            &feed,
+            OptionChainQuery::new("SAMPLE", expiry..=expiry),
+            || {},
+        )
+        .unwrap();
+        let sink = feed.0.lock().unwrap().clone().unwrap();
+        let mut study = OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry]).unwrap();
+        study.calculate(&bars);
+        study
+            .set_input("expected_move", InputValue::Toggle(true))
+            .unwrap();
+        for case in 0..10 {
+            let mut quotes = rows(expiry, Utc::now());
+            match case {
+                1 => quotes[2].bid = None,
+                2 => quotes[3].ask = None,
+                3 => quotes[2].bid = Some(9.0), // Crossed market.
+                4 => quotes
+                    .iter_mut()
+                    .for_each(|row| row.underlying_price = None),
+                5 => quotes.retain(|row| row.strike != 95.0 || row.kind != OptionKind::Put),
+                6 => quotes
+                    .iter_mut()
+                    .for_each(|row| row.implied_volatility = None),
+                7 => {
+                    quotes[2].implied_volatility = None; // One ATM IV remains usable.
+                    for row in &mut quotes {
+                        row.bid = None;
+                        row.ask = None;
+                    }
+                }
+                8 => quotes.clear(),
+                9 => quotes.iter_mut().for_each(|row| {
+                    row.underlying_price = Some(200.0);
+                    row.bid = Some(5.0);
+                    row.ask = Some(6.0);
+                }),
+                _ => {}
+            }
+            sink.push(quotes).unwrap();
+            if case == 6 || case == 8 {
+                study
+                    .set_input("move_method", InputValue::Choice(usize::from(case == 6)))
+                    .unwrap();
+            }
+            let present = matches!(case, 0 | 7 | 9);
+            assert_eq!(study.plot_value(6, 0).is_some(), present, "case {case}");
+            assert_eq!(study.plot_value(7, 1).is_some(), present, "case {case}");
+            assert_eq!(study.plot_label().is_some(), present, "case {case}");
+        }
+        assert_eq!(study.plot_value(6, 0), Some(189.0));
+        assert_eq!(study.plot_value(7, 1), Some(211.0));
+        study.set_visible(false);
+        assert_eq!(study.plot_value(6, 0), None);
+        assert!(study.plot_label().is_none());
+        study.set_visible(true);
+        study.set_instrument(Some(&Instrument::new("OTHER")));
+        assert_eq!(study.plot_value(7, 0), None);
+        assert!(study.plot_label().is_none());
     }
 
     /// The four contracts in the issue give +5/-6 net, and walls at 100/110; a later
