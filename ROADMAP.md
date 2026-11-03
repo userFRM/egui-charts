@@ -260,7 +260,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 ### Export
 
 - [x] `Chart::export_csv` (the default-enabled `csv` feature) exports OHLCV and study values with timestamps and missing-value handling.
-- [x] `Chart::export_png` (the default-enabled `png-export` feature) renders an isolated chart frame on the CPU after font initialisation; export controls include size, title, timestamp, crosshair and transparency.
+- [x] `Chart::export_png` (the default-enabled `png-export` feature) renders an isolated chart frame on the CPU after font initialisation; export controls include size, title, timestamp, crosshair and transparency. Image frames, PNG and SVG independently include or exclude foreground primitives and the crosshair; foreground defaults to included, while frozen exports omit pointer hover and selection decorations and retain persistent drawings.
 - [x] Export dialog and demo actions save images/data or copy images through application facilities. The demo exports either the active chart or the visible arrangement as PNG or SVG, with shared image options and opted-in trading overlays. The terminal's file callback returns save errors and carries a host request to open an exported image.
 - [ ] Capture composed panels, trading overlays, external textures and feed-backed order-flow visuals in a complete terminal image.
 - [ ] Add an export watermark switch, vector image output and print/PDF output.

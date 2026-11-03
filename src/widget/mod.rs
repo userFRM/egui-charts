@@ -305,6 +305,8 @@ pub struct Chart {
     primitives: Vec<primitives::Attached>,
     /// Id of the next primitive attached.
     next_primitive: u64,
+    /// Omit the above-drawings primitive pass in an export snapshot.
+    hide_foreground: bool,
     /// The chart's drawings and the active drawing tool.
     #[cfg(feature = "drawings")]
     pub(crate) drawings: DrawingManager,
