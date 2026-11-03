@@ -99,9 +99,7 @@ impl ChangeMarks {
                     mark.up,
                     color.gamma_multiply(opacity as f32),
                 );
-                if color != egui::Color32::TRANSPARENT {
-                    painter.ctx().request_repaint();
-                }
+                painter.ctx().request_repaint();
             }
             true
         });
@@ -130,10 +128,10 @@ impl Chart {
 
     /// Marks, for `options.duration` after each live update, where the close of `series` rose
     /// or fell against the close of the bar the update replaced: a dot at the new close with a
-    /// chevron above it for a rise and below it for a fall. Updates that leave the close
-    /// unchanged, new bars and history mark nothing. `None` removes the markers.
-    /// Marks fade linearly to transparent over that duration; another changed close of the
-    /// same bar restarts its fade. Expired marks stop requesting repaints.
+    /// chevron above it for a rise and below it for a fall. Each mark fades linearly to
+    /// transparent over that duration, and another changed close of the same bar restarts its
+    /// fade. Updates that leave the close unchanged, new bars and history mark nothing. `None`
+    /// removes the markers.
     ///
     /// Bar series accept change markers; unknown ids and study ids are ignored with a warning.
     pub fn set_change_markers(&mut self, series: SeriesId, options: Option<ChangeMarkers>) {
