@@ -130,8 +130,8 @@ fn study_input_summary(study: &dyn egui_charts::studies::Indicator) -> String {
         .join(" ")
 }
 
-/// Object-tree ids for indicators are offset into a high range so a single
-/// `usize` id space cleanly distinguishes indicators from drawings (which use
+/// Object-tree ids for studies and added series are offset into a high range so a single
+/// `usize` id space cleanly distinguishes series from drawings (which use
 /// small monotonic ids from the drawing manager). The main series reserves the last id.
 const MAIN_SERIES_ID: usize = usize::MAX;
 /// Local tones offered by the settings dialog.
@@ -395,6 +395,7 @@ pub struct DemoApp {
     settings_state: ChartSettingsState,
     symbol_search: SymbolSearchDialog,
     compare_dialog: egui_charts::ui::top_toolbar::CompareSymbolsDialog,
+    comparison_settings: Option<comparison::ComparisonSettings>,
     comparisons: Vec<(String, SeriesId, Arc<LiveFeed>)>,
     /// Spreads picked in symbol search, with feeds of their symbols.
     spreads: Vec<comparison::Spread>,
@@ -682,6 +683,7 @@ impl DemoApp {
             settings_state: ChartSettingsState::default(),
             symbol_search: SymbolSearchDialog::new(),
             compare_dialog: egui_charts::ui::top_toolbar::CompareSymbolsDialog::new(),
+            comparison_settings: None,
             comparisons: Vec::new(),
             spreads: Vec::new(),
             settings: egui_charts::services::SettingsStore::new(storage.clone()),
@@ -1170,7 +1172,7 @@ impl DemoApp {
         } else if !self.indicator_settings.open_for_chart(&self.chart, id)
             && self.chart.series().any(|(series, _)| series == id)
         {
-            self.compare_dialog.open();
+            self.open_comparison_settings(id);
         }
     }
 
@@ -1214,6 +1216,7 @@ impl DemoApp {
             self.chart.end_user_action();
         }
 
+        self.show_comparison_settings(ctx);
         self.show_templates(ctx);
 
         // Chart settings.
@@ -2392,6 +2395,27 @@ impl DemoApp {
         main.visible = self.chart.is_main_series_visible();
         items.push(main);
 
+        // Added bar series, including separate panes and spread expressions.
+        for (id, options) in self.chart.series() {
+            let mut item =
+                SourceItem::data_source(indicator_tree_id(id), &options.name).with_series_id(id);
+            item.visible = self.chart.is_series_visible(id);
+            item.color = options.color;
+            item.z_index = self.chart.series_order(id).unwrap_or(0) as i32;
+            items.push(item);
+        }
+
+        let panes = self.chart.panes();
+        items.sort_by_key(|item| {
+            let id = item.series_id.expect("bar series row");
+            (
+                panes
+                    .iter()
+                    .position(|pane| Some(*pane) == self.chart.series_pane(id)),
+                self.chart.series_order(id),
+            )
+        });
+
         // Live indicators.
         for (id, ind) in self.chart.indicators() {
             let color = ind.colors().first().copied().unwrap_or(egui::Color32::GRAY);
@@ -2459,6 +2483,15 @@ impl DemoApp {
                 if let Some(study) = indicator_from_tree_id(id) {
                     if let Some(ind) = chart.indicator_mut(study) {
                         ind.set_color(0, color);
+                    } else {
+                        let options = chart
+                            .series()
+                            .find(|(id, _)| *id == study)
+                            .map(|(_, options)| options.clone());
+                        if let Some(mut options) = options {
+                            options.color = color;
+                            chart.set_series_options(study, options);
+                        }
                     }
                 } else {
                     chart
@@ -3321,7 +3354,13 @@ impl DemoApp {
 
     fn handle_series_context(&mut self, action: SeriesContextMenuAction) {
         match action {
-            SeriesContextMenuAction::OpenSettings => self.open_chart_settings_dialog(),
+            SeriesContextMenuAction::OpenSettings => {
+                let id = match self.chart.selected_element() {
+                    Some(egui_charts::widget::ChartElementId::Series(id)) => id,
+                    _ => SeriesId::MAIN,
+                };
+                self.open_indicator_settings(id);
+            }
             SeriesContextMenuAction::AddIndicator => {
                 self.indicator_dialog.open_for_chart(&self.chart, None);
             }
@@ -3478,6 +3517,7 @@ impl DemoApp {
             || self.quick_search.is_open()
             || self.symbol_search.is_open()
             || self.compare_dialog.is_open
+            || self.comparison_settings.is_some()
             || self.indicator_dialog.is_open()
             || self.settings_dialog.is_open
             || self.drawing_props.is_open

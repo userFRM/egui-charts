@@ -397,7 +397,11 @@ fn render_row_content(
     settings_response.on_hover_text(l10n::text(ui.ctx(), "Settings"));
 
     // Delete button
-    if item.source_type != SourceType::DataSource {
+    if item.source_type != SourceType::DataSource
+        || item
+            .series_id
+            .is_some_and(|id| id != crate::widget::SeriesId::MAIN)
+    {
         let del_rect =
             Rect::from_center_size(egui::pos2(right_x - 8.0, center_y), vec2(16.0, 16.0));
         let del_response = ui.allocate_rect(del_rect, Sense::click());

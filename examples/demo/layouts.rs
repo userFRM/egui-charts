@@ -230,6 +230,7 @@ impl DemoApp {
     }
 
     fn refresh_active_chart(&mut self) {
+        self.comparison_settings = None;
         self.refresh_strategy_signals();
         self.last_chart_click = None;
         self.crosshair = None;

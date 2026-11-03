@@ -63,7 +63,7 @@ pub(super) fn render_item_menu(
     }
 
     // Rename
-    if item.is_drawing()
+    if (item.is_drawing() || item.source_type == SourceType::DataSource)
         && ui
             .selectable_label(false, l10n::text(ui.ctx(), "Rename…"))
             .clicked()
@@ -87,7 +87,7 @@ pub(super) fn render_item_menu(
     ui.separator();
 
     // Z-ordering (drawings only)
-    if item.source_type == SourceType::Drawing {
+    if item.source_type == SourceType::Drawing || item.source_type == SourceType::DataSource {
         if ui
             .selectable_label(false, l10n::text(ui.ctx(), "Bring to front"))
             .clicked()
@@ -175,7 +175,10 @@ pub(super) fn render_item_menu(
     } else {
         "Delete"
     };
-    if item.source_type != SourceType::DataSource
+    if (item.source_type != SourceType::DataSource
+        || item
+            .series_id
+            .is_some_and(|id| id != crate::widget::SeriesId::MAIN))
         && ui
             .selectable_label(false, l10n::text(ui.ctx(), delete_label))
             .clicked()

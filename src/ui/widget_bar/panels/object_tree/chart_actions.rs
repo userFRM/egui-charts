@@ -12,7 +12,8 @@ impl ObjectTreePanel {
     /// Bind the main data source with `with_series_id(SeriesId::MAIN)` to control its visibility.
     /// Returns `false` for host-owned property dialogs, colour gestures, templates, main-series
     /// removal and renaming non-drawing rows. Drawing names are saved and undone with the drawing.
-    /// Bulk actions apply to every selected drawing and study, and visibility includes the main series.
+    /// Bulk actions apply to drawings, studies and added bar series. Visibility includes the main
+    /// series; bar-series ordering stays within its pane.
     pub fn apply_to_chart(
         &mut self,
         chart: &mut Chart,
@@ -108,6 +109,14 @@ impl ObjectTreePanel {
                     chart.reveal_drawing(*id);
                 } else {
                     chart.drawings_mut().deselect();
+                    if let Some(id) = sources
+                        .iter()
+                        .find(|s| s.id == *id && is_added_series(s))
+                        .and_then(|s| s.series_id)
+                        && let Some(time) = chart.bars(id).last().map(|bar| bar.time)
+                    {
+                        chart.scroll_to_time(time);
+                    }
                 }
             }
             ObjectTreeAction::ClearSelection => {
@@ -163,7 +172,7 @@ impl ObjectTreePanel {
                 let Some(source) = sources.iter().find(|s| s.id == *id) else {
                     return false;
                 };
-                if !source.is_drawing() && !source.is_indicator() {
+                if !source.is_drawing() && !source.is_indicator() && !is_added_series(source) {
                     return false;
                 }
                 delete(chart, source);
@@ -200,6 +209,22 @@ impl ObjectTreePanel {
             | ObjectTreeAction::SendToBack(id)
             | ObjectTreeAction::MoveUp(id)
             | ObjectTreeAction::MoveDown(id) => {
+                if let Some(series) = sources
+                    .iter()
+                    .find(|s| s.id == *id && s.source_type == SourceType::DataSource)
+                    .and_then(|s| s.series_id)
+                {
+                    let Some(order) = chart.series_order(series) else {
+                        return false;
+                    };
+                    let order = match action {
+                        ObjectTreeAction::BringToFront(_) => usize::MAX,
+                        ObjectTreeAction::SendToBack(_) => 0,
+                        ObjectTreeAction::MoveUp(_) => order.saturating_add(1),
+                        _ => order.saturating_sub(1),
+                    };
+                    return chart.set_series_order(series, order);
+                }
                 let mut order: Vec<_> = chart
                     .drawings()
                     .drawings
@@ -231,6 +256,19 @@ impl ObjectTreePanel {
                 }
             }
             ObjectTreeAction::ZoomTo(id) => {
+                if let Some(series) = sources
+                    .iter()
+                    .find(|s| s.id == *id && s.source_type == SourceType::DataSource)
+                    .and_then(|s| s.series_id)
+                {
+                    if let Some(time) = chart.bars(series).last().map(|bar| bar.time) {
+                        chart.scroll_to_time(time);
+                        if let Some(scale) = chart.series_price_scale_mut(series) {
+                            scale.reset();
+                        }
+                    }
+                    return true;
+                }
                 if !sources.iter().any(|s| s.id == *id && s.is_drawing())
                     || !chart.drawings().drawings.iter().any(|d| d.id == *id)
                 {
@@ -257,6 +295,10 @@ fn set_visible(chart: &mut Chart, source: &SourceItem, visible: bool) -> bool {
     if source.source_type == SourceType::DataSource && source.series_id == Some(SeriesId::MAIN) {
         chart.set_main_series_visible(visible);
         true
+    } else if is_added_series(source) {
+        source
+            .series_id
+            .is_some_and(|id| chart.set_series_visible(id, visible))
     } else if source.is_indicator() {
         source
             .series_id
@@ -271,8 +313,13 @@ fn set_visible(chart: &mut Chart, source: &SourceItem, visible: bool) -> bool {
     }
 }
 
+fn is_added_series(source: &SourceItem) -> bool {
+    source.source_type == SourceType::DataSource
+        && source.series_id.is_some_and(|id| id != SeriesId::MAIN)
+}
+
 fn delete(chart: &mut Chart, source: &SourceItem) {
-    if source.is_indicator() {
+    if source.is_indicator() || is_added_series(source) {
         if let Some(id) = source.series_id {
             chart.remove_series(id);
         }
