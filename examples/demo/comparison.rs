@@ -34,6 +34,7 @@ impl ComparisonSettings {
         .show(ctx, open, |ui| {
             let height = (ui.available_height() - 64.0).max(0.0);
             egui::ScrollArea::both()
+                .id_salt("comparison_content")
                 .max_height(height)
                 .show(ui, |ui| {
                     FormGrid::new("comparison_style").show(ui, |ui| {
