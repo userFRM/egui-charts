@@ -13,7 +13,7 @@ pub fn annotations(chart: &mut egui_charts::Chart) {
     let color = Color32::from_rgb(126, 87, 194);
     chart.set_price_lines(
         SeriesId::MAIN,
-        vec![PriceLine::new(close, color).with_title("Reference")],
+        vec![PriceLine::new(close - 2.0, color).with_title("Reference")],
     );
     chart.set_markers(
         SeriesId::MAIN,
