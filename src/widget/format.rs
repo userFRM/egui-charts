@@ -215,6 +215,8 @@ impl Chart {
     /// [`set_price_formatter`](Self::set_price_formatter) does in the others. The formatter
     /// receives the percentage or index values the axis shows, its ticks as one list through
     /// [`PriceFormatter::format_ticks`]. `None` restores signed percentages and index values.
+    ///
+    /// [`PriceFormatter::format_ticks`]: crate::scales::PriceFormatter::format_ticks
     pub fn set_percentage_formatter(
         &mut self,
         formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
