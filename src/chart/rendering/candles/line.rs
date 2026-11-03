@@ -10,7 +10,7 @@ use egui::{Color32, Painter, Pos2, Shape, Stroke};
 use super::helpers::valued_runs;
 use super::volume::render_volume_bars;
 use crate::chart::rendering::{RenderContext, StyleColors};
-use crate::model::{Bar, LinePlotStyle, LineType, PriceSource};
+use crate::model::{Bar, ChartTypeStyles, LinePlotStyle, LineType, PriceSource};
 
 pub(super) fn render_line(
     painter: &Painter,
@@ -250,23 +250,33 @@ fn curve_through(points: &[Pos2]) -> Vec<Pos2> {
     curve
 }
 
-/// Paints the crosshair marker: a dot of `radius` in the series' line colour, ringed in the
-/// chart background so it stands out from the line.
+/// Paint the hovered point with its marker style, falling back to the line colour and
+/// chart background for the fill and border.
 pub(crate) fn render_crosshair_marker(
     painter: &Painter,
     point: Pos2,
-    radius: f32,
+    styles: &ChartTypeStyles,
     color: Color32,
     background: Color32,
 ) {
+    let radius = styles.crosshair_marker_radius;
     if !radius.is_finite() || radius <= 0.0 || !point.is_finite() {
         return;
     }
+    let width = styles.crosshair_marker_border_width;
+    let stroke = if width.is_finite() && width > 0.0 {
+        Stroke::new(
+            width,
+            styles.crosshair_marker_border_color.unwrap_or(background),
+        )
+    } else {
+        Stroke::NONE
+    };
     painter.circle(
         point,
         radius,
-        color,
-        Stroke::new(DESIGN_TOKENS.stroke.thick, background),
+        styles.crosshair_marker_fill.unwrap_or(color),
+        stroke,
     );
 }
 

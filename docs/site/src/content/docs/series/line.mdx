@@ -36,12 +36,16 @@ keeps `line`, `step_line` and `line_with_markers` independent. Each
 [`LinePlotStyle`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.LinePlotStyle.html)
 sets colour, width, dash style and straight or curved connections. Step line
 ignores curvature. `marker_radius` controls the point circles;
-`crosshair_marker_radius` and `last_price_animation` control hover and last-price markers.
+`crosshair_marker_radius`, `crosshair_marker_fill`, `crosshair_marker_border_color`
+and `crosshair_marker_border_width` style the hover marker, which is hidden until the radius is
+positive and by default takes the point's line colour with a chart-background ring;
+`last_price_animation` controls the last-price pulse.
 
 For an added series, use
 [`SeriesOptions::color`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.SeriesOptions.html#structfield.color)
 and `width`. Added lines use solid straight segments, or steps for `StepLine`;
-they do not expose the main line's dash/curve options. Per-point
+they do not expose the main line's dash/curve options. The four `crosshair_marker_*`
+fields of `SeriesOptions` style the hover marker of an added series, on its own scale and pane. Per-point
 [`BarColors::color`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.BarColors.html#structfield.color)
 colours the outgoing segment or marker. All three line types can be
 [added series](../chart-types.mdx#added-series-restrictions).

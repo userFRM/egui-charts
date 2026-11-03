@@ -481,6 +481,7 @@ pub struct DemoApp {
     products: ProductsPanel,
 
     // Replay engine and its floating transport. `None` until first toggled.
+    recording_files: replay::RecordingFiles,
     replay: Option<ReplayController>,
     replay_updated: Option<chrono::DateTime<chrono::Utc>>,
     replay_applied: Option<chrono::DateTime<chrono::Utc>>,
@@ -813,6 +814,7 @@ impl DemoApp {
                     "Every key the chart understands",
                 ),
             ]),
+            recording_files: Default::default(),
             replay: None,
             replay_updated: None,
             replay_applied: None,
@@ -1048,20 +1050,27 @@ impl DemoApp {
     }
 
     fn apply_session(&mut self) {
+        // Recorded prices and metadata already have their final session and price basis.
+        if self.chart.replay_driver().is_some() {
+            return;
+        }
         self.live.set_view(
             self.timeframe_toolbar.state.session_type,
             self.timeframe_toolbar.state.adjust_for_dividends,
         );
-        self.chart.set_conversion(
-            self.timeframe_toolbar
-                .state
-                .adjust_for_dividends
-                .then_some("adjusted".to_owned()),
-        );
+        let cents = self
+            .chart
+            .conversion()
+            .is_some_and(|c| c.starts_with("cents"));
+        self.live.set_price_unit(cents);
+        self.chart.set_conversion(replay::conversion(
+            cents,
+            self.timeframe_toolbar.state.adjust_for_dividends,
+        ));
         self.chart.reload_feed();
+        self.chart.set_instrument(Some(self.live.instrument()));
         self.chart
             .set_extended_hours(self.timeframe_toolbar.state.session_type != SessionType::RTH);
-        self.chart.set_instrument(Some(self.live.instrument()));
         self.loading_bars = true;
         self.bars = self.live.snapshot(
             self.state.timeframe,
@@ -1527,6 +1536,7 @@ impl eframe::App for DemoApp {
         self.poll_storage(&ctx);
 
         // Drive replay before laying out the chart so its window is current.
+        self.poll_recording(&ctx);
         self.advance_replay();
         if self.replay.is_none() || self.live.loading() {
             let delay = self.live.advance(chrono::Utc::now());
@@ -2948,11 +2958,8 @@ impl DemoApp {
                                     .iter()
                                     .any(|spread| spread.loading(&extra.chart)))
                     });
+                // Paused charts still need frames to finish their comparison and spread feeds.
                 if loading {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label("Loading chart data…");
-                    });
                     ui.ctx().request_repaint();
                 }
                 if self.api_samples
@@ -3848,10 +3855,10 @@ mod tests {
         assert!(!app.live.loading());
     }
 
-    /// The initial history yields to input while the chart is paused, then finishes normally
-    /// and answers the symbol details from the complete history.
+    /// Cached bars paint immediately while bootstrap yields to input, then symbol details
+    /// use the complete history.
     #[test]
-    fn initial_history_shows_loading_and_keeps_keyboard_input_responsive() {
+    fn initial_history_is_visible_while_bootstrap_keeps_keyboard_input_responsive() {
         fn texts(
             app: &mut DemoApp,
             ctx: &egui::Context,
@@ -3880,9 +3887,16 @@ mod tests {
             texts
         }
         fn frame(app: &mut DemoApp, ctx: &egui::Context, events: Vec<egui::Event>) -> bool {
-            texts(app, ctx, events)
-                .iter()
-                .any(|(text, _)| text == "Loading chart data…")
+            let texts = texts(app, ctx, events);
+            assert!(
+                !app.chart.bars(SeriesId::MAIN).is_empty(),
+                "history must be visible on every frame, including the first"
+            );
+            assert!(
+                texts.iter().all(|(text, _)| !text.contains("Loading")),
+                "bootstrap must not paint a loading indicator"
+            );
+            app.live.loading()
         }
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
@@ -3891,7 +3905,7 @@ mod tests {
         app.live.set_paused(true);
         assert!(
             frame(&mut app, &ctx, Vec::new()),
-            "the first frame must expose the pending load"
+            "showing history must not finish bootstrap on the first frame"
         );
         assert!(frame(
             &mut app,
