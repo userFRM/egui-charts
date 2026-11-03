@@ -18,7 +18,6 @@ use egui::{Color32, CursorIcon, Painter, Pos2, Rect, Stroke};
 use egui_charts::model::{Bar, BarData};
 use egui_charts::scales::CustomHorizontalScale;
 use egui_charts::studies::{CustomIndicator, IndicatorValue};
-use egui_charts::theme::ThemeExt;
 use egui_charts::widget::{
     Chart, Primitive, PrimitivePass, PrimitiveView, SeriesId, TimeAxisLabel,
 };
@@ -74,8 +73,6 @@ impl PrimitivesExample {
                 ui.selectable_value(&mut self.show_categories, true, "Categorical keys");
             });
             if self.show_categories {
-                self.categories
-                    .set_theme(ui.ctx(), &ui.ctx().active_theme());
                 self.categories.show(ui);
             } else {
                 self.chart.show(ui);
@@ -125,13 +122,6 @@ fn categorical_chart() -> Chart {
     );
     // Repeated keys update their existing slot instead of adding a category.
     chart.update(SeriesId::MAIN, scale.value(&Phase::Auction, 103.0).unwrap());
-    assert_eq!(
-        chart
-            .bar_at_key(SeriesId::MAIN, &scale, &Phase::Auction)
-            .unwrap()
-            .close,
-        103.0
-    );
     chart.set_markers(
         SeriesId::MAIN,
         vec![
