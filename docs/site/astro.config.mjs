@@ -50,7 +50,7 @@ export default defineConfig({
         },
         {
           label: 'Studies and extensions',
-          items: ['studies', 'study-data', 'drawings', 'order-flow', 'theming', 'extensions', 'extensions/custom-series'],
+          items: ['studies', 'study-data', 'drawings', 'order-flow', 'theming', 'time-zones', 'accessibility', 'extensions', 'extensions/custom-series'],
         },
         {
           label: 'Recipes',
