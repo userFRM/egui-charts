@@ -638,15 +638,17 @@ impl LiveFeed {
         {
             let sub = sim.subscription.take().expect("initializing subscription");
             if start == 0 {
-                // Bootstrap recent executions only; older daily bars arrive through paging.
-                if sub.timeframe.duration_ms() >= 60_000
-                    && sub.timeframe.duration_ms() % 60_000 == 0
-                {
-                    let minutes =
-                        sim.shown_history(&sim.history[..sim.archived_end()], sub.extended_hours);
-                    for bar in resample(&minutes, Timeframe::Min1, sub.clock.clone())
-                        .expect("nested minute history")
-                    {
+                // Keep complete boundary bars when pruning moved the minute archive's edge.
+                let since = sim.history.first().map_or(sim.now, |bar| {
+                    sub.clock.bar_open(bar.time - TimeDelta::days(1))
+                });
+                for bar in sim.archived_bars(
+                    sub.timeframe,
+                    sub.clock.clone(),
+                    sub.extended_hours,
+                    sub.conversion.as_deref() == Some("adjusted"),
+                ) {
+                    if bar.time >= since {
                         sub.sink.push_bar(bar);
                     }
                 }

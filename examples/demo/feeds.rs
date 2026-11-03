@@ -995,7 +995,8 @@ mod tests {
                 .with_feed(feed.clone())
                 .with_symbol("SAMPLE")
                 .with_timeframe(timeframe)
-                .with_initial_bars(32)
+                .with_initial_bars(256)
+                .with_visible_candles(16)
                 .build();
             for _ in 0..4 {
                 super::super::tests::finish_feed(&feed);
@@ -1006,7 +1007,7 @@ mod tests {
             }
             assert_eq!(
                 chart.bars(egui_charts::widget::SeriesId::MAIN).len(),
-                32,
+                256,
                 "the live subscription must not bypass history paging"
             );
         }
