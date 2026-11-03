@@ -1908,9 +1908,13 @@ mod options_profile_tests {
             "rows centre on strikes off a multiple of their spacing"
         );
         assert_eq!(study.plot_value(1, 0), None, "max pain starts off");
+        let legend =
+            |study: &dyn Indicator| ConfiguredStudy::new(study.clone_box()).legend_visible(1);
+        assert!(!legend(&*study), "no max pain readout while it is off");
         study
             .set_input("max_pain", InputValue::Toggle(true))
             .unwrap();
+        assert!(legend(&*study));
         // Payout at 100 and 110: 2,000 and 1,000; equal interest ties; a 300 call
         // multiplier makes 110 cost 3,000; no interest ties at zero.
         for (calls, puts, call_multiplier, expected) in [
