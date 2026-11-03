@@ -49,7 +49,7 @@ export default defineConfig({
         },
         {
           label: 'Studies and extensions',
-          items: ['studies', 'study-data', 'drawings', 'order-flow', 'theming', { label: 'Extensions', link: '/api-reference/#extensions' }],
+          items: ['studies', 'study-data', 'drawings', 'order-flow', 'theming', 'time-zones', 'accessibility', { label: 'Extensions', link: '/api-reference/#extensions' }],
         },
         {
           label: 'Recipes',
