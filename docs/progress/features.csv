@@ -398,8 +398,8 @@ Drawings,Drawings,Vertical line,done,library,src/drawings/rendering/lines.rs;src
 Drawings,Drawings,XABCD pattern,done,library,src/drawings/rendering/patterns.rs;src/painting/dashed_line.rs;src/config/drawing_tool/behavior.rs;src/drawings/domain/drawing.rs,
 Order flow,Order flow,Absorption detection,done,library,src/services/detectors/absorption.rs;src/services/detectors/depth.rs;src/services/detectors/mod.rs;src/model/signal.rs;src/widget/signals.rs;,
 Options,Expected move,Expected move to an expiry from the at-the-money straddle or implied volatility,missing,host,,
-Options,Gamma exposure,Call and put walls,missing,host,,
-Options,Gamma exposure,Gamma exposure by strike,missing,host,,
+Options,Gamma exposure,Call and put walls,done,host,src/studies/builtin/options_volume_profile.rs;src/data/option_chain.rs;src/data/volume_profile.rs;src/painting/volume_profile.rs;src/chart/rendering/volume_profile.rs;src/ui/dialogs/indicator_dialog/dialog.rs,1759
+Options,Gamma exposure,Gamma exposure by strike,done,host,src/studies/builtin/options_volume_profile.rs;src/data/option_chain.rs;src/data/volume_profile.rs;src/painting/volume_profile.rs;src/chart/rendering/volume_profile.rs;src/ui/dialogs/indicator_dialog/dialog.rs,1759
 Options,Gamma exposure,Gamma exposure computed from option chains or supplied by the feed,done,host,;src/data/option_chain.rs;src/data/mod.rs;src/model/instrument.rs,
 Options,Options profile,"Open interest by strike for calls, puts and net",done,host,src/studies/builtin/options_volume_profile.rs;src/data/option_chain.rs;src/ui/dialogs/indicator_dialog/dialog.rs,1758
 Options,Options profile,"Option expiry selection: nearest, one listed expiry or every expiry up to a date",done,host,src/studies/builtin/options_volume_profile.rs;src/data/option_chain.rs;src/ui/dialogs/indicator_dialog/dialog.rs,1758
@@ -461,7 +461,7 @@ Order flow,Order flow,Market structure meters,partial,library,src/data/order_flo
 Order flow,Order flow,Merge and split adjacent profiles,done,library,src/studies/builtin/trade_profile.rs;src/ui/context_menu/trade_profile.rs;src/widget/trade_profile.rs;src/ui/context_menu/chart_menus/mod.rs;terminal/src/studies.rs;src/widget/frame/mod.rs,
 Order flow,Order flow,Multi-column footprint,done,library,src/chart/overlays/footprint.rs;src/widget/frame/mod.rs,
 Order flow,Order flow,"On-chart order lines with drag to move entry, stop and target",done,host,src/ui/trading/mod.rs;src/ui/trading/view.rs;src/chart/rendering/trading_lines/mod.rs,
-Order flow,Order flow,Options gamma exposure suite,partial,host,;src/data/option_chain.rs;src/data/mod.rs;src/model/instrument.rs,
+Order flow,Order flow,Options gamma exposure suite,done,host,src/studies/builtin/options_volume_profile.rs;src/data/option_chain.rs;src/data/volume_profile.rs;src/painting/volume_profile.rs;src/chart/rendering/volume_profile.rs;src/ui/dialogs/indicator_dialog/dialog.rs;src/data/mod.rs;src/model/instrument.rs,1759
 Order flow,Order flow,"Order book, heatmap and order-level replay",done,library,src/data/replay.rs;src/data/recording.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/widget/replay.rs;src/widget/feed/mod.rs;src/widget/feed/pump.rs,
 Order flow,Order flow,Minimum traded volume for imbalances and stacked imbalance zones,done,library,;src/data/footprint.rs;src/chart/overlays/footprint.rs;src/studies/builtin/footprint_studies.rs,
 Order flow,Order flow,Order-flow entries offered only for symbols whose feed supplies their data,done,host,src/ui/top_toolbar/components/chart_type_selector.rs;src/ui/dialogs/indicator_dialog/dialog.rs;src/data/order_flow.rs;src/data/mod.rs;src/model/instrument.rs;,1747
@@ -714,7 +714,7 @@ Studies,Indicators,Negative Volume Index,done,library,src/studies/builtin/volume
 Studies,Indicators,Net Volume,partial,library,src/studies/builtin/net_volume.rs;src/studies/indicator_trait.rs,
 Studies,Indicators,On Balance Volume,done,library,src/studies/builtin/obv.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Open Interest,done,host,src/data/metrics.rs;src/data/mod.rs;src/studies/metric.rs;src/widget/studies_data.rs;src/ui/dialogs/indicator_dialog/dialog.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Options Volume Profile,done,host,src/studies/builtin/options_volume_profile.rs;src/data/volume_profile.rs;src/chart/rendering/indicator.rs;src/painting/volume_profile.rs;src/painting/dashed_line.rs;src/data/option_chain.rs;src/ui/dialogs/indicator_dialog/dialog.rs,1758
+Studies,Indicators,Options Volume Profile,done,host,src/studies/builtin/options_volume_profile.rs;src/data/volume_profile.rs;src/chart/rendering/indicator.rs;src/painting/volume_profile.rs;src/painting/dashed_line.rs;src/data/option_chain.rs;src/ui/dialogs/indicator_dialog/dialog.rs;src/chart/rendering/volume_profile.rs,1758;1759
 Studies,Indicators,Parabolic SAR,done,library,src/studies/builtin/parabolic_sar.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
 Studies,Indicators,Percentage Price Oscillator,partial,library,src/studies/builtin/price_oscillator.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/studies/builtin/macd.rs;src/studies/palette.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Percentage Volume Oscillator,partial,library,src/studies/builtin/percentage_volume_oscillator.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/studies/builtin/macd.rs;src/studies/palette.rs;src/chart/rendering/indicator.rs,
