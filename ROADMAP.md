@@ -225,10 +225,10 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 
 ### Toolbars, Dialogs and Panels
 
-- [x] Top toolbar with symbol search, comparison, interval/type selection, study, alert, replay, history, settings, save and layout actions.
+- [x] Top toolbar with symbol search, comparison, interval/type selection, study, alert, replay, history, settings, save and layout actions. Interval and snapshot section headings use quiet grey ink in light themes and retain the dark palette.
 - [x] Symbol search supports text, type, exchange and source filters, pagination, keyboard navigation and host results; the terminal loads comparisons from the chart feed on shared percentage scales, separate scales or panes, and displays arithmetic spreads as candles in their own panes. Demo spreads show cached history before execution bootstrap finishes and refresh when their components or display inputs change.
 - [x] Timeframe toolbar provides range presets, go-to-date, time zone, regular/extended session and adjustment requests. `Terminal` fits ranges to loaded history, navigates dates in the chart time zone, switches intervals and sessions, restores interval favourites, and requests host-supplied dividend adjustment.
-- [x] Drawing toolbar categories, cursor modes, snapping, repeated placement, locking and template actions; favourites can be stored.
+- [x] Drawing toolbar categories, cursor modes, snapping, repeated placement, locking and template actions; drawing and cursor favourites appear on the floating strip. Cursor stars show on hover or keyboard focus, and the demo saves them between sessions.
 - [x] Chart settings apply backgrounds, grids, candle parts and colours, previous-close colouring, crosshair styling, session shading and watermarks.
 - [x] Status settings control supplied logos, last day change and study backdrops; legend text and controls have opaque backing over profiles; Symbol settings request dividend-adjusted history from the host.
 - [x] Object tree supports selection, filtering, visibility, locks, ordering, rename, duplication, pane moves and bulk actions; a data window shows OHLCV and study values.

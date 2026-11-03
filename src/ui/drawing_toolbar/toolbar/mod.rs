@@ -71,7 +71,7 @@ pub struct DrawingToolbarDomainState {
 // Import from modular components
 use super::{
     DrawingToolShortcuts, DrawingToolbarAction, DrawingToolbarConfig,
-    categories::{CursorsCategory, ToolCategory, trend_lines::render_registered_tool_submenu},
+    categories::{CursorsCategory, trend_lines::render_registered_tool_submenu},
     components::{draw_separator_styled, draw_tool_button},
     data, icons,
     state::{MagnetType, ToolbarState},
@@ -305,8 +305,10 @@ impl DrawingToolbar {
         }
 
         // === FAVOURITE TOOLS STRIP ===
-        if let Some(tool) = self.show_floating(ui, sidebar_rect.right_top() + Vec2::splat(8.0)) {
-            action = DrawingToolbarAction::SelectTool(tool);
+        if let Some(pick) =
+            self.show_floating_with_action(ui, sidebar_rect.right_top() + Vec2::splat(8.0))
+        {
+            action = pick;
         }
 
         ui.allocate_rect(sidebar_rect, Sense::hover());
@@ -590,7 +592,8 @@ impl DrawingToolbar {
         self.menu_button(ui, "Hide", &response);
 
         // Favourite tools strip
-        let strip_shown = self.state.floating_visible && !self.state.favorites.is_empty();
+        let strip_shown = self.state.floating_visible
+            && (!self.state.favorites.is_empty() || !self.state.cursor_favorites.is_empty());
         if FavoritesButton::show(ui, strip_shown) {
             self.state.floating_visible = !strip_shown;
         }
@@ -641,7 +644,7 @@ impl DrawingToolbar {
 
         let trading = !self.hidden.contains(&Control::Trading);
         let sel_tool = self.state.sel_tool;
-        let starred = self.state.favorites.len();
+        let starred = self.state.favorites.len() + self.state.cursor_favorites.len();
         let state = &mut self.state;
         let registry = &self.registry;
         let action = show_flyout(ui, category, anchor, |ui| match category {
@@ -657,7 +660,7 @@ impl DrawingToolbar {
             _ => {
                 let favorites = &mut state.favorites;
                 let action = if category == "Cursors" {
-                    CursorsCategory.render_submenu(ui, sel_tool, favorites)
+                    CursorsCategory.render_with_favorites(ui, &mut state.cursor_favorites)
                 } else {
                     render_registered_tool_submenu(
                         ui,
@@ -672,7 +675,7 @@ impl DrawingToolbar {
         })
         .flatten();
         // Starring a tool shows the strip it joins.
-        if self.state.favorites.len() > starred {
+        if self.state.favorites.len() + self.state.cursor_favorites.len() > starred {
             self.state.floating_visible = true;
         }
 
@@ -773,6 +776,105 @@ mod tests {
             egui::Shape::Text(t) if t.galley.job.text == value => Some(t.visual_bounding_rect()),
             _ => None,
         })
+    }
+
+    /// Stars keep cursor picks separate from drawing picks and do not change the active mode.
+    #[test]
+    fn cursor_stars_keep_the_menu_open_and_strip_picks_report_modes() {
+        use egui::accesskit::{Role, Toggled};
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            for cursor in CursorType::all() {
+                let mut toolbar = DrawingToolbar::new();
+                toolbar.select_tool(DrawingToolType::TrendLine);
+                let theme = theme.clone();
+                let mut harness = Harness::builder()
+                    .with_size(egui::vec2(1440.0, 900.0))
+                    .with_context_setup(move |ctx| {
+                        egui_extras::install_image_loaders(ctx);
+                        crate::theme::apply_to_egui(ctx, &theme);
+                    })
+                    .build_ui_state(
+                        |ui, state: &mut (DrawingToolbar, DrawingToolbarAction)| {
+                            let action = state.0.show_with_action(ui);
+                            if action != DrawingToolbarAction::None {
+                                state.1 = action;
+                            }
+                        },
+                        (toolbar, DrawingToolbarAction::None),
+                    );
+                harness.run();
+                harness.get_by_role_and_label(Role::Button, "Arrow").click();
+                harness.run();
+                let name = format!("Favourite {}", cursor.name());
+                harness
+                    .get_by_role_and_label(Role::RadioButton, cursor.name())
+                    .hover();
+                harness.run();
+                // This target is absent on the old cursor menu.
+                let star = harness.get_by_role_and_label(Role::Button, &name);
+                assert_ne!(star.accesskit_node().toggled(), Some(Toggled::True));
+                star.focus();
+                harness.run();
+                harness.key_press(egui::Key::Space);
+                harness.run();
+                assert_eq!(harness.state().1, DrawingToolbarAction::None);
+                assert_eq!(
+                    harness.state().0.state.sel_tool,
+                    Some(DrawingToolType::TrendLine)
+                );
+                assert_eq!(
+                    harness.state().0.state.current_cursor_type,
+                    CursorType::Arrow
+                );
+                assert_eq!(
+                    harness
+                        .get_by_role_and_label(Role::Button, &name)
+                        .accesskit_node()
+                        .toggled(),
+                    Some(Toggled::True)
+                );
+                // Unstarring keeps the flyout open too, then the same target can star it again.
+                for selected in [false, true] {
+                    harness.get_by_role_and_label(Role::Button, &name).click();
+                    harness.run();
+                    assert_eq!(
+                        harness
+                            .get_by_role_and_label(Role::Button, &name)
+                            .accesskit_node()
+                            .toggled(),
+                        Some(if selected {
+                            Toggled::True
+                        } else {
+                            Toggled::False
+                        })
+                    );
+                }
+                harness.key_press(egui::Key::Escape);
+                harness.run();
+                assert!(
+                    harness
+                        .query_by_role_and_label(Role::Button, &name)
+                        .is_none()
+                );
+                let pick = harness
+                    .query_all_by_role_and_label(Role::Button, cursor.name())
+                    .last()
+                    .unwrap();
+                pick.click();
+                harness.run();
+                let expected = if *cursor == CursorType::Eraser {
+                    DrawingToolbarAction::ToggleEraserMode
+                } else {
+                    DrawingToolbarAction::SetCursorType(*cursor)
+                };
+                assert_eq!(harness.state().1, expected);
+                assert_eq!(harness.state().0.state.sel_tool, None);
+            }
+        }
     }
 
     /// The floating strip lists the favorite tools as they change, stays where it was first put
