@@ -55,6 +55,12 @@ pub struct ChartPointer {
 
 impl PartialEq for ChartPointer {
     fn eq(&self, other: &Self) -> bool {
+        self.origin == other.origin && self.same_position(other)
+    }
+}
+
+impl ChartPointer {
+    fn same_position(&self, other: &Self) -> bool {
         self.time == other.time
             && self.price == other.price
             && self.series == other.series
@@ -66,7 +72,6 @@ impl PartialEq for ChartPointer {
             && self.target == other.target
             && self.modifiers == other.modifiers
             && self.kind == other.kind
-            && self.origin == other.origin
             && match (&self.bar, &other.bar) {
                 (Some(left), Some(right)) => same_bar(left, right),
                 (None, None) => true,
@@ -267,7 +272,8 @@ impl PartialEq for ImageRequest {
 
 #[derive(Default)]
 pub(super) struct HostEvents {
-    queue: std::collections::VecDeque<ChartEvent>,
+    // Queue growth should move handles, not large pointer snapshots.
+    queue: std::collections::VecDeque<Box<ChartEvent>>,
     dropped: usize,
     pub(super) data_operations: bool,
     range: Option<VisibleTimeRange>,
@@ -291,7 +297,7 @@ impl HostEvents {
             self.queue.pop_front();
             self.dropped = self.dropped.saturating_add(1);
         }
-        self.queue.push_back(event);
+        self.queue.push_back(Box::new(event));
     }
 }
 
@@ -345,7 +351,7 @@ impl Chart {
         (dropped > 0)
             .then_some(ChartEvent::EventsDropped(dropped))
             .into_iter()
-            .chain(self.host_events.queue.drain(..))
+            .chain(self.host_events.queue.drain(..).map(|event| *event))
     }
 
     pub(super) fn data_loaded(&mut self, series: SeriesId) {
@@ -380,6 +386,7 @@ impl Chart {
             .queue
             .iter_mut()
             .rev()
+            .map(Box::as_mut)
             .find(|event| !matches!(event, ChartEvent::DataOperation { .. }))
             && *last == series
         {
@@ -634,14 +641,16 @@ impl Chart {
             .then(|| self.pointer_at(ui, pos, self.pointer_origin(ui, pos, None)))
             .flatten()
         });
-        let mut previous = self.host_events.pointer.clone();
-        if let (Some(position), Some(previous)) = (&position, &mut previous)
-            && !matches!(position.origin, Some(egui::Event::Touch { .. }))
-        {
-            // Button transitions alone do not move the cursor; changed touch details do.
-            previous.origin = position.origin.clone();
-        }
-        if position != previous {
+        let unchanged = match (&position, &self.host_events.pointer) {
+            (Some(position), Some(previous)) => {
+                // Button transitions alone do not move the cursor; changed touch details do.
+                position.same_position(previous)
+                    && (!matches!(position.origin, Some(egui::Event::Touch { .. }))
+                        || position.origin == previous.origin)
+            }
+            _ => position == self.host_events.pointer,
+        };
+        if !unchanged {
             self.host_events.pointer = position.clone();
             self.host_events.push(ChartEvent::CrosshairMoved(position));
         }
