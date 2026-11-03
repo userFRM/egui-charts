@@ -35,11 +35,15 @@ pub(super) fn volatility_smile() -> Chart {
 }
 
 pub(super) fn yield_curve() -> Chart {
-    let scale = MaturityScale::default();
-    let slots = scale.whitespace(360.0);
-    let count = slots.len();
+    let maturities = [
+        1.0, 2.0, 3.0, 4.0, 6.0, 12.0, 24.0, 36.0, 60.0, 84.0, 120.0, 240.0, 360.0,
+    ];
+    let slots = maturities
+        .into_iter()
+        .map(|months| Bar::whitespace(key_time(months).expect("finite maturity")))
+        .collect();
     let mut chart = Chart::new(BarData::from_bars(slots));
-    chart.set_horizontal_scale(Some(Arc::new(scale)));
+    chart.set_horizontal_scale(Some(Arc::new(MaturityScale::default())));
     chart.set_symbol("Yield, %");
     chart.config_mut().show_volume = false;
     chart.config_mut().show_legend_volume = false;
@@ -52,22 +56,20 @@ pub(super) fn yield_curve() -> Chart {
             color,
             ..Default::default()
         });
-        let bars = [
-            1.0, 2.0, 3.0, 4.0, 6.0, 12.0, 24.0, 36.0, 60.0, 84.0, 120.0, 240.0, 360.0,
-        ]
-        .into_iter()
-        .map(|months| {
-            let years: f64 = months / 12.0;
-            let rate = if earlier {
-                3.2 + 1.1 * (1.0 - (-years / 4.0).exp())
-            } else {
-                3.9 + 1.4 * (-years / 1.5).exp() + 0.012 * years
-            };
-            Bar::from_value(key_time(months).expect("finite maturity"), rate)
-        })
-        .collect();
+        let bars = maturities
+            .into_iter()
+            .map(|months| {
+                let years: f64 = months / 12.0;
+                let rate = if earlier {
+                    3.2 + 1.1 * (1.0 - (-years / 4.0).exp())
+                } else {
+                    3.9 + 1.4 * (-years / 1.5).exp() + 0.012 * years
+                };
+                Bar::from_value(key_time(months).expect("finite maturity"), rate)
+            })
+            .collect();
         chart.set_data(series, bars);
     }
-    chart.set_visible_bars(count + 3);
+    chart.set_visible_bars(maturities.len() + 3);
     chart
 }

@@ -144,7 +144,11 @@ impl ChartState {
         {
             self.revision = next_revision();
         }
-        self.time_scale.set_bar_cnt(self.shown().len());
+        let shown = self.elements.as_deref().unwrap_or(&self.data.bars);
+        #[cfg(feature = "widget")]
+        self.time_scale
+            .refresh_numeric_positions(shown, self.revision);
+        self.time_scale.set_bar_cnt(shown.len());
         first_changed
     }
 
@@ -187,7 +191,10 @@ impl ChartState {
             )
         });
         self.elements = elements;
-        self.time_scale.set_bar_cnt(self.shown().len());
+        let shown = self.elements.as_deref().unwrap_or(&self.data.bars);
+        self.time_scale
+            .refresh_numeric_positions(shown, self.revision);
+        self.time_scale.set_bar_cnt(shown.len());
         match kept {
             Some((_, true)) if follow && near_live => self.time_scale.scroll_to_realtime(),
             Some(_) if follow && near_live => {}

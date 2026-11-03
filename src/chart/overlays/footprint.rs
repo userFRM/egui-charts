@@ -2087,7 +2087,7 @@ mod tests {
             let map = ChartMapping {
                 bar_spacing: spacing,
                 base_idx: 1,
-                ..map
+                ..map.clone()
             };
             let mut output = ctx.run_ui(
                 egui::RawInput {

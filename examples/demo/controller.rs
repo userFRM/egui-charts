@@ -400,6 +400,7 @@ pub struct DemoApp {
     /// Spreads picked in symbol search, with feeds of their symbols.
     spreads: Vec<comparison::Spread>,
     storage: Arc<storage::DemoStorage>,
+    workspace_recovery: storage::WorkspaceRecovery,
     settings: egui_charts::services::SettingsStore,
     /// Changes of the chart arrangement, which autosave counts with the charts' edits.
     grid_edits: u64,
@@ -690,6 +691,7 @@ impl DemoApp {
             spreads: Vec::new(),
             settings: egui_charts::services::SettingsStore::new(storage.clone()),
             storage,
+            workspace_recovery: storage::WorkspaceRecovery::default(),
             grid_edits: 0,
             study_templates: TemplateDialog::new(StoreKind::StudyTemplates),
             drawing_templates: TemplateDialog::new(StoreKind::DrawingTemplates),
@@ -887,8 +889,15 @@ impl DemoApp {
         app.settings_state = ChartSettingsState::from_chart(&app.chart);
         // The demo's storage answers at once, so the settings apply before the first frame.
         let current = app.user_settings();
-        if let Some(settings) = app.settings.poll(&cc.egui_ctx, &current) {
+        let recover_workspace = if let Some(settings) = app.settings.poll(&cc.egui_ctx, &current) {
+            let unnamed = settings.layout.is_none();
             app.apply_user_settings(&cc.egui_ctx, settings);
+            unnamed
+        } else {
+            true
+        };
+        if recover_workspace {
+            app.restore_workspace();
         }
         if let Some(settings) = cc.storage.and_then(|storage| {
             eframe::get_value::<egui_charts::services::DetectorSettings>(storage, "detectors")
@@ -1444,6 +1453,7 @@ impl eframe::App for DemoApp {
         eframe::set_value(storage, "alerts", &self.alert_host.engine().alerts());
         self.checkpoint_replay();
         eframe::set_value(storage, "replay_session", &self.replay_session);
+        self.checkpoint_workspace();
         self.storage.persist(storage);
         eframe::set_value(
             storage,
@@ -1620,6 +1630,7 @@ impl eframe::App for DemoApp {
             eframe::set_value(storage, "demo_formatting", &self.formatting);
             storage.flush();
         }
+        self.poll_workspace(&ctx);
         self.storage.flush(frame.storage_mut());
 
         // Repaint continuously while replay is playing.
@@ -1770,10 +1781,12 @@ impl DemoApp {
                     ctx.copy_text(self.chart.symbol().to_string());
                 }
                 if id == "research" {
-                    if let Some(click) = &self.last_chart_click {
+                    if let Some(click) = &self.last_chart_click
+                        && let Some(time) = click.time
+                    {
                         self.toasts.info(format!(
                             "Host action: {id}, last chart click: {}, price: {:.4}",
-                            click.time.to_rfc3339(),
+                            time.to_rfc3339(),
                             click.price
                         ));
                     } else {
@@ -2458,20 +2471,7 @@ impl DemoApp {
                 _ => {}
             }
         }
-        // Open financials follow the chart's symbol.
-        if self.symbol_details.take_financials_request()
-            || (self.financials.as_ref()).is_some_and(|(symbol, _)| *symbol != chart_symbol)
-        {
-            let title = (self.chart.instrument())
-                .and_then(|instrument| instrument.description.clone())
-                .unwrap_or_else(|| chart_symbol.clone());
-            let panel = egui_charts::ui::financials::FinancialsPanel::new(
-                title,
-                feeds::financials(&chart_symbol),
-            );
-            self.open_panel = None;
-            self.financials = Some((chart_symbol.clone(), panel));
-        }
+        self.feed_financials();
         let timezone = self.timeframe_toolbar.state.timezone.parse();
         self.symbol_details
             .set_timezone(timezone.unwrap_or_default());
@@ -3019,8 +3019,11 @@ impl DemoApp {
                     ctx.request_repaint();
                 }
                 egui_charts::widget::ChartEvent::Click { position, button } => {
-                    if button == egui::PointerButton::Primary && position.series == SeriesId::MAIN {
-                        replay_click.get_or_insert(position.time);
+                    if button == egui::PointerButton::Primary
+                        && position.series == SeriesId::MAIN
+                        && let Some(time) = position.time
+                    {
+                        replay_click.get_or_insert(time);
                     }
                     self.last_chart_click = Some(position);
                 }
@@ -3077,7 +3080,9 @@ impl DemoApp {
                 bar.open, bar.high, bar.low, bar.close, bar.volume
             ))
             .on_hover_ui(|ui| {
-                ui.label(pointer.time.to_rfc3339());
+                if let Some(time) = pointer.time {
+                    ui.label(time.to_rfc3339());
+                }
                 ui.label(format!("Bar {} · Pane {}", pointer.index, pointer.pane));
                 for (id, bar) in &pointer.series_bars {
                     ui.label(format!("Series {}: {:.2}", id.0, bar.close));
@@ -4129,7 +4134,7 @@ mod tests {
         let replay = app.replay.as_ref().unwrap();
         assert_eq!(replay.state.curr_bar, index);
         assert!(!replay.state.is_playing());
-        assert_eq!(app.last_chart_click.as_ref().unwrap().time, time);
+        assert_eq!(app.last_chart_click.as_ref().unwrap().time, Some(time));
         app.handle_top_toolbar(&ctx, TopToolbarAction::Host("research".into()));
         let message = &app.toasts.toasts().last().unwrap().message;
         assert!(message.contains(&time.to_rfc3339()), "{message}");
@@ -7415,7 +7420,10 @@ mod tests {
                         )),
                         "{labels:?}"
                     );
-                    assert!(labels.contains(&pointer.time.to_rfc3339()), "{labels:?}");
+                    assert!(
+                        labels.contains(&pointer.time.unwrap().to_rfc3339()),
+                        "{labels:?}"
+                    );
                     assert!(
                         labels.iter().any(|label| label.starts_with("SMA: SMA(2) ")),
                         "{labels:?}"
