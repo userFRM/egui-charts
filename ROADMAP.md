@@ -28,7 +28,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 
 - [x] Cursor-centred wheel zoom, horizontal pan, drag pan, touch pan and pinch zoom.
 - [x] Touch drags can start kinetic scrolling with configurable damping.
-- [x] Axis drag scaling, double-click reset, box zoom and optional chart-owned navigation buttons.
+- [x] Axis drag scaling, double-click reset, box zoom and optional chart-owned navigation buttons. Live updates preserve the view on valued bars; filling a whitespace tail follows only when both shift options are enabled and the view is near the live edge. Appended bars retain their new-bar follow policy.
 - [x] Cross, dot and arrow cursor modes, styled crosshair lines, price/time labels and OHLC snapping. Independent time-scale filters exclude whitespace and hidden-only values from crosshair indices without removing stored data; visible series and study values keep their slots eligible.
 - [x] Main-pane crosshair snapping includes visible studies on the main scale for time-based charts.
 - [x] Hover readouts and the data window show bar and study values.
