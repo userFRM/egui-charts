@@ -695,11 +695,7 @@ fn bar_limits_bound_feed_history_and_ticks() {
         }
         assert_eq!(chart.bars(SeriesId::MAIN).last().unwrap().close, 1100.0);
         assert_eq!(chart.trades(SeriesId::MAIN).count(), 100);
-        assert_eq!(
-            chart.feed_link.as_ref().unwrap().footprint.is_some(),
-            !timeframe.is_trade_based(),
-            "execution charts retain candles when the interval has no time slots"
-        );
+        assert!(chart.feed_link.as_ref().unwrap().footprint.is_some());
     }
 }
 
@@ -844,6 +840,272 @@ fn an_eviction_drops_the_scroll_back_page_in_flight_and_its_continuation() {
         [(oldest - all[0].time).num_minutes()],
         "the continuation lapsed with the evicted bar"
     );
+}
+
+/// Historical executions and a live burst have separate anchors. Paging must not shift the
+/// live cells, equal exchange timestamps remain separate, and a new interval reuses the tape.
+#[test]
+fn footprint_trade_intervals_follow_pages_streams_and_interval_changes() {
+    use crate::model::OrderSide::{Buy, Sell};
+    for (interval, fills, expected) in [
+        (
+            "2t",
+            vec![(100.0, 2.0, Buy), (101.0, 3.0, Sell), (102.0, 4.0, Buy)],
+            vec![(5.0, -1.0), (4.0, 4.0)],
+        ),
+        (
+            "5v",
+            vec![(100.0, 2.0, Buy), (101.0, 6.0, Sell)],
+            vec![(5.0, -1.0), (3.0, -3.0)],
+        ),
+        (
+            "2r",
+            vec![(100.0, 2.0, Buy), (102.0, 3.0, Sell), (101.0, 4.0, Buy)],
+            vec![(5.0, -1.0), (4.0, 4.0)],
+        ),
+        (
+            "5delta",
+            vec![(100.0, 2.0, Buy), (101.0, 8.0, Sell)],
+            vec![(9.0, -5.0), (1.0, -1.0)],
+        ),
+    ] {
+        for chart_type in [ChartType::VolumeFootprint, ChartType::SessionVolumeProfile] {
+            if chart_type == ChartType::SessionVolumeProfile && !cfg!(feature = "studies") {
+                continue;
+            }
+            let feed = Arc::new(Script::default());
+            let canonical = interval == "2t" && chart_type == ChartType::VolumeFootprint;
+            let instrument =
+                || Instrument::new(if canonical { "EX:A" } else { "A" }).with_tick_size(1.0);
+            let mut chart = fed(&feed, Some("A"));
+            let timeframe = interval.parse().unwrap();
+            chart.set_timeframe(timeframe);
+            chart.set_chart_type(chart_type);
+            let mut frames = Frames::new();
+            frames.run(&mut chart);
+            feed.resolve().send(Ok(instrument()));
+            let start = bars(1)[0].time;
+            let history: Vec<_> = fills
+                .iter()
+                .map(|&(price, size, side)| Tick::new(start, price, size, Some(side)))
+                .collect();
+            let candles =
+                crate::data::aggregate_trades_with_tick_size(&history, timeframe, Some(1.0))
+                    .unwrap();
+            feed.page().send(page(candles.clone(), true));
+            frames.run(&mut chart);
+            let live_start = start + TimeDelta::seconds(1);
+            let live: Vec<_> = fills
+                .iter()
+                .map(|&(price, size, side)| Tick::new(live_start, price + 10.0, size, Some(side)))
+                .collect();
+            let sink = feed.sink();
+            for trade in &live {
+                sink.push_tick(trade.clone());
+                frames.run(&mut chart);
+            }
+            // The history page arrives after the live stream has already allocated its bars.
+            feed.trades
+                .lock()
+                .unwrap()
+                .remove(0)
+                .send(Ok(TradePage::new(history.clone(), true)));
+            frames.run(&mut chart);
+            let mut all_candles = candles;
+            all_candles.extend(
+                crate::data::aggregate_trades_with_tick_size(&live, timeframe, Some(1.0)).unwrap(),
+            );
+            assert_eq!(chart.bars(SeriesId::MAIN), all_candles, "{interval}");
+            let flow = chart
+                .feed_link
+                .as_ref()
+                .unwrap()
+                .footprint
+                .as_ref()
+                .unwrap();
+            let got: Vec<_> = flow
+                .bars()
+                .values()
+                .map(|bar| (bar.volume(), bar.delta()))
+                .collect();
+            assert_eq!(
+                got,
+                expected
+                    .iter()
+                    .chain(&expected)
+                    .copied()
+                    .collect::<Vec<_>>(),
+                "{interval}"
+            );
+            for bar in &all_candles {
+                assert_eq!(
+                    flow.bar_at(bar.time).unwrap().volume(),
+                    bar.volume,
+                    "{interval}"
+                );
+            }
+            let image = chart.feed_link.as_ref().unwrap().frozen();
+            assert_eq!(image.footprint.as_ref().unwrap().bars(), flow.bars());
+            // A replay cutoff keeps the executions before it, and only those, on their own anchors.
+            let link = chart.feed_link.as_ref().unwrap();
+            let replayed = |cutoff| {
+                let flow = link.footprint(Some(cutoff)).unwrap();
+                flow.bars()
+                    .values()
+                    .map(|bar| (bar.volume(), bar.delta()))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(replayed(live_start), expected, "{interval}: replay");
+            assert_eq!(
+                replayed(live_start + TimeDelta::nanoseconds(1)),
+                got,
+                "{interval}: replay"
+            );
+            // The last execution is still queued when the interval changes.
+            let queued = Tick::new(start + TimeDelta::seconds(2), 120.0, 1.0, Some(Buy));
+            sink.push_tick(queued.clone());
+            // No new trade page has answered on the new interval.
+            chart.set_timeframe("3t".parse().unwrap());
+            frames.run(&mut chart);
+            feed.resolve().send(Ok(instrument()));
+            frames.run(&mut chart);
+            frames.run(&mut chart);
+            let mut regrouped =
+                Footprint::new(BarClock::new("3t".parse().unwrap()), 1.0, 1).unwrap();
+            for trade in history.iter().chain(&live).chain(std::iter::once(&queued)) {
+                regrouped.push(trade).unwrap();
+            }
+            assert_eq!(
+                chart
+                    .feed_link
+                    .as_ref()
+                    .unwrap()
+                    .footprint
+                    .as_ref()
+                    .unwrap()
+                    .bars(),
+                regrouped.bars(),
+                "{interval}: retained tape"
+            );
+            if interval == "2t" && chart_type == ChartType::VolumeFootprint {
+                chart.feed_link.as_mut().unwrap().trades = Trades::new(2);
+                let at = start + TimeDelta::seconds(3);
+                let sink = feed.sink();
+                for i in 0..5 {
+                    sink.push_tick(Tick::new(
+                        at + TimeDelta::milliseconds(i),
+                        120.0,
+                        1.0,
+                        Some(Buy),
+                    ));
+                }
+                frames.run(&mut chart);
+                let flow = chart
+                    .feed_link
+                    .as_ref()
+                    .unwrap()
+                    .footprint
+                    .as_ref()
+                    .unwrap();
+                // On the new three-trade interval the first bar lost all three fills; the
+                // next holds exactly the two retained fills, without shifting its open.
+                let kept = at + TimeDelta::milliseconds(3);
+                assert_eq!(flow.complete_from(), Some(kept));
+                assert_eq!(
+                    flow.bars()
+                        .values()
+                        .map(|bar| (bar.time, bar.volume(), bar.delta()))
+                        .collect::<Vec<_>>(),
+                    vec![(kept, 2.0, 2.0)]
+                );
+                chart.set_timeframe("2t".parse().unwrap());
+                frames.run(&mut chart);
+                feed.resolve().send(Ok(instrument()));
+                frames.run(&mut chart);
+                frames.run(&mut chart);
+                assert_eq!(
+                    chart.trades(SeriesId::MAIN).count(),
+                    2,
+                    "an interval change keeps the bounded tape"
+                );
+                let flow = chart
+                    .feed_link
+                    .as_ref()
+                    .unwrap()
+                    .footprint
+                    .as_ref()
+                    .unwrap();
+                assert_eq!(
+                    flow.bars()
+                        .values()
+                        .map(|bar| (bar.time, bar.volume(), bar.delta()))
+                        .collect::<Vec<_>>(),
+                    vec![(kept, 2.0, 2.0)]
+                );
+                assert_eq!(
+                    flow.complete_from(),
+                    None,
+                    "dropped data stays incomplete after reanchoring"
+                );
+                chart.set_extended_hours(true);
+                chart.set_timeframe("3t".parse().unwrap());
+                frames.run(&mut chart);
+                assert_eq!(
+                    chart.trades(SeriesId::MAIN).count(),
+                    0,
+                    "a different hours choice reloads its executions"
+                );
+            }
+        }
+    }
+}
+
+/// The page answering an interval change holds what traded between the two subscriptions, and
+/// repeating the retained executions does not end the scroll-back for older ones.
+#[test]
+fn an_interval_change_page_fills_the_retained_tape() {
+    let start = bars(1)[0].time;
+    let fill = |second, size| Tick::new(start + TimeDelta::seconds(second), 100.0, size, None);
+    for (page, volume) in [
+        (vec![fill(0, 1.0), fill(1, 2.0)], 3.0),
+        (vec![fill(0, 1.0), fill(1, 2.0), fill(2, 4.0)], 7.0),
+    ] {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        chart.set_timeframe(Timeframe::Min1);
+        chart.set_chart_type(ChartType::VolumeFootprint);
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+        frames.run(&mut chart);
+        let answer = |fills| {
+            let reply = feed.trades.lock().unwrap().pop().unwrap();
+            reply.send(Ok(TradePage::new(fills, false)));
+        };
+        answer(vec![fill(0, 1.0)]);
+        feed.sink().push_tick(fill(1, 2.0));
+        frames.run(&mut chart);
+        chart.set_timeframe(Timeframe::Min5);
+        frames.run(&mut chart);
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+        frames.run(&mut chart);
+        answer(page);
+        frames.run(&mut chart);
+        let flow = chart
+            .feed_link
+            .as_ref()
+            .unwrap()
+            .footprint
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            flow.bars().values().map(|bar| bar.volume()).sum::<f64>(),
+            volume
+        );
+        assert!(!chart.feed.trade_history_complete);
+    }
 }
 
 /// Evicted trades leave the footprint: its bars equal those summed from the held trades, delta

@@ -40,6 +40,8 @@ pub(crate) struct FeedLink {
     inbox: Arc<Inbox>,
     /// Slots of the chart's timeframe, by which history, live bars and ticks merge.
     pub(super) clock: BarClock,
+    /// Hours choice of the retained executions.
+    extended_hours: bool,
     initial_bars: usize,
     /// Whether history is requested adjusted for dividends.
     pub(super) adjusted: bool,
@@ -68,6 +70,8 @@ pub(crate) struct FeedLink {
     /// The trades as a footprint on the instrument's tick, while the chart type or a volume
     /// profile drawing reads them, within [`FOOTPRINT_BARS`] and [`FOOTPRINT_ROWS`].
     pub(super) footprint: Option<Footprint>,
+    /// Live trade-bar allocations shared with the sink, independent of paged executions.
+    footprint_input: Option<(crate::data::OrderFlowInput, u64)>,
     /// The footprint of the trades before the replay cutoff, while a replay runs under a visible
     /// volume profile drawing, rebuilt when the cutoff moves.
     pub(super) replay_footprint: Option<(chrono::DateTime<chrono::Utc>, Option<Footprint>)>,
@@ -142,6 +146,7 @@ impl FeedLink {
             feed: Arc::clone(&self.feed),
             inbox: Arc::default(),
             clock: self.clock.clone(),
+            extended_hours: self.extended_hours,
             initial_bars: self.initial_bars,
             adjusted: self.adjusted,
             wake: Arc::default(),
@@ -159,11 +164,8 @@ impl FeedLink {
                 .bubbles
                 .as_ref()
                 .map(|bubbles| self.bubbles(bubbles.config.clone())),
-            footprint: self
-                .footprint
-                .is_some()
-                .then(|| self.footprint(None))
-                .flatten(),
+            footprint: self.footprint.clone(),
+            footprint_input: None,
             replay_footprint: self.replay_footprint.clone(),
             order_book: self.order_book.clone(),
             order_queue: self.order_queue.clone(),
@@ -196,19 +198,52 @@ impl FeedLink {
         let tick_size = self.instrument.as_ref()?.tick_size?;
         let mut flow = Footprint::new(self.clock.clone(), tick_size, 1).ok()?;
         flow.set_budget(FOOTPRINT_BARS, FOOTPRINT_ROWS);
+        let trade_based = self.clock.timeframe().is_some_and(|tf| tf.is_trade_based());
         let trades = || {
             self.trades
                 .iter()
+                .take(if trade_based {
+                    self.trades.iter().count() - self.trades.live().count()
+                } else {
+                    usize::MAX
+                })
                 .take_while(|trade| before.is_none_or(|time| trade.ts < time))
         };
-        for trade in trades() {
-            let _ = flow.push(trade);
+        // Paged executions have their own anchor; the sink supplies live allocations below.
+        if !trade_based || self.trades.lost_until().is_none() || self.trades.live().next().is_none()
+        {
+            for trade in trades() {
+                let _ = flow.push(trade);
+            }
         }
         if let Some(lost) = self.trades.lost_until() {
             flow.drop_through(lost, trades());
         }
-        if let Some(first) = self.unconfirmed_start() {
+        let first = self.unconfirmed_start().or_else(|| {
+            if trade_based && self.trades.lost_until().is_some() {
+                self.trades.iter().next().map(|trade| trade.ts)
+            } else {
+                None
+            }
+        });
+        if let Some(first) = first {
             flow.received_from(first);
+        }
+        if let Some(cutoff) = before.filter(|_| trade_based) {
+            // A cutoff can fall inside a sink allocation, so the live bars are summed again up to
+            // it. Their anchor is known only while the whole live stream is held.
+            if self.trades.lost_until().is_none() {
+                let mut live = Footprint::new(self.clock.clone(), tick_size, 1).ok()?;
+                for trade in self.trades.live().take_while(|trade| trade.ts < cutoff) {
+                    let _ = live.push(trade);
+                }
+                flow.copy_trade_bars(&live, None);
+            }
+        } else if let Some((input, _)) = &self.footprint_input {
+            input.copy_footprint(&mut flow, u64::MAX);
+            if let Some(lost) = self.trades.lost_until() {
+                flow.drop_through(lost, trades());
+            }
         }
         Some(flow)
     }
@@ -248,6 +283,7 @@ impl Chart {
             feed,
             inbox: Arc::default(),
             clock: BarClock::new(timeframe),
+            extended_hours: self.extended_hours,
             initial_bars,
             adjusted: false,
             wake: Arc::default(),
@@ -263,6 +299,7 @@ impl Chart {
             trades: Trades::new(TRADE_CAPACITY),
             bubbles: None,
             footprint: None,
+            footprint_input: None,
             replay_footprint: None,
             order_book: None,
             order_queue: None,

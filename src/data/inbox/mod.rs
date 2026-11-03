@@ -197,6 +197,18 @@ impl Inbox {
         self.state().subscriptions.remove(&id);
     }
 
+    /// Stops a subscription atomically, retaining its symbol, undrained executions and reset.
+    #[cfg(feature = "widget")]
+    pub(crate) fn unsubscribe_with_trades(
+        &self,
+        id: SubscriptionId,
+    ) -> Option<(String, bool, Trades)> {
+        self.state()
+            .subscriptions
+            .remove(&id)
+            .map(|live| (live.symbol, live.updates.reset, live.updates.trades))
+    }
+
     /// Takes everything that arrived since the last drain.
     pub(crate) fn drain(&self) -> Drained {
         let mut state = self.state();
