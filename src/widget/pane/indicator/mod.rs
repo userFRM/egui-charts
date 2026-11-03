@@ -422,7 +422,7 @@ impl IndicatorPane {
             .map(|item| crate::chart::primitives::PrimitiveView {
                 series: item.series,
                 study: (!bar_series).then_some(indicator),
-                mapping,
+                mapping: mapping.clone(),
                 bars,
                 visible: displayed_range.clone(),
             });
