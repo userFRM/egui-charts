@@ -15,10 +15,11 @@ pub(super) struct ComparisonSettings {
     scale: egui_charts::scales::PriceScale,
     original_scale: egui_charts::scales::PriceScale,
     independent_scale: SeriesScale,
+    overlay_scale: SeriesScale,
 }
 
 impl ComparisonSettings {
-    fn show(&mut self, ctx: &egui::Context, open: &mut bool) -> bool {
+    fn show(&mut self, ctx: &egui::Context, chart: &Chart, open: &mut bool) -> bool {
         use egui_charts::model::{LineStyle, PriceLineSource, SeriesDisplayFormat, SeriesFormat};
         use egui_charts::scales::PriceScaleMode;
         use egui_charts::ui_kit::{FormGrid, dialog::DialogFooter, ext::UiExt, modal::Modal};
@@ -248,28 +249,36 @@ impl ComparisonSettings {
                     ui.separator();
                     FormGrid::new("comparison_scale").show(ui, |ui| {
                         let label = ui.label("Price scale");
-                        ui.label_inputs_by(label.id, |ui| {
-                            let overlay = match self.options.scale {
-                                SeriesScale::Overlay(id) => SeriesScale::Overlay(id),
-                                _ => SeriesScale::Overlay(self.id.0 as u64),
-                            };
-                            ui.combo_select(
-                                "scale",
-                                &mut self.options.scale,
-                                [
-                                    SeriesScale::Right,
-                                    SeriesScale::Left,
-                                    self.independent_scale,
-                                    overlay,
-                                ],
-                                |v| match v {
-                                    SeriesScale::Right => "Right".into(),
-                                    SeriesScale::Left => "Left".into(),
-                                    SeriesScale::Separate(_) => "New price scale".into(),
-                                    SeriesScale::Overlay(_) => "No axis labels".into(),
-                                },
-                            );
-                        });
+                        if chart.series_pane(self.id) == Some(PaneId::MAIN) {
+                            ui.label_inputs_by(label.id, |ui| {
+                                if ui.combo_select(
+                                    "scale",
+                                    &mut self.options.scale,
+                                    [
+                                        SeriesScale::Right,
+                                        SeriesScale::Left,
+                                        self.independent_scale,
+                                        self.overlay_scale,
+                                    ],
+                                    |v| match v {
+                                        SeriesScale::Right => "Right".into(),
+                                        SeriesScale::Left => "Left".into(),
+                                        SeriesScale::Separate(_) => "New price scale".into(),
+                                        SeriesScale::Overlay(_) => "No axis labels".into(),
+                                    },
+                                ) {
+                                    self.scale = chart
+                                        .shared_price_scale(self.options.scale)
+                                        .cloned()
+                                        .unwrap_or_else(|| {
+                                            egui_charts::scales::PriceScale::new(Default::default())
+                                        });
+                                    self.original_scale = self.scale.clone();
+                                }
+                            });
+                        } else {
+                            ui.label("Pane price scale");
+                        }
                         ui.end_row();
                         ui.label("Scale mode");
                         ui.combo_select(
@@ -788,19 +797,36 @@ impl DemoApp {
         let Some(scale) = self.chart.series_price_scale(id) else {
             return;
         };
+        let occupied: Vec<_> = self
+            .chart
+            .series()
+            .map(|(_, options)| options.scale)
+            .chain(self.chart.series_scale(SeriesId::MAIN))
+            .chain(
+                self.chart
+                    .indicators()
+                    .filter_map(|(_, study)| match study.scale() {
+                        egui_charts::studies::StudyScale::Shared(scale) => Some(scale),
+                        _ => None,
+                    }),
+            )
+            .collect();
+        let key = (0..=u64::MAX)
+            .find(|key| {
+                !occupied.iter().any(|scale| {
+                    matches!(
+                        scale, SeriesScale::Separate(id) | SeriesScale::Overlay(id) if id == key
+                    )
+                })
+            })
+            .expect("a finite chart leaves unused scale identifiers");
         let independent_scale = match options.scale {
             SeriesScale::Separate(_) => options.scale,
-            _ => SeriesScale::Separate(
-                self.chart
-                    .series()
-                    .filter_map(|(_, options)| match options.scale {
-                        SeriesScale::Separate(key) => Some(key),
-                        _ => None,
-                    })
-                    .max()
-                    .unwrap_or(0)
-                    .saturating_add(1),
-            ),
+            _ => SeriesScale::Separate(key),
+        };
+        let overlay_scale = match options.scale {
+            SeriesScale::Overlay(_) => options.scale,
+            _ => SeriesScale::Overlay(key),
         };
         self.comparison_settings = Some(ComparisonSettings {
             id,
@@ -808,6 +834,7 @@ impl DemoApp {
             scale: scale.clone(),
             original_scale: scale.clone(),
             independent_scale,
+            overlay_scale,
         });
     }
 
@@ -819,7 +846,7 @@ impl DemoApp {
             return;
         }
         let mut open = true;
-        if draft.show(ctx, &mut open) {
+        if draft.show(ctx, &self.chart, &mut open) {
             self.chart.user_action(|chart| {
                 let scale_changed = chart.series_scale(draft.id) != Some(draft.options.scale);
                 chart.set_series_options(draft.id, draft.options);
@@ -1098,6 +1125,18 @@ mod tests {
         app.handle_series_context(SeriesContextMenuAction::OpenSettings);
         assert_eq!(app.comparison_settings.as_ref().unwrap().id, restored);
         assert!(app.keyboard_dialog_open());
+        let primary = *app.chart.state().price_scale().options();
+        close(&mut app, "New price scale");
+        close(&mut app, "Right");
+        assert_eq!(
+            *app.comparison_settings.as_ref().unwrap().scale.options(),
+            primary
+        );
+        close(&mut app, "Ok");
+        assert_eq!(app.chart.series_scale(restored), Some(SeriesScale::Right));
+        assert_eq!(*app.chart.state().price_scale().options(), primary);
+        assert!(app.chart.undo());
+        app.open_indicator_settings(restored);
         app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
         app.activate_chart_slot(1);
         assert!(app.comparison_settings.is_none());

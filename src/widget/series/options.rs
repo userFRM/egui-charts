@@ -688,6 +688,17 @@ impl Chart {
         }
     }
 
+    /// The scale at `assignment` in the main pane, including scales shared only by studies.
+    /// Returns the primary scale at its assignment and `None` for an absent secondary scale.
+    /// For a series in another pane, use [`series_price_scale`](Self::series_price_scale).
+    pub fn shared_price_scale(&self, assignment: SeriesScale) -> Option<&PriceScale> {
+        if assignment == self.main_series_scale {
+            Some(self.state.price_scale())
+        } else {
+            self.series_scales.get(&assignment)
+        }
+    }
+
     /// The scale shared by this present bar series, including its options and fitted range.
     pub fn series_price_scale(&self, id: SeriesId) -> Option<&PriceScale> {
         let scale = self.series_scale(id)?;
