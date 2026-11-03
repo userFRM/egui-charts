@@ -330,6 +330,7 @@ mod tests {
 
     #[test]
     fn calendar_date_constructors_match_date_only_imports() {
+        #[cfg(feature = "csv")]
         let path = temp_csv("calendar-dates");
         for (year, month, day, midnight) in [
             (1969, 12, 31, -86_400),
@@ -349,16 +350,24 @@ mod tests {
                     {{"time":"{date}"}}]"#
             );
             let json = BarData::from_json_string(&json).unwrap();
-            std::fs::write(
-                &path,
-                format!(
-                    "ts,open,high,low,close,volume\n{date},1,2,0.5,1.5,10\n\
-                     {date},3,3,3,3,0\n{date},NaN,NaN,NaN,NaN,NaN\n"
-                ),
-            )
-            .unwrap();
-            let csv = BarData::from_csv(&path).unwrap();
-            for bars in [&typed[..], &json.bars[..], &csv.bars[..]] {
+            #[cfg(feature = "csv")]
+            let csv = {
+                std::fs::write(
+                    &path,
+                    format!(
+                        "ts,open,high,low,close,volume\n{date},1,2,0.5,1.5,10\n\
+                         {date},3,3,3,3,0\n{date},NaN,NaN,NaN,NaN,NaN\n"
+                    ),
+                )
+                .unwrap();
+                BarData::from_csv(&path).unwrap()
+            };
+            for bars in [
+                &typed[..],
+                &json.bars[..],
+                #[cfg(feature = "csv")]
+                &csv.bars[..],
+            ] {
                 assert_eq!(bars.len(), 3, "{date}");
                 for bar in bars {
                     assert_eq!(bar.time.timestamp(), midnight, "{date}");
@@ -369,6 +378,7 @@ mod tests {
                 assert!(bars[2].is_whitespace(), "{date}");
             }
         }
+        #[cfg(feature = "csv")]
         std::fs::remove_file(&path).unwrap();
     }
 

@@ -519,7 +519,8 @@ impl Chart {
 
     /// A frozen chart for a multi-chart image layout, with the same background, title,
     /// watermark and crosshair choices as [`Self::export_image`]. Show it inside the callback
-    /// of [`Self::export_layout_image`], [`Self::export_layout_png`] or [`Self::export_layout_svg`].
+    /// of [`Self::export_layout_image`], `Self::export_layout_png` (with `png-export`) or
+    /// [`Self::export_layout_svg`].
     /// No storage or live subscriptions are attached; the original chart stays unchanged.
     pub fn export_snapshot(&self, ctx: &egui::Context, options: &ImageExportOptions) -> Self {
         let mut chart = self.frozen_export_snapshot();
