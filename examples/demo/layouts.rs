@@ -592,7 +592,7 @@ impl DemoApp {
     pub(super) fn restore_layout(
         &mut self,
         name: String,
-        layout: SavedLayout,
+        mut layout: SavedLayout,
         comparisons: Result<Vec<Vec<super::comparison::SavedComparison>>, String>,
     ) -> bool {
         if let Some(index) = self.layout_tabs.iter().position(|t| t.name == name)
@@ -635,7 +635,10 @@ impl DemoApp {
                 return false;
             }
         }
-        for snapshot in &layout.charts {
+        for snapshot in &mut layout.charts {
+            if !self.api_samples {
+                super::marks::remove_samples(snapshot);
+            }
             let mut check = Chart::new(egui_charts::model::BarData::new());
             if let Err(error) = check.restore(snapshot) {
                 self.toasts.error(format!("Could not open layout: {error}"));
