@@ -85,13 +85,11 @@ pub struct CrosshairOptions {
     /// Show axis labels, subject to each label's visibility switch.
     pub label_visible: bool,
 
-    /// Show the time-axis label independently of the vertical line. Default: true.
-    /// `label_visible` must also be true; `CrosshairStyle::Hidden` hides every element.
+    /// Show the time-axis label, independently of the vertical line. Needs `label_visible`.
     pub vert_label_visible: bool,
 
-    /// Show the price-axis label independently of the horizontal line. Default: true.
-    /// Also applies to volume and study values. `label_visible` must also be true;
-    /// `CrosshairStyle::Hidden` hides every element.
+    /// Show the price-axis label, independently of the horizontal line. Needs `label_visible`.
+    /// Also applies to volume and study values.
     pub horz_label_visible: bool,
 
     /// Background of the vertical line's label on the time axis (`Color32::PLACEHOLDER`:
