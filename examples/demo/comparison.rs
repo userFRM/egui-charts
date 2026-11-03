@@ -940,7 +940,7 @@ mod tests {
             ComparePlacement::NewPriceScale,
         ));
         let id = app.comparisons[0].1;
-        let main = app.chart.snapshot();
+        let main = app.chart.snapshot().unwrap();
         let original = app
             .chart
             .series()
