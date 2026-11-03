@@ -368,10 +368,16 @@ mod tests {
             for width in [640.0, 1440.0] {
                 let ctx = egui::Context::default();
                 let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+                super::super::tests::settle(&mut app, &ctx);
                 app.theme = theme.clone();
                 egui_charts::theme::apply_to_egui(&ctx, &theme);
                 app.live.set_paused(true);
                 app.chart.set_feed_paused(true);
+                // Detector triangles can share a fill's price; this test identifies report markers.
+                for kind in egui_charts::services::DetectionKind::ALL {
+                    app.chart
+                        .set_signal_category_visible(kind.category(), false);
+                }
                 let bars = app.chart.bars(SeriesId::MAIN).to_vec();
                 let live_marker = |output: &FullOutput| {
                     output.shapes.iter().any(|shape| {
@@ -380,6 +386,10 @@ mod tests {
                     })
                 };
                 let frame = |app: &mut DemoApp, events| {
+                    super::super::tests::finish_feed(&app.live);
+                    for extra in &app.extra_charts {
+                        super::super::tests::finish_feed(&extra.live);
+                    }
                     ctx.run_ui(
                         RawInput {
                             screen_rect: Some(Rect::from_min_size(

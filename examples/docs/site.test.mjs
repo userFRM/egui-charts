@@ -17,6 +17,8 @@ for (const [page, scenes, setup] of [
   ['price-scale', ['price-scale'], own('./scenes/price_scale.rs')],
   ['time-scale', ['time-scale'], own('./scenes/time_scale.rs')],
   ['panes', ['panes'], own('./scenes/panes.rs')],
+  ['theming', ['theme'], own('./scenes/theme.rs')],
+  ['time-zones', ['theme'], own('./scenes/theme.rs')],
   ['horizontal-scales', ['volatility-smile', 'yield-curve'], section('/// Compare', '/// Shade')],
   ['extensions', ['primitives'], `${section('/// Shade', '/// Draw each')}\n\n${section('/// Shared fixed')}`],
   ['extensions/custom-series', ['custom-series'], section('/// Draw each')],
@@ -31,7 +33,12 @@ for (const [page, scenes, setup] of [
     const source = setup.trim().split('\n').filter((line) => line.trim());
     const displayed = [...html.matchAll(/<div class="ec-line"[^>]*>(.*?)<\/div>/gs)]
       .map((line) => decode(line[1])).filter((line) => line.trim());
-    assert.deepEqual(displayed.slice(0, source.length), source);
+    if (page === 'theming' || page === 'time-zones') {
+      // These scenes follow other setup snippets on their guide pages.
+      assert.ok(displayed.join('\n').includes(source.join('\n')), 'the scene source is displayed unchanged');
+    } else {
+      assert.deepEqual(displayed.slice(0, source.length), source);
+    }
     const widget = resolve(site, 'examples/widget');
     assert.match(readFileSync(resolve(widget, 'index.html'), 'utf8'), /data-example-state="loading"/);
     const wasm = readdirSync(widget).filter((file) => file.endsWith('.wasm'));

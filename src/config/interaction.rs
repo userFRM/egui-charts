@@ -1,10 +1,21 @@
 //! Scroll, zoom, and tracking interaction options.
 //!
 //! Controls how mouse/touch gestures are interpreted: which gestures
-//! pan the chart, which zoom it, and how the tracking-mode (crosshair
-//! following) behaves.
+//! pan the chart, which zoom it, and how live-edge following and touch
+//! crosshair tracking behave.
 
-/// How tracking mode (crosshair auto-follow) is exited.
+/// How a touch crosshair activated by a long press is exited.
+/// This does not control live-edge following.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum TouchTrackingExitMode {
+    /// Hide the crosshair and readout when the touch ends.
+    #[default]
+    OnTouchEnd,
+    /// Keep the crosshair and readout after release until the next tap.
+    OnNextTap,
+}
+
+/// How tracking mode (live-edge following) is exited.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum TrackingModeExitMode {
     /// Exit tracking mode when touch/click ends

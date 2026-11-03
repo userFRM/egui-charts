@@ -1,0 +1,113 @@
+---
+title: Time zones and sessions
+---
+
+import Example from '../../components/Example.astro';
+import presentation from '../../../../../examples/docs/scenes/theme.rs?raw';
+
+Store historical bars, streaming updates and shared time ranges as UTC instants.
+The display zone changes calendar and clock labels; changing it does not rewrite
+the supplied timestamps or move bars to a new instant.
+
+## Choose a display zone
+
+```rust
+use egui_charts::{ChartBuilder, model::TimezoneId, scales::TimezoneMode};
+
+let mut chart = ChartBuilder::new().build();
+let mut options = chart.chart_options().clone();
+options.time_scale.timezone = TimezoneMode::Timezone(
+    TimezoneId::fixed_offset(5 * 3600 + 45 * 60).unwrap(),
+);
+options.time_scale.time_visible = true;
+options.time_scale.seconds_visible = false;
+chart.set_chart_options(options);
+```
+
+[`TimeScaleOptions::timezone`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.TimeScaleOptions.html#structfield.timezone)
+accepts a [`TimezoneMode`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/scales/enum.TimezoneMode.html):
+
+| Mode | Display clock |
+| --- | --- |
+| `Utc` | UTC, the default. |
+| `Local` | The user's system local zone. |
+| `Timezone(zone)` | The selected validated zone. |
+| `Exchange(fallback)` | The instrument's `time_zone`, or `fallback` when absent. |
+
+[`TimezoneId`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.TimezoneId.html)
+parses `UTC` and signed offsets such as `+05:45` in every build. IANA names such
+as `America/New_York` require `timezones`, enabled by default; unavailable names
+return an error rather than being approximated. Handle that error when a user
+enters a zone. Fixed offsets never observe daylight saving. Named zones use the
+offset valid at each UTC instant, including historical daylight-saving changes.
+For example, 14:30 UTC displays as 09:30 at offset -05:00 and 10:30 at -04:00.
+
+[`time_visible`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.TimeScaleOptions.html#structfield.time_visible)
+controls whether intraday labels include the clock;
+[`seconds_visible`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.TimeScaleOptions.html#structfield.seconds_visible)
+controls seconds. These presentation settings do not change the bar interval.
+Date patterns, calendar language and custom label formatters are covered in
+[Theming and localization](theming.mdx#format-dates-and-values).
+
+## Try the same instant in two clocks
+
+Toggle **UTC +05:45** and compare **Stored UTC** with **Display**. Adding five
+hours and 45 minutes changes the displayed clock, including the date if it
+crosses midnight; **Stored UTC** stays identical. Hover a candle to inspect the
+crosshair time. The [scene setup](theming.mdx#try-presentation-changes) uses the
+same deterministic history and works without the optional zone database.
+
+<Example scene="theme" title="UTC history with a different display clock"
+  task="Toggle UTC +05:45 and compare the stored timestamp with its display."
+  code={presentation} />
+
+## Set exchange sessions separately
+
+A display zone is not a trading calendar. Supply the instrument's exchange zone
+and hours through
+[`Instrument::with_time_zone`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.Instrument.html#method.with_time_zone)
+and [`with_session`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.Instrument.html#method.with_session).
+For a venue that stays at UTC year round:
+
+```rust
+use chrono::{NaiveTime, Weekday};
+use egui_charts::{ChartBuilder, model::{Instrument, Session, SessionWindow, TimezoneId}};
+
+let session = Session::new([SessionWindow::new(
+    vec![Weekday::Mon, Weekday::Tue, Weekday::Wed, Weekday::Thu, Weekday::Fri],
+    NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+    NaiveTime::from_hms_opt(17, 0, 0).unwrap(),
+)]);
+let instrument = Instrument::new("SYNTH")
+    .with_time_zone(TimezoneId::utc())
+    .with_session(session);
+let mut chart = ChartBuilder::new().build();
+chart.set_instrument(Some(instrument));
+chart.config_mut().show_session_breaks = true;
+```
+
+[`SessionWindow`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.SessionWindow.html)
+uses exchange-local opening and closing times with an inclusive open and
+exclusive close. Overnight windows are named by their **closing** weekday.
+[`Session`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.Session.html)
+also carries extended windows, holidays and date-specific overrides for early
+closes or exceptional openings. An override replaces that date's weekly hours
+and holiday; an empty override closes the date. The host supplies an accurate
+calendar and its updates. The library does not fetch exchange hours or data.
+
+Enable [`show_session_breaks`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.ChartConfig.html#structfield.show_session_breaks)
+for boundary lines and
+[`show_extended_hours`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/config/struct.ChartConfig.html#structfield.show_extended_hours)
+for shading of supplied bars outside regular hours. Shading does not fetch or
+filter bars. [`set_session_provider`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_session_provider)
+accepts host-defined break detection; `None` restores metadata-based breaks.
+This replaces boundary detection, not the instrument's trading calendar.
+
+For feed-built bars, keep the feed's
+[`BarClock`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.BarClock.html)
+and session metadata consistent with the venue. Changing display labels cannot
+reaggregate prebuilt historical OHLC bars. Daily and longer bars identify trading
+dates; follow the [data contract](data-model.mdx) rather than applying an offset
+to every bar. Synchronize charts using the
+[UTC time range](time-scale.mdx#logical-indices-and-utc-instants), even when their
+display clocks differ.

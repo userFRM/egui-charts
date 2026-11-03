@@ -46,7 +46,7 @@ fn main() -> eframe::Result {
                         if landing {
                             Ok(Box::new(controller::landing::LandingChart::new(cc)))
                         } else {
-                            Ok(Box::new(DemoApp::new(cc)))
+                            Ok(DemoApp::new(cc))
                         }
                     }),
                 )
@@ -65,7 +65,7 @@ fn main() -> eframe::Result {
         eframe::run_native(
             "egui-charts demo",
             options,
-            Box::new(|cc| Ok(Box::new(DemoApp::new(cc)))),
+            Box::new(|cc| Ok(DemoApp::new(cc))),
         )
     }
 }
