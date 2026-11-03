@@ -12,6 +12,8 @@ use egui_charts::widget::{SeriesId, Watermark, WatermarkLine};
 use std::sync::Arc;
 
 const LEVEL: Color32 = Color32::from_rgb(255, 152, 0);
+const FILL: Color32 = Color32::from_rgb(41, 98, 255);
+const STOP: Color32 = Color32::from_rgb(242, 54, 69);
 
 impl DemoApp {
     /// Annotates the bars on show with the time-axis events and, when the API samples are on, a
@@ -49,7 +51,7 @@ impl DemoApp {
             markers.push(
                 Marker::new(bar.time)
                     .with_shape(MarkerShape::Diamond)
-                    .with_color(Color32::from_rgb(41, 98, 255))
+                    .with_color(FILL)
                     .with_text("Fill")
                     .at_price(bar.open, MarkerPos::AtPriceMiddle),
             );
@@ -58,7 +60,7 @@ impl DemoApp {
             markers.push(
                 Marker::new(bar.time)
                     .with_shape(MarkerShape::ArrowUp)
-                    .with_color(Color32::from_rgb(242, 54, 69))
+                    .with_color(STOP)
                     .with_text("Stop")
                     .at_price(low, MarkerPos::AtPriceBottom),
             );
@@ -106,6 +108,22 @@ impl DemoApp {
             self.chart.remove_price_line(id);
         }
     }
+}
+
+/// Takes the fill, stop and demo level `annotate` adds out of a saved chart, so earlier saves do
+/// not bring samples back into a session that did not turn them on.
+pub(super) fn remove_samples(snapshot: &mut egui_charts::widget::ChartSnapshot) {
+    let Some(saved) = &mut snapshot.main_annotations else {
+        return;
+    };
+    saved.markers.retain(|marker| {
+        let text = marker.text.as_deref();
+        !(text == Some("Fill") && marker.color == FILL
+            || text == Some("Stop") && marker.color == STOP)
+    });
+    saved
+        .price_lines
+        .retain(|line| !(line.title.as_deref() == Some("Demo level") && line.color == LEVEL));
 }
 
 /// Time-axis events every 40 bars and, with `samples`, a signal mark on each of those bars.

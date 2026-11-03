@@ -65,7 +65,9 @@ use std::sync::Arc;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PrimitiveId(pub(crate) u64);
 
-/// When a primitive draws in its pane.
+/// When a primitive draws in its pane. Within a pass, every
+/// [`draw_background`](Primitive::draw_background) runs in attachment order before any
+/// [`draw`](Primitive::draw).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PrimitivePass {
     /// Behind the series and studies of the pane, above its background, grid and sessions.
@@ -82,6 +84,8 @@ pub enum PrimitivePass {
 /// Among custom hits, later draw passes win (`Above`, `Series`, `Below`), then the
 /// shortest distance in UI points. Equal hits keep ordinary primitives ahead of series
 /// renderers, the latest attached primitive first, and renderers in series visual order.
+/// When series backgrounds group foregrounds in attachment order, equal custom hits also
+/// follow reverse attachment order across primitives and renderers.
 /// Drawings retain priority; built-in series still follow series visual order.
 /// Within a renderer, return its best object using these same pass and distance rules,
 /// breaking ties in reverse paint order. Object ids are local to the pointer's target.
@@ -190,7 +194,14 @@ pub struct TimeAxisLabel {
 /// the main series, an added bar series or an overlay study draws in the main pane; one attached
 /// to a study in a pane of its own draws in that pane. See the [module](self) documentation.
 pub trait Primitive: Send {
-    /// Draws in `pass` with `painter`, clipped to the plot area of the pane.
+    /// Draws the background of `pass`, clipped to the plot area of the pane. All participating
+    /// backgrounds draw in attachment order before any foreground in that pass.
+    /// The chart may defer these shapes; painter indices must stay within this hook.
+    fn draw_background(&self, painter: &Painter, view: &PrimitiveView<'_>, pass: PrimitivePass) {
+        let _ = (painter, view, pass);
+    }
+
+    /// Draws the foreground of `pass` with `painter`, clipped to the plot area of the pane.
     fn draw(&self, painter: &Painter, view: &PrimitiveView<'_>, pass: PrimitivePass) {
         let _ = (painter, view, pass);
     }
@@ -209,6 +220,19 @@ pub trait Primitive: Send {
     ) {
         let _ = factor;
         self.draw(painter, view, pass);
+    }
+
+    /// Draws the background with the same grouping factor as [`draw_merged`](Self::draw_merged).
+    /// The default calls [`draw_background`](Self::draw_background).
+    fn draw_background_merged(
+        &self,
+        painter: &Painter,
+        view: &PrimitiveView<'_>,
+        pass: PrimitivePass,
+        factor: usize,
+    ) {
+        let _ = factor;
+        self.draw_background(painter, view, pass);
     }
 
     /// Labels for the price axis of the pane, placed at their prices next to the chart's own

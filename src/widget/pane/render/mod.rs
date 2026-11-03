@@ -231,6 +231,7 @@ impl Chart {
                 |ui| self.show_internal(ui, Some(time_axis), maximized_plot.as_ref(), footprint),
             )
             .inner;
+        let touch_readout = crate::widget::interaction::touch_crosshair(ui, response.id);
 
         let mut host_clicks = Vec::new();
         let studies = if self.chart_type.is_time_independent() {
@@ -654,6 +655,8 @@ impl Chart {
                 panels.push((entry, indicator, panel, legend_row_height));
             }
             panels.sort_by_key(|(entry, _, _, _)| entry.is_some_and(|(id, _)| Some(id) == on_top));
+            let mut below_grouped = false;
+            let mut series_backgrounds = Vec::new();
             for (paint_row, (entry, indicator, mut panel, legend_row_height)) in
                 panels.into_iter().enumerate()
             {
@@ -662,14 +665,19 @@ impl Chart {
                 let key = (pane_id, id);
                 panel.overlay = paint_row > 0;
                 panel.axis_tags = axis_tags.clone();
-                let mut hover = self
-                    .axis_hover
-                    .map(|(pos, _)| pos)
-                    .or_else(|| {
+                let hover = if touch_readout.touch_input
+                    && self.chart_options.tooltip.enabled
+                    && self.chart_options.tooltip.on_long_press
+                {
+                    touch_readout.position
+                } else {
+                    self.axis_hover.map(|(pos, _)| pos).or_else(|| {
                         ui.input(|input| input.pointer.hover_pos()).filter(|pos| {
                             hover_rect.contains(*pos) && ui.rect_contains_pointer(hover_rect)
                         })
                     })
+                };
+                let mut hover = hover
                     .or_else(|| {
                         self.synced_crosshair_bar_idx
                             .filter(|index| index.is_finite() && *index >= 0.0)
@@ -777,7 +785,42 @@ impl Chart {
                         .flat_map(|id| self.primitives_of(id))
                         .collect::<Vec<_>>(),
                     study.is_none() && id.is_some(),
-                    self.merge_groups.factor(),
+                    |painter, pass| {
+                        use crate::widget::{PrimitivePass, primitives};
+                        if pass == PrimitivePass::Below && paint_row == 0 {
+                            let backgrounds = primitives::backgrounds(
+                                painter,
+                                self.pane_primitives(&members, &pane_mapping),
+                                pass,
+                                self.merge_groups.factor(),
+                            );
+                            below_grouped = !backgrounds.is_empty();
+                            primitives::paint_backgrounds(painter, backgrounds);
+                            if below_grouped {
+                                for (item, view) in self.pane_primitives(&members, &pane_mapping) {
+                                    item.draw(painter, &view, pass, self.merge_groups.factor());
+                                }
+                            }
+                        }
+                        if (pass == PrimitivePass::Below && !below_grouped)
+                            || (pass == PrimitivePass::Series && series_backgrounds.is_empty())
+                        {
+                            for (item, view) in self
+                                .pane_primitives(&members, &pane_mapping)
+                                .filter(|(item, _)| Some(item.series) == id)
+                            {
+                                item.draw(painter, &view, pass, self.merge_groups.factor());
+                            }
+                        }
+                        if pass == PrimitivePass::Below && paint_row == 0 {
+                            series_backgrounds = primitives::backgrounds(
+                                painter,
+                                self.pane_primitives(&members, &pane_mapping),
+                                PrimitivePass::Series,
+                                self.merge_groups.factor(),
+                            );
+                        }
+                    },
                 ) {
                     if !collapsed
                         && let Some(item) =
@@ -787,14 +830,16 @@ impl Chart {
                             .painter()
                             .with_clip_rect(interaction.chart_rect.intersect(ui.clip_rect()));
                         self.paint_series(&painter, interaction.chart_rect, item, map);
-                        let view = self.primitive_view(item.id, pane_mapping.clone());
-                        for primitive in self.primitives_of(item.id) {
-                            primitive.draw(
-                                &painter,
-                                &view,
-                                crate::widget::PrimitivePass::Series,
-                                self.merge_groups.factor(),
-                            );
+                        if series_backgrounds.is_empty() {
+                            let view = self.primitive_view(item.id, pane_mapping.clone());
+                            for primitive in self.primitives_of(item.id) {
+                                primitive.draw(
+                                    &painter,
+                                    &view,
+                                    crate::widget::PrimitivePass::Series,
+                                    self.merge_groups.factor(),
+                                );
+                            }
                         }
                     }
                     self.measured_axis_width =
@@ -812,10 +857,20 @@ impl Chart {
                         menu,
                     } = interaction;
 
-                    let pane_response = match &maximized_plot {
+                    let mut pane_response = match &maximized_plot {
                         Some(plot) => pane_response.union(plot.clone()),
                         None => pane_response.interact(Sense::click_and_drag()),
                     };
+                    if self.chart_options.tooltip.enabled
+                        && self.chart_options.tooltip.on_long_press
+                        && touch_readout.touch_input
+                        && !drawing_tool_active
+                        && !eraser_mode
+                    {
+                        pane_response
+                            .flags
+                            .remove(egui::response::Flags::LONG_TOUCHED);
+                    }
 
                     // A click on the legend's close "x" removes this study or series.
                     let close_clicked = close_response.as_ref().is_some_and(|r| r.clicked());
@@ -896,37 +951,22 @@ impl Chart {
                     let pointer = ui
                         .input(|input| input.pointer.interact_pos())
                         .filter(|pos| chart_rect.contains(*pos));
-                    let pane_primitives = || {
-                        self.primitives
-                            .iter()
-                            .filter(|item| {
-                                self.pane_layout.panes[pane_idx]
-                                    .members
-                                    .contains(&item.series)
-                                    && self.is_series_visible(item.series)
-                            })
-                            .map(|item| {
-                                let mut view =
-                                    self.primitive_view(item.series, pane_coords.clone());
-                                if let Some(study) = view.study
-                                    && matches!(
-                                        study.scale(),
-                                        crate::studies::StudyScale::Shared(_)
-                                    )
-                                {
-                                    view.mapping =
-                                        crate::chart::rendering::study_mapping(study, &pane_coords);
-                                }
-                                (item, view)
-                            })
-                    };
+                    let pane_primitives = || self.pane_primitives(&members, &pane_mapping);
                     let primitive_hit = pointer.and_then(|pos| {
                         crate::widget::primitives::primitive_at(
-                            pane_primitives().filter(|(item, _)| !item.replaces),
+                            pane_primitives().filter(|(item, _)| {
+                                !series_backgrounds.is_empty() || !item.replaces
+                            }),
                             pos,
                         )
                     });
                     let renderer_hit = pointer.and_then(|pos| {
+                        if !series_backgrounds.is_empty() {
+                            return crate::widget::primitives::primitive_at(
+                                pane_primitives().filter(|(item, _)| item.replaces),
+                                pos,
+                            );
+                        }
                         members.iter().rev().fold(None, |best, id| {
                             crate::widget::primitives::best_hit(
                                 best,
@@ -944,43 +984,54 @@ impl Chart {
                     // close-"x" click is handled above and must not also
                     // change the selection.
                     let study_at = |pos| {
-                        self.pane_layout.panes[pane_idx]
-                            .members
-                            .iter()
-                            .rev()
-                            .find_map(|id| {
-                                if self.has_renderer(*id) {
-                                    return renderer_hit.as_ref().and_then(|hit| {
-                                        (hit.target
-                                            == crate::widget::PointerTarget::Element(
-                                                ChartElementId::Indicator(*id),
-                                            ))
-                                        .then_some(ChartElementId::Indicator(*id))
-                                    });
-                                }
+                        let renderer = renderer_hit
+                            .as_ref()
+                            .filter(|_| !series_backgrounds.is_empty() && Some(pos) == pointer)
+                            .and_then(|hit| match hit.target {
+                                crate::widget::PointerTarget::Element(id) => Some(id),
+                                _ => None,
+                            });
+                        renderer.or_else(|| {
+                            self.pane_layout.panes[pane_idx]
+                                .members
+                                .iter()
+                                .rev()
+                                .find_map(|id| {
+                                    if self.has_renderer(*id) {
+                                        return renderer_hit.as_ref().and_then(|hit| {
+                                            (Some(pos) == pointer
+                                                && hit.target
+                                                    == crate::widget::PointerTarget::Element(
+                                                        ChartElementId::Indicator(*id),
+                                                    ))
+                                            .then_some(ChartElementId::Indicator(*id))
+                                        });
+                                    }
 
-                                if let Some(item) = self
-                                    .price_series
-                                    .iter()
-                                    .find(|item| item.id == *id && item.visible)
-                                {
-                                    return self
-                                        .hit_price_series(item, pos, chart_rect, map)
-                                        .map(|_| ChartElementId::Series(*id));
-                                }
-                                let idx = self.study_ids.iter().position(|study| study == id)?;
-                                hit_test_pane_indicator(
-                                    pos,
-                                    studies.indicators()[idx].as_ref(),
-                                    idx,
-                                    visible_range.clone(),
-                                    chart_rect,
-                                    &pane_coords,
-                                )
-                                .map(|hit| {
-                                    ChartElementId::Indicator(self.study_ids[hit.indicator_idx])
+                                    if let Some(item) = self
+                                        .price_series
+                                        .iter()
+                                        .find(|item| item.id == *id && item.visible)
+                                    {
+                                        return self
+                                            .hit_price_series(item, pos, chart_rect, map)
+                                            .map(|_| ChartElementId::Series(*id));
+                                    }
+                                    let idx =
+                                        self.study_ids.iter().position(|study| study == id)?;
+                                    hit_test_pane_indicator(
+                                        pos,
+                                        studies.indicators()[idx].as_ref(),
+                                        idx,
+                                        visible_range.clone(),
+                                        chart_rect,
+                                        &pane_coords,
+                                    )
+                                    .map(|hit| {
+                                        ChartElementId::Indicator(self.study_ids[hit.indicator_idx])
+                                    })
                                 })
-                            })
+                        })
                     };
                     if !collapsed
                         && !toggle.clicked()
@@ -1068,6 +1119,20 @@ impl Chart {
             }
             if let Some((_, chart_rect, _)) = &drawing_response {
                 let chart_rect = *chart_rect;
+                if !collapsed && !series_backgrounds.is_empty() {
+                    let painter = ui
+                        .painter()
+                        .with_clip_rect(chart_rect.intersect(ui.clip_rect()));
+                    crate::widget::primitives::paint_backgrounds(&painter, series_backgrounds);
+                    for (item, view) in self.pane_primitives(&members, &pane_mapping) {
+                        item.draw(
+                            &painter,
+                            &view,
+                            crate::widget::PrimitivePass::Series,
+                            self.merge_groups.factor(),
+                        );
+                    }
+                }
                 let painter = ui
                     .painter()
                     .with_clip_rect(panel_rect.intersect(ui.clip_rect()));
@@ -1149,7 +1214,7 @@ impl Chart {
                     }
                 }
             }
-            if !collapsed && let Some((pane_response, chart_rect, pane_coords)) = drawing_response {
+            if !collapsed && let Some((pane_response, chart_rect, _)) = drawing_response {
                 if pane_response.clicked() || pane_response.secondary_clicked() {
                     host_clicks.push(pane_response.clone());
                 }
@@ -1224,21 +1289,15 @@ impl Chart {
                     });
                 }
                 // The last pass of the pane's primitives, above its drawings.
-                let painter = ui.painter().with_clip_rect(chart_rect);
-                for item in self.primitives.iter().filter(|item| {
-                    self.pane_layout.panes[pane_idx]
-                        .members
-                        .contains(&item.series)
-                        && self.is_series_visible(item.series)
-                }) {
-                    let view = self.primitive_view(item.series, pane_coords.clone());
-                    item.draw(
-                        &painter,
-                        &view,
-                        crate::widget::PrimitivePass::Above,
-                        self.merge_groups.factor(),
-                    );
-                }
+                let painter = ui
+                    .painter()
+                    .with_clip_rect(chart_rect.intersect(ui.clip_rect()));
+                crate::widget::primitives::paint_pass(
+                    &painter,
+                    self.pane_primitives(&members, &pane_mapping),
+                    crate::widget::PrimitivePass::Above,
+                    self.merge_groups.factor(),
+                );
             }
             if !collapsed {
                 let mut table_rect = plot;

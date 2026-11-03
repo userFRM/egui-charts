@@ -64,7 +64,11 @@ Choose the pass explicitly to avoid drawing the same geometry three times:
 | [`Series`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/enum.PrimitivePass.html#variant.Series) | Above series and studies; below drawings |
 | [`Above`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/enum.PrimitivePass.html#variant.Above) | Above series, studies and drawings; still below the main pane's crosshair and legend |
 
-Several attachments draw in attachment order within a pass. Read geometry from
+Several attachments draw in attachment order within a pass. Override
+[`draw_background`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/trait.Primitive.html#method.draw_background)
+to paint a backdrop: every background in a pass draws before any `draw`, so a later
+attachment's backdrop never covers an earlier attachment's foreground.
+`draw_background_merged` receives the merge factor like `draw_merged`. Read geometry from
 the current view instead of caching screen coordinates across pan, zoom or resize:
 
 - [`view.visible`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/struct.PrimitiveView.html#structfield.visible)
