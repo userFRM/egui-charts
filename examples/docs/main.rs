@@ -20,6 +20,9 @@ enum Scene {
     Theme(scenes::theme::Presentation),
     Panes(scenes::panes::Panes),
     Live(scenes::studies::LiveData),
+    HostReadout(scenes::recipes::HostReadout),
+    Synchronized(Box<scenes::recipes::Synchronized>),
+    Export(scenes::recipes::Export),
 }
 
 impl ExampleApp {
@@ -28,6 +31,35 @@ impl ExampleApp {
         let chart = match name {
             "first-chart" => first_chart::first_chart(),
             "series" => scenes::series::lifecycle(),
+            "annotations" => {
+                let mut chart = first_chart::first_chart();
+                scenes::recipes::annotations(&mut chart);
+                chart
+            }
+            "price-volume" => {
+                let mut chart = first_chart::first_chart();
+                scenes::recipes::price_volume(&mut chart);
+                chart
+            }
+            "second-series" => {
+                let mut chart = first_chart::first_chart();
+                scenes::recipes::second_series(&mut chart);
+                chart
+            }
+            "host-readout" => {
+                scene = Scene::HostReadout(scenes::recipes::HostReadout::default());
+                first_chart::first_chart()
+            }
+            "synchronized" => {
+                scene = Scene::Synchronized(Box::new(scenes::recipes::Synchronized::new(
+                    first_chart::first_chart(),
+                )));
+                first_chart::first_chart()
+            }
+            "export" => {
+                scene = Scene::Export(scenes::recipes::Export::default());
+                first_chart::first_chart()
+            }
             "series-candles" => scenes::series::candles(),
             "series-line" => scenes::series::line(),
             "series-area" => scenes::series::area(),
@@ -120,6 +152,9 @@ impl eframe::App for ExampleApp {
                 Scene::Theme(scene) => scene.show(ui, &mut self.chart),
                 Scene::Panes(scene) => scene.show(ui, &mut self.chart),
                 Scene::Live(scene) => scene.show(ui, &mut self.chart),
+                Scene::HostReadout(scene) => return scene.show(ui, &mut self.chart),
+                Scene::Synchronized(scene) => return scene.show(ui, &mut self.chart),
+                Scene::Export(scene) => return scene.show(ui, &mut self.chart),
             }
             self.chart.show(ui);
         });
@@ -213,6 +248,12 @@ mod tests {
             "studies",
             "custom-study",
             "live-data",
+            "annotations",
+            "price-volume",
+            "host-readout",
+            "synchronized",
+            "export",
+            "second-series",
             "volatility-smile",
             "yield-curve",
             "primitives",
