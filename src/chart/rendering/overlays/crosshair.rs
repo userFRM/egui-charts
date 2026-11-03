@@ -112,7 +112,7 @@ pub fn render_crosshair_with_options(
     let time_tag = bar
         .filter(|_| {
             options.label_visible
-                && options.vert_line_visible
+                && options.vert_label_visible
                 && options.style != CrosshairStyle::Hidden
         })
         .map(|(_, candle)| {
@@ -233,7 +233,7 @@ pub(crate) fn render_crosshair_price_tag(
     label: Option<String>,
 ) -> Option<Rect> {
     if !options.label_visible
-        || !options.horz_line_visible
+        || !options.horz_label_visible
         || options.style == CrosshairStyle::Hidden
         || !context.rect.y_range().contains(pos.y)
     {
@@ -490,6 +490,14 @@ mod tests {
     }
     #[test]
     fn options_control_each_stroke_and_label_at_the_bar_center() {
+        let mut saved = serde_json::to_value(CrosshairOptions::default()).unwrap();
+        let fields = saved.as_object_mut().unwrap();
+        fields.remove("vert_label_visible");
+        fields.remove("horz_label_visible");
+        assert_eq!(
+            serde_json::from_value::<CrosshairOptions>(saved).unwrap(),
+            CrosshairOptions::default()
+        );
         let rect = Rect::from_min_max(Pos2::new(100.0, 0.0), Pos2::new(400.0, 200.0));
         let map = PriceMap::new(
             PriceTransform::default(),
@@ -508,85 +516,105 @@ mod tests {
             10.0,
         );
         let bars = vec![bar; 30];
-        for vertical in [false, true] {
-            for horizontal in [false, true] {
-                for labels in [false, true] {
-                    for style in [CrosshairStyle::Full, CrosshairStyle::Hidden] {
-                        let shown = style != CrosshairStyle::Hidden;
-                        let (vertical_shown, horizontal_shown) =
-                            (vertical && shown, horizontal && shown);
-                        let options = CrosshairOptions {
-                            style,
-                            vert_line_visible: vertical,
-                            horz_line_visible: horizontal,
-                            label_visible: labels,
-                            vert_line_color: Color32::RED,
-                            horz_line_color: Color32::BLUE,
-                            vert_line_width: 2.0,
-                            horz_line_width: 3.0,
-                            vert_line_style: LineStyle::Solid,
-                            horz_line_style: LineStyle::Dotted,
-                            vert_label_background_color: Color32::DARK_RED,
-                            horz_label_background_color: Color32::DARK_GREEN,
-                            ..Default::default()
-                        };
-                        let ctx = Context::default();
-                        let mut tags = [None; 2];
-                        let x = coords.idx_to_x(10);
-                        let output = ctx.run_ui(RawInput::default(), |ui| {
-                            tags = crate::chart::rendering::render_crosshair_with_options(
-                                &RenderContext::new(ui.painter(), rect),
-                                Pos2::new(x + 3.0, 100.0),
-                                &bars,
-                                &map,
-                                &coords,
-                                &options,
-                                300.0,
-                                480.0,
-                                None,
-                                &TimeFormatterBuilder::new().build(),
-                                3600,
-                                None,
-                            );
-                        });
-                        let (lines, dots): (Vec<_>, Vec<_>) = output
+        for flags in 0..32 {
+            let vertical = flags & 1 != 0;
+            let horizontal = flags & 2 != 0;
+            let labels = flags & 4 != 0;
+            let time_label = flags & 8 != 0;
+            let price_label = flags & 16 != 0;
+            for style in [
+                CrosshairStyle::Full,
+                CrosshairStyle::Dot,
+                CrosshairStyle::Arrow,
+                CrosshairStyle::Demonstration,
+                CrosshairStyle::Magic,
+                CrosshairStyle::Hidden,
+            ] {
+                let shown = style != CrosshairStyle::Hidden;
+                let (vertical_shown, horizontal_shown) = (
+                    vertical && style == CrosshairStyle::Full,
+                    horizontal && style == CrosshairStyle::Full,
+                );
+                let options = CrosshairOptions {
+                    style,
+                    vert_line_visible: vertical,
+                    horz_line_visible: horizontal,
+                    label_visible: labels,
+                    vert_label_visible: time_label,
+                    horz_label_visible: price_label,
+                    vert_line_color: Color32::RED,
+                    horz_line_color: Color32::BLUE,
+                    vert_line_width: 2.0,
+                    horz_line_width: 3.0,
+                    vert_line_style: LineStyle::Solid,
+                    horz_line_style: LineStyle::Dotted,
+                    vert_label_background_color: Color32::DARK_RED,
+                    horz_label_background_color: Color32::DARK_GREEN,
+                    ..Default::default()
+                };
+                let ctx = Context::default();
+                let mut tags = [None; 2];
+                let x = coords.idx_to_x(10);
+                let output = ctx.run_ui(RawInput::default(), |ui| {
+                    tags = crate::chart::rendering::render_crosshair_with_options(
+                        &RenderContext::new(ui.painter(), rect),
+                        Pos2::new(x + 3.0, 100.0),
+                        &bars,
+                        &map,
+                        &coords,
+                        &options,
+                        300.0,
+                        480.0,
+                        None,
+                        &TimeFormatterBuilder::new().build(),
+                        3600,
+                        None,
+                    );
+                });
+                let (lines, dots): (Vec<_>, Vec<_>) = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match shape.shape {
+                        Shape::LineSegment { points, stroke } => Some((points, stroke)),
+                        _ => None,
+                    })
+                    .partition(|(_, stroke)| stroke.color == Color32::RED);
+                // The dotted horizontal line is a row of one-point dots.
+                assert!(dots.iter().all(|([a, b], stroke)| {
+                    *stroke == Stroke::new(3.0, Color32::BLUE)
+                        && a.y == 100.0
+                        && b.y == 100.0
+                        && b.x - a.x <= 1.0
+                }));
+                let dots = !dots.is_empty();
+                let fill = |color| {
+                    output
+                        .shapes
+                        .iter()
+                        .any(|shape| matches!(&shape.shape, Shape::Rect(r) if r.fill == color))
+                };
+                let (time_fill, price_fill) = (fill(Color32::DARK_RED), fill(Color32::DARK_GREEN));
+                if !shown {
+                    assert!(
+                        output
                             .shapes
                             .iter()
-                            .filter_map(|shape| match shape.shape {
-                                Shape::LineSegment { points, stroke } => Some((points, stroke)),
-                                _ => None,
-                            })
-                            .partition(|(_, stroke)| stroke.color == Color32::RED);
-                        // The dotted horizontal line is a row of one-point dots.
-                        assert!(dots.iter().all(|([a, b], stroke)| {
-                            *stroke == Stroke::new(3.0, Color32::BLUE)
-                                && a.y == 100.0
-                                && b.y == 100.0
-                                && b.x - a.x <= 1.0
-                        }));
-                        let dots = !dots.is_empty();
-                        let fill = |color| {
-                            output.shapes.iter().any(
-                                |shape| matches!(&shape.shape, Shape::Rect(r) if r.fill == color),
-                            )
-                        };
-                        let (time_fill, price_fill) =
-                            (fill(Color32::DARK_RED), fill(Color32::DARK_GREEN));
-                        output.drop_without_applying_deltas();
-                        assert_eq!(lines.len(), usize::from(vertical_shown));
-                        if vertical_shown {
-                            assert!(lines.contains(&(
-                                [Pos2::new(x, 0.0), Pos2::new(x, 300.0)],
-                                Stroke::new(2.0, Color32::RED)
-                            )));
-                        }
-                        assert_eq!(dots, horizontal_shown);
-                        assert_eq!(tags[0].is_some(), labels && horizontal_shown);
-                        assert_eq!(tags[1].is_some(), labels && vertical_shown);
-                        assert_eq!(price_fill, tags[0].is_some());
-                        assert_eq!(time_fill, tags[1].is_some());
-                    }
+                            .all(|shape| matches!(shape.shape, Shape::Noop))
+                    );
                 }
+                output.drop_without_applying_deltas();
+                assert_eq!(lines.len(), usize::from(vertical_shown));
+                if vertical_shown {
+                    assert!(lines.contains(&(
+                        [Pos2::new(x, 0.0), Pos2::new(x, 300.0)],
+                        Stroke::new(2.0, Color32::RED)
+                    )));
+                }
+                assert_eq!(dots, horizontal_shown);
+                assert_eq!(tags[0].is_some(), labels && price_label && shown);
+                assert_eq!(tags[1].is_some(), labels && time_label && shown);
+                assert_eq!(price_fill, tags[0].is_some());
+                assert_eq!(time_fill, tags[1].is_some());
             }
         }
     }

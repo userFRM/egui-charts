@@ -274,11 +274,13 @@ mod tests {
                     ..Default::default()
                 };
                 chart
-                    .export_layout_svg(&ctx, &options, |ui, snapshot| {
+                    .export_layout_image(&ctx, &options, |ui, snapshot| {
                         snapshot.show(ui);
                         assert_eq!(snapshot.last_crosshair, expected);
                     })
-                    .unwrap();
+                    .unwrap()
+                    .textures_delta
+                    .clear();
                 // An explicit index replaces the time anchor and keeps its local semantics.
                 chart.set_synced_crosshair_bar_idx(Some(5.0));
                 chart.update(SeriesId::MAIN, bar(-5));

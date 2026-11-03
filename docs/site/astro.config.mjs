@@ -60,6 +60,7 @@ export default defineConfig({
           ],
         },
         { label: 'API', items: ['api-reference'] },
+        { label: 'Versions', items: ['migration', 'release-notes'] },
       ],
     }),
   ],
