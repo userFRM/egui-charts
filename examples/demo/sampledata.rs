@@ -292,12 +292,16 @@ pub fn daily_history(symbol: &str, before: DateTime<Utc>) -> Vec<Bar> {
 /// Combine the coarse archive with recent minutes on the requested calendar.
 /// Split synthetic days follow open, low, high, close at 0, 1/4, 3/4 and 1 of their span,
 /// with uniform volume, so a shifted calendar boundary consumes only its share of a UTC day.
+/// Session calendars place coarse daily samples in the demo's regular exchange window.
 pub fn calendar_history(
     daily: &[Bar],
     minutes: &[Bar],
     clock: egui_charts::model::BarClock,
 ) -> Vec<Bar> {
-    use chrono::Duration;
+    use chrono::{Datelike, Duration, TimeZone};
+    let session = us_equity_session();
+    let regular = &session.windows[0];
+    let zone = us_equity_zone();
     let mut result: Vec<Bar> = Vec::new();
     let mut push = |bar: Bar| {
         if let Some(last) = result.last_mut().filter(|last| last.time == bar.time) {
@@ -310,7 +314,7 @@ pub fn calendar_history(
         }
     };
     for (index, bar) in daily.iter().enumerate() {
-        let end = (bar
+        let mut end = (bar
             .time
             .date_naive()
             .and_hms_opt(0, 0, 0)
@@ -327,7 +331,26 @@ pub fn calendar_history(
                 .first()
                 .map_or(DateTime::<Utc>::MAX_UTC, |minute| minute.time),
         );
-        let span = (end - bar.time).num_milliseconds();
+        let mut start = bar.time;
+        if clock.has_session() {
+            let day = bar.time.date_naive();
+            if !regular.days.contains(&day.weekday()) {
+                continue;
+            }
+            let open = zone
+                .from_local_datetime(&day.and_time(regular.open))
+                .single()
+                .expect("the regular open exists")
+                .to_utc();
+            let close = zone
+                .from_local_datetime(&day.and_time(regular.close))
+                .single()
+                .expect("the regular close exists")
+                .to_utc();
+            start = start.max(open);
+            end = end.min(close);
+        }
+        let span = (end - start).num_milliseconds();
         if span <= 0 {
             continue;
         }
@@ -342,7 +365,7 @@ pub fn calendar_history(
             pair[0].1
                 + (pair[1].1 - pair[0].1) * (at - pair[0].0) as f64 / (pair[1].0 - pair[0].0) as f64
         };
-        let mut from = bar.time;
+        let mut from = start;
         while from < end {
             let slot = clock.bar_open(from);
             let mut to = end;
@@ -358,14 +381,14 @@ pub fn calendar_history(
                 }
                 to = DateTime::from_timestamp_millis(hi).unwrap();
             }
-            if from == bar.time && to == end {
+            if from == start && to == end {
                 push(Bar {
                     time: slot,
                     ..bar.clone()
                 });
             } else {
-                let a = (from - bar.time).num_milliseconds();
-                let b = (to - bar.time).num_milliseconds();
+                let a = (from - start).num_milliseconds();
+                let b = (to - start).num_milliseconds();
                 let (open, close) = (price(a), price(b));
                 let mut high = open.max(close);
                 let mut low = open.min(close);

@@ -943,6 +943,40 @@ mod tests {
             );
         }
         let now = "2026-11-03T15:00:00Z".parse().unwrap();
+        let daily = Bar::new(
+            "2026-11-02T00:00:00Z".parse().unwrap(),
+            100.0,
+            130.0,
+            94.0,
+            106.0,
+            2400.0,
+        );
+        let clock = BarClock::new(Timeframe::Day1)
+            .with_timezone(crate::sampledata::us_equity_zone())
+            .with_session(
+                crate::sampledata::us_equity_zone(),
+                crate::sampledata::us_equity_session(),
+                false,
+            );
+        assert_eq!(
+            crate::sampledata::calendar_history(&[daily.clone()], &[], clock.clone()),
+            vec![Bar {
+                time: "2026-11-02T05:00:00Z".parse().unwrap(),
+                ..daily.clone()
+            }]
+        );
+        assert!(
+            crate::sampledata::calendar_history(
+                &[Bar {
+                    time: "2026-11-01T00:00:00Z".parse().unwrap(),
+                    ..daily
+                }],
+                &[],
+                clock
+            )
+            .is_empty(),
+            "a shifted stock calendar must not invent Sunday bars"
+        );
         let feed = Arc::new(LiveFeed::new("SAMPLE", now));
         super::super::tests::finish_feed(&feed);
         for timeframe in [Timeframe::Day1, Timeframe::Week1, Timeframe::Month1] {

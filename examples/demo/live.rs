@@ -823,13 +823,19 @@ impl Simulation {
         if timeframe.duration_ms() < Timeframe::Day1.duration_ms() {
             return resample(minutes, Timeframe::Min1, clock).expect("nested minute history");
         }
-        use chrono::Datelike;
         let days: Vec<_> = self
             .daily_history
             .iter()
             .filter(|bar| {
-                before.is_none_or(|time| bar.time + TimeDelta::days(1) <= time)
-                    && (!clock.has_session() || bar.time.weekday().num_days_from_monday() < 5)
+                before.is_none_or(|time| {
+                    bar.time
+                        .date_naive()
+                        .and_hms_opt(0, 0, 0)
+                        .unwrap()
+                        .and_utc()
+                        + TimeDelta::days(1)
+                        <= time
+                })
             })
             .cloned()
             .map(|mut bar| {
