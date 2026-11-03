@@ -2,10 +2,12 @@
 
 use super::{Chart, ChartElementId, PointerTarget, SeriesId};
 use crate::chart::coords::ChartMapping;
-use crate::chart::primitives::{Primitive, PrimitiveId, PrimitivePass, PrimitiveView};
+use crate::chart::primitives::{
+    Primitive, PrimitiveHit, PrimitiveId, PrimitivePass, PrimitiveView,
+};
 use crate::model::Bar;
 use crate::studies::Indicator;
-use egui::{CursorIcon, Painter, Pos2};
+use egui::{Painter, Pos2};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 /// A primitive and the series it is attached to.
@@ -70,11 +72,11 @@ impl Attached {
 }
 
 /// A primitive under the pointer and the cursor it asks for.
-#[derive(Clone, Copy)]
-pub(super) struct PrimitiveHit {
+#[derive(Clone)]
+pub(super) struct Hit {
     /// The custom series a renderer draws, or the primitive itself.
     pub(super) target: PointerTarget,
-    pub(super) cursor: CursorIcon,
+    pub(super) result: PrimitiveHit,
 }
 
 impl Chart {
@@ -433,21 +435,46 @@ pub(super) fn paint_pass<'a>(
     }
 }
 
-/// The latest attached primitive under `pos`.
+/// Chooses by pass, then distance, keeping `first` on a tie.
+pub(super) fn best_hit(first: Option<Hit>, second: Option<Hit>) -> Option<Hit> {
+    match (first, second) {
+        (Some(first), Some(second)) => {
+            if second.result.pass > first.result.pass
+                || (second.result.pass == first.result.pass
+                    && second.result.distance < first.result.distance)
+            {
+                Some(second)
+            } else {
+                Some(first)
+            }
+        }
+        (first, second) => first.or(second),
+    }
+}
+
+/// The best hit under `pos`, with the latest attached primitive winning ties.
 pub(super) fn primitive_at<'a>(
     primitives: impl DoubleEndedIterator<Item = (&'a Attached, PrimitiveView<'a>)>,
     pos: Pos2,
-) -> Option<PrimitiveHit> {
-    primitives.rev().find_map(|(item, view)| {
-        let cursor = item.get().hit_test(pos, &view)?;
-        Some(PrimitiveHit {
-            target: if item.replaces {
-                PointerTarget::Element(ChartElementId::Indicator(item.series))
-            } else {
-                PointerTarget::Primitive(item.id)
-            },
-            cursor,
-        })
+) -> Option<Hit> {
+    primitives.rev().fold(None, |best, (item, view)| {
+        let Some(result) = item.get().hit_test_result(pos, &view) else {
+            return best;
+        };
+        if !result.distance.is_finite() || result.distance < 0.0 {
+            return best;
+        }
+        best_hit(
+            best,
+            Some(Hit {
+                target: if item.replaces {
+                    PointerTarget::Element(ChartElementId::Indicator(item.series))
+                } else {
+                    PointerTarget::Primitive(item.id)
+                },
+                result,
+            }),
+        )
     })
 }
 
@@ -459,7 +486,7 @@ mod tests {
     use crate::studies::{CustomIndicator, IndicatorValue};
     use crate::widget::test_frames::{chart, frame, shapes};
     use crate::widget::{ChartEvent, SeriesOptions};
-    use egui::{Color32, Event, Shape};
+    use egui::{Color32, CursorIcon, Event, Shape};
 
     type Log = Arc<Mutex<Vec<String>>>;
 
@@ -915,6 +942,261 @@ mod tests {
     }
 
     #[test]
+    fn object_hits_rank_by_pass_distance_and_paint_order_in_every_pane() {
+        struct Objects(Arc<Mutex<Vec<(egui::Vec2, PrimitiveHit)>>>, bool);
+        impl Primitive for Objects {
+            fn draw_background(
+                &self,
+                painter: &Painter,
+                view: &PrimitiveView<'_>,
+                pass: PrimitivePass,
+            ) {
+                if self.1 && pass == PrimitivePass::Series {
+                    painter.rect_filled(view.mapping.rect, 0.0, BELOW);
+                }
+            }
+            fn hit_test_result(&self, pos: Pos2, view: &PrimitiveView<'_>) -> Option<PrimitiveHit> {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|(offset, hit)| {
+                        let mut hit = hit.clone();
+                        hit.distance = pos.distance(view.mapping.rect.center() + *offset);
+                        hit
+                    })
+                    .filter(|hit| hit.distance <= 20.0)
+                    .max_by(|left, right| {
+                        left.pass
+                            .cmp(&right.pass)
+                            .then_with(|| right.distance.total_cmp(&left.distance))
+                    })
+            }
+        }
+        struct Invalid(f32);
+        impl Primitive for Invalid {
+            fn hit_test_result(&self, _: Pos2, _: &PrimitiveView<'_>) -> Option<PrimitiveHit> {
+                Some(PrimitiveHit {
+                    distance: self.0,
+                    pass: PrimitivePass::Above,
+                    ..PrimitiveHit::new(CursorIcon::Wait)
+                })
+            }
+        }
+        let object = |id: &str, cursor, offset| {
+            (
+                offset,
+                PrimitiveHit {
+                    object_id: Some(id.into()),
+                    data: Some(Arc::new(serde_json::json!({ "object": id }))),
+                    ..PrimitiveHit::new(cursor)
+                },
+            )
+        };
+        for (secondary, move_main, backgrounds) in
+            [(false, false), (true, false), (false, true), (true, true)]
+                .into_iter()
+                .flat_map(|(secondary, move_main)| {
+                    [false, true].map(|backgrounds| (secondary, move_main, backgrounds))
+                })
+        {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[10.0], &[20.0]);
+            chart.config.show_volume = false;
+            let objects = Arc::new(Mutex::new(vec![
+                object("upper", CursorIcon::ResizeVertical, egui::vec2(0.0, -8.0)),
+                object("lower", CursorIcon::Grab, egui::vec2(0.0, 8.0)),
+            ]));
+            let series = chart.add_custom_series(
+                Box::new(
+                    CustomIndicator::new("Objects", |bars| {
+                        vec![IndicatorValue::Single(15.0); bars.len()]
+                    })
+                    .with_overlay(!secondary),
+                ),
+                Objects(objects.clone(), backgrounds),
+            );
+            let rival = chart.add_custom_series(
+                Box::new(CustomIndicator::new("Rival", |bars| {
+                    vec![IndicatorValue::Single(15.0); bars.len()]
+                })),
+                Objects(
+                    Arc::new(Mutex::new(vec![object(
+                        "rival",
+                        CursorIcon::Wait,
+                        egui::vec2(0.0, -18.0),
+                    )])),
+                    backgrounds,
+                ),
+            );
+            assert!(chart.move_series_to_pane(rival, chart.series_pane(series).unwrap()));
+            if move_main {
+                let destination = if secondary {
+                    chart.series_pane(series).unwrap()
+                } else {
+                    chart.add_pane()
+                };
+                assert!(chart.move_series_to_pane(SeriesId::MAIN, destination));
+            }
+            let first = Arc::new(Mutex::new(vec![object(
+                "first",
+                CursorIcon::Crosshair,
+                egui::vec2(3.0, 4.0),
+            )]));
+            let second = Arc::new(Mutex::new(vec![object(
+                "second",
+                CursorIcon::PointingHand,
+                egui::vec2(0.0, 6.0),
+            )]));
+            let first_id = chart
+                .attach_primitive(series, Objects(first.clone(), backgrounds))
+                .unwrap();
+            let second_id = chart
+                .attach_primitive(series, Objects(second.clone(), backgrounds))
+                .unwrap();
+            for time in [0.0, 0.1, 0.2] {
+                frame(&ctx, &mut chart, time, vec![]);
+            }
+            let plot = if chart.series_pane(series) == Some(chart.main_series_pane()) {
+                chart.last_rendered_price_rect
+            } else {
+                chart.last_rendered_indicator_panes[0].chart_rect
+            };
+            let renderer = PointerTarget::Element(ChartElementId::Indicator(series));
+            let mut pos = plot.center();
+            // At the centre, sqrt(3^2 + 4^2) = 5 beats 6; both renderer objects are 8 away.
+            for (step, (target, id, distance, cursor)) in [
+                (
+                    PointerTarget::Primitive(first_id),
+                    "first",
+                    5.0,
+                    CursorIcon::Crosshair,
+                ),
+                (
+                    PointerTarget::Primitive(second_id),
+                    "second",
+                    5.0,
+                    CursorIcon::PointingHand,
+                ),
+                (
+                    PointerTarget::Primitive(first_id),
+                    "first",
+                    5.0,
+                    CursorIcon::Crosshair,
+                ),
+                (renderer, "lower", 8.0, CursorIcon::Grab),
+                (
+                    PointerTarget::Primitive(second_id),
+                    "second",
+                    5.0,
+                    CursorIcon::PointingHand,
+                ),
+                (renderer, "upper", 8.0, CursorIcon::ResizeVertical),
+                (renderer, "lower", 0.0, CursorIcon::Grab),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                match step {
+                    1 => second.lock().unwrap()[0].0.y = 5.0,
+                    2 => second.lock().unwrap()[0].1.pass = PrimitivePass::Below,
+                    3 => first.lock().unwrap()[0].1.pass = PrimitivePass::Below,
+                    4 => {
+                        for (_, hit) in objects.lock().unwrap().iter_mut() {
+                            hit.pass = PrimitivePass::Above;
+                        }
+                        second.lock().unwrap()[0].1.pass = PrimitivePass::Above;
+                    }
+                    5 => {
+                        second.lock().unwrap()[0].1.pass = PrimitivePass::Below;
+                        objects.lock().unwrap()[1].1.pass = PrimitivePass::Below;
+                    }
+                    6 => {
+                        pos.y += 8.0;
+                        objects.lock().unwrap()[1].1.pass = PrimitivePass::Above;
+                    }
+                    _ => {}
+                }
+                chart.drain_events().for_each(drop);
+                let time = 1.0 + step as f64;
+                let actual_cursor = frame(&ctx, &mut chart, time, vec![Event::PointerMoved(pos)]);
+                let pointer = chart
+                    .drain_events()
+                    .find_map(|event| match event {
+                        ChartEvent::CrosshairMoved(Some(pointer)) => Some(pointer),
+                        _ => None,
+                    })
+                    .unwrap();
+                assert_eq!(
+                    pointer.target,
+                    Some(target),
+                    "secondary={secondary}, move_main={move_main}, backgrounds={backgrounds}, step={step}"
+                );
+                let hit = pointer.primitive_hit.as_ref().unwrap();
+                assert_eq!(hit.object_id.as_deref(), Some(id));
+                assert_eq!(
+                    hit.data.as_deref(),
+                    Some(&serde_json::json!({ "object": id }))
+                );
+                assert_eq!((hit.distance, hit.cursor), (distance, cursor));
+                assert_eq!(actual_cursor, cursor);
+                frame(&ctx, &mut chart, time + 0.1, vec![]);
+                assert!(
+                    !chart
+                        .drain_events()
+                        .any(|event| matches!(event, ChartEvent::CrosshairMoved(_)))
+                );
+                for pressed in [true, false] {
+                    frame(
+                        &ctx,
+                        &mut chart,
+                        time + 0.2,
+                        vec![Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        }],
+                    );
+                }
+                assert!(chart.drain_events().any(|event| matches!(event,
+                    ChartEvent::Click { position, .. }
+                        if position.target == pointer.target && position.primitive_hit == pointer.primitive_hit
+                )));
+            }
+            // Payload changes under a stationary pointer still reach the host.
+            objects.lock().unwrap()[1].1.data =
+                Some(Arc::new(serde_json::json!({ "updated": true })));
+            frame(&ctx, &mut chart, 9.0, vec![]);
+            assert!(chart.drain_events().any(|event| matches!(event,
+                ChartEvent::CrosshairMoved(Some(pointer))
+                    if pointer.primitive_hit.as_ref().unwrap().data.as_deref() == Some(&serde_json::json!({ "updated": true }))
+            )));
+            chart.set_series_visible(rival, false);
+            // Legacy hits retain their cursor and the latest attachment wins a tie.
+            chart.attach_primitive(series, Dots);
+            let latest = chart.attach_primitive(series, Dots).unwrap();
+            objects.lock().unwrap().clear();
+            for distance in [f32::NAN, f32::INFINITY, -1.0] {
+                let invalid = chart.attach_primitive(series, Invalid(distance)).unwrap();
+                frame(&ctx, &mut chart, 9.05, vec![]);
+                assert_eq!(
+                    chart.host_events.target,
+                    Some(PointerTarget::Primitive(latest))
+                );
+                assert_eq!(
+                    chart.host_events.primitive_hit,
+                    Some(PrimitiveHit::new(CursorIcon::PointingHand))
+                );
+                chart.detach_primitive(invalid);
+            }
+            chart.set_series_visible(series, false);
+            frame(&ctx, &mut chart, 9.1, vec![]);
+            assert!(chart.host_events.primitive_hit.is_none());
+        }
+    }
+
+    #[test]
     fn custom_series_draws_and_hit_tests_in_place_of_its_plots() {
         let ctx = egui::Context::default();
         let mut chart = chart(&[10.0], &[20.0]);
@@ -996,6 +1278,10 @@ mod tests {
         assert_eq!(
             pointer.target,
             Some(PointerTarget::Element(ChartElementId::Indicator(id)))
+        );
+        assert_eq!(
+            pointer.primitive_hit,
+            Some(PrimitiveHit::new(CursorIcon::PointingHand))
         );
         let click = |pressed| Event::PointerButton {
             pos,

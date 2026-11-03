@@ -208,6 +208,7 @@ impl Chart {
         self.follow_chart_theme(&ui.active_theme());
         self.host_events.volume_map = None;
         self.host_events.target = None;
+        self.host_events.primitive_hit = None;
         self.apply_config_scale_mode();
         #[cfg(feature = "studies")]
         self.sync_volume_study(ui.ctx());
@@ -1644,11 +1645,14 @@ impl Chart {
                     pos,
                 )
             } else {
-                order.iter().rev().find_map(|id| {
-                    primitives::primitive_at(
-                        self.main_primitives(&coords)
-                            .filter(|(item, _)| item.replaces && item.series == *id),
-                        pos,
+                order.iter().rev().fold(None, |best, id| {
+                    primitives::best_hit(
+                        best,
+                        primitives::primitive_at(
+                            self.main_primitives(&coords)
+                                .filter(|(item, _)| item.replaces && item.series == *id),
+                            pos,
+                        ),
                     )
                 })
             }
@@ -1686,6 +1690,7 @@ impl Chart {
         });
         let element_at = |pos: Pos2| {
             let renderer = renderer_hit
+                .as_ref()
                 .filter(|_| Some(pos) == pointer)
                 .and_then(|hit| {
                     if let super::PointerTarget::Element(id) = hit.target {
@@ -2133,26 +2138,32 @@ impl Chart {
             let drawing = self.drawings.hit_test(pos);
             #[cfg(not(feature = "drawings"))]
             let drawing: Option<usize> = None;
-            if let Some(hit) = primitive_hit
-                .or(renderer_hit.filter(|hit| {
-                    element_at(pos).map(|(id, _)| super::PointerTarget::Element(id))
-                        == Some(hit.target)
-                }))
-                .filter(|_| {
-                    drawing.is_none()
-                        && response.hovered()
-                        && !response.dragged()
-                        && !self.zoom_mode_active
-                        && !eraser_mode
-                        && !drawing_tool_active
-                })
-            {
-                ui.ctx().set_cursor_icon(hit.cursor);
+            let hit = primitives::best_hit(
+                primitive_hit,
+                renderer_hit
+                    .as_ref()
+                    .filter(|hit| {
+                        element_at(pos).map(|(id, _)| super::PointerTarget::Element(id))
+                            == Some(hit.target)
+                    })
+                    .cloned(),
+            );
+            if let Some(hit) = hit.as_ref().filter(|_| {
+                drawing.is_none()
+                    && response.hovered()
+                    && !response.dragged()
+                    && !self.zoom_mode_active
+                    && !eraser_mode
+                    && !drawing_tool_active
+            }) {
+                ui.ctx().set_cursor_icon(hit.result.cursor);
             }
             self.host_events.target = drawing
                 .map(super::PointerTarget::Drawing)
-                .or(primitive_hit.map(|hit| hit.target))
+                .or(hit.as_ref().map(|hit| hit.target))
                 .or_else(|| element_at(pos).map(|(id, _)| super::PointerTarget::Element(id)));
+            self.host_events.primitive_hit =
+                hit.filter(|_| drawing.is_none()).map(|hit| hit.result);
         }
 
         // Draw selection handles for whichever element is currently selected on
@@ -2723,7 +2734,9 @@ impl Chart {
                 .finish_drawing_action(&mut self.drawings, drawing_history);
         }
         self.paint_marks(&clipped_price_ctx, &coords, MarkerZOrder::Top);
-        self.paint_primitives(&painter, &coords, PrimitivePass::Above);
+        if !self.hide_foreground {
+            self.paint_primitives(&painter, &coords, PrimitivePass::Above);
+        }
 
         // Placed after the drawings handled this frame's input, so a dragged line's tags move
         // with it in the same frame.
