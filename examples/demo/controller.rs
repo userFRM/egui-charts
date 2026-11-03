@@ -1736,54 +1736,79 @@ impl DemoApp {
                         ui.close();
                     }
                     if ui.ctx().content_rect().width() < 600.0 {
-                        for (label, panel, icon) in [
-                            (
-                                "Watchlist",
-                                SidePanel::Watchlist,
-                                &icons::WIDGET_BAR_WATCHLIST,
-                            ),
-                            ("Alerts", SidePanel::Alerts, &icons::ALERTS),
-                            (
-                                "Object Tree",
-                                SidePanel::ObjectTree,
-                                &icons::WIDGET_BAR_LAYERS,
-                            ),
-                            ("Data Window", SidePanel::DataWindow, &icons::TABLE),
-                            (
-                                "Time and sales",
-                                SidePanel::TimeAndSales,
-                                &icons::SETTINGS_EVENTS,
-                            ),
-                        ]
-                        .into_iter()
-                        .filter(|(_, panel, _)| {
-                            self.api_samples || *panel != SidePanel::TimeAndSales
-                        }) {
-                            if menu_item(ui, label, icon, None).clicked() {
-                                panel_action = Some(panel);
-                                ui.close();
-                            }
-                        }
-                        for widget in &self.widget_bar.widgets {
-                            // A note page distinguishes Session notes from Formatting here.
-                            let icon = if widget.id == 2 {
-                                &icons::NOTE
-                            } else {
-                                &widget.icon
-                            };
-                            if SidePanel::from_widget(widget.id).is_none()
-                                && menu_item(ui, &widget.tooltip, icon, None).clicked()
-                            {
-                                widget_action = Some(widget.id);
-                                ui.close();
-                            }
-                        }
-                        if menu_item(ui, "Keyboard shortcuts", &icons::WIDGET_BAR_HELP, None)
-                            .clicked()
-                        {
-                            show_help = true;
-                            ui.close();
-                        }
+                        let response = menu_item(
+                            ui,
+                            "Panels",
+                            &icons::WIDGET_BAR_LAYERS,
+                            Some(&icons::CHEVRON_RIGHT),
+                        );
+                        egui::containers::menu::SubMenu::new()
+                            .config(
+                                egui::containers::menu::MenuConfig::new()
+                                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside),
+                            )
+                            .show(ui, &response, |ui| {
+                                egui::ScrollArea::vertical()
+                                    .max_height((ui.ctx().content_rect().height() - 40.0).max(80.0))
+                                    .show(ui, |ui| {
+                                        for (panel, icon) in SidePanel::BUILT_IN {
+                                            if self.widget_bar.icons.contains(&icon)
+                                                && menu_item(
+                                                    ui,
+                                                    icon.tooltip(),
+                                                    icon.icon(),
+                                                    (self.open_panel == Some(panel))
+                                                        .then_some(&icons::CHECK),
+                                                )
+                                                .clicked()
+                                            {
+                                                panel_action = Some(panel);
+                                                ui.close();
+                                            }
+                                        }
+                                        if menu_item(
+                                            ui,
+                                            "Data Window",
+                                            &icons::TABLE,
+                                            (self.open_panel == Some(SidePanel::DataWindow))
+                                                .then_some(&icons::CHECK),
+                                        )
+                                        .clicked()
+                                        {
+                                            panel_action = Some(SidePanel::DataWindow);
+                                            ui.close();
+                                        }
+                                        for widget in &self.widget_bar.widgets {
+                                            let icon = if widget.id == 2 {
+                                                &icons::NOTE
+                                            } else {
+                                                &widget.icon
+                                            };
+                                            if menu_item(ui, &widget.tooltip, icon, None).clicked()
+                                            {
+                                                if let Some(panel) =
+                                                    SidePanel::from_widget(widget.id)
+                                                {
+                                                    panel_action = Some(panel);
+                                                } else {
+                                                    widget_action = Some(widget.id);
+                                                }
+                                                ui.close();
+                                            }
+                                        }
+                                        if menu_item(
+                                            ui,
+                                            "Keyboard shortcuts",
+                                            &icons::WIDGET_BAR_HELP,
+                                            None,
+                                        )
+                                        .clicked()
+                                        {
+                                            show_help = true;
+                                            ui.close();
+                                        }
+                                    });
+                            });
                         ui.separator();
                     }
                     // Host actions live in the menu so the default strip keeps the
@@ -1810,6 +1835,11 @@ impl DemoApp {
                 if let Some(panel) = panel_action {
                     self.open_panel = (self.open_panel != Some(panel)).then_some(panel);
                     self.widget_bar.active_widget = None;
+                    match self.open_panel {
+                        Some(SidePanel::Hotlists) => self.hotlists.refresh(),
+                        Some(SidePanel::Screener) => self.screener.refresh(),
+                        _ => {}
+                    }
                 }
                 if let Some(id) = widget_action {
                     self.open_panel = None;
@@ -2269,6 +2299,9 @@ impl DemoApp {
     }
 
     fn show_side_panel(&mut self, ui: &mut egui::Ui) {
+        if self.open_panel.is_some() {
+            self.widget_bar.active_widget = None;
+        }
         self.widget_bar.show_panel(ui);
         let Some(which) = self.open_panel else {
             return;

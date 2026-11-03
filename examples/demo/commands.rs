@@ -769,20 +769,8 @@ mod tests {
                 "Copy symbol",
             ]
             .into_iter()
-            .chain(
-                (width < 600.0)
-                    .then_some([
-                        "Watchlist",
-                        "Alerts",
-                        "Object Tree",
-                        "Data Window",
-                        "Time and sales",
-                        "Session notes",
-                        "Keyboard shortcuts",
-                    ])
-                    .into_iter()
-                    .flatten(),
-            ) {
+            .chain((width < 600.0).then_some("Panels"))
+            {
                 let pos = label_pos(&output, label);
                 assert_eq!(pos.x, origin, "{width}: {label}");
                 let icon = output
@@ -859,6 +847,52 @@ mod tests {
             click_at_width(&mut app, &ctx, "Menu", width);
             click_at_width(&mut app, &ctx, "Order flow", width);
             assert!(app.open_panel.is_none());
+            if width < 600.0 {
+                app.enable_samples();
+                let panels = super::super::SidePanel::BUILT_IN
+                    .into_iter()
+                    .map(|(panel, icon)| (icon.tooltip().to_owned(), Some(panel), None))
+                    .chain(std::iter::once((
+                        "Data Window".into(),
+                        Some(super::super::SidePanel::DataWindow),
+                        None,
+                    )))
+                    .chain(app.widget_bar.widgets.iter().map(|widget| {
+                        (
+                            widget.tooltip.clone(),
+                            super::super::SidePanel::from_widget(widget.id),
+                            Some(widget.id),
+                        )
+                    }))
+                    .collect::<Vec<_>>();
+                for (label, panel, widget) in panels {
+                    for opening in [true, false] {
+                        click_at_width(&mut app, &ctx, "Menu", width);
+                        click_at_width(&mut app, &ctx, "Panels", width);
+                        click_at_width(&mut app, &ctx, &label, width);
+                        egui::Popup::close_all(&ctx);
+                        assert!(app.open_panel == panel.filter(|_| opening), "{label}");
+                        if panel.is_none() {
+                            assert_eq!(
+                                app.widget_bar.active_widget,
+                                widget.filter(|_| opening),
+                                "{label}"
+                            );
+                        } else {
+                            assert!(app.widget_bar.active_widget.is_none());
+                        }
+                        // Both transitions retain one active panel, without drawing it twice.
+                        for resized in [1440.0, width] {
+                            frame_at_width(&mut app, &ctx, vec![], resized)
+                                .drop_without_applying_deltas();
+                            assert!(
+                                app.open_panel == panel.filter(|_| opening),
+                                "resize {label}"
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 
