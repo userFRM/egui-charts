@@ -228,7 +228,8 @@ impl Chart {
                 self.add_study_pane(id);
             }
         }
-        self.pane_layout.main = self.main_pane_order();
+        let main = std::mem::take(&mut self.pane_layout.main);
+        self.pane_layout.main = self.main_pane_order(main);
         if self.pane_layout.maximized.is_some_and(|id| {
             id != PaneId::MAIN
                 && !self
@@ -242,7 +243,8 @@ impl Chart {
     }
 
     /// The price pane's draw order, including series and studies added since its last frame.
-    pub(super) fn main_pane_order(&self) -> Vec<SeriesId> {
+    /// Accepts the existing order to reuse its allocation on each frame.
+    pub(super) fn main_pane_order(&self, mut main: Vec<SeriesId>) -> Vec<SeriesId> {
         let overlays: Vec<_> = self
             .study_ids
             .iter()
@@ -256,7 +258,6 @@ impl Chart {
             .filter(|item| !self.in_pane(item.id))
             .map(|item| item.id)
             .collect();
-        let mut main = self.pane_layout.main.clone();
         main.retain(|id| *id == SeriesId::MAIN || overlays.contains(id) || series.contains(id));
         if !main.contains(&SeriesId::MAIN) {
             main.insert(0, SeriesId::MAIN);

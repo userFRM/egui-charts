@@ -433,7 +433,7 @@ impl Chart {
     /// The bar series in `pane`, back to front, excluding studies and absent series.
     fn ordered_bar_series(&self, pane: PaneId) -> Vec<SeriesId> {
         let items = if pane == PaneId::MAIN {
-            self.main_pane_order()
+            self.main_pane_order(self.pane_layout.main.clone())
         } else {
             self.pane_series(pane)
         };

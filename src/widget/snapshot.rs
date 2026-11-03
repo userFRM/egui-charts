@@ -292,7 +292,10 @@ impl Chart {
                         collapsed: pane.collapsed,
                         preserve: pane.preserve,
                         members: if *id == PaneId::MAIN {
-                            self.main_pane_order().iter().map(|id| id.0).collect()
+                            self.main_pane_order(self.pane_layout.main.clone())
+                                .iter()
+                                .map(|id| id.0)
+                                .collect()
                         } else {
                             pane.members.iter().map(|id| id.0).collect()
                         },
