@@ -261,7 +261,7 @@ impl IndicatorRenderer {
                 indicator.as_ref(),
                 &ChartMapping {
                     price: *price_scale,
-                    ..*coords
+                    ..coords.clone()
                 },
             );
             Self::render_study(

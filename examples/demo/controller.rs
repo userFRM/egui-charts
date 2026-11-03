@@ -400,6 +400,7 @@ pub struct DemoApp {
     /// Spreads picked in symbol search, with feeds of their symbols.
     spreads: Vec<comparison::Spread>,
     storage: Arc<storage::DemoStorage>,
+    workspace_recovery: storage::WorkspaceRecovery,
     settings: egui_charts::services::SettingsStore,
     /// Changes of the chart arrangement, which autosave counts with the charts' edits.
     grid_edits: u64,
@@ -690,6 +691,7 @@ impl DemoApp {
             spreads: Vec::new(),
             settings: egui_charts::services::SettingsStore::new(storage.clone()),
             storage,
+            workspace_recovery: storage::WorkspaceRecovery::default(),
             grid_edits: 0,
             study_templates: TemplateDialog::new(StoreKind::StudyTemplates),
             drawing_templates: TemplateDialog::new(StoreKind::DrawingTemplates),
@@ -887,8 +889,15 @@ impl DemoApp {
         app.settings_state = ChartSettingsState::from_chart(&app.chart);
         // The demo's storage answers at once, so the settings apply before the first frame.
         let current = app.user_settings();
-        if let Some(settings) = app.settings.poll(&cc.egui_ctx, &current) {
+        let recover_workspace = if let Some(settings) = app.settings.poll(&cc.egui_ctx, &current) {
+            let unnamed = settings.layout.is_none();
             app.apply_user_settings(&cc.egui_ctx, settings);
+            unnamed
+        } else {
+            true
+        };
+        if recover_workspace {
+            app.restore_workspace();
         }
         if let Some(settings) = cc.storage.and_then(|storage| {
             eframe::get_value::<egui_charts::services::DetectorSettings>(storage, "detectors")
@@ -1444,6 +1453,7 @@ impl eframe::App for DemoApp {
         eframe::set_value(storage, "alerts", &self.alert_host.engine().alerts());
         self.checkpoint_replay();
         eframe::set_value(storage, "replay_session", &self.replay_session);
+        self.checkpoint_workspace();
         self.storage.persist(storage);
         eframe::set_value(
             storage,
@@ -1620,6 +1630,7 @@ impl eframe::App for DemoApp {
             eframe::set_value(storage, "demo_formatting", &self.formatting);
             storage.flush();
         }
+        self.poll_workspace(&ctx);
         self.storage.flush(frame.storage_mut());
 
         // Repaint continuously while replay is playing.
