@@ -14,7 +14,7 @@ Builder API,Broker API,Order ticket and order or position dialogs,done,host,src/
 Builder API,Broker API,"Order, position and execution queries",done,host,src/services/broker.rs;src/ui/trading/mod.rs;src/ui/trading/events.rs;src/ui/trading/account_panel/mod.rs;src/ui/trading/account_panel/history.rs;src/ui/trading/account_panel/view.rs,
 Builder API,Broker API,Take-profit levels,done,host,src/model/trading.rs;src/services/paper.rs;src/ui/trading/ticket/mod.rs;src/chart/rendering/trading_lines/mod.rs,
 Builder API,Broker API,Trading entry points in the UI,done,host,src/ui/top_toolbar/toolbar.rs;src/ui/trading/mod.rs;src/ui/trading/account_panel/mod.rs;src/ui/trading/account_panel/view.rs;src/ui/dialogs/chart_settings/tabs/trading.rs,
-Builder API,Builder integration,Clean demo opening and saved opt-ins,done,library,examples/demo/controller.rs;examples/demo/layouts.rs;examples/demo/live.rs;src/services/detectors/mod.rs,1957;2000
+Builder API,Builder integration,Clean demo opening and saved opt-ins,done,library,examples/demo/controller.rs;examples/demo/layouts.rs;examples/demo/live.rs;examples/demo/comparison.rs;src/services/detectors/mod.rs,1957;2000;2012
 Builder API,Builder integration,Custom drawing tools from a downstream crate,done,library,src/drawings/registry.rs;src/drawings/manager/mod.rs;src/drawings/manager/interaction.rs,
 Builder API,Builder integration,Custom indicator metadata,done,library,src/studies/indicator_trait.rs;src/studies/inputs.rs;src/studies/settings.rs;src/chart/rendering/indicator.rs;src/chart/rendering/axes/study_scale.rs,
 Builder API,Builder integration,Custom indicators from a downstream crate,done,library,src/studies/factory/mod.rs;src/ui/dialogs/indicator_dialog/dialog.rs;src/widget/studies.rs;src/studies/custom.rs;terminal/src/studies.rs,
@@ -49,7 +49,7 @@ Builder API,Datafeed API,History paging when scrolling back,done,host,src/widget
 Builder API,Datafeed API,History request parameters,done,host,src/data/mod.rs;src/widget/feed/mod.rs;examples/demo/feeds.rs;examples/demo/live.rs,
 Builder API,Datafeed API,Host data feed contract,done,host,src/data/mod.rs;src/widget/builder.rs;src/widget/feed/mod.rs;src/data/inbox/sink.rs;src/data/merge.rs;src/prelude.rs,
 Builder API,Datafeed API,Interval resampling,done,library,src/data/mod.rs;src/data/resample.rs;src/model/clock.rs;src/model/session/exchange.rs,
-Builder API,Datafeed API,Live bar stream lifecycle,done,host,src/widget/feed/mod.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/data/merge.rs;src/model/clock.rs;examples/demo/live.rs;examples/demo/controller.rs;examples/demo/comparison.rs,1923
+Builder API,Datafeed API,Live bar stream lifecycle,done,host,src/widget/feed/mod.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/data/merge.rs;src/model/clock.rs;examples/demo/live.rs;examples/demo/controller.rs;examples/demo/comparison.rs,1923;2012
 Builder API,Datafeed API,Paginated symbol search,done,host,src/services/search.rs;src/ui/dialogs/symbol_search/service.rs;src/ui/dialogs/symbol_search/mod.rs,
 Builder API,Datafeed API,Per-symbol resolution capabilities,done,host,src/model/instrument.rs;src/widget/feed/mod.rs;src/ui/top_toolbar/components/timeframe_selector/mod.rs,
 Builder API,Datafeed API,Price precision from symbol metadata,done,host,src/model/instrument.rs;src/scales/price_formatter.rs;src/ui/trading/mod.rs;src/widget/feed/mod.rs;src/widget/frame/mod.rs;src/widget/format.rs,
@@ -96,7 +96,7 @@ Builder API,Widget API and customization,Localisation of UI text,partial,library
 Builder API,Widget API and customization,Multiple charts per widget,done,library,src/widget/layout.rs;src/ui/multi_chart.rs,
 Builder API,Widget API and customization,Price scale API,done,library,src/scales/pricescale.rs;src/widget/mod.rs;src/widget/series/options.rs;src/widget/series/scales/mod.rs;src/widget/frame/mod.rs,
 Builder API,Widget API and customization,Screenshots,done,library,src/widget/export.rs;src/widget/frame/mod.rs;src/widget/pane/render/mod.rs;src/widget/raster.rs;src/widget/svg.rs;src/widget/feed/mod.rs;examples/demo/commands.rs;Cargo.toml,1884;1934;1963
-Builder API,Widget API and customization,Series and scale API facade,done,library,src/widget/series/options.rs;src/widget/series/scales/mod.rs;src/widget/time_scale.rs;src/widget/series/mod.rs,1863;1893
+Builder API,Widget API and customization,Series and scale API facade,done,library,src/widget/series/options.rs;src/widget/series/scales/mod.rs;src/widget/time_scale.rs;src/widget/series/mod.rs,1862;1863;1893
 Builder API,Widget API and customization,Series draw order including the main series,done,library,src/widget/series/options.rs;src/widget/pane/mod.rs;src/widget/frame/mod.rs;src/widget/snapshot.rs,1866
 Builder API,Widget API and customization,Style overrides,partial,library,src/widget/mod.rs;src/widget/builder.rs;src/config/chart.rs;src/widget/frame/mod.rs,
 Builder API,Widget API and customization,Themes and custom colour schemes,done,library,src/widget/mod.rs;src/theme/context.rs;src/chart/rendering/markers.rs;src/config/chart.rs;src/widget/palette.rs;src/model/markers.rs;src/theme/presets.rs;src/theme/style.rs;src/widget/frame/mod.rs;examples/demo/formatting.rs;examples/demo/layouts.rs,1940
