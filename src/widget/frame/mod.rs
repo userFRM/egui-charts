@@ -17,6 +17,36 @@ use crate::theme::ThemeExt;
 use egui::{Pos2, Rect, Response, Sense, Ui, Vec2};
 
 impl Chart {
+    /// Prepares the main-series conflation groups for `bar_spacing` in logical points and
+    /// `pixels_per_point` (the egui context's display scale), returning the bars per group.
+    /// Call after supplying data and configuring
+    /// [`conflation_threshold`](crate::config::ChartConfig::conflation_threshold), before showing
+    /// a dense view at that spacing. Rendering also prepares lazily, using the same cache.
+    ///
+    /// Pan and hover reuse the groups. A changed grouping factor, price source or historical
+    /// revision rebuilds them; appends and tail updates rebuild only the last existing group
+    /// and any new groups. Only one factor is retained at a time. This reads the currently
+    /// applied bars, including a replay cutoff; it does not poll a connected feed.
+    /// Disabled conflation and price-based chart types return 1 and clear the groups.
+    pub fn prepare_conflation(&mut self, bar_spacing: f32, pixels_per_point: f32) -> usize {
+        let factor = if self.chart_type.is_time_independent() {
+            1
+        } else {
+            super::merge::factor(
+                bar_spacing,
+                pixels_per_point,
+                self.config.conflation_threshold,
+            )
+        };
+        self.merge_groups.update(
+            &self.state.data().bars,
+            self.state.revision(),
+            factor,
+            self.config.price_source,
+        );
+        factor
+    }
+
     /// Renders the chart with its studies and drawings, and handles pan, zoom,
     /// crosshair, keyboard shortcuts, the drawing tools and all visual elements
     /// configured in [`ChartConfig`](crate::config::ChartConfig).
@@ -418,14 +448,13 @@ impl Chart {
         shared_plot: Option<&Response>,
         footprint: Option<(&Footprint, &FootprintConfig)>,
     ) -> Response {
-        // Register the SVG and icon image loaders once per context so the
-        // embedded icons used by the toolbars and panels decode without the
-        // host app having to wire egui_extras itself.
+        // Register the icon loader once per context, and the general SVG loader for UI images.
         #[cfg(feature = "icons")]
         {
             let ctx = ui.ctx().clone();
             let loaders_installed = egui::Id::unique("egui_charts::image_loaders_installed");
             if !ctx.data(|d| d.get_temp::<bool>(loaders_installed).unwrap_or(false)) {
+                #[cfg(feature = "ui")]
                 egui_extras::install_image_loaders(&ctx);
                 crate::icons::install_loader(&ctx);
                 ctx.data_mut(|d| d.insert_temp(loaders_installed, true));
@@ -822,17 +851,9 @@ impl Chart {
         }
         self.start_idx = start_idx;
 
-        // With several bars to a pixel, read and draw them in groups of a pixel (see `merge`).
-        let factor = super::merge::factor(
+        let factor = self.prepare_conflation(
             self.state.time_scale().bar_spacing(),
             ui.ctx().pixels_per_point(),
-        )
-        .min(if time_based { usize::MAX } else { 1 });
-        self.merge_groups.update(
-            self.state.shown(),
-            self.state.revision(),
-            factor,
-            self.config.price_source,
         );
 
         #[cfg(feature = "studies")]
@@ -1632,7 +1653,7 @@ impl Chart {
                     crate::chart::rendering::study_mapping(study.as_ref(), &coords),
                 );
                 for item in self.primitives_of(*id).filter(|item| item.replaces) {
-                    item.draw(&clipped_painter, &view, PrimitivePass::Series);
+                    item.draw(&clipped_painter, &view, PrimitivePass::Series, factor);
                 }
             } else {
                 rendering::IndicatorRenderer::render(
