@@ -171,16 +171,7 @@ impl Chart {
         time: DateTime<Utc>,
         direction: MismatchDirection,
     ) -> Option<usize> {
-        let points = self.state.shown();
-        let at = points.partition_point(|bar| bar.time < time);
-        if points.get(at).is_some_and(|bar| bar.time == time) {
-            return Some(at);
-        }
-        match direction {
-            MismatchDirection::Exact => None,
-            MismatchDirection::NearestLeft => at.checked_sub(1),
-            MismatchDirection::NearestRight => (at < points.len()).then_some(at),
-        }
+        super::series::index_at_time(self.state.shown(), time, direction)
     }
 
     /// Gives the horizontal axis a meaning other than time, such as option strikes or bond

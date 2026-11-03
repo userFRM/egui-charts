@@ -18,6 +18,24 @@ use chrono::{DateTime, Utc};
 use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 
+/// The index in time-ordered `bars` of the bar at `time`, or else of its nearest neighbour in
+/// `direction`. An exact match returns the first of several bars with that time.
+pub(super) fn index_at_time(
+    bars: &[Bar],
+    time: DateTime<Utc>,
+    direction: MismatchDirection,
+) -> Option<usize> {
+    let at = bars.partition_point(|bar| bar.time < time);
+    if bars.get(at).is_some_and(|bar| bar.time == time) {
+        return Some(at);
+    }
+    match direction {
+        MismatchDirection::Exact => None,
+        MismatchDirection::NearestLeft => at.checked_sub(1),
+        MismatchDirection::NearestRight => (at < bars.len()).then_some(at),
+    }
+}
+
 /// How discrete time and series queries resolve a missing timestamp or logical position.
 ///
 /// Every direction returns an exact match when present. A neighbour search returns `None`
@@ -374,16 +392,7 @@ impl Chart {
         time: DateTime<Utc>,
         direction: MismatchDirection,
     ) -> Option<usize> {
-        let bars = self.bars(series);
-        let at = bars.partition_point(|bar| bar.time < time);
-        if bars.get(at).is_some_and(|bar| bar.time == time) {
-            return Some(at);
-        }
-        match direction {
-            MismatchDirection::Exact => None,
-            MismatchDirection::NearestLeft => at.checked_sub(1),
-            MismatchDirection::NearestRight => (at < bars.len()).then_some(at),
-        }
+        index_at_time(self.bars(series), time, direction)
     }
 
     /// The bar of `series` at a logical position on the shared horizontal scale, or its nearest
