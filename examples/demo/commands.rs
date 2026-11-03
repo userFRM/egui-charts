@@ -892,6 +892,41 @@ mod tests {
                         }
                     }
                 }
+                let size = egui::vec2(width, 320.0);
+                let draw = |app: &mut DemoApp, events| {
+                    super::super::tests::ui_frame(&ctx, size, events, |ui| {
+                        app.show_top_toolbar(ui, app.theme.chart.bg);
+                    })
+                };
+                for _ in 0..3 {
+                    draw(&mut app, vec![]);
+                }
+                super::super::tests::ui_click(&ctx, size, egui::pos2(20.0, 20.0), |ui| {
+                    app.show_top_toolbar(ui, app.theme.chart.bg);
+                });
+                let texts = draw(&mut app, vec![]);
+                let panel_menu = texts
+                    .iter()
+                    .find(|(text, _)| text == "Panels")
+                    .expect("landscape panel menu")
+                    .1;
+                assert!(
+                    egui::Rect::from_min_size(egui::Pos2::ZERO, size).contains_rect(panel_menu)
+                );
+                super::super::tests::ui_click(&ctx, size, panel_menu.center(), |ui| {
+                    app.show_top_toolbar(ui, app.theme.chart.bg);
+                });
+                let texts = draw(&mut app, vec![]);
+                let watchlist = texts
+                    .iter()
+                    .find(|(text, _)| text == "Watchlist and details")
+                    .expect("landscape panel action")
+                    .1;
+                super::super::tests::ui_click(&ctx, size, watchlist.center(), |ui| {
+                    app.show_top_toolbar(ui, app.theme.chart.bg);
+                });
+                assert!(app.open_panel == Some(super::super::SidePanel::Watchlist));
+                egui::Popup::close_all(&ctx);
             }
         }
     }

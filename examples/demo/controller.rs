@@ -1710,31 +1710,6 @@ impl DemoApp {
                 let mut toolbar = std::mem::take(&mut self.top_toolbar);
                 let state = self.state.clone();
                 let action = toolbar.show_with_menu(ui, &state, |ui| {
-                    sample = self.show_demo_controls(ui);
-                    ui.separator();
-                    menu_toggle(
-                        ui,
-                        "Liquidity heatmap",
-                        &icons::LIQUIDITY_HEATMAP,
-                        &mut heatmap_enabled,
-                    );
-                    ui.add_enabled_ui(heatmap_enabled || order_flow.show_order_book, |ui| {
-                        menu_toggle(
-                            ui,
-                            "Largest order profile",
-                            &icons::CHART_SESSION_VOLUME_PROFILE,
-                            &mut largest_profile,
-                        );
-                    });
-                    ui.separator();
-                    ui.add_enabled_ui(self.replay.is_none(), |ui| {
-                        menu_toggle(ui, "Pause synthetic feed", &icons::MEDIA_PAUSE, &mut paused);
-                    });
-                    ui.separator();
-                    if menu_item(ui, "Order flow", &icons::CHART_VOLUME_FOOTPRINT, None).clicked() {
-                        panel_action = Some(SidePanel::OrderFlow);
-                        ui.close();
-                    }
                     if ui.ctx().content_rect().width() < 600.0 {
                         let response = menu_item(
                             ui,
@@ -1810,6 +1785,31 @@ impl DemoApp {
                                     });
                             });
                         ui.separator();
+                    }
+                    sample = self.show_demo_controls(ui);
+                    ui.separator();
+                    menu_toggle(
+                        ui,
+                        "Liquidity heatmap",
+                        &icons::LIQUIDITY_HEATMAP,
+                        &mut heatmap_enabled,
+                    );
+                    ui.add_enabled_ui(heatmap_enabled || order_flow.show_order_book, |ui| {
+                        menu_toggle(
+                            ui,
+                            "Largest order profile",
+                            &icons::CHART_SESSION_VOLUME_PROFILE,
+                            &mut largest_profile,
+                        );
+                    });
+                    ui.separator();
+                    ui.add_enabled_ui(self.replay.is_none(), |ui| {
+                        menu_toggle(ui, "Pause synthetic feed", &icons::MEDIA_PAUSE, &mut paused);
+                    });
+                    ui.separator();
+                    if menu_item(ui, "Order flow", &icons::CHART_VOLUME_FOOTPRINT, None).clicked() {
+                        panel_action = Some(SidePanel::OrderFlow);
+                        ui.close();
                     }
                     // Host actions live in the menu so the default strip keeps the
                     // built-in controls only.
