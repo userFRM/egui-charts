@@ -105,6 +105,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 ### Calculations and Rendering
 
 - [x] `IndicatorFactory` registers 204 indicators with default features and accepts downstream registrations; the study picker groups its built-in results on Indicators, Profiles, Patterns and Order flow pages, each offered only while it has an accepted study. Hosts can restrict Order flow entries, including search and favourites, to the feed services each study's inputs read; requirements are cached when feed metadata or the factory changes. Other categories keep their existing availability.
+- [x] Host-backed options profiles appear on Profiles for declared option-chain feeds, with nearest or listed expiries and inclusive date cutoffs, separate volume and open-interest measures, split or net sides, put/call readouts and an optional multiplier-weighted max-pain level. Missing contract fields hide the inputs that need them.
 - [x] Moving-average families include SMA, EMA, WMA, HMA, ALMA, KAMA and configurable combinations, ribbons and crossing markers.
 - [x] Momentum and trend studies include RSI, MACD, Stochastic, ADX, SuperTrend, Ichimoku and Parabolic SAR.
 - [x] Volatility and channel studies include Bollinger Bands, ATR, Keltner, Donchian and historical volatility.
