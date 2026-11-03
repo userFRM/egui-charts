@@ -59,33 +59,6 @@ impl ExampleApp {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn every_guide_scene_can_start() {
-        for name in [
-            "first-chart",
-            "series",
-            "series-candles",
-            "series-line",
-            "series-area",
-            "series-baseline",
-            "series-histogram",
-            "series-heikin",
-            "series-renko",
-            "series-point-and-figure",
-            "price-scale",
-            "time-scale",
-            "panes",
-        ] {
-            assert!(ExampleApp::new(name).is_some(), "{name}");
-        }
-        assert!(ExampleApp::new("unknown").is_none());
-    }
-}
-
 impl eframe::App for ExampleApp {
     fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
         #[cfg(target_arch = "wasm32")]
@@ -195,4 +168,31 @@ fn main() -> eframe::Result {
             Ok(Box::new(app))
         }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_guide_scene_can_start() {
+        for name in [
+            "first-chart",
+            "series",
+            "series-candles",
+            "series-line",
+            "series-area",
+            "series-baseline",
+            "series-histogram",
+            "series-heikin",
+            "series-renko",
+            "series-point-and-figure",
+            "price-scale",
+            "time-scale",
+            "panes",
+        ] {
+            assert!(ExampleApp::new(name).is_some(), "{name}");
+        }
+        assert!(ExampleApp::new("unknown").is_none());
+    }
 }
