@@ -1674,7 +1674,7 @@ impl DemoApp {
                     menu_toggle(
                         ui,
                         "Liquidity heatmap",
-                        &icons::LAYOUT_GRID,
+                        &icons::LIQUIDITY_HEATMAP,
                         &mut heatmap_enabled,
                     );
                     ui.add_enabled_ui(heatmap_enabled, |ui| {
@@ -1709,7 +1709,7 @@ impl DemoApp {
                                 SidePanel::TimeAndSales,
                                 &icons::SETTINGS_EVENTS,
                             ),
-                            ("Order flow", SidePanel::OrderFlow, &icons::SETTINGS_EVENTS),
+                            ("Order flow", SidePanel::OrderFlow, &icons::SETTINGS_TRADING),
                         ]
                         .into_iter()
                         .filter(|(_, panel, _)| {
@@ -1721,8 +1721,14 @@ impl DemoApp {
                             }
                         }
                         for widget in &self.widget_bar.widgets {
+                            // A note page distinguishes Session notes from Formatting here.
+                            let icon = if widget.id == 2 {
+                                &icons::NOTE
+                            } else {
+                                &widget.icon
+                            };
                             if SidePanel::from_widget(widget.id).is_none()
-                                && menu_item(ui, &widget.tooltip, &widget.icon, None).clicked()
+                                && menu_item(ui, &widget.tooltip, icon, None).clicked()
                             {
                                 widget_action = Some(widget.id);
                                 ui.close();

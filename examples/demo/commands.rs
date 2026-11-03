@@ -158,9 +158,9 @@ impl DemoApp {
         let mut command = None;
         for (label, icon) in [
             ("Readout", &icons::EYE),
-            ("Appearance", &icons::THEME_TOGGLE),
+            ("Appearance", &icons::BRUSH),
             ("Formatting", &icons::TEXT),
-            ("Showcase", &icons::LAYOUT_GRID),
+            ("Showcase", &icons::WIDGET_BAR_HIGHLIGHTS),
         ] {
             let response = menu_item(ui, label, icon, Some(&icons::CHEVRON_RIGHT));
             egui::containers::menu::SubMenu::new()
@@ -713,7 +713,7 @@ mod tests {
     }
 
     #[test]
-    fn menu_labels_align_and_toggles_keep_their_state_and_position() {
+    fn menu_icons_are_distinct_labels_align_and_toggles_keep_their_state_and_position() {
         for width in [393.0, 1440.0] {
             let ctx = egui::Context::default();
             let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
@@ -735,9 +735,11 @@ mod tests {
             output.textures_delta.clear();
             let origin = label_pos(&output, "Readout").x;
             let pause_pos = label_pos(&output, "Pause synthetic feed");
+            let mut menu_icons = std::collections::HashMap::new();
             for label in [
                 "Quick Search",
                 "Toggle Theme",
+                "Readout",
                 "Appearance",
                 "Formatting",
                 "Showcase",
@@ -763,7 +765,25 @@ mod tests {
                     .into_iter()
                     .flatten(),
             ) {
-                assert_eq!(label_pos(&output, label).x, origin, "{width}: {label}");
+                let pos = label_pos(&output, label);
+                assert_eq!(pos.x, origin, "{width}: {label}");
+                let icon = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| {
+                        let bounds = shape.shape.visual_bounding_rect();
+                        let texture = shape.shape.texture_id();
+                        (texture != egui::TextureId::default()
+                            && bounds.right() < origin
+                            && bounds.y_range().contains(pos.y))
+                        .then_some(texture)
+                    })
+                    .unwrap_or_else(|| panic!("{width}: missing icon for {label}"));
+                assert_eq!(
+                    menu_icons.insert(icon, label),
+                    None,
+                    "{width}: {label} shares its icon with another entry"
+                );
             }
             output.drop_without_applying_deltas();
             click_at_width(&mut app, &ctx, "Largest order profile", width);
