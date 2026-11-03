@@ -10,7 +10,7 @@
 //! smallest positive `f64`. This also applies when public fields are set directly.
 //! Use [`PriceFormatterBuilder`] for a fluent construction API.
 
-use crate::model::{Instrument, percent_change};
+use crate::model::{Instrument, SeriesDisplayFormat, SeriesFormat, percent_change};
 use std::sync::Arc;
 
 // Enough decimal places to keep even the smallest positive f64 from rounding to zero.
@@ -111,6 +111,28 @@ pub trait PriceFormatter: Send + Sync {
 
     /// Clone this formatter into a Box
     fn clone_box(&self) -> Box<dyn PriceFormatter>;
+}
+
+impl PriceFormatter for SeriesDisplayFormat {
+    fn format(&self, value: f64) -> String {
+        let step = self.min_move;
+        let rounded = (value / step).round() * step;
+        let value = if step.is_finite() && step > 0.0 && rounded.is_finite() {
+            rounded
+        } else {
+            value
+        };
+        let precision = usize::from(self.precision);
+        match self.kind {
+            SeriesFormat::Price => DefaultPriceFormatter::with_precision(precision).format(value),
+            SeriesFormat::Volume => VolumeFormatter { precision }.format(value),
+            SeriesFormat::Percentage => format!("{}%", format_decimal(value, precision)),
+        }
+    }
+
+    fn clone_box(&self) -> Box<dyn PriceFormatter> {
+        Box::new(*self)
+    }
 }
 
 /// Default price formatter with configurable precision

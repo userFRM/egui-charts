@@ -496,6 +496,8 @@ mod tests {
         styles.line.style = LineStyle::Dashed;
         styles.step_line.style = LineStyle::Dotted;
         styles.marker_radius = 8.0;
+        styles.area.marker_radius = 8.0;
+        styles.baseline.marker_radius = 8.0;
         styles.area.top_fill = Color32::from_rgba_unmultiplied(255, 0, 0, 200);
         styles.area.bottom_fill = Color32::from_rgba_unmultiplied(0, 0, 255, 40);
         styles.baseline.above_fill = Color32::from_rgba_unmultiplied(255, 255, 0, 100);
@@ -562,7 +564,10 @@ mod tests {
             if kind != ChartType::Candles {
                 assert!(has_line, "{kind:?} ignored its line style");
             }
-            if kind == ChartType::LineWithMarkers {
+            if matches!(
+                kind,
+                ChartType::LineWithMarkers | ChartType::Area | ChartType::Baseline
+            ) {
                 assert_eq!(markers, 4);
             }
             if kind == ChartType::Area {
@@ -703,5 +708,142 @@ mod tests {
                 (solid(style.color), vec![40.0, 50.0]),
             ]
         );
+    }
+
+    #[test]
+    fn area_and_baseline_point_markers_follow_each_series_points_and_visibility() {
+        use crate::model::{BarColors, BaselineLevel};
+        use crate::widget::{SeriesId, SeriesOptions};
+
+        let bars: Vec<_> = [70.0, 30.0, f64::NAN, 50.0, f64::NAN, 100.0]
+            .into_iter()
+            .enumerate()
+            .map(|(i, value)| {
+                let time = chrono::DateTime::UNIX_EPOCH + chrono::Duration::minutes(i as i64);
+                if value.is_nan() {
+                    Bar::whitespace(time)
+                } else {
+                    let mut bar = Bar::from_value(time, value);
+                    bar.colors = Some(Box::new(BarColors {
+                        color: (i == 0).then_some(Color32::GOLD),
+                        top_line: (i == 0).then_some(Color32::CYAN),
+                        bottom_line: (i == 1).then_some(Color32::MAGENTA),
+                        ..Default::default()
+                    }));
+                    bar
+                }
+            })
+            .collect();
+        for kind in [ChartType::Area, ChartType::Baseline] {
+            for inverted in [false, true] {
+                for (radius, added_radius, main_visible, added_visible) in [
+                    (0.0, None, true, true),
+                    (4.0, Some(7.0), true, true),
+                    (4.0, Some(0.0), true, true),
+                    (0.0, Some(7.0), true, true),
+                    (-1.0, Some(-2.0), true, true),
+                    (f32::NAN, Some(f32::NAN), true, true),
+                    (f32::INFINITY, Some(f32::INFINITY), true, true),
+                    (4.0, Some(7.0), false, true),
+                    (4.0, Some(7.0), true, false),
+                ] {
+                    let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+                    chart.config_mut().show_volume = false;
+                    chart.set_chart_type(kind);
+                    let mut params = chart.chart_type_params().clone();
+                    params.baseline = BaselineLevel::Price(50.0);
+                    params.styles.area.marker_radius = radius;
+                    params.styles.baseline.marker_radius = radius;
+                    let area_color = params.styles.area.line.color;
+                    let above_color = params.styles.baseline.above.color;
+                    chart.set_chart_type_params(params);
+                    let added = chart.add_series(SeriesOptions {
+                        chart_type: kind,
+                        color: area_color,
+                        up_color: above_color,
+                        marker_radius: added_radius,
+                        ..Default::default()
+                    });
+                    chart.set_data(added, bars.clone());
+                    chart.set_series_visible(SeriesId::MAIN, main_visible);
+                    chart.set_series_visible(added, added_visible);
+                    let scale = chart.series_price_scale_mut(SeriesId::MAIN).unwrap();
+                    scale.set_range(0.0, 100.0);
+                    scale.options_mut().invert_scale = inverted;
+                    let output = Context::default().run_ui(
+                        RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                pos2(0.0, 0.0),
+                                vec2(600.0, 400.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            chart.show(ui);
+                        },
+                    );
+                    let rect = chart.get_rendered_price_rect();
+                    let shapes = output.shapes.clone();
+                    output.drop_without_applying_deltas();
+                    for (id, radius, visible) in [
+                        (SeriesId::MAIN, radius, main_visible),
+                        (added, added_radius.unwrap_or(0.0), added_visible),
+                    ] {
+                        let circles: Vec<_> = shapes
+                            .iter()
+                            .filter_map(|shape| match &shape.shape {
+                                Shape::Circle(circle)
+                                    if circle.radius == radius
+                                        && circle.fill != Color32::TRANSPARENT =>
+                                {
+                                    assert_eq!(shape.clip_rect, rect);
+                                    Some((circle.center, circle.fill))
+                                }
+                                _ => None,
+                            })
+                            .collect();
+                        let expected: Vec<_> = if visible && radius.is_finite() && radius > 0.0 {
+                            // In a 0..100 range, 70 is 30% down the pane and 30 is 70% down;
+                            // inversion swaps them. Isolated points at 50 and 100 sit halfway
+                            // and on the pane edge, where the marker is clipped in half.
+                            [(0, 70.0_f32), (1, 30.0), (3, 50.0), (5, 100.0)]
+                                .into_iter()
+                                .map(|(i, value)| {
+                                    let fraction = if inverted {
+                                        value / 100.0
+                                    } else {
+                                        1.0 - value / 100.0
+                                    };
+                                    let point = pos2(
+                                        chart.index_to_x(i as f64).unwrap(),
+                                        rect.top() + rect.height() * fraction,
+                                    );
+                                    let color = match (kind, i) {
+                                        (ChartType::Area, 0) => Color32::GOLD,
+                                        (ChartType::Area, _) => area_color,
+                                        (_, 0) => Color32::CYAN,
+                                        (_, 1) => Color32::MAGENTA,
+                                        _ => above_color,
+                                    };
+                                    (point, color)
+                                })
+                                .collect()
+                        } else {
+                            Vec::new()
+                        };
+                        assert_eq!(circles.len(), expected.len(), "{kind:?}, {id:?}, {radius}");
+                        for ((point, color), (expected_point, expected_color)) in
+                            circles.iter().zip(expected)
+                        {
+                            assert!(
+                                point.distance(expected_point) < 0.001,
+                                "{kind:?}, {id:?}: {point:?} != {expected_point:?}"
+                            );
+                            assert_eq!(*color, expected_color);
+                        }
+                    }
+                }
+            }
+        }
     }
 }
