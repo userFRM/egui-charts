@@ -26,6 +26,10 @@ pub struct ImageExportOptions {
     /// Draw the crosshair where the pointer last placed it over the plots, or where
     /// [`Chart::set_crosshair_position`] or a synchronized chart placed it since.
     pub include_crosshair: bool,
+    /// Draw [`PrimitivePass::Above`](super::PrimitivePass::Above) content above the plots and
+    /// persistent drawings. Defaults to `true`, independently of `include_crosshair`.
+    /// Frozen exports omit pointer hover and selection decorations with either setting.
+    pub include_foreground: bool,
     /// Pixels of the textures the host binds itself, by the id its images use, so
     /// `Chart::export_png` and [`Chart::export_svg`] can draw them with `png-export`.
     /// Without an entry, an image of such a texture fails the export. Supplied textures use
@@ -44,6 +48,7 @@ impl Default for ImageExportOptions {
             include_watermark: true,
             transparent_background: false,
             include_crosshair: false,
+            include_foreground: true,
             textures: HashMap::new(),
         }
     }
@@ -518,12 +523,13 @@ impl Chart {
     }
 
     /// A frozen chart for a multi-chart image layout, with the same background, title,
-    /// watermark and crosshair choices as [`Self::export_image`]. Show it inside the callback
+    /// watermark, foreground and crosshair choices as [`Self::export_image`]. Show it inside the callback
     /// of [`Self::export_layout_image`], `Self::export_layout_png` (with `png-export`) or
     /// [`Self::export_layout_svg`].
     /// No storage or live subscriptions are attached; the original chart stays unchanged.
     pub fn export_snapshot(&self, ctx: &egui::Context, options: &ImageExportOptions) -> Self {
         let mut chart = self.frozen_export_snapshot();
+        chart.hide_foreground = !options.include_foreground;
         chart.config.skip_background = options.transparent_background;
         chart.config.show_symbol_labels &= options.include_title;
         if !options.include_watermark {
@@ -1368,9 +1374,53 @@ mod tests {
 
     #[test]
     #[cfg(feature = "png-export")]
-    fn png_images_rasterise_the_chart_with_the_last_crosshair_on_request() {
+    fn image_exports_control_foreground_and_crosshair_independently() {
+        use crate::chart::primitives::{Primitive, PrimitivePass, PrimitiveView};
+        use crate::studies::{CustomIndicator, IndicatorValue};
         use crate::widget::test_frames::{chart, frame};
-        use egui::{Event, Pos2};
+        use egui::{Color32, Event, Pos2};
+
+        struct Layers([[Color32; 3]; 2]);
+        impl Layers {
+            fn paint(
+                &self,
+                painter: &egui::Painter,
+                view: &PrimitiveView<'_>,
+                pass: PrimitivePass,
+                background: bool,
+            ) {
+                let at = match pass {
+                    PrimitivePass::Below => 0,
+                    PrimitivePass::Series => 1,
+                    PrimitivePass::Above => 2,
+                };
+                painter.rect_filled(
+                    egui::Rect::from_min_size(
+                        Pos2::new(
+                            view.mapping.rect.left() + 16.0 + at as f32 * 24.0,
+                            view.mapping.rect.bottom() - if background { 32.0 } else { 16.0 },
+                        ),
+                        egui::vec2(12.0, 12.0),
+                    ),
+                    0.0,
+                    self.0[background as usize][at],
+                );
+            }
+        }
+        impl Primitive for Layers {
+            fn draw_background(
+                &self,
+                painter: &egui::Painter,
+                view: &PrimitiveView<'_>,
+                pass: PrimitivePass,
+            ) {
+                self.paint(painter, view, pass, true);
+            }
+            fn draw(&self, painter: &egui::Painter, view: &PrimitiveView<'_>, pass: PrimitivePass) {
+                self.paint(painter, view, pass, false);
+            }
+        }
+
         let ctx = egui::Context::default();
         let mut chart = chart(&[100.0], &[110.0]);
         frame(
@@ -1380,18 +1430,17 @@ mod tests {
             vec![Event::PointerMoved(Pos2::new(400.0, 200.0))],
         );
         frame(&ctx, &mut chart, 0.1, vec![Event::PointerGone]);
-        let decode = |chart: &Chart, include_crosshair| {
+        let options = |include_foreground, include_crosshair| ImageExportOptions {
+            size: [480, 320],
+            include_title: false,
+            include_timestamp: false,
+            include_crosshair,
+            include_foreground,
+            ..Default::default()
+        };
+        let decode = |chart: &Chart, include_foreground, include_crosshair| {
             let png = chart
-                .export_png(
-                    &ctx,
-                    &ImageExportOptions {
-                        size: [480, 320],
-                        include_title: false,
-                        include_timestamp: false,
-                        include_crosshair,
-                        ..Default::default()
-                    },
-                )
+                .export_png(&ctx, &options(include_foreground, include_crosshair))
                 .unwrap();
             let mut reader = png::Decoder::new(png.as_slice()).read_info().unwrap();
             let mut pixels = vec![0; reader.output_buffer_size()];
@@ -1402,7 +1451,7 @@ mod tests {
             );
             pixels.as_chunks::<4>().0.to_vec()
         };
-        let (plain, crosshair) = (decode(&chart, false), decode(&chart, true));
+        let (plain, crosshair) = (decode(&chart, true, false), decode(&chart, true, true));
         // Candle bodies keep their exact colour through rasterisation and encoding.
         let bullish = chart.config().bullish_color.to_srgba_unmultiplied();
         assert!(plain.iter().filter(|pixel| **pixel == bullish).count() > 1000);
@@ -1417,9 +1466,131 @@ mod tests {
         let (time, _) = chart.last_crosshair.unwrap();
         for price in [Some(105.0), None] {
             chart.last_crosshair = Some((time, price));
-            let crosshair = decode(&chart, true);
+            let crosshair = decode(&chart, true, true);
             assert!(crosshair.contains(&[255, 0, 0, 255]));
             assert_eq!(crosshair.contains(&[0, 0, 255, 255]), price.is_some());
         }
+
+        let pane = chart.add_indicator(Box::new(
+            CustomIndicator::new("Pane", |bars| {
+                bars.iter()
+                    .map(|bar| IndicatorValue::Single(bar.close))
+                    .collect()
+            })
+            .with_overlay(false),
+        ));
+        let colors = [
+            [
+                [
+                    Color32::from_rgb(1, 2, 3),
+                    Color32::from_rgb(4, 5, 6),
+                    Color32::from_rgb(7, 8, 9),
+                ],
+                [
+                    Color32::from_rgb(21, 22, 23),
+                    Color32::from_rgb(24, 25, 26),
+                    Color32::from_rgb(27, 28, 29),
+                ],
+            ],
+            [
+                [
+                    Color32::from_rgb(11, 12, 13),
+                    Color32::from_rgb(14, 15, 16),
+                    Color32::from_rgb(17, 18, 19),
+                ],
+                [
+                    Color32::from_rgb(31, 32, 33),
+                    Color32::from_rgb(34, 35, 36),
+                    Color32::from_rgb(37, 38, 39),
+                ],
+            ],
+        ];
+        for (id, colors) in [SeriesId::MAIN, pane].into_iter().zip(colors) {
+            assert!(chart.attach_primitive(id, Layers(colors)).is_some());
+        }
+        #[cfg(feature = "drawings")]
+        {
+            use crate::drawings::{Drawing, DrawingToolType};
+            let mut drawing = Drawing::new(0, DrawingToolType::HorizontalLine);
+            drawing.color = [45, 201, 173, 255];
+            drawing.stroke_width = 3.0;
+            let id = chart.create_drawing(drawing, &[(time, 103.0)]).unwrap();
+            chart.drawings.select(id);
+        }
+        chart.selection.select(
+            super::super::ChartElementId::Series(SeriesId::MAIN),
+            Some(50),
+        );
+        chart.last_crosshair = Some((time, Some(105.0)));
+        let mut images = Vec::new();
+        for (foreground, crosshair) in [(false, false), (false, true), (true, false), (true, true)]
+        {
+            let options = options(foreground, crosshair);
+            let pixels = decode(&chart, foreground, crosshair);
+            let mut image = chart.export_image(&ctx, &options).unwrap();
+            let raster = super::super::raster::rasterize(
+                image.size,
+                &image.primitives,
+                &image.textures_delta,
+            )
+            .unwrap();
+            image.textures_delta.clear();
+            assert_eq!(
+                raster
+                    .iter()
+                    .map(Color32::to_srgba_unmultiplied)
+                    .collect::<Vec<_>>(),
+                pixels
+            );
+            let svg = chart.export_svg(&ctx, &options).unwrap();
+            for colors in colors.into_iter().flatten() {
+                for (pass, color) in colors.into_iter().enumerate() {
+                    let present = pass != 2 || foreground;
+                    assert_eq!(
+                        pixels.contains(&color.to_srgba_unmultiplied()),
+                        present,
+                        "{color:?}, foreground={foreground}"
+                    );
+                    let [r, g, b, _] = color.to_srgba_unmultiplied();
+                    assert_eq!(svg.contains(&format!("rgb({r},{g},{b})")), present);
+                }
+            }
+            for color in [Color32::RED, Color32::BLUE] {
+                assert_eq!(pixels.contains(&color.to_srgba_unmultiplied()), crosshair);
+                let [r, g, b, _] = color.to_srgba_unmultiplied();
+                assert_eq!(svg.contains(&format!("rgb({r},{g},{b})")), crosshair);
+            }
+            assert!(pixels.contains(&bullish));
+            #[cfg(feature = "drawings")]
+            assert!(pixels.contains(&[45, 201, 173, 255]));
+            images.push(pixels);
+        }
+        // Four 12-pixel swatches, with at most one feathered pixel along each edge.
+        assert!(
+            images[0]
+                .iter()
+                .zip(&images[2])
+                .filter(|(a, b)| a != b)
+                .count()
+                <= 4 * 14 * 14
+        );
+        // Disjoint overlays change only their own pixels; the underlying frame stays identical.
+        for at in 0..images[0].len() {
+            let expected = if images[2][at] != images[0][at] {
+                images[2][at]
+            } else {
+                images[1][at]
+            };
+            assert_eq!(images[3][at], expected, "pixel {at}");
+        }
+        assert!(ImageExportOptions::default().include_foreground);
+        assert!(chart.selected_element().is_some());
+        chart.clear_selection();
+        #[cfg(feature = "drawings")]
+        {
+            assert!(chart.drawings.selected_ids().next().is_some());
+            chart.drawings.deselect();
+        }
+        assert_eq!(decode(&chart, false, false), images[0]);
     }
 }
