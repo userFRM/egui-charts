@@ -1253,6 +1253,51 @@ fn secondary_pane_assignments_keep_ranges_axes_and_queries_local() {
     }
 }
 
+/// A secondary pane's own scale follows the price axis settings: it moves to the left axis
+/// when only that one is shown and draws no labels when both are hidden.
+#[test]
+fn secondary_pane_scale_follows_price_axis_visibility() {
+    for (right, left, side) in [
+        (true, false, Some(false)),
+        (false, true, Some(true)),
+        (false, false, None),
+    ] {
+        let ctx = egui::Context::default();
+        let mut chart = Chart::new(BarData::from_bars(bars(&[100.0; 30])));
+        chart.config.show_volume = false;
+        chart.config.show_right_axis = right;
+        chart.config.show_left_axis = left;
+        let pane = chart.add_pane();
+        let id = chart.add_series(SeriesOptions::default());
+        chart.set_data(id, bars(&[10.0; 30]));
+        chart.set_series_formatter(
+            id,
+            Some(std::sync::Arc::new(
+                crate::scales::CustomPriceFormatter::new(|value| format!("pane:{value:.0}")),
+            )),
+        );
+        assert!(chart.move_series_to_pane(id, pane));
+        let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 0.0, vec![]);
+        let plot = chart.get_rendered_price_rect();
+        let sides: Vec<_> = painted
+            .iter()
+            .filter_map(|shape| match shape {
+                egui::Shape::Text(text) if text.galley.text().starts_with("pane:") => {
+                    Some(text.pos.x < plot.left())
+                }
+                _ => None,
+            })
+            .collect();
+        match side {
+            Some(left) => assert!(
+                !sides.is_empty() && sides.iter().all(|side| *side == left),
+                "right {right}, left {left}: {sides:?}"
+            ),
+            None => assert!(sides.is_empty(), "hidden axes: {sides:?}"),
+        }
+    }
+}
+
 /// The main series can sit before, between or after added series; paint and selection use
 /// that order on every frame, including after restoring a serialized chart.
 #[test]

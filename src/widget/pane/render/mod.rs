@@ -686,7 +686,7 @@ impl Chart {
                     Some(plot.x_range()),
                     collapsed,
                     panel.axis_rect.map(|_| {
-                        if !self.pane_axis_on_left(pane_id, assignment) {
+                        if !self.pane_axis_on_left(assignment) {
                             crate::scales::PriceScaleId::Right
                         } else {
                             crate::scales::PriceScaleId::Left

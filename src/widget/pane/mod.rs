@@ -163,26 +163,17 @@ impl Pane {
 }
 
 impl Chart {
-    fn pane_axis_on_left(&self, pane: PaneId, key: crate::model::SeriesScale) -> bool {
-        use crate::model::SeriesScale;
-        key != SeriesScale::Right
-            || (!self.config.show_right_axis
-                && self.config.show_left_axis
-                && !self.pane_series(pane).into_iter().any(|id| {
-                    self.series_scale(id) == Some(SeriesScale::Right)
-                        || self.indicators().any(|(study, value)| {
-                            study == id
-                                && value.scale()
-                                    == crate::studies::StudyScale::Shared(SeriesScale::Right)
-                        })
-                }))
+    /// The pane's own scale follows the price axis settings; other assignments sit on the left.
+    fn pane_axis_on_left(&self, key: crate::model::SeriesScale) -> bool {
+        key != crate::model::SeriesScale::Right || !self.config.show_right_axis
     }
 
     /// The visible named axes in a secondary pane, in member order.
     fn pane_axis_keys(&self, id: PaneId) -> Vec<crate::model::SeriesScale> {
         use crate::model::SeriesScale;
         let members = self.pane_series(id);
-        if members.is_empty() && (self.config.show_right_axis || self.config.show_left_axis) {
+        let shown = self.config.show_right_axis || self.config.show_left_axis;
+        if members.is_empty() && shown {
             return vec![SeriesScale::Right];
         }
         let mut keys = Vec::new();
@@ -195,12 +186,12 @@ impl Chart {
                 match study.scale() {
                     crate::studies::StudyScale::Shared(key) => Some(key),
                     crate::studies::StudyScale::None => None,
-                    _ => (self.config.show_right_axis || self.config.show_left_axis)
-                        .then_some(SeriesScale::Right),
+                    _ => Some(SeriesScale::Right),
                 }
             });
             if let Some(key) = key
                 && !matches!(key, SeriesScale::Overlay(_))
+                && (key != SeriesScale::Right || shown)
                 && !keys.contains(&key)
             {
                 keys.push(key);
@@ -219,7 +210,7 @@ impl Chart {
         let keys = self.pane_axis_keys(id);
         let count = keys
             .iter()
-            .filter(|key| self.pane_axis_on_left(id, **key))
+            .filter(|key| self.pane_axis_on_left(**key))
             .count();
         let width = self
             .measured_axis_width
@@ -228,7 +219,7 @@ impl Chart {
         let mut left = plot.left();
         keys.into_iter()
             .map(|key| {
-                let axis = if !self.pane_axis_on_left(id, key) {
+                let axis = if !self.pane_axis_on_left(key) {
                     Rect::from_x_y_ranges(plot.right()..=rect.right(), rect.y_range())
                 } else {
                     let axis = Rect::from_x_y_ranges((left - width)..=left, rect.y_range());
@@ -917,13 +908,13 @@ impl Chart {
             .panes
             .iter()
             .filter(|pane| self.pane_shown(pane))
-            .map(|pane| (pane.id, self.pane_axis_keys(pane.id)))
+            .map(|pane| self.pane_axis_keys(pane.id))
             .collect();
         let pane_left = pane_axes
             .iter()
-            .map(|(id, keys)| {
+            .map(|keys| {
                 keys.iter()
-                    .filter(|key| self.pane_axis_on_left(*id, **key))
+                    .filter(|key| self.pane_axis_on_left(**key))
                     .count()
             })
             .max()
@@ -935,7 +926,7 @@ impl Chart {
         let right_axis = right_axis.max(
             if pane_axes
                 .iter()
-                .any(|(id, keys)| keys.iter().any(|key| !self.pane_axis_on_left(*id, *key)))
+                .any(|keys| keys.iter().any(|key| !self.pane_axis_on_left(*key)))
             {
                 self.measured_axis_width.max(self.config.right_axis_width)
             } else {
