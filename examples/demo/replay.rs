@@ -318,52 +318,31 @@ fn recording_bytes(
 impl DemoApp {
     pub(super) fn show_recording_controls(&mut self, ui: &mut egui::Ui) {
         use egui_charts::icons::icons;
-        let response = super::commands::menu_item(
-            ui,
-            "Market recording",
-            &icons::REPLAY,
-            Some(&icons::CHEVRON_RIGHT),
-        );
-        egui::containers::menu::SubMenu::new().show(ui, &response, |ui| {
-            ui.label("Local .egcreplay file: instrument and recorded events");
-            if super::commands::menu_item(ui, "Download captured recording", &icons::DATABASE, None)
+        ui.label("Local .egcreplay file: instrument and recorded events");
+        if super::commands::menu_item(ui, "Download captured recording", &icons::DATABASE, None)
+            .clicked()
+        {
+            let mut events = Vec::new();
+            self.live.read_recording(&mut events);
+            match recording_bytes(&self.live.instrument(), &events) {
+                Ok(bytes) => self.write_export(None, "egcreplay", &bytes),
+                Err(error) => self.notify(&error),
+            }
+            ui.close();
+        }
+        let busy =
+            self.recording_files.selected.is_some() || self.recording_files.parsing.is_some();
+        ui.add_enabled_ui(!busy, |ui| {
+            if super::commands::menu_item(ui, "Open local recording", &icons::FOLDER_OPEN, None)
                 .clicked()
             {
-                let result = (|| {
-                    let mut events = Vec::new();
-                    self.live.read_recording(&mut events);
-                    let bytes = recording_bytes(&self.live.instrument(), &events)?;
-                    let filename = format!("{}-market.egcreplay", self.state.symbol);
-                    #[cfg(not(target_arch = "wasm32"))]
-                    let path = std::env::temp_dir().join(filename);
-                    #[cfg(target_arch = "wasm32")]
-                    let path = std::path::PathBuf::from(filename);
-                    #[cfg(not(target_arch = "wasm32"))]
-                    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
-                    #[cfg(target_arch = "wasm32")]
-                    super::browser_download(&bytes, &path)?;
-                    Ok::<_, String>(path)
-                })();
-                match result {
-                    Ok(path) => self.notify(&format!("Saved recording: {}", path.display())),
-                    Err(error) => self.notify(&error),
-                }
+                self.pick_recording(ui.ctx());
                 ui.close();
             }
-            let busy =
-                self.recording_files.selected.is_some() || self.recording_files.parsing.is_some();
-            ui.add_enabled_ui(!busy, |ui| {
-                if super::commands::menu_item(ui, "Open local recording", &icons::FOLDER_OPEN, None)
-                    .clicked()
-                {
-                    self.pick_recording(ui.ctx());
-                    ui.close();
-                }
-            });
-            if busy {
-                ui.label("Reading recording…");
-            }
         });
+        if busy {
+            ui.label("Reading recording…");
+        }
     }
 
     fn pick_recording(&mut self, ctx: &egui::Context) {
@@ -495,43 +474,38 @@ pub(super) struct LayoutGroups {
 impl DemoApp {
     pub(super) fn show_price_unit_controls(&mut self, ui: &mut egui::Ui) {
         use egui_charts::icons::icons;
-        let response =
-            super::commands::menu_item(ui, "Price unit", &icons::TEXT, Some(&icons::CHEVRON_RIGHT));
-        egui::containers::menu::SubMenu::new().show(ui, &response, |ui| {
-            ui.label("Synthetic prices: 1 USD = 100 US cents");
-            ui.add_enabled_ui(self.replay.is_none(), |ui| {
-                for (label, cents) in [("USD", false), ("US cents", true)] {
-                    let selected = self.chart.instrument().is_some_and(|instrument| {
-                        if cents {
-                            instrument.unit.as_deref() == Some("US cents")
-                        } else {
-                            instrument.currency.as_deref() == Some("USD")
-                                && instrument.unit.is_none()
-                        }
-                    });
-                    if super::commands::menu_item(
-                        ui,
-                        label,
-                        &icons::TEXT,
-                        selected.then_some(&icons::CHECK),
-                    )
-                    .clicked()
-                    {
-                        self.user_action(|app| {
-                            app.chart.set_conversion(conversion(
-                                cents,
-                                app.timeframe_toolbar.state.adjust_for_dividends,
-                            ));
-                            app.regenerate_bars();
-                            app.time_and_sales.clear();
-                        });
-                        ui.close();
+        ui.label("Synthetic prices: 1 USD = 100 US cents");
+        ui.add_enabled_ui(self.replay.is_none(), |ui| {
+            for (label, cents) in [("USD", false), ("US cents", true)] {
+                let selected = self.chart.instrument().is_some_and(|instrument| {
+                    if cents {
+                        instrument.unit.as_deref() == Some("US cents")
+                    } else {
+                        instrument.currency.as_deref() == Some("USD") && instrument.unit.is_none()
                     }
+                });
+                if super::commands::menu_item(
+                    ui,
+                    label,
+                    &icons::TEXT,
+                    selected.then_some(&icons::CHECK),
+                )
+                .clicked()
+                {
+                    self.user_action(|app| {
+                        app.chart.set_conversion(conversion(
+                            cents,
+                            app.timeframe_toolbar.state.adjust_for_dividends,
+                        ));
+                        app.regenerate_bars();
+                        app.time_and_sales.clear();
+                    });
+                    ui.close();
                 }
-            })
-            .response
-            .on_disabled_hover_text("Exit replay before changing its price unit");
-        });
+            }
+        })
+        .response
+        .on_disabled_hover_text("Exit replay before changing its price unit");
     }
 
     pub(super) fn layout_groups(&self) -> LayoutGroups {
@@ -1170,12 +1144,6 @@ mod tests {
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
         super::super::tests::settle(&mut app, &ctx);
         app.live.set_paused(true);
-        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            app.show_demo_controls(ui);
-        });
-        let menu_visible = output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Market recording"));
-        output.drop_without_applying_deltas();
-        assert!(menu_visible, "the host menu must expose local recordings");
         app.chart.set_conversion(Some("cents".into()));
         app.regenerate_bars();
         super::super::tests::settle(&mut app, &ctx);

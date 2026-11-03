@@ -163,9 +163,9 @@ pub(super) fn quick_search_commands() -> Vec<Command> {
 impl DemoApp {
     pub(super) fn show_demo_controls(&mut self, ui: &mut egui::Ui) -> Option<&'static str> {
         let mut command = None;
-        self.show_price_unit_controls(ui);
-        self.show_recording_controls(ui);
         for (label, icon) in [
+            ("Price unit", &icons::PRICE_LABEL),
+            ("Market recording", &icons::REPLAY),
             ("Readout", &icons::EYE),
             ("Appearance", &icons::BRUSH),
             ("Formatting", &icons::TEXT),
@@ -181,6 +181,8 @@ impl DemoApp {
                     "Readout" => self.show_readout_controls(ui),
                     "Appearance" => self.show_appearance_controls(ui),
                     "Formatting" => self.show_formatting_controls(ui),
+                    "Price unit" => self.show_price_unit_controls(ui),
+                    "Market recording" => self.show_recording_controls(ui),
                     _ => command = sample_menu(ui),
                 });
         }
@@ -753,6 +755,8 @@ mod tests {
             for label in [
                 "Quick Search",
                 "Toggle Theme",
+                "Price unit",
+                "Market recording",
                 "Readout",
                 "Appearance",
                 "Formatting",
