@@ -1037,6 +1037,8 @@ mod tests {
                     chart.add_pane()
                 };
                 assert!(chart.move_series_to_pane(SeriesId::MAIN, destination));
+                // Keep the main series behind the renderers, as in the original layout.
+                assert!(chart.set_series_order(SeriesId::MAIN, 0));
             }
             let first = Arc::new(Mutex::new(vec![object(
                 "first",
