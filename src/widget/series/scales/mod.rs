@@ -108,6 +108,19 @@ impl Chart {
         }
     }
 
+    /// The main series' last-value colour for `bar`: the price line colour, the bar's own
+    /// colour, or its direction.
+    pub(in crate::widget) fn main_value_color(&self, bar: &Bar) -> Color32 {
+        self.main_series_style
+            .price_line_color
+            .or_else(|| bar.colors.as_ref().and_then(|own| own.color))
+            .unwrap_or(if bar.close >= bar.open {
+                self.config.bullish_color
+            } else {
+                self.config.bearish_color
+            })
+    }
+
     /// The latest loaded or latest visible valued bar of a main or added bar series.
     /// Trailing whitespace is skipped; `source` is independent of the price-line setting.
     /// Hidden series and hidden value labels remain queryable.
@@ -136,16 +149,7 @@ impl Chart {
                 PriceLineSource::LastBar => self.time_to_index(bar.time)?,
                 PriceLineSource::LastVisible => (start + at) as f64,
             };
-            let color = self
-                .main_series_style
-                .price_line_color
-                .or_else(|| bar.colors.as_ref().and_then(|own| own.color))
-                .unwrap_or(if bar.close >= bar.open {
-                    self.config.bullish_color
-                } else {
-                    self.config.bearish_color
-                });
-            (bar, color, index)
+            (bar, self.main_value_color(bar), index)
         } else {
             let item = self.price_series.iter().find(|item| item.id == id)?;
             let bar = self.series_bar_from(item, source)?;
