@@ -18,14 +18,17 @@ use chrono::{DateTime, Utc};
 use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 
-/// Which bar [`Chart::bar_index_at`] finds for a time no bar opens at.
+/// How discrete time and series queries resolve a missing timestamp or logical position.
+///
+/// Every direction returns an exact match when present. A neighbour search returns `None`
+/// when no point lies on the requested side, without falling back to the opposite side.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MismatchDirection {
-    /// Only a bar opened at the time.
+    /// Only the requested timestamp or logical position.
     Exact,
-    /// The latest bar opened before the time.
+    /// The greatest timestamp or logical position below the requested one.
     NearestLeft,
-    /// The earliest bar opened after the time.
+    /// The smallest timestamp or logical position above the requested one.
     NearestRight,
 }
 
@@ -363,7 +366,8 @@ impl Chart {
     }
 
     /// The index in [`bars`](Self::bars) of the bar of `series` opened at `time`, or else of its
-    /// nearest neighbour in `direction`. `None` when there is no such bar.
+    /// nearest neighbour in `direction`. `None` when there is no such bar. This is a stored-row
+    /// offset; use [`bar_at_index`](Self::bar_at_index) to query by shared logical position.
     pub fn bar_index_at(
         &self,
         series: SeriesId,
@@ -379,6 +383,35 @@ impl Chart {
             MismatchDirection::Exact => None,
             MismatchDirection::NearestLeft => at.checked_sub(1),
             MismatchDirection::NearestRight => (at < bars.len()).then_some(at),
+        }
+    }
+
+    /// The bar of `series` at a logical position on the shared horizontal scale, or its nearest
+    /// neighbour in `direction`. This includes stored [whitespace](Bar::whitespace) bars.
+    ///
+    /// Unlike an offset into [`bars`](Self::bars), the position counts gaps: a series at logical
+    /// indices 0, 2 and 4 returns its second stored bar for index 2. Fractional positions can
+    /// select neighbours without rounding. `None` for a non-finite index, an absent series, an
+    /// empty time scale or when there is no bar in the requested direction.
+    pub fn bar_at_index(
+        &self,
+        series: SeriesId,
+        index: f64,
+        direction: MismatchDirection,
+    ) -> Option<&Bar> {
+        if !index.is_finite() {
+            return None;
+        }
+        self.state.shown().first()?;
+        let bars = self.bars(series);
+        if let Some(time) = self.index_to_time(index) {
+            return bars.get(self.bar_index_at(series, time, direction)?);
+        }
+        // Extrapolation beyond the timestamp domain still has a neighbour on one side.
+        match direction {
+            MismatchDirection::NearestLeft if index > 0.0 => bars.last(),
+            MismatchDirection::NearestRight if index < 0.0 => bars.first(),
+            _ => None,
         }
     }
 

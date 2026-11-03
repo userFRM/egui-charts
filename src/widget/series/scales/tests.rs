@@ -1150,7 +1150,8 @@ fn main_series_order_controls_paint_and_selection() {
 }
 
 /// Bars can be popped from, and looked up in, any bar series; live changes are reported
-/// once per series in a row; the draw order can be changed.
+/// once per series in a row; the draw order can be changed. Discrete lookups distinguish shared
+/// logical indices from stored rows and preserve gaps through time-coordinate round trips.
 #[test]
 fn series_data_is_queried_popped_and_reported() {
     use crate::model::LogicalRange;
@@ -1162,17 +1163,147 @@ fn series_data_is_queried_popped_and_reported() {
     chart.set_data(id, vec![data[0].clone(), data[2].clone(), data[4].clone()]);
     let minute = |index| data[0].time + TimeDelta::minutes(index);
     for (time, direction, expected) in [
+        (minute(0), MismatchDirection::Exact, Some(0)),
         (minute(2), MismatchDirection::Exact, Some(1)),
+        (minute(4), MismatchDirection::Exact, Some(2)),
+        (minute(2), MismatchDirection::NearestLeft, Some(1)),
+        (minute(2), MismatchDirection::NearestRight, Some(1)),
         (minute(1), MismatchDirection::Exact, None),
         (minute(1), MismatchDirection::NearestLeft, Some(0)),
         (minute(1), MismatchDirection::NearestRight, Some(1)),
+        (minute(-1), MismatchDirection::Exact, None),
         (minute(-1), MismatchDirection::NearestLeft, None),
+        (minute(-1), MismatchDirection::NearestRight, Some(0)),
+        (minute(5), MismatchDirection::Exact, None),
+        (minute(5), MismatchDirection::NearestLeft, Some(2)),
         (minute(5), MismatchDirection::NearestRight, None),
     ] {
         assert_eq!(
             chart.bar_index_at(id, time, direction),
             expected,
             "{time} {direction:?}"
+        );
+        let index = (time - minute(0)).num_minutes() as f64;
+        assert_eq!(
+            chart.bar_at_index(id, index, direction),
+            expected.map(|row| &data[row * 2]),
+            "logical {index} {direction:?}"
+        );
+    }
+    for (index, left, right) in [
+        (-0.25, None, Some(0)),
+        (1.25, Some(0), Some(2)),
+        (3.75, Some(2), Some(4)),
+        (4.25, Some(4), None),
+        (-f64::MAX, None, Some(0)),
+        (f64::MAX, Some(4), None),
+        (f64::NAN, None, None),
+        (f64::NEG_INFINITY, None, None),
+        (f64::INFINITY, None, None),
+    ] {
+        for (direction, expected) in [
+            (MismatchDirection::Exact, None),
+            (MismatchDirection::NearestLeft, left),
+            (MismatchDirection::NearestRight, right),
+        ] {
+            assert_eq!(
+                chart.bar_at_index(id, index, direction),
+                expected.map(|row| &data[row]),
+                "logical {index} {direction:?}"
+            );
+        }
+    }
+    for (time, direction, expected) in [
+        (minute(0), MismatchDirection::Exact, Some(0)),
+        (minute(2), MismatchDirection::Exact, Some(2)),
+        (minute(4), MismatchDirection::Exact, Some(4)),
+        (minute(2), MismatchDirection::NearestLeft, Some(2)),
+        (minute(2), MismatchDirection::NearestRight, Some(2)),
+        (
+            minute(1) + TimeDelta::seconds(30),
+            MismatchDirection::Exact,
+            None,
+        ),
+        (
+            minute(1) + TimeDelta::seconds(30),
+            MismatchDirection::NearestLeft,
+            Some(1),
+        ),
+        (
+            minute(1) + TimeDelta::seconds(30),
+            MismatchDirection::NearestRight,
+            Some(2),
+        ),
+        (minute(-1), MismatchDirection::Exact, None),
+        (minute(-1), MismatchDirection::NearestLeft, None),
+        (minute(-1), MismatchDirection::NearestRight, Some(0)),
+        (minute(5), MismatchDirection::Exact, None),
+        (minute(5), MismatchDirection::NearestLeft, Some(4)),
+        (minute(5), MismatchDirection::NearestRight, None),
+    ] {
+        assert_eq!(
+            chart.time_index_at(time, direction),
+            expected,
+            "{time} {direction:?}"
+        );
+    }
+    for index in 0..5 {
+        assert_eq!(chart.time_at_index(index), Some(minute(index as i64)));
+        assert_eq!(chart.time_to_x(minute(index as i64)), None, "before layout");
+    }
+    assert_eq!(chart.time_at_index(5), None);
+    assert_eq!(chart.time_at_index(usize::MAX), None);
+    assert_eq!(chart.x_to_time(0.0), None, "before layout");
+
+    // A five-slot range places each centre one spacing apart, including sparse gaps.
+    let ctx = egui::Context::default();
+    frame(&ctx, &mut chart, 0.0, vec![]);
+    assert!(chart.set_visible_logical_range(LogicalRange::new(0.0, 4.0)));
+    frame(&ctx, &mut chart, 0.1, vec![]);
+    let plot = chart.get_rendered_price_rect();
+    let spacing = plot.width() / 5.0;
+    for index in 0..5 {
+        let time = minute(index);
+        let x = chart.time_to_x(time).unwrap();
+        let expected = plot.left() + (index as f32 + 0.5) * spacing - 1.0;
+        assert!(
+            (x - expected).abs() < 0.001,
+            "centre {index}: {x} != {expected}"
+        );
+        assert_eq!(chart.x_to_time(x), Some(time));
+        assert_eq!(chart.x_to_time(x + spacing * 0.25), Some(time));
+        assert_eq!(
+            chart.bar_at_index(id, index as f64, MismatchDirection::Exact),
+            (index % 2 == 0).then(|| &data[index as usize])
+        );
+    }
+    for time in [minute(-1), minute(5), minute(1) + TimeDelta::seconds(30)] {
+        assert_eq!(chart.time_to_x(time), None);
+        assert!(
+            chart.time_to_index(time).is_some(),
+            "continuous mapping stays available"
+        );
+    }
+    for index in [-1.0, 5.0] {
+        assert_eq!(chart.x_to_time(chart.index_to_x(index).unwrap()), None);
+    }
+    for x in [f32::NAN, f32::NEG_INFINITY, f32::INFINITY] {
+        assert_eq!(chart.x_to_time(x), None);
+    }
+    // Binary-exact spacing makes half-slot boundary expectations independent of pixel rounding.
+    chart.state.time_scale_mut().set_bar_spacing(128.0);
+    chart.state.time_scale_mut().set_right_offset(0.0);
+    for (index, expected) in [
+        (-0.75, None),
+        (-0.5, Some(minute(0))),
+        (0.5, Some(minute(1))),
+        (3.5, Some(minute(4))),
+        (4.5, None),
+    ] {
+        assert_eq!(
+            chart.x_to_time(chart.index_to_x(index).unwrap()),
+            expected,
+            "nearest {index}"
         );
     }
     for (series, (left, right), bars, bars_before, bars_after) in [
@@ -1242,6 +1373,15 @@ fn series_data_is_queried_popped_and_reported() {
     );
 
     let other = chart.add_series(SeriesOptions::default());
+    for series in [other, SeriesId(99), SeriesId::VOLUME] {
+        for direction in [
+            MismatchDirection::Exact,
+            MismatchDirection::NearestLeft,
+            MismatchDirection::NearestRight,
+        ] {
+            assert_eq!(chart.bar_at_index(series, 2.0, direction), None);
+        }
+    }
     assert!(chart.set_series_order(other, 0));
     assert_eq!(
         chart.series().map(|(id, _)| id).collect::<Vec<_>>(),
@@ -1252,7 +1392,37 @@ fn series_data_is_queried_popped_and_reported() {
     let range = LogicalRange::new(0.0, 4.0);
     assert_eq!(chart.bars_in_logical_range(other, range), None);
     assert_eq!(chart.bars_in_logical_range(SeriesId(99), range), None);
+    chart.set_data(other, vec![Bar::whitespace(minute(1))]);
+    assert!(
+        chart
+            .bar_at_index(other, 1.0, MismatchDirection::Exact)
+            .unwrap()
+            .is_whitespace()
+    );
     chart.set_data(SeriesId::MAIN, Vec::new());
     assert_eq!(chart.bars_in_logical_range(SeriesId::MAIN, range), None);
     assert_eq!(chart.bars_in_logical_range(id, range), None);
+    for direction in [
+        MismatchDirection::Exact,
+        MismatchDirection::NearestLeft,
+        MismatchDirection::NearestRight,
+    ] {
+        assert_eq!(chart.time_index_at(minute(0), direction), None);
+        assert_eq!(chart.bar_at_index(id, 0.0, direction), None);
+    }
+    assert_eq!(chart.time_at_index(0), None);
+    assert_eq!(chart.time_to_x(minute(0)), None);
+    assert_eq!(chart.x_to_time(plot.center().x), None);
+
+    chart.set_data(SeriesId::MAIN, vec![Bar::whitespace(minute(2))]);
+    assert_eq!(chart.time_at_index(0), Some(minute(2)));
+    assert_eq!(chart.time_at_index(1), None);
+    let x = chart.time_to_x(minute(2)).unwrap();
+    assert_eq!(chart.x_to_time(x), Some(minute(2)));
+    assert!(
+        chart
+            .bar_at_index(SeriesId::MAIN, 0.0, MismatchDirection::Exact)
+            .unwrap()
+            .is_whitespace()
+    );
 }
