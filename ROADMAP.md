@@ -33,7 +33,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Main-pane crosshair snapping includes visible studies and added series on their own scales for time-based charts. Close-only snapping compares visible main and added-series closes on every chart type, preferring the main series and then added-series draw order on equal screen distances.
 - [x] Hover readouts and the data window show bar and study values.
 - [ ] Allow mouse drags to start kinetic scrolling.
-- [ ] Include price-based chart studies in main-pane crosshair snapping.
+- [ ] Include price-based chart studies and added-series values in broader main-pane magnet snapping.
 - [ ] Correct box-zoom overlay alpha and use theme colours.
 - [ ] Add the instrument title to the floating historical readout.
 - [ ] Provide a table view of loaded bars and study values.
