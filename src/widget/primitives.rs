@@ -40,6 +40,17 @@ fn seen(revision: u64, bars: &[Bar]) -> Seen {
 }
 
 impl Attached {
+    pub(super) fn draw_background(
+        &self,
+        painter: &Painter,
+        view: &PrimitiveView<'_>,
+        pass: PrimitivePass,
+        factor: usize,
+    ) {
+        self.get()
+            .draw_background_merged(painter, view, pass, factor);
+    }
+
     pub(super) fn draw(
         &self,
         painter: &Painter,
@@ -227,7 +238,7 @@ impl Chart {
     pub(super) fn main_primitives<'a>(
         &'a self,
         coords: &'a ChartMapping,
-    ) -> impl DoubleEndedIterator<Item = (&'a Attached, PrimitiveView<'a>)> {
+    ) -> impl DoubleEndedIterator<Item = (&'a Attached, PrimitiveView<'a>)> + Clone {
         self.primitives
             .iter()
             .filter_map(move |item| Some((item, self.main_view(item.series, coords)?)))
@@ -301,12 +312,119 @@ impl Chart {
         pass: PrimitivePass,
     ) {
         let painter = painter.with_clip_rect(painter.clip_rect().intersect(coords.rect));
-        for (item, view) in self
-            .main_primitives(coords)
-            .filter(|(item, _)| pass != PrimitivePass::Series || !item.replaces)
-        {
-            item.draw(&painter, &view, pass, self.merge_groups.factor());
+        let shapes = backgrounds(
+            &painter,
+            self.main_pass_primitives(coords),
+            pass,
+            self.merge_groups.factor(),
+        );
+        let grouped = !shapes.is_empty();
+        paint_backgrounds(&painter, shapes);
+        if grouped {
+            for (item, view) in self.main_pass_primitives(coords) {
+                item.draw(&painter, &view, pass, self.merge_groups.factor());
+            }
+        } else {
+            for (item, view) in self.main_primitives(coords) {
+                item.draw(&painter, &view, pass, self.merge_groups.factor());
+            }
         }
+    }
+
+    /// Includes renderers of volume overlays, whose foregrounds normally draw with the series.
+    pub(super) fn main_pass_primitives<'a>(
+        &'a self,
+        coords: &'a ChartMapping,
+    ) -> impl DoubleEndedIterator<Item = (&'a Attached, PrimitiveView<'a>)> + Clone {
+        self.primitives.iter().filter_map(move |item| {
+            let view = self.main_view(item.series, coords).or_else(|| {
+                if !item.replaces || self.in_pane(item.series) {
+                    return None;
+                }
+                let mut view = self.primitive_view(item.series, coords.clone());
+                let study = view.study?;
+                if !study.is_visible() || !study.is_overlay() {
+                    return None;
+                }
+                view.mapping = crate::chart::rendering::study_mapping(study, coords);
+                Some(view)
+            })?;
+            Some((item, view))
+        })
+    }
+
+    /// The visible primitives of a secondary pane, in attachment order, on their own scales.
+    pub(super) fn pane_primitives<'a>(
+        &'a self,
+        members: &'a [SeriesId],
+        coords: &'a ChartMapping,
+    ) -> impl DoubleEndedIterator<Item = (&'a Attached, PrimitiveView<'a>)> + Clone {
+        self.primitives.iter().filter_map(move |item| {
+            if !members.contains(&item.series) || !self.is_series_visible(item.series) {
+                return None;
+            }
+            let mut view = self.primitive_view(item.series, coords.clone());
+            if let Some(study) = view.study
+                && matches!(study.scale(), crate::studies::StudyScale::Shared(_))
+            {
+                view.mapping = crate::chart::rendering::study_mapping(study, coords);
+            }
+            Some((item, view))
+        })
+    }
+}
+
+/// Defers background shapes until the series have drawn, retaining their clip rectangles.
+/// An empty result keeps the existing series foreground order.
+pub(super) fn backgrounds<'a>(
+    painter: &Painter,
+    primitives: impl Iterator<Item = (&'a Attached, PrimitiveView<'a>)>,
+    pass: PrimitivePass,
+    factor: usize,
+) -> Vec<egui::epaint::ClippedShape> {
+    let start = painter
+        .ctx()
+        .graphics_mut(|graphics| graphics.entry(painter.layer_id()).next_idx());
+    for (item, view) in primitives {
+        item.draw_background(painter, &view, pass, factor);
+    }
+    painter.ctx().graphics_mut(|graphics| {
+        let list = graphics.entry(painter.layer_id());
+        let end = list.next_idx();
+        let mut shapes = Vec::new();
+        for index in start.0..end.0 {
+            list.mutate_shape(egui::layers::ShapeIdx(index), |shape| {
+                let empty = egui::epaint::ClippedShape::new(shape.clip_rect, egui::Shape::Noop);
+                shapes.push(std::mem::replace(shape, empty));
+            });
+        }
+        shapes
+    })
+}
+
+/// Inserts deferred backgrounds without applying the painter's opacity a second time.
+pub(super) fn paint_backgrounds(painter: &Painter, shapes: Vec<egui::epaint::ClippedShape>) {
+    painter.ctx().graphics_mut(|graphics| {
+        let list = graphics.entry(painter.layer_id());
+        for shape in shapes {
+            let index = list.add(shape.clip_rect, egui::Shape::Noop);
+            list.mutate_shape(index, |entry| *entry = shape);
+        }
+    });
+}
+
+/// Draws one complete pane pass, with every background before any foreground.
+pub(super) fn paint_pass<'a>(
+    painter: &Painter,
+    primitives: impl Iterator<Item = (&'a Attached, PrimitiveView<'a>)> + Clone,
+    pass: PrimitivePass,
+    factor: usize,
+) {
+    for (item, view) in primitives.clone() {
+        item.draw_background(painter, &view, pass, factor);
+    }
+    for (item, view) in primitives {
+        item.draw(painter, &view, pass, factor);
     }
 }
 
@@ -406,6 +524,180 @@ mod tests {
     const BELOW: Color32 = Color32::from_rgb(1, 2, 3);
     const SERIES: Color32 = Color32::from_rgb(4, 5, 6);
     const ABOVE: Color32 = Color32::from_rgb(7, 8, 9);
+
+    #[test]
+    fn backgrounds_precede_foregrounds_in_every_pass_and_pane() {
+        struct Ordered {
+            id: u8,
+            merged: bool,
+            log: Log,
+        }
+        impl Ordered {
+            fn record(
+                &self,
+                painter: &Painter,
+                view: &PrimitiveView<'_>,
+                pass: PrimitivePass,
+                background: bool,
+            ) {
+                self.log
+                    .lock()
+                    .unwrap()
+                    .push(format!("{pass:?} {background} {}", self.id));
+                painter.rect_filled(
+                    egui::Rect::from_min_size(view.mapping.rect.min, egui::vec2(8.0, 8.0)),
+                    0.0,
+                    Color32::from_rgb(self.id, background as u8, pass as u8),
+                );
+            }
+        }
+        impl Primitive for Ordered {
+            fn draw_background(
+                &self,
+                painter: &Painter,
+                view: &PrimitiveView<'_>,
+                pass: PrimitivePass,
+            ) {
+                self.record(painter, view, pass, true);
+            }
+            fn draw(&self, painter: &Painter, view: &PrimitiveView<'_>, pass: PrimitivePass) {
+                self.record(painter, view, pass, false);
+            }
+            fn draw_background_merged(
+                &self,
+                painter: &Painter,
+                view: &PrimitiveView<'_>,
+                pass: PrimitivePass,
+                factor: usize,
+            ) {
+                if self.merged {
+                    assert_eq!(factor, 4);
+                    self.record(painter, view, pass, true);
+                } else {
+                    self.draw_background(painter, view, pass);
+                }
+            }
+            fn draw_merged(
+                &self,
+                painter: &Painter,
+                view: &PrimitiveView<'_>,
+                pass: PrimitivePass,
+                factor: usize,
+            ) {
+                if self.merged {
+                    assert_eq!(factor, 4);
+                    self.record(painter, view, pass, false);
+                } else {
+                    self.draw(painter, view, pass);
+                }
+            }
+        }
+        for pane in [false, true] {
+            for kind in ["main", "bars", "study", "custom", "custom_volume"] {
+                for merged in [false, true] {
+                    if (pane && kind == "main")
+                        || (kind == "custom_volume" && !cfg!(feature = "studies"))
+                    {
+                        continue;
+                    }
+                    let ctx = egui::Context::default();
+                    let mut chart = chart(&[10.0], &[20.0]);
+                    let other = chart.add_indicator(Box::new(
+                        CustomIndicator::new("Other", |bars| {
+                            vec![IndicatorValue::Single(15.0); bars.len()]
+                        })
+                        .with_overlay(!pane),
+                    ));
+                    let log = Log::default();
+                    let probe = |id| Ordered {
+                        id,
+                        merged,
+                        log: log.clone(),
+                    };
+                    let study = || -> Box<dyn Indicator> {
+                        #[cfg(feature = "studies")]
+                        if kind == "custom_volume" {
+                            let mut volume = crate::studies::Volume::default();
+                            volume.set_overlay(!pane);
+                            return Box::new(volume);
+                        }
+                        Box::new(
+                            CustomIndicator::new("Ordered", |bars| {
+                                bars.iter()
+                                    .map(|bar| IndicatorValue::Single(bar.close))
+                                    .collect()
+                            })
+                            .with_overlay(!pane),
+                        )
+                    };
+                    let id = match kind {
+                        "main" => SeriesId::MAIN,
+                        "bars" => {
+                            let id = chart.add_series(SeriesOptions::default());
+                            chart.set_data(id, chart.bars(SeriesId::MAIN).to_vec());
+                            if pane {
+                                let destination = chart.add_pane();
+                                chart.move_series_to_pane(id, destination);
+                            }
+                            id
+                        }
+                        "study" => chart.add_indicator(study()),
+                        "custom" | "custom_volume" => chart.add_custom_series(study(), probe(1)),
+                        _ => unreachable!(),
+                    };
+                    if !kind.starts_with("custom") {
+                        chart.attach_primitive(id, probe(1));
+                    }
+                    if pane {
+                        let destination = chart.series_pane(id).unwrap();
+                        assert!(chart.move_series_to_pane(other, destination));
+                    }
+                    chart.attach_primitive(other, probe(2));
+                    if merged {
+                        let mut options = chart.chart_options().clone();
+                        options.time_scale.min_bar_spacing = 0.0;
+                        chart.set_chart_options(options);
+                        chart.apply_synced_time_scale(0.25, 0.0);
+                    }
+                    frame(&ctx, &mut chart, 0.0, vec![]);
+                    log.lock().unwrap().clear();
+                    let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+                    let mut expected = Vec::new();
+                    let mut colors = Vec::new();
+                    for pass in [
+                        PrimitivePass::Below,
+                        PrimitivePass::Series,
+                        PrimitivePass::Above,
+                    ] {
+                        for background in [true, false] {
+                            for id in [1, 2] {
+                                expected.push(format!("{pass:?} {background} {id}"));
+                                colors.push(Color32::from_rgb(id, background as u8, pass as u8));
+                            }
+                        }
+                    }
+                    assert_eq!(
+                        *log.lock().unwrap(),
+                        expected,
+                        "{kind}, pane={pane}, merged={merged}"
+                    );
+                    let actual: Vec<_> = painted
+                        .iter()
+                        .filter_map(|shape| match shape {
+                            Shape::Rect(rect) if colors.contains(&rect.fill) => Some(rect.fill),
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(actual, colors, "paint order: {kind}, pane={pane}");
+                    chart.set_series_visible(id, false);
+                    chart.set_series_visible(other, false);
+                    log.lock().unwrap().clear();
+                    frame(&ctx, &mut chart, 0.2, vec![]);
+                    assert!(log.lock().unwrap().is_empty(), "hidden {kind}");
+                }
+            }
+        }
+    }
 
     /// Fills a corner of the plot in each pass and asks for prices 0 to 500.
     struct Layers;

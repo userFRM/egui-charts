@@ -492,15 +492,21 @@ impl Chart {
             self.config.show_time_labels && shared_time_axis.is_none(),
         );
         let time_axis_top = shared_time_axis.map_or(layout.price_rect.bottom(), |axis| axis.top());
-        let statistics_rect = footprint
-            .filter(|(_, config)| {
-                config.statistics
-                    && !self.chart_type.is_time_independent()
-                    && self.main_series_visible
-            })
-            .map(|_| {
+        let statistics_rows = if let Some((_, config)) = footprint {
+            config.statistics.then(|| config.statistics_rows.clone())
+        } else {
+            (self.chart_type == ChartType::VolumeFootprint
+                && self.chart_type_params.footprint_statistics)
+                .then(|| self.chart_type_params.footprint_statistics_rows.clone())
+        }
+        .filter(|rows| !rows.is_empty());
+        let statistics_rect = statistics_rows
+            .as_deref()
+            .filter(|_| !self.chart_type.is_time_independent() && self.main_series_visible)
+            .map(|rows| {
                 let bottom = layout.price_rect.bottom();
-                let height = 112.0_f32.min(layout.price_rect.height().max(0.0) * 0.4);
+                let height =
+                    (rows.len() as f32 * 12.0 + 4.0).min(layout.price_rect.height().max(0.0) * 0.4);
                 layout.price_rect.max.y -= height;
                 if self.shows_volume() {
                     layout.volume_rect =
@@ -934,6 +940,44 @@ impl Chart {
                 });
                 Some((flow.price_step(), flow.tick_size(), profiles))
             });
+        let fixed_footprint = self
+            .feed_link
+            .as_ref()
+            .and_then(|link| link.footprint.as_ref())
+            .filter(|_| {
+                self.main_series_visible
+                    && footprint.is_none()
+                    && self.replay.is_none()
+                    && self.chart_type == ChartType::VolumeFootprint
+                    && self.chart_type_params.footprint_row_ticks > 0
+            });
+        let footprint_prices = fixed_footprint
+            .into_iter()
+            .flat_map(|flow| {
+                let group = crate::chart::overlays::fixed_row_group(
+                    flow,
+                    self.chart_type_params.footprint_row_ticks,
+                );
+                let step = flow.price_step() * group as f64;
+                self.state.shown()[start_idx..end_idx]
+                    .iter()
+                    .filter(|bar| flow.complete_from().is_some_and(|from| bar.time >= from))
+                    .filter_map(|bar| flow.bar_at(bar.time))
+                    .filter_map(|bar| {
+                        bar.levels
+                            .first_key_value()
+                            .zip(bar.levels.last_key_value())
+                    })
+                    .flat_map(move |((&low, _), (&high, _))| {
+                        [
+                            low.div_euclid(group) as f64 * step - flow.tick_size() * 0.5,
+                            (high.div_euclid(group) as f64 + 1.0) * step - flow.tick_size() * 0.5,
+                        ]
+                    })
+            })
+            .filter(|price| price.is_finite())
+            .map(|price| [price, price])
+            .reduce(|a, b| [a[0].min(b[0]), a[1].max(b[1])]);
         #[cfg(feature = "studies")]
         let profile_prices = execution_profiles
             .iter()
@@ -1004,6 +1048,7 @@ impl Chart {
                 .into_iter()
                 .chain(primitive_prices)
                 .chain(target_prices)
+                .chain(footprint_prices.into_iter().flatten())
                 .chain(profile_prices),
             series_values,
         );
@@ -1429,12 +1474,11 @@ impl Chart {
                         || (self.chart_type == ChartType::SessionVolumeProfile
                             && cfg!(feature = "studies")))
             });
-        let feed_config = feed.map(|_| FootprintConfig {
-            text_color: colors.text,
-            neutral_color: colors.text,
-            ask_color: colors.bullish,
-            bid_color: colors.bearish,
-            ..Default::default()
+        let feed_config = feed.map(|_| {
+            FootprintConfig::from_chart_params(
+                &self.chart_type_params,
+                [colors.bullish, colors.bearish, colors.text, colors.text],
+            )
         });
         let session_profiles = host.is_none() && self.chart_type == ChartType::SessionVolumeProfile;
         // Bars from the first execution on are drawn from executions, those before as
@@ -1495,6 +1539,13 @@ impl Chart {
             });
 
         self.paint_primitives(&painter, &coords, PrimitivePass::Below);
+        let series_backgrounds = primitives::backgrounds(
+            &clipped_painter,
+            self.main_pass_primitives(&coords),
+            PrimitivePass::Series,
+            factor,
+        );
+        let grouped_primitives = !series_backgrounds.is_empty();
         let studies = if self.chart_type.is_time_independent() {
             &self.element_studies.studies
         } else {
@@ -1549,20 +1600,32 @@ impl Chart {
             .input(|input| input.pointer.interact_pos())
             .filter(|pos| chart_rect.contains(*pos));
         let primitive_hit = pointer.and_then(|pos| {
-            primitives::primitive_at(
-                self.main_primitives(&coords)
-                    .filter(|(item, _)| !item.replaces),
-                pos,
-            )
-        });
-        let renderer_hit = pointer.and_then(|pos| {
-            self.pane_layout.main.iter().rev().find_map(|id| {
+            if grouped_primitives {
+                primitives::primitive_at(self.main_pass_primitives(&coords), pos)
+            } else {
                 primitives::primitive_at(
                     self.main_primitives(&coords)
-                        .filter(|(item, _)| item.replaces && item.series == *id),
+                        .filter(|(item, _)| !item.replaces),
                     pos,
                 )
-            })
+            }
+        });
+        let renderer_hit = pointer.and_then(|pos| {
+            if grouped_primitives {
+                primitives::primitive_at(
+                    self.main_pass_primitives(&coords)
+                        .filter(|(item, _)| item.replaces),
+                    pos,
+                )
+            } else {
+                self.pane_layout.main.iter().rev().find_map(|id| {
+                    primitives::primitive_at(
+                        self.main_primitives(&coords)
+                            .filter(|(item, _)| item.replaces && item.series == *id),
+                        pos,
+                    )
+                })
+            }
         });
         let rendered: Vec<_> = self
             .study_ids
@@ -1629,6 +1692,9 @@ impl Chart {
                 .iter()
                 .flatten()
                 .find_map(|(at, hit)| (*at == pos).then_some(*hit).flatten());
+            if grouped_primitives && renderer.is_some() {
+                return renderer;
+            }
             hit.into_iter()
                 .chain(secondary)
                 .chain(renderer)
@@ -1709,12 +1775,14 @@ impl Chart {
                 );
             }
             if self.has_renderer(*id) {
-                let view = self.primitive_view(
-                    *id,
-                    crate::chart::rendering::study_mapping(study.as_ref(), &coords),
-                );
-                for item in self.primitives_of(*id).filter(|item| item.replaces) {
-                    item.draw(&clipped_painter, &view, PrimitivePass::Series, factor);
+                if !grouped_primitives {
+                    let view = self.primitive_view(
+                        *id,
+                        crate::chart::rendering::study_mapping(study.as_ref(), &coords),
+                    );
+                    for item in self.primitives_of(*id).filter(|item| item.replaces) {
+                        item.draw(&clipped_painter, &view, PrimitivePass::Series, factor);
+                    }
                 }
             } else {
                 rendering::IndicatorRenderer::render(
@@ -1850,14 +1918,15 @@ impl Chart {
                     }
                 }
                 if let Some(table) = statistics_rect
-                    && let Some((flow, config)) = host
+                    && let Some((flow, config)) = host.or_else(|| feed.zip(feed_config.as_ref()))
                 {
-                    crate::chart::overlays::render_footprint_statistics(
+                    crate::chart::overlays::render_footprint_statistics_rows(
                         &painter,
                         &self.get_chart_mapping().with_rect(table),
                         self.bars(super::SeriesId::MAIN),
                         flow,
                         config.text_color,
+                        statistics_rows.as_deref().unwrap(),
                     );
                 }
                 if let Some((_, Some(volume))) = &merged {
@@ -1936,7 +2005,19 @@ impl Chart {
             .show_price_targets
             .then(|| painter.add(egui::Shape::Noop));
 
-        self.paint_primitives(&painter, &coords, PrimitivePass::Series);
+        primitives::paint_backgrounds(&clipped_painter, series_backgrounds);
+        if grouped_primitives {
+            for (item, view) in self.main_pass_primitives(&coords) {
+                item.draw(&clipped_painter, &view, PrimitivePass::Series, factor);
+            }
+        } else {
+            for (item, view) in self
+                .main_primitives(&coords)
+                .filter(|(item, _)| !item.replaces)
+            {
+                item.draw(&clipped_painter, &view, PrimitivePass::Series, factor);
+            }
+        }
 
         // Resolve a click on the main chart area into a selection. Overlay
         // indicators take priority over the series beneath them; an empty-area
