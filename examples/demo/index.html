@@ -7,9 +7,10 @@
     <script>
         // Only this key distinguishes a choice from palettes saved by earlier releases.
         try {
-            const theme = localStorage.getItem('theme_choice');
-            if (theme === 'true' || theme === 'false') {
-                document.documentElement.dataset.theme = theme === 'true' ? 'dark' : 'light';
+            const saved = localStorage.getItem('theme_choice');
+            const theme = saved === 'true' ? 'dark' : saved === 'false' ? 'light' : JSON.parse(saved);
+            if (['light', 'dark', 'high-contrast'].includes(theme)) {
+                document.documentElement.dataset.theme = theme;
             }
         } catch (_) {
             // Unreadable storage follows the system appearance.
@@ -22,6 +23,7 @@
         }
         :root[data-theme="light"] { color-scheme: light; --bg: #fff; --text: #666; --border: #ebebeb; }
         :root[data-theme="dark"] { color-scheme: dark; --bg: #000; --text: #a6a6a6; --border: #2a2a2a; }
+        :root[data-theme="high-contrast"] { color-scheme: dark; --bg: #000; --text: #fff; --border: #fff; }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg); }
         canvas { width: 100vw; height: 100vh; height: 100dvh; display: block; outline: none; }
