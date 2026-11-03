@@ -732,14 +732,16 @@ impl Chart {
     /// for drawing tool restoration and hit testing. On price-based chart types its indices
     /// count elements instead of source bars.
     pub fn get_chart_mapping(&self) -> ChartMapping {
-        ChartMapping::new(
+        let mut mapping = ChartMapping::new(
             self.last_rendered_price_rect,
             self.state.time_scale().bar_spacing(),
             self.start_idx,
             self.state.time_scale().base_idx(),
             self.state.time_scale().right_offset_precise(),
             self.last_price_map,
-        )
+        );
+        mapping.numeric_positions = self.state.time_scale().numeric_positions().cloned();
+        mapping
     }
 
     /// Returns a mutable reference to the chart's visual configuration.

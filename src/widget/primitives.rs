@@ -205,11 +205,11 @@ impl Chart {
             return None;
         }
         let mapping = if series == SeriesId::MAIN {
-            self.main_series_visible.then_some(*coords)?
+            self.main_series_visible.then_some(coords.clone())?
         } else if let Some(item) = self.price_series.iter().find(|item| item.id == series) {
             item.visible.then(|| ChartMapping {
                 price: self.series_map(item, coords.rect),
-                ..*coords
+                ..coords.clone()
             })?
         } else {
             let idx = self.study_ids.iter().position(|id| *id == series)?;
@@ -242,7 +242,7 @@ impl Chart {
         self.primitives.iter().filter_map(move |item| {
             let view = self.main_view(item.series, coords).or_else(|| {
                 self.is_series_visible(item.series)
-                    .then(|| self.primitive_view(item.series, *coords))
+                    .then(|| self.primitive_view(item.series, coords.clone()))
             })?;
             Some((item, view))
         })
