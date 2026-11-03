@@ -1,14 +1,42 @@
 //! Isolated guide scenes with deterministic bars, also runnable natively.
 
 mod first_chart;
+mod scenes;
 
 use eframe::egui;
 use egui_charts::Chart;
 
 struct ExampleApp {
     chart: Chart,
+    scene: Scene,
     #[cfg(target_arch = "wasm32")]
     dark: Option<bool>,
+}
+
+enum Scene {
+    FirstChart,
+    PriceScale(scenes::price_scale::PriceScale),
+    TimeScale,
+    Panes(scenes::panes::Panes),
+}
+
+impl ExampleApp {
+    fn new(name: &str) -> Option<Self> {
+        let mut chart = first_chart::first_chart();
+        let scene = match name {
+            "first-chart" => Scene::FirstChart,
+            "price-scale" => Scene::PriceScale(scenes::price_scale::PriceScale::new(&mut chart)),
+            "time-scale" => Scene::TimeScale,
+            "panes" => Scene::Panes(scenes::panes::Panes::new(&mut chart)),
+            _ => return None,
+        };
+        Some(Self {
+            chart,
+            scene,
+            #[cfg(target_arch = "wasm32")]
+            dark: None,
+        })
+    }
 }
 
 impl eframe::App for ExampleApp {
@@ -47,7 +75,15 @@ impl eframe::App for ExampleApp {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(250));
         }
-        egui::CentralPanel::default().show(ui, |ui| self.chart.show(ui));
+        egui::CentralPanel::default().show(ui, |ui| {
+            match &mut self.scene {
+                Scene::FirstChart => {}
+                Scene::PriceScale(scene) => scene.show(ui, &mut self.chart),
+                Scene::TimeScale => scenes::time_scale::show(ui, &mut self.chart),
+                Scene::Panes(scene) => scene.show(ui, &mut self.chart),
+            }
+            self.chart.show(ui);
+        });
     }
 }
 
@@ -64,18 +100,17 @@ fn main() -> eframe::Result {
             .dyn_into::<web_sys::HtmlCanvasElement>()
             .unwrap();
         wasm_bindgen_futures::spawn_local(async move {
-            let result = match root.get_attribute("data-scene").as_deref() {
-                Some("first-chart") => {
+            let result = match root
+                .get_attribute("data-scene")
+                .as_deref()
+                .and_then(ExampleApp::new)
+            {
+                Some(app) => {
                     eframe::WebRunner::new()
                         .start(
                             canvas,
                             eframe::WebOptions::default(),
-                            Box::new(|_| {
-                                Ok(Box::new(ExampleApp {
-                                    chart: first_chart::first_chart(),
-                                    dark: None,
-                                }))
-                            }),
+                            Box::new(|_| Ok(Box::new(app))),
                         )
                         .await
                 }
@@ -103,12 +138,14 @@ fn main() -> eframe::Result {
     }
     #[cfg(not(target_arch = "wasm32"))]
     eframe::run_native(
-        "First chart",
+        "Guide example",
         Default::default(),
         Box::new(|_| {
-            Ok(Box::new(ExampleApp {
-                chart: first_chart::first_chart(),
-            }))
+            let name = std::env::args()
+                .nth(1)
+                .unwrap_or_else(|| "first-chart".into());
+            let app = ExampleApp::new(&name).ok_or("Unknown example scene")?;
+            Ok(Box::new(app))
         }),
     )
 }
