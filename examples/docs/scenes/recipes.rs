@@ -131,7 +131,7 @@ impl HostReadout {
         if let Some(point) = &self.pointer
             && let Some(bar) = point.bar.as_ref().filter(|bar| !bar.is_whitespace())
         {
-            egui::Area::new(egui::Id::new("host-readout"))
+            egui::Area::new(ui.id().with("host-readout"))
                 .order(egui::Order::Tooltip)
                 .fixed_pos(point.pos + egui::vec2(16.0, 90.0))
                 .interactable(false)

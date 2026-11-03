@@ -17,7 +17,9 @@ You do not need to repeat coordinate lookup or read the chart's internals.
 Create a [first chart](../first-chart.mdx) and one `HostReadout::default()` before
 the frame loop. Call `readout.show(ui, &mut chart)` each frame; it shows the chart
 itself. Keep this state alive so the legend can use the last event on the next
-frame. The source below is the complete readout, including its imports.
+frame. It calls
+[`drain_events`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.drain_events)
+after `show`. The source below is the complete readout, including its imports.
 
 <Example scene="host-readout" title="Built-in values with a host readout"
   task="Move over a candle to compare the chart tooltip with the host's UTC close readout, then click and leave the plot."
@@ -25,7 +27,9 @@ frame. The source below is the complete readout, including its imports.
 
 The host legend appears above the chart; the additional tooltip follows the
 pointer. A click saves its timestamp in the host state. The scene keeps the
-built-in tooltip enabled. The saved main bar's close is a data value;
+built-in tooltip enabled with
+[`set_tooltip_enabled`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_tooltip_enabled).
+The saved main bar's close is a data value;
 [`ChartPointer::price`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.ChartPointer.html#structfield.price)
 is the pointer's value on the hovered pane and can be in volume or study units.
 
