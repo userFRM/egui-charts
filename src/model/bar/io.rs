@@ -6,8 +6,10 @@
 
 use super::bar::Bar;
 use super::bar_data::BarData;
+#[cfg(feature = "csv")]
+use chrono::DateTime;
 #[cfg(any(feature = "csv", test))]
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 
 /// The time column of a bar CSV file, UTC. `%.f` writes the fraction of a second only when the
 /// time has one and reads a time with or without it.
