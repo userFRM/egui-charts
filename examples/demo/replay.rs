@@ -86,6 +86,399 @@ impl Capture {
     }
 }
 
+const MAX_RECORDING_BYTES: usize = CAPTURE_BYTES + 8192;
+const MAX_RECORDING_EVENTS: usize = 200_000;
+const RECORDING_MAGIC: &[u8; 8] = b"EGCDEMO1";
+
+/// Local file delivery and bounded decoding stay separate from the current workspace.
+#[derive(Default)]
+pub(super) struct RecordingFiles {
+    selected: Option<std::sync::mpsc::Receiver<Result<Option<Vec<u8>>, String>>>,
+    parsing: Option<RecordingImport>,
+    opened: bool,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct RecordingInstrument {
+    symbol: String,
+    description: Option<String>,
+    exchange: Option<String>,
+    currency: Option<String>,
+    unit: Option<String>,
+    tick_size: f64,
+    price_decimals: Option<u8>,
+    #[serde(default)]
+    time_zone: Option<egui_charts::model::TimezoneId>,
+    #[serde(default)]
+    session: Option<egui_charts::model::Session>,
+}
+
+impl RecordingInstrument {
+    fn instrument(&self) -> egui_charts::model::Instrument {
+        let mut instrument =
+            egui_charts::model::Instrument::new(&self.symbol).with_tick_size(self.tick_size);
+        instrument.description = self.description.clone();
+        instrument.exchange = self.exchange.clone();
+        instrument.currency = self.currency.clone();
+        instrument.unit = self.unit.clone();
+        instrument.price_decimals = self.price_decimals;
+        instrument.time_zone = self.time_zone.clone();
+        instrument.session = self.session.clone();
+        instrument
+    }
+}
+
+struct RecordingImport {
+    instrument: RecordingInstrument,
+    bytes: Vec<u8>,
+    offset: usize,
+    header: usize,
+    events: Vec<ReplayEvent>,
+}
+
+struct LoadedRecording {
+    driver: Arc<ReplayDriver>,
+    instrument: egui_charts::model::Instrument,
+    bars: Vec<Bar>,
+}
+
+impl RecordingImport {
+    fn new(bytes: Vec<u8>) -> Result<Self, String> {
+        if bytes.len() > MAX_RECORDING_BYTES {
+            return Err("Recording exceeds the 8 MiB event limit".into());
+        }
+        if bytes.get(..8) != Some(RECORDING_MAGIC.as_slice()) {
+            return Err("Choose a supported demo recording (.egcreplay)".into());
+        }
+        let length = bytes.get(8..12).ok_or("Truncated recording metadata")?;
+        let length = u32::from_le_bytes(length.try_into().unwrap()) as usize;
+        if length > 4096 {
+            return Err("Recording metadata exceeds 4 KiB".into());
+        }
+        let header = 12 + length;
+        let instrument: RecordingInstrument = serde_json::from_slice(
+            bytes
+                .get(12..header)
+                .ok_or("Truncated recording metadata")?,
+        )
+        .map_err(|e| format!("Invalid recording metadata: {e}"))?;
+        if instrument.symbol.is_empty()
+            || !instrument.tick_size.is_finite()
+            || instrument.tick_size <= 0.0
+            || instrument.price_decimals.is_some_and(|n| n > 12)
+        {
+            return Err("Invalid recording instrument or tick size".into());
+        }
+        // Validate the binary version before any workspace state can change.
+        egui_charts::data::RecordingReader::new(bytes.get(header..).ok_or("Missing event stream")?)
+            .map_err(|e| e.to_string())?;
+        Ok(Self {
+            instrument,
+            bytes,
+            offset: header + 8,
+            header,
+            events: Vec::new(),
+        })
+    }
+
+    /// At most 512 records or 64 KiB per UI frame, plus one book snapshot capped at 1 MiB.
+    fn read_batch(&mut self) -> Result<bool, String> {
+        use std::io::Read;
+        let start_offset = self.offset;
+        for _ in 0..512 {
+            if self.offset == self.bytes.len() {
+                return Ok(true);
+            }
+            if self.events.len() == MAX_RECORDING_EVENTS {
+                return Err("Recording exceeds 200000 events".into());
+            }
+            let start = self.offset;
+            let length = self
+                .bytes
+                .get(start..start + 4)
+                .ok_or("Truncated event length")?;
+            let length = u32::from_le_bytes(length.try_into().unwrap()) as usize;
+            if length > 1024 * 1024 {
+                return Err("A recording event exceeds 1 MiB".into());
+            }
+            let end = start + 4 + length;
+            let frame = self
+                .bytes
+                .get(start..end)
+                .ok_or("Truncated recording event")?;
+            let header = &self.bytes[self.header..self.header + 8];
+            let mut reader = egui_charts::data::RecordingReader::new(header.chain(frame))
+                .map_err(|e| e.to_string())?;
+            let event = reader
+                .read()
+                .map_err(|e| e.to_string())?
+                .ok_or("Missing recording event")?;
+            if event.symbol != self.instrument.symbol {
+                return Err("Recording contains a different instrument".into());
+            }
+            if self
+                .events
+                .last()
+                .is_some_and(|last| (last.time, last.sequence) >= (event.time, event.sequence))
+            {
+                return Err("Recording events must be ordered by time and sequence".into());
+            }
+            self.events.push(event);
+            self.offset = end;
+            if self.offset - start_offset >= 64 * 1024 {
+                break;
+            }
+        }
+        Ok(self.offset == self.bytes.len())
+    }
+
+    fn finish(self) -> Result<LoadedRecording, String> {
+        if !matches!(
+            self.events.first().map(|e| &e.event),
+            Some(MarketEvent::DepthSnapshot { .. } | MarketEvent::OrderSnapshot { .. })
+        ) {
+            return Err("Recording must begin with a book snapshot".into());
+        }
+        if self.events.last().is_some_and(|e| {
+            e.time
+                .checked_add_signed(chrono::TimeDelta::nanoseconds(1))
+                .is_none()
+        }) {
+            return Err("Recording time is outside the playback range".into());
+        }
+        let instrument = self.instrument.instrument();
+        let trades: Vec<_> = self
+            .events
+            .iter()
+            .filter_map(|e| match &e.event {
+                MarketEvent::Trade(trade) => Some(trade.clone()),
+                _ => None,
+            })
+            .collect();
+        if trades.is_empty() {
+            return Err("Recording has no executions to replay".into());
+        }
+        let bars = egui_charts::data::aggregate_trades_with_tick_size(
+            &trades,
+            BarClock::new(Timeframe::Ticks(NonZeroU64::MIN)),
+            instrument.tick_size,
+        )
+        .map_err(|e| e.to_string())?;
+        let driver =
+            ReplayDriver::new(self.events, vec![instrument.clone()]).map_err(|e| e.to_string())?;
+        Ok(LoadedRecording {
+            driver: Arc::new(driver),
+            instrument,
+            bars,
+        })
+    }
+}
+
+fn recording_bytes(
+    instrument: &egui_charts::model::Instrument,
+    events: &[ReplayEvent],
+) -> Result<Vec<u8>, String> {
+    if !events
+        .iter()
+        .any(|event| matches!(event.event, MarketEvent::Trade(_)))
+    {
+        return Err("No captured executions yet; wait for the feed to load".into());
+    }
+    let metadata = RecordingInstrument {
+        symbol: instrument.symbol.clone(),
+        description: instrument.description.clone(),
+        exchange: instrument.exchange.clone(),
+        currency: instrument.currency.clone(),
+        unit: instrument.unit.clone(),
+        tick_size: instrument
+            .tick_size
+            .ok_or("Recording requires an instrument tick size")?,
+        price_decimals: instrument.price_decimals,
+        time_zone: instrument.time_zone.clone(),
+        session: instrument.session.clone(),
+    };
+    let metadata = serde_json::to_vec(&metadata).map_err(|e| e.to_string())?;
+    if metadata.len() > 4096 {
+        return Err("Recording metadata exceeds 4 KiB".into());
+    }
+    let mut bytes = RECORDING_MAGIC.to_vec();
+    bytes.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&metadata);
+    let mut writer = RecordingWriter::new(bytes).map_err(|e| e.to_string())?;
+    for event in events {
+        writer.write(event).map_err(|e| e.to_string())?;
+    }
+    let bytes = writer.finish().map_err(|e| e.to_string())?;
+    if bytes.len() > MAX_RECORDING_BYTES {
+        return Err("Recording exceeds the 8 MiB event limit".into());
+    }
+    Ok(bytes)
+}
+
+impl DemoApp {
+    pub(super) fn show_recording_controls(&mut self, ui: &mut egui::Ui) {
+        use egui_charts::icons::icons;
+        let response = super::commands::menu_item(
+            ui,
+            "Market recording",
+            &icons::REPLAY,
+            Some(&icons::CHEVRON_RIGHT),
+        );
+        egui::containers::menu::SubMenu::new().show(ui, &response, |ui| {
+            ui.label("Local .egcreplay file: instrument and recorded events");
+            if super::commands::menu_item(ui, "Download captured recording", &icons::DATABASE, None)
+                .clicked()
+            {
+                let result = (|| {
+                    let mut events = Vec::new();
+                    self.live.read_recording(&mut events);
+                    let bytes = recording_bytes(&self.live.instrument(), &events)?;
+                    let path = std::env::temp_dir()
+                        .join(format!("{}-market.egcreplay", self.state.symbol));
+                    #[cfg(not(target_arch = "wasm32"))]
+                    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+                    #[cfg(target_arch = "wasm32")]
+                    super::browser_download(&bytes, &path)?;
+                    Ok::<_, String>(path)
+                })();
+                match result {
+                    Ok(path) => self.notify(&format!("Saved recording: {}", path.display())),
+                    Err(error) => self.notify(&error),
+                }
+                ui.close();
+            }
+            let busy =
+                self.recording_files.selected.is_some() || self.recording_files.parsing.is_some();
+            ui.add_enabled_ui(!busy, |ui| {
+                if super::commands::menu_item(ui, "Open local recording", &icons::FOLDER_OPEN, None)
+                    .clicked()
+                {
+                    self.pick_recording(ui.ctx());
+                    ui.close();
+                }
+            });
+            if busy {
+                ui.label("Reading recording…");
+            }
+        });
+    }
+
+    fn pick_recording(&mut self, ctx: &egui::Context) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.recording_files.selected = Some(rx);
+        let ctx = ctx.clone();
+        #[cfg(not(target_arch = "wasm32"))]
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let result = (|| {
+                let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Market recording", &["egcreplay"])
+                    .pick_file()
+                else {
+                    return Ok(None);
+                };
+                let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+                if file.metadata().map_err(|e| e.to_string())?.len() > MAX_RECORDING_BYTES as u64 {
+                    return Err("Recording exceeds the 8 MiB event limit".into());
+                }
+                let mut bytes = Vec::new();
+                file.take(MAX_RECORDING_BYTES as u64 + 1)
+                    .read_to_end(&mut bytes)
+                    .map_err(|e| e.to_string())?;
+                Ok(Some(bytes))
+            })();
+            let _ = tx.send(result);
+            ctx.request_repaint();
+        });
+        #[cfg(target_arch = "wasm32")]
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = if let Some(file) = rfd::AsyncFileDialog::new()
+                .add_filter("Market recording", &["egcreplay"])
+                .pick_file()
+                .await
+            {
+                if file.inner().size() > MAX_RECORDING_BYTES as f64 {
+                    Err("Recording exceeds the 8 MiB event limit".into())
+                } else {
+                    Ok(Some(file.read().await))
+                }
+            } else {
+                Ok(None)
+            };
+            let _ = tx.send(result);
+            ctx.request_repaint();
+        });
+    }
+
+    pub(super) fn poll_recording(&mut self, ctx: &egui::Context) {
+        if let Some(rx) = self.recording_files.selected.take() {
+            match rx.try_recv() {
+                Ok(Ok(Some(bytes))) => match RecordingImport::new(bytes) {
+                    Ok(import) => self.recording_files.parsing = Some(import),
+                    Err(error) => self.notify(&error),
+                },
+                Ok(Ok(None)) => {}
+                Ok(Err(error)) => self.notify(&error),
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    self.recording_files.selected = Some(rx)
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.notify("Recording selection failed")
+                }
+            }
+        }
+        let Some(mut import) = self.recording_files.parsing.take() else {
+            return;
+        };
+        match import.read_batch() {
+            Ok(false) => {
+                self.recording_files.parsing = Some(import);
+                ctx.request_repaint();
+            }
+            Ok(true) => match import
+                .finish()
+                .and_then(|loaded| self.open_recording(loaded))
+            {
+                Ok(()) => {}
+                Err(error) => self.notify(&error),
+            },
+            Err(error) => self.notify(&error),
+        }
+    }
+
+    fn open_recording(&mut self, loaded: LoadedRecording) -> Result<(), String> {
+        if loaded.instrument.symbol != self.chart.symbol() {
+            return Err(format!(
+                "Open the {} chart before importing this recording",
+                loaded.instrument.symbol
+            ));
+        }
+        self.stop_replay();
+        self.live_was_paused = self.live.paused();
+        self.live.set_paused(true);
+        self.bars = self.chart.bars(SeriesId::MAIN).to_vec();
+        self.state.replay_active = true;
+        self.replay_control.set_symbol(&self.state.symbol);
+        self.replay_control.show_control();
+        let mut replay = ReplayController::new(loaded.bars.clone(), Vec::new())
+            .with_symbol(self.state.symbol.clone());
+        replay.handle_action(ReplayAction::EnterReplayMode);
+        self.replay = Some(replay);
+        self.replay_interval = Timeframe::Ticks(NonZeroU64::MIN);
+        self.recording_files.opened = true;
+        loaded.driver.seek(loaded.bars[0].time);
+        self.chart.set_conversion(None);
+        self.chart.set_market_replay(Some(loaded.driver));
+        self.chart.set_instrument(Some(loaded.instrument));
+        self.chart.set_signal_source(None);
+        self.chart
+            .set_replay_source(loaded.bars, source_clock(&self.chart, self.replay_interval));
+        self.configure_replay_intervals();
+        self.push_market_replay_window();
+        Ok(())
+    }
+}
+
 /// Group membership, detached slots and synchronization switches kept with a demo layout.
 #[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(super) struct LayoutGroups {
@@ -105,11 +498,14 @@ impl DemoApp {
             ui.label("Synthetic prices: 1 USD = 100 US cents");
             ui.add_enabled_ui(self.replay.is_none(), |ui| {
                 for (label, cents) in [("USD", false), ("US cents", true)] {
-                    let selected = self
-                        .chart
-                        .conversion()
-                        .is_some_and(|c| c.starts_with("cents"))
-                        == cents;
+                    let selected = self.chart.instrument().is_some_and(|instrument| {
+                        if cents {
+                            instrument.unit.as_deref() == Some("US cents")
+                        } else {
+                            instrument.currency.as_deref() == Some("USD")
+                                && instrument.unit.is_none()
+                        }
+                    });
                     if super::commands::menu_item(
                         ui,
                         label,
@@ -141,8 +537,8 @@ impl DemoApp {
             groups: std::array::from_fn(|slot| self.layout.sync_group(slot).map(str::to_owned)),
             detached: std::array::from_fn(|slot| self.layout.is_detached(slot)),
             cents: std::array::from_fn(|slot| {
-                let chart = if slot == self.layout_slot {
-                    Some(&self.chart)
+                let live = if slot == self.layout_slot {
+                    Some(&self.live)
                 } else {
                     self.extra_charts
                         .get(if slot < self.layout_slot {
@@ -150,13 +546,9 @@ impl DemoApp {
                         } else {
                             slot - 1
                         })
-                        .map(|extra| &extra.chart)
+                        .map(|extra| &extra.live)
                 };
-                chart.is_some_and(|chart| {
-                    chart
-                        .instrument()
-                        .is_some_and(|i| i.unit.as_deref() == Some("US cents"))
-                })
+                live.is_some_and(|live| live.instrument().unit.as_deref() == Some("US cents"))
             }),
             sync: [
                 sync.sync_symbol,
@@ -296,6 +688,11 @@ impl DemoApp {
     }
 
     pub(super) fn configure_replay_intervals(&mut self) {
+        if self.recording_files.opened {
+            self.replay_control
+                .set_update_intervals(self.replay_interval, vec![self.replay_interval]);
+            return;
+        }
         let mut intervals = vec![self.state.timeframe];
         if self.state.timeframe.duration_ms() > Timeframe::Min1.duration_ms() {
             intervals.push(Timeframe::Min1);
@@ -309,6 +706,9 @@ impl DemoApp {
     }
 
     pub(super) fn checkpoint_replay(&mut self) {
+        if self.recording_files.opened {
+            return;
+        }
         if let Some(session) = self.replay.as_ref().and_then(|replay| replay.session()) {
             self.replay_session = Some((session, self.replay_interval));
         }
@@ -333,6 +733,7 @@ impl DemoApp {
             self.chart.set_feed_paused(false);
             self.live.set_paused(self.live_was_paused);
             self.state.replay_active = false;
+            self.recording_files.opened = false;
             self.replay_control.hide_control();
             if market {
                 self.refresh_strategy_signals();
@@ -394,7 +795,13 @@ impl DemoApp {
         }
         let source = self.layout_slot;
         let slots: Vec<_> = (0..self.extra_charts.len() + 1)
-            .filter(|&slot| self.layout.sync_group(slot) == self.layout.sync_group(source))
+            .filter(|&slot| {
+                if self.recording_files.opened {
+                    slot == source
+                } else {
+                    self.layout.sync_group(slot) == self.layout.sync_group(source)
+                }
+            })
             .collect();
         for (index, extra) in self.extra_charts.iter_mut().enumerate() {
             let slot = if index >= source { index + 1 } else { index };
@@ -424,7 +831,11 @@ impl DemoApp {
                 chart.set_replay_time(None);
             }
         }
-        self.layout.set_replay_time(&mut charts, source, Some(time));
+        if self.recording_files.opened {
+            charts[source].set_replay_time(Some(time));
+        } else {
+            self.layout.set_replay_time(&mut charts, source, Some(time));
+        }
         self.replay_slots = slots;
         if let Some(bar) = replay.visible_bars().last() {
             self.paper.set_replay_time(Some(bar.time));
@@ -434,7 +845,7 @@ impl DemoApp {
     }
 
     pub(super) fn set_replay_interval(&mut self, interval: Timeframe) {
-        if self.replay.is_none() {
+        if self.replay.is_none() || self.recording_files.opened {
             return;
         }
         let (mut bars, clock) = if interval.is_trade_based() {
@@ -749,6 +1160,163 @@ mod tests {
     use egui_charts::model::{Bar, OrderSide};
     use egui_charts::ui::floating_replay_control::ReplayControlAction;
 
+    /// Local files must round-trip their price basis and book events, and reject bad input before replacement.
+    #[test]
+    fn local_recordings_roundtrip_and_invalid_imports_keep_the_workspace() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        super::super::tests::settle(&mut app, &ctx);
+        app.live.set_paused(true);
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.show_demo_controls(ui);
+        });
+        let menu_visible = output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Market recording"));
+        output.drop_without_applying_deltas();
+        assert!(menu_visible, "the host menu must expose local recordings");
+        app.chart.set_conversion(Some("cents".into()));
+        app.regenerate_bars();
+        super::super::tests::settle(&mut app, &ctx);
+        app.live.set_paused(false);
+        app.live
+            .advance(app.live.now() + chrono::TimeDelta::seconds(20));
+        app.live.set_paused(true);
+        let mut events = Vec::new();
+        app.live.read_recording(&mut events);
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e.event, MarketEvent::Quote(_)))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e.event, MarketEvent::Trade(_)))
+        );
+        let end = events.last().unwrap().time;
+        let sequence = events.last().unwrap().sequence;
+        let quote = events
+            .iter()
+            .find_map(|event| match &event.event {
+                MarketEvent::Quote(quote) => Some(quote.clone()),
+                _ => None,
+            })
+            .unwrap();
+        // Supplied quotes and executions exercise batching and stepping even in a quiet session.
+        for i in 1..=600 {
+            let mut quote = quote.clone();
+            quote.ts = end + chrono::TimeDelta::milliseconds(i);
+            events.push(ReplayEvent::new(
+                &app.state.symbol,
+                quote.ts,
+                sequence + i as u64,
+                if i % 100 == 0 {
+                    MarketEvent::Trade(egui_charts::model::Tick::new(
+                        quote.ts,
+                        quote.ask,
+                        1.0,
+                        Some(OrderSide::Buy),
+                    ))
+                } else {
+                    MarketEvent::Quote(quote)
+                },
+            ));
+        }
+        let bytes = recording_bytes(&app.live.instrument(), &events).unwrap();
+        let mut import = RecordingImport::new(bytes.clone()).unwrap();
+        let mut batches = 1;
+        while !import.read_batch().unwrap() {
+            batches += 1;
+        }
+        assert!(batches > 1, "parsing yields between bounded batches");
+        assert_eq!(import.events, events);
+        let loaded = import.finish().unwrap();
+        assert_eq!(loaded.instrument.unit.as_deref(), Some("US cents"));
+        assert_eq!(loaded.instrument.tick_size, app.live.instrument().tick_size);
+        assert_eq!(loaded.instrument.session, app.live.instrument().session);
+        assert_eq!(loaded.instrument.time_zone, app.live.instrument().time_zone);
+        let first = loaded.bars[0].time;
+        let last = loaded.bars.last().unwrap().time;
+        app.chart.set_conversion(None);
+        app.regenerate_bars();
+        super::super::tests::settle(&mut app, &ctx);
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.recording_files.selected = Some(rx);
+        tx.send(Ok(Some(bytes.clone()))).unwrap();
+        for _ in 0..16 {
+            super::super::tests::settle(&mut app, &ctx);
+            if app.chart.replay_driver().is_some() {
+                break;
+            }
+        }
+        let driver = app.chart.replay_driver().unwrap().clone();
+        assert_eq!(
+            app.chart.instrument().unwrap().unit.as_deref(),
+            Some("US cents")
+        );
+        assert!(
+            !app.layout_groups().cents[app.layout_slot],
+            "an imported price basis must not change the saved live workspace"
+        );
+        assert_eq!(driver.time(), first);
+        app.handle_replay_control(ReplayControlAction::StepForward);
+        assert!(driver.time() > first);
+        app.handle_replay_control(ReplayControlAction::Play);
+        assert!(driver.speed() > 0.0);
+        app.handle_replay_control(ReplayControlAction::Pause);
+        assert_eq!(driver.speed(), 0.0);
+        app.handle_replay_control(ReplayControlAction::GoToEnd);
+        assert!(driver.time() >= last);
+        app.handle_replay_control(ReplayControlAction::GoToStart);
+        assert_eq!(driver.time(), first);
+        super::super::tests::settle(&mut app, &ctx);
+        let bars = app.chart.bars(SeriesId::MAIN).to_vec();
+        let range = driver.time_range();
+        let mut oversized_frame = bytes.clone();
+        let mut checked = RecordingImport::new(bytes.clone()).unwrap();
+        oversized_frame[checked.offset..checked.offset + 4]
+            .copy_from_slice(&u32::MAX.to_le_bytes());
+        let mut unsupported = bytes.clone();
+        unsupported[0] = b'?';
+        for invalid in [
+            unsupported,
+            oversized_frame,
+            bytes[..bytes.len() - 1].to_vec(),
+            vec![0; MAX_RECORDING_BYTES + 1],
+        ] {
+            let result = RecordingImport::new(invalid.clone()).and_then(|mut import| {
+                while !import.read_batch()? {}
+                import.finish()
+            });
+            assert!(result.is_err());
+            let (tx, rx) = std::sync::mpsc::channel();
+            app.recording_files.selected = Some(rx);
+            tx.send(Ok(Some(invalid))).unwrap();
+            for _ in 0..16 {
+                super::super::tests::settle(&mut app, &ctx);
+                if app.recording_files.selected.is_none() && app.recording_files.parsing.is_none() {
+                    break;
+                }
+            }
+            assert_eq!(app.chart.bars(SeriesId::MAIN), bars);
+            assert!(Arc::ptr_eq(app.chart.replay_driver().unwrap(), &driver));
+            assert_eq!(driver.time_range(), range);
+        }
+        while !checked.read_batch().unwrap() {}
+        let mut other = checked.finish().unwrap();
+        other.instrument.symbol = "OTHER".into();
+        assert!(app.open_recording(other).unwrap_err().contains("OTHER"));
+        assert!(Arc::ptr_eq(app.chart.replay_driver().unwrap(), &driver));
+        app.stop_replay();
+        super::super::tests::settle(&mut app, &ctx);
+        assert!(app.chart.replay_driver().is_none());
+        assert_eq!(
+            app.chart.instrument().unwrap().currency.as_deref(),
+            Some("USD")
+        );
+        assert!(app.chart.instrument().unwrap().unit.is_none());
+        assert!(!app.chart.bars(SeriesId::MAIN).is_empty());
+    }
+
     /// A fixed unit conversion must reach source prices, feed metadata, replay and saved layouts.
     #[test]
     fn cents_prices_survive_streaming_replay_and_layout_restore() {
@@ -758,6 +1326,7 @@ mod tests {
         app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
         super::super::tests::settle(&mut app, &ctx);
         app.live.set_paused(true);
+        let display_interval = app.state.timeframe;
         let raw = app.live.snapshot(
             app.state.timeframe,
             app.chart.bar_clock(),
@@ -835,7 +1404,7 @@ mod tests {
         );
         assert_eq!(app.live.instrument().unit.as_deref(), Some("US cents"));
         assert!(app.chart.replay_driver().is_some());
-        app.switch_timeframe(Timeframe::Hour1);
+        app.switch_timeframe(display_interval);
         app.stop_replay();
         app.chart.set_conversion(None);
         app.regenerate_bars();

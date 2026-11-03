@@ -481,6 +481,7 @@ pub struct DemoApp {
     products: ProductsPanel,
 
     // Replay engine and its floating transport. `None` until first toggled.
+    recording_files: replay::RecordingFiles,
     replay: Option<ReplayController>,
     replay_updated: Option<chrono::DateTime<chrono::Utc>>,
     replay_applied: Option<chrono::DateTime<chrono::Utc>>,
@@ -812,6 +813,7 @@ impl DemoApp {
                     "Every key the chart understands",
                 ),
             ]),
+            recording_files: Default::default(),
             replay: None,
             replay_updated: None,
             replay_applied: None,
@@ -1540,6 +1542,7 @@ impl eframe::App for DemoApp {
         self.poll_storage(&ctx);
 
         // Drive replay before laying out the chart so its window is current.
+        self.poll_recording(&ctx);
         self.advance_replay();
         if self.replay.is_none() || self.live.loading() {
             let delay = self.live.advance(chrono::Utc::now());

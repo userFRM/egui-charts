@@ -164,6 +164,7 @@ impl DemoApp {
     pub(super) fn show_demo_controls(&mut self, ui: &mut egui::Ui) -> Option<&'static str> {
         let mut command = None;
         self.show_price_unit_controls(ui);
+        self.show_recording_controls(ui);
         for (label, icon) in [
             ("Readout", &icons::EYE),
             ("Appearance", &icons::BRUSH),
