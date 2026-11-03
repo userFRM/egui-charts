@@ -966,7 +966,7 @@ Terminal,Watchlists and screeners,Sections inside a list,done,library,src/ui/wid
 Terminal,Watchlists and screeners,Share a list by link,done,host,src/services/sharing.rs;src/ui/share_controls.rs;src/ui/widget_bar/panels/watchlist.rs,
 Terminal,Watchlists and screeners,Sort by column and drag to reorder,done,library,src/ui/widget_bar/panels/watchlist.rs,
 Terminal,Watchlists and screeners,Stock screener,done,host,src/ui/widget_bar/panels/screener.rs;src/data/market.rs;src/services/storage.rs;src/ui/dialogs/templates/store.rs;examples/demo/feeds.rs;examples/demo/live.rs;examples/demo/controller.rs,
-Terminal,Watchlists and screeners,Symbol details panel,done,host,src/ui/widget_bar/panels/symbol_details.rs;src/data/mod.rs;src/ui/widget_bar/panels/market_details.rs;examples/demo/feeds.rs;examples/demo/controller.rs;examples/demo/live.rs,
+Terminal,Watchlists and screeners,Symbol details panel,done,host,src/ui/widget_bar/panels/symbol_details.rs;src/data/mod.rs;src/ui/widget_bar/panels/market_details.rs;examples/demo/feeds.rs;examples/demo/controller.rs;examples/demo/live.rs;src/ui/financials.rs;examples/demo/commands.rs,1933
 Terminal,Watchlists and screeners,Watchlist panel in the right toolbar,done,host,src/ui/widget_bar/toolbar.rs;src/ui/widget_bar/panels/watchlist.rs;src/theme/presets.rs,
 Studies,Strategy tester,Live strategy updates,done,library,src/strategies/live.rs;src/strategies/backtest.rs;src/strategies/mod.rs,
 Terminal,Alerts,Strategy order fill alerts,done,library,src/model/alert.rs;src/services/alerts.rs;src/services/alert_engine.rs;src/strategies/live.rs;examples/demo/strategy_live.rs,

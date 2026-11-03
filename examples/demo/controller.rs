@@ -2469,20 +2469,7 @@ impl DemoApp {
                 _ => {}
             }
         }
-        // Open financials follow the chart's symbol.
-        if self.symbol_details.take_financials_request()
-            || (self.financials.as_ref()).is_some_and(|(symbol, _)| *symbol != chart_symbol)
-        {
-            let title = (self.chart.instrument())
-                .and_then(|instrument| instrument.description.clone())
-                .unwrap_or_else(|| chart_symbol.clone());
-            let panel = egui_charts::ui::financials::FinancialsPanel::new(
-                title,
-                feeds::financials(&chart_symbol),
-            );
-            self.open_panel = None;
-            self.financials = Some((chart_symbol.clone(), panel));
-        }
+        self.feed_financials();
         let timezone = self.timeframe_toolbar.state.timezone.parse();
         self.symbol_details
             .set_timezone(timezone.unwrap_or_default());
