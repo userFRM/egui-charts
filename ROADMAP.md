@@ -229,7 +229,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Chart settings apply backgrounds, grids, candle parts and colours, previous-close colouring, crosshair styling, session shading and watermarks.
 - [x] Status settings control supplied logos, last day change and study backdrops; legend text and controls have opaque backing over profiles; Symbol settings request dividend-adjusted history from the host.
 - [x] Object tree supports selection, filtering, visibility, locks, ordering, rename, duplication, pane moves and bulk actions; a data window shows OHLCV and study values.
-- [x] Editable shortcut bindings are shared by chart input, help and menu hints; quick search uses a command palette.
+- [x] Editable shortcut bindings are shared by chart input, help and menu hints; quick search uses a command palette. The demo showcase menu describes and opens the same populated samples without a search query.
 - [x] Watchlists support named lists, sections, sorting, row reordering, flags, symbol navigation and text import/export.
 - [x] Feed-backed panels render symbol details, news, calendars, hotlists, screener tables and grouped market heatmaps; `FinancialsPanel` charts and tabulates supplied financial figures.
 - [ ] Assemble a terminal that owns component state, handles all actions and lets the application intercept them. `Terminal` also runs the widget bar and side panels, persists watchlists, routes panel symbol selections, derives performance and seasonality from chart bars, opens host-fed profile cards, trades through the supplied brokers and docks the account and strategy report. It also handles time controls, comparisons, spread selection and host-supplied dividend adjustment, and runs multi-chart grids, layout tabs, saved layouts, favourites, autosave and Ctrl+S. Remaining action groups and the demo migration are unfinished.
@@ -265,7 +265,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 
 ## Layouts and Persistence
 
-- [x] `ChartLayout` arranges up to 16 charts in grids or tabs, tracks the active chart, supports detached views and groups, and synchronises selected symbol, interval, time range and crosshair time.
+- [x] `ChartLayout` arranges up to 16 charts in grids or tabs, tracks the active chart, supports detached views and groups, and synchronises selected symbol, interval, time range and crosshair time. The demo saves group memberships, detached slots and synchronization switches with each layout.
 - [x] Main-pane drawings synchronise between grouped charts by timestamp.
 - [x] `ChartSnapshot` saves symbol, interval, chart configuration, built-in studies, panes, scales, viewport and drawings in versioned documents; feed-backed comparisons and spreads reconnect on restore, and the dividend-adjustment choice persists.
 - [x] The terminal creates, copies, renames, lists, saves, opens and deletes layouts through supplied storage, with debounced autosave and Ctrl+S. Layout tabs keep independent charts and undo history; Tab and Shift+Tab cycle the visible chart slots, and new slots inherit the study limit.
@@ -296,7 +296,8 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 
 - [x] Feature layers separate the engine, built-in studies, widget, drawings, icons and terminal UI; engine and study calculations need no egui.
 - [x] `Theme` provides editable palettes with dark, light and high-contrast presets; shared tokens cover sizing, spacing, corners and colours.
-- [x] Host translation lookup with English fallback, locale/date formatters and optional named time zones.
+- [x] Host translation lookup with English fallback, locale/date formatters and optional named time zones. The demo persists independent language and number-format samples and applies host formatting to its data window and exported chart. The demo selects light, dark, high contrast or system appearance, preserves explicit choices and follows later system changes.
+- [x] The demo exposes floating, tracking and magnifier readouts, hover or hold activation, lens size and zoom; magnified candles stay inside the circular lens. Its annotation editor creates, edits and removes series markers and price lines, controls marker fitting and layering, and configures live change-marker duration.
 - [x] Accessibility roles/states, keyboard focus and a textual bar/study readout.
 - [x] Reusable `ui_kit` buttons, inputs, colour pickers, dialogs, lists, tabs, panels, command palette and toast components.
 - [x] Native and browser examples and CI checks cover library, feature combinations and demo builds.

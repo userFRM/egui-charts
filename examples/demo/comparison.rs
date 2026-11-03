@@ -352,6 +352,7 @@ impl DemoApp {
             })
             .map(str::to_owned)
         else {
+            self.notify("All demo symbols are already shown. Remove one before adding a pane.");
             return;
         };
         let feed = Arc::new(LiveFeed::new(&symbol, chrono::Utc::now()));
