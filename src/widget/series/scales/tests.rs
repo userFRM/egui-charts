@@ -866,22 +866,37 @@ fn series_data_is_queried_popped_and_reported() {
             "{time} {direction:?}"
         );
     }
-    for ((left, right), bars, bars_before, bars_after) in [
-        ((1.0, 3.0), 1..2, 1.0, 1.0),
+    for (series, (left, right), bars, bars_before, bars_after) in [
+        // The bar at 2 is 2 - 0 logical slots from the first and 4 - 2 from the last.
+        (id, (1.0, 3.0), 1..2, 2.0, 2.0),
         // Two bars of whitespace before the first bar.
-        ((-2.0, 2.4), 0..2, -2.0, 1.0),
+        (id, (-2.0, 2.4), 0..2, -2.0, 2.0),
         // Five bars of whitespace after the last bar, at 4.
-        ((2.6, 9.0), 2..3, 2.0, -5.0),
-        ((0.6, 1.4), 1..1, 1.0, 2.0),
+        (id, (2.6, 9.0), 2..3, 4.0, -5.0),
+        // Slice selection still rounds the edges; distance from an outer edge does not.
+        (id, (0.25, 3.75), 0..3, 0.25, 0.25),
+        (id, (-2.25, 2.25), 0..2, -2.25, 2.0),
+        (id, (2.75, 9.25), 2..3, 4.0, -5.25),
+        (id, (-0.25, 4.25), 0..3, -0.25, -0.25),
+        // Empty intersections measure from the requested edges, including inside a gap.
+        (id, (0.75, 1.25), 1..1, 0.75, 2.75),
+        (id, (-3.25, -1.25), 0..0, -3.25, 5.25),
+        (id, (5.25, 7.25), 3..3, 5.25, -3.25),
+        (SeriesId::MAIN, (1.0, 3.0), 1..4, 1.0, 1.0),
+        (SeriesId::MAIN, (0.75, 3.25), 1..4, 1.0, 1.0),
+        (SeriesId::MAIN, (-2.25, 2.25), 0..3, -2.25, 2.0),
+        (SeriesId::MAIN, (2.75, 9.25), 3..5, 3.0, -5.25),
+        (SeriesId::MAIN, (-3.25, -1.25), 0..0, -3.25, 5.25),
+        (SeriesId::MAIN, (5.25, 7.25), 5..5, 5.25, -3.25),
     ] {
         assert_eq!(
-            chart.bars_in_logical_range(id, LogicalRange::new(left, right)),
+            chart.bars_in_logical_range(series, LogicalRange::new(left, right)),
             Some(BarsInRange {
                 bars,
                 bars_before,
                 bars_after
             }),
-            "{left}..{right}"
+            "{series:?}: {left}..{right}"
         );
     }
 
@@ -924,4 +939,11 @@ fn series_data_is_queried_popped_and_reported() {
         [other, id]
     );
     assert_eq!(chart.series_order(id), Some(1));
+
+    let range = LogicalRange::new(0.0, 4.0);
+    assert_eq!(chart.bars_in_logical_range(other, range), None);
+    assert_eq!(chart.bars_in_logical_range(SeriesId(99), range), None);
+    chart.set_data(SeriesId::MAIN, Vec::new());
+    assert_eq!(chart.bars_in_logical_range(SeriesId::MAIN, range), None);
+    assert_eq!(chart.bars_in_logical_range(id, range), None);
 }

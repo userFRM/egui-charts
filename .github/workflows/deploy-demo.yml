@@ -58,11 +58,9 @@ jobs:
         run: cargo test --doc --all-features
       - name: Build Starlight guide
         working-directory: docs/site
-        run: npm run build
-      - name: Build API reference
         env:
           RUSTDOCFLAGS: -Dwarnings
-        run: cargo doc --no-deps --all-features
+        run: npm run build
       - name: Build native examples
         run: cargo build --examples
       - name: Build wasm demo
@@ -93,6 +91,8 @@ jobs:
           <meta http-equiv="refresh" content="0; url=egui_charts/index.html">
           <title>egui-charts API reference</title><a href="egui_charts/index.html">Open the API reference</a></html>
           HTML
+      - name: Check assembled guide and API links
+        run: node docs/site/check-api-links.mjs _site/docs
       - name: Check assembled guide examples
         run: node --test examples/docs/site.test.mjs
       - name: Upload Pages artifact
