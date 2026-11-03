@@ -2,7 +2,8 @@ import { basename } from 'node:path';
 import { guides } from './guides.mjs';
 
 const base = '/egui-charts/docs/';
-const shared = new Map(guides.map(({ source, slug }) => [source, slug]));
+const shared = new Map(guides.map(({ source, slug }) => [basename(source), slug]));
+shared.set('theme.md', 'theming');
 
 // Keep GitHub source links intact while publishing chapter URLs and hiding Rust setup lines.
 export default function remarkDocs() {
