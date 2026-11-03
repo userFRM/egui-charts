@@ -1,6 +1,6 @@
 //! Host control of the time scale: fitting, scrolling, logical ranges and coordinate conversions.
 
-use super::Chart;
+use super::{Chart, MismatchDirection};
 use crate::model::LogicalRange;
 use chrono::{DateTime, Utc};
 use egui::{Ui, Vec2};
@@ -150,6 +150,30 @@ impl Chart {
         )
     }
 
+    /// The stored UTC time at a whole logical index of the horizontal scale, including
+    /// whitespace points, or `None` outside the loaded scale. On price-based charts the index
+    /// addresses a displayed element. Unlike [`index_to_time`](Self::index_to_time), this never
+    /// interpolates or extrapolates.
+    pub fn time_at_index(&self, index: usize) -> Option<DateTime<Utc>> {
+        self.state.shown().get(index).map(|bar| bar.time)
+    }
+
+    /// The whole logical index of a stored horizontal-scale point at `time`, or of its nearest
+    /// neighbour in `direction`. An exact match returns its first index when displayed elements
+    /// share a timestamp. Includes whitespace points and returns `None` for an empty scale or
+    /// when no point lies in the requested direction.
+    ///
+    /// Unlike [`time_to_index`](Self::time_to_index), this never interpolates or extrapolates;
+    /// unlike [`bar_index_at`](Self::bar_index_at), it addresses the shared scale, not a series'
+    /// stored rows.
+    pub fn time_index_at(
+        &self,
+        time: DateTime<Utc>,
+        direction: MismatchDirection,
+    ) -> Option<usize> {
+        super::series::index_at_time(self.state.shown(), time, direction)
+    }
+
     /// Gives the horizontal axis a meaning other than time, such as option strikes or bond
     /// maturities. The [`time`](crate::model::Bar::time) of each bar, marker and drawing then
     /// holds a key of `scale`, which labels the axis and the crosshair; everything placed by
@@ -158,6 +182,8 @@ impl Chart {
     /// Session breaks and extended-hours shading are periods of time, drawn on the time scale
     /// only. Numeric scales space actual samples proportionally, retaining row indices for
     /// data access; spacing and scroll offsets use the mean numeric gap as one unit.
+    /// [`CustomHorizontalScale`](crate::scales::CustomHorizontalScale) accepts categorical and
+    /// structured keys directly, using their ordered ranks for positions.
     pub fn set_horizontal_scale(
         &mut self,
         scale: Option<std::sync::Arc<dyn crate::scales::HorizontalScale>>,
@@ -166,6 +192,30 @@ impl Chart {
         let positions = numeric.then(|| crate::model::numeric_positions(self.state.shown()));
         self.state.time_scale_mut().set_numeric_positions(positions);
         self.horizontal_scale = scale;
+    }
+
+    /// Finds a bar by its host key in the shared custom horizontal domain. Returns `None` for
+    /// an unknown key, absent bar or removed series. Use the same `scale` installed on this chart.
+    pub fn bar_at_key<K: Ord>(
+        &self,
+        series: super::SeriesId,
+        scale: &crate::scales::CustomHorizontalScale<K>,
+        key: &K,
+    ) -> Option<&crate::model::Bar> {
+        let index = self.bar_index_at(series, scale.time(key)?, super::MismatchDirection::Exact)?;
+        self.bars(series).get(index)
+    }
+
+    /// The screen x of a host key in the shared custom horizontal domain, using the last frame.
+    /// Missing categories interpolate between loaded neighbours; known keys outside the data
+    /// extrapolate. Returns `None` for an unknown key, empty chart or before the first frame.
+    /// Use the same `scale` installed on this chart for bars and annotations.
+    pub fn key_to_x<K: Ord>(
+        &self,
+        scale: &crate::scales::CustomHorizontalScale<K>,
+        key: &K,
+    ) -> Option<f32> {
+        self.index_to_x(self.time_to_index(scale.time(key)?)?)
     }
 
     /// The screen x of a logical index in the last frame, at the centre of its bar.
@@ -191,6 +241,26 @@ impl Chart {
                 .time_scale()
                 .coord_to_idx_precise(x, plot.left(), plot.width())
         })
+    }
+
+    /// The screen x of the first horizontal-scale point stored at `time` in the last frame.
+    /// Includes whitespace points. `None` for an absent timestamp or before the chart is shown;
+    /// loaded points outside the visible range still have coordinates.
+    pub fn time_to_x(&self, time: DateTime<Utc>) -> Option<f32> {
+        self.index_to_x(self.time_index_at(time, MismatchDirection::Exact)? as f64)
+    }
+
+    /// The stored UTC time of the horizontal-scale point nearest to a screen x in the last
+    /// frame, including whitespace points. Halfway between points selects the one on the right.
+    /// `None` before the chart is shown, for a non-finite x or when the rounded logical index
+    /// lies outside the loaded scale. Use [`x_to_index`](Self::x_to_index) and
+    /// [`index_to_time`](Self::index_to_time) for continuous interpolation and extrapolation.
+    pub fn x_to_time(&self, x: f32) -> Option<DateTime<Utc>> {
+        let index = (self.x_to_index(x)? + 0.5).floor();
+        if !(0.0..self.state.shown().len() as f64).contains(&index) {
+            return None;
+        }
+        self.time_at_index(index as usize)
     }
 
     /// The size of the time axis below the plots in the last frame, in points.
@@ -277,7 +347,7 @@ mod tests {
     use crate::model::{Bar, BarData, LogicalRange};
     use crate::scales::{PriceHorizontalScale, key_time};
     use crate::widget::test_frames::{chart, frame, shapes};
-    use crate::widget::{Chart, ChartEvent, SeriesId};
+    use crate::widget::{Chart, ChartEvent, MismatchDirection, SeriesId};
     use chrono::Duration;
 
     fn assert_close(actual: f64, expected: f64, what: &str) {
@@ -291,6 +361,147 @@ mod tests {
         let range = chart.visible_logical_range().unwrap();
         assert_close(range.left.into(), left.into(), what);
         assert_close(range.right.into(), right.into(), what);
+    }
+
+    /// Category order comes from the key, not its label or arrival order. Inserting the middle
+    /// category moves its annotation to the new slot without changing its identity.
+    #[test]
+    fn custom_keys_align_insertion_lookup_axis_crosshair_and_annotations() {
+        use crate::model::MarkerPos;
+        use crate::scales::{CustomHorizontalScale, HorizontalScale};
+        use crate::theme::{Theme, apply_to_egui};
+        use std::sync::Arc;
+
+        // Structured keys with labels whose alphabetic order differs from their key order.
+        let keys = [(1, "Zulu"), (2, "Alpha"), (3, "Mike")];
+        let scale = Arc::new(CustomHorizontalScale::new(
+            [keys[2], keys[0], keys[1], keys[1]],
+            |key| key.1.to_owned(),
+        ));
+        assert_eq!(scale.time(&(4, "Unknown")), None);
+        assert!(scale.value(&(4, "Unknown"), 12.0).is_none());
+        assert!(scale.marker(&(4, "Unknown")).is_none());
+        for theme in [Theme::light(), Theme::dark()] {
+            let ctx = egui::Context::default();
+            apply_to_egui(&ctx, &theme);
+            let mut chart = Chart::new(BarData::new());
+            chart.set_horizontal_scale(Some(scale.clone()));
+            chart.set_chart_type(crate::ChartType::LineWithMarkers);
+            // Calendar intervals must not change category spacing or extrapolation.
+            chart.set_timeframe(crate::model::Timeframe::Month1);
+            let marker_color = egui::Color32::from_rgb(177, 52, 210);
+            chart.set_markers(
+                SeriesId::MAIN,
+                vec![
+                    scale
+                        .marker(&keys[1])
+                        .unwrap()
+                        .with_pos(MarkerPos::InBar)
+                        .with_color(marker_color),
+                ],
+            );
+            // Last duplicate wins, and streaming inserts an older missing key in order.
+            chart.set_data(
+                SeriesId::MAIN,
+                vec![
+                    scale.value(&keys[2], 13.0).unwrap(),
+                    scale.value(&keys[0], 9.0).unwrap(),
+                    scale.value(&keys[0], 10.0).unwrap(),
+                ],
+            );
+            assert!(chart.bar_at_key(SeriesId::MAIN, &scale, &keys[1]).is_none());
+            assert!(chart.key_to_x(&scale, &keys[1]).is_none());
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            // Ranks 0 and 2 leave rank 1 exactly halfway, even before it has a bar.
+            let x = |key| chart.key_to_x(&scale, key).unwrap();
+            assert_close(
+                x(&keys[1]).into(),
+                ((x(&keys[0]) + x(&keys[2])) / 2.0).into(),
+                "missing category",
+            );
+            chart.update(SeriesId::MAIN, scale.value(&keys[1], 11.0).unwrap());
+            chart.update(SeriesId::MAIN, scale.value(&keys[1], 12.0).unwrap());
+            assert_eq!(chart.bars(SeriesId::MAIN).len(), 3);
+            assert_eq!(
+                chart.index_to_time(-1.0),
+                Some(scale.time(&keys[0]).unwrap() - Duration::seconds(1))
+            );
+            for (key, value) in keys.iter().zip([10.0, 12.0, 13.0]) {
+                let bar = chart.bar_at_key(SeriesId::MAIN, &scale, key).unwrap();
+                assert_eq!(bar.close, value);
+                assert_eq!(scale.key(bar.time), Some(key));
+                assert_eq!(scale.format_crosshair(bar.time, 60), key.1);
+            }
+            assert!(
+                chart
+                    .bar_at_key(SeriesId::MAIN, &scale, &(4, "Unknown"))
+                    .is_none()
+            );
+            assert!(chart.set_visible_logical_range(LogicalRange::new(-1.0, 3.0)));
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+            let plot = chart.get_rendered_price_rect();
+            let xs: Vec<_> = keys
+                .iter()
+                .map(|key| chart.key_to_x(&scale, key).unwrap())
+                .collect();
+            assert_close(
+                (xs[1] - xs[0]).into(),
+                (xs[2] - xs[1]).into(),
+                "category spacing",
+            );
+            assert!(chart.key_to_x(&scale, &(4, "Unknown")).is_none());
+            for (key, x) in keys.iter().zip(&xs) {
+                assert!(
+                    painted.iter().any(|shape| matches!(shape,
+                        egui::Shape::Text(text) if text.galley.text() == key.1
+                            && text.pos.y >= plot.bottom()
+                            && (text.pos.x + text.galley.size().x / 2.0 - x).abs() < 0.01
+                    )),
+                    "axis {}",
+                    key.1
+                );
+            }
+            assert!(
+                painted.iter().any(|shape| matches!(shape,
+                    egui::Shape::Circle(circle) if circle.fill == marker_color
+                        && (circle.center.x - xs[1]).abs() < 0.01
+                )),
+                "marker at the inserted category"
+            );
+            let axis_y = painted
+                .iter()
+                .find_map(|shape| match shape {
+                    egui::Shape::Text(text)
+                        if text.galley.text() == "Alpha" && text.pos.y >= plot.bottom() =>
+                    {
+                        Some(text.pos.y)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            let hovered = shapes(
+                &ctx,
+                &mut chart,
+                0.2,
+                vec![egui::Event::PointerMoved(egui::pos2(
+                    xs[1],
+                    plot.center().y,
+                ))],
+            );
+            assert!(hovered.iter().any(|shape| matches!(shape,
+                egui::Shape::Text(text) if text.galley.text() == "Alpha"
+                    && text.pos.y >= plot.bottom() && text.pos.y < axis_y
+            )));
+            assert_eq!(chart.last_hover_bar_idx, Some(1.0));
+            for unknown in [
+                scale.time(&keys[0]).unwrap() - Duration::seconds(1),
+                scale.time(&keys[2]).unwrap() + Duration::seconds(1),
+                scale.time(&keys[0]).unwrap() + Duration::milliseconds(500),
+            ] {
+                assert_eq!(scale.key(unknown), None);
+                assert_eq!(scale.format_crosshair(unknown, 60), "");
+            }
+        }
     }
 
     #[test]
@@ -421,6 +632,18 @@ mod tests {
         assert_eq!(chart.get_chart_mapping().idx_to_x(499_999), x);
         chart.state.time_scale_mut().scroll_pixels(1.0);
         assert!((chart.index_to_x(499_999.0).unwrap() - x - 1.0).abs() < 1e-4);
+
+        // 1 ns / 60 s is below the precision of a floating-point index near one million.
+        let time = chart.time_at_index(999_997).unwrap() + Duration::nanoseconds(1);
+        let near = Bar::from_value(time, 10.0);
+        chart.set_data(added, vec![near.clone()]);
+        for (direction, expected) in [
+            (MismatchDirection::Exact, None),
+            (MismatchDirection::NearestLeft, None),
+            (MismatchDirection::NearestRight, Some(&near)),
+        ] {
+            assert_eq!(chart.bar_at_index(added, 999_997.0, direction), expected);
+        }
     }
 
     /// Expected values follow from the time scale's definition on 100 daily bars: a logical
@@ -632,6 +855,13 @@ mod tests {
                     let pane = &chart.get_rendered_indicator_panes()[0];
                     assert_close(pane.mapping.idx_to_x(i).into(), x.into(), "pane mapping");
                     assert_eq!(chart.index_to_time(i as f64), key_time(keys[i]));
+                    assert_eq!(chart.time_at_index(i), key_time(keys[i]));
+                    assert_eq!(
+                        chart.time_index_at(key_time(keys[i]).unwrap(), MismatchDirection::Exact),
+                        Some(i)
+                    );
+                    assert_eq!(chart.time_to_x(key_time(keys[i]).unwrap()), Some(x));
+                    assert_eq!(chart.x_to_time(x), key_time(keys[i]));
                 }
                 if keys.len() >= 3 {
                     let expected = (keys[2] - keys[1]) / (keys[1] - keys[0]);

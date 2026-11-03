@@ -50,6 +50,10 @@ pub struct SeriesOptions {
     pub up_color: Color32,
     /// Falling bars of the OHLC and column types, and the baseline type below its base.
     pub down_color: Color32,
+    /// Candle border width in logical points, drawn inside the body. Defaults to zero;
+    /// non-positive or non-finite widths disable borders, including per-bar border colours.
+    #[serde(default)]
+    pub candle_border_width: f32,
     /// Independent baseline line and fill styles. `None` uses `up_color`, `down_color` and
     /// `width`, with flat fills at the default opacity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -62,6 +66,20 @@ pub struct SeriesOptions {
     /// Non-positive or non-finite radii hide markers.
     #[serde(default)]
     pub marker_radius: Option<f32>,
+    /// Crosshair marker radius in logical points for Line, Step line, Line with markers,
+    /// Area and Baseline. Non-positive or non-finite radii hide it, the default.
+    #[serde(default)]
+    pub crosshair_marker_radius: f32,
+    /// Crosshair marker fill, including opacity. `None` uses the hovered point's line colour.
+    #[serde(default)]
+    pub crosshair_marker_fill: Option<Color32>,
+    /// Crosshair marker border colour. `None` uses the chart background.
+    #[serde(default)]
+    pub crosshair_marker_border_color: Option<Color32>,
+    /// Crosshair marker border width in logical points. Non-positive or non-finite widths
+    /// hide the border; the default is the design-token thick stroke.
+    #[serde(default = "default_crosshair_marker_border_width")]
+    pub crosshair_marker_border_width: f32,
     /// Scale shared with the series carrying the same assignment in the price pane. In another
     /// pane the series uses that pane's scale.
     pub scale: SeriesScale,
@@ -73,6 +91,10 @@ pub struct SeriesOptions {
     pub style: SeriesStyle,
 }
 
+fn default_crosshair_marker_border_width() -> f32 {
+    DESIGN_TOKENS.stroke.thick
+}
+
 impl Default for SeriesOptions {
     fn default() -> Self {
         Self {
@@ -81,9 +103,14 @@ impl Default for SeriesOptions {
             color: Color32::from_rgb(41, 98, 255),
             up_color: DESIGN_TOKENS.semantic.extended.bullish,
             down_color: DESIGN_TOKENS.semantic.extended.bearish,
+            candle_border_width: 0.0,
             baseline_style: None,
             width: 2.0,
             marker_radius: None,
+            crosshair_marker_radius: 0.0,
+            crosshair_marker_fill: None,
+            crosshair_marker_border_color: None,
+            crosshair_marker_border_width: default_crosshair_marker_border_width(),
             scale: SeriesScale::Right,
             columns_base: None,
             style: SeriesStyle {
@@ -98,6 +125,9 @@ impl SeriesOptions {
     fn sanitized(mut self) -> Self {
         if !self.width.is_finite() || self.width <= 0.0 {
             self.width = 2.0;
+        }
+        if !self.candle_border_width.is_finite() || self.candle_border_width < 0.0 {
+            self.candle_border_width = 0.0;
         }
         if self.chart_type.is_time_independent()
             || self.chart_type == ChartType::TimePriceOpportunity
@@ -146,6 +176,10 @@ impl SeriesOptions {
                     ..Default::default()
                 },
                 baseline,
+                crosshair_marker_radius: self.crosshair_marker_radius,
+                crosshair_marker_fill: self.crosshair_marker_fill,
+                crosshair_marker_border_color: self.crosshair_marker_border_color,
+                crosshair_marker_border_width: self.crosshair_marker_border_width,
                 ..Default::default()
             },
             columns_base: self.columns_base,
