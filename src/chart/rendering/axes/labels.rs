@@ -210,8 +210,8 @@ type TimeAxisPoints = Vec<(chrono::DateTime<chrono::Utc>, usize)>;
 /// (`closed_weekdays`), so a series of weekday bars labels no weekend there. Whitespace on
 /// either side gets at most four keys per point of plot width.
 ///
-/// Keys carry unsigned indices, so when they reach before the first bar every index, and the
-/// bar indices of the returned mapping, are shifted by the same number of slots.
+/// Keys carry unsigned indices, so keys before the first bar shift all candidate indices.
+/// Ordinal mappings shift by the same number of slots; numeric mappings retain their key origin.
 /// [`render_time_labels`] paints them.
 pub(crate) fn time_axis_marks(
     context: &RenderContext,
@@ -225,7 +225,13 @@ pub(crate) fn time_axis_marks(
     // The logical indices at the right and left edges of the plot; the left one is negative
     // when the view reaches before the first bar.
     let right = coords.base_idx as f64 + coords.right_offset;
-    let left = (right + 1.0 - f64::from(context.rect.width() / coords.bar_spacing)).floor();
+    let left = right + 1.0 - f64::from(context.rect.width() / coords.bar_spacing);
+    let (left, right) = coords
+        .numeric_positions
+        .as_ref()
+        .map_or((left.floor(), right), |positions| {
+            (positions.index(left).floor(), positions.index(right))
+        });
     let first = if visible_data.is_empty() {
         left.max(0.0) as usize
     } else {
@@ -276,42 +282,53 @@ pub(crate) fn time_axis_marks(
             .take(trailing)
             .map_while(|index| Some((time_at(index as f64)?, index + shift))),
     );
-    // Next to the bars, a daily series gets no keys on the weekdays it has no bars.
-    let weekday = |time| {
-        let local = match calendar {
-            Some(zone) => crate::model::local_time(zone.clone(), time),
-            None => crate::model::local_time(chrono::Local, time),
+    if coords.numeric_positions.is_none() {
+        // Next to the bars, a daily series gets no keys on the weekdays it has no bars.
+        let weekday = |time| {
+            let local = match calendar {
+                Some(zone) => crate::model::local_time(zone.clone(), time),
+                None => crate::model::local_time(chrono::Local, time),
+            };
+            local.weekday().num_days_from_monday() as usize
         };
-        local.weekday().num_days_from_monday() as usize
-    };
-    let after = closed_weekdays(
-        last.saturating_sub(15)..=last,
-        last as f64 + 1.0,
-        &time_at,
-        weekday,
-    );
-    let before = if shift > 0 {
-        closed_weekdays(0..=last.min(15), -1.0, &time_at, weekday)
-    } else {
-        [false; 7]
-    };
-    bars.retain(|(time, index)| {
-        if *index < shift {
-            !before[weekday(*time)]
+        let after = closed_weekdays(
+            last.saturating_sub(15)..=last,
+            last as f64 + 1.0,
+            &time_at,
+            weekday,
+        );
+        let before = if shift > 0 {
+            closed_weekdays(0..=last.min(15), -1.0, &time_at, weekday)
         } else {
-            *index <= last + shift || !after[weekday(*time)]
-        }
-    });
+            [false; 7]
+        };
+        bars.retain(|(time, index)| {
+            if *index < shift {
+                !before[weekday(*time)]
+            } else {
+                *index <= last + shift || !after[weekday(*time)]
+            }
+        });
+    }
     let layout = TickMarkLayout {
         width: context.rect.width(),
-        bar_spacing: coords.bar_spacing,
+        bar_spacing: coords
+            .numeric_positions
+            .as_ref()
+            .map_or(coords.bar_spacing, |positions| {
+                (f64::from(coords.bar_spacing) / positions.unit) as f32
+            }),
         min_spacing: min_time_label_spacing(options),
         uniform_distribution: options.uniform_distribution,
     };
-    let mapping = ChartMapping {
-        start_idx: coords.start_idx + shift,
-        base_idx: coords.base_idx + shift,
-        ..*coords
+    let mapping = if coords.numeric_positions.is_some() {
+        coords.clone()
+    } else {
+        ChartMapping {
+            start_idx: coords.start_idx + shift,
+            base_idx: coords.base_idx + shift,
+            ..coords.clone()
+        }
     };
     (scale.tick_marks(&bars, &layout), bars, mapping)
 }
@@ -353,7 +370,11 @@ fn closed_weekdays(
 fn time_to_idx(
     time: chrono::DateTime<chrono::Utc>,
     bars: &[(chrono::DateTime<chrono::Utc>, usize)],
+    coords: &ChartMapping,
 ) -> f64 {
+    if let Some(positions) = &coords.numeric_positions {
+        return positions.index_at(time);
+    }
     if bars.is_empty() {
         return 0.0;
     }
@@ -401,11 +422,8 @@ pub(crate) fn render_time_grid(
     horizontal: Option<(Color32, crate::model::LineStyle)>,
 ) {
     let lines = marks.iter().filter_map(|mark| {
-        let index = time_to_idx(mark.time, points);
-        let delta = (coords.base_idx as f64 - index) + coords.right_offset;
-        let x = (f64::from(context.rect.right())
-            - (delta + 0.5) * f64::from(coords.bar_spacing)
-            - 1.0) as f32;
+        let index = time_to_idx(mark.time, points, coords);
+        let x = coords.index_to_x(index);
         (x >= context.rect.left() && x <= context.rect.right()).then_some([
             Pos2::new(x, context.rect.top()),
             Pos2::new(x, context.rect.bottom()),
@@ -481,12 +499,8 @@ pub fn render_time_labels(
 
     for mark in marks {
         // Use fractional index for smooth label movement during pan
-        let index = time_to_idx(mark.time, points);
-        // Calculate x using same formula as candle rendering
-        let delta_from_right = (coords.base_idx as f64 - index) + coords.right_offset;
-        let x = (f64::from(context.rect.min.x) + f64::from(context.rect.width())
-            - (delta_from_right + 0.5) * f64::from(coords.bar_spacing)
-            - 1.0) as f32;
+        let index = time_to_idx(mark.time, points, coords);
+        let x = coords.index_to_x(index);
 
         if x < context.rect.min.x || x > context.rect.max.x {
             continue;

@@ -1,10 +1,44 @@
-//! Sample capabilities and commands shared by the showcase menu and quick search.
+//! Demo menu controls and sample commands shared with quick search.
 
 use super::{DemoApp, TopToolbarAction};
 use eframe::egui;
 use egui_charts::drawings::DrawingToolType;
+use egui_charts::icons::{Icon, icons};
 use egui_charts::studies::IndicatorFactory;
+use egui_charts::theme::ThemeExt;
 use egui_charts::ui_kit::command_palette::Command;
+use egui_charts::ui_kit::list_item::ListItem;
+
+/// A top-left menu row with an icon and an optional trailing icon at the right edge.
+pub(super) fn menu_item(
+    ui: &mut egui::Ui,
+    label: &str,
+    icon: &Icon,
+    trailing: Option<&Icon>,
+) -> egui::Response {
+    let response = ListItem::new().show_with_icon(ui, label, icon);
+    if let Some(trailing) = trailing {
+        let rect = egui::Rect::from_center_size(
+            response.rect.right_center() - egui::vec2(12.0, 0.0),
+            egui::Vec2::splat(12.0),
+        );
+        trailing
+            .as_image_tinted(rect.size(), ui.active_theme().ui.text)
+            .paint_at(ui, rect);
+    }
+    response
+}
+
+/// A menu row that flips `checked` on click and shows a check mark at the right while on.
+pub(super) fn menu_toggle(ui: &mut egui::Ui, label: &str, icon: &Icon, checked: &mut bool) {
+    let response = menu_item(ui, label, icon, checked.then_some(&icons::CHECK));
+    if response.clicked() {
+        *checked = !*checked;
+    }
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::Role::CheckBox, response.enabled(), *checked, label)
+    });
+}
 
 const SAMPLES: &[(&str, &str, &str)] = &[
     (
@@ -61,6 +95,11 @@ const SAMPLES: &[(&str, &str, &str)] = &[
         "targets",
         "Analyst price targets",
         "Requires SAMPLE on the daily interval.",
+    ),
+    (
+        "financials",
+        "Company financials",
+        "Synthetic income statement, balance sheet and statistics for AAPL.",
     ),
 ];
 
@@ -122,25 +161,28 @@ pub(super) fn quick_search_commands() -> Vec<Command> {
 }
 
 impl DemoApp {
-    pub(super) fn show_showcase(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::top("demo_showcase")
-            .resizable(false)
-            .default_size(28.0)
-            .min_size(28.0)
-            .frame(
-                super::panel_frame(self.theme.ui.panel_bg)
-                    .inner_margin(egui::Margin::symmetric(8, 2)),
-            )
-            .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    self.show_readout_controls(ui);
-                    self.show_appearance_controls(ui);
-                    self.show_formatting_controls(ui);
-                    if let Some(id) = sample_menu(ui, "Showcase") {
-                        self.execute_search_command(ui.ctx(), id);
-                    }
+    pub(super) fn show_demo_controls(&mut self, ui: &mut egui::Ui) -> Option<&'static str> {
+        let mut command = None;
+        for (label, icon) in [
+            ("Readout", &icons::EYE),
+            ("Appearance", &icons::BRUSH),
+            ("Formatting", &icons::TEXT),
+            ("Showcase", &icons::WIDGET_BAR_HIGHLIGHTS),
+        ] {
+            let response = menu_item(ui, label, icon, Some(&icons::CHEVRON_RIGHT));
+            egui::containers::menu::SubMenu::new()
+                .config(
+                    egui::containers::menu::MenuConfig::new()
+                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside),
+                )
+                .show(ui, &response, |ui| match label {
+                    "Readout" => self.show_readout_controls(ui),
+                    "Appearance" => self.show_appearance_controls(ui),
+                    "Formatting" => self.show_formatting_controls(ui),
+                    _ => command = sample_menu(ui),
                 });
-            });
+        }
+        command
     }
 
     fn enable_samples(&mut self) {
@@ -298,6 +340,11 @@ impl DemoApp {
                 }
                 return;
             }
+            "financials" => {
+                self.switch_symbol("AAPL");
+                self.open_financials();
+                return;
+            }
             "tape" | "markers" | "signals" => {
                 self.enable_samples();
                 if id == "markers" {
@@ -337,21 +384,19 @@ pub(super) enum SampleScene {
     Extensions(super::primitive_scene::PrimitiveScene),
 }
 
-/// Sample destinations shared by the application menu, showcase strip and open scenes.
-pub(super) fn sample_menu(ui: &mut egui::Ui, label: &str) -> Option<&'static str> {
+/// Sample destinations shared by the application menu and open scenes.
+fn sample_menu(ui: &mut egui::Ui) -> Option<&'static str> {
     let mut command = None;
-    ui.menu_button(label, |ui| {
-        ui.set_max_width(360.0);
-        ui.label("Explore the demo's synthetic data");
-        ui.separator();
-        for &(id, label, description) in SAMPLES {
-            if ui.button(label).clicked() {
-                command = Some(id);
-                ui.close();
-            }
-            ui.small(description);
+    ui.set_max_width(360.0);
+    ui.label("Explore the demo's synthetic data");
+    ui.separator();
+    for &(id, label, description) in SAMPLES {
+        if ui.button(label).clicked() {
+            command = Some(id);
+            ui.close();
         }
-    });
+        ui.small(description);
+    }
     command
 }
 
@@ -364,7 +409,7 @@ impl DemoApp {
         let mut command = None;
         egui::Panel::top("sample_chooser").show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
-                command = sample_menu(ui, "Samples");
+                command = ui.menu_button("Samples", sample_menu).inner.flatten();
                 if ui.button("Return to price chart").clicked() {
                     command = Some("price-workspace");
                 }
@@ -611,12 +656,21 @@ mod tests {
     }
 
     fn frame(app: &mut DemoApp, ctx: &egui::Context, events: Vec<egui::Event>) -> egui::FullOutput {
+        frame_at_width(app, ctx, events, 1440.0)
+    }
+
+    fn frame_at_width(
+        app: &mut DemoApp,
+        ctx: &egui::Context,
+        events: Vec<egui::Event>,
+        width: f32,
+    ) -> egui::FullOutput {
         use eframe::App;
         ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
-                    egui::vec2(1440.0, 900.0),
+                    egui::vec2(width, 900.0),
                 )),
                 events,
                 ..Default::default()
@@ -626,20 +680,33 @@ mod tests {
     }
 
     fn click(app: &mut DemoApp, ctx: &egui::Context, label: &str) {
-        let output = frame(app, ctx, vec![]);
+        click_at_width(app, ctx, label, 1440.0);
+    }
+
+    fn click_at_width(app: &mut DemoApp, ctx: &egui::Context, label: &str, width: f32) {
+        ctx.enable_accesskit();
+        let output = frame_at_width(app, ctx, vec![], width);
         let pos = output
-            .shapes
-            .iter()
-            .find_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) if text.galley.text() == label => {
-                    Some(text.pos + text.galley.size() * 0.5)
-                }
-                _ => None,
-            })
-            .unwrap_or_else(|| panic!("missing control: {label}"));
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .and_then(|update| {
+                update.nodes.iter().find_map(|(_, node)| {
+                    if node.label() == Some(label) {
+                        let rect = node.bounds()?;
+                        Some(egui::pos2(
+                            (rect.x0 + rect.x1) as f32 * 0.5,
+                            (rect.y0 + rect.y1) as f32 * 0.5,
+                        ))
+                    } else {
+                        None
+                    }
+                })
+            });
         output.drop_without_applying_deltas();
+        let pos = pos.unwrap_or_else(|| panic!("missing control: {label}"));
         for pressed in [true, false] {
-            frame(
+            frame_at_width(
                 app,
                 ctx,
                 vec![
@@ -651,8 +718,123 @@ mod tests {
                         modifiers: egui::Modifiers::NONE,
                     },
                 ],
+                width,
             )
             .drop_without_applying_deltas();
+        }
+    }
+
+    #[test]
+    fn menu_icons_are_distinct_labels_align_and_toggles_keep_their_state_and_position() {
+        for width in [393.0, 1440.0] {
+            let ctx = egui::Context::default();
+            let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+            app.live.set_paused(true);
+            app.enable_samples();
+            frame_at_width(&mut app, &ctx, vec![], width).drop_without_applying_deltas();
+            click_at_width(&mut app, &ctx, "Menu", width);
+            let label_pos = |output: &egui::FullOutput, label: &str| {
+                output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == label => Some(text.pos),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("missing menu label: {label}"))
+            };
+            let mut output = frame_at_width(&mut app, &ctx, vec![], width);
+            output.textures_delta.clear();
+            let origin = label_pos(&output, "Readout").x;
+            let pause_pos = label_pos(&output, "Pause synthetic feed");
+            let mut menu_icons = std::collections::HashMap::new();
+            for label in [
+                "Quick Search",
+                "Toggle Theme",
+                "Readout",
+                "Appearance",
+                "Formatting",
+                "Showcase",
+                "Liquidity heatmap",
+                "Largest order profile",
+                "Pause synthetic feed",
+                "Research",
+                "Copy symbol",
+            ]
+            .into_iter()
+            .chain(
+                (width < 600.0)
+                    .then_some([
+                        "Watchlist",
+                        "Alerts",
+                        "Object Tree",
+                        "Data Window",
+                        "Time and sales",
+                        "Order flow",
+                        "Session notes",
+                        "Keyboard shortcuts",
+                    ])
+                    .into_iter()
+                    .flatten(),
+            ) {
+                let pos = label_pos(&output, label);
+                assert_eq!(pos.x, origin, "{width}: {label}");
+                let icon = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| {
+                        let bounds = shape.shape.visual_bounding_rect();
+                        let texture = shape.shape.texture_id();
+                        (texture != egui::TextureId::default()
+                            && bounds.right() < origin
+                            && bounds.y_range().contains(pos.y))
+                        .then_some(texture)
+                    })
+                    .unwrap_or_else(|| panic!("{width}: missing icon for {label}"));
+                assert_eq!(
+                    menu_icons.insert(icon, label),
+                    None,
+                    "{width}: {label} shares its icon with another entry"
+                );
+            }
+            output.drop_without_applying_deltas();
+            click_at_width(&mut app, &ctx, "Largest order profile", width);
+            assert!(
+                !app.largest_order_profile,
+                "disabled profile must not toggle"
+            );
+            for paused in [false, true] {
+                click_at_width(&mut app, &ctx, "Pause synthetic feed", width);
+                assert_eq!(app.live.paused(), paused);
+                let mut output = frame_at_width(&mut app, &ctx, vec![], width);
+                output.textures_delta.clear();
+                assert_eq!(label_pos(&output, "Pause synthetic feed"), pause_pos);
+                let node = output
+                    .platform_output
+                    .accesskit_update
+                    .as_ref()
+                    .unwrap()
+                    .nodes
+                    .iter()
+                    .find(|(_, node)| node.label() == Some("Pause synthetic feed"))
+                    .unwrap();
+                assert_eq!(node.1.role(), egui::accesskit::Role::CheckBox);
+                assert_eq!(
+                    node.1.toggled(),
+                    Some(if paused {
+                        egui::accesskit::Toggled::True
+                    } else {
+                        egui::accesskit::Toggled::False
+                    })
+                );
+                output.drop_without_applying_deltas();
+            }
+            click_at_width(&mut app, &ctx, "Liquidity heatmap", width);
+            click_at_width(&mut app, &ctx, "Largest order profile", width);
+            assert!(app.liquidity_heatmap);
+            assert!(app.largest_order_profile);
+            click_at_width(&mut app, &ctx, "Copy symbol", width);
+            assert!(!egui::Popup::is_any_open(&ctx));
         }
     }
 
@@ -663,6 +845,7 @@ mod tests {
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
         app.live.set_paused(true);
         frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        click(&mut app, &ctx, "Menu");
         click(&mut app, &ctx, "Formatting");
         for label in [
             "Deutsch",
@@ -705,6 +888,7 @@ mod tests {
         let svg = app.chart.export_svg(&ctx, &Default::default()).unwrap();
         assert!(svg.contains(" u"));
         assert!(svg.contains(" units"));
+        click(&mut app, &ctx, "Menu");
         click(&mut app, &ctx, "Formatting");
         click(&mut app, &ctx, "Restore default formatting");
         assert!(app.chart.format_time(time).contains("Mar"));
@@ -750,6 +934,52 @@ mod tests {
     }
 
     #[test]
+    fn financials_sample_opens_populated_pages_and_follows_symbol_availability() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        app.execute_search_command(&ctx, "financials");
+        assert_eq!(app.chart.symbol(), "AAPL");
+        assert_eq!(app.financials.as_ref().unwrap().0, "AAPL");
+        frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        for (page, row) in [
+            ("Income statement", "Total revenue"),
+            ("Balance sheet", "Total assets"),
+            ("Statistics", "Net margin %"),
+        ] {
+            click(&mut app, &ctx, page);
+            let output = frame(&mut app, &ctx, vec![]);
+            assert!(
+                output.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::Shape::Text(text) if text.galley.text() == row)),
+                "{page}"
+            );
+            output.drop_without_applying_deltas();
+        }
+        click(&mut app, &ctx, "Back to chart");
+        assert!(app.financials.is_none());
+        frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        assert_eq!(app.chart.symbol(), "AAPL");
+        assert!(!app.chart.state().shown().is_empty());
+        for (symbol, available) in [
+            ("MSFT", true),
+            ("BTCUSD", false),
+            ("EURUSD", false),
+            ("SPX", false),
+            ("SAMPLE", false),
+        ] {
+            app.execute_search_command(&ctx, "financials");
+            app.switch_symbol(symbol);
+            frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+            assert_eq!(app.financials.is_some(), available, "{symbol}");
+            if let Some((shown, _)) = &app.financials {
+                assert_eq!(shown, symbol);
+            }
+        }
+    }
+
+    #[test]
     fn showcase_routes_enable_samples_once_and_check_target_prerequisite() {
         let commands = quick_search_commands();
         let ids: std::collections::HashSet<_> =
@@ -765,6 +995,26 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
         app.live.set_paused(true);
+        frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+        click(&mut app, &ctx, "Menu");
+        click(&mut app, &ctx, "Readout");
+        click(&mut app, &ctx, "Magnifier");
+        click(&mut app, &ctx, "Hold to inspect");
+        assert_eq!(
+            egui_charts::config::TooltipMode::Magnifier,
+            app.chart.chart_options().tooltip.mode
+        );
+        assert!(app.chart.chart_options().tooltip.on_long_press);
+        egui::Popup::close_all(&ctx);
+        click(&mut app, &ctx, "Menu");
+        click(&mut app, &ctx, "Appearance");
+        click(&mut app, &ctx, "High contrast");
+        assert_eq!(app.theme_choice.as_deref(), Some("high-contrast"));
+        egui::Popup::close_all(&ctx);
+        click(&mut app, &ctx, "Menu");
+        click(&mut app, &ctx, "Showcase");
+        click(&mut app, &ctx, "Time and sales");
+        assert!(app.api_samples);
         for id in ["tape", "signals", "markers", "tape"] {
             app.execute_search_command(&ctx, id);
             assert!(app.api_samples, "{id}");
