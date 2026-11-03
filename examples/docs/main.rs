@@ -18,6 +18,7 @@ enum Scene {
     PriceScale(scenes::price_scale::PriceScale),
     TimeScale,
     Panes(scenes::panes::Panes),
+    Live(scenes::studies::LiveData),
 }
 
 impl ExampleApp {
@@ -46,6 +47,13 @@ impl ExampleApp {
             "panes" => {
                 let mut chart = first_chart::first_chart();
                 scene = Scene::Panes(scenes::panes::Panes::new(&mut chart));
+                chart
+            }
+            "studies" => scenes::studies::builtins(),
+            "custom-study" => scenes::studies::custom(),
+            "live-data" => {
+                let (chart, live) = scenes::studies::LiveData::new();
+                scene = Scene::Live(live);
                 chart
             }
             _ => return None,
@@ -101,6 +109,7 @@ impl eframe::App for ExampleApp {
                 Scene::PriceScale(scene) => scene.show(ui, &mut self.chart),
                 Scene::TimeScale => scenes::time_scale::show(ui, &mut self.chart),
                 Scene::Panes(scene) => scene.show(ui, &mut self.chart),
+                Scene::Live(scene) => scene.show(ui, &mut self.chart),
             }
             self.chart.show(ui);
         });
@@ -190,6 +199,9 @@ mod tests {
             "price-scale",
             "time-scale",
             "panes",
+            "studies",
+            "custom-study",
+            "live-data",
         ] {
             assert!(ExampleApp::new(name).is_some(), "{name}");
         }
