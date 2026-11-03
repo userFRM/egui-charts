@@ -2951,6 +2951,7 @@ impl Chart {
                 let mut main_options = crosshair_options;
                 if volume_rect.contains(hover_pos) {
                     main_options.horz_line_visible = false;
+                    main_options.horz_label_visible = false;
                     if main_options.style == crate::config::CrosshairStyle::Dot {
                         main_options.style = crate::config::CrosshairStyle::Arrow;
                     }
