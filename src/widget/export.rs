@@ -1379,9 +1379,15 @@ mod tests {
         use crate::widget::test_frames::{chart, frame};
         use egui::{Color32, Event, Pos2};
 
-        struct Layers([Color32; 3]);
-        impl Primitive for Layers {
-            fn draw(&self, painter: &egui::Painter, view: &PrimitiveView<'_>, pass: PrimitivePass) {
+        struct Layers([[Color32; 3]; 2]);
+        impl Layers {
+            fn paint(
+                &self,
+                painter: &egui::Painter,
+                view: &PrimitiveView<'_>,
+                pass: PrimitivePass,
+                background: bool,
+            ) {
                 let at = match pass {
                     PrimitivePass::Below => 0,
                     PrimitivePass::Series => 1,
@@ -1391,13 +1397,26 @@ mod tests {
                     egui::Rect::from_min_size(
                         Pos2::new(
                             view.mapping.rect.left() + 16.0 + at as f32 * 24.0,
-                            view.mapping.rect.bottom() - 16.0,
+                            view.mapping.rect.bottom() - if background { 32.0 } else { 16.0 },
                         ),
                         egui::vec2(12.0, 12.0),
                     ),
                     0.0,
-                    self.0[at],
+                    self.0[background as usize][at],
                 );
+            }
+        }
+        impl Primitive for Layers {
+            fn draw_background(
+                &self,
+                painter: &egui::Painter,
+                view: &PrimitiveView<'_>,
+                pass: PrimitivePass,
+            ) {
+                self.paint(painter, view, pass, true);
+            }
+            fn draw(&self, painter: &egui::Painter, view: &PrimitiveView<'_>, pass: PrimitivePass) {
+                self.paint(painter, view, pass, false);
             }
         }
 
@@ -1461,14 +1480,28 @@ mod tests {
         ));
         let colors = [
             [
-                Color32::from_rgb(1, 2, 3),
-                Color32::from_rgb(4, 5, 6),
-                Color32::from_rgb(7, 8, 9),
+                [
+                    Color32::from_rgb(1, 2, 3),
+                    Color32::from_rgb(4, 5, 6),
+                    Color32::from_rgb(7, 8, 9),
+                ],
+                [
+                    Color32::from_rgb(21, 22, 23),
+                    Color32::from_rgb(24, 25, 26),
+                    Color32::from_rgb(27, 28, 29),
+                ],
             ],
             [
-                Color32::from_rgb(11, 12, 13),
-                Color32::from_rgb(14, 15, 16),
-                Color32::from_rgb(17, 18, 19),
+                [
+                    Color32::from_rgb(11, 12, 13),
+                    Color32::from_rgb(14, 15, 16),
+                    Color32::from_rgb(17, 18, 19),
+                ],
+                [
+                    Color32::from_rgb(31, 32, 33),
+                    Color32::from_rgb(34, 35, 36),
+                    Color32::from_rgb(37, 38, 39),
+                ],
             ],
         ];
         for (id, colors) in [SeriesId::MAIN, pane].into_iter().zip(colors) {
@@ -1509,7 +1542,7 @@ mod tests {
                 pixels
             );
             let svg = chart.export_svg(&ctx, &options).unwrap();
-            for colors in colors {
+            for colors in colors.into_iter().flatten() {
                 for (pass, color) in colors.into_iter().enumerate() {
                     let present = pass != 2 || foreground;
                     assert_eq!(
@@ -1531,14 +1564,14 @@ mod tests {
             assert!(pixels.contains(&[45, 201, 173, 255]));
             images.push(pixels);
         }
-        // Two 12-pixel swatches, with at most one feathered pixel along each edge.
+        // Four 12-pixel swatches, with at most one feathered pixel along each edge.
         assert!(
             images[0]
                 .iter()
                 .zip(&images[2])
                 .filter(|(a, b)| a != b)
                 .count()
-                <= 2 * 14 * 14
+                <= 4 * 14 * 14
         );
         // Disjoint overlays change only their own pixels; the underlying frame stays identical.
         for at in 0..images[0].len() {
