@@ -115,7 +115,7 @@ impl Chart {
             bearish_border: None,
             bullish_wick: None,
             bearish_wick: None,
-            candle_border_width: 0.0,
+            candle_border_width: options.candle_border_width,
         };
         let context = RenderContext::new(plot, rect);
         let clock = self.bar_clock();

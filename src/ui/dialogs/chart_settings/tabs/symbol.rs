@@ -27,7 +27,12 @@ impl SettingsDialog {
                 let kind = self.settings.chart_type;
                 if kind.is_time_independent()
                     || !kind.uses_ohlc()
-                    || kind == crate::model::ChartType::TimePriceOpportunity
+                    || matches!(
+                        kind,
+                        crate::model::ChartType::TimePriceOpportunity
+                            | crate::model::ChartType::VolumeFootprint
+                            | crate::model::ChartType::SessionVolumeProfile
+                    )
                 {
                     let mut series = crate::chart::series::SeriesSettings {
                         chart_type: kind,

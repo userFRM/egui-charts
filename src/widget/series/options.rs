@@ -50,6 +50,10 @@ pub struct SeriesOptions {
     pub up_color: Color32,
     /// Falling bars of the OHLC and column types, and the baseline type below its base.
     pub down_color: Color32,
+    /// Candle border width in logical points, drawn inside the body. Defaults to zero;
+    /// non-positive or non-finite widths disable borders, including per-bar border colours.
+    #[serde(default)]
+    pub candle_border_width: f32,
     /// Independent baseline line and fill styles. `None` uses `up_color`, `down_color` and
     /// `width`, with flat fills at the default opacity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -99,6 +103,7 @@ impl Default for SeriesOptions {
             color: Color32::from_rgb(41, 98, 255),
             up_color: DESIGN_TOKENS.semantic.extended.bullish,
             down_color: DESIGN_TOKENS.semantic.extended.bearish,
+            candle_border_width: 0.0,
             baseline_style: None,
             width: 2.0,
             marker_radius: None,
@@ -120,6 +125,9 @@ impl SeriesOptions {
     fn sanitized(mut self) -> Self {
         if !self.width.is_finite() || self.width <= 0.0 {
             self.width = 2.0;
+        }
+        if !self.candle_border_width.is_finite() || self.candle_border_width < 0.0 {
+            self.candle_border_width = 0.0;
         }
         if self.chart_type.is_time_independent()
             || self.chart_type == ChartType::TimePriceOpportunity
