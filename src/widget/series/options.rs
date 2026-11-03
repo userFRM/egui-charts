@@ -62,8 +62,8 @@ pub struct SeriesOptions {
     /// Non-positive or non-finite radii hide markers.
     #[serde(default)]
     pub marker_radius: Option<f32>,
-    /// Scale shared with the series carrying the same assignment in the price pane. In another
-    /// pane the series uses that pane's scale.
+    /// Scale shared with members carrying the same assignment in this series' pane.
+    /// Assignments in different panes have independent options and ranges.
     pub scale: SeriesScale,
     /// The price [`ChartType::Columns`] rise above or fall below, which the scale's fit then
     /// includes; `None` raises them from the pane bottom.
@@ -277,6 +277,10 @@ impl Indicator for SeriesLegend {
         StudyFormat::Price
     }
 
+    fn precision(&self) -> Option<usize> {
+        self.precision
+    }
+
     fn name(&self) -> &str {
         &self.name
     }
@@ -349,6 +353,7 @@ impl Chart {
         self.ensure_series_scale(options.scale);
         let renamed = self.price_series[at].options.name != options.name;
         self.price_series[at].options = options;
+        self.series_price_scale_mut(id);
         if renamed && self.is_fed(id) {
             self.set_data(id, Vec::new());
             self.fill_fed_series();
@@ -609,6 +614,7 @@ impl Chart {
         } else if let Some(at) = self.price_series.iter().position(|item| item.id == id) {
             self.ensure_series_scale(scale);
             self.price_series[at].options.scale = scale;
+            self.series_price_scale_mut(id);
         } else {
             return false;
         }
@@ -664,7 +670,7 @@ impl Chart {
                 .iter()
                 .find(|pane| pane.members.contains(&id))
             {
-                Some(pane) => &pane.scale,
+                Some(pane) => pane.assigned_scale(scale),
                 None => self.secondary_scale(scale),
             },
         )
@@ -681,7 +687,7 @@ impl Chart {
             .iter()
             .position(|pane| pane.members.contains(&id))
         {
-            Some(&mut self.pane_layout.panes[at].scale)
+            Some(self.pane_layout.panes[at].assigned_scale_mut(scale))
         } else if scale == self.main_series_scale {
             Some(self.state.price_scale_mut())
         } else {
@@ -701,8 +707,22 @@ impl Chart {
                 .iter()
                 .find(|pane| pane.members.contains(&id) && pane.rect.is_positive())
                 .map(|pane| {
-                    self.series_display_map(id, pane.price_map())
-                        .with_thousands_sep(self.config.thousands_sep)
+                    if let Some(item) = self.price_series.iter().find(|item| item.id == id) {
+                        self.series_map(item, pane.rect)
+                    } else {
+                        let study = self
+                            .indicators()
+                            .find(|(study, _)| *study == id)
+                            .expect("present study")
+                            .1;
+                        if matches!(study.scale(), crate::studies::StudyScale::Shared(_)) {
+                            let mut coords = self.get_chart_mapping().with_rect(pane.rect);
+                            coords.price = pane.price_map();
+                            crate::chart::rendering::study_mapping(study, &coords).price
+                        } else {
+                            pane.price_map()
+                        }
+                    }
                 });
         }
         let rect = self.last_rendered_price_rect;

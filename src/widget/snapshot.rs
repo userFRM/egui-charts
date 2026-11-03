@@ -82,6 +82,9 @@ pub struct SavedPane {
     /// The pane's price scale, including its manual range.
     #[serde(default)]
     pub scale: Option<crate::scales::PriceScale>,
+    /// Additional named scales in this pane, including options and manual ranges.
+    #[serde(default)]
+    pub scales: Vec<(crate::model::SeriesScale, crate::scales::PriceScale)>,
 }
 
 /// What a chart shows and how: everything a user sets on it, without the bars, which come from
@@ -300,6 +303,11 @@ impl Chart {
                             pane.members.iter().map(|id| id.0).collect()
                         },
                         scale: (*id != PaneId::MAIN).then(|| pane.scale.clone()),
+                        scales: pane
+                            .scales
+                            .iter()
+                            .map(|(key, scale)| (*key, scale.clone()))
+                            .collect(),
                     }
                 })
                 .collect(),
@@ -468,6 +476,9 @@ impl Chart {
             if let Some(scale) = &saved.scale {
                 pane.scale = scale.clone();
             }
+            for (key, scale) in &saved.scales {
+                *pane.assigned_scale_mut(*key) = scale.clone();
+            }
             if saved.main && !saved.members.is_empty() {
                 self.pane_layout.main = saved
                     .members
@@ -609,9 +620,14 @@ fn check(snapshot: &ChartSnapshot, factory: &IndicatorFactory) -> Result<Checked
         || snapshot
             .panes
             .iter()
-            .filter_map(|pane| pane.scale.as_ref())
+            .flat_map(|pane| pane.scale.iter().chain(pane.scales.iter().map(|(_, scale)| scale)))
             .chain(snapshot.series.iter().flatten().filter_map(|series| series.price_scale.as_ref()))
             .any(|scale| !valid_scale(scale))
+        || snapshot.panes.iter().any(|pane| {
+            (pane.main && !pane.scales.is_empty())
+                || pane.scales.iter().any(|(key, _)| *key == crate::model::SeriesScale::Right)
+                || pane.scales.iter().map(|(key, _)| key).collect::<std::collections::HashSet<_>>().len() != pane.scales.len()
+        })
         || snapshot
             .studies
             .iter()

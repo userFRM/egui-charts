@@ -313,14 +313,12 @@ impl Chart {
         {
             return super::SeriesId::MAIN;
         }
-        self.price_series
-            .iter()
-            .find(|item| {
-                item.visible
-                    && self.series_pane(item.id) == pane
-                    && (pane != Some(super::PaneId::MAIN) || Some(item.options.scale) == scale)
-            })
-            .map_or(id, |item| item.id)
+        pane.and_then(|pane| {
+            self.pane_series(pane)
+                .into_iter()
+                .find(|item| self.is_series_visible(*item) && self.series_scale(*item) == scale)
+        })
+        .unwrap_or(id)
     }
 
     pub(super) fn series_display_map(

@@ -96,6 +96,9 @@ pub(super) struct Pane {
     pub(super) preserve: bool,
     pub(super) collapsed: Option<bool>,
     pub(super) scale: crate::scales::PriceScale,
+    /// Named assignments other than the pane's default right scale.
+    pub(super) scales:
+        std::collections::HashMap<crate::model::SeriesScale, crate::scales::PriceScale>,
     /// Panel rect in the last frame; [`Rect::NOTHING`] when the pane was not drawn.
     pub(super) rect: Rect,
 }
@@ -109,14 +112,41 @@ impl Pane {
             height: None,
             preserve: false,
             collapsed: None,
-            scale: crate::scales::PriceScale::new(crate::scales::PriceScaleOptions {
-                scale_margins: crate::scales::PriceScaleMargins {
-                    top: 0.0,
-                    bottom: 0.0,
-                },
-                ..Default::default()
-            }),
+            scale: Self::new_scale(),
+            scales: Default::default(),
             rect: Rect::NOTHING,
+        }
+    }
+
+    fn new_scale() -> crate::scales::PriceScale {
+        crate::scales::PriceScale::new(crate::scales::PriceScaleOptions {
+            scale_margins: crate::scales::PriceScaleMargins {
+                top: 0.0,
+                bottom: 0.0,
+            },
+            ..Default::default()
+        })
+    }
+
+    pub(super) fn assigned_scale(
+        &self,
+        key: crate::model::SeriesScale,
+    ) -> &crate::scales::PriceScale {
+        if key == crate::model::SeriesScale::Right {
+            &self.scale
+        } else {
+            self.scales.get(&key).unwrap_or(&self.scale)
+        }
+    }
+
+    pub(super) fn assigned_scale_mut(
+        &mut self,
+        key: crate::model::SeriesScale,
+    ) -> &mut crate::scales::PriceScale {
+        if key == crate::model::SeriesScale::Right {
+            &mut self.scale
+        } else {
+            self.scales.entry(key).or_insert_with(Self::new_scale)
         }
     }
 
@@ -133,6 +163,83 @@ impl Pane {
 }
 
 impl Chart {
+    fn pane_axis_on_left(&self, pane: PaneId, key: crate::model::SeriesScale) -> bool {
+        use crate::model::SeriesScale;
+        key != SeriesScale::Right
+            || (!self.config.show_right_axis
+                && self.config.show_left_axis
+                && !self.pane_series(pane).into_iter().any(|id| {
+                    self.series_scale(id) == Some(SeriesScale::Right)
+                        || self.indicators().any(|(study, value)| {
+                            study == id
+                                && value.scale()
+                                    == crate::studies::StudyScale::Shared(SeriesScale::Right)
+                        })
+                }))
+    }
+
+    /// The visible named axes in a secondary pane, in member order.
+    fn pane_axis_keys(&self, id: PaneId) -> Vec<crate::model::SeriesScale> {
+        use crate::model::SeriesScale;
+        let members = self.pane_series(id);
+        if members.is_empty() && (self.config.show_right_axis || self.config.show_left_axis) {
+            return vec![SeriesScale::Right];
+        }
+        let mut keys = Vec::new();
+        for member in members {
+            if !self.is_series_visible(member) {
+                continue;
+            }
+            let key = self.series_scale(member).or_else(|| {
+                let study = self.indicators().find(|(id, _)| *id == member)?.1;
+                match study.scale() {
+                    crate::studies::StudyScale::Shared(key) => Some(key),
+                    crate::studies::StudyScale::None => None,
+                    _ => (self.config.show_right_axis || self.config.show_left_axis)
+                        .then_some(SeriesScale::Right),
+                }
+            });
+            if let Some(key) = key
+                && !matches!(key, SeriesScale::Overlay(_))
+                && !keys.contains(&key)
+            {
+                keys.push(key);
+            }
+        }
+        keys
+    }
+
+    /// Axis slots use the same plot column in every pane.
+    fn pane_axes(
+        &self,
+        id: PaneId,
+        rect: Rect,
+        plot: Rect,
+    ) -> Vec<(crate::model::SeriesScale, Rect)> {
+        let keys = self.pane_axis_keys(id);
+        let count = keys
+            .iter()
+            .filter(|key| self.pane_axis_on_left(id, **key))
+            .count();
+        let width = self
+            .measured_axis_width
+            .max(self.config.left_axis_width)
+            .min((plot.left() - rect.left()).max(0.0) / count.max(1) as f32);
+        let mut left = plot.left();
+        keys.into_iter()
+            .map(|key| {
+                let axis = if !self.pane_axis_on_left(id, key) {
+                    Rect::from_x_y_ranges(plot.right()..=rect.right(), rect.y_range())
+                } else {
+                    let axis = Rect::from_x_y_ranges((left - width)..=left, rect.y_range());
+                    left -= width;
+                    axis
+                };
+                (key, axis)
+            })
+            .collect()
+    }
+
     /// Whether `id` is drawn below the price pane when placed there: a host series or a study
     /// that is not an overlay.
     fn pane_member(&self, id: SeriesId) -> bool {
@@ -465,8 +572,8 @@ impl Chart {
     }
 
     /// Moves a host series or study into `pane`, after the series and studies already there.
-    /// A study moved to the price pane becomes an overlay. Below the price pane a host series
-    /// shares the pane's price scale instead of its [`SeriesScale`](crate::model::SeriesScale).
+    /// A study moved to the price pane becomes an overlay. Scale assignments join the
+    /// destination pane's scales, retaining that pane's options and manual ranges.
     /// Returns `false` for the main series, an unknown id or pane, or a custom study
     /// presentation that rejects placement edits.
     pub fn move_series_to_pane(&mut self, series: SeriesId, pane: PaneId) -> bool {
@@ -494,6 +601,8 @@ impl Chart {
             }
         }
         self.sync_panes();
+        // Create a destination assignment before hosts query or edit it between frames.
+        self.series_price_scale_mut(series);
         true
     }
 
@@ -803,7 +912,36 @@ impl Chart {
         } + series_right;
         let study_axes = study_axes
             .min((widget_rect.width() - 2.0 * padding - left_axis - right_axis).max(0.0) * 0.5);
-        let left_axis = left_axis + study_axes;
+        let pane_axes: Vec<_> = self
+            .pane_layout
+            .panes
+            .iter()
+            .filter(|pane| self.pane_shown(pane))
+            .map(|pane| (pane.id, self.pane_axis_keys(pane.id)))
+            .collect();
+        let pane_left = pane_axes
+            .iter()
+            .map(|(id, keys)| {
+                keys.iter()
+                    .filter(|key| self.pane_axis_on_left(*id, **key))
+                    .count()
+            })
+            .max()
+            .unwrap_or(0) as f32
+            * self.measured_axis_width.max(self.config.left_axis_width);
+        let left_axis = (left_axis + study_axes)
+            .max(pane_left)
+            .min((widget_rect.width() - 2.0 * padding).max(0.0) * 0.5);
+        let right_axis = right_axis.max(
+            if pane_axes
+                .iter()
+                .any(|(id, keys)| keys.iter().any(|key| !self.pane_axis_on_left(*id, *key)))
+            {
+                self.measured_axis_width.max(self.config.right_axis_width)
+            } else {
+                0.0
+            },
+        );
         let bottom_padding = if show_time_labels {
             self.time_axis_height()
         } else {
