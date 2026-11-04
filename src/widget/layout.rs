@@ -415,6 +415,7 @@ impl std::fmt::Display for ChartLayoutMode {
 enum Tracks {
     Rows(&'static [usize]),
     Columns(&'static [usize]),
+    /// Two halves, stacked when `by_rows` and side by side otherwise, each divided on its own.
     Halves {
         by_rows: bool,
         halves: [&'static Tracks; 2],
@@ -422,6 +423,7 @@ enum Tracks {
 }
 
 impl Tracks {
+    /// Charts the arrangement holds.
     fn chart_count(&self) -> usize {
         match self {
             Self::Rows(cells) | Self::Columns(cells) => cells.iter().sum(),
@@ -429,6 +431,7 @@ impl Tracks {
         }
     }
 
+    /// Maximum columns and rows, with a half's subdivisions added across the split.
     fn grid_size(&self) -> (usize, usize) {
         match self {
             Self::Rows(cells) => (cells.iter().copied().max().unwrap_or(1), cells.len()),
@@ -444,6 +447,7 @@ impl Tracks {
         }
     }
 
+    /// Cells for the first `count` charts within `rect`. A half with no chart yields its space.
     fn rects(&self, rect: Rect, count: usize) -> Vec<Rect> {
         let (by_rows, tracks) = match self {
             Tracks::Rows(tracks) => (true, tracks),
