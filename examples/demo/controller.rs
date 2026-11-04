@@ -242,6 +242,7 @@ enum SidePanel {
     DataWindow,
     Watchlist,
     TimeAndSales,
+    Depth,
     OrderFlow,
     Highlights,
     Screener,
@@ -462,6 +463,7 @@ pub struct DemoApp {
     // Symbol search is open for the watchlist's add button: the pick joins the list.
     watchlist_search: bool,
     time_and_sales: TimeAndSalesPanel,
+    depth: egui_charts::ui::widget_bar::DepthPanel,
     order_flow: egui_charts::ui::widget_bar::OrderFlowPanel,
     // Below the watchlist: the chart symbol's synthetic details and notes kept in app storage.
     symbol_details: SymbolDetailsPanel,
@@ -673,7 +675,14 @@ impl DemoApp {
                 .and_then(|storage| eframe::get_value(storage, "demo_formatting"))
                 .unwrap_or_default(),
             top_toolbar,
-            drawing_toolbar: DrawingToolbar::default(),
+            drawing_toolbar: {
+                let mut toolbar = DrawingToolbar::default();
+                toolbar.state.cursor_favorites = cc
+                    .storage
+                    .and_then(|storage| eframe::get_value(storage, "cursor_favorites"))
+                    .unwrap_or_default();
+                toolbar
+            },
             selection_toolbar: FloatingSelectionToolbar::new(),
             timeframe_toolbar,
             widget_bar,
@@ -767,6 +776,10 @@ impl DemoApp {
             watchlist_wide: false,
             watchlist_search: false,
             time_and_sales: TimeAndSalesPanel::default(),
+            depth: cc
+                .storage
+                .and_then(|storage| eframe::get_value(storage, "depth_panel"))
+                .unwrap_or_default(),
             symbol_details: SymbolDetailsPanel::new(),
             financials: None,
             highlights: NewsPanel::highlights(),
@@ -1459,6 +1472,7 @@ impl eframe::App for DemoApp {
         storage.remove_string("api_samples");
         eframe::set_value(storage, "event_visibility", self.chart.event_visibility());
         eframe::set_value(storage, "open_panel", &self.open_panel);
+        eframe::set_value(storage, "depth_panel", &self.depth);
         eframe::set_value(
             storage,
             "drawing_defaults",
@@ -1474,6 +1488,11 @@ impl eframe::App for DemoApp {
             storage,
             "interval_preferences",
             &self.top_toolbar.timeframe_selector.preferences(),
+        );
+        eframe::set_value(
+            storage,
+            "cursor_favorites",
+            &self.drawing_toolbar.state.cursor_favorites,
         );
         eframe::set_value(
             storage,
@@ -1717,6 +1736,13 @@ impl DemoApp {
                     ui.separator();
                     if menu_item(ui, "Order flow", &icons::CHART_VOLUME_FOOTPRINT, None).clicked() {
                         panel_action = Some(SidePanel::OrderFlow);
+                        ui.close();
+                    }
+                    if egui_charts::ui::widget_bar::DepthPanel::is_available(&self.chart)
+                        && menu_item(ui, "Depth", &icons::FIXED_RANGE_VOLUME_PROFILE, None)
+                            .clicked()
+                    {
+                        panel_action = Some(SidePanel::Depth);
                         ui.close();
                     }
                     if ui.ctx().content_rect().width() < 600.0 {
@@ -2248,6 +2274,11 @@ impl DemoApp {
 
     fn show_side_panel(&mut self, ui: &mut egui::Ui) {
         self.widget_bar.show_panel(ui);
+        if self.open_panel == Some(SidePanel::Depth)
+            && !egui_charts::ui::widget_bar::DepthPanel::is_available(&self.chart)
+        {
+            return;
+        }
         let Some(which) = self.open_panel else {
             return;
         };
@@ -2277,6 +2308,7 @@ impl DemoApp {
                     self.show_watchlist(ui);
                 }
                 SidePanel::TimeAndSales => self.time_and_sales.show(ui),
+                SidePanel::Depth => self.depth.show(ui, &mut self.chart),
                 SidePanel::OrderFlow => {
                     for (kind, visible) in
                         self.order_flow
@@ -2520,14 +2552,14 @@ impl DemoApp {
         };
         for request in requests {
             use egui_charts::ui::widget_bar::{MarketDetail, MarketDetailRequest};
-            let bars = self.chart.bars(SeriesId::MAIN);
+            let bars = self.market_history();
             match request {
                 MarketDetailRequest::PeriodReturns(symbol) => self
                     .symbol_details
-                    .set_period_returns(&symbol, MarketDetail::Ready(feeds::period_returns(bars))),
+                    .set_period_returns(&symbol, MarketDetail::Ready(feeds::period_returns(&bars))),
                 MarketDetailRequest::Seasonality(symbol) => self
                     .symbol_details
-                    .set_seasonality(&symbol, MarketDetail::Ready(feeds::seasonality(bars))),
+                    .set_seasonality(&symbol, MarketDetail::Ready(feeds::seasonality(&bars))),
                 _ => {}
             }
         }
@@ -2833,6 +2865,7 @@ impl DemoApp {
     fn handle_timeframe_toolbar(&mut self, action: TimeframeToolbarAction) {
         match action {
             TimeframeToolbarAction::DateRangeChanged(range) => {
+                self.explain_history_limit(range);
                 let visible = visible_bars_for_range(range, self.chart.bars(SeriesId::MAIN));
                 let width = self.chart.get_rendered_price_rect().width();
                 // Include the latest slot in the scale's exclusive data range.
@@ -4577,6 +4610,113 @@ mod tests {
     }
 
     #[test]
+    fn depth_menu_requires_a_declaration_and_restores_its_view() {
+        use eframe::App;
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let now = "2026-10-27T14:00:00Z".parse().unwrap();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            now,
+            true,
+        );
+        settle(&mut app, &ctx);
+        let draw = |app: &mut DemoApp, events| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+            )
+        };
+        let click = |app: &mut DemoApp, label: &str| {
+            let output = draw(app, vec![]);
+            let pos = output
+                .platform_output
+                .accesskit_update
+                .as_ref()
+                .unwrap()
+                .nodes
+                .iter()
+                .find_map(|(_, node)| {
+                    if node.label() != Some(label) || node.role() == egui::accesskit::Role::Label {
+                        return None;
+                    }
+                    let rect = node.bounds()?;
+                    Some(egui::pos2(
+                        (rect.x0 + rect.x1) as f32 / 2.0,
+                        (rect.y0 + rect.y1) as f32 / 2.0,
+                    ))
+                })
+                .unwrap_or_else(|| panic!("missing control: {label}"));
+            output.drop_without_applying_deltas();
+            for pressed in [true, false] {
+                draw(
+                    app,
+                    vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            pressed,
+                            button: egui::PointerButton::Primary,
+                            modifiers: Default::default(),
+                        },
+                    ],
+                )
+                .drop_without_applying_deltas();
+            }
+        };
+        let has = |output: &egui::FullOutput, label: &str| {
+            output.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == label)
+        })
+        };
+        click(&mut app, "Menu");
+        let output = draw(&mut app, vec![]);
+        assert!(has(&output, "Depth"));
+        output.drop_without_applying_deltas();
+        click(&mut app, "Depth");
+        let output = draw(&mut app, vec![]);
+        assert!(has(&output, "Bid size"));
+        assert!(has(&output, "Center"));
+        output.drop_without_applying_deltas();
+        let mut storage = AppStorage::default();
+        app.save(&mut storage);
+        let saved = eframe::Storage::get_string(&storage, "depth_panel").unwrap();
+        let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        cc.storage = Some(&storage);
+        let mut restored = DemoApp::new_at(&cc, now, true);
+        settle(&mut restored, &ctx);
+        let output = draw(&mut restored, vec![]);
+        assert!(has(&output, "Bid size"));
+        output.drop_without_applying_deltas();
+        let mut resaved = AppStorage::default();
+        restored.save(&mut resaved);
+        assert_eq!(
+            eframe::Storage::get_string(&resaved, "depth_panel"),
+            Some(saved)
+        );
+        let mut instrument = app.chart.instrument().unwrap().clone();
+        instrument.services = Some(vec![]);
+        app.chart = egui_charts::ChartBuilder::new()
+            .with_symbol(&instrument.symbol)
+            .build();
+        app.chart.set_instrument(Some(instrument));
+        let output = draw(&mut app, vec![]);
+        assert!(!has(&output, "Bid size"));
+        output.drop_without_applying_deltas();
+        click(&mut app, "Menu");
+        let output = draw(&mut app, vec![]);
+        assert!(!has(&output, "Depth"));
+        output.drop_without_applying_deltas();
+    }
+
+    #[test]
     fn opening_state_is_quiet_and_saved_features_restore() {
         use eframe::App;
         use egui_charts::services::{DetectionCounts, DetectionKind};
@@ -4751,10 +4891,21 @@ mod tests {
                     ]),
                 );
             }
-            for explicit in [false, true, true].into_iter().take(restarts) {
+            for (restart, explicit) in [false, true, true].into_iter().take(restarts).enumerate() {
                 let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
                 cc.storage = Some(&storage);
                 let mut app = DemoApp::new(&cc);
+                use egui_charts::ui::drawing_toolbar::categories::cursors::CursorType;
+                assert_eq!(
+                    app.drawing_toolbar.state.cursor_favorites,
+                    if restart == 0 {
+                        &[][..]
+                    } else {
+                        CursorType::all()
+                    },
+                    "cursor favourites survive a restart; older settings start empty"
+                );
+                app.drawing_toolbar.state.cursor_favorites = CursorType::all().to_vec();
                 if legacy_document.is_some() {
                     assert_eq!(app.state.symbol, "AAPL");
                     assert_eq!(app.state.timeframe, Timeframe::Min5);

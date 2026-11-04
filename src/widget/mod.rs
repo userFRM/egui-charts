@@ -133,11 +133,12 @@ mod drawing_api;
 pub use drawing_api::DrawingError;
 mod studies_data;
 pub use crate::chart::primitives::{
-    PriceAxisLabel, Primitive, PrimitiveId, PrimitivePass, PrimitiveView, TimeAxisLabel,
+    PriceAxisLabel, Primitive, PrimitiveHit, PrimitiveId, PrimitivePass, PrimitiveView,
+    TimeAxisLabel,
 };
 pub use pane::VisualOrder;
 pub use series::SeriesOptions;
-pub use series::{BarsInRange, MismatchDirection, PriceLineId};
+pub use series::{BarsInRange, MismatchDirection, PriceLineId, SeriesLastValue};
 #[cfg(feature = "ui")]
 #[cfg_attr(docsrs, doc(cfg(feature = "ui")))]
 pub use snapshot::{
@@ -304,6 +305,8 @@ pub struct Chart {
     primitives: Vec<primitives::Attached>,
     /// Id of the next primitive attached.
     next_primitive: u64,
+    /// Omit the above-drawings primitive pass in an export snapshot.
+    hide_foreground: bool,
     /// The chart's drawings and the active drawing tool.
     #[cfg(feature = "drawings")]
     pub(crate) drawings: DrawingManager,
@@ -414,10 +417,14 @@ pub struct Chart {
     pub(crate) synced_crosshair_bar_idx: Option<f64>,
     /// Source period retained by time-based setters and resolved against the current bars.
     synced_crosshair_period: Option<(DateTime<Utc>, DateTime<Utc>)>,
-    /// Main-pane price of the external crosshair; `None` centres its horizontal line.
+    /// Price of the external crosshair in its target's units; `None` centres its horizontal line.
     synced_crosshair_price: Option<f64>,
-    /// Time and main-pane price of the crosshair last drawn, for exported images.
+    /// Target bar series of a programmatic position; `None` uses the main scale.
+    synced_crosshair_series: Option<SeriesId>,
+    /// Time and target price of the crosshair last drawn, for exported images.
     last_crosshair: Option<(DateTime<Utc>, Option<f64>)>,
+    /// Series whose units the last drawn host position used; `None` uses the main scale.
+    last_crosshair_series: Option<SeriesId>,
     /// Last computed hover bar index (for sync emission to other charts)
     pub(crate) last_hover_bar_idx: Option<f64>,
 

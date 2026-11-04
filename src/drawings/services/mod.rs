@@ -14,6 +14,7 @@ pub use handle::{HandleConfig, HandleService};
 pub(crate) use history::DrawingCommand;
 pub use history::HistoryService;
 pub use interaction::{DrawingInteraction, point_to_line_distance};
+pub(crate) use selection::SelectionArea;
 pub use selection::SelectionService;
 pub use snap::{SnapOptions, SnapService, SnapTargets};
 pub use z_order::ZOrderService;

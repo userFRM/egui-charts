@@ -63,11 +63,35 @@ impl Chart {
     /// does, with its horizontal line and price label at `price` on the main price scale.
     /// `None`, a time outside the data or a non-finite price clears it. The pointer's own
     /// crosshair takes its place while the pointer is over the plots.
+    /// Use [`Self::set_series_crosshair_position`] to target another bar series or pane.
     pub fn set_crosshair_position(&mut self, position: Option<(DateTime<Utc>, f64)>) {
         self.set_synced_crosshair(
             position.map(|(time, _)| (time, time)),
             position.map(|(_, price)| price),
         );
+        if self.synced_crosshair_bar_idx.is_none() && self.last_hover_bar_idx.is_none() {
+            self.last_crosshair = None;
+        }
+    }
+
+    /// Shows a crosshair at `time` in the raw price units and current pane of the bar series
+    /// `series`, including [`super::SeriesId::MAIN`]. Time resolution follows
+    /// [`Self::set_synced_crosshair_time`]; the target's scale mode, inversion and formatter
+    /// apply without price snapping. Moving the series or changing its scale updates the
+    /// position on the next frame. Hidden axes have no price label.
+    ///
+    /// `None`, a non-finite price, a time outside the chart's data or an unknown or removed
+    /// target clears the position. A hidden series or collapsed pane retains the position;
+    /// its horizontal line and price label wait until it is shown. Offscreen prices have
+    /// only the time line and label. The pointer takes precedence over all host positions
+    /// while over any plot, and the saved position returns when it leaves.
+    pub fn set_series_crosshair_position(
+        &mut self,
+        series: super::SeriesId,
+        position: Option<(DateTime<Utc>, f64)>,
+    ) {
+        self.set_crosshair_position(position.filter(|_| self.series_scale(series).is_some()));
+        self.synced_crosshair_series = self.synced_crosshair_bar_idx.map(|_| series);
     }
 
     /// As [`Self::set_crosshair_position`] for a source bar's `period`: when no local bar's
@@ -78,10 +102,25 @@ impl Chart {
         period: Option<(DateTime<Utc>, DateTime<Utc>)>,
         price: Option<f64>,
     ) {
-        let period = period.filter(|_| price.is_none_or(f64::is_finite));
+        self.set_synced_crosshair_for_series(None, period, price);
+    }
+
+    /// As [`Self::set_synced_crosshair`], with the price read on the scale of the bar series
+    /// `series`; a series that is not present clears the position.
+    pub(super) fn set_synced_crosshair_for_series(
+        &mut self,
+        series: Option<super::SeriesId>,
+        period: Option<(DateTime<Utc>, DateTime<Utc>)>,
+        price: Option<f64>,
+    ) {
+        let period = period.filter(|_| {
+            price.is_none_or(f64::is_finite)
+                && series.is_none_or(|id| self.series_scale(id).is_some())
+        });
         self.synced_crosshair_bar_idx = period.and_then(|(from, to)| self.synced_index(from, to));
         self.synced_crosshair_period = period.filter(|_| self.synced_crosshair_bar_idx.is_some());
         self.synced_crosshair_price = price.filter(|_| self.synced_crosshair_bar_idx.is_some());
+        self.synced_crosshair_series = series.filter(|_| self.synced_crosshair_bar_idx.is_some());
     }
 
     fn synced_index(&self, from: DateTime<Utc>, to: DateTime<Utc>) -> Option<f64> {
@@ -187,6 +226,7 @@ impl Chart {
         self.synced_crosshair_bar_idx = bar_idx;
         self.synced_crosshair_period = None;
         self.synced_crosshair_price = None;
+        self.synced_crosshair_series = None;
     }
 
     /// Returns the nearest hovered local index from the last frame, counting elements on
