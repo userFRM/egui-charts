@@ -4015,11 +4015,11 @@ mod tests {
             app.show_drawing_toolbar(ui, app.theme.chart.bg)
         });
         assert!(!app.drawing_toolbar.state.hide_indicators);
-        app.chart.set_indicator_visible(id, false);
+        choose(&mut app, "Hide indicators");
         settle(&mut app, &ctx);
         app.handle_top_toolbar(&ctx, TopToolbarAction::Save);
         app.poll_storage(&ctx);
-        app.chart.set_indicator_visible(id, true);
+        choose(&mut app, "Hide indicators");
         app.handle_layout_action(egui_charts::ui::top_toolbar::LayoutAction::Open(
             "Unnamed".into(),
         ));
