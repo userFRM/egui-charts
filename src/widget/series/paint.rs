@@ -24,12 +24,6 @@ impl Chart {
             return None;
         }
         let main = self.state.shown();
-        let logical =
-            self.state
-                .time_scale()
-                .coord_to_idx_precise(pos.x, rect.left(), rect.width());
-        let time = crate::model::time_at(main, logical)?;
-        let at = item.bars.partition_point(|bar| bar.time < time);
         let x = |bar: &Bar| {
             crate::model::index_at(main, bar.time).map(|index| {
                 self.state
@@ -37,8 +31,37 @@ impl Chart {
                     .idx_to_coord_precise(index, rect.left(), rect.width())
             })
         };
+        let columns = item.options.chart_type == ChartType::Columns;
+        let at = if columns {
+            item.bars
+                .partition_point(|bar| x(bar).is_some_and(|px| px < pos.x))
+        } else {
+            let logical =
+                self.state
+                    .time_scale()
+                    .coord_to_idx_precise(pos.x, rect.left(), rect.width());
+            let time = crate::model::time_at(main, logical)?;
+            item.bars.partition_point(|bar| bar.time < time)
+        };
         let tolerance = item.options.style.hit_tolerance;
-        for index in at.saturating_sub(1)..(at + 2).min(item.bars.len()) {
+        let column_half_width =
+            self.state.time_scale().bar_spacing() * self.config.candle_width / 2.0;
+        let near = at.saturating_sub(1)..(at + 2).min(item.bars.len());
+        let mut range = near.clone();
+        if columns {
+            // Padding can reach beyond the neighbouring timestamps.
+            range.start = item.bars.partition_point(|bar| {
+                x(bar).is_some_and(|px| px + column_half_width + tolerance < pos.x)
+            });
+            range.end = item.bars.partition_point(|bar| {
+                x(bar).is_some_and(|px| px - column_half_width - tolerance <= pos.x)
+            });
+        }
+        for index in near
+            .clone()
+            .chain((range.start..near.start).rev())
+            .chain(near.end..range.end)
+        {
             let bar = &item.bars[index];
             if bar.is_whitespace() {
                 continue;
@@ -56,15 +79,21 @@ impl Chart {
                         && (map.price_to_y(bar.low).min(map.price_to_y(bar.high))
                             ..=map.price_to_y(bar.low).max(map.price_to_y(bar.high)))
                             .contains(&pos.y))
-            } else if item.options.chart_type == ChartType::Columns {
+            } else if columns {
                 let base = item
                     .options
                     .columns_base
                     .map_or(rect.bottom(), |base| map.price_to_y(base));
-                Rect::from_two_pos(
-                    Pos2::new(px - self.state.time_scale().bar_spacing() * 0.4, base),
-                    Pos2::new(px + self.state.time_scale().bar_spacing() * 0.4, close.y),
+                let (top, bottom) = if item.options.columns_base.is_none() || close.y <= base {
+                    (close.y.min(base - 1.0), base)
+                } else {
+                    (base, close.y.max(base + 1.0))
+                };
+                Rect::from_min_max(
+                    Pos2::new(px - column_half_width, top),
+                    Pos2::new(px + column_half_width, bottom),
                 )
+                .expand(tolerance)
                 .contains(pos)
             } else if pos.distance(close) <= tolerance {
                 true

@@ -425,18 +425,15 @@ jobs:
           exit "$fail"
 
   performance-measure:
-    name: Measure chart performance (${{ matrix.revision }})
+    name: Measure chart performance (head)
     needs: changes
     if: "!cancelled() && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'push') && github.event.pull_request.draft != true"
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        revision: [base, head]
+    timeout-minutes: 60
     outputs:
-      base: ${{ steps.counts.outputs.base }}
-      head: ${{ steps.counts.outputs.head }}
+      base: ${{ steps.base.outputs.counts }}
+      head: ${{ steps.head.outputs.counts }}
+      processor: ${{ steps.measurement.outputs.processor }}
     steps:
       - name: Check input classification
         shell: bash
@@ -444,41 +441,69 @@ jobs:
           CHANGES_RESULT: ${{ needs.changes.result }}
         run: test "$CHANGES_RESULT" = success
       - uses: actions/checkout@v7
-        if: needs.changes.outputs.rust == 'true' && (matrix.revision == 'head' || github.event_name != 'push')
+        if: needs.changes.outputs.rust == 'true'
       - name: Identify measurement cache
-        if: needs.changes.outputs.rust == 'true' && (matrix.revision == 'head' || github.event_name != 'push')
+        if: needs.changes.outputs.rust == 'true'
         id: measurement
         env:
-          MEASURED_SHA: ${{ matrix.revision == 'base' && needs.changes.outputs.base || github.sha }}
           WORKLOAD_HASH: ${{ hashFiles('benches/frame_time.rs', 'benches/frame/**', 'benches/regression/**', 'benches/check-regressions.sh', 'examples/bare_chart.rs', '.github/workflows/ci.yml') }}
         run: |
-          echo "key=performance-v1-ubuntu-24.04-1.95.0-${ImageVersion}-$(getconf GNU_LIBC_VERSION)-$WORKLOAD_HASH-$MEASURED_SHA" >> "$GITHUB_OUTPUT"
+          processor=$(awk -F ': ' '/^model name[[:space:]]*:/ { print $2; exit }' /proc/cpuinfo)
+          # glibc selects routines by processor features, which change the instruction counts.
+          processor_hash=$(awk '/^(model name|flags)[[:space:]]*:/ { print; if (++fields == 2) exit }' /proc/cpuinfo | sha256sum | cut -c1-16)
+          echo "processor=$processor" >> "$GITHUB_OUTPUT"
+          echo "key=performance-v1-ubuntu-24.04-1.95.0-${ImageVersion}-$(getconf GNU_LIBC_VERSION)-$processor_hash-$WORKLOAD_HASH" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        if: needs.changes.outputs.rust == 'true'
+        with:
+          toolchain: 1.95.0
+      - uses: Swatinem/rust-cache@v2
+        if: needs.changes.outputs.rust == 'true'
+        with:
+          key: head
+          workspaces: . -> target
+      - name: Install Valgrind
+        if: needs.changes.outputs.rust == 'true'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends valgrind
+      - name: Build the head workload
+        if: needs.changes.outputs.rust == 'true'
+        run: cargo build --release --locked --bench frame_time --message-format=json-render-diagnostics > performance.json
+      - name: Measure head instructions
+        if: needs.changes.outputs.rust == 'true'
+        id: head
+        run: |
+          bench=$(jq -r 'select(.target.name == "frame_time" and .executable) | .executable' performance.json)
+          bash benches/check-regressions.sh --measure "$bench" > performance-counts.txt
+          {
+            echo 'counts<<COUNTS'
+            cat performance-counts.txt
+            echo COUNTS
+          } >> "$GITHUB_OUTPUT"
+      - name: Save main measurement
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v5
+        with:
+          path: performance-counts.txt
+          key: ${{ steps.measurement.outputs.key }}-${{ github.sha }}
       - name: Restore base measurement
-        if: needs.changes.outputs.rust == 'true' && matrix.revision == 'base' && github.event_name != 'push'
+        if: needs.changes.outputs.rust == 'true' && github.event_name != 'push'
         id: cached
         uses: actions/cache/restore@v5
         with:
           path: performance-counts.txt
-          key: ${{ steps.measurement.outputs.key }}
+          key: ${{ steps.measurement.outputs.key }}-${{ needs.changes.outputs.base }}
       - uses: actions/checkout@v7
-        if: needs.changes.outputs.rust == 'true' && matrix.revision == 'base' && github.event_name != 'push' && steps.cached.outputs.cache-hit != 'true'
+        if: needs.changes.outputs.rust == 'true' && github.event_name != 'push' && steps.cached.outputs.cache-hit != 'true'
         with:
           ref: ${{ needs.changes.outputs.base }}
           path: performance-base
-      - uses: dtolnay/rust-toolchain@master
-        if: needs.changes.outputs.rust == 'true' && (matrix.revision == 'head' || github.event_name != 'push') && steps.cached.outputs.cache-hit != 'true'
-        with:
-          toolchain: 1.95.0
       - uses: Swatinem/rust-cache@v2
-        if: needs.changes.outputs.rust == 'true' && (matrix.revision == 'head' || github.event_name != 'push') && steps.cached.outputs.cache-hit != 'true'
+        if: needs.changes.outputs.rust == 'true' && github.event_name != 'push' && steps.cached.outputs.cache-hit != 'true'
         with:
-          key: ${{ matrix.revision }}
-          workspaces: ${{ matrix.revision == 'base' && 'performance-base' || '.' }} -> target
-      - name: Install Valgrind
-        if: needs.changes.outputs.rust == 'true' && (matrix.revision == 'head' || github.event_name != 'push') && steps.cached.outputs.cache-hit != 'true'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends valgrind
+          key: base
+          workspaces: performance-base -> target
       - name: Use the same workloads for the base library
-        if: needs.changes.outputs.rust == 'true' && matrix.revision == 'base' && github.event_name != 'push' && steps.cached.outputs.cache-hit != 'true'
+        if: needs.changes.outputs.rust == 'true' && github.event_name != 'push' && steps.cached.outputs.cache-hit != 'true'
         run: |
           cp -r benches/frame benches/regression performance-base/benches/
           cp benches/frame_time.rs performance-base/benches/frame_time.rs
@@ -498,34 +523,23 @@ jobs:
           if ! grep -q 'fn add_synced_drawing.*-> Result' performance-base/src/drawings/manager/edit.rs; then
             sed -i 's/\.expect("bench drawings are valid")//' performance-base/benches/frame_time.rs
           fi
-      - name: Build the head workload
-        if: needs.changes.outputs.rust == 'true' && matrix.revision == 'head'
-        run: cargo build --release --locked --bench frame_time --message-format=json-render-diagnostics > performance.json
       - name: Build the base workload
-        if: needs.changes.outputs.rust == 'true' && matrix.revision == 'base' && github.event_name != 'push' && steps.cached.outputs.cache-hit != 'true'
+        if: needs.changes.outputs.rust == 'true' && github.event_name != 'push' && steps.cached.outputs.cache-hit != 'true'
         run: cargo build --release --locked --manifest-path performance-base/Cargo.toml --bench frame_time --message-format=json-render-diagnostics > performance.json
-      - name: Measure instructions
-        if: needs.changes.outputs.rust == 'true' && (matrix.revision == 'head' || github.event_name != 'push') && steps.cached.outputs.cache-hit != 'true'
+      - name: Measure base instructions
+        if: needs.changes.outputs.rust == 'true' && github.event_name != 'push' && steps.cached.outputs.cache-hit != 'true'
         run: |
           bench=$(jq -r 'select(.target.name == "frame_time" and .executable) | .executable' performance.json)
           bash benches/check-regressions.sh --measure "$bench" > performance-counts.txt
-      - name: Publish instruction counts
-        if: needs.changes.outputs.rust == 'true' && (matrix.revision == 'head' || github.event_name != 'push')
-        id: counts
-        env:
-          REVISION: ${{ matrix.revision }}
+      - name: Publish base instruction counts
+        if: needs.changes.outputs.rust == 'true' && github.event_name != 'push'
+        id: base
         run: |
           {
-            echo "$REVISION<<COUNTS"
+            echo 'counts<<COUNTS'
             cat performance-counts.txt
             echo COUNTS
           } >> "$GITHUB_OUTPUT"
-      - name: Save main measurement
-        if: matrix.revision == 'head' && github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v5
-        with:
-          path: performance-counts.txt
-          key: ${{ steps.measurement.outputs.key }}
 
   performance:
     name: Chart performance regressions
@@ -550,10 +564,12 @@ jobs:
           MEASUREMENT_RESULT: ${{ needs.performance-measure.result }}
           BASE_COUNTS: ${{ needs.performance-measure.outputs.base }}
           HEAD_COUNTS: ${{ needs.performance-measure.outputs.head }}
+          PROCESSOR: ${{ needs.performance-measure.outputs.processor }}
         run: |
           test "$MEASUREMENT_RESULT" = success
           printf '%s\n' "$BASE_COUNTS" > performance-base.txt
           printf '%s\n' "$HEAD_COUNTS" > performance-head.txt
+          printf 'Processor: %s\n\n' "$PROCESSOR" >> "$GITHUB_STEP_SUMMARY"
           set -o pipefail
           bash benches/check-regressions.sh --compare performance-base.txt performance-head.txt 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
 

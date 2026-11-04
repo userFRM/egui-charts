@@ -12,6 +12,14 @@ const guideScenes = readFileSync(new URL('./scenes/extensions.rs', import.meta.u
 const section = (from, to) => guideScenes.slice(guideScenes.indexOf(from), to && guideScenes.indexOf(to)).trim();
 const own = (file) => readFileSync(new URL(file, import.meta.url), 'utf8');
 
+const runnable = [
+  ['order-flow', 'order-flow'],
+  ['study-data', 'order-flow'],
+  ['replay', 'recording-replay'],
+  ['strategy-report', 'host-report'],
+  ['host-services', 'host-report'],
+];
+
 for (const [page, scenes, setup] of [
   ['first-chart', ['first-chart'], own('./first_chart.rs')],
   ['price-scale', ['price-scale'], own('./scenes/price_scale.rs')],
@@ -22,6 +30,7 @@ for (const [page, scenes, setup] of [
   ['horizontal-scales', ['volatility-smile', 'yield-curve'], section('/// Compare', '/// Shade')],
   ['extensions', ['primitives'], `${section('/// Shade', '/// Draw each')}\n\n${section('/// Shared fixed')}`],
   ['extensions/custom-series', ['custom-series'], section('/// Draw each')],
+  ...runnable.map(([page, scene]) => [page, [scene], own(`./scenes/${scene.replaceAll('-', '_')}.rs`).split('#[cfg(test)]')[0]]),
 ]) {
   test(`the assembled ${page} embeds the shipped scene beside its exact compiled setup`, () => {
     const html = readFileSync(resolve(site, `${page}/index.html`), 'utf8');
@@ -38,6 +47,11 @@ for (const [page, scenes, setup] of [
       assert.ok(displayed.join('\n').includes(source.join('\n')), 'the scene source is displayed unchanged');
     } else {
       assert.deepEqual(displayed.slice(0, source.length), source);
+    }
+    if (runnable.some(([name]) => name === page)) {
+      assert.match(html, /class="chart-example" data-run="manual"/);
+      assert.match(html, /<summary>Compiled Rust source<\/summary>/);
+      assert.doesNotMatch(html, /<iframe[^>]*\ssrc=/);
     }
     const widget = resolve(site, 'examples/widget');
     assert.match(readFileSync(resolve(widget, 'index.html'), 'utf8'), /data-example-state="loading"/);
