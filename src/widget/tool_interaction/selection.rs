@@ -1,7 +1,7 @@
 //! Drawing selection and manipulation
 //!
 //! Handles:
-//! - Drawing selection via click
+//! - Drawing selection via click or Ctrl/Command-dragged area
 //! - Handle dragging for drawing manipulation
 //! - Eraser mode (click to delete)
 //! - Keyboard shortcuts (Delete, Escape)
@@ -15,7 +15,9 @@ use egui::{Painter, Rect, Response, Stroke, Ui, epaint::StrokeKind};
 /// When no drawing tool is active, clicks are interpreted as selection attempts.
 /// An unlocked drawing can be selected and moved in one drag. In eraser mode,
 /// clicking on a drawing deletes it instead, whatever is selected, unless it is locked.
-/// Shift+click on empty space starts a measurement.
+/// Ctrl/Command-drag on empty space adds drawings intersecting the visible area. Releasing
+/// the modifier continues the gesture; Escape cancels it. Locked drawings can be selected,
+/// but subsequent editing retains the existing lock rules. Shift+click on empty space measures.
 pub fn handle_selection<F1, F2, F3>(
     ui: &Ui,
     drawing_manager: &mut DrawingManager,
@@ -31,6 +33,10 @@ pub fn handle_selection<F1, F2, F3>(
     F3: Fn(f64, f32, f32) -> f64,
 {
     drawing_manager.interaction_modifiers = ui.input(|i| i.modifiers);
+    if handle_selection_area(ui, drawing_manager, response, price_rect) {
+        cursor_modes.eraser.set_hover(None);
+        return;
+    }
     let pointer_pos = if response.clicked() || response.drag_started() || response.dragged() {
         response.interact_pointer_pos()
     } else {
@@ -136,10 +142,10 @@ pub fn handle_selection<F1, F2, F3>(
                 translate_price,
             );
         } else if response.clicked() {
-            if ui.input(|i| i.modifiers.shift) {
+            if ui.input(|i| i.modifiers.shift || i.modifiers.ctrl || i.modifiers.command) {
                 if let Some(id) = drawing_manager.hit_test(pos) {
                     drawing_manager.toggle_selection(id);
-                } else {
+                } else if ui.input(|i| i.modifiers.shift) {
                     drawing_manager.set_active_tool(Some(DrawingToolType::Measure));
                     drawing_manager.start_drawing_with_coords(
                         DrawingToolType::Measure,
@@ -155,6 +161,60 @@ pub fn handle_selection<F1, F2, F3>(
     } else {
         cursor_modes.eraser.set_hover(None);
     }
+}
+
+/// An area starts only on empty space, leaving handle/body drags and their copy shortcut intact.
+fn handle_selection_area(
+    ui: &Ui,
+    manager: &mut DrawingManager,
+    response: &Response,
+    pane: Rect,
+) -> bool {
+    let area_input = manager.box_selection_input(ui);
+    if manager.selection_area().is_none()
+        && area_input
+        && !manager.eraser_mode
+        && manager.dragging_handle.is_none()
+        && response.drag_started_by(egui::PointerButton::Primary)
+        && ui.input(|i| i.modifiers.ctrl || i.modifiers.command)
+        && let Some(origin) = ui.input(|i| i.pointer.press_origin())
+        && pane.contains(origin)
+        && manager.hit_test(origin).is_none()
+        && !manager
+            .selected_ids()
+            .any(|id| manager.hit_test_handle_by_id(origin, id).is_some())
+    {
+        manager.begin_selection_area(origin, pane);
+    }
+    // Escape also cancels while the selection modifier is still held.
+    if manager.selection_area().is_some() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        manager.deselect();
+    }
+    let Some(area) = manager.selection_area() else {
+        return false;
+    };
+    if area.pane != pane {
+        return true;
+    }
+    if !area.cancelled
+        && let Some(pointer) = ui.input(|i| i.pointer.interact_pos())
+    {
+        let rect = Rect::from_two_pos(area.origin, pane.clamp(pointer));
+        manager.update_selection_area(ui.ctx(), rect);
+        let color = ui.visuals().selection.bg_fill;
+        ui.painter().with_clip_rect(pane).rect(
+            rect,
+            0.0,
+            color.gamma_multiply(0.15),
+            Stroke::new(1.0, color),
+            StrokeKind::Inside,
+        );
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+    }
+    if !ui.input(|i| i.pointer.primary_down()) {
+        manager.end_selection_area();
+    }
+    true
 }
 
 /// The cursor for a handle: a resize arrow along the way it moves its drawing, or a grab for a body move.
@@ -233,6 +293,235 @@ mod tests {
     use crate::drawings::manager::DrawingSyncAction;
     use crate::drawings::{ChartPoint, Drawing};
     use egui::{Context, Event, Id, PointerButton, Pos2, RawInput, Sense};
+
+    /// An area gesture adds visible drawings without panning or copying, survives modifier
+    /// release, cancels on Escape, and leaves the set ready for one undoable edit.
+    #[test]
+    fn box_selection_adds_without_pan_and_edits_the_selected_set() {
+        use crate::widget::test_frames::{chart, frame};
+        use egui::{Modifiers, pos2, vec2};
+        for modifiers in [Modifiers::CTRL, Modifiers::COMMAND] {
+            for cancel in [false, true] {
+                let ctx = Context::default();
+                let mut chart = chart(&[10.0], &[20.0]);
+                chart.chart_options.crosshair.style = crate::config::CrosshairStyle::Arrow;
+                for id in 6..=13 {
+                    let mut drawing = Drawing::new(id, DrawingToolType::TrendLine);
+                    drawing.completed = true;
+                    let price = if id == 6 {
+                        11.0
+                    } else {
+                        14.0 + (id % 3) as f64
+                    };
+                    drawing.chart_points =
+                        vec![ChartPoint::new(30.0, price), ChartPoint::new(70.0, price)];
+                    drawing.locked = id == 9;
+                    drawing.visible = id != 10;
+                    drawing.selectable = id != 11;
+                    drawing.pane = (id == 12).then_some(999);
+                    if id == 13 {
+                        drawing.timeframe_visibility =
+                            crate::drawings::TimeframeVisibility::specific(&[]);
+                    }
+                    chart.drawings_mut().drawings.push(drawing);
+                }
+                chart.drawings_mut().select(6);
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                let drawing = &chart.drawings().drawings[1];
+                let from = pos2(drawing.points[0].x - 20.0, drawing.points[0].y - 70.0);
+                let to = pos2(drawing.points[1].x + 20.0, drawing.points[0].y + 60.0);
+                let view = chart.get_time_scale_state();
+                let before = chart.drawings().drawings.clone();
+                let button = |pos, pressed| Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers,
+                };
+                for (step, events) in [
+                    vec![Event::ModifiersChanged(modifiers), Event::PointerMoved(to)],
+                    vec![button(to, true)],
+                    vec![Event::PointerMoved(from)],
+                    if cancel {
+                        vec![Event::Key {
+                            key: egui::Key::Escape,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers,
+                        }]
+                    } else {
+                        vec![Event::ModifiersChanged(Modifiers::NONE)]
+                    },
+                    vec![Event::PointerMoved(from - vec2(5.0, 5.0))],
+                    vec![button(from, false)],
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    frame(&ctx, &mut chart, 0.1 + step as f64 * 0.1, events);
+                    let after = chart.get_time_scale_state();
+                    assert_eq!(after, view, "step {step}");
+                    assert_eq!(chart.drawings().drawings.len(), before.len());
+                    for (drawing, old) in chart.drawings().drawings.iter().zip(&before) {
+                        assert_eq!(drawing.chart_points, old.chart_points);
+                    }
+                }
+                let selected: Vec<_> = chart.drawings().selected_ids().collect();
+                assert_eq!(selected, if cancel { vec![] } else { vec![6, 7, 8, 9] });
+                assert!(
+                    !chart.drawings_mut().undo(),
+                    "selection is not a stored edit"
+                );
+                if !cancel {
+                    chart.drawings_mut().edit_selected(|d| d.stroke_width = 4.0);
+                    for drawing in &chart.drawings().drawings {
+                        assert_eq!(drawing.stroke_width == 4.0, [6, 7, 8].contains(&drawing.id));
+                    }
+                    assert!(chart.drawings_mut().undo());
+                    for (drawing, old) in chart.drawings().drawings.iter().zip(&before) {
+                        assert_eq!(drawing.stroke_width, old.stroke_width);
+                    }
+                    assert!(!chart.drawings_mut().undo());
+                }
+            }
+        }
+    }
+
+    /// Crossing geometry is selected even with both anchors outside; a disjoint bounding box,
+    /// an unfilled circle's interior and geometry clipped outside the pane are not selected.
+    #[test]
+    fn box_selection_intersects_painted_geometry() {
+        use crate::drawings::rendering::ChartView;
+        use egui::{Modifiers, pos2, vec2};
+        let pane = Rect::from_min_size(Pos2::ZERO, vec2(500.0, 400.0));
+        for (tool, anchors, area, expected) in [
+            (
+                DrawingToolType::TrendLine,
+                vec![(100., 100.), (300., 300.)],
+                [(180., 130.), (220., 270.)],
+                true,
+            ),
+            (
+                DrawingToolType::TrendLine,
+                vec![(100., 100.), (300., 300.)],
+                [(100., 240.), (150., 290.)],
+                false,
+            ),
+            (
+                DrawingToolType::Ray,
+                vec![(100., 100.), (200., 100.)],
+                [(300., 80.), (340., 120.)],
+                true,
+            ),
+            (
+                DrawingToolType::HorizontalLine,
+                vec![(100., 100.)],
+                [(300., 80.), (340., 120.)],
+                true,
+            ),
+            (
+                DrawingToolType::Circle,
+                vec![(200., 200.), (280., 200.)],
+                [(180., 180.), (220., 220.)],
+                false,
+            ),
+            (
+                DrawingToolType::Circle,
+                vec![(200., 200.), (280., 200.)],
+                [(270., 180.), (310., 220.)],
+                true,
+            ),
+            (
+                DrawingToolType::TextLabel,
+                vec![(50., 100.)],
+                [(150., 80.), (200., 120.)],
+                true,
+            ),
+            (
+                DrawingToolType::TrendLine,
+                vec![(50., 450.), (450., 450.)],
+                [(20., 350.), (480., 390.)],
+                false,
+            ),
+        ] {
+            let ctx = Context::default();
+            let mut manager = DrawingManager::new();
+            manager.update_pane_anchors(pane);
+            let mut drawing = Drawing::new(7, tool);
+            drawing.completed = true;
+            drawing.fill_color = None;
+            drawing.text = (tool == DrawingToolType::TextLabel)
+                .then(|| "A deliberately long annotation".into());
+            drawing.points = anchors.into_iter().map(|(x, y)| pos2(x, y)).collect();
+            drawing.chart_points = drawing
+                .points
+                .iter()
+                .map(|p| ChartPoint::new(p.x, f64::from(p.y)))
+                .collect();
+            manager.drawings.push(drawing);
+            let mut cursors = CursorModeState::default();
+            let [from, to] = area.map(|(x, y)| pos2(x, y));
+            let button = |pos, pressed| Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::CTRL,
+            };
+            for events in [
+                vec![],
+                vec![Event::PointerMoved(from)],
+                vec![button(from, true)],
+                vec![Event::PointerMoved(to)],
+                vec![button(to, false)],
+            ] {
+                ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(pane),
+                        events: std::iter::once(Event::ModifiersChanged(Modifiers::CTRL))
+                            .chain(events)
+                            .collect(),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let response =
+                            ui.interact(pane, Id::NULL.with("chart"), Sense::click_and_drag());
+                        handle_selection(
+                            ui,
+                            &mut manager,
+                            &mut cursors,
+                            &response,
+                            pane,
+                            &|x| x,
+                            &f64::from,
+                            &|price, from, to| price + f64::from(to - from),
+                        );
+                        manager.render_all(
+                            ui.painter(),
+                            pane,
+                            &ChartView {
+                                price_formatter: None,
+                                time_formatter: None,
+                                bar_seconds: 0,
+                                instrument: None,
+                                bars: &[],
+                                revision: 0,
+                                bar_to_x: &|x| x,
+                                price_to_y: &|y| y as f32,
+                                y_to_price: &f64::from,
+                                time_axis: true,
+                                executions: None,
+                                timeframe: None,
+                                finer: &[],
+                            },
+                        );
+                    },
+                )
+                .drop_without_applying_deltas();
+            }
+            assert_eq!(manager.is_selected(7), expected, "{tool:?}, {area:?}");
+        }
+    }
 
     /// Shift projects a dragged endpoint onto 45 degrees, locks body movement to one axis,
     /// and command drags leave the original untouched with a single undoable copy.
@@ -708,111 +997,114 @@ mod tests {
         }
     }
 
-    /// Shift-click keeps both drawings selected; dragging either body moves the group
+    /// Shift/Ctrl/Command-click keeps both drawings selected; dragging either body moves the group
     /// without panning, and Delete removes the whole selection in one undo step.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
     #[cfg_attr(not(target_arch = "wasm32"), test)]
-    fn shift_selection_moves_and_deletes_as_one_action() {
+    fn modifier_selection_moves_and_deletes_as_one_action() {
         use crate::widget::test_frames::{chart, frame};
         use egui::{Key, Modifiers, vec2};
-        let ctx = Context::default();
-        let mut chart = chart(&[10.0], &[20.0]);
-        for (id, price) in [(7, 14.0), (8, 17.0)] {
-            let mut drawing = Drawing::new(id, DrawingToolType::TrendLine);
-            drawing.completed = true;
-            drawing.chart_points = vec![ChartPoint::new(30.0, price), ChartPoint::new(70.0, price)];
-            chart.drawings_mut().drawings.push(drawing);
-        }
-        let mut time = 0.0;
-        frame(&ctx, &mut chart, time, vec![]);
-        let first = chart.drawings().drawings[0].points[0]
-            .lerp(chart.drawings().drawings[0].points[1], 0.5);
-        let second = chart.drawings().drawings[1].points[0]
-            .lerp(chart.drawings().drawings[1].points[1], 0.5);
-        let button = |pos, pressed, modifiers| Event::PointerButton {
-            pos,
-            button: PointerButton::Primary,
-            pressed,
-            modifiers,
-        };
-        let mut step = |chart: &mut crate::widget::Chart, events| {
-            time += 0.5;
-            frame(&ctx, chart, time, events);
-        };
-        for (pos, modifiers) in [(first, Modifiers::NONE), (second, Modifiers::SHIFT)] {
-            step(
-                &mut chart,
-                vec![Event::ModifiersChanged(modifiers), Event::PointerMoved(pos)],
-            );
-            step(&mut chart, vec![button(pos, true, modifiers)]);
-            step(&mut chart, vec![button(pos, false, modifiers)]);
-        }
-        // A context action targets the clicked member without dropping its peers.
-        assert!(chart.drawings().measurement.is_none());
-        for pressed in [true, false] {
-            step(
-                &mut chart,
+        for modifier in [Modifiers::SHIFT, Modifiers::CTRL, Modifiers::COMMAND] {
+            let ctx = Context::default();
+            let mut chart = chart(&[10.0], &[20.0]);
+            for (id, price) in [(7, 14.0), (8, 17.0)] {
+                let mut drawing = Drawing::new(id, DrawingToolType::TrendLine);
+                drawing.completed = true;
+                drawing.chart_points =
+                    vec![ChartPoint::new(30.0, price), ChartPoint::new(70.0, price)];
+                chart.drawings_mut().drawings.push(drawing);
+            }
+            let mut time = 0.0;
+            frame(&ctx, &mut chart, time, vec![]);
+            let first = chart.drawings().drawings[0].points[0]
+                .lerp(chart.drawings().drawings[0].points[1], 0.5);
+            let second = chart.drawings().drawings[1].points[0]
+                .lerp(chart.drawings().drawings[1].points[1], 0.5);
+            let button = |pos, pressed, modifiers| Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers,
+            };
+            let mut step = |chart: &mut crate::widget::Chart, events| {
+                time += 0.5;
+                frame(&ctx, chart, time, events);
+            };
+            for (pos, modifiers) in [(first, Modifiers::NONE), (second, modifier)] {
+                step(
+                    &mut chart,
+                    vec![Event::ModifiersChanged(modifiers), Event::PointerMoved(pos)],
+                );
+                step(&mut chart, vec![button(pos, true, modifiers)]);
+                step(&mut chart, vec![button(pos, false, modifiers)]);
+            }
+            // A context action targets the clicked member without dropping its peers.
+            assert!(chart.drawings().measurement.is_none());
+            for pressed in [true, false] {
+                step(
+                    &mut chart,
+                    vec![
+                        Event::ModifiersChanged(Modifiers::NONE),
+                        Event::PointerMoved(first),
+                        Event::PointerButton {
+                            pos: first,
+                            button: PointerButton::Secondary,
+                            pressed,
+                            modifiers: Modifiers::NONE,
+                        },
+                    ],
+                );
+            }
+            assert_eq!(chart.drawings().sel_drawing(), Some(7));
+            assert_eq!(chart.drawings().selected_ids().collect::<Vec<_>>(), [7, 8]);
+            let view = chart.get_time_scale_state();
+            let before: Vec<_> = chart
+                .drawings()
+                .drawings
+                .iter()
+                .map(|d| d.chart_points.clone())
+                .collect();
+            let to = first + vec2(40.0, 20.0);
+            for events in [
                 vec![
                     Event::ModifiersChanged(Modifiers::NONE),
                     Event::PointerMoved(first),
-                    Event::PointerButton {
-                        pos: first,
-                        button: PointerButton::Secondary,
-                        pressed,
-                        modifiers: Modifiers::NONE,
-                    },
                 ],
+                vec![button(first, true, Modifiers::NONE)],
+                vec![Event::PointerMoved(to)],
+                vec![button(to, false, Modifiers::NONE)],
+            ] {
+                step(&mut chart, events);
+            }
+            assert_eq!(
+                chart.get_time_scale_state(),
+                view,
+                "a selected body must own the drag"
             );
+            let delta = chart.drawings().drawings[0].chart_points[0].bar_idx - before[0][0].bar_idx;
+            assert!(delta > 0.0);
+            for (drawing, old) in chart.drawings().drawings.iter().zip(&before) {
+                assert_eq!(drawing.chart_points[0].bar_idx - old[0].bar_idx, delta);
+            }
+            assert!(chart.undo());
+            for (drawing, old) in chart.drawings().drawings.iter().zip(&before) {
+                assert_eq!(&drawing.chart_points, old);
+            }
+            step(
+                &mut chart,
+                vec![Event::Key {
+                    key: Key::Delete,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::NONE,
+                }],
+            );
+            assert!(chart.drawings().drawings.is_empty());
+            assert!(chart.undo());
+            assert_eq!(chart.drawings().drawings.len(), 2);
+            assert!(!chart.can_undo());
         }
-        assert_eq!(chart.drawings().sel_drawing(), Some(7));
-        assert_eq!(chart.drawings().selected_ids().collect::<Vec<_>>(), [7, 8]);
-        let view = chart.get_time_scale_state();
-        let before: Vec<_> = chart
-            .drawings()
-            .drawings
-            .iter()
-            .map(|d| d.chart_points.clone())
-            .collect();
-        let to = first + vec2(40.0, 20.0);
-        for events in [
-            vec![
-                Event::ModifiersChanged(Modifiers::NONE),
-                Event::PointerMoved(first),
-            ],
-            vec![button(first, true, Modifiers::NONE)],
-            vec![Event::PointerMoved(to)],
-            vec![button(to, false, Modifiers::NONE)],
-        ] {
-            step(&mut chart, events);
-        }
-        assert_eq!(
-            chart.get_time_scale_state(),
-            view,
-            "a selected body must own the drag"
-        );
-        let delta = chart.drawings().drawings[0].chart_points[0].bar_idx - before[0][0].bar_idx;
-        assert!(delta > 0.0);
-        for (drawing, old) in chart.drawings().drawings.iter().zip(&before) {
-            assert_eq!(drawing.chart_points[0].bar_idx - old[0].bar_idx, delta);
-        }
-        assert!(chart.undo());
-        for (drawing, old) in chart.drawings().drawings.iter().zip(&before) {
-            assert_eq!(&drawing.chart_points, old);
-        }
-        step(
-            &mut chart,
-            vec![Event::Key {
-                key: Key::Delete,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers: Modifiers::NONE,
-            }],
-        );
-        assert!(chart.drawings().drawings.is_empty());
-        assert!(chart.undo());
-        assert_eq!(chart.drawings().drawings.len(), 2);
-        assert!(!chart.can_undo());
     }
 
     /// Whole drawings keep off-pane anchors and their shape through the widget's scale mapping.

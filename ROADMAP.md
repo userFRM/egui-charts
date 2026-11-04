@@ -86,7 +86,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 ### Interaction, Properties and Persistence
 
 - [x] Fixed-point placement keeps clicked anchors; free paths finish with Enter or double-click.
-- [x] Selection uses rendered strokes, fills and text, with geometry and anchor fallbacks before painting.
+- [x] Selection uses rendered strokes, fills and text, with geometry and anchor fallbacks before painting. Ctrl/Command-drag on empty pane space adds drawings intersecting the selection area, including locked drawings for inspection; editing still honours locks. Escape cancels the area gesture.
 - [x] Anchor handles, dragging, OHLC/study/drawing magnet snapping, repeated placement, locking and visibility controls.
 - [x] Undoable drawing creation, edits, deletion, ordering, flat groups and moves between panes.
 - [x] Properties edit style, tool inputs, text, timeframe visibility and validated price/time coordinates.
