@@ -219,6 +219,11 @@ impl Chart {
             });
             return;
         }
+        if !matches!(action, StudyAction::ToggleVisibility(_))
+            && !self.indicator_user_edit_enabled(id)
+        {
+            return;
+        }
         self.user_action(|chart| match action {
             StudyAction::Settings(_) => chart.indicator_settings_request = Some(id),
             StudyAction::ToggleVisibility(_) => {

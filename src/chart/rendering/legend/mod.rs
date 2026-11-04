@@ -3,7 +3,7 @@
 mod quotes;
 mod study_controls;
 
-pub(crate) use study_controls::study_controls;
+pub(crate) use study_controls::{controls_width, study_controls};
 
 use quotes::paint_quotes;
 
@@ -691,7 +691,7 @@ impl<'a> Legend<'a> {
                         let up = study.values().value(0, self.bar_index);
                         let line = usize::from(up.is_none());
                         if let Some(value) = up.or_else(|| study.values().value(1, self.bar_index))
-                            && study.plot_style(line).visible
+                            && study.legend_visible(line)
                         {
                             // The column colour without its transparency.
                             let [r, g, b, _] = study
@@ -758,7 +758,9 @@ impl<'a> Legend<'a> {
                         layout.text(text, theme.text.ohlc, color, bounds.width());
                     }
                 }
-                let controls = layout.reserve(Vec2::new(80.0, 20.0)).intersect(bounds);
+                let controls = layout
+                    .reserve(Vec2::new(controls_width(study.as_ref()), 20.0))
+                    .intersect(bounds);
                 let row_right = if layout.pos.y > row_start.y {
                     bounds.right()
                 } else {
@@ -768,13 +770,8 @@ impl<'a> Legend<'a> {
                     .intersect(bounds);
                 // The next row's backdrop goes under this row's outline, which reaches into it.
                 layout.new_row();
-                let (responses, menu) = study_controls(
-                    ui,
-                    row,
-                    controls,
-                    id.with(("study", index)),
-                    study.is_visible(),
-                );
+                let (responses, menu) =
+                    study_controls(ui, row, controls, id.with(("study", index)), study.as_ref());
                 for (response, intent) in responses.iter().zip([
                     StudyAction::ToggleVisibility(index),
                     StudyAction::Settings(index),

@@ -1,6 +1,5 @@
 use super::*;
 use crate::model::{BarData, LineStyle, SeriesDisplayFormat, SeriesFormat};
-use crate::tokens::DESIGN_TOKENS;
 use crate::widget::test_frames::frame;
 use crate::widget::{PaneId, SeriesId, SeriesOptions};
 use chrono::{TimeDelta, Utc};
@@ -24,6 +23,219 @@ fn bars(prices: &[f64]) -> Vec<Bar> {
             )
         })
         .collect()
+}
+
+/// Fitting includes all loaded series and whitespace, independent of visibility and pane.
+/// Minutes 0..30 span 31 slots: spacing is width / (31 + margin), or (width - px) / 31.
+#[test]
+fn fit_content_includes_added_series_across_panes() {
+    for case in [
+        "main only",
+        "both sides",
+        "pane",
+        "pixels",
+        "hidden",
+        "added only",
+        "added only pane",
+        "added only numeric",
+        "added only Heikin",
+        "added only multiple",
+        "whitespace",
+        "minimum",
+        "maximum",
+        "fixed edges",
+        "numeric",
+        "multiple series",
+        "fractional",
+    ] {
+        let ctx = egui::Context::default();
+        let mut data = bars(&[10.0; 41]);
+        if case == "fractional" {
+            data[0].time += TimeDelta::seconds(30);
+            data[30].time += TimeDelta::seconds(15);
+        }
+        let mut chart = Chart::new(BarData::from_bars(if case.starts_with("added only") {
+            vec![]
+        } else if case == "numeric" {
+            vec![data[10].clone(), data[11].clone(), data[20].clone()]
+        } else {
+            data[10..=20].to_vec()
+        }));
+        chart.config.show_volume = false;
+        if case == "added only Heikin" {
+            chart.set_chart_type(ChartType::Heikin);
+        }
+        let mut options = chart.chart_options().clone();
+        options.time_scale.right_offset = 3.0;
+        options.time_scale.right_offset_pixels = (case == "pixels").then_some(60.0);
+        options.time_scale.min_bar_spacing = if case == "minimum" { 100.0 } else { 0.5 };
+        options.time_scale.max_bar_spacing = if case == "maximum" { 4.0 } else { 0.0 };
+        options.time_scale.fix_left_edge = case == "fixed edges";
+        options.time_scale.fix_right_edge = case == "fixed edges";
+        chart = chart.with_chart_options(options);
+        if case.contains("numeric") {
+            chart.set_horizontal_scale(Some(std::sync::Arc::new(
+                crate::scales::PriceHorizontalScale::default(),
+            )));
+        }
+        let color = Color32::from_rgb(133, 77, 211);
+        let mut id = chart.add_series(SeriesOptions {
+            color,
+            ..Default::default()
+        });
+        if case != "main only" {
+            chart.set_data(
+                id,
+                vec![data[0].clone(), data[15].clone(), data[30].clone()],
+            );
+        }
+        if case == "added only multiple" {
+            chart.set_data(id, vec![data[0].clone(), data[5].clone()]);
+            id = chart.add_series(SeriesOptions {
+                color,
+                ..Default::default()
+            });
+            chart.set_data(
+                id,
+                vec![data[5].clone(), data[25].clone(), data[30].clone()],
+            );
+            let pane = chart.add_pane();
+            assert!(chart.move_series_to_pane(id, pane));
+        }
+        if case == "multiple series" {
+            chart.set_data(id, vec![data[5].clone(), data[25].clone()]);
+            id = chart.add_series(SeriesOptions {
+                color,
+                ..Default::default()
+            });
+            chart.set_data(id, vec![data[0].clone(), data[30].clone()]);
+            let pane = chart.add_pane();
+            assert!(chart.move_series_to_pane(id, pane));
+        }
+        if case == "hidden" {
+            chart.set_series_visible(id, false);
+            chart.set_main_series_visible(false);
+        }
+        if case.contains("pane") {
+            let pane = chart.add_pane();
+            assert!(chart.move_series_to_pane(id, pane));
+        }
+        if case == "whitespace" {
+            chart.set_data(
+                id,
+                vec![
+                    Bar::whitespace(data[0].time),
+                    data[15].clone(),
+                    Bar::whitespace(data[30].time),
+                ],
+            );
+        }
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        frame(&ctx, &mut chart, 0.05, vec![]);
+        chart.fit_content();
+        let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 0.1, vec![]);
+        let plot = chart.get_rendered_price_rect();
+        let slots = if case == "main only" {
+            11.0
+        } else if case == "added only multiple" {
+            4.0
+        } else if case.starts_with("added only") {
+            3.0
+        } else if case == "numeric" {
+            7.0
+        } else if case == "fractional" {
+            30.75
+        } else {
+            31.0
+        };
+        let margin = if case == "fixed edges" { 0.0 } else { 3.0 };
+        let pixels = if case == "pixels" { 60.0 } else { 0.0 };
+        let expected =
+            ((plot.width() - pixels) / (slots + if pixels > 0.0 { 0.0 } else { margin })).clamp(
+                if case == "minimum" { 100.0 } else { 0.5 },
+                if case == "maximum" { 4.0 } else { f32::MAX },
+            );
+        assert!(
+            (chart.get_time_scale_state().0 - expected).abs() < 0.001,
+            "{case}: spacing {:?} != {expected}",
+            chart.get_time_scale_state()
+        );
+        let endpoints = if case == "main only" {
+            [10, 20]
+        } else {
+            [0, 30]
+        };
+        for minute in endpoints {
+            let index = chart.time_to_index(data[minute].time).unwrap();
+            let x = chart.index_to_x(index).unwrap();
+            if case != "minimum" {
+                assert!(
+                    plot.x_range().contains(x),
+                    "{case}: endpoint {minute} at {x}, {plot:?}"
+                );
+            }
+            if case != "main only" && case != "hidden" && case != "whitespace" && case != "minimum"
+            {
+                assert!(painted.iter().any(|shape| matches!(shape,
+                    egui::Shape::Path(path) if path.stroke.color == egui::epaint::ColorMode::Solid(color)
+                        && path.points.iter().any(|point| (point.x - x).abs() < 0.01)
+                )), "{case}: added endpoint {minute} is painted");
+            }
+        }
+        let last = chart.time_to_index(data[endpoints[1]].time).unwrap();
+        let last_x = chart.index_to_x(last).unwrap();
+        let gap = if pixels > 0.0 {
+            pixels
+        } else {
+            margin * expected
+        };
+        assert!(
+            (plot.right() - last_x - (gap + expected / 2.0 + 1.0)).abs() < 0.01,
+            "{case}: right margin"
+        );
+        if case.starts_with("added only") && case != "added only multiple" {
+            assert!(chart.bars(SeriesId::MAIN).is_empty());
+            // Appends and replacements update the fallback mapping before the next fit.
+            chart.update(id, data[40].clone());
+            chart.fit_content();
+            frame(&ctx, &mut chart, 0.2, vec![]);
+            let x = chart
+                .index_to_x(chart.time_to_index(data[40].time).unwrap())
+                .unwrap();
+            assert!(chart.get_rendered_price_rect().x_range().contains(x));
+            if case == "added only numeric" {
+                chart.set_data(
+                    id,
+                    vec![
+                        data[0].clone(),
+                        data[5].clone(),
+                        data[30].clone(),
+                        data[40].clone(),
+                    ],
+                );
+                chart.fit_content();
+                frame(&ctx, &mut chart, 0.25, vec![]);
+                let x = |minute: usize| {
+                    chart
+                        .index_to_x(chart.time_to_index(data[minute].time).unwrap())
+                        .unwrap()
+                };
+                // Replacing minute 15 by minute 5 preserves the endpoints and row count.
+                assert!(((x(30) - x(5)) / (x(5) - x(0)) - 5.0).abs() < 0.001);
+            }
+            chart.set_data(SeriesId::MAIN, data[10..=20].to_vec());
+            chart.fit_content();
+            frame(&ctx, &mut chart, 0.3, vec![]);
+            assert_eq!(chart.time_at_index(0), Some(data[10].time));
+            chart.remove_series(id);
+            chart.fit_content();
+            assert!(
+                (chart.get_time_scale_state().0 - chart.get_rendered_price_rect().width() / 14.0)
+                    .abs()
+                    < 0.001
+            );
+        }
+    }
 }
 
 /// Last-value queries skip whitespace and use shared indices, each pane's scale and the
@@ -1338,6 +1550,135 @@ fn comparisons_share_percent_ranges_with_individual_visible_references() {
     }
 }
 
+/// Saved strokes draw independently on main and added series, at their first visible close:
+/// (close - base) / base * 100 = 0%, or close / base * 100 = 100.
+#[test]
+fn relative_base_lines_use_each_series_stroke_and_visibility() {
+    for own_pane in [false, true] {
+        for mode in [
+            PriceScaleMode::Normal,
+            PriceScaleMode::Logarithmic,
+            PriceScaleMode::Percentage,
+            PriceScaleMode::IndexedTo100,
+        ] {
+            for (pattern, dash, gap) in [
+                ("Solid", 0.0, 0.0),
+                ("Dashed", 4.0, 4.0),
+                ("Dotted", 1.0, 3.0),
+                ("LargeDashed", 8.0, 8.0),
+                ("SparseDotted", 1.0, 7.0),
+            ] {
+                let ctx = egui::Context::default();
+                let mut chart = Chart::new(BarData::from_bars(bars(&[100.0, 110.0, 90.0])));
+                let added = chart.add_series(SeriesOptions {
+                    scale: SeriesScale::Separate(2),
+                    ..Default::default()
+                });
+                chart.set_data(added, bars(&[200.0, 180.0, 220.0]));
+                if own_pane {
+                    let pane = chart.add_pane();
+                    assert!(chart.move_series_to_pane(added, pane));
+                }
+                let cases = [
+                    (SeriesId::MAIN, Color32::MAGENTA, 3.0, 100.0),
+                    (added, Color32::GOLD, 2.0, 200.0),
+                ];
+                for (id, color, width, _) in cases {
+                    let mut saved = serde_json::to_value(chart.series_style(id).unwrap()).unwrap();
+                    saved["base_line_color"] = serde_json::to_value(color).unwrap();
+                    saved["base_line_width"] = serde_json::json!(width);
+                    saved["base_line_style"] =
+                        serde_json::json!(if id == added { "LargeDashed" } else { pattern });
+                    saved["base_line_visible"] = serde_json::json!(true);
+                    *chart.series_style_mut(id).unwrap() = serde_json::from_value(saved).unwrap();
+                    chart.series_price_scale_mut(id).unwrap().options_mut().mode = mode;
+                }
+                for (at, hidden_line, hidden_series) in [
+                    (0.0, None, None),
+                    (0.1, Some(SeriesId::MAIN), None),
+                    (0.2, Some(added), None),
+                    (0.3, None, Some(SeriesId::MAIN)),
+                    (0.4, None, Some(added)),
+                ] {
+                    for (id, ..) in cases {
+                        chart.series_style_mut(id).unwrap().base_line_visible =
+                            hidden_line != Some(id);
+                        assert!(chart.set_series_visible(id, hidden_series != Some(id)));
+                    }
+                    let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, at, vec![]);
+                    for (id, color, width, base) in cases {
+                        let (pattern, dash, gap) = if id == added {
+                            ("LargeDashed", 8.0, 8.0)
+                        } else {
+                            (pattern, dash, gap)
+                        };
+                        let mut segments = Vec::new();
+                        for shape in &painted {
+                            match shape {
+                                egui::Shape::LineSegment { points, stroke }
+                                    if stroke.color == color =>
+                                {
+                                    assert_eq!(stroke.width, width);
+                                    segments.push(*points);
+                                }
+                                egui::Shape::Mesh(mesh)
+                                    if mesh.vertices.first().is_some_and(|v| v.color == color) =>
+                                {
+                                    for dot in mesh.vertices.as_chunks::<4>().0 {
+                                        let positions: [Pos2; 4] =
+                                            std::array::from_fn(|at| dot[at].pos);
+                                        let rect = Rect::from_points(&positions);
+                                        assert_eq!(rect.height(), width);
+                                        segments.push([
+                                            egui::pos2(rect.left(), rect.center().y),
+                                            egui::pos2(rect.right(), rect.center().y),
+                                        ]);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        let visible = matches!(
+                            mode,
+                            PriceScaleMode::Percentage | PriceScaleMode::IndexedTo100
+                        ) && hidden_line != Some(id)
+                            && hidden_series != Some(id);
+                        assert_eq!(
+                            !segments.is_empty(),
+                            visible,
+                            "{id:?} {mode:?} {pattern} pane={own_pane}"
+                        );
+                        if !visible {
+                            continue;
+                        }
+                        let map = chart.series_price_map(id).unwrap();
+                        assert_eq!(
+                            map.transform().to_scale(base),
+                            if mode == PriceScaleMode::Percentage {
+                                0.0
+                            } else {
+                                100.0
+                            }
+                        );
+                        for points in &segments {
+                            let tolerance = if dash == 1.0 { 0.51 } else { 0.01 };
+                            assert!((points[0].y - map.price_to_y(base)).abs() < tolerance);
+                            assert_eq!(points[0].y, points[1].y);
+                        }
+                        if pattern == "Solid" {
+                            assert_eq!(segments.len(), 1);
+                        } else {
+                            assert!(segments.len() > 2);
+                            assert!((segments[0][1].x - segments[0][0].x - dash).abs() < 0.01);
+                            assert!((segments[1][0].x - segments[0][1].x - gap).abs() < 0.01);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Secondary history and corrections use the main merge rules, and visibility/removal
 /// cannot lose data or resurrect an id. A scale move preserves the other memberships.
 #[test]
@@ -1465,7 +1806,7 @@ fn series_style_draws_columns_and_lines_and_fits_provided_ranges() {
     assert!((range.min - 48.75).abs() < 1e-10 && (range.max - 61.25).abs() < 1e-10);
     for (price, color) in [
         (220.0, Color32::GOLD),
-        (200.0, DESIGN_TOKENS.semantic.extended.gray),
+        (200.0, Color32::from_rgb(178, 181, 190)),
     ] {
         assert!(painted.iter().any(|shape| matches!(shape,
             egui::Shape::LineSegment { points, stroke }

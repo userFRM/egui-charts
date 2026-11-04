@@ -214,16 +214,19 @@ impl SeriesOptions {
 }
 
 /// The base line of a percentage or indexed scale mapped by `map`, at 0% or 100.
-pub(in crate::widget) fn base_line(map: &PriceMap) -> Option<PriceLine> {
+pub(in crate::widget) fn base_line(map: &PriceMap, style: &SeriesStyle) -> Option<PriceLine> {
     let transform = map.transform();
-    matches!(
-        transform.mode,
-        PriceScaleMode::Percentage | PriceScaleMode::IndexedTo100
-    )
+    (style.base_line_visible
+        && style.base_line_width.is_finite()
+        && style.base_line_width > 0.0
+        && matches!(
+            transform.mode,
+            PriceScaleMode::Percentage | PriceScaleMode::IndexedTo100
+        ))
     .then(|| {
-        PriceLine::new(transform.base, DESIGN_TOKENS.semantic.extended.gray)
-            .with_width(DESIGN_TOKENS.stroke.hairline)
-            .with_style(LineStyle::Solid)
+        PriceLine::new(transform.base, style.base_line_color)
+            .with_width(style.base_line_width)
+            .with_style(style.base_line_style)
             .with_axis_label(false)
     })
 }
@@ -375,6 +378,8 @@ impl Chart {
     /// [`set_data`](Self::set_data) and [`update`](Self::update); the host owns feeds. Times
     /// are projected onto the main series' time axis, including its whitespace. Move the
     /// series to another pane with [`move_series_to_pane`](Self::move_series_to_pane).
+    /// Without the original price pane, it joins the surviving main series, or the first
+    /// remaining pane when the main series is absent.
     pub fn add_series(&mut self, options: SeriesOptions) -> SeriesId {
         let options = options.sanitized();
         let id = SeriesId(self.next_series);
@@ -395,6 +400,9 @@ impl Chart {
             change_marks: None,
             lines: Vec::new(),
         });
+        if !self.panes().contains(&PaneId::MAIN) {
+            self.sync_panes();
+        }
         self.host_events
             .push(crate::widget::ChartEvent::SeriesAdded(id));
         id
