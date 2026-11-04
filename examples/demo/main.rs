@@ -48,9 +48,12 @@ fn main() -> eframe::Result {
                 )
                 .await;
             if let Err(error) = result {
+                let message = error.as_string().unwrap_or_else(|| {
+                    "Check your connection and graphics support, then retry.".into()
+                });
                 startup_state(
                     "error",
-                    Some(&format!("Could not start the chart: {error:?}")),
+                    Some(&format!("Could not start the chart: {message}")),
                 );
             }
         });
