@@ -6,8 +6,8 @@ book through the existing [`Datafeed`](https://userfrm.github.io/egui-charts/doc
 [`Footprint::new(chart.bar_clock(), tick_size, ticks_per_row)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Footprint.html#method.new) aggregates executions without
 estimating their aggressor from candles. Replay chronological historical trades once and append
 new executions with [`push`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Footprint.html#method.push); rebuild on corrections. Unknown aggressors contribute to total
-volume and remain outside bid/ask delta. [`Chart::show_footprint`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.show_footprint) draws the four numeric modes,
-profiles, grouped rows, imbalances, POC and value area in place of the price series. Its
+volume and remain outside bid/ask delta. [`Chart::show_footprint`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.show_footprint) draws volume, delta, trade count and
+average size columns, profiles, grouped rows, imbalances, POC and value area in place of the price series. Its
 [`FootprintConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/overlays/struct.FootprintConfig.html) controls the presentation: cell colour, number abbreviation and zero display,
 value-sized fonts, extreme ask/bid ratios and the pullback range. Automatic grouping affects
 display only.
@@ -157,6 +157,9 @@ price. [`nodes`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/stud
 rows count as zero, and endpoints and ties are not nodes. The renderer selects bid/ask stacks,
 total volume or signed delta through the first [`FootprintConfig::modes`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/overlays/struct.FootprintConfig.html#structfield.modes) entry. It draws the
 value area, POC, developing POC and volume nodes on the host's price mapping.
+[`developing_value_area`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TradeProfile.html#method.developing_value_area) returns the inclusive value area rows after each
+contributing bar of the footprint the profile came from, by the final area's share and tie rules. The Profile section of the Symbol settings can trace that area and extend each
+completed session's POC, VAH and VAL to the first later bar that trades in their row; all are off by default, and sessions labelled "Partial executions" do not extend.
 
 ## Stream studies
 

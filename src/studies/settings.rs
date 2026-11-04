@@ -187,6 +187,15 @@ impl StudyIntervalRange {
 /// Host-serializable presentation settings of an applied study.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct StudySettings {
+    /// Show values in the status line when the chart enables study values. Defaults to true.
+    #[serde(default = "enabled_by_default")]
+    pub show_legend_values: bool,
+    /// Allow user edits through settings, legend and context controls. Host APIs remain writable.
+    #[serde(default = "enabled_by_default")]
+    pub user_edit_enabled: bool,
+    /// Help article requested through the host. None uses the underlying study's metadata.
+    #[serde(default)]
+    pub help_url: Option<String>,
     /// One style per declared output line.
     pub plots: Vec<PlotStyle>,
     /// Decimal places, or the chart's default precision.
@@ -215,6 +224,10 @@ pub struct StudySettings {
     /// Applying settings drops indices without a plot and sorts the rest.
     #[serde(default)]
     pub untagged_plots: Vec<usize>,
+}
+
+fn enabled_by_default() -> bool {
+    true
 }
 
 /// An owned settings and input snapshot without calculated study data.
@@ -378,6 +391,12 @@ impl ConfiguredStudy {
             aligned_zones: Vec::new(),
         }
     }
+    /// Attach a host-chosen help article to this study, retained in saved presentation.
+    pub fn with_help_url(mut self, url: impl Into<String>) -> Self {
+        self.settings.help_url = Some(url.into());
+        self
+    }
+
     /// Whether the study can be calculated on another interval: it reads one source, or the bars
     /// alone, without data of its own to request or order flow it cannot do without.
     fn runs_on_other_bars(&self) -> bool {
@@ -413,6 +432,16 @@ impl Indicator for ConfiguredStudy {
         true
     }
 
+    fn user_edit_enabled(&self) -> bool {
+        self.settings.user_edit_enabled
+    }
+    fn help_url(&self) -> Option<&str> {
+        self.settings
+            .help_url
+            .as_deref()
+            .or_else(|| self.study.help_url())
+            .filter(|url| !url.trim().is_empty())
+    }
     fn name(&self) -> &str {
         self.study.name()
     }
@@ -1012,7 +1041,9 @@ impl Indicator for ConfiguredStudy {
             self.study.plot_style(line).visible,
         );
         // The study may add a readout for a hidden plot or withhold one for a drawn plot.
-        (self.plot_style(line).visible || (shown && !own)) && (shown || !own)
+        self.settings.show_legend_values
+            && (self.plot_style(line).visible || (shown && !own))
+            && (shown || !own)
     }
     fn value_format(&self) -> crate::scales::StudyFormat {
         self.study.value_format()

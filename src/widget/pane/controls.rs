@@ -309,6 +309,11 @@ impl Chart {
             child.set_invisible();
         }
         let panes = &self.pane_layout.panes;
+        let main_pane = panes
+            .iter()
+            .any(|pane| pane.id == PaneId::MAIN)
+            .then_some(PaneId::MAIN)
+            .or_else(|| self.series_pane(SeriesId::MAIN));
         let above = pane_idx.checked_sub(1).map(|at| panes[at].id);
         let below = panes.get(pane_idx + 1).map(|pane| pane.id);
         child.menu_button("...", |ui| {
@@ -334,7 +339,7 @@ impl Chart {
                     below.is_some_and(|pane| pane != PaneId::MAIN),
                     4,
                 ),
-                ("Remove pane", true, 5),
+                ("Remove pane", panes.len() > 1, 5),
             ] {
                 if ui
                     .add_enabled(enabled, egui::Button::new(l10n::text(ui.ctx(), label)))
@@ -351,7 +356,10 @@ impl Chart {
             for member in &members {
                 ui.menu_button(l10n::text(ui.ctx(), self.member_name(*member)), |ui| {
                     if ui
-                        .button(l10n::text(ui.ctx(), "Move to main pane"))
+                        .add_enabled(
+                            main_pane.is_some(),
+                            egui::Button::new(l10n::text(ui.ctx(), "Move to main pane")),
+                        )
                         .clicked()
                     {
                         action = Some(6);
@@ -396,7 +404,7 @@ impl Chart {
                 self.remove_pane(id);
             }
             Some(6) => {
-                self.move_series_to_pane(move_member.unwrap(), PaneId::MAIN);
+                self.move_series_to_pane(move_member.unwrap(), main_pane.unwrap());
             }
             Some(7) => {
                 self.move_to_new_pane(move_member.unwrap());

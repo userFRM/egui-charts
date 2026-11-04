@@ -92,7 +92,9 @@ impl Chart {
     /// bar series shown in a pane other than the main one, or [`SeriesId::MAIN`] from the main
     /// series' legend button.
     pub fn take_indicator_settings_request(&mut self) -> Option<SeriesId> {
-        self.indicator_settings_request.take()
+        self.indicator_settings_request
+            .take()
+            .filter(|id| !self.study_ids.contains(id) || self.indicator_user_edit_enabled(*id))
     }
 
     /// Replaces the bars of `series`, for history or a replay window. Invalid bars (a non-finite
@@ -796,6 +798,7 @@ impl Chart {
         let follow = self.chart_options.time_scale.shift_visible_range_on_new_bar;
         self.state
             .set_elements(built.map(|(elements, _)| elements), follow);
+        self.refresh_time_scale_content();
         #[cfg(feature = "drawings")]
         self.project_drawing_points();
     }

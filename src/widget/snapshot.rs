@@ -64,7 +64,7 @@ pub struct SavedSeries {
 /// One pane of a [`ChartSnapshot`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SavedPane {
-    /// Whether it is the price pane.
+    /// Whether it is the original price pane. A layout may omit that pane.
     pub main: bool,
     /// Its share of the chart height; see [`Chart::pane_stretch_factor`].
     pub stretch: f32,
@@ -378,6 +378,16 @@ impl Chart {
         factory: &IndicatorFactory,
     ) -> Result<Vec<SkippedDrawing>, RestoreError> {
         let (studies, drawings) = check(snapshot, factory)?;
+        let main_present = snapshot.panes.iter().any(|pane| pane.main);
+        let main_source_present =
+            main_present || snapshot.panes.iter().any(|pane| pane.members.contains(&0));
+        if !main_source_present {
+            self.remove_series(super::SeriesId::MAIN);
+        } else if !self.main_series_present {
+            self.main_series_present = true;
+            let paused = self.feed_link.as_ref().is_some_and(|link| link.host_paused);
+            self.set_feed_paused(paused);
+        }
         self.set_symbol(snapshot.symbol.clone());
         if let Some(interval) = snapshot.interval {
             self.set_timeframe(interval);
@@ -413,7 +423,11 @@ impl Chart {
         if let Some(scale) = &snapshot.price_scale {
             *self.state.price_scale_mut() = scale.clone();
         }
-        self.move_series_to_pane(super::SeriesId::MAIN, PaneId::MAIN);
+        if self.panes().contains(&PaneId::MAIN) {
+            self.move_series_to_pane(super::SeriesId::MAIN, PaneId::MAIN);
+        } else {
+            self.leave_panes(super::SeriesId::MAIN);
+        }
         let mut replaced: Vec<_> = self.indicators().map(|(id, _)| id).collect();
         if snapshot.series.is_some() {
             replaced.extend(self.series().map(|(id, _)| id));
@@ -426,7 +440,18 @@ impl Chart {
         self.restored_studies.clear();
         self.pane_layout
             .panes
-            .retain(|pane| pane.id == PaneId::MAIN || !pane.members.is_empty());
+            .retain(|pane| (main_present && pane.id == PaneId::MAIN) || !pane.members.is_empty());
+        if main_present
+            && !self
+                .pane_layout
+                .panes
+                .iter()
+                .any(|pane| pane.id == PaneId::MAIN)
+        {
+            self.pane_layout
+                .panes
+                .push(super::pane::Pane::new(PaneId::MAIN));
+        }
         let mut panes: HashMap<usize, PaneId> = HashMap::new();
         for (at, pane) in snapshot.panes.iter().enumerate() {
             panes.insert(
@@ -434,7 +459,13 @@ impl Chart {
                 if pane.main {
                     PaneId::MAIN
                 } else {
-                    self.add_pane()
+                    let id = self.add_pane();
+                    self.pane_layout
+                        .panes
+                        .last_mut()
+                        .expect("pane was added")
+                        .preserve = true;
+                    id
                 },
             );
         }
@@ -664,7 +695,9 @@ fn check(snapshot: &ChartSnapshot, factory: &IndicatorFactory) -> Result<Checked
         .price_scale
         .as_ref()
         .is_some_and(|scale| !valid_scale(scale))
-        || snapshot.panes.iter().filter(|pane| pane.main).count() != 1
+        || snapshot.panes.is_empty()
+        || snapshot.panes.iter().filter(|pane| pane.main).count() > 1
+        || (main_pane.is_none() && snapshot.main_series_visible)
         || snapshot.studies.iter().map(|study| study.id)
             .chain(snapshot.series.iter().flatten().map(|series| series.id))
             .any(|id| id == super::SeriesId::MAIN.0)
