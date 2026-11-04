@@ -4002,8 +4002,10 @@ mod tests {
         assert!(is_visible(&app.chart, id));
         app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
         app.activate_chart_slot(1);
-        let other = app.chart.indicators().next().unwrap().0;
-        app.chart.set_indicator_visible(other, false);
+        let others: Vec<_> = app.chart.indicators().map(|(id, _)| id).collect();
+        for other in others {
+            app.chart.set_indicator_visible(other, false);
+        }
         ui_frame(&ctx, size, vec![], |ui| {
             app.show_drawing_toolbar(ui, app.theme.chart.bg)
         });

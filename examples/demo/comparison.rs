@@ -1198,6 +1198,9 @@ mod tests {
         assert!(app.chart.series_order(ids[0]).unwrap() > 0);
         app.handle_layout_action(LayoutAction::SaveAs("Series tree".into()));
         app.poll_storage(&ctx);
+        super::super::tests::settle(&mut app, &ctx);
+        let ids: Vec<_> = app.chart.series().map(|(id, _)| id).collect();
+        check(&app);
         for id in ids {
             let sources = app.build_source_items();
             app.handle_object_tree(A::Delete(super::super::indicator_tree_id(id)), &sources);
