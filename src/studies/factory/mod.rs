@@ -462,7 +462,8 @@ impl IndicatorFactory {
     /// Each template replaces the defaults for its registered name; other names retain theirs.
     /// An empty list changes nothing, and the last template for a repeated name wins.
     /// Invalid names, inputs or settings reject the entire batch without changing any defaults.
-    /// Existing studies, saved templates, layouts and clipboard copies keep their own settings.
+    /// Existing studies, saved templates, layouts, clipboard copies and alert studies keep their
+    /// own settings.
     /// Replacing or removing a constructor discards its defaults.
     ///
     /// Capture a study with [`StudyTemplate::from_study`], edit its typed inputs or settings,
