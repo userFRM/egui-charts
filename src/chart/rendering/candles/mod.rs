@@ -30,6 +30,7 @@ pub use volume::render_volume_bar;
 
 use crate::theme::ThemeExt;
 pub use heikin_ashi::HeikinAshiCache;
+pub(crate) use heikin_ashi::rising as heikin_rising;
 pub(crate) use line::{LAST_PRICE_PULSE_SECONDS, render_crosshair_marker, render_last_price_pulse};
 pub use params::{
     BarDimensions, CandleDataContext, ChartTypeParams, CoordMapping, TradingColors, VolumeSettings,
@@ -130,25 +131,7 @@ pub fn render_chart_type(
             );
         }
         ChartType::Heikin => {
-            candlestick::render_heikin_ashi(
-                ctx.price_ctx,
-                ctx.volume_ctx,
-                ctx.price_scale,
-                ctx.colors,
-                ctx.visible_data,
-                ctx.full_data,
-                ctx.revision,
-                ctx.heikin_ashi,
-                ctx.start_idx,
-                params.bar_width(),
-                params.wick_width(),
-                params.show_volume(),
-                params.max_volume(),
-                params.chart_rect_min_x(),
-                &idx_to_coord,
-                params.bullish_color(),
-                params.bearish_color(),
-            );
+            heikin_ashi::render(ctx, params, &idx_to_coord);
         }
         ChartType::Bars => {
             candlestick::render_ohlc_bars(

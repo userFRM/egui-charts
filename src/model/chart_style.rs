@@ -197,6 +197,56 @@ impl Default for CandlesStyle {
     }
 }
 
+/// Independent candle components and scale prices for the Heikin-Ashi chart.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HeikinStyle {
+    /// Fill the transformed open-to-close body.
+    pub body_visible: bool,
+    /// Outline the transformed body inside its bounds, using the chart's positive border
+    /// width or a one-point stroke by default.
+    pub border_visible: bool,
+    /// Draw the transformed high-to-low wick.
+    pub wick_visible: bool,
+    /// Compare transformed closes when choosing colours instead of open and close.
+    pub color_by_previous_close: bool,
+    /// Rising body colour.
+    pub body_up: Color32,
+    /// Falling body colour.
+    pub body_down: Color32,
+    /// Rising border colour.
+    pub border_up: Color32,
+    /// Falling border colour.
+    pub border_down: Color32,
+    /// Rising wick colour.
+    pub wick_up: Color32,
+    /// Falling wick colour.
+    pub wick_down: Color32,
+    /// Show only the original close on the price scale. By default both original and
+    /// transformed closes are labelled.
+    pub real_price_only: bool,
+}
+
+impl Default for HeikinStyle {
+    fn default() -> Self {
+        let up = DESIGN_TOKENS.semantic.extended.bullish;
+        let down = DESIGN_TOKENS.semantic.extended.bearish;
+        Self {
+            body_visible: true,
+            border_visible: true,
+            wick_visible: true,
+            color_by_previous_close: false,
+            body_up: up,
+            body_down: down,
+            border_up: up,
+            border_down: down,
+            wick_up: up,
+            wick_down: down,
+            real_price_only: false,
+        }
+    }
+}
+
 /// The Kagi chart's stroke widths in logical points. Non-positive or non-finite widths hide
 /// the lines of that thickness.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -217,7 +267,8 @@ impl Default for KagiStyle {
     }
 }
 
-/// Styles of the candles, bars, line, step, marker, area, HLC area, baseline and Kagi chart types.
+/// Styles of the candle, Heikin-Ashi, bar, line, step, marker, area, HLC area, baseline and Kagi
+/// chart types.
 /// Defaults use the design-token palette and remain independent of candle colours.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -238,6 +289,8 @@ pub struct ChartTypeStyles {
     pub hlc_area: HlcAreaStyle,
     /// Candles chart.
     pub candles: CandlesStyle,
+    /// Heikin-Ashi chart.
+    pub heikin: HeikinStyle,
     /// Bars chart.
     pub bars: BarsStyle,
     /// Kagi chart.
@@ -268,6 +321,7 @@ impl Default for ChartTypeStyles {
             baseline: BaselineStyle::default(),
             hlc_area: HlcAreaStyle::default(),
             candles: CandlesStyle::default(),
+            heikin: HeikinStyle::default(),
             bars: BarsStyle::default(),
             kagi: KagiStyle::default(),
             crosshair_marker_radius: 0.0,

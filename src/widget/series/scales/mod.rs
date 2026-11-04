@@ -562,14 +562,16 @@ impl Chart {
     /// The main series' last-value colour for `bar`: the price line colour, the bar's own
     /// colour, or its direction.
     pub(in crate::widget) fn main_value_color(&self, bar: &Bar) -> Color32 {
+        let (up, down) = if self.chart_type == ChartType::Heikin {
+            let style = &self.chart_type_params.styles.heikin;
+            (style.body_up, style.body_down)
+        } else {
+            (self.config.bullish_color, self.config.bearish_color)
+        };
         self.main_series_style
             .price_line_color
             .or_else(|| bar.colors.as_ref().and_then(|own| own.color))
-            .unwrap_or(if bar.close >= bar.open {
-                self.config.bullish_color
-            } else {
-                self.config.bearish_color
-            })
+            .unwrap_or(if bar.close >= bar.open { up } else { down })
     }
 
     /// The latest loaded or latest visible valued bar of a main or added bar series.
