@@ -790,14 +790,16 @@ impl Chart {
                             }
                             let backgrounds = primitives::backgrounds(
                                 painter,
-                                self.pane_primitives(&members, &pane_mapping),
+                                self.pane_primitives(pane_id, &members, &pane_mapping),
                                 pass,
                                 self.merge_groups.factor(),
                             );
                             below_grouped = !backgrounds.is_empty();
                             primitives::paint_backgrounds(painter, backgrounds);
                             if below_grouped {
-                                for (item, view) in self.pane_primitives(&members, &pane_mapping) {
+                                for (item, view) in
+                                    self.pane_primitives(pane_id, &members, &pane_mapping)
+                                {
                                     item.draw(painter, &view, pass, self.merge_groups.factor());
                                 }
                             }
@@ -806,8 +808,14 @@ impl Chart {
                             || (pass == PrimitivePass::Series && series_backgrounds.is_empty())
                         {
                             for (item, view) in self
-                                .pane_primitives(&members, &pane_mapping)
-                                .filter(|(item, _)| Some(item.series) == id)
+                                .pane_primitives(pane_id, &members, &pane_mapping)
+                                .filter(|(item, _)| {
+                                    if item.pane.is_some() {
+                                        pass == PrimitivePass::Below && paint_row == 0
+                                    } else {
+                                        Some(item.series) == id
+                                    }
+                                })
                             {
                                 item.draw(painter, &view, pass, self.merge_groups.factor());
                             }
@@ -815,7 +823,7 @@ impl Chart {
                         if pass == PrimitivePass::Below && paint_row == 0 {
                             series_backgrounds = primitives::backgrounds(
                                 painter,
-                                self.pane_primitives(&members, &pane_mapping),
+                                self.pane_primitives(pane_id, &members, &pane_mapping),
                                 PrimitivePass::Series,
                                 self.merge_groups.factor(),
                             );
@@ -967,7 +975,7 @@ impl Chart {
                     let pointer = ui
                         .input(|input| input.pointer.interact_pos())
                         .filter(|pos| chart_rect.contains(*pos));
-                    let pane_primitives = || self.pane_primitives(&members, &pane_mapping);
+                    let pane_primitives = || self.pane_primitives(pane_id, &members, &pane_mapping);
                     let primitive_hit = pointer.and_then(|pos| {
                         crate::widget::primitives::primitive_at(
                             pane_primitives().filter(|(item, _)| {
@@ -1164,24 +1172,39 @@ impl Chart {
             }
             if let Some((_, chart_rect, _)) = &drawing_response {
                 let chart_rect = *chart_rect;
-                if !collapsed && !series_backgrounds.is_empty() {
+                let pane_owned = self
+                    .primitives
+                    .iter()
+                    .any(|item| item.pane == Some(pane_id));
+                if !collapsed && (pane_owned || !series_backgrounds.is_empty()) {
+                    let grouped = !series_backgrounds.is_empty();
                     let painter = ui
                         .painter()
                         .with_clip_rect(chart_rect.intersect(ui.clip_rect()));
                     crate::widget::primitives::paint_backgrounds(&painter, series_backgrounds);
-                    for (item, view) in self.pane_primitives(&members, &pane_mapping) {
+                    let mut hit_drawn = grouped;
+                    for (item, view) in self
+                        .pane_primitives(pane_id, &members, &pane_mapping)
+                        .filter(|(item, _)| grouped || item.pane.is_some())
+                    {
                         item.draw(
                             &painter,
                             &view,
                             crate::widget::PrimitivePass::Series,
                             self.merge_groups.factor(),
                         );
+                        hit_drawn |= self.host_events.target
+                            == Some(crate::widget::PointerTarget::Primitive(item.id));
                     }
-                    if self
-                        .host_events
-                        .primitive_hit
-                        .as_ref()
-                        .is_some_and(|hit| hit.pass == crate::widget::PrimitivePass::Series)
+                    if hit_drawn
+                        && ui
+                            .input(|input| input.pointer.interact_pos())
+                            .is_some_and(|pos| chart_rect.contains(pos))
+                        && self
+                            .host_events
+                            .primitive_hit
+                            .as_ref()
+                            .is_some_and(|hit| hit.pass == crate::widget::PrimitivePass::Series)
                     {
                         self.cover_annotation_hit();
                     }
@@ -1435,7 +1458,7 @@ impl Chart {
                         .with_clip_rect(chart_rect.intersect(ui.clip_rect()));
                     crate::widget::primitives::paint_pass(
                         &painter,
-                        self.pane_primitives(&members, &pane_mapping),
+                        self.pane_primitives(pane_id, &members, &pane_mapping),
                         crate::widget::PrimitivePass::Above,
                         self.merge_groups.factor(),
                     );
@@ -1445,7 +1468,7 @@ impl Chart {
                             .filter(|pos| chart_rect.contains(*pos))
                             .and_then(|pos| {
                                 crate::widget::primitives::primitive_at(
-                                    self.pane_primitives(&members, &pane_mapping),
+                                    self.pane_primitives(pane_id, &members, &pane_mapping),
                                     pos,
                                 )
                             })

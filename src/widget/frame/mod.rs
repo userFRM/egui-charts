@@ -881,6 +881,7 @@ impl Chart {
                 egui::FontId::proportional(ui.active_theme().text.title),
                 self.config.text_color,
             );
+            self.paint_empty_pane_primitives(ui, &painter);
             self.record_host_click(ui, &response);
             return response;
         }

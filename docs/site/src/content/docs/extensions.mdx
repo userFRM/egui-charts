@@ -50,6 +50,21 @@ Attach once during setup, then call `chart.show(ui)` each frame. Reattaching
 every frame would accumulate primitives. Undoing a study removal restores the
 study without its primitive attachments, so the host must recreate those.
 
+## Pane decorations
+
+[`Chart::attach_pane_primitive(pane, primitive)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.attach_pane_primitive)
+attaches a
+[`PanePrimitive`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/trait.PanePrimitive.html)
+to an existing pane instead of a series. It returns `None` for an unknown pane and
+drops the primitive. The decoration stays while the pane exists, including an
+empty retained pane and a chart without loaded bars, and is detached once on the
+next frame after the pane is removed. `detach_primitive` removes it earlier.
+
+It draws and hit tests in the same passes as a series primitive, clipped to the
+pane's plot, but its
+[`PanePrimitiveView`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/struct.PanePrimitiveView.html)
+has no price scale, and it cannot add axis labels or autoscale margins.
+
 ## Draw passes and coordinates
 
 [`draw`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/trait.Primitive.html#method.draw)

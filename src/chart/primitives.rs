@@ -1,4 +1,10 @@
-//! Custom drawing attached to a series: primitives, and the renderers of custom series.
+//! Host drawing attached to a series or pane, and the renderers of custom series.
+//!
+//! A [`PanePrimitive`] attaches with
+//! [`Chart::attach_pane_primitive`](crate::widget::Chart::attach_pane_primitive). It draws and
+//! hit tests within that pane independently of its series, including an empty retained pane.
+//! Its [`PanePrimitiveView`] supplies the pane's plot rectangle and shared horizontal
+//! coordinates, without a series or price scale. It has no axis or autoscale hooks.
 //!
 //! A [`Primitive`] is host code that the chart calls while it draws a frame. It is attached to a
 //! series with [`Chart::attach_primitive`](crate::widget::Chart::attach_primitive) and draws in
@@ -60,10 +66,119 @@ use egui::{Color32, CursorIcon, Painter, Pos2, Rect};
 use std::ops::Range;
 use std::sync::Arc;
 
+/// Identifies a pane of a chart. [`PaneId::MAIN`] is the original price pane;
+/// [`Chart::add_pane`](crate::widget::Chart::add_pane) and
+/// [`Chart::panes`](crate::widget::Chart::panes) return the others. An id stays valid until its
+/// pane is removed. Added pane ids are never reused by the chart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PaneId(pub(crate) usize);
+
+impl PaneId {
+    /// The original price pane, which can be removed. The main series can move elsewhere.
+    pub const MAIN: PaneId = PaneId(0);
+}
+
 /// Identifies a primitive attached to a chart, for
 /// [`Chart::detach_primitive`](crate::widget::Chart::detach_primitive) and pointer targets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PrimitiveId(pub(crate) u64);
+
+/// The plot and shared horizontal coordinates of a pane-owned primitive.
+pub struct PanePrimitiveView<'a> {
+    /// The pane the primitive belongs to, independent of its series membership or ordering.
+    pub pane: PaneId,
+    /// Plot area in UI points, excluding the price and time axes.
+    pub rect: Rect,
+    /// Bars defining the shared horizontal scale, oldest first. May be empty.
+    pub bars: &'a [Bar],
+    /// Indices of `bars` in view.
+    pub visible: Range<usize>,
+    mapping: &'a ChartMapping,
+}
+
+impl<'a> PanePrimitiveView<'a> {
+    pub(crate) fn new(pane: PaneId, view: &'a PrimitiveView<'_>) -> Self {
+        Self {
+            pane,
+            rect: view.mapping.rect,
+            bars: view.bars,
+            visible: view.visible.clone(),
+            mapping: &view.mapping,
+        }
+    }
+
+    /// The x of a fractional bar index on the chart's shared horizontal scale.
+    pub fn index_to_x(&self, index: f64) -> f32 {
+        self.mapping.index_to_x(index)
+    }
+
+    /// The x of a UTC time, interpolated between bars as in [`PrimitiveView::time_to_x`].
+    /// Returns `None` when there are no bars.
+    pub fn time_to_x(&self, time: DateTime<Utc>) -> Option<f32> {
+        crate::model::index_at(self.bars, time).map(|index| self.index_to_x(index))
+    }
+}
+
+/// Host drawing owned by a pane, independent of the pane's series and price scales.
+///
+/// Drawing and hit testing use the same passes and ranking as [`Primitive`]. Drawing hooks run
+/// only for expanded, visible panes; lifecycle and update hooks also run while a pane is hidden.
+/// Removing members leaves the attachment intact if the pane is retained. Removing the pane
+/// detaches it on the next frame. Use [`Chart::detach_primitive`](crate::widget::Chart::detach_primitive)
+/// to detach it explicitly.
+///
+/// ```rust
+/// use egui::{Align2, Color32, FontId, Painter};
+/// use egui_charts::widget::{Chart, PaneId, PanePrimitive, PanePrimitiveView, PrimitivePass};
+///
+/// struct Watermark;
+/// impl PanePrimitive for Watermark {
+///     fn draw(&self, painter: &Painter, view: &PanePrimitiveView<'_>, pass: PrimitivePass) {
+///         if pass == PrimitivePass::Below {
+///             painter.text(view.rect.center(), Align2::CENTER_CENTER, "Research",
+///                 FontId::proportional(32.0), Color32::GRAY);
+///         }
+///     }
+/// }
+/// # fn example(chart: &mut Chart) {
+/// let decoration = chart.attach_pane_primitive(PaneId::MAIN, Watermark).unwrap();
+/// assert!(chart.detach_primitive(decoration));
+/// # }
+/// ```
+pub trait PanePrimitive: Send {
+    /// Draws behind all foregrounds of `pass`, clipped to the pane's plot area.
+    fn draw_background(
+        &self,
+        painter: &Painter,
+        view: &PanePrimitiveView<'_>,
+        pass: PrimitivePass,
+    ) {
+        let _ = (painter, view, pass);
+    }
+
+    /// Draws in `pass`, clipped to the pane's plot area.
+    fn draw(&self, painter: &Painter, view: &PanePrimitiveView<'_>, pass: PrimitivePass) {
+        let _ = (painter, view, pass);
+    }
+
+    /// Returns the best object under `pos`, using [`PrimitiveHit`]'s ranking rules.
+    fn hit_test(&self, pos: Pos2, view: &PanePrimitiveView<'_>) -> Option<PrimitiveHit> {
+        let _ = (pos, view);
+        None
+    }
+
+    /// Called once at the first frame after attachment. Keep a context clone to request
+    /// repaints, including from another thread.
+    fn attached(&mut self, ctx: &egui::Context, pane: PaneId) {
+        let _ = (ctx, pane);
+    }
+
+    /// Called once on detachment if [`attached`](Self::attached) ran.
+    fn detached(&mut self) {}
+
+    /// Refreshes cached drawing state before each chart paint, after attachment.
+    fn update(&mut self) {}
+}
 
 /// When a primitive draws in its pane. Within a pass, every
 /// [`draw_background`](Primitive::draw_background) runs in attachment order before any
