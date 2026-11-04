@@ -3,7 +3,7 @@
 mod quotes;
 mod study_controls;
 
-pub(crate) use study_controls::study_controls;
+pub(crate) use study_controls::{controls_width, study_controls};
 
 use quotes::paint_quotes;
 
@@ -751,16 +751,7 @@ impl<'a> Legend<'a> {
                     }
                 }
                 let controls = layout
-                    .reserve(Vec2::new(
-                        if !study.user_edit_enabled() {
-                            20.0
-                        } else if study.help_url().is_some() {
-                            100.0
-                        } else {
-                            80.0
-                        },
-                        20.0,
-                    ))
+                    .reserve(Vec2::new(controls_width(study.as_ref()), 20.0))
                     .intersect(bounds);
                 let row_right = if layout.pos.y > row_start.y {
                     bounds.right()

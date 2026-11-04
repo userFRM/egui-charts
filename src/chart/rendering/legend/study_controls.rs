@@ -3,7 +3,18 @@ use crate::theme::ThemeExt;
 use egui::FontId;
 use egui::{Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
 
-/// The row outline and its hide, settings, remove and more-actions buttons. Returns the first
+/// Width of the study's buttons: read-only studies keep hide and, with an article, help.
+pub(crate) fn controls_width(study: &dyn crate::studies::Indicator) -> f32 {
+    let help = study.help_url().is_some();
+    match (study.user_edit_enabled(), help) {
+        (true, true) => 100.0,
+        (true, false) => 80.0,
+        (false, true) => 40.0,
+        (false, false) => 20.0,
+    }
+}
+
+/// The row outline and its hide, settings, remove, more-actions and help buttons. Returns the first
 /// three buttons and, when the more-actions button is clicked or the row secondary-clicked, the
 /// corner of the study menu.
 pub(crate) fn study_controls(
@@ -17,12 +28,11 @@ pub(crate) fn study_controls(
     let visible = study.is_visible();
     let editable = study.user_edit_enabled();
     let help = study.help_url();
-    let count: usize = if !editable {
-        1
-    } else if help.is_some() {
-        5
-    } else {
-        4
+    // The help button follows the hide button when editing is off.
+    let shown = |index: usize| match index {
+        0 => true,
+        4 => help.is_some(),
+        _ => editable,
     };
     let touch_id = egui::Id::unique("legend_touch_input");
     let input_touch = ui.input(|input| {
@@ -71,7 +81,8 @@ pub(crate) fn study_controls(
     // Keep controls focusable while Tab transfers focus from their row.
     let focused = row_response.has_focus()
         || row_response.lost_focus()
-        || (0..count).any(|index| ui.memory(|memory| memory.has_focus(id.with(index))));
+        || (0..5_usize)
+            .any(|index| shown(index) && ui.memory(|memory| memory.has_focus(id.with(index))));
     let hovered = !touch
         && ui.input(|input| input.pointer.hover_pos().is_some())
         && ui.rect_contains_pointer(row);
@@ -87,8 +98,9 @@ pub(crate) fn study_controls(
         );
     }
     let buttons: [Response; 5] = std::array::from_fn(|index| {
+        let slot = if index == 4 && !editable { 1 } else { index };
         let rect = Rect::from_min_size(
-            controls.min + Vec2::new(index as f32 * 20.0, 0.0),
+            controls.min + Vec2::new(slot as f32 * 20.0, 0.0),
             Vec2::splat(20.0),
         )
         .intersect(controls);
@@ -103,38 +115,33 @@ pub(crate) fn study_controls(
                 _ => "Study help",
             },
         );
-        let enabled = index < count;
+        let shown = shown(index);
         let response = ui.interact(
             rect,
             id.with(index),
-            if revealed && enabled && (index < 4 || help.is_some()) {
+            if revealed && shown {
                 Sense::click()
             } else {
                 Sense::hover()
             },
         );
-        if !revealed || !enabled {
+        if !revealed || !shown {
             return response;
         }
         let response = response.on_hover_text(&label);
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, &label));
-        if response.hovered() && enabled {
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
+        if response.hovered() {
             ui.painter()
                 .rect_filled(rect, theme.radius.sm, theme.ui.btn_bg_hover);
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
-        let color = if enabled {
-            theme.ui.text
-        } else {
-            theme.ui.text_muted
-        };
         if index == 4 {
             ui.painter().text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
                 "?",
                 FontId::proportional(14.0),
-                color,
+                theme.ui.text,
             );
             if response.clicked()
                 && let Some(url) = help
@@ -151,7 +158,7 @@ pub(crate) fn study_controls(
                     2 => &crate::icons::icons::TRASH,
                     _ => &crate::icons::icons::UI_MORE_HORIZONTAL,
                 };
-                icon.as_image_tinted(Vec2::splat(14.0), color)
+                icon.as_image_tinted(Vec2::splat(14.0), theme.ui.text)
                     .paint_at(ui, rect.shrink(3.0));
             }
             #[cfg(not(feature = "icons"))]
@@ -160,7 +167,7 @@ pub(crate) fn study_controls(
                 egui::Align2::CENTER_CENTER,
                 [if visible { "−" } else { "+" }, "...", "×", "•••"][index],
                 FontId::proportional(14.0),
-                color,
+                theme.ui.text,
             );
         }
         response
@@ -329,7 +336,7 @@ mod tests {
                 );
             }
 
-            // Read-only studies keep visibility; editable studies send help URLs to the host.
+            // Read-only studies keep visibility and help; only editable ones keep the edit buttons.
             let mut study =
                 crate::studies::ConfiguredStudy::new(Box::new(crate::studies::SMA::new(1)));
             let mut saved = serde_json::to_value(study.settings()).unwrap();
@@ -371,6 +378,7 @@ mod tests {
                 (clicks, urls)
             };
             for index in [1, 2, 3, 4, 0] {
+                let help_slot = index == 1;
                 let pos = controls.min + Vec2::new(index as f32 * 20.0 + 10.0, 10.0);
                 frame(vec![Event::PointerMoved(pos)]);
                 let mut opened = Vec::new();
@@ -384,7 +392,14 @@ mod tests {
                     assert_eq!(clicks, [index == 0 && !pressed, false, false]);
                     opened.extend(urls);
                 }
-                assert_eq!(opened, Vec::<String>::new());
+                assert_eq!(
+                    opened,
+                    if help_slot {
+                        vec!["https://example.org/average".to_owned()]
+                    } else {
+                        Vec::new()
+                    }
+                );
             }
 
             let mut settings = serde_json::to_value(study.settings()).unwrap();

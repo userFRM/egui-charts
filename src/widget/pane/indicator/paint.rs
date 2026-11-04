@@ -524,13 +524,7 @@ impl IndicatorPane {
         }
         let theme = painter.ctx().active_theme();
         let galley = self.legend_galley(painter, rect, indicator, theme.ui.text);
-        let width = if !indicator.user_edit_enabled() {
-            20.0
-        } else if indicator.help_url().is_some() {
-            100.0
-        } else {
-            80.0
-        };
+        let width = crate::chart::rendering::controls_width(indicator);
         let x = (rect.left() + theme.spacing.sm + galley.size().x + theme.spacing.md)
             .min(rect.right() - width - if self.pane_controls { 40.0 } else { 0.0 })
             .max(rect.left());
@@ -587,13 +581,7 @@ impl IndicatorPane {
     ) -> std::sync::Arc<egui::Galley> {
         let theme = painter.ctx().active_theme();
         let mut job = self.legend_job(indicator, text_color, theme.chart.bg, theme.text.ohlc);
-        let controls_width = if !indicator.user_edit_enabled() {
-            20.0
-        } else if indicator.help_url().is_some() {
-            100.0
-        } else {
-            80.0
-        };
+        let controls_width = crate::chart::rendering::controls_width(indicator);
         job.wrap.max_width = (rect.width()
             - controls_width
             - if self.pane_controls { 40.0 } else { 0.0 }
