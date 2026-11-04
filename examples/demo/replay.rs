@@ -1413,7 +1413,11 @@ mod tests {
     #[test]
     fn paper_account_resets_on_replay_start_and_rewind_but_not_forward_steps() {
         let ctx = egui::Context::default();
-        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-10-27T12:05:14Z".parse().unwrap(),
+            true,
+        );
         super::super::tests::settle(&mut app, &ctx);
         app.live.set_paused(true);
         for _ in 0..4 {
@@ -1528,10 +1532,16 @@ mod tests {
             .drop_without_applying_deltas();
         }
         super::super::tests::finish_feed(&app.live);
-        app.live.set_paused(false);
-        app.live
-            .advance(app.live.now() + chrono::TimeDelta::seconds(2));
-        app.live.set_paused(true);
+        // Quiet periods can outlast two seconds; capture executions before selecting trade updates.
+        app.advance_sample_to(app.live.now() + chrono::TimeDelta::seconds(10));
+        let mut events = Vec::new();
+        app.live.read_recording(&mut events);
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event.event, MarketEvent::Trade(_))),
+            "trade replay requires captured executions"
+        );
         let bars = app.live.snapshot(
             app.state.timeframe,
             app.chart.bar_clock(),
