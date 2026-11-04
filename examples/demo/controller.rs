@@ -1763,12 +1763,23 @@ impl DemoApp {
                                             } else {
                                                 &widget.icon
                                             };
-                                            if menu_item(ui, &widget.tooltip, icon, None).clicked()
+                                            let panel = SidePanel::from_widget(widget.id);
+                                            let open = match panel {
+                                                Some(_) => self.open_panel == panel,
+                                                None => {
+                                                    self.widget_bar.active_widget == Some(widget.id)
+                                                }
+                                            };
+                                            if menu_item(
+                                                ui,
+                                                &widget.tooltip,
+                                                icon,
+                                                open.then_some(&icons::CHECK),
+                                            )
+                                            .clicked()
                                             {
-                                                if let Some(panel) =
-                                                    SidePanel::from_widget(widget.id)
-                                                {
-                                                    panel_action = Some(panel);
+                                                if panel.is_some() {
+                                                    panel_action = panel;
                                                 } else {
                                                     widget_action = Some(widget.id);
                                                 }
@@ -2443,6 +2454,7 @@ impl DemoApp {
             items.push(item);
         }
 
+        // The tree lists higher layers first, so each pane reads from its front series to its back.
         let panes = self.chart.panes();
         items.sort_by_key(|item| {
             let id = item.series_id.expect("bar series row");
@@ -2453,8 +2465,11 @@ impl DemoApp {
                 std::cmp::Reverse(self.chart.series_order(id)),
             )
         });
+        let rows = items.len() as i32;
+        for (row, item) in (0..).zip(&mut items) {
+            item.z_index = rows - row;
+        }
 
-        // The tree lists higher layers first, so each pane reads from its front series to its back.
         // Live indicators.
         for (id, ind) in self.chart.indicators() {
             let color = ind.colors().first().copied().unwrap_or(egui::Color32::GRAY);
@@ -2465,10 +2480,6 @@ impl DemoApp {
         }
 
         // Live drawings.
-        let rows = items.len() as i32;
-        for (row, item) in (0..).zip(&mut items) {
-            item.z_index = rows - row;
-        }
         for d in self.chart.drawings().listed_drawings() {
             let mut item =
                 SourceItem::drawing(d.id, d.tool_type, d.color32()).with_panes(&self.chart);
@@ -4054,29 +4065,9 @@ mod tests {
         settings.order_flow.show_heatmap = true;
         settings.order_flow.order_book.profile = BookProfile::LargestOrder;
         settings.order_flow.order_book.quantity_unit = Some("lots".into());
-        app.apply_chart_settings(settings);
-        app.switch_symbol(live::ORDER_LEVEL_SYMBOL);
-        assert!(
-            app.chart
-                .depth_history(SeriesId::MAIN)
-                .unwrap()
-                .config()
-                .orders
-                .is_some()
-        );
-        app.switch_symbol("AAPL");
-        assert!(
-            app.chart
-                .depth_history(SeriesId::MAIN)
-                .unwrap()
-                .config()
-                .orders
-                .is_none()
-        );
-        let choose = |app: &mut DemoApp, label: &str| {
         settings.order_flow.show_volume_bubbles = true;
         settings.order_flow.volume_bubbles.max_diameter = 91.0;
-            for _ in 0..3 {
+        app.apply_chart_settings(settings);
         // Replay hides the live history; the toolbar must leave it for the replay's exit.
         let columns = |app: &DemoApp| {
             app.chart
@@ -4100,6 +4091,26 @@ mod tests {
         });
         app.chart.set_replay_time(None);
         assert_eq!(columns(&app), 7);
+        app.switch_symbol(live::ORDER_LEVEL_SYMBOL);
+        assert!(
+            app.chart
+                .depth_history(SeriesId::MAIN)
+                .unwrap()
+                .config()
+                .orders
+                .is_some()
+        );
+        app.switch_symbol("AAPL");
+        assert!(
+            app.chart
+                .depth_history(SeriesId::MAIN)
+                .unwrap()
+                .config()
+                .orders
+                .is_none()
+        );
+        let choose = |app: &mut DemoApp, label: &str| {
+            for _ in 0..3 {
                 ui_frame(&ctx, size, vec![], |ui| {
                     app.show_top_toolbar(ui, app.theme.chart.bg)
                 });
@@ -4144,6 +4155,16 @@ mod tests {
                 .order_flow
                 .show_heatmap
         );
+        // The menu brings the bubbles back as they were set, not with their defaults.
+        choose(&mut app, "Liquidity heatmap");
+        choose(&mut app, "Liquidity heatmap");
+        assert_eq!(
+            ChartSettingsState::from_chart(&app.chart)
+                .order_flow
+                .volume_bubbles
+                .max_diameter,
+            91.0
+        );
         app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
         app.activate_chart_slot(1);
         app.chart.set_liquidity_heatmap(false);
@@ -4164,16 +4185,6 @@ mod tests {
         let mut view = app.chart.order_book_view();
         view.profile = BookProfile::LargestOrder;
         app.chart.set_order_book_view(view);
-        // The menu brings the bubbles back as they were set, not with their defaults.
-        choose(&mut app, "Liquidity heatmap");
-        choose(&mut app, "Liquidity heatmap");
-        assert_eq!(
-            ChartSettingsState::from_chart(&app.chart)
-                .order_flow
-                .volume_bubbles
-                .max_diameter,
-            91.0
-        );
         settle(&mut app, &ctx);
         app.handle_top_toolbar(&ctx, TopToolbarAction::Save);
         app.poll_storage(&ctx);
