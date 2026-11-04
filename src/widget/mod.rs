@@ -279,6 +279,8 @@ pub struct Chart {
     bar_limits: std::collections::HashMap<SeriesId, std::num::NonZeroUsize>,
     /// The chart's studies, in the order they were added.
     pub(crate) studies: IndicatorRegistry,
+    /// Changes when study edits or completed calculations can affect table cells.
+    readout_revision: u64,
     study_data: studies_data::StudyDataCache,
     pub(crate) element_studies: crate::chart::rendering::candles::price_based::ElementStudies,
     /// Range bars built from the held trades, while the chart type is Range.
@@ -336,7 +338,6 @@ pub struct Chart {
     currency_choices: Vec<String>,
     currency_choice: Option<String>,
     legend_badge: Option<egui::ImageSource<'static>>,
-    watermark: Option<Watermark>,
     legend_statuses: Vec<(String, egui::Color32, egui::Color32)>,
     /// Current quote, independent of the historical readout.
     quote: Option<crate::model::Level1Quote>,
@@ -557,9 +558,11 @@ impl Chart {
 
     /// Paints `watermark` behind the series of the price pane, in addition to the symbol
     /// watermark of [`ChartConfig::show_watermark`](crate::config::ChartConfig::show_watermark).
-    /// `None` removes it.
+    /// `None` removes it. This assigns the pane currently holding the main series; use
+    /// [`Self::set_pane_watermark`] to address another pane. It stays with that pane when
+    /// series move.
     pub fn set_watermark(&mut self, watermark: Option<Watermark>) {
-        self.watermark = watermark;
+        self.set_pane_watermark(self.main_series_pane(), watermark);
     }
 
     /// Supplies status marks and their host-defined meaning and colours.
