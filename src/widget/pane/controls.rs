@@ -161,6 +161,57 @@ impl Chart {
                     {
                         ui.close();
                     }
+                    ui.separator();
+                    let options = chart.pane_axis_options(pane_id).expect("present pane");
+                    for (label, side) in [
+                        ("Axes on left", crate::model::AxisSide::Left),
+                        ("Axes on right", crate::model::AxisSide::Right),
+                    ] {
+                        if ui
+                            .selectable_label(
+                                options.side == Some(side),
+                                l10n::text(ui.ctx(), label),
+                            )
+                            .clicked()
+                        {
+                            chart.set_pane_axis_options(
+                                pane_id,
+                                crate::model::PaneAxisOptions {
+                                    side: (options.side != Some(side)).then_some(side),
+                                    ..options
+                                },
+                            );
+                            ui.close();
+                        }
+                    }
+                    ui.menu_button(l10n::text(ui.ctx(), "Join price scales"), |ui| {
+                        for (label, side) in [
+                            ("At left edge", crate::model::AxisSide::Left),
+                            ("At right edge", crate::model::AxisSide::Right),
+                        ] {
+                            if ui
+                                .selectable_label(false, l10n::text(ui.ctx(), label))
+                                .clicked()
+                            {
+                                chart.merge_pane_scales(pane_id, side);
+                                ui.close();
+                            }
+                        }
+                    });
+                    let mut hide_unused = options.hide_unused;
+                    if ui
+                        .checkbox(&mut hide_unused, l10n::text(ui.ctx(), "Hide unused axes"))
+                        .changed()
+                    {
+                        chart.set_pane_axis_options(
+                            pane_id,
+                            crate::model::PaneAxisOptions {
+                                hide_unused,
+                                ..options
+                            },
+                        );
+                        ui.close();
+                    }
                 });
             });
         }

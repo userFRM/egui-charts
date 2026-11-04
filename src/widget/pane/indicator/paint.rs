@@ -353,6 +353,9 @@ impl IndicatorPane {
                 )
             })
             .with_price_precision(Some(indicator.precision().unwrap_or(2).min(255) as u8));
+        let label_rect = self.axis_rect.map_or(chart_rect, |axis| {
+            crate::widget::series::axis_label_rect(chart_rect, axis)
+        });
         let mut tags = self.axis_tags.clone();
         tags.push(crosshair_tag);
         if self.axis_options.show_study_values {
@@ -361,7 +364,7 @@ impl IndicatorPane {
             {
                 crate::widget::volume::tags(
                     painter,
-                    chart_rect,
+                    label_rect,
                     &map,
                     indicator,
                     axis_edge,
@@ -371,7 +374,7 @@ impl IndicatorPane {
             } else {
                 crate::chart::rendering::axes::render_study_tags(
                     painter,
-                    chart_rect,
+                    label_rect,
                     &map,
                     indicator,
                     axis_edge,
@@ -404,7 +407,9 @@ impl IndicatorPane {
             let x = if left {
                 axis_edge - 0.5
             } else {
-                chart_rect.right() + 0.5
+                self.axis_rect
+                    .map_or(chart_rect.right(), |axis| axis.left())
+                    + 0.5
             };
             painter.vline(
                 x,
@@ -422,7 +427,9 @@ impl IndicatorPane {
                 .map_or(chart_rect.left(), |axis| axis.right())
                 - DESIGN_TOKENS.spacing.sm
         } else {
-            chart_rect.right() + DESIGN_TOKENS.spacing.sm
+            self.axis_rect
+                .map_or(chart_rect.right(), |axis| axis.left())
+                + DESIGN_TOKENS.spacing.sm
         };
 
         for mark in crate::chart::rendering::price_marks(&map, self.price_formatter.as_deref()) {

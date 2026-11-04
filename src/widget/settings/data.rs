@@ -269,6 +269,8 @@ impl Default for MarginsSettings {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct ScalesAndLinesSettings {
+    /// Axis layout of the pane containing the main series.
+    pub axis_layout: crate::model::PaneAxisOptions,
     /// Display host-supplied currency metadata.
     pub show_currency: bool,
     /// Display host-supplied price unit metadata.
@@ -328,6 +330,7 @@ pub struct ScalesAndLinesSettings {
 impl Default for ScalesAndLinesSettings {
     fn default() -> Self {
         Self {
+            axis_layout: Default::default(),
             show_currency: true,
             show_unit: true,
             show_scale_mode_buttons: true,
