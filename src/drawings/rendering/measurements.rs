@@ -7,7 +7,7 @@ use crate::drawings::domain::{Drawing, DrawingToolType};
 use crate::model::{Bar, percent_change};
 use crate::scales::price_decimals;
 use crate::scales::{DefaultPriceFormatter, PriceFormatter, VolumeFormatter};
-use crate::styles::{stroke, typography};
+use crate::styles::typography;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Align2, Color32, Pos2, Rect, Stroke};
