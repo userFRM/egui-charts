@@ -161,8 +161,9 @@ impl OptionsVolumeProfile {
     /// underlying price for that expiry, or the latest valid underlying bar close when absent.
     /// Historical fallback closes must be at or before the query's `as_of`. Option last trades
     /// never replace missing bid/ask mids.
-    /// A date cutoff uses the last selected expiry. Dates end at the next UTC midnight;
-    /// live bands age with UTC time, historical bands with the chain query's `as_of` instant.
+    /// A date cutoff uses the last selected expiry. Dates end at the next UTC midnight.
+    /// Nearest-expiry selection and band ageing follow UTC time for live chains and the
+    /// chain query's `as_of` instant for historical ones.
     /// Missing inputs or an expired date remove both bounds and their expiry/method label.
     /// The fill spans the visible pane even when only one underlying bar has arrived.
     /// Returns `None` for an empty symbol or expiry list.
@@ -710,7 +711,10 @@ impl Indicator for OptionsVolumeProfile {
         PlotStyle {
             visible: line == 1 || (3..=7).contains(&line),
             color: if (6..=7).contains(&line) {
-                self.colors.get(line).copied().unwrap_or(self.colors[0])
+                self.colors
+                    .get(line)
+                    .copied()
+                    .unwrap_or(self.colors[0].to_opaque())
             } else {
                 self.colors[usize::from(line == 1 || line == 4)]
             },
@@ -802,20 +806,6 @@ impl Indicator for OptionsVolumeProfile {
             Expiries::Through => 1 + dates.len(),
         };
         let mut inputs = vec![
-            StudyInput::new(
-                "expected_move",
-                "Expected move",
-                InputValue::Toggle(self.expected_move),
-                InputKind::Toggle,
-            )
-            .with_default(InputValue::Toggle(false)),
-            StudyInput::new(
-                "move_method",
-                "Expected move method",
-                InputValue::Choice(usize::from(self.move_iv)),
-                InputKind::Choice(vec!["ATM straddle".into(), "Implied volatility".into()]),
-            )
-            .with_default(InputValue::Choice(0)),
             StudyInput::new(
                 "expiry",
                 "Expiry",
@@ -912,6 +902,22 @@ impl Indicator for OptionsVolumeProfile {
                 .with_default(InputValue::Toggle(false)),
             );
         }
+        inputs.extend([
+            StudyInput::new(
+                "expected_move",
+                "Expected move",
+                InputValue::Toggle(self.expected_move),
+                InputKind::Toggle,
+            )
+            .with_default(InputValue::Toggle(false)),
+            StudyInput::new(
+                "move_method",
+                "Expected move method",
+                InputValue::Choice(usize::from(self.move_iv)),
+                InputKind::Choice(vec!["ATM straddle".into(), "Implied volatility".into()]),
+            )
+            .with_default(InputValue::Choice(0)),
+        ]);
         inputs
     }
     fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), StudyError> {
