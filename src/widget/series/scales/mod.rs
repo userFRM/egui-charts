@@ -183,9 +183,18 @@ impl Chart {
         side: crate::model::AxisSide,
     ) -> Vec<crate::widget::PaneScale> {
         self.pane_scale_keys(pane)
-            .into_iter()
             .filter(|key| self.pane_scale_side(pane, *key) == Some(side))
             .collect()
+    }
+
+    pub(in crate::widget) fn pane_scale_count(
+        &self,
+        pane: PaneId,
+        side: crate::model::AxisSide,
+    ) -> usize {
+        self.pane_scale_keys(pane)
+            .filter(|key| self.pane_scale_side(pane, *key) == Some(side))
+            .count()
     }
 
     /// The scale behind an axis of [`Self::pane_scales`]. `None` for an axis the pane does not
@@ -195,7 +204,7 @@ impl Chart {
         let crate::widget::PaneScale::Named(key) = axis else {
             return None;
         };
-        if !self.pane_scale_keys(pane).contains(&axis) {
+        if !self.pane_scale_keys(pane).any(|key| key == axis) {
             None
         } else if pane == PaneId::MAIN && key != self.main_series_scale {
             self.series_scales.get(&key)
@@ -214,15 +223,14 @@ impl Chart {
         let crate::widget::PaneScale::Named(key) = axis else {
             return None;
         };
-        self.pane_scale_keys(pane)
-            .contains(&axis)
-            .then(|| self.pane_price_scale_mut(pane, key))
+        let present = self.pane_scale_keys(pane).any(|key| key == axis);
+        present.then(|| self.pane_price_scale_mut(pane, key))
     }
 
-    fn pane_scale_keys(&self, pane: PaneId) -> Vec<crate::widget::PaneScale> {
+    fn pane_scale_keys(&self, pane: PaneId) -> impl Iterator<Item = crate::widget::PaneScale> {
         use crate::widget::PaneScale;
         let Some(options) = self.pane_axis_options(pane) else {
-            return Vec::new();
+            return None.into_iter().chain(Vec::new());
         };
         let main = pane == self.main_series_pane();
         let primary = if main {
@@ -231,32 +239,27 @@ impl Chart {
             SeriesScale::Right
         };
         let mut keys = Vec::new();
-        for id in self.pane_series(pane) {
+        let mut show_primary = !options.hide_unused && !matches!(primary, SeriesScale::Overlay(_));
+        for id in self.pane_series_iter(pane) {
             if options.hide_unused && !self.is_series_visible(id) {
                 continue;
             }
             let Some(key) = self.source_axis_key(pane, id) else {
                 continue;
             };
-            if !matches!(key, PaneScale::Named(SeriesScale::Overlay(_))) && !keys.contains(&key) {
+            if key == PaneScale::Named(primary) && !matches!(primary, SeriesScale::Overlay(_)) {
+                show_primary = true;
+            } else if !matches!(key, PaneScale::Named(SeriesScale::Overlay(_)))
+                && !keys.contains(&key)
+            {
                 keys.push(key);
             }
         }
-        if !options.hide_unused
-            && !matches!(primary, SeriesScale::Overlay(_))
-            && !keys.contains(&PaneScale::Named(primary))
-        {
-            keys.insert(0, PaneScale::Named(primary));
-        }
         // The primary axis stays nearest the plot regardless of the series' draw order.
-        if let Some(at) = keys
-            .iter()
-            .position(|key| *key == PaneScale::Named(primary))
-        {
-            let key = keys.remove(at);
-            keys.insert(0, key);
-        }
-        keys
+        show_primary
+            .then_some(PaneScale::Named(primary))
+            .into_iter()
+            .chain(keys)
     }
 
     pub(in crate::widget) fn source_axis_key(
@@ -331,9 +334,8 @@ impl Chart {
         pane: PaneId,
         panel: Rect,
         plot: Rect,
-    ) -> Vec<(crate::widget::PaneScale, Rect)> {
+    ) -> impl Iterator<Item = (crate::widget::PaneScale, Rect)> + '_ {
         use crate::model::AxisSide;
-        let mut axes = Vec::new();
         let reference = self
             .pane_layout
             .panes
@@ -345,51 +347,67 @@ impl Chart {
             .padding
             .max(0.0)
             .min(reference.width().min(reference.height()).max(0.0) / 2.0);
-        for side in [AxisSide::Left, AxisSide::Right] {
-            let count = self.pane_scales(pane, side).len();
-            let available = match side {
-                AxisSide::Left => plot.left() - panel.left() - padding,
-                AxisSide::Right => panel.right() - plot.right() - padding,
-            };
-            // Layout has already reserved these columns. Measurements can change while
-            // painting another pane, so use the allocated gutter for every pane this frame.
-            let columns = self
-                .pane_layout
-                .panes
-                .iter()
-                .filter(|item| {
-                    item.id == PaneId::MAIN
-                        || item.id == self.main_series_pane()
-                        || self.pane_shown(item)
-                })
-                .map(|item| self.pane_scales(item.id, side).len())
-                .max()
-                .unwrap_or(0);
-            let width = available.max(0.0) / columns.max(1) as f32;
-            for (at, key) in self.pane_scales(pane, side).into_iter().enumerate() {
-                let offset = at as f32 * width;
-                let left = match side {
-                    AxisSide::Left => plot.left() - offset - width,
-                    AxisSide::Right => plot.right() + offset,
+        [AxisSide::Left, AxisSide::Right]
+            .into_iter()
+            .filter_map(move |side| {
+                let count = self.pane_scale_count(pane, side);
+                if count == 0 {
+                    return None;
+                }
+                let available = match side {
+                    AxisSide::Left => plot.left() - panel.left() - padding,
+                    AxisSide::Right => panel.right() - plot.right() - padding,
                 };
-                let right = if side == AxisSide::Right
-                    && at + 1 == count
-                    && panel.right() - (left + width) <= padding + 0.1
-                {
-                    panel.right()
-                } else {
-                    left + width
-                };
-                axes.push((key, Rect::from_x_y_ranges(left..=right, panel.y_range())));
-            }
-        }
-        axes
+                // Layout has already reserved these columns. Measurements can change while
+                // painting another pane, so use the allocated gutter for every pane this frame.
+                let columns = self
+                    .pane_layout
+                    .panes
+                    .iter()
+                    .filter(|item| {
+                        item.id == PaneId::MAIN
+                            || item.id == self.main_series_pane()
+                            || self.pane_shown(item)
+                    })
+                    .map(|item| {
+                        if item.id == pane {
+                            count
+                        } else {
+                            self.pane_scale_count(item.id, side)
+                        }
+                    })
+                    .max()
+                    .unwrap_or(0);
+                let width = available.max(0.0) / columns.max(1) as f32;
+                Some(
+                    self.pane_scale_keys(pane)
+                        .filter(move |key| self.pane_scale_side(pane, *key) == Some(side))
+                        .enumerate()
+                        .map(move |(at, key)| {
+                            let offset = at as f32 * width;
+                            let left = match side {
+                                AxisSide::Left => plot.left() - offset - width,
+                                AxisSide::Right => plot.right() + offset,
+                            };
+                            let right = if side == AxisSide::Right
+                                && at + 1 == count
+                                && panel.right() - (left + width) <= padding + 0.1
+                            {
+                                panel.right()
+                            } else {
+                                left + width
+                            };
+                            (key, Rect::from_x_y_ranges(left..=right, panel.y_range()))
+                        }),
+                )
+            })
+            .flatten()
     }
 
     pub(in crate::widget) fn primary_axis_side(&self) -> Option<crate::model::AxisSide> {
         let pane = self.main_series_pane();
         let key = crate::widget::PaneScale::Named(self.main_series_scale);
-        if self.pane_scale_keys(pane).contains(&key) {
+        if self.pane_scale_keys(pane).any(|axis| axis == key) {
             self.pane_scale_side(pane, key)
         } else {
             None
@@ -419,14 +437,12 @@ impl Chart {
         let plot =
             Rect::from_x_y_ranges(self.last_rendered_price_rect.x_range(), pane.rect.y_range());
         self.pane_scale_axes(pane.id, pane.rect, plot)
-            .into_iter()
             .find(|(_, axis)| axis.contains(pos))
             .map(|(key, _)| (pane.id, key))
     }
 
     pub(in crate::widget) fn series_axis_keys(&self) -> Vec<SeriesScale> {
         self.pane_scale_keys(self.main_series_pane())
-            .into_iter()
             .filter_map(|key| match key {
                 crate::widget::PaneScale::Named(key) if key != self.main_series_scale => Some(key),
                 _ => None,

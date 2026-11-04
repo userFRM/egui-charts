@@ -181,7 +181,6 @@ impl Chart {
         plot: Rect,
     ) -> Vec<(crate::model::SeriesScale, Rect)> {
         self.pane_scale_axes(id, rect, plot)
-            .into_iter()
             .filter_map(|(key, rect)| match key {
                 super::PaneScale::Named(key) => Some((key, rect)),
                 super::PaneScale::Study(_) => None,
@@ -484,37 +483,39 @@ impl Chart {
     /// are the bar series not moved to another pane and the overlay studies.
     /// Empty for an unknown pane.
     pub fn pane_series(&self, pane: PaneId) -> Vec<SeriesId> {
-        if self.pane_index(pane).is_none() {
-            return Vec::new();
-        }
-        if pane == PaneId::MAIN {
-            (self.main_series_present && !self.in_pane(SeriesId::MAIN))
-                .then_some(SeriesId::MAIN)
-                .into_iter()
-                .chain(
-                    self.price_series
-                        .iter()
-                        .map(|item| item.id)
-                        .filter(|id| !self.in_pane(*id)),
-                )
-                .chain(
-                    self.indicators()
-                        .filter(|(_, study)| study.is_overlay())
-                        .map(|(id, _)| id),
-                )
-                .collect()
-        } else {
-            self.pane_index(pane)
-                .map(|at| {
-                    self.pane_layout.panes[at]
-                        .members
-                        .iter()
-                        .copied()
-                        .filter(|id| self.pane_member(*id))
-                        .collect()
-                })
-                .unwrap_or_default()
-        }
+        self.pane_series_iter(pane).collect()
+    }
+
+    pub(in crate::widget) fn pane_series_iter(
+        &self,
+        pane: PaneId,
+    ) -> impl Iterator<Item = SeriesId> + '_ {
+        let entry = self.pane_index(pane).map(|at| &self.pane_layout.panes[at]);
+        let main = entry.is_some() && pane == PaneId::MAIN;
+        (main && self.main_series_present && !self.in_pane(SeriesId::MAIN))
+            .then_some(SeriesId::MAIN)
+            .into_iter()
+            .chain(
+                main.then_some(&self.price_series)
+                    .into_iter()
+                    .flatten()
+                    .map(|item| item.id)
+                    .filter(|id| !self.in_pane(*id)),
+            )
+            .chain(
+                main.then(|| self.indicators())
+                    .into_iter()
+                    .flatten()
+                    .filter(|(_, study)| study.is_overlay())
+                    .map(|(id, _)| id),
+            )
+            .chain(
+                entry
+                    .filter(|_| pane != PaneId::MAIN)
+                    .into_iter()
+                    .flat_map(|item| item.members.iter().copied())
+                    .filter(|id| self.pane_member(*id)),
+            )
     }
 
     /// The pane of `other` that corresponds to the study pane `pane` of this chart, for linking
@@ -942,7 +943,7 @@ impl Chart {
                         || pane.id == self.main_series_pane()
                         || self.pane_shown(pane)
                 })
-                .map(|pane| self.pane_scales(pane.id, side).len())
+                .map(|pane| self.pane_scale_count(pane.id, side))
                 .max()
                 .unwrap_or(0) as f32
         };
@@ -956,8 +957,7 @@ impl Chart {
             0.0
         };
         let extra_columns = self
-            .pane_scales(self.main_series_pane(), AxisSide::Left)
-            .len()
+            .pane_scale_count(self.main_series_pane(), AxisSide::Left)
             .saturating_sub(usize::from(primary_left)) as f32;
         let extra_width = self
             .measured_axis_width
@@ -974,7 +974,7 @@ impl Chart {
                 pane.id != self.main_series_pane()
                     && (pane.id == PaneId::MAIN || self.pane_shown(pane))
             })
-            .map(|pane| self.pane_scales(pane.id, AxisSide::Left).len())
+            .map(|pane| self.pane_scale_count(pane.id, AxisSide::Left))
             .max()
             .unwrap_or(0) as f32
             * self.measured_axis_width.max(self.config.left_axis_width);

@@ -391,7 +391,7 @@ impl Chart {
                 .first()
                 .and_then(|id| self.series_price_map(*id))
                 .unwrap_or(map);
-            let axes = self.pane_scale_axes(pane_id, panel_rect, plot);
+            let axes: Vec<_> = self.pane_scale_axes(pane_id, panel_rect, plot).collect();
             let mut drawing_response = None;
             let mut scale_tags = std::collections::HashMap::<PaneScale, Vec<Option<Rect>>>::new();
             let mut drawn_axes = Vec::new();

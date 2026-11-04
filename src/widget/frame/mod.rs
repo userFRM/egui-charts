@@ -733,7 +733,6 @@ impl Chart {
         // Define axis rects
         let price_axis_rect = self
             .pane_scale_axes(main_pane, rect, chart_rect)
-            .into_iter()
             .find(|(key, _)| *key == super::PaneScale::Named(self.main_series_scale))
             .map_or(Rect::NOTHING, |(_, axis)| {
                 Rect::from_x_y_ranges(axis.x_range(), chart_rect.y_range())
@@ -3479,10 +3478,7 @@ impl Chart {
                 .x
                 + if currency.is_empty() { 16.0 } else { 26.0 };
             let axis = if show_left_axis
-                && self
-                    .pane_scales(main_pane, crate::model::AxisSide::Left)
-                    .len()
-                    == 1
+                && self.pane_scale_count(main_pane, crate::model::AxisSide::Left) == 1
             {
                 Rect::from_min_max(
                     Pos2::new(rect.left(), price_rect.top()),

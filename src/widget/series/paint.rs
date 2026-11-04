@@ -447,8 +447,10 @@ impl Chart {
         rect: Rect,
     ) -> Vec<(SeriesScale, Rect)> {
         let keys = self.series_axis_keys();
+        if keys.is_empty() {
+            return Vec::new();
+        }
         self.pane_scale_axes(self.main_series_pane(), widget, rect)
-            .into_iter()
             .filter_map(|(key, axis)| match key {
                 crate::widget::PaneScale::Named(key) if keys.contains(&key) => Some((key, axis)),
                 _ => None,
