@@ -182,7 +182,7 @@ impl Chart {
                 .with_style(style.price_line_style)
                 .with_axis_label(false)
             });
-        let base_line = base_line(&map).filter(|_| style.base_line_visible);
+        let base_line = base_line(&map, style);
         let lines = item.lines.iter().map(|(_, line)| line);
         for line in base_line.iter().chain(&price_line).chain(lines) {
             crate::chart::rendering::render_price_line(

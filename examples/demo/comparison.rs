@@ -109,11 +109,25 @@ struct SavedStyle {
     price_line_width: f32,
     price_line_style: egui_charts::model::LineStyle,
     base_line_visible: bool,
+    #[serde(default = "default_base_line_color")]
+    base_line_color: egui::Color32,
+    #[serde(default = "default_base_line_width")]
+    base_line_width: f32,
+    #[serde(default)]
+    base_line_style: egui_charts::model::LineStyle,
     #[serde(skip)]
     autoscale: Option<egui_charts::model::AutoscaleProvider>,
     hit_tolerance: f32,
     #[serde(default)]
     alerts: egui_charts::model::SeriesAlerts,
+}
+
+fn default_base_line_color() -> egui::Color32 {
+    egui_charts::model::SeriesStyle::default().base_line_color
+}
+
+fn default_base_line_width() -> f32 {
+    egui_charts::model::SeriesStyle::default().base_line_width
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
