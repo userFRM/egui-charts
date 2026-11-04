@@ -1083,15 +1083,19 @@ mod tests {
                     });
                     let shapes = std::mem::take(&mut output.shapes);
                     output.drop_without_applying_deltas();
+                    // The latest-value line is a row of one-pixel dots in a single mesh.
                     let lines: Vec<_> = shapes
                         .iter()
                         .filter_map(|s| match &s.shape {
-                            Shape::LineSegment { points, stroke }
-                                if points[0].y == points[1].y
-                                    && stroke.width == 1.0
-                                    && stroke.color != Color32::TRANSPARENT =>
-                            {
-                                Some((points[0].y, stroke.color))
+                            Shape::Mesh(mesh) if !mesh.vertices.is_empty() => {
+                                let (min, max) = mesh
+                                    .vertices
+                                    .iter()
+                                    .fold((f32::MAX, f32::MIN), |(min, max), v| {
+                                        (min.min(v.pos.y), max.max(v.pos.y))
+                                    });
+                                (max - min <= 1.0)
+                                    .then_some(((min + max) / 2.0, mesh.vertices[0].color))
                             }
                             _ => None,
                         })
@@ -1102,7 +1106,7 @@ mod tests {
                         "tagged={tagged}, visible={visible}, enabled={enabled}, missing={missing}, offset={offset}"
                     );
                     if let Some(value) = expected {
-                        assert!((lines[0].0 - map.price_to_y(value)).abs() < 0.001);
+                        assert!((lines[0].0 - map.price_to_y(value)).abs() <= 0.5);
                         assert_eq!(
                             lines[0].1,
                             if last == 0.0 {
