@@ -375,6 +375,8 @@ impl Chart {
     /// [`set_data`](Self::set_data) and [`update`](Self::update); the host owns feeds. Times
     /// are projected onto the main series' time axis, including its whitespace. Move the
     /// series to another pane with [`move_series_to_pane`](Self::move_series_to_pane).
+    /// Without the original price pane, it joins the surviving main series, or the first
+    /// remaining pane when the main series is absent.
     pub fn add_series(&mut self, options: SeriesOptions) -> SeriesId {
         let options = options.sanitized();
         let id = SeriesId(self.next_series);
@@ -395,6 +397,9 @@ impl Chart {
             change_marks: None,
             lines: Vec::new(),
         });
+        if !self.panes().contains(&PaneId::MAIN) {
+            self.sync_panes();
+        }
         self.host_events
             .push(crate::widget::ChartEvent::SeriesAdded(id));
         id
