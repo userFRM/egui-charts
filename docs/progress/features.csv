@@ -852,7 +852,7 @@ Terminal,Alerts,Drawing alerts,done,library,src/ui/context_menu/drawing.rs;src/d
 Terminal,Alerts,Indicator alerts on study plots,done,library,src/ui/dialogs/alert_dialog/dialog.rs;src/services/alert_engine.rs;src/services/alert_evaluator.rs;src/services/alert_feed.rs;terminal/src/alerts.rs,
 Terminal,Alerts,Inline alert creation forms in the alerts panel,done,library,src/ui/widget_bar/panels/alerts_panel.rs;src/ui/dialogs/alert_dialog/dialog.rs;src/model/alert.rs;src/services/alerts.rs;terminal/src/alerts.rs,
 Terminal,Alerts,Moving up / moving down operators,done,library,src/ui/dialogs/alert_dialog/dialog.rs,
-Terminal,Alerts,Multi-condition alerts,done,library,src/ui/dialogs/alert_dialog/dialog.rs,
+Terminal,Alerts,Multi-condition alerts,done,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs;src/services/alert_engine.rs;src/services/alert_evaluator.rs;src/services/alert_feed.rs,2064
 Terminal,Alerts,Notification: email and plain-text email,missing,host,,
 Terminal,Alerts,Notification: in-app popup when an alert fires,done,library,src/ui/widget_bar/panels/alerts_panel.rs;src/services/alert_engine.rs;terminal/src/alerts.rs,
 Terminal,Alerts,Notification: mobile app push,missing,host,,
