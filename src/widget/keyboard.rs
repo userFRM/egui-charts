@@ -462,10 +462,7 @@ impl super::Chart {
                 let position = scale.visible_logical_range().length() - scale.base_idx() as f32;
                 self.scroll_to_position(position, true);
             }
-            A::FitContent => {
-                self.pending_scroll_time = None;
-                self.state.time_scale_mut().fit_content();
-            }
+            A::FitContent => self.fit_content(),
             A::ResetChart | A::ResetZoom => self.reset_chart_view(),
             A::ToggleLogScale | A::TogglePercentageScale => {
                 let mode = if action == A::ToggleLogScale {

@@ -830,7 +830,7 @@ impl Chart {
             rendering::render_watermark(ui, &painter, chart_rect, watermark);
         }
 
-        if self.state.data().is_empty() {
+        if self.state.data().is_empty() && self.state.shown().is_empty() {
             self.last_hover_bar_idx = None;
             self.last_crosshair = None;
             self.last_rendered_price_rect = layout.price_rect;
@@ -1015,7 +1015,9 @@ impl Chart {
             )
             .filter(|_| self.main_series_visible && time_based)
             .collect::<Vec<_>>();
-        let heikin_ashi = (self.chart_type == crate::model::ChartType::Heikin).then(|| {
+        let heikin_ashi = (self.chart_type == crate::model::ChartType::Heikin
+            && !self.state.data().is_empty())
+        .then(|| {
             self.heikin_ashi
                 .bars(&self.state.data().bars, self.state.revision())
         });

@@ -15,13 +15,39 @@ pub(super) struct ScrollAnimation {
 }
 
 impl Chart {
-    /// Fits every bar into the plot width, then restores the configured right offset.
+    /// Fits all loaded bar series across every pane, including hidden series and whitespace.
     ///
-    /// The right offset, in bars or pixels, is kept free of bars. The bar spacing limits still
-    /// apply.
+    /// The configured right offset, in bars or pixels, follows the latest participating point.
+    /// Spacing and fixed-edge limits still apply. Without a main horizontal domain, the union
+    /// of added-series timestamps supplies whitespace slots for the shared mapping;
+    /// values remain in their added series. With no loaded points the view is unchanged.
     pub fn fit_content(&mut self) {
         self.cancel_view_motion();
+        self.refresh_time_scale_content();
         self.state.time_scale_mut().fit_content();
+    }
+
+    /// Keep fitting and edge limits on the same mapping used to paint added series.
+    pub(super) fn refresh_time_scale_content(&mut self) {
+        self.state.set_fallback_series(
+            self.price_series
+                .iter()
+                .map(|item| (item.bars.as_slice(), item.revision)),
+        );
+        let shown = self.state.shown();
+        let scale = self.state.time_scale();
+        let range = shown.first().map(|_| {
+            self.price_series
+                .iter()
+                .flat_map(|item| item.bars.first().into_iter().chain(item.bars.last()))
+                .filter_map(|bar| crate::model::index_at(shown, bar.time))
+                .map(|index| scale.position(index))
+                .fold(
+                    (0.0_f64, scale.base_idx() as f64),
+                    |(left, right), index| (left.min(index), right.max(index)),
+                )
+        });
+        self.state.time_scale_mut().set_content_range(range);
     }
 
     /// Restores the configured bar spacing and right offset, leaving the price scale unchanged.

@@ -47,6 +47,10 @@ pub struct ChartState {
     elements: Option<Arc<[Bar]>>,
     /// Time coordinate system (logical index <-> pixel mapping).
     time_scale: TimeScale,
+    /// Shared whitespace slots when the main series has no horizontal domain.
+    fallback: Vec<Bar>,
+    /// Prefix revisions, lengths and last times represented by the fallback slots.
+    fallback_series: Vec<(u64, usize, Option<chrono::DateTime<chrono::Utc>>)>,
     /// The main series' price scale.
     price_scale: PriceScale,
     /// Stack of previous zoom snapshots for the "zoom out" button.
@@ -61,6 +65,8 @@ impl Clone for ChartState {
         Self {
             data: self.data.clone(),
             elements: self.elements.clone(),
+            fallback: self.fallback.clone(),
+            fallback_series: self.fallback_series.clone(),
             time_scale: self.time_scale.clone(),
             price_scale: self.price_scale.clone(),
             zoom_history: self.zoom_history.clone(),
@@ -78,6 +84,8 @@ impl ChartState {
         Self {
             data,
             elements: None,
+            fallback: Vec::new(),
+            fallback_series: Vec::new(),
             time_scale,
             price_scale: PriceScale::new(PriceScaleOptions::default()),
             zoom_history: Vec::new(),
@@ -145,6 +153,11 @@ impl ChartState {
             self.revision = next_revision();
         }
         let shown = self.elements.as_deref().unwrap_or(&self.data.bars);
+        let shown = if shown.is_empty() {
+            &self.fallback
+        } else {
+            shown
+        };
         #[cfg(feature = "widget")]
         self.time_scale
             .refresh_numeric_positions(shown, self.revision);
@@ -153,9 +166,96 @@ impl ChartState {
     }
 
     /// The series drawn on the time scale, one OHLC bar per element on price-based charts.
-    /// Indices returned by the chart hover and selection APIs refer to this series.
+    /// Indices returned by the chart hover and selection APIs refer to this series. When the
+    /// main series is empty, the widget can supply whitespace slots from added series.
     pub fn shown(&self) -> &[Bar] {
-        self.elements.as_deref().unwrap_or(&self.data.bars)
+        let shown = self.elements.as_deref().unwrap_or(&self.data.bars);
+        if shown.is_empty() {
+            &self.fallback
+        } else {
+            shown
+        }
+    }
+
+    /// Shares added-series timestamps without taking their values into the main series.
+    #[cfg(feature = "widget")]
+    pub(crate) fn set_fallback_series<'a>(
+        &mut self,
+        series: impl IntoIterator<Item = (&'a [Bar], u64)>,
+    ) {
+        // shown() can already contain the fallback; inspect the main domain alone.
+        let series: Vec<_> = if self
+            .elements
+            .as_deref()
+            .unwrap_or(&self.data.bars)
+            .is_empty()
+        {
+            series.into_iter().collect()
+        } else {
+            Vec::new()
+        };
+        let keys: Vec<_> = series
+            .iter()
+            .map(|(bars, revision)| (*revision, bars.len(), bars.last().map(|bar| bar.time)))
+            .collect();
+        if self.fallback_series == keys {
+            return;
+        }
+        let appended = self.fallback_series.len() == series.len()
+            && self.fallback_series.iter().zip(&series).all(
+                |((old_revision, len, last), (bars, revision))| {
+                    old_revision == revision
+                        && *len <= bars.len()
+                        && *last
+                            == len
+                                .checked_sub(1)
+                                .and_then(|index| bars.get(index))
+                                .map(|bar| bar.time)
+                },
+            );
+        let old_len = self.fallback.len();
+        let mut first_changed = old_len;
+        if appended {
+            for ((_, len, _), (bars, _)) in self.fallback_series.iter().zip(&series) {
+                for bar in &bars[*len..] {
+                    let at = self.fallback.partition_point(|point| point.time < bar.time);
+                    if self
+                        .fallback
+                        .get(at)
+                        .is_none_or(|point| point.time != bar.time)
+                    {
+                        first_changed = first_changed.min(at);
+                        self.fallback.insert(at, Bar::whitespace(bar.time));
+                    }
+                }
+            }
+        } else {
+            let times: std::collections::BTreeSet<_> = series
+                .iter()
+                .flat_map(|(bars, _)| bars.iter().map(|bar| bar.time))
+                .collect();
+            let bars: Vec<_> = times.into_iter().map(Bar::whitespace).collect();
+            first_changed = self
+                .fallback
+                .iter()
+                .zip(&bars)
+                .position(|(old, new)| old.time != new.time)
+                .unwrap_or(old_len.min(bars.len()));
+            self.fallback = bars;
+        }
+        if first_changed < old_len.saturating_sub(1) || self.fallback.len() < old_len {
+            self.revision = next_revision();
+        }
+        self.fallback_series = keys;
+        let shown = self.elements.as_deref().unwrap_or(&self.data.bars);
+        let shown = if shown.is_empty() {
+            &self.fallback
+        } else {
+            shown
+        };
+        self.time_scale
+            .refresh_numeric_positions(shown, self.revision);
+        self.time_scale.set_bar_cnt(shown.len());
     }
 
     #[cfg(feature = "widget")]
@@ -192,6 +292,11 @@ impl ChartState {
         });
         self.elements = elements;
         let shown = self.elements.as_deref().unwrap_or(&self.data.bars);
+        let shown = if shown.is_empty() {
+            &self.fallback
+        } else {
+            shown
+        };
         self.time_scale
             .refresh_numeric_positions(shown, self.revision);
         self.time_scale.set_bar_cnt(shown.len());
