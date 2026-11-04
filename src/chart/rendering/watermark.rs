@@ -1,6 +1,7 @@
-//! Host watermarks: lines of text and an image, aligned anywhere in the price pane.
+//! Host watermarks: lines of text and an image, aligned within any chart pane.
 
 use crate::config::FontWeight;
+use egui::emath::GuiRounding as _;
 use egui::{Align2, Color32, FontFamily, FontId, Painter, Rect, Shape, Ui, Vec2};
 
 /// One line of text of a [`Watermark`].
@@ -47,7 +48,7 @@ impl WatermarkLine {
 }
 
 /// An image and lines of text painted behind the series, stacked in that order and aligned
-/// together in the price pane; see [`Chart::set_watermark`](crate::Chart::set_watermark).
+/// together in a pane; see [`Chart::set_pane_watermark`](crate::Chart::set_pane_watermark).
 #[derive(Clone, Debug)]
 pub struct Watermark {
     /// Lines of text, top to bottom.
@@ -106,6 +107,7 @@ impl Watermark {
 
 /// Paints `watermark` in `rect`. An image still loading is left out until it has loaded.
 pub(crate) fn render_watermark(ui: &Ui, painter: &Painter, rect: Rect, watermark: &Watermark) {
+    let painter = &painter.with_clip_rect(rect.intersect(painter.clip_rect()));
     let inner = rect.shrink(watermark.padding.max(0.0));
     if !inner.is_positive() {
         return;
@@ -138,7 +140,12 @@ pub(crate) fn render_watermark(ui: &Ui, painter: &Painter, rect: Rect, watermark
     };
     let mut top = block.top();
     if let Some((image, size)) = image {
-        image.paint_at(ui, row(top, size));
+        let image_rect = row(top, size).round_to_pixels(ui.pixels_per_point());
+        if let Ok(egui::load::TexturePoll::Ready { texture }) =
+            image.load_for_size(ui.ctx(), inner.size())
+        {
+            egui::paint_texture_at(painter, image_rect, image.image_options(), &texture);
+        }
         top += size.y;
     }
     for (line, galley) in galleys {

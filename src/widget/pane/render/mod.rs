@@ -361,7 +361,7 @@ impl Chart {
             .with_overlay(false)
             .with_line_count(0);
 
-        for ((_, pane_id, collapsed), panel_rect) in
+        for ((pane_idx, pane_id, collapsed), panel_rect) in
             panes.iter().copied().zip(rects.iter().copied())
         {
             if pane_id == main_pane {
@@ -777,6 +777,11 @@ impl Chart {
                     |painter, pass| {
                         use crate::widget::{PrimitivePass, primitives};
                         if pass == PrimitivePass::Below && paint_row == 0 {
+                            if let Some(watermark) = &self.pane_layout.panes[pane_idx].watermark {
+                                crate::chart::rendering::render_watermark(
+                                    ui, painter, pane_plot, watermark,
+                                );
+                            }
                             let backgrounds = primitives::backgrounds(
                                 painter,
                                 self.pane_primitives(&members, &pane_mapping),
