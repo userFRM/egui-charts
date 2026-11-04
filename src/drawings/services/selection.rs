@@ -102,6 +102,7 @@ impl SelectionService {
         had_selection
     }
 
+    /// Starts an area gesture that adds to the current selection.
     pub(crate) fn begin_area(&mut self, origin: Pos2, pane: Rect) {
         self.area = Some(SelectionArea {
             origin,
@@ -111,6 +112,7 @@ impl SelectionService {
         });
     }
 
+    /// Drops the press intent and marks a live area cancelled until the button is released.
     pub(crate) fn cancel_area(&mut self) {
         if let Some((_, intent)) = &mut self.area_press {
             *intent = false;
@@ -120,6 +122,7 @@ impl SelectionService {
         }
     }
 
+    /// Replaces the selection with the one the area began with plus `ids`.
     pub(crate) fn update_area(&mut self, ids: impl IntoIterator<Item = usize>) {
         if let Some(area) = &self.area {
             self.selected = area.initial.clone();

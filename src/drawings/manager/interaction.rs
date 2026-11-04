@@ -38,18 +38,23 @@ impl DrawingManager {
             || (modifier && self.selection.area_press.is_some_and(|(_, empty)| empty)))
     }
 
+    /// The live selection area, if a gesture owns the pointer.
     pub(crate) fn selection_area(&self) -> Option<&crate::drawings::services::SelectionArea> {
         self.selection.area.as_ref()
     }
 
+    /// Starts an area gesture in `pane` at `origin`, remembering the selection it adds to.
     pub(crate) fn begin_selection_area(&mut self, origin: Pos2, pane: egui::Rect) {
         self.selection.begin_area(origin, pane);
     }
 
+    /// Ends the area gesture, keeping the selection it made.
     pub(crate) fn end_selection_area(&mut self) {
         self.selection.area = None;
     }
 
+    /// Selects the visible drawings of this pane whose painted geometry meets `rect`, on top of
+    /// the selection the gesture began with.
     pub(crate) fn update_selection_area(&mut self, ctx: &egui::Context, rect: egui::Rect) {
         let painted = self.painted.lock().unwrap_or_else(|e| e.into_inner());
         let ids: Vec<_> = self
