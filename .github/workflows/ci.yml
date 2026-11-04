@@ -250,7 +250,8 @@ jobs:
         if: matrix.os == 'ubuntu-latest' && needs.changes.outputs.native == 'true'
         env:
           WGPU_BACKEND: vulkan
-        run: xvfb-run -a -e /dev/stderr examples/demo/smoke-native.sh target/debug/egui-charts-demo
+        # The readiness probe disconnects before the demo connects; do not reset the server then.
+        run: xvfb-run -a -e /dev/stderr -s '-screen 0 1280x1024x24 -noreset' examples/demo/smoke-native.sh target/debug/egui-charts-demo
       - uses: actions/cache/save@v5
         if: matrix.os == 'windows-latest' && github.ref == 'refs/heads/main' && steps.windows-cache.outputs.cache-primary-key != '' && steps.windows-cache.outputs.cache-hit != 'true'
         with:
