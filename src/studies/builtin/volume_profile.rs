@@ -852,9 +852,7 @@ fn grouped(bar: &FootprintBar, ticks: i64) -> FootprintBar {
             level: key,
             ..Default::default()
         });
-        target.bid += row.bid;
-        target.ask += row.ask;
-        target.unknown += row.unknown;
+        target.absorb(row);
     }
     FootprintBar {
         time: bar.time,

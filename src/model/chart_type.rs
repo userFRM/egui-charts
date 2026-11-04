@@ -362,6 +362,12 @@ pub enum FootprintMode {
     /// Only the larger of the sell and buy volume of the row, at the left of the cell when sells
     /// dominate and at the right when buys do, centred on a tie. The other side stays out.
     DominantSide,
+    /// Sell execution count on the left, buy execution count on the right.
+    BidAskTrades,
+    /// Total execution count, including unknown sides.
+    Trades,
+    /// Total volume divided by execution count; absent for an empty row.
+    AverageSize,
 }
 
 /// What determines a footprint cell's colour.
@@ -462,11 +468,15 @@ pub enum FootprintStatistic {
     DeltaPercent,
     /// Buy volume divided by sell volume.
     AskBidRatio,
+    /// Total execution count, including unknown sides.
+    Trades,
+    /// Total volume divided by execution count; undefined for an empty bar.
+    AverageSize,
 }
 
 impl FootprintStatistic {
     /// All available rows in their display order.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 11] = [
         Self::Volume,
         Self::Bid,
         Self::Ask,
@@ -476,6 +486,8 @@ impl FootprintStatistic {
         Self::CumulativeDelta,
         Self::DeltaPercent,
         Self::AskBidRatio,
+        Self::Trades,
+        Self::AverageSize,
     ];
 
     /// Shared table label.
@@ -490,6 +502,8 @@ impl FootprintStatistic {
             Self::CumulativeDelta => "CVD",
             Self::DeltaPercent => "Delta %",
             Self::AskBidRatio => "Ask/Bid",
+            Self::Trades => "Trades",
+            Self::AverageSize => "Average size",
         }
     }
 }
@@ -794,9 +808,9 @@ mod tests {
     #[test]
     fn saved_execution_settings_keep_choices_and_legacy_defaults() {
         let settings = serde_json::json!({
-            "footprint_modes": ["Delta"], "footprint_row_ticks": 2,
+            "footprint_modes": ["Delta", "BidAskTrades", "Trades", "AverageSize"], "footprint_row_ticks": 2,
             "footprint_value_area": 0.010003969988090037,
-            "footprint_statistics": true, "footprint_statistics_rows": ["Volume", "Delta"],
+            "footprint_statistics": true, "footprint_statistics_rows": ["Volume", "Delta", "Trades", "AverageSize"],
             "footprint_colors": [[12, 34, 56, 255], null, null, null],
             "profile": {"mode": "Volume", "value_area": 0.5, "developing_poc": true,
                 "developing_value_area": true, "extend_poc": true, "extend_vah": true,
