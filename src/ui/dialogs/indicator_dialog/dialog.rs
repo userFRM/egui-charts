@@ -39,6 +39,11 @@ use std::sync::Arc;
 /// Width of the category sidebar.
 const SIDEBAR_WIDTH: f32 = 200.0;
 
+/// Whether `theme` is the stock light preset, the only one with chooser-specific inks.
+fn is_default_light(theme: &Theme) -> bool {
+    !theme.dark && theme.ui == Theme::light().ui
+}
+
 /// Indicator Dialog
 ///
 /// Modal dialog for searching and adding indicators. It lists studies from its
@@ -507,7 +512,7 @@ impl IndicatorDialog {
         let search = ui
             .scope(|ui| {
                 ui.spacing_mut().interact_size.y = 40.0;
-                if !theme.dark && theme.ui == Theme::light().ui {
+                if is_default_light(theme) {
                     ui.visuals_mut().weak_text_color = Some(Color32::from_gray(112));
                 }
                 ui.style_mut().override_font_id = Some(FontId::proportional(theme.text.heading));
@@ -551,7 +556,7 @@ impl IndicatorDialog {
         }
         // The sidebar runs before the list, so the list shows a category clicked this frame.
         let category = Cell::new(self.sel_category);
-        let section_color = if !theme.dark && theme.ui == Theme::light().ui {
+        let section_color = if is_default_light(theme) {
             Color32::from_gray(116)
         } else {
             theme.ui.text_muted
@@ -646,7 +651,7 @@ impl IndicatorDialog {
             && self.search.is_empty()
         {
             let mut pill_theme = theme.clone();
-            if !theme.dark && theme.ui == Theme::light().ui {
+            if is_default_light(theme) {
                 pill_theme.ui.text = Color32::from_gray(26);
                 // The tab bar blends this surface with white at 60%, giving #f2f2f2.
                 pill_theme.ui.panel_bg_secondary = Color32::from_gray(233);
@@ -715,7 +720,7 @@ impl IndicatorDialog {
             ui.available_width(),
             DESIGN_TOKENS.sizing.button_sm,
         ));
-        let header_color = if !theme.dark && theme.ui == Theme::light().ui {
+        let header_color = if is_default_light(theme) {
             Color32::from_gray(114)
         } else {
             theme.ui.text_muted
@@ -734,7 +739,7 @@ impl IndicatorDialog {
         let mut action = IndicatorDialogAction::None;
         // The scroll bar takes its own column, so it never covers the badges.
         crate::styles::menu_scroll_bar(ui);
-        if !theme.dark && theme.ui == Theme::light().ui {
+        if is_default_light(theme) {
             let scroll = &mut ui.spacing_mut().scroll;
             scroll.dormant_handle_opacity = 99.0 / 255.0;
             scroll.active_handle_opacity = 99.0 / 255.0;
