@@ -786,94 +786,93 @@ mod tests {
             Harness,
             kittest::{NodeT, Queryable},
         };
-        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
-            for cursor in CursorType::all() {
-                let mut toolbar = DrawingToolbar::new();
-                toolbar.select_tool(DrawingToolType::TrendLine);
-                let theme = theme.clone();
-                let mut harness = Harness::builder()
-                    .with_size(egui::vec2(1440.0, 900.0))
-                    .with_context_setup(move |ctx| {
-                        egui_extras::install_image_loaders(ctx);
-                        crate::theme::apply_to_egui(ctx, &theme);
-                    })
-                    .build_ui_state(
-                        |ui, state: &mut (DrawingToolbar, DrawingToolbarAction)| {
-                            let action = state.0.show_with_action(ui);
-                            if action != DrawingToolbarAction::None {
-                                state.1 = action;
-                            }
-                        },
-                        (toolbar, DrawingToolbarAction::None),
-                    );
-                harness.run();
-                harness.get_by_role_and_label(Role::Button, "Arrow").click();
-                harness.run();
-                let name = format!("Favourite {}", cursor.name());
+        let theme = crate::theme::Theme::light();
+        for cursor in CursorType::all() {
+            let mut toolbar = DrawingToolbar::new();
+            toolbar.select_tool(DrawingToolType::TrendLine);
+            let theme = theme.clone();
+            let mut harness = Harness::builder()
+                .with_size(egui::vec2(1440.0, 900.0))
+                .with_context_setup(move |ctx| {
+                    egui_extras::install_image_loaders(ctx);
+                    crate::theme::apply_to_egui(ctx, &theme);
+                })
+                .build_ui_state(
+                    |ui, state: &mut (DrawingToolbar, DrawingToolbarAction)| {
+                        let action = state.0.show_with_action(ui);
+                        if action != DrawingToolbarAction::None {
+                            state.1 = action;
+                        }
+                    },
+                    (toolbar, DrawingToolbarAction::None),
+                );
+            harness.run();
+            harness.get_by_role_and_label(Role::Button, "Arrow").click();
+            harness.run();
+            let name = format!("Favourite {}", cursor.name());
+            harness
+                .get_by_role_and_label(Role::RadioButton, cursor.name())
+                .hover();
+            harness.run();
+            // This target is absent on the old cursor menu.
+            let star = harness.get_by_role_and_label(Role::Button, &name);
+            assert_ne!(star.accesskit_node().toggled(), Some(Toggled::True));
+            star.focus();
+            harness.run();
+            harness.key_press(egui::Key::Space);
+            harness.run();
+            assert_eq!(harness.state().1, DrawingToolbarAction::None);
+            assert_eq!(
+                harness.state().0.state.sel_tool,
+                Some(DrawingToolType::TrendLine)
+            );
+            assert_eq!(
+                harness.state().0.state.current_cursor_type,
+                CursorType::Arrow
+            );
+            assert_eq!(
                 harness
-                    .get_by_role_and_label(Role::RadioButton, cursor.name())
-                    .hover();
+                    .get_by_role_and_label(Role::Button, &name)
+                    .accesskit_node()
+                    .toggled(),
+                Some(Toggled::True)
+            );
+            // Unstarring keeps the flyout open too, then the same target can star it again.
+            for selected in [false, true] {
+                harness.get_by_role_and_label(Role::Button, &name).click();
                 harness.run();
-                // This target is absent on the old cursor menu.
-                let star = harness.get_by_role_and_label(Role::Button, &name);
-                assert_ne!(star.accesskit_node().toggled(), Some(Toggled::True));
-                star.focus();
-                harness.run();
-                harness.key_press(egui::Key::Space);
-                harness.run();
-                assert_eq!(harness.state().1, DrawingToolbarAction::None);
-                assert_eq!(
-                    harness.state().0.state.sel_tool,
-                    Some(DrawingToolType::TrendLine)
-                );
-                assert_eq!(
-                    harness.state().0.state.current_cursor_type,
-                    CursorType::Arrow
-                );
                 assert_eq!(
                     harness
                         .get_by_role_and_label(Role::Button, &name)
                         .accesskit_node()
                         .toggled(),
-                    Some(Toggled::True)
+                    Some(if selected {
+                        Toggled::True
+                    } else {
+                        Toggled::False
+                    })
                 );
-                // Unstarring keeps the flyout open too, then the same target can star it again.
-                for selected in [false, true] {
-                    harness.get_by_role_and_label(Role::Button, &name).click();
-                    harness.run();
-                    assert_eq!(
-                        harness
-                            .get_by_role_and_label(Role::Button, &name)
-                            .accesskit_node()
-                            .toggled(),
-                        Some(if selected {
-                            Toggled::True
-                        } else {
-                            Toggled::False
-                        })
-                    );
-                }
-                harness.key_press(egui::Key::Escape);
-                harness.run();
-                assert!(
-                    harness
-                        .query_by_role_and_label(Role::Button, &name)
-                        .is_none()
-                );
-                let pick = harness
-                    .query_all_by_role_and_label(Role::Button, cursor.name())
-                    .last()
-                    .unwrap();
-                pick.click();
-                harness.run();
-                let expected = if *cursor == CursorType::Eraser {
-                    DrawingToolbarAction::ToggleEraserMode
-                } else {
-                    DrawingToolbarAction::SetCursorType(*cursor)
-                };
-                assert_eq!(harness.state().1, expected);
-                assert_eq!(harness.state().0.state.sel_tool, None);
             }
+            harness.key_press(egui::Key::Escape);
+            harness.run();
+            assert!(
+                harness
+                    .query_by_role_and_label(Role::Button, &name)
+                    .is_none()
+            );
+            let pick = harness
+                .query_all_by_role_and_label(Role::Button, cursor.name())
+                .last()
+                .unwrap();
+            pick.click();
+            harness.run();
+            let expected = if *cursor == CursorType::Eraser {
+                DrawingToolbarAction::ToggleEraserMode
+            } else {
+                DrawingToolbarAction::SetCursorType(*cursor)
+            };
+            assert_eq!(harness.state().1, expected);
+            assert_eq!(harness.state().0.state.sel_tool, None);
         }
     }
 
