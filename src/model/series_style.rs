@@ -175,6 +175,7 @@ impl Default for SeriesAlerts {
 /// The chart-wide `ChartConfig::show_symbol_last_val` and `show_price_line` switches hide every
 /// series' labels and price lines.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SeriesStyle {
     /// Raw-value display for ticks, tags, legends and readouts. `None` retains instrument or
     /// scale formatting. Explicit series formatters take precedence, followed by the chart's
@@ -197,8 +198,14 @@ pub struct SeriesStyle {
     /// Price line style.
     pub price_line_style: LineStyle,
     /// Draw a line at the series' base value, 0% in percentage mode and 100 in indexed mode.
-    /// Other scale modes have no base value.
+    /// Other scale modes have no base value. Defaults to true.
     pub base_line_visible: bool,
+    /// Base line colour. Defaults to `#B2B5BE`.
+    pub base_line_color: Color32,
+    /// Base line width in logical points, default 1. Non-positive or non-finite widths hide it.
+    pub base_line_width: f32,
+    /// Base line pattern. Defaults to [`LineStyle::Solid`].
+    pub base_line_style: LineStyle,
     /// Replaces the prices and pixel margins the series contributes to its scale's fit.
     /// A function is not saved; hosts set it again after restoring a chart.
     #[serde(skip)]
@@ -220,10 +227,48 @@ impl Default for SeriesStyle {
             price_line_color: None,
             price_line_width: 1.0,
             price_line_style: LineStyle::Dashed,
-            base_line_visible: false,
+            base_line_visible: true,
+            base_line_color: Color32::from_rgb(178, 181, 190),
+            base_line_width: 1.0,
+            base_line_style: LineStyle::Solid,
             autoscale: None,
             hit_tolerance: 5.0,
             alerts: SeriesAlerts::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Saved strokes round-trip, and layouts without the new fields get the default stroke
+    /// while keeping their explicit visibility choice.
+    #[test]
+    fn base_line_settings_round_trip_and_default_older_styles() {
+        let mut saved = serde_json::to_value(SeriesStyle::default()).unwrap();
+        saved["base_line_color"] = serde_json::json!([12, 34, 56, 255]);
+        saved["base_line_width"] = serde_json::json!(3.0);
+        saved["base_line_style"] = serde_json::json!("LargeDashed");
+        saved["base_line_visible"] = serde_json::json!(false);
+        let style: SeriesStyle = serde_json::from_value(saved.clone()).unwrap();
+        assert_eq!(serde_json::to_value(style).unwrap(), saved);
+
+        for visible in [false, true] {
+            saved["base_line_visible"] = serde_json::json!(visible);
+            for field in ["base_line_color", "base_line_width", "base_line_style"] {
+                saved.as_object_mut().unwrap().remove(field);
+            }
+            let style: SeriesStyle = serde_json::from_value(saved.clone()).unwrap();
+            let actual = serde_json::to_value(style).unwrap();
+            assert_eq!(
+                actual["base_line_color"],
+                serde_json::json!([178, 181, 190, 255])
+            );
+            assert_eq!(actual["base_line_width"], 1.0);
+            assert_eq!(actual["base_line_style"], "Solid");
+            assert_eq!(actual["base_line_visible"], visible);
+        }
+        assert!(SeriesStyle::default().base_line_visible);
     }
 }

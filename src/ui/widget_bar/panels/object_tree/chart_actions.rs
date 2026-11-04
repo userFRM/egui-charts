@@ -12,7 +12,8 @@ impl ObjectTreePanel {
     /// Bind the main data source with `with_series_id(SeriesId::MAIN)` to control its visibility.
     /// Returns `false` for host-owned property dialogs, colour gestures, templates, main-series
     /// removal and renaming non-drawing rows. Drawing names are saved and undone with the drawing.
-    /// Bulk actions apply to every selected drawing and study, and visibility includes the main series.
+    /// Bulk actions apply to drawings, studies and added bar series. Visibility includes the main
+    /// series; bar-series ordering stays within its pane.
     pub fn apply_to_chart(
         &mut self,
         chart: &mut Chart,
@@ -163,7 +164,7 @@ impl ObjectTreePanel {
                 let Some(source) = sources.iter().find(|s| s.id == *id) else {
                     return false;
                 };
-                if !source.is_drawing() && !source.is_indicator() {
+                if !source.is_drawing() && !source.is_indicator() && !source.is_added_series() {
                     return false;
                 }
                 delete(chart, source);
@@ -200,6 +201,22 @@ impl ObjectTreePanel {
             | ObjectTreeAction::SendToBack(id)
             | ObjectTreeAction::MoveUp(id)
             | ObjectTreeAction::MoveDown(id) => {
+                if let Some(series) = sources
+                    .iter()
+                    .find(|s| s.id == *id && s.source_type == SourceType::DataSource)
+                    .and_then(|s| s.series_id)
+                {
+                    let Some(order) = chart.series_order(series) else {
+                        return false;
+                    };
+                    let order = match action {
+                        ObjectTreeAction::BringToFront(_) => usize::MAX,
+                        ObjectTreeAction::SendToBack(_) => 0,
+                        ObjectTreeAction::MoveUp(_) => order.saturating_add(1),
+                        _ => order.saturating_sub(1),
+                    };
+                    return chart.set_series_order(series, order);
+                }
                 let mut order: Vec<_> = chart
                     .drawings()
                     .drawings
@@ -231,6 +248,19 @@ impl ObjectTreePanel {
                 }
             }
             ObjectTreeAction::ZoomTo(id) => {
+                if let Some(series) = sources
+                    .iter()
+                    .find(|s| s.id == *id && s.is_added_series())
+                    .and_then(|s| s.series_id)
+                {
+                    if let Some(time) = chart.bars(series).last().map(|bar| bar.time) {
+                        chart.scroll_to_time(time);
+                        if let Some(scale) = chart.series_price_scale_mut(series) {
+                            scale.reset();
+                        }
+                    }
+                    return true;
+                }
                 if !sources.iter().any(|s| s.id == *id && s.is_drawing())
                     || !chart.drawings().drawings.iter().any(|d| d.id == *id)
                 {
@@ -242,7 +272,11 @@ impl ObjectTreePanel {
             }
             ObjectTreeAction::RemoveAllDrawings => chart.drawings_mut().clear_all(),
             ObjectTreeAction::RemoveAllIndicators => {
-                let ids: Vec<SeriesId> = chart.indicators().map(|(id, _)| id).collect();
+                let ids: Vec<SeriesId> = chart
+                    .indicators()
+                    .filter(|(_, study)| study.user_edit_enabled())
+                    .map(|(id, _)| id)
+                    .collect();
                 for id in ids {
                     chart.remove_series(id);
                 }
@@ -257,6 +291,10 @@ fn set_visible(chart: &mut Chart, source: &SourceItem, visible: bool) -> bool {
     if source.source_type == SourceType::DataSource && source.series_id == Some(SeriesId::MAIN) {
         chart.set_main_series_visible(visible);
         true
+    } else if source.is_added_series() {
+        source
+            .series_id
+            .is_some_and(|id| chart.set_series_visible(id, visible))
     } else if source.is_indicator() {
         source
             .series_id
@@ -272,8 +310,10 @@ fn set_visible(chart: &mut Chart, source: &SourceItem, visible: bool) -> bool {
 }
 
 fn delete(chart: &mut Chart, source: &SourceItem) {
-    if source.is_indicator() {
-        if let Some(id) = source.series_id {
+    if source.is_indicator() || source.is_added_series() {
+        if let Some(id) = source.series_id
+            && (source.is_added_series() || chart.indicator_user_edit_enabled(id))
+        {
             chart.remove_series(id);
         }
     } else if source.is_drawing() {
@@ -392,6 +432,32 @@ mod tests {
     fn apply(tree: &mut ObjectTreePanel, chart: &mut Chart, action: ObjectTreeAction) {
         let rows = rows(chart);
         chart.user_action(|chart| tree.apply_to_chart(chart, &action, &rows));
+    }
+
+    #[test]
+    fn deleting_added_series_preserves_read_only_studies() {
+        for bulk in [false, true] {
+            let mut chart = chart(&[100.0], &[200.0]);
+            let study = chart.add_indicator(Box::new(crate::studies::SMA::new(2)));
+            chart.set_indicator_user_edit_enabled(study, false);
+            let added = chart.add_series(crate::widget::SeriesOptions::default());
+            let sources = [
+                SourceItem::indicator(1, "SMA", egui::Color32::GRAY).with_series_id(study),
+                SourceItem::data_source(2, "Comparison").with_series_id(added),
+            ];
+            let mut tree = ObjectTreePanel::new();
+            if bulk {
+                tree.state_mut().select(1);
+                tree.state_mut().toggle_selection(2);
+                tree.apply_to_chart(&mut chart, &ObjectTreeAction::DeleteSelected, &sources);
+            } else {
+                for id in [1, 2] {
+                    tree.apply_to_chart(&mut chart, &ObjectTreeAction::Delete(id), &sources);
+                }
+            }
+            assert!(chart.indicators().any(|(id, _)| id == study));
+            assert!(chart.series().all(|(id, _)| id != added));
+        }
     }
 
     #[test]

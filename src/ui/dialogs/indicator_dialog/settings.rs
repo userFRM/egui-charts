@@ -68,6 +68,10 @@ fn pattern_combo(ui: &mut egui::Ui, pattern: &mut LineStyle) {
 impl IndicatorSettingsDialog {
     /// Open on the current values of the study identified by `id`.
     pub fn open(&mut self, id: SeriesId, study: &dyn Indicator, interval: Option<Timeframe>) {
+        if !study.user_edit_enabled() {
+            self.edit = None;
+            return;
+        }
         self.edit = Some(StudyEdit {
             id,
             inputs: Vec::new(),
@@ -95,6 +99,9 @@ impl IndicatorSettingsDialog {
             return false;
         };
         self.open(id, study, chart.timeframe());
+        if !self.is_open() {
+            return false;
+        }
         let studies: Vec<_> = chart.indicators().collect();
         for (candidate, study) in &studies {
             let mut next = Some(candidate.0);
@@ -132,6 +139,22 @@ impl IndicatorSettingsDialog {
     /// Whether an edit is open.
     pub fn is_open(&self) -> bool {
         self.edit.is_some()
+    }
+
+    /// Show an edit while its study still exists and permits editing. Revoking permission
+    /// discards an already open edit. The host must recheck permission before applying it.
+    pub fn show_for_chart(
+        &mut self,
+        ctx: &egui::Context,
+        theme: &Theme,
+        chart: &crate::widget::Chart,
+    ) -> Option<StudyEdit> {
+        if let Some(edit) = &self.edit
+            && !chart.indicator_user_edit_enabled(edit.id)
+        {
+            self.edit = None;
+        }
+        self.show(ctx, theme)
     }
 
     /// Show the staged edit. Apply returns it once; the host calls
@@ -199,6 +222,10 @@ impl IndicatorSettingsDialog {
                             });
                         }
                         Tab::Style => {
+                            ui.checkbox(
+                                &mut edit.settings.show_legend_values,
+                                l10n::text(ui.ctx(), "Show values in status line"),
+                            );
                             for (line, plot) in edit.settings.plots.iter_mut().enumerate() {
                                 ui.push_id(line, |ui| {
                                     ui.horizontal_wrapped(|ui| {
@@ -507,5 +534,19 @@ mod tests {
         assert!(!dialog.is_open());
         assert_eq!(study.inputs()[0].value, InputValue::Length(20));
         assert!(study.plot_style(0).visible);
+
+        let mut chart = crate::widget::test_frames::chart(&[100.0], &[110.0]);
+        let id = chart.add_indicator(Box::new(SMA::new(20)));
+        assert!(dialog.open_for_chart(&chart, id));
+        assert!(chart.set_indicator_user_edit_enabled(id, false));
+        assert!(
+            dialog
+                .show_for_chart(&ctx, &Theme::dark(), &chart)
+                .is_none()
+        );
+        assert!(!dialog.is_open());
+        assert!(!dialog.open_for_chart(&chart, id));
+        assert!(chart.set_indicator_user_edit_enabled(id, true));
+        assert!(dialog.open_for_chart(&chart, id));
     }
 }

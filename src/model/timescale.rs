@@ -148,6 +148,8 @@ pub struct TimeScale {
     width: f32,
     /// Total number of bars in dataset
     bar_cnt: usize,
+    /// Extent of participating series in spacing units, relative to the main series.
+    content_range: Option<(f64, f64)>,
     /// Min bar spacing constraint
     min_bar_spacing: f32,
     /// Max bar spacing constraint (0 = unlimited)
@@ -171,6 +173,7 @@ impl TimeScale {
             live_right_offset_pixels: None,
             width: 800.0,
             bar_cnt: 0,
+            content_range: None,
             min_bar_spacing: DEFAULT_MIN_BAR_SPACING,
             max_bar_spacing: 0.0, // unlimited
             fix_left_edge: false,
@@ -235,6 +238,16 @@ impl TimeScale {
         self.bar_cnt = count;
         // CRITICAL: Changing bar_cnt affects max_offset calculation in constraints
         self.apply_constraints();
+    }
+
+    #[cfg(feature = "widget")]
+    pub(crate) fn set_content_range(&mut self, range: Option<(f64, f64)>) {
+        self.content_range = range;
+        self.apply_constraints();
+    }
+
+    fn content_range(&self) -> (f64, f64) {
+        self.content_range.unwrap_or((0.0, self.base_idx() as f64))
     }
 
     /// Numeric sample positions used by this scale, or `None` for ordinal time charts.
@@ -506,19 +519,29 @@ impl TimeScale {
         }
     }
 
-    /// Fit all data in view, then restore the configured right offset.
+    /// Fit all participating data in view, reserving the configured right offset after it.
     ///
     /// The bars and the configured offset in bars share the width, or the bars share the width
-    /// less a configured pixel offset, so every bar stays in view.
+    /// less a configured pixel offset. Spacing limits take precedence; a fixed right edge
+    /// suppresses the margin.
     pub fn fit_content(&mut self) {
         if self.bar_cnt > 0 {
-            let (pixels, bars) = self
-                .live_right_offset_pixels
-                .map_or((0.0, self.live_right_offset), |px| (px, 0.0));
+            let (left, right) = self.content_range();
+            let (pixels, bars) = if self.fix_right_edge {
+                (0.0, 0.0)
+            } else {
+                self.live_right_offset_pixels
+                    .map_or((0.0, self.live_right_offset), |px| (px, 0.0))
+            };
             self.bar_spacing = self.clamp_spacing(
-                (self.width as f64 - pixels as f64) / (self.bar_cnt as f64 + bars as f64).max(1.0),
+                (self.width as f64 - pixels as f64) / (right - left + 1.0 + bars as f64).max(1.0),
             );
-            self.scroll_to_realtime();
+            let margin = if self.fix_right_edge {
+                0.0
+            } else {
+                f64::from(self.live_edge_offset())
+            };
+            self.set_right_offset(right - self.base_idx() as f64 + margin);
         }
     }
 
@@ -570,10 +593,14 @@ impl TimeScale {
         }
 
         if self.fix_left_edge {
-            // The offset that puts the left border of `visible_logical_range` at bar 0.
-            Some(self.width as f64 / self.bar_spacing - self.bar_cnt as f64)
+            // Keep the first participating slot at the left border.
+            Some(
+                self.content_range().0 - self.base_idx() as f64
+                    + self.width as f64 / self.bar_spacing
+                    - 1.0,
+            )
         } else {
-            Some(-(self.bar_cnt as f64 + 100.0))
+            Some(self.content_range().0 - self.base_idx() as f64 - 101.0)
         }
     }
 
@@ -584,13 +611,14 @@ impl TimeScale {
             return 0.0;
         }
 
+        let last = self.content_range().1 - self.base_idx() as f64;
         if self.fix_right_edge {
-            0.0
+            last
         } else {
             // Allow scrolling into future whitespace
             // Use a generous bound based on visible bars at minimum zoom
 
-            self.width as f64 / self.spacing_bounds().0
+            last + self.width as f64 / self.spacing_bounds().0
         }
     }
 

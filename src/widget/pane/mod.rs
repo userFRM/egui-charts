@@ -15,14 +15,14 @@ use egui::{Color32, Rect, Vec2};
 /// A study's name and input values, which identify it across charts.
 type PaneStudy = (String, Vec<(String, serde_json::Value)>);
 
-/// Identifies a pane of a chart. [`PaneId::MAIN`] is the initial price pane; [`Chart::add_pane`] and
-/// [`Chart::panes`] return the others. An id stays valid until its pane is removed and is never
-/// reused by the chart.
+/// Identifies a pane of a chart. [`PaneId::MAIN`] is the original price pane;
+/// [`Chart::add_pane`] and [`Chart::panes`] return the others. An id stays valid until its pane
+/// is removed. Added pane ids are never reused by the chart.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PaneId(pub(super) usize);
 
 impl PaneId {
-    /// The initial price pane. The main series can move to another pane.
+    /// The original price pane, which can be removed. The main series can move elsewhere.
     pub const MAIN: PaneId = PaneId(0);
 }
 
@@ -52,7 +52,7 @@ impl Default for PaneOptions {
 
 #[derive(Clone)]
 pub(super) struct PaneLayout {
-    /// Every pane from top to bottom, the price pane included.
+    /// Every existing pane from top to bottom.
     pub(super) panes: Vec<Pane>,
     pub(super) maximized: Option<PaneId>,
     /// Draw order in the initial price pane, including the main series while placed there.
@@ -103,7 +103,7 @@ pub(super) struct Pane {
 }
 
 impl Pane {
-    fn new(id: PaneId) -> Self {
+    pub(super) fn new(id: PaneId) -> Self {
         Self {
             id,
             members: Vec::new(),
@@ -249,7 +249,10 @@ impl Chart {
                 .study_ids
                 .iter()
                 .position(|study| *study == id)
-                .is_some_and(|idx| !self.studies.indicators()[idx].is_overlay())
+                .is_some_and(|idx| {
+                    !self.studies.indicators()[idx].is_overlay()
+                        || self.pane_index(PaneId::MAIN).is_none()
+                })
     }
 
     /// Whether the host series `id` is drawn by a pane below the price pane.
@@ -260,10 +263,11 @@ impl Chart {
             .any(|pane| pane.members.contains(&id))
     }
 
-    /// Whether `pane` stays in the layout at the next sync, which drops a pane whose members
-    /// have all left it unless it is preserved.
+    /// Whether `pane` stays in the layout at the next sync. Empty panes are dropped when their
+    /// members leave, unless preserved or the final pane.
     fn pane_listed(&self, pane: &Pane) -> bool {
-        pane.preserve
+        self.pane_layout.panes.len() == 1
+            || pane.preserve
             || pane.members.is_empty()
             || pane.members.iter().any(|id| self.pane_member(*id))
     }
@@ -279,12 +283,14 @@ impl Chart {
                     .any(|id| self.pane_member(*id) && self.is_series_visible(*id)))
     }
 
-    /// Whether the chart draws any pane besides the price pane.
+    /// Whether rendering needs the shared layout for panes other than the original price pane.
     pub(super) fn has_panes(&self) -> bool {
-        self.pane_layout
-            .panes
-            .iter()
-            .any(|pane| self.pane_shown(pane))
+        self.pane_index(PaneId::MAIN).is_none()
+            || self
+                .pane_layout
+                .panes
+                .iter()
+                .any(|pane| self.pane_shown(pane))
     }
 
     fn pane_index(&self, pane: PaneId) -> Option<usize> {
@@ -307,14 +313,20 @@ impl Chart {
     }
 
     /// Removes `id` from its pane and drops that pane if it became empty and is not preserved.
-    fn leave_panes(&mut self, id: SeriesId) {
+    pub(super) fn leave_panes(&mut self, id: SeriesId) {
+        let mut remaining = self.pane_layout.panes.len();
         self.pane_layout.panes.retain_mut(|pane| {
             let before = pane.members.len();
             pane.members.retain(|member| *member != id);
-            pane.id == PaneId::MAIN
+            let keep = pane.id == PaneId::MAIN
                 || pane.members.len() == before
                 || !pane.members.is_empty()
                 || pane.preserve
+                || remaining == 1;
+            if !keep {
+                remaining -= 1;
+            }
+            keep
         });
     }
 
@@ -330,24 +342,45 @@ impl Chart {
             }
             pane.members = members;
         }
+        if emptied.len() == self.pane_layout.panes.len() {
+            emptied.pop();
+        }
         self.pane_layout
             .panes
             .retain(|pane| !emptied.contains(&pane.id));
+        let main_present = self.pane_index(PaneId::MAIN).is_some();
+        if !main_present {
+            let target = self.series_pane(SeriesId::MAIN);
+            let unplaced: Vec<_> = self
+                .price_series
+                .iter()
+                .filter(|item| !self.in_pane(item.id))
+                .map(|item| item.id)
+                .collect();
+            if let Some(pane) = self
+                .pane_layout
+                .panes
+                .iter_mut()
+                .find(|pane| target.is_none_or(|id| pane.id == id))
+            {
+                pane.members.extend(unplaced);
+            }
+        }
         for idx in 0..self.study_ids.len() {
             let id = self.study_ids[idx];
-            if !self.studies.indicators()[idx].is_overlay() && !self.in_pane(id) {
+            if (!main_present || !self.studies.indicators()[idx].is_overlay()) && !self.in_pane(id)
+            {
                 self.add_study_pane(id);
             }
         }
         let main = std::mem::take(&mut self.pane_layout.main);
         self.pane_layout.main = self.main_pane_order(main);
         if self.pane_layout.maximized.is_some_and(|id| {
-            id != PaneId::MAIN
-                && !self
-                    .pane_layout
-                    .panes
-                    .iter()
-                    .any(|pane| pane.id == id && self.pane_shown(pane))
+            !self
+                .pane_layout
+                .panes
+                .iter()
+                .any(|pane| pane.id == id && (id == PaneId::MAIN || self.pane_shown(pane)))
         }) {
             self.pane_layout.maximized = None;
         }
@@ -356,6 +389,10 @@ impl Chart {
     /// The price pane's draw order, including series and studies added since its last frame.
     /// Accepts the existing order to reuse its allocation on each frame.
     pub(super) fn main_pane_order(&self, mut main: Vec<SeriesId>) -> Vec<SeriesId> {
+        if self.pane_index(PaneId::MAIN).is_none() {
+            main.clear();
+            return main;
+        }
         let overlays: Vec<_> = self
             .study_ids
             .iter()
@@ -405,6 +442,11 @@ impl Chart {
 
     /// Appends a pane holding the study `id`, at the study's preferred height.
     pub(super) fn add_study_pane(&mut self, id: SeriesId) {
+        if let Some(idx) = self.study_ids.iter().position(|study| *study == id)
+            && self.studies.indicators()[idx].is_overlay()
+        {
+            self.studies.indicators_mut()[idx].set_overlay(false);
+        }
         let height = self.study_pane_height(id);
         self.add_pane();
         let pane = self.pane_layout.panes.last_mut().expect("pane was added");
@@ -423,26 +465,63 @@ impl Chart {
         id
     }
 
-    /// Removes a pane with the series and studies it draws. Returns `false` for the price pane
-    /// or an unknown id.
+    /// Removes a pane, its series, studies, markers, price lines and drawings, including locked
+    /// drawings. Attached primitives detach on the next frame. The original price pane can be
+    /// removed; its retained data still supplies the shared horizontal mapping and study inputs.
+    /// Surviving panes keep their ids, order and data. Without the original pane, new bar series
+    /// and overlay studies join the surviving main series. When that series is absent, new
+    /// bar series use the first pane and studies start in their own panes.
+    /// Returns `false` without removing content for an unknown id or the final pane.
     pub fn remove_pane(&mut self, pane: PaneId) -> bool {
         self.sync_panes();
-        if pane == PaneId::MAIN {
+        if self.panes().len() <= 1 {
             return false;
         }
-        let Some(at) = self.pane_index(pane) else {
+        if self.pane_index(pane).is_none() {
             return false;
-        };
-        for id in self.pane_layout.panes[at].members.clone() {
+        }
+        let members = self.pane_series(pane);
+        #[cfg(feature = "drawings")]
+        {
+            let drawings: Vec<_> = self
+                .drawings
+                .drawings
+                .iter()
+                .filter(|drawing| {
+                    let owner = match drawing.pane {
+                        None => Some(self.main_series_pane()),
+                        Some(id) => self
+                            .series_pane(SeriesId(id))
+                            .or_else(|| self.pane_index(PaneId(id)).map(|_| PaneId(id))),
+                    };
+                    owner == Some(pane)
+                })
+                .map(|drawing| (drawing.id, drawing.locked))
+                .collect();
+            for (id, locked) in drawings {
+                if locked {
+                    self.drawings
+                        .edit_drawing(id, |drawing| drawing.locked = false);
+                }
+                self.drawings.delete_drawing(id);
+            }
+        }
+        let removes_main = members.contains(&SeriesId::MAIN)
+            || (pane == PaneId::MAIN && !self.main_series_present);
+        for id in members {
             self.remove_series(id);
+        }
+        if removes_main {
+            self.marks = Default::default();
+            self.change_marks = None;
         }
         self.pane_layout.panes.retain(|item| item.id != pane);
         self.sync_panes();
         true
     }
 
-    /// The panes from top to bottom, the price pane included. A study that is not an overlay
-    /// starts in a new pane at the bottom.
+    /// Existing panes from top to bottom, including the original price pane until removed.
+    /// A study that is not an overlay starts in a new pane at the bottom.
     pub fn panes(&self) -> Vec<PaneId> {
         self.pane_layout
             .panes
@@ -456,6 +535,9 @@ impl Chart {
     /// are the bar series not moved to another pane and the overlay studies.
     /// Empty for an unknown pane.
     pub fn pane_series(&self, pane: PaneId) -> Vec<SeriesId> {
+        if self.pane_index(pane).is_none() {
+            return Vec::new();
+        }
         if pane == PaneId::MAIN {
             (self.main_series_present && !self.in_pane(SeriesId::MAIN))
                 .then_some(SeriesId::MAIN)
@@ -574,7 +656,7 @@ impl Chart {
                     .indicators()
                     .any(|(id, study)| id == series && study.is_overlay())
         };
-        main.then_some(PaneId::MAIN)
+        (main && self.pane_index(PaneId::MAIN).is_some()).then_some(PaneId::MAIN)
     }
 
     /// Moves a bar series, including the main series, or study into `pane`, after its members.
@@ -768,12 +850,14 @@ impl Chart {
         true
     }
 
-    /// Whether `pane` is kept when it becomes empty; the price pane always is.
+    /// Whether `pane` is kept when it becomes empty. The original price pane and the final
+    /// remaining pane are always kept; an unknown or removed pane returns `false`.
     pub fn preserves_empty_pane(&self, pane: PaneId) -> bool {
-        pane == PaneId::MAIN
-            || self
-                .pane_index(pane)
-                .is_some_and(|at| self.pane_layout.panes[at].preserve)
+        self.pane_index(pane).is_some_and(|at| {
+            pane == PaneId::MAIN
+                || self.pane_layout.panes.len() == 1
+                || self.pane_layout.panes[at].preserve
+        })
     }
 
     /// Sets the behaviour and colours of the pane separators (builder pattern).
@@ -1016,6 +1100,25 @@ impl Chart {
 mod tests {
     use crate::widget::test_frames::chart;
     use egui::{Context, Pos2, RawInput, Rect, Vec2};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    /// A primitive that counts its detachments.
+    struct Attachment(Arc<AtomicUsize>);
+    impl crate::widget::Primitive for Attachment {
+        fn draw(
+            &self,
+            _: &egui::Painter,
+            _: &crate::widget::PrimitiveView<'_>,
+            _: crate::widget::PrimitivePass,
+        ) {
+        }
+        fn detached(&mut self) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
 
     /// A host series moved into a pane leaves the price scale, panes share the height by
     /// stretch factor across resizes, and a pane can sit above the price pane.
@@ -1106,5 +1209,344 @@ mod tests {
         // A flat value of 200 gets 10% of a 1% span (2): [199.8, 200.2].
         assert!((pane.y_min - 199.8).abs() < 1e-9);
         assert!((pane.y_max - 200.2).abs() < 1e-9);
+    }
+
+    /// Removing the original pane keeps the remaining panes' identities and shared time
+    /// positions, deletes only its content, and round-trips without recreating it.
+    #[test]
+    fn removing_original_pane_preserves_survivors_and_cleans_up_content() {
+        use crate::model::{LogicalRange, Marker, PriceLine};
+        use crate::widget::test_frames::{frame, shapes};
+        use crate::widget::{PaneId, SeriesId, SeriesOptions};
+        use egui::Color32;
+
+        for removed_series_first in [false, true] {
+            let ctx = Context::default();
+            let mut chart = chart(&[100.0], &[110.0]);
+            chart.config.show_volume = false;
+            chart.chart_options.crosshair.mode = crate::config::CrosshairMode::Normal;
+            let data = chart.bars(SeriesId::MAIN).to_vec();
+            let marker = Marker::new(data[70].time);
+            chart.set_markers(SeriesId::MAIN, vec![marker.clone()]);
+            let line = chart
+                .add_price_line(SeriesId::MAIN, PriceLine::new(105.0, Color32::RED))
+                .unwrap();
+            let overlay = chart.add_indicator(Box::new(crate::studies::SMA::new(3)));
+            let removed = chart.add_series(SeriesOptions::default());
+            chart.set_data(removed, data.clone());
+            let detached = Arc::new(AtomicUsize::new(0));
+            chart.attach_primitive(overlay, Attachment(detached.clone()));
+            chart.attach_primitive(removed, Attachment(detached.clone()));
+
+            let survivor_color = Color32::from_rgb(11, 123, 45);
+            let survivors: Vec<_> = (0..2)
+                .map(|_| {
+                    let series = chart.add_series(SeriesOptions {
+                        color: survivor_color,
+                        ..Default::default()
+                    });
+                    chart.set_data(series, data.clone());
+                    let pane = chart.add_pane();
+                    assert!(chart.move_series_to_pane(series, pane));
+                    (pane, series)
+                })
+                .collect();
+            let (first, series) = survivors[0];
+            let second = survivors[1].0;
+            let study = chart.add_indicator(Box::new(crate::studies::RSI::new(3)));
+            assert!(chart.move_series_to_pane(study, first));
+            chart
+                .series_price_scale_mut(series)
+                .unwrap()
+                .set_range(90.0, 130.0);
+            assert!(chart.move_pane(second, 0));
+            chart.set_markers(series, vec![marker]);
+            let survivor_line = chart
+                .add_price_line(series, PriceLine::new(105.0, Color32::BLUE))
+                .unwrap();
+            let survivor_detached = Arc::new(AtomicUsize::new(0));
+            chart.attach_primitive(series, Attachment(survivor_detached.clone()));
+            #[cfg(feature = "drawings")]
+            for (id, pane) in [(1, None), (2, Some(overlay.0)), (3, Some(first.0))] {
+                let mut drawing = crate::drawings::Drawing::new(
+                    id,
+                    crate::drawings::DrawingToolType::HorizontalLine,
+                );
+                drawing.chart_points = vec![crate::drawings::ChartPoint::new(70.0, 105.0)];
+                drawing.pane = pane;
+                drawing.locked = true;
+                chart.drawings_mut().drawings.push(drawing);
+            }
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            assert!(chart.set_visible_logical_range(LogicalRange::new(60.0, 80.0)));
+            frame(&ctx, &mut chart, 0.1, vec![]);
+            let x = chart.time_to_x(data[70].time).unwrap();
+            let view = chart.get_time_scale_state();
+            #[cfg(feature = "ui")]
+            let original = chart.snapshot().unwrap();
+            if removed_series_first {
+                assert!(chart.remove_series(SeriesId::MAIN));
+            }
+            assert!(chart.user_action(|chart| chart.remove_pane(PaneId::MAIN)));
+            assert!(!chart.remove_pane(PaneId::MAIN));
+            assert!(
+                chart
+                    .shared_price_scale(crate::model::SeriesScale::Right)
+                    .is_none()
+            );
+            assert_eq!(chart.panes(), [second, first]);
+            assert_eq!(chart.pane_series(first), [series, study]);
+            assert!(chart.pane_series(PaneId::MAIN).is_empty());
+            assert_eq!(chart.series_pane(SeriesId::MAIN), None);
+            assert_eq!(chart.series_pane(overlay), None);
+            assert!(chart.price_line(line).is_none());
+            assert!(chart.price_line(survivor_line).is_some());
+            assert_eq!(chart.markers(series).len(), 1);
+            assert_eq!(chart.bars(series), data);
+            assert!(chart.marks.is_empty());
+            frame(&ctx, &mut chart, 0.2, vec![]);
+            assert_eq!(detached.load(Ordering::Relaxed), 2);
+            assert_eq!(survivor_detached.load(Ordering::Relaxed), 0);
+            assert_eq!(chart.get_time_scale_state(), view);
+            let range = chart.series_price_scale(series).unwrap().range();
+            assert_eq!((range.min, range.max), (90.0, 130.0));
+            assert!((chart.time_to_x(data[70].time).unwrap() - x).abs() < 0.01);
+            let heights: Vec<_> = chart
+                .panes()
+                .iter()
+                .map(|pane| chart.pane_height(*pane).unwrap())
+                .collect();
+            assert!(
+                (heights[0] - heights[1]).abs() < 0.01,
+                "equal stretches share all remaining height"
+            );
+            let rect = chart
+                .pane_layout
+                .panes
+                .iter()
+                .find(|pane| pane.id == first)
+                .unwrap()
+                .rect;
+            let pos = Pos2::new(x, rect.center().y);
+            assert!(
+                (rect.bottom() - chart.time_axis_rect.top()).abs() < 0.01,
+                "surviving panes fill the plot height"
+            );
+            chart.drain_events().for_each(drop);
+            let painted = shapes(&ctx, &mut chart, 0.3, vec![egui::Event::PointerMoved(pos)]);
+            assert!(painted.iter().any(|shape| matches!(shape,
+                egui::Shape::Path(path) if path.stroke.color == egui::epaint::ColorMode::Solid(survivor_color)
+            )), "surviving series still paint");
+            assert!(chart.drain_events().any(|event| matches!(event,
+                crate::widget::ChartEvent::CrosshairMoved(Some(pointer))
+                    if pointer.time == Some(data[70].time) && pointer.pane == 1
+            )));
+            for (step, (_, id)) in [survivors[1], survivors[0]].into_iter().enumerate() {
+                let pos = Pos2::new(x, chart.series_price_map(id).unwrap().price_to_y(110.0));
+                let events = [true, false].map(|pressed| egui::Event::PointerButton {
+                    pos,
+                    pressed,
+                    button: egui::PointerButton::Primary,
+                    modifiers: Default::default(),
+                });
+                frame(
+                    &ctx,
+                    &mut chart,
+                    0.31 + step as f64 * 0.02,
+                    vec![egui::Event::PointerMoved(pos)],
+                );
+                frame(&ctx, &mut chart, 0.32 + step as f64 * 0.02, events.to_vec());
+                assert_eq!(
+                    chart.selection.selected_id(),
+                    Some(crate::chart::selection::ChartElementId::Series(id))
+                );
+            }
+            #[cfg(feature = "drawings")]
+            assert_eq!(
+                chart
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .map(|drawing| drawing.id)
+                    .collect::<Vec<_>>(),
+                [3]
+            );
+
+            #[cfg(feature = "ui")]
+            {
+                let snapshot = chart.snapshot().unwrap();
+                let json = serde_json::to_string(&snapshot).unwrap();
+                let snapshot = serde_json::from_str(&json).unwrap();
+                let mut restored =
+                    crate::widget::Chart::new(crate::model::BarData::from_bars(data.clone()));
+                restored.restore(&snapshot).unwrap();
+                let new_series = restored.restored_series_id(series.0).unwrap();
+                restored.set_data(new_series, data.clone());
+                frame(&Context::default(), &mut restored, 0.0, vec![]);
+                assert!(!restored.panes().contains(&PaneId::MAIN));
+                assert_eq!(restored.panes().len(), 2);
+                assert_eq!(restored.markers(new_series).len(), 1);
+                assert_eq!(restored.price_lines(new_series).count(), 1);
+                let new_study = restored.restored_series_id(study.0).unwrap();
+                assert_eq!(
+                    restored.pane_series(restored.panes()[1]),
+                    [new_series, new_study]
+                );
+                assert_eq!(restored.snapshot().unwrap().panes.len(), 2);
+                #[cfg(feature = "drawings")]
+                assert_eq!(restored.drawings().drawings.len(), 1);
+                restored.restore(&original).unwrap();
+                assert!(restored.panes().contains(&PaneId::MAIN));
+                assert!(restored.is_main_series_visible());
+            }
+            assert!(chart.undo());
+            assert!(chart.panes().contains(&PaneId::MAIN));
+            #[cfg(feature = "drawings")]
+            assert!(
+                chart
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .all(|drawing| drawing.locked)
+            );
+            assert!(chart.redo());
+            assert_eq!(chart.panes(), [second, first]);
+            assert!(chart.remove_pane(second));
+            assert!(
+                !chart.remove_pane(first),
+                "the final pane and its members stay"
+            );
+            assert_eq!(chart.pane_series(first), [series, study]);
+            assert!(chart.remove_series(series));
+            assert!(chart.remove_series(study));
+            assert_eq!(chart.panes(), [first]);
+            assert!(chart.preserves_empty_pane(first));
+            frame(&ctx, &mut chart, 0.4, vec![]);
+            assert_eq!(
+                chart.panes(),
+                [first],
+                "automatic cleanup also keeps a final pane"
+            );
+            let added = chart.add_series(SeriesOptions::default());
+            assert_eq!(chart.series_pane(added), Some(first));
+            chart
+                .series_price_scale_mut(added)
+                .unwrap()
+                .set_range(80.0, 140.0);
+            chart.set_data(added, data.clone());
+            frame(&ctx, &mut chart, 0.5, vec![]);
+            assert_eq!(chart.series_pane(added), Some(first));
+            let range = chart.series_price_scale(added).unwrap().range();
+            assert_eq!((range.min, range.max), (80.0, 140.0));
+            let background = Color32::from_rgb(7, 13, 19);
+            chart.config.background_color = background;
+            chart.config.background_style = crate::config::BackgroundStyle::Solid;
+            for (step, visible) in [false, true].into_iter().enumerate() {
+                chart.set_series_visible(added, visible);
+                chart.pane_layout.panes[0].collapsed = Some(visible);
+                let painted = shapes(&ctx, &mut chart, 0.6 + step as f64 * 0.01, vec![]);
+                assert!(
+                    painted.iter().any(|shape| matches!(shape,
+                        egui::Shape::Rect(rect) if rect.fill == background
+                            && rect.rect.width() > 700.0 && rect.rect.height() > 500.0
+                    )),
+                    "a chart with only hidden or collapsed panes still paints its canvas"
+                );
+            }
+            let added_study = chart.add_indicator(Box::new(crate::studies::SMA::new(3)));
+            let pane = chart.series_pane(added_study).unwrap();
+            assert_ne!(pane, first);
+            assert_ne!(pane, PaneId::MAIN);
+            let study = chart
+                .indicators()
+                .find(|(id, _)| *id == added_study)
+                .unwrap()
+                .1;
+            assert!(!study.is_overlay());
+            // The retained source still supplies closes: (110 + 110 + 110) / 3 = 110.
+            assert_eq!(study.plot_value(0, 70), Some(110.0));
+            #[cfg(feature = "ui")]
+            assert_eq!(chart.snapshot().unwrap().studies[0].pane, 1);
+            frame(&ctx, &mut chart, 0.7, vec![]);
+            assert_eq!(chart.series_pane(added_study), Some(pane));
+        }
+    }
+
+    /// The initial pane owns only the content still placed there, including after restoration.
+    #[test]
+    fn removing_original_pane_preserves_relocated_main_series() {
+        use crate::model::{LogicalRange, Marker, PriceLine};
+        use crate::widget::test_frames::frame;
+        use crate::widget::{PaneId, SeriesId};
+
+        let ctx = Context::default();
+        let mut chart = chart(&[100.0], &[110.0]);
+        chart.config.show_volume = false;
+        let data = chart.bars(SeriesId::MAIN).to_vec();
+        let overlay = chart.add_indicator(Box::new(crate::studies::SMA::new(3)));
+        let empty = chart.add_pane();
+        let survivor = chart.add_pane();
+        assert!(chart.move_series_to_pane(SeriesId::MAIN, survivor));
+        chart.set_markers(SeriesId::MAIN, vec![Marker::new(data[70].time)]);
+        chart
+            .add_price_line(SeriesId::MAIN, PriceLine::new(105.0, egui::Color32::RED))
+            .unwrap();
+        let detached = Arc::new(AtomicUsize::new(0));
+        chart.attach_primitive(SeriesId::MAIN, Attachment(detached.clone()));
+        #[cfg(feature = "drawings")]
+        for (id, pane) in [(1, None), (2, Some(SeriesId::MAIN.0))] {
+            let mut drawing =
+                crate::drawings::Drawing::new(id, crate::drawings::DrawingToolType::HorizontalLine);
+            drawing.chart_points = vec![crate::drawings::ChartPoint::new(70.0, 105.0)];
+            drawing.pane = pane;
+            chart.drawings_mut().drawings.push(drawing);
+        }
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        assert!(chart.set_visible_logical_range(LogicalRange::new(60.0, 80.0)));
+        frame(&ctx, &mut chart, 0.1, vec![]);
+        let x = chart.time_to_x(data[70].time).unwrap();
+        assert!(chart.remove_pane(PaneId::MAIN));
+        frame(&ctx, &mut chart, 0.2, vec![]);
+        assert_eq!(chart.panes(), [empty, survivor]);
+        assert_eq!(chart.pane_series(survivor), [SeriesId::MAIN]);
+        assert_eq!(chart.series_pane(overlay), None);
+        assert!(chart.is_main_series_visible());
+        assert_eq!(chart.bars(SeriesId::MAIN), data);
+        assert_eq!(chart.markers(SeriesId::MAIN).len(), 1);
+        assert_eq!(chart.price_lines(SeriesId::MAIN).count(), 1);
+        assert_eq!(detached.load(Ordering::Relaxed), 0);
+        assert!((chart.time_to_x(data[70].time).unwrap() - x).abs() < 0.01);
+        let added = chart.add_series(crate::widget::SeriesOptions::default());
+        chart.set_data(added, data.clone());
+        let study = chart.add_indicator(Box::new(crate::studies::SMA::new(3)));
+        assert_eq!(chart.series_pane(added), Some(survivor));
+        assert_eq!(chart.series_pane(study), Some(survivor));
+        assert_eq!(chart.panes(), [empty, survivor]);
+        assert!(chart.remove_pane(empty));
+        frame(&ctx, &mut chart, 0.3, vec![]);
+        assert!(chart.pane_height(survivor).unwrap() > 500.0);
+        #[cfg(feature = "drawings")]
+        assert_eq!(chart.drawings().drawings.len(), 2);
+        #[cfg(feature = "ui")]
+        {
+            let snapshot = chart.snapshot().unwrap();
+            let mut restored =
+                crate::widget::Chart::new(crate::model::BarData::from_bars(data.clone()));
+            for step in 0..2 {
+                restored.restore(&snapshot).unwrap();
+                restored.set_data(restored.restored_series_id(added.0).unwrap(), data.clone());
+                frame(&Context::default(), &mut restored, step as f64, vec![]);
+                assert_eq!(restored.panes().len(), 1);
+                assert_ne!(restored.panes()[0], PaneId::MAIN);
+                assert_eq!(
+                    restored.series_pane(SeriesId::MAIN),
+                    Some(restored.panes()[0])
+                );
+                assert!(restored.is_main_series_visible());
+                assert_eq!(restored.markers(SeriesId::MAIN).len(), 1);
+                assert_eq!(restored.price_lines(SeriesId::MAIN).count(), 1);
+            }
+        }
+        assert!(!chart.remove_pane(survivor));
     }
 }
