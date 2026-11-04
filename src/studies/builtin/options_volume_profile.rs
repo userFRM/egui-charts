@@ -636,9 +636,16 @@ impl Indicator for OptionsVolumeProfile {
         }]
     }
     fn colors(&self) -> Vec<Color32> {
-        self.colors.clone()
+        if matches!(self.source, ProfileSource::Chain(..)) {
+            (0..8).map(|line| self.plot_style(line).color).collect()
+        } else {
+            self.colors.clone()
+        }
     }
     fn set_colors(&mut self, colors: Vec<Color32>) {
+        if matches!(self.source, ProfileSource::Chain(..)) && colors.len() >= 8 {
+            self.colors.resize(8, self.colors[0]);
+        }
         for (stored, color) in self.colors.iter_mut().zip(colors) {
             *stored = color;
         }
@@ -672,7 +679,11 @@ impl Indicator for OptionsVolumeProfile {
     fn plot_style(&self, line: usize) -> PlotStyle {
         PlotStyle {
             visible: line == 1 || (3..=7).contains(&line),
-            color: self.colors[usize::from(line == 1 || line == 4)],
+            color: if (6..=7).contains(&line) {
+                self.colors.get(line).copied().unwrap_or(self.colors[0])
+            } else {
+                self.colors[usize::from(line == 1 || line == 4)]
+            },
             width: 1.0,
             pattern: crate::model::LineStyle::Solid,
             plot_type: crate::studies::PlotType::Line,
@@ -1060,6 +1071,11 @@ mod tests {
             let fill = study.fills().remove(0);
             assert!(matches!(fill.first, crate::studies::FillBoundary::Plot(6)));
             assert!(matches!(fill.second, crate::studies::FillBoundary::Plot(7)));
+        }
+        for (line, color) in [(6, Color32::YELLOW), (7, Color32::LIGHT_BLUE)] {
+            study.set_color(line, color);
+            assert_eq!(study.plot_style(line).color, color);
+            assert_eq!(study.colors()[line], color);
         }
         study
             .set_input("move_method", InputValue::Choice(0))
