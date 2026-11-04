@@ -205,6 +205,137 @@ pub(crate) fn render_axis_value(
     ))
 }
 
+/// Primitive tags share automatic placement; callers defer fixed tags until automatic tags finish.
+pub(crate) fn render_primitive_price_labels(
+    painter: &Painter,
+    plot: Rect,
+    axis_right: f32,
+    labels: Vec<(crate::chart::primitives::PriceAxisLabel, PriceMap)>,
+    occupied: &mut Vec<Option<Rect>>,
+    allow_overlap: bool,
+) {
+    let painter = painter.with_clip_rect(painter.clip_rect().intersect(Rect::from_x_y_ranges(
+        painter.clip_rect().x_range(),
+        plot.y_range(),
+    )));
+    let axis = Rect::from_x_y_ranges(
+        if axis_right <= plot.left() {
+            painter.clip_rect().left()..=plot.left()
+        } else {
+            plot.right()..=axis_right
+        },
+        plot.y_range(),
+    );
+    let axis_painter = painter.with_clip_rect(painter.clip_rect().intersect(axis));
+    for (label, map) in labels {
+        let fixed = label.fixed_coordinate.is_some();
+        if !fixed && !map.range().contains(map.transform().to_scale(label.price)) {
+            continue;
+        }
+        let y = label
+            .fixed_coordinate
+            .map_or_else(|| map.price_to_y(label.price), |offset| plot.top() + offset);
+        if !y.is_finite() {
+            continue;
+        }
+        let ink = label
+            .text_color
+            .unwrap_or_else(|| tag_text_color(label.color));
+        let tag = if fixed {
+            let (anchor, align) = price_tag_anchor(plot, axis_right, y);
+            Some(paint_axis_tag(
+                &axis_painter,
+                anchor,
+                align,
+                axis_right,
+                label.text,
+                ink,
+                label.color,
+            ))
+        } else {
+            render_axis_value(
+                &painter,
+                plot,
+                axis_right,
+                y,
+                label.text,
+                (ink, label.color),
+                occupied,
+                allow_overlap,
+            )
+        };
+        let clip = if fixed {
+            axis_painter.clip_rect()
+        } else {
+            painter.clip_rect()
+        };
+        if let Some(tag) = tag.filter(|tag| tag.intersects(clip)) {
+            if label.tick_visible {
+                let edge = if axis_right <= plot.left() {
+                    plot.left()
+                } else {
+                    plot.right()
+                };
+                let end = edge + if axis_right <= plot.left() { -5.0 } else { 5.0 };
+                axis_painter.line_segment(
+                    [
+                        Pos2::new(edge, tag.center().y),
+                        Pos2::new(end, tag.center().y),
+                    ],
+                    Stroke::new(1.0, ink),
+                );
+            }
+            occupied.push(Some(tag));
+        }
+    }
+}
+
+/// Fixed time tags are clipped rather than moved; automatic tags keep the usual edge fitting.
+pub(crate) fn render_primitive_time_label(
+    painter: &Painter,
+    axis: Rect,
+    x: f32,
+    label: crate::chart::primitives::TimeAxisLabel,
+) -> Option<Rect> {
+    if !x.is_finite() || (label.fixed_coordinate.is_none() && !axis.x_range().contains(x)) {
+        return None;
+    }
+    let painter = painter.with_clip_rect(painter.clip_rect().intersect(axis));
+    let ink = label
+        .text_color
+        .unwrap_or_else(|| tag_text_color(label.color));
+    let tag = if label.fixed_coordinate.is_some() {
+        let galley = painter.layout_no_wrap(label.text, axis_font(painter.ctx()), ink);
+        let size = Vec2::new(galley.size().x + 8.0, 25.0_f32.max(galley.size().y));
+        let tag = Align2::CENTER_TOP.anchor_size(Pos2::new(x, axis.top() + 1.5), size);
+        painter.rect_filled(tag, 1.0, label.color);
+        painter.galley(tag.center() - galley.size() / 2.0, galley, ink);
+        tag
+    } else {
+        paint_crosshair_tag(
+            &painter,
+            Pos2::new(x, axis.top() + 1.5),
+            Align2::CENTER_TOP,
+            axis.left()..=axis.right(),
+            label.text,
+            (ink, label.color),
+            axis_font(painter.ctx()),
+            25.0,
+            None,
+        )
+    };
+    if !tag.intersects(painter.clip_rect()) {
+        return None;
+    }
+    if label.tick_visible {
+        painter.line_segment(
+            [Pos2::new(x, axis.top()), Pos2::new(x, axis.top() + 5.0)],
+            Stroke::new(1.0, ink),
+        );
+    }
+    Some(tag.intersect(axis))
+}
+
 /// Last-bar values of visible study lines, in the same units and colours as their plot.
 pub(crate) fn render_study_tags(
     painter: &Painter,

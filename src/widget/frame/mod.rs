@@ -2475,29 +2475,27 @@ impl Chart {
                 ));
             }
         }
+        let mut fixed_price_labels = Vec::new();
         if show_price_axis {
-            let labels: Vec<_> = self
+            let (fixed, automatic): (Vec<_>, Vec<_>) = self
                 .main_primitives(&coords)
                 .flat_map(|(item, view)| {
                     let map = view.mapping.price;
-                    let labels = item.get().price_axis_labels(&view);
-                    labels.into_iter().map(move |label| (label, map))
+                    item.get()
+                        .price_axis_labels(&view)
+                        .into_iter()
+                        .map(move |label| (label, map))
                 })
-                .collect();
-            for (label, map) in labels {
-                if map.range().contains(map.transform().to_scale(label.price)) {
-                    tags.push(rendering::axes::render_axis_value(
-                        &painter,
-                        price_rect,
-                        axis_edge,
-                        map.price_to_y(label.price),
-                        label.text,
-                        (rendering::axes::tag_text_color(label.color), label.color),
-                        &tags,
-                        self.config.price_axis.allow_label_overlap,
-                    ));
-                }
-            }
+                .partition(|(label, _)| label.fixed_coordinate.is_some());
+            fixed_price_labels = fixed;
+            rendering::axes::render_primitive_price_labels(
+                &painter,
+                price_rect,
+                axis_edge,
+                automatic,
+                &mut tags,
+                self.config.price_axis.allow_label_overlap,
+            );
         }
         let mut independent_axis_width =
             self.paint_series_axes(ui, &painter, rect, price_rect, &colors);
@@ -2690,30 +2688,32 @@ impl Chart {
         let time_labels = painter.add(egui::Shape::Noop);
         // Kept apart from the price tags, which size the price axis.
         let mut time_tags = Vec::new();
+        let mut fixed_time_labels = Vec::new();
         if self.config.show_time_labels {
+            let axis = self.time_axis_rect;
             let labels: Vec<_> = self
                 .time_axis_primitives(&coords)
                 .flat_map(|(item, view)| {
-                    let labels = item.get().time_axis_labels(&view);
-                    labels
+                    item.get()
+                        .time_axis_labels(&view)
                         .into_iter()
-                        .filter_map(|label| Some((view.time_to_x(label.time)?, label)))
+                        .filter_map(move |label| {
+                            let x = label
+                                .fixed_coordinate
+                                .map(|offset| axis.left() + offset)
+                                .or_else(|| view.time_to_x(label.time))?;
+                            Some((x, label))
+                        })
                         .collect::<Vec<_>>()
                 })
                 .collect();
             for (x, label) in labels {
-                if chart_rect.x_range().contains(x) {
-                    time_tags.push(Some(rendering::axes::paint_crosshair_tag(
-                        &painter,
-                        Pos2::new(x, time_axis_top + 1.5),
-                        egui::Align2::CENTER_TOP,
-                        chart_rect.left()..=chart_rect.right(),
-                        label.text,
-                        (rendering::axes::tag_text_color(label.color), label.color),
-                        rendering::axes::axis_font(ui.ctx()),
-                        25.0,
-                        None,
-                    )));
+                if label.fixed_coordinate.is_some() {
+                    fixed_time_labels.push((x, label));
+                } else {
+                    time_tags.push(rendering::axes::render_primitive_time_label(
+                        &painter, axis, x, label,
+                    ));
                 }
             }
         }
@@ -3479,6 +3479,23 @@ impl Chart {
             }
         }
 
+        for (x, label) in fixed_time_labels {
+            time_tags.push(rendering::axes::render_primitive_time_label(
+                &painter,
+                self.time_axis_rect,
+                x,
+                label,
+            ));
+        }
+
+        rendering::axes::render_primitive_price_labels(
+            &painter,
+            price_rect,
+            axis_edge,
+            fixed_price_labels,
+            &mut tags,
+            self.config.price_axis.allow_label_overlap,
+        );
         let current_price = crate::model::last_with_value(&self.state.data().bars)
             .filter(|_| self.main_series_visible && self.config.show_symbol_last_val)
             .map(|bar| {
