@@ -126,7 +126,7 @@ Chart,Chart types,Bars,done,library,src/chart/rendering/candles/mod.rs;src/chart
 Chart,Chart types,Baseline,done,library,src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/area.rs;src/model/chart_style.rs;src/model/bar/bar.rs;src/widget/series/options.rs;src/chart/rendering/candles/line.rs;src/ui/dialogs/series_settings/tabs/symbol.rs;src/widget/series/paint.rs;src/widget/frame/mod.rs;examples/demo/comparison.rs,1860;1869;1870
 Chart,Chart types,Candlestick chart,done,library,src/widget/builder.rs;src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/candle.rs;src/widget/frame/mod.rs;src/widget/series/options.rs;src/widget/series/paint.rs,1859
 Chart,Chart types,Chart type selector,done,library,src/ui/top_toolbar/components/chart_type_selector.rs;src/ui/top_toolbar/toolbar.rs;src/widget/builder.rs,
-Chart,Chart types,Columns,done,library,src/model/chart_type.rs;src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/candlestick.rs,
+Chart,Chart types,Columns,done,library,src/model/chart_type.rs;src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/candlestick.rs;src/widget/series/paint.rs,1876
 Chart,Chart types,HLC area,done,library,src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/area.rs,
 Chart,Chart types,Heikin Ashi,done,library,src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/heikin_ashi.rs;src/chart/rendering/candles/candlestick.rs;src/widget/frame/mod.rs,
 Chart,Chart types,High-low,done,library,src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/range.rs,

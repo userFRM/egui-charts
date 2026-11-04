@@ -65,6 +65,7 @@ impl Chart {
                     Pos2::new(px - self.state.time_scale().bar_spacing() * 0.4, base),
                     Pos2::new(px + self.state.time_scale().bar_spacing() * 0.4, close.y),
                 )
+                .expand(tolerance)
                 .contains(pos)
             } else if pos.distance(close) <= tolerance {
                 true

@@ -1480,6 +1480,74 @@ fn series_style_draws_columns_and_lines_and_fits_provided_ranges() {
     );
 }
 
+/// At a 40-point pitch, columns span 16 points on either side of their centre. A linear
+/// -10..10 range over 200 points puts the zero base at 120 and closes of +/-5 at 70/170.
+#[test]
+fn column_hits_expand_by_the_series_tolerance_and_stay_in_the_plot() {
+    let ctx = egui::Context::default();
+    let mut chart = Chart::new(BarData::from_bars(bars(&[100.0; 5])));
+    let id = chart.add_series(SeriesOptions {
+        chart_type: ChartType::Columns,
+        columns_base: Some(0.0),
+        ..Default::default()
+    });
+    frame(&ctx, &mut chart, 0.0, vec![]);
+    let rect = Rect::from_min_max(Pos2::new(20.0, 20.0), Pos2::new(420.0, 220.0));
+    chart.state.time_scale_mut().set_width(rect.width());
+    chart.state.time_scale_mut().set_bar_spacing(40.0);
+    chart.state.time_scale_mut().set_right_offset(0.0);
+    let x = chart
+        .state
+        .time_scale()
+        .idx_to_coord_precise(2.0, rect.left(), rect.width());
+    for inverted in [false, true] {
+        let map = PriceMap::new(
+            Default::default(),
+            crate::scales::PriceRange::new(-10.0, 10.0),
+            rect.top(),
+            rect.bottom(),
+            inverted,
+        );
+        for (base, close) in [(Some(0.0), 5.0), (Some(0.0), -5.0), (None, 5.0)] {
+            chart.set_data(id, vec![bars(&[close; 5])[2].clone()]);
+            chart.price_series[0].options.columns_base = base;
+            let tip: f32 = if (close > 0.0) != inverted {
+                70.0
+            } else {
+                170.0
+            };
+            let base = if base.is_some() { 120.0 } else { 220.0 };
+            let (top, bottom) = (tip.min(base), tip.max(base));
+            for tolerance in [0.0, 2.0, 5.0] {
+                chart.series_style_mut(id).unwrap().hit_tolerance = tolerance;
+                let item = &chart.price_series[0];
+                for (edge, outward) in [
+                    (
+                        Pos2::new(x - 16.0, (top + bottom) / 2.0),
+                        egui::vec2(-1.0, 0.0),
+                    ),
+                    (
+                        Pos2::new(x + 16.0, (top + bottom) / 2.0),
+                        egui::vec2(1.0, 0.0),
+                    ),
+                    (Pos2::new(x, top), egui::vec2(0.0, -1.0)),
+                    (Pos2::new(x, bottom), egui::vec2(0.0, 1.0)),
+                ] {
+                    for distance in [-0.25, 0.0, 0.25, 2.0, 2.25, 5.0, 5.25] {
+                        let pos = edge + outward * distance;
+                        let expected = (distance <= tolerance && rect.contains(pos)).then_some(2);
+                        assert_eq!(
+                            chart.hit_price_series(item, pos, rect, map),
+                            expected,
+                            "close={close}, base={base}, inverted={inverted}, tolerance={tolerance}, pos={pos:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Each added series writes its last value with its own scale's decimals, led by its own
 /// name once the axis shows names, and a host formatter still replaces the decimals.
 #[test]
