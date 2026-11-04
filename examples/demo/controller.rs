@@ -155,15 +155,9 @@ fn depth_history(symbol: &str) -> DepthHistory {
     .expect("default depth history")
 }
 
-/// How the live book is shown: highlighted at [`ORDER_TIERS`], with the heatmap's profile of the
-/// largest order at each price or of the total there.
-fn book_view(largest_order_profile: bool) -> OrderBookView {
+/// How the live book is shown: highlighted at [`ORDER_TIERS`].
+fn book_view() -> OrderBookView {
     OrderBookView {
-        profile: if largest_order_profile {
-            BookProfile::LargestOrder
-        } else {
-            BookProfile::Total
-        },
         tiers: Some(ORDER_TIERS),
         ..Default::default()
     }
@@ -580,7 +574,7 @@ impl DemoApp {
                     ..Default::default()
                 }),
         );
-        chart.set_order_book_view(book_view(false));
+        chart.set_order_book_view(book_view());
         chart.set_symbol(symbol);
         chart.set_timeframe(timeframe);
         let storage = Arc::new(storage::DemoStorage::restore(cc.storage));
@@ -1312,7 +1306,6 @@ impl DemoApp {
             .set_notification_seconds(state.alerts.notification_seconds as f32);
         apply_settings_state(&state, &mut self.chart, &mut self.timeframe_toolbar);
         self.chart.end_user_action();
-        self.sync_depth_history();
         if news_changed {
             self.annotate();
         }
@@ -1665,9 +1658,11 @@ impl eframe::App for DemoApp {
 
 impl DemoApp {
     fn sync_depth_history(&mut self) {
-        if !ChartSettingsState::from_chart(&self.chart)
-            .order_flow
-            .show_heatmap
+        // Replay hides the live history, which must survive for its exit.
+        if self.chart.replay_time().is_some()
+            || !ChartSettingsState::from_chart(&self.chart)
+                .order_flow
+                .show_heatmap
         {
             return;
         }
@@ -1862,9 +1857,10 @@ impl DemoApp {
                 if heatmap_enabled != order_flow.show_heatmap {
                     self.chart.user_action(|chart| {
                         chart.set_liquidity_heatmap(heatmap_enabled);
-                        chart.set_volume_bubbles(heatmap_enabled.then(Default::default));
+                        chart.set_volume_bubbles(
+                            heatmap_enabled.then(|| order_flow.volume_bubbles.clone()),
+                        );
                     });
-                    self.sync_depth_history();
                 }
                 if largest_profile != (order_flow.order_book.profile == BookProfile::LargestOrder) {
                     let mut view = order_flow.order_book;
@@ -4069,7 +4065,32 @@ mod tests {
                 .is_none()
         );
         let choose = |app: &mut DemoApp, label: &str| {
+        settings.order_flow.show_volume_bubbles = true;
+        settings.order_flow.volume_bubbles.max_diameter = 91.0;
             for _ in 0..3 {
+        // Replay hides the live history; the toolbar must leave it for the replay's exit.
+        let columns = |app: &DemoApp| {
+            app.chart
+                .depth_history(SeriesId::MAIN)
+                .unwrap()
+                .config()
+                .columns
+        };
+        app.chart.set_depth_history(Some(
+            DepthHistory::new(DepthHistoryConfig {
+                columns: 7,
+                ..Default::default()
+            })
+            .unwrap(),
+        ));
+        app.chart
+            .set_replay_time(Some(app.chart.bars(SeriesId::MAIN)[5].time));
+        assert!(app.chart.depth_history(SeriesId::MAIN).is_none());
+        ui_frame(&ctx, size, vec![], |ui| {
+            app.show_top_toolbar(ui, app.theme.chart.bg)
+        });
+        app.chart.set_replay_time(None);
+        assert_eq!(columns(&app), 7);
                 ui_frame(&ctx, size, vec![], |ui| {
                     app.show_top_toolbar(ui, app.theme.chart.bg)
                 });
@@ -4134,6 +4155,16 @@ mod tests {
         let mut view = app.chart.order_book_view();
         view.profile = BookProfile::LargestOrder;
         app.chart.set_order_book_view(view);
+        // The menu brings the bubbles back as they were set, not with their defaults.
+        choose(&mut app, "Liquidity heatmap");
+        choose(&mut app, "Liquidity heatmap");
+        assert_eq!(
+            ChartSettingsState::from_chart(&app.chart)
+                .order_flow
+                .volume_bubbles
+                .max_diameter,
+            91.0
+        );
         settle(&mut app, &ctx);
         app.handle_top_toolbar(&ctx, TopToolbarAction::Save);
         app.poll_storage(&ctx);
