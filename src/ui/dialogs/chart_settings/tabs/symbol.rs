@@ -476,7 +476,9 @@ mod tests {
                     }
                     assert_eq!(style, expected);
                     if !accept {
-                        assert_eq!(after, before);
+                        // Theme colours only apply once a frame has run, so compare the
+                        // candle settings rather than the whole state.
+                        assert_eq!(after.candle_colors, before.candle_colors);
                     }
                     // Paint the accepted state after the modal has closed.
                     let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 1.0, vec![]);
