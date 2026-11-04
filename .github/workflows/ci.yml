@@ -206,7 +206,9 @@ jobs:
         if: needs.changes.outputs.docs == 'true' && matrix.os != 'windows-latest'
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      # Keep both dependency graphs; per-workspace cleanup would prune the other's artifacts.
+      # Keep both dependency graphs; per-workspace cleanup would prune the other's artifacts. Exact
+      # key only: a prefix fallback would carry stale artifacts into every new entry and grow it
+      # without bound, since nothing prunes this target.
       - uses: actions/cache/restore@v5
         if: matrix.os == 'windows-latest' && (needs.changes.outputs.docs == 'true' || needs.changes.outputs.native == 'true')
         id: windows-cache
@@ -216,7 +218,6 @@ jobs:
             ~/.cargo/git
             target
           key: windows-native-v1-${{ runner.arch }}-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'examples/demo/Cargo.toml', 'examples/demo/Cargo.lock', '.github/workflows/ci.yml') }}
-          restore-keys: windows-native-v1-${{ runner.arch }}-${{ steps.toolchain.outputs.cachekey }}-
       - name: Run library tests (all features)
         if: needs.changes.outputs.rust == 'true'
         run: cargo test --all-features --lib
