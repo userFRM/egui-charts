@@ -1,5 +1,6 @@
 //! Interactive alert levels. Changes are host intents; rendering never changes alert status.
 
+use chrono::{DateTime, Utc};
 use egui::{Color32, FontId, Rect, Sense, Stroke, Ui, pos2, vec2};
 
 use crate::chart::coords::ChartMapping;
@@ -7,7 +8,8 @@ use crate::model::{Alert, AlertCondition, AlertSource, AlertStatus};
 
 /// Draw threshold markers and optional pane-wide lines, returning a replacement after a drag
 /// or a marker menu change. Submit it through the same service as panel edits so storage and undo
-/// retain the display choices. A fired marker blinks until its blinking option is disabled.
+/// retain the display choices. A fired marker blinks for a minute unless its blinking option is
+/// disabled, and stays drawn that long even with `active_only` set, so a one-shot firing is seen.
 /// Supply only alerts for this pane, resolving symbol or watchlist membership in the host.
 /// With `active_only` unset, triggered, disabled and expired alerts are drawn dimmed.
 /// Call after drawing the chart, then submit the result through the host's alerts service.
@@ -24,9 +26,10 @@ pub fn render_alert_levels<'a>(
 ) -> Option<Alert> {
     let mut changed = None;
     let painter = ui.painter().with_clip_rect(mapping.rect);
+    let now = Utc::now();
     for alert in alerts
         .into_iter()
-        .filter(|a| !active_only || a.status == AlertStatus::Active)
+        .filter(|a| !active_only || a.status == AlertStatus::Active || blinks(a, now))
     {
         let Some(id) = &alert.id else { continue };
         let active = alert.status == AlertStatus::Active;
@@ -180,9 +183,7 @@ pub fn render_alert_levels<'a>(
                 if alert.extend_line {
                     painter.hline(mapping.rect.x_range(), y, Stroke::new(1.0, color));
                 }
-                let blinking = alert.blink_on_trigger
-                    && (alert.last_triggered_at.is_some()
-                        || alert.status == AlertStatus::Triggered);
+                let blinking = blinks(alert, now);
                 let marker_color = if blinking {
                     let bright = ui.input(|input| (input.time * 2.0).floor() as i64 % 2 == 0);
                     ui.ctx()
@@ -241,6 +242,15 @@ pub fn render_alert_levels<'a>(
     changed
 }
 
+/// Whether a firing is recent enough to blink. Paused and expired alerts stay still.
+fn blinks(alert: &Alert, now: DateTime<Utc>) -> bool {
+    alert.blink_on_trigger
+        && matches!(alert.status, AlertStatus::Active | AlertStatus::Triggered)
+        && alert
+            .last_triggered_at
+            .is_some_and(|fired| (0..60).contains(&(now - fired).num_seconds()))
+}
+
 /// Resolve Alt+A at a hovered chart price without handling keys owned by a field or popup.
 /// The host decides whether to open a dialog or save a default alert at the returned price.
 pub fn alert_shortcut_price(ui: &mut Ui, mapping: &ChartMapping) -> Option<f64> {
@@ -265,6 +275,62 @@ mod tests {
     use crate::scales::{PriceMap, PriceRange, PriceTransform};
     use crate::theme::Theme;
 
+    /// The shapes of one frame at `time`. A fresh context also exercises reload, without
+    /// transient animation state.
+    fn frame(
+        alert: &Alert,
+        theme: &Theme,
+        time: f64,
+        active_only: bool,
+    ) -> Vec<egui::epaint::ClippedShape> {
+        let ctx = egui::Context::default();
+        #[cfg(feature = "icons")]
+        crate::icons::install_loader(&ctx);
+        crate::theme::apply_to_egui(&ctx, theme);
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                time: Some(time),
+                ..Default::default()
+            },
+            |ui| {
+                let rect = Rect::from_min_size(pos2(20.0, 20.0), vec2(400.0, 200.0));
+                let mapping = ChartMapping::new(
+                    rect,
+                    6.0,
+                    0,
+                    0,
+                    0.0,
+                    PriceMap::new(
+                        PriceTransform::default(),
+                        PriceRange::new(90.0, 110.0),
+                        rect.top(),
+                        rect.bottom(),
+                        false,
+                    ),
+                );
+                render_alert_levels(
+                    ui,
+                    &mapping,
+                    [alert],
+                    Color32::GOLD,
+                    false,
+                    active_only,
+                    |p| p.to_string(),
+                );
+            },
+        );
+        let shapes = std::mem::take(&mut output.shapes);
+        output.drop_without_applying_deltas();
+        shapes
+    }
+
+    fn marker(shapes: &[egui::epaint::ClippedShape]) -> Option<&egui::epaint::CircleShape> {
+        shapes.iter().find_map(|shape| match &shape.shape {
+            egui::Shape::Circle(circle) if circle.radius == 6.0 => Some(circle),
+            _ => None,
+        })
+    }
+
     #[test]
     fn restored_marker_options_control_extension_and_blinking_independently() {
         for theme in [Theme::light(), Theme::dark()] {
@@ -272,7 +338,7 @@ mod tests {
                 for blink in [false, true] {
                     let stored = serde_json::json!({
                         "id": "saved", "symbol": "SAMPLE", "condition": {"Above": 100.0},
-                        "last_triggered_at": "2026-10-01T10:00:00Z",
+                        "last_triggered_at": Utc::now(),
                         "extend_line": line, "blink_on_trigger": blink
                     });
                     let alert: Alert = serde_json::from_value(stored).unwrap();
@@ -280,57 +346,13 @@ mod tests {
                         serde_json::from_str(&serde_json::to_string(&alert).unwrap()).unwrap();
                     let mut colors = Vec::new();
                     for time in [0.0, 0.75] {
-                        // Fresh UI contexts also exercise reload, without transient animation state.
-                        let ctx = egui::Context::default();
-                        #[cfg(feature = "icons")]
-                        crate::icons::install_loader(&ctx);
-                        crate::theme::apply_to_egui(&ctx, &theme);
-                        let mut output = ctx.run_ui(
-                            egui::RawInput {
-                                time: Some(time),
-                                ..Default::default()
-                            },
-                            |ui| {
-                                let rect =
-                                    Rect::from_min_size(pos2(20.0, 20.0), vec2(400.0, 200.0));
-                                let mapping = ChartMapping::new(
-                                    rect,
-                                    6.0,
-                                    0,
-                                    0,
-                                    0.0,
-                                    PriceMap::new(
-                                        PriceTransform::default(),
-                                        PriceRange::new(90.0, 110.0),
-                                        rect.top(),
-                                        rect.bottom(),
-                                        false,
-                                    ),
-                                );
-                                render_alert_levels(
-                                    ui,
-                                    &mapping,
-                                    [&alert],
-                                    Color32::GOLD,
-                                    false,
-                                    false,
-                                    |p| p.to_string(),
-                                );
-                            },
-                        );
-                        let shapes = std::mem::take(&mut output.shapes);
-                        output.drop_without_applying_deltas();
+                        let shapes = frame(&alert, &theme, time, false);
                         let lines = shapes.iter().filter(|shape| matches!(&shape.shape,
                             egui::Shape::LineSegment { points, .. } if points[0] == pos2(20.0, 120.0) && points[1] == pos2(420.0, 120.0)
                         )).count();
                         assert_eq!(lines, usize::from(line));
-                        let marker = shapes
-                            .iter()
-                            .find_map(|shape| match &shape.shape {
-                                egui::Shape::Circle(circle) if circle.radius == 6.0 => Some(circle),
-                                _ => None,
-                            })
-                            .expect("a marker remains without the line or text labels");
+                        let marker =
+                            marker(&shapes).expect("a marker remains without the line or labels");
                         // Halfway through [90,110] maps to halfway down the 200-point pane.
                         assert_eq!(marker.center, pos2(408.0, 120.0));
                         colors.push(marker.fill);
@@ -338,6 +360,37 @@ mod tests {
                     assert_eq!(colors[0] != colors[1], blink);
                 }
             }
+        }
+    }
+
+    #[test]
+    fn a_firing_blinks_for_a_minute_and_outlasts_the_active_filter() {
+        use AlertStatus::{Active, Disabled, Expired, Triggered};
+        let theme = Theme::light();
+        for (status, fired, enabled, active_only, drawn, blinks) in [
+            (Active, Some(1), true, true, true, true),
+            // A one-shot firing would otherwise vanish in the frame it fires.
+            (Triggered, Some(1), true, true, true, true),
+            (Triggered, Some(1), false, true, false, false),
+            (Triggered, Some(120), true, true, false, false),
+            (Triggered, Some(120), true, false, true, false),
+            (Active, Some(120), true, true, true, false),
+            (Active, None, true, true, true, false),
+            (Disabled, Some(1), true, false, true, false),
+            (Disabled, Some(1), true, true, false, false),
+            (Expired, Some(1), true, false, true, false),
+        ] {
+            let mut alert = Alert::new("SAMPLE", AlertCondition::Above(100.0));
+            alert.id = Some(AlertId("saved".into()));
+            alert.status = status;
+            alert.blink_on_trigger = enabled;
+            alert.last_triggered_at = fired.map(|s| Utc::now() - chrono::TimeDelta::seconds(s));
+            let case = format!("{status:?} {fired:?} {enabled} {active_only}");
+            let colors: Vec<_> = [0.0, 0.75]
+                .map(|time| marker(&frame(&alert, &theme, time, active_only)).map(|m| m.fill))
+                .into();
+            assert_eq!(colors[0].is_some(), drawn, "{case}");
+            assert_eq!(colors[0] != colors[1], blinks, "{case}");
         }
     }
 

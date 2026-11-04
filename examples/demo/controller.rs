@@ -882,6 +882,7 @@ impl DemoApp {
             app.symbol_search.record_symbol(&row);
         }
         app.alerts.set_service(app.alert_host.clone());
+        app.alerts.set_mark("SAMPLE", SAMPLE_LOGO.into());
         app.top_toolbar.state.can_trade = true;
         app.watchlist.set_selected(symbol);
         app.watchlist.set_service(app.quotes.clone());

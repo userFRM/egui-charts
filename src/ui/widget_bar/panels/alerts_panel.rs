@@ -75,7 +75,8 @@ pub enum AlertSortKey {
 pub struct AlertListOptions {
     /// Property to order by; creation time by default.
     pub sort: AlertSortKey,
-    /// Order newest first or text in reverse alphabetical order; enabled by default.
+    /// Order newest first or text in reverse alphabetical order; enabled by default. Choosing a
+    /// key in the panel starts times newest first and other keys ascending.
     pub descending: bool,
     /// Show the user-assigned alert name.
     pub name: bool,
@@ -686,78 +687,82 @@ impl AlertsPanel {
     fn sort_controls(&mut self, ui: &mut Ui) {
         let before = self.options.clone();
         let mut history_action = None;
-        ui.add_enabled_ui(self.staged_display.is_none(), |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(l10n::text(ui.ctx(), "Sort by"));
-                egui::ComboBox::from_id_salt("alert_sort")
-                    .selected_text(l10n::text(
-                        ui.ctx(),
-                        match self.options.sort {
-                            AlertSortKey::Name => "Name",
-                            AlertSortKey::Symbol => "Symbol",
-                            AlertSortKey::Status => "Status",
-                            AlertSortKey::Arrival => "Arrival",
-                            AlertSortKey::Created => "Created",
-                            AlertSortKey::Fired => "Last firing",
-                            AlertSortKey::Message => "Message",
-                        },
-                    ))
-                    .show_ui(ui, |ui| {
-                        for (key, label) in [
-                            (AlertSortKey::Arrival, "Arrival"),
-                            (AlertSortKey::Created, "Created"),
-                            (AlertSortKey::Fired, "Last firing"),
-                            (AlertSortKey::Message, "Message"),
-                            (AlertSortKey::Name, "Name"),
-                            (AlertSortKey::Symbol, "Symbol"),
-                            (AlertSortKey::Status, "Status"),
-                        ] {
-                            ui.selectable_value(
-                                &mut self.options.sort,
-                                key,
-                                l10n::text(ui.ctx(), label),
-                            );
-                        }
-                    })
-                    .response
-                    .accessible_name(l10n::text(ui.ctx(), "Sort by"));
-                ui.add_enabled(
-                    self.options.sort != AlertSortKey::Arrival,
-                    egui::Checkbox::new(
-                        &mut self.options.descending,
-                        l10n::text(ui.ctx(), "Descending"),
-                    ),
-                );
-                ui.menu_button(l10n::text(ui.ctx(), "Fields"), |ui| {
-                    for (value, label) in [
-                        (&mut self.options.name, "Name"),
-                        (&mut self.options.message, "Message"),
-                        (&mut self.options.source_icon, "Source symbol"),
-                        (&mut self.options.symbol_icon, "Instrument image"),
-                        (&mut self.options.last_firing, "Last firing"),
+        ui.horizontal_wrapped(|ui| {
+            ui.label(l10n::text(ui.ctx(), "Sort by"));
+            egui::ComboBox::from_id_salt("alert_sort")
+                .selected_text(l10n::text(
+                    ui.ctx(),
+                    match self.options.sort {
+                        AlertSortKey::Name => "Name",
+                        AlertSortKey::Symbol => "Symbol",
+                        AlertSortKey::Status => "Status",
+                        AlertSortKey::Arrival => "Arrival",
+                        AlertSortKey::Created => "Created",
+                        AlertSortKey::Fired => "Last firing",
+                        AlertSortKey::Message => "Message",
+                    },
+                ))
+                .show_ui(ui, |ui| {
+                    for (key, label) in [
+                        (AlertSortKey::Arrival, "Arrival"),
+                        (AlertSortKey::Created, "Created"),
+                        (AlertSortKey::Fired, "Last firing"),
+                        (AlertSortKey::Message, "Message"),
+                        (AlertSortKey::Name, "Name"),
+                        (AlertSortKey::Symbol, "Symbol"),
+                        (AlertSortKey::Status, "Status"),
                     ] {
-                        ui.checkbox(value, l10n::text(ui.ctx(), label));
+                        ui.selectable_value(
+                            &mut self.options.sort,
+                            key,
+                            l10n::text(ui.ctx(), label),
+                        );
                     }
-                });
-                if ui
-                    .add_enabled(
-                        !self.undo.is_empty() && self.pending == 0,
-                        egui::Button::new(l10n::text(ui.ctx(), "Undo")),
-                    )
-                    .clicked()
-                {
-                    history_action = Some(false);
-                }
-                if ui
-                    .add_enabled(
-                        !self.redo.is_empty() && self.pending == 0,
-                        egui::Button::new(l10n::text(ui.ctx(), "Redo")),
-                    )
-                    .clicked()
-                {
-                    history_action = Some(true);
+                })
+                .response
+                .accessible_name(l10n::text(ui.ctx(), "Sort by"));
+            if self.options.sort != before.sort {
+                self.options.descending = matches!(
+                    self.options.sort,
+                    AlertSortKey::Created | AlertSortKey::Fired
+                );
+            }
+            ui.add_enabled(
+                self.options.sort != AlertSortKey::Arrival,
+                egui::Checkbox::new(
+                    &mut self.options.descending,
+                    l10n::text(ui.ctx(), "Descending"),
+                ),
+            );
+            ui.menu_button(l10n::text(ui.ctx(), "Fields"), |ui| {
+                for (value, label) in [
+                    (&mut self.options.name, "Name"),
+                    (&mut self.options.message, "Message"),
+                    (&mut self.options.source_icon, "Source symbol"),
+                    (&mut self.options.symbol_icon, "Instrument image"),
+                    (&mut self.options.last_firing, "Last firing"),
+                ] {
+                    ui.checkbox(value, l10n::text(ui.ctx(), label));
                 }
             });
+            if ui
+                .add_enabled(
+                    !self.undo.is_empty() && self.pending == 0,
+                    egui::Button::new(l10n::text(ui.ctx(), "Undo")),
+                )
+                .clicked()
+            {
+                history_action = Some(false);
+            }
+            if ui
+                .add_enabled(
+                    !self.redo.is_empty() && self.pending == 0,
+                    egui::Button::new(l10n::text(ui.ctx(), "Redo")),
+                )
+                .clicked()
+            {
+                history_action = Some(true);
+            }
         });
         if self.options != before {
             self.remember(PresentationEdit::List(before));
@@ -950,12 +955,6 @@ impl AlertsPanel {
                                         ui.visuals().text_color(),
                                     ))
                                     .on_hover_ui(|ui| schedule_tooltip(ui, schedule));
-                                }
-                            })
-                            .response
-                            .on_hover_ui(|ui| {
-                                if let Some(schedule) = &alert.schedule {
-                                    schedule_tooltip(ui, schedule);
                                 }
                             });
                             if self.options.message && !alert.message.is_empty() {
@@ -1371,7 +1370,9 @@ mod tests {
             // 11:30 UTC + 5h45 is 17:15 on the schedule's clock.
             let firing = "Last firing: 2026-10-02 17:15:00 +05:45";
             assert!(h.query_by_label(firing).is_some());
-            h.hover_at(h.get_by_label("Active").rect().center());
+            // The calendar marker sits beside the status and shows the row's schedule.
+            let status = h.get_by_label("Active").rect();
+            h.hover_at(egui::pos2(status.right() + 14.0, status.center().y));
             h.run_steps(60);
             assert!(h.query_by_label("+05:45").is_some());
             assert!(h.query_by_label("22:00 - 02:00").is_some());
@@ -1394,6 +1395,14 @@ mod tests {
                 h.get_by_label("Redo").click();
                 h.run_steps(3);
                 assert!(h.query_by_label(text).is_none(), "redo {field}");
+            }
+            // Choosing text starts alphabetically even though times start newest first.
+            for (key, descending) in [("Message", false), ("Created", true)] {
+                h.get_all_by_label("Sort by").last().unwrap().click();
+                h.run_steps(3);
+                h.get_all_by_label(key).last().unwrap().click();
+                h.run_steps(3);
+                assert_eq!(h.state().options.descending, descending, "{key}");
             }
             h.get_by_label("Marker").click();
             h.run_steps(3);

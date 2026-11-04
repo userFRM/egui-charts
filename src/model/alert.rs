@@ -35,7 +35,8 @@ pub struct Alert {
     /// Draw the threshold across the pane in addition to its marker. Enabled by default.
     #[serde(default = "alert_display_enabled")]
     pub extend_line: bool,
-    /// Blink the marker after a firing. Enabled by default; independent of the line extension.
+    /// Blink the marker for a minute after a firing. Enabled by default; independent of the line
+    /// extension.
     #[serde(default = "alert_display_enabled")]
     pub blink_on_trigger: bool,
     /// The symbol whose bars supply the sources, unless `watchlist` names the subject.
