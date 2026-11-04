@@ -1727,7 +1727,8 @@ impl DemoApp {
                         ui.close();
                     }
                     if egui_charts::ui::widget_bar::DepthPanel::is_available(&self.chart)
-                        && menu_item(ui, "Depth", &icons::FIXED_RANGE_VOLUME_PROFILE, None).clicked()
+                        && menu_item(ui, "Depth", &icons::FIXED_RANGE_VOLUME_PROFILE, None)
+                            .clicked()
                     {
                         panel_action = Some(SidePanel::Depth);
                         ui.close();
