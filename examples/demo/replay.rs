@@ -1413,9 +1413,12 @@ mod tests {
     #[test]
     fn paper_account_resets_on_replay_start_and_rewind_but_not_forward_steps() {
         let ctx = egui::Context::default();
-        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2024-03-15T16:30:00Z".parse().unwrap(),
+            true,
+        );
         super::super::tests::settle(&mut app, &ctx);
-        app.live.set_paused(true);
         for _ in 0..4 {
             ctx.run_ui(
                 egui::RawInput {
@@ -1528,10 +1531,7 @@ mod tests {
             .drop_without_applying_deltas();
         }
         super::super::tests::finish_feed(&app.live);
-        app.live.set_paused(false);
-        app.live
-            .advance(app.live.now() + chrono::TimeDelta::seconds(2));
-        app.live.set_paused(true);
+        app.advance_sample_to(app.live.now() + chrono::TimeDelta::seconds(2));
         let bars = app.live.snapshot(
             app.state.timeframe,
             app.chart.bar_clock(),
