@@ -75,6 +75,7 @@ pub struct IndicatorFactory {
     /// The category of each name, `None` for a built-in outside the catalogue, and its constructor.
     constructors: HashMap<String, (Option<&'static str>, IndicatorConstructor)>,
     help_urls: HashMap<&'static str, &'static str>,
+    defaults: HashMap<String, StudyTemplate>,
 }
 
 impl IndicatorFactory {
@@ -97,6 +98,7 @@ impl IndicatorFactory {
         let mut factory = Self {
             constructors: HashMap::new(),
             help_urls: HashMap::new(),
+            defaults: HashMap::new(),
         };
 
         factory.register_builtin();
@@ -450,14 +452,77 @@ impl IndicatorFactory {
         if name.trim().is_empty() {
             return false;
         }
+        self.defaults.remove(&name);
         self.constructors
             .insert(name, (Some(category), Box::new(constructor)));
         true
     }
 
-    /// Create an indicator by its registered name, or `None` if not found.
+    /// Set the inputs and presentation used by subsequent [`create`](Self::create) calls.
+    /// Each template replaces the defaults for its registered name; other names retain theirs.
+    /// An empty list changes nothing, and the last template for a repeated name wins.
+    /// Invalid names, inputs or settings reject the entire batch without changing any defaults.
+    /// Existing studies, saved templates, layouts and clipboard copies keep their own settings.
+    /// Replacing or removing a constructor discards its defaults.
+    ///
+    /// Capture a study with [`StudyTemplate::from_study`], edit its typed inputs or settings,
+    /// then pass it here. A chooser supplied this factory through `IndicatorDialog::with_factory`
+    /// uses the same defaults. Explicit edits to a created study take precedence.
+    ///
+    /// ```
+    /// use egui_charts::studies::{IndicatorFactory, InputValue, StudyTemplate};
+    /// let mut factory = IndicatorFactory::new();
+    /// let mut defaults = StudyTemplate::from_study(factory.create("SMA").unwrap().as_ref());
+    /// defaults.inputs = vec![("period".into(), InputValue::Length(5))];
+    /// defaults.settings.plots[0].width = 3.0;
+    /// factory.set_defaults(&[defaults])?;
+    /// assert_eq!(factory.create("SMA").unwrap().plot_style(0).width, 3.0);
+    /// # Ok::<(), egui_charts::studies::StudyError>(())
+    /// ```
+    pub fn set_defaults(&mut self, defaults: &[StudyTemplate]) -> Result<(), StudyError> {
+        for template in defaults {
+            self.create_default(template)?;
+        }
+        for template in defaults {
+            self.defaults
+                .insert(template.name.clone(), template.clone());
+        }
+        Ok(())
+    }
+
+    /// Discard the host defaults for `name`. Returns whether defaults were removed.
+    /// Subsequent creations use the registered constructor's values again.
+    pub fn clear_defaults(&mut self, name: &str) -> bool {
+        self.defaults.remove(name).is_some()
+    }
+
+    /// Create an indicator by its registered name with the host's defaults, or `None` if not
+    /// found or if the constructor no longer accepts those defaults. Without host defaults,
+    /// returns the constructor's study unchanged.
     pub fn create(&self, name: &str) -> Option<Box<dyn Indicator>> {
+        if let Some(template) = self.defaults.get(name) {
+            return self.create_default(template).ok();
+        }
+        self.create_registered(name)
+    }
+
+    /// Reconstruct saved state without applying defaults intended for new studies.
+    pub(crate) fn create_registered(&self, name: &str) -> Option<Box<dyn Indicator>> {
         self.constructors.get(name).map(|(_, f)| f())
+    }
+
+    // Defaults use current inputs, without the migrations applied to saved templates.
+    fn create_default(&self, template: &StudyTemplate) -> Result<Box<dyn Indicator>, StudyError> {
+        let study = self
+            .create_registered(&template.name)
+            .ok_or_else(|| StudyError::UnknownStudy(template.name.clone()))?;
+        let mut study = ConfiguredStudy::new(study);
+        study.apply_settings(&template.inputs, template.settings.clone())?;
+        study.set_visible(template.visible);
+        if let Some(scale) = template.scale {
+            study.set_scale(scale);
+        }
+        Ok(Box::new(study))
     }
 
     /// The category of the indicator registered under `name`, such as `"Momentum"` or
@@ -489,11 +554,13 @@ impl IndicatorFactory {
     ///
     /// Returns `true` if it was present and removed, `false` otherwise.
     pub fn unregister(&mut self, name: &str) -> bool {
+        self.defaults.remove(name);
         self.constructors.remove(name).is_some()
     }
 
     /// Remove all registered indicators, including built-ins.
     pub fn clear(&mut self) {
+        self.defaults.clear();
         self.constructors.clear();
     }
 
