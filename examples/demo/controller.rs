@@ -1723,6 +1723,12 @@ impl DemoApp {
                                     .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside),
                             )
                             .show(ui, &response, |ui| {
+                                ui.set_width(
+                                    egui_charts::tokens::DESIGN_TOKENS
+                                        .sizing
+                                        .dialog
+                                        .submenu_width,
+                                );
                                 let height = (ui.ctx().content_rect().height() - 40.0).max(80.0);
                                 // A popup starts shorter than a long panel list.
                                 ui.set_max_height(height);
