@@ -1,6 +1,8 @@
 use super::*;
 use crate::data::inbox::Inbox;
 use crate::model::{Bar, BarClock, SymbolType, Timeframe};
+#[cfg(test)]
+use crate::services::{SymbolQuery, SymbolSearch};
 use chrono::{DateTime, Utc};
 use serde_json::json;
 
@@ -250,7 +252,7 @@ fn endpoint_requests_preserve_interval_bounds_and_search_filters() {
         for body in [
             r#"{"supported_resolutions":["1","15","60","240","1D"],"exchanges":[{"value":"X"}],"symbols_types":[{"value":"stock"}]}"#,
             r#"{"name":"ABC","ticker":"X:ABC","description":"ABC Inc","exchange":"X","type":"stock","minmov":5,"pricescale":100,"currency_code":"USD","volume_precision":2,"timezone":"UTC","session":"0930-1600:23456","supported_resolutions":["15"],"data_status":"streaming"}"#,
-            r#"[{"symbol":"X:ABC","description":"ABC Inc","type":"stock"}]"#,
+            r#"[{"symbol":"X:ABC","description":"ABC Inc","type":"stock","exchange":"X","country":"GB","sector":"Energy","source":"Provider/A","root":"ABC","logo":"bytes://company","exchange_logo":"bytes://venue"}]"#,
             r#"{"s":"no_data","nextTime":-60}"#,
         ] {
             let (mut connection, _) = listener.accept().unwrap();
@@ -327,19 +329,26 @@ fn endpoint_requests_preserve_interval_bounds_and_search_filters() {
         session.windows[0].open,
         chrono::NaiveTime::from_hms_opt(9, 30, 0).unwrap()
     );
-    feed.search_symbols(
-        "A & B".into(),
-        Some(SymbolType::Stock),
-        Some("X/Y".into()),
-        7,
-        10,
-        inbox.reply(2),
-    );
+    let mut query = SymbolQuery::new("X:A & B");
+    query.symbol_type = Some(SymbolType::Stock);
+    query.exchange = Some("X/Y".into());
+    query.country = Some("GB".into());
+    query.sector = Some("Energy & utilities".into());
+    query.source = Some("Provider/A".into());
+    query.offset = 7;
+    query.limit = 10;
+    feed.search(query, inbox.reply(2));
     let found = (*take()
         .downcast::<Result<Vec<Instrument>, FeedError>>()
         .unwrap())
     .unwrap();
     assert_eq!(found[0].symbol, "X:ABC");
+    assert_eq!(found[0].country.as_deref(), Some("GB"));
+    assert_eq!(found[0].sector.as_deref(), Some("Energy"));
+    assert_eq!(found[0].source.as_deref(), Some("Provider/A"));
+    assert_eq!(found[0].root.as_deref(), Some("ABC"));
+    assert_eq!(found[0].logo.as_deref(), Some("bytes://company"));
+    assert_eq!(found[0].exchange_logo.as_deref(), Some("bytes://venue"));
     feed.history(request, inbox.reply(3));
     let page = (*take().downcast::<Result<HistoryPage, FeedError>>().unwrap()).unwrap();
     assert_eq!(page.continue_before, DateTime::from_timestamp(-59, 0));
@@ -349,7 +358,7 @@ fn endpoint_requests_preserve_interval_bounds_and_search_filters() {
         [
             "/data/config",
             "/data/symbols?symbol=X%3AABC",
-            "/data/search?query=A%20%26%20B&type=stock&exchange=X%2FY&offset=7&limit=10"
+            "/data/search?query=X%3AA%20%26%20B&type=stock&exchange=X%2FY&offset=7&limit=10&country=GB&sector=Energy%20%26%20utilities&source=Provider%2FA"
         ]
     );
     assert!(targets[3].contains("&resolution=3M&countback=2&"));

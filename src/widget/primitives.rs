@@ -1096,14 +1096,14 @@ mod tests {
                     5.0,
                     CursorIcon::Crosshair,
                 ),
-                (renderer, "lower", 8.0, CursorIcon::Grab),
+                (renderer.clone(), "lower", 8.0, CursorIcon::Grab),
                 (
                     PointerTarget::Primitive(second_id),
                     "second",
                     5.0,
                     CursorIcon::PointingHand,
                 ),
-                (renderer, "upper", 8.0, CursorIcon::ResizeVertical),
+                (renderer.clone(), "upper", 8.0, CursorIcon::ResizeVertical),
                 (renderer, "lower", 0.0, CursorIcon::Grab),
             ]
             .into_iter()
