@@ -197,6 +197,27 @@ fn paint_fills(
 ) {
     use crate::studies::FillBoundary;
     for fill in study.fills() {
+        // Colour selection uses values so inverted price maps retain the same meaning.
+        let colors = if map.y_to_price(coords.rect.top()) < map.y_to_price(coords.rect.bottom()) {
+            (fill.inverted_color.unwrap_or(fill.color), Some(fill.color))
+        } else {
+            (fill.color, fill.inverted_color)
+        };
+        if let (FillBoundary::Level(a), FillBoundary::Level(b)) = (fill.first, fill.second) {
+            let (a, b) = (map.price_to_y(a), map.price_to_y(b));
+            if a.is_finite() && b.is_finite() {
+                paint_band(
+                    painter,
+                    Pos2::new(coords.rect.left(), a),
+                    Pos2::new(coords.rect.right(), a),
+                    Pos2::new(coords.rect.left(), b),
+                    Pos2::new(coords.rect.right(), b),
+                    colors.0,
+                    colors.1,
+                );
+            }
+            continue;
+        }
         let value = |boundary, bar| match boundary {
             FillBoundary::Level(value) => value.is_finite().then_some(value),
             FillBoundary::Plot(line) => (line < study.line_count()
@@ -221,13 +242,6 @@ fn paint_fills(
                 Pos2::new(next_x, map.price_to_y(d)),
             ];
             if points.iter().all(|point| point.is_finite()) {
-                // Colour selection uses values so inverted price maps retain the same meaning.
-                let colors =
-                    if map.y_to_price(coords.rect.top()) < map.y_to_price(coords.rect.bottom()) {
-                        (fill.inverted_color.unwrap_or(fill.color), Some(fill.color))
-                    } else {
-                        (fill.color, fill.inverted_color)
-                    };
                 paint_band(
                     painter, points[0], points[1], points[2], points[3], colors.0, colors.1,
                 );

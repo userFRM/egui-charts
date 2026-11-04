@@ -1142,13 +1142,15 @@ mod tests {
                 painted |= output.shapes.iter().any(|shape| {
                     matches!(&shape.shape, egui::Shape::Mesh(mesh)
                         if mesh.vertices.len() >= 4
-                            && mesh.vertices.iter().all(|vertex| vertex.color == fill_color))
+                            && mesh.vertices.iter().all(|vertex| vertex.color == fill_color)
+                            && mesh.calc_bounds().left() <= chart.get_rendered_price_rect().left()
+                            && mesh.calc_bounds().right() >= chart.get_rendered_price_rect().right())
                 });
                 output.drop_without_applying_deltas();
             }
             assert!(
                 painted,
-                "expected move has no filled band with {count} underlying bars"
+                "expected move does not fill the pane with {count} underlying bars"
             );
         }
         study
