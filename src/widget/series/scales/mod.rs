@@ -2,7 +2,8 @@
 
 use super::{PriceSeries, SeriesLastValue};
 use crate::model::{
-    Bar, ChartType, Marker, MarkerOptions, MarkerPos, PriceLineSource, SeriesScale,
+    AutoscaleInfo, AutoscaleMargins, Bar, ChartType, Marker, MarkerOptions, MarkerPos,
+    PriceLineSource, SeriesScale,
 };
 use crate::scales::{PriceMap, PriceScale, PriceScaleMode, PriceScaleOptions, PriceTransform};
 use crate::studies::{Indicator, PlotType};
@@ -12,6 +13,16 @@ use egui::{Color32, Painter, Rect};
 
 /// A price on a series axis, its tag colours, the map it is drawn on and its tag text.
 type AxisValue = (f64, (Color32, Color32), PriceMap, String);
+
+/// Anchor tags to their own axis column while retaining the pane's vertical bounds.
+pub(in crate::widget) fn axis_label_rect(plot: Rect, axis: Rect) -> Rect {
+    let x = if axis.center().x < plot.center().x {
+        axis.right()..=plot.right()
+    } else {
+        plot.left()..=axis.left()
+    };
+    Rect::from_x_y_ranges(x, plot.y_range())
+}
 
 fn shared_prices(
     study: &dyn Indicator,
@@ -42,6 +53,404 @@ fn shared_prices(
 }
 
 impl Chart {
+    /// The pane's saved axis layout, or `None` for an unknown pane.
+    pub fn pane_axis_options(&self, pane: PaneId) -> Option<crate::model::PaneAxisOptions> {
+        self.pane_layout
+            .panes
+            .iter()
+            .find(|item| item.id == pane)
+            .map(|item| item.axes)
+    }
+
+    /// Replaces the pane's axis layout without changing scale assignments, options or ranges.
+    /// Returns `false` for an unknown pane. Wrap host edits in [`Self::user_action`] for undo.
+    pub fn set_pane_axis_options(
+        &mut self,
+        pane: PaneId,
+        options: crate::model::PaneAxisOptions,
+    ) -> bool {
+        let Some(item) = self
+            .pane_layout
+            .panes
+            .iter_mut()
+            .find(|item| item.id == pane)
+        else {
+            return false;
+        };
+        item.axes = options;
+        true
+    }
+
+    /// Places the pane's labelled axes beside each other at `side`, preserving their units.
+    /// Hidden overlay scales stay unlabelled. Returns `false` for an unknown pane.
+    pub fn place_pane_scales(&mut self, pane: PaneId, side: crate::model::AxisSide) -> bool {
+        let Some(mut options) = self.pane_axis_options(pane) else {
+            return false;
+        };
+        options.side = Some(side);
+        self.set_pane_axis_options(pane, options)
+    }
+
+    /// Joins sources from the pane's displayed axes onto one scale at `side`. The main
+    /// series' scale wins when displayed, otherwise the nearest named scale at that edge,
+    /// then the first named scale. Its options and manual range are retained. Series keep
+    /// their data and numeric formats; undo restores the previous assignments and ranges.
+    /// Overlay assignments stay unlabelled. Returns `false` without changes for an unknown
+    /// pane or a study that refuses the new assignment.
+    pub fn merge_pane_scales(&mut self, pane: PaneId, side: crate::model::AxisSide) -> bool {
+        use crate::studies::StudyScale;
+        use crate::widget::PaneScale;
+        if self.pane_axis_options(pane).is_none() {
+            return false;
+        }
+        let mut keys = self.pane_scales(pane, side);
+        keys.extend(self.pane_scales(
+            pane,
+            if side == crate::model::AxisSide::Left {
+                crate::model::AxisSide::Right
+            } else {
+                crate::model::AxisSide::Left
+            },
+        ));
+        let primary = PaneScale::Named(self.main_series_scale);
+        let target = if pane == self.main_series_pane() && keys.contains(&primary) {
+            self.main_series_scale
+        } else {
+            keys.iter()
+                .find_map(|key| match key {
+                    PaneScale::Named(key) => Some(*key),
+                    _ => None,
+                })
+                .unwrap_or(SeriesScale::Right)
+        };
+        let members: Vec<_> = self
+            .pane_series(pane)
+            .into_iter()
+            .filter(|id| {
+                self.source_axis_key(pane, *id)
+                    .is_some_and(|key| keys.contains(&key))
+            })
+            .collect();
+        let studies: Vec<_> = members
+            .iter()
+            .filter_map(|id| self.indicators().find(|(member, _)| member == id))
+            .filter(|(_, study)| {
+                study.scale() != StudyScale::Shared(target)
+                    && !(study.scale() == StudyScale::Main
+                        && target == self.main_series_scale
+                        && pane == self.main_series_pane())
+            })
+            .map(|(id, study)| (id, study.clone_box().set_scale(StudyScale::Shared(target))))
+            .collect();
+        if studies.iter().any(|(_, accepted)| !accepted) {
+            return false;
+        }
+        self.pane_price_scale_mut(pane, target);
+        for id in members {
+            if self.series_scale(id).is_some_and(|key| key != target) {
+                if self
+                    .series_style(id)
+                    .is_some_and(|style| style.display_format.is_none())
+                {
+                    let precision = self.series_price_scale(id).and_then(|scale| {
+                        scale.map(Default::default(), 0.0, 1.0).price_precision()
+                    });
+                    if let Some(precision) = precision {
+                        self.series_style_mut(id)
+                            .expect("present series")
+                            .display_format = Some(crate::model::SeriesDisplayFormat {
+                            precision: precision.min(18) as u8,
+                            min_move: 0.0,
+                            ..Default::default()
+                        });
+                    }
+                }
+                self.set_series_scale(id, target);
+            }
+        }
+        for (id, _) in studies {
+            self.set_indicator_scale(id, StudyScale::Shared(target));
+        }
+        self.place_pane_scales(pane, side)
+    }
+
+    /// The labelled scales displayed on one side of a pane, nearest the plot first.
+    /// Shared assignments appear once; independent studies have their own identities.
+    /// Hidden overlays and, by default, axes with no visible sources are
+    /// omitted. A visible source with no data retains its axis. Unknown panes return no axes.
+    pub fn pane_scales(
+        &self,
+        pane: PaneId,
+        side: crate::model::AxisSide,
+    ) -> Vec<crate::widget::PaneScale> {
+        self.pane_scale_keys(pane)
+            .filter(|key| self.pane_scale_side(pane, *key) == Some(side))
+            .collect()
+    }
+
+    pub(in crate::widget) fn pane_scale_count(
+        &self,
+        pane: PaneId,
+        side: crate::model::AxisSide,
+    ) -> usize {
+        self.pane_scale_keys(pane)
+            .filter(|key| self.pane_scale_side(pane, *key) == Some(side))
+            .count()
+    }
+
+    /// The scale behind an axis of [`Self::pane_scales`]. `None` for an axis the pane does not
+    /// display, an independent study, which maps itself, or a study assignment before the
+    /// frame that creates its scale.
+    pub fn pane_scale(&self, pane: PaneId, axis: crate::widget::PaneScale) -> Option<&PriceScale> {
+        let crate::widget::PaneScale::Named(key) = axis else {
+            return None;
+        };
+        if !self.pane_scale_keys(pane).any(|key| key == axis) {
+            None
+        } else if pane == PaneId::MAIN && key != self.main_series_scale {
+            self.series_scales.get(&key)
+        } else {
+            Some(self.pane_price_scale(pane, key))
+        }
+    }
+
+    /// Changes options or a manual range on the scale behind an axis of [`Self::pane_scales`].
+    /// `None` for an axis the pane does not display or an independent study, which maps itself.
+    pub fn pane_scale_mut(
+        &mut self,
+        pane: PaneId,
+        axis: crate::widget::PaneScale,
+    ) -> Option<&mut PriceScale> {
+        let crate::widget::PaneScale::Named(key) = axis else {
+            return None;
+        };
+        let present = self.pane_scale_keys(pane).any(|key| key == axis);
+        present.then(|| self.pane_price_scale_mut(pane, key))
+    }
+
+    fn pane_scale_keys(&self, pane: PaneId) -> impl Iterator<Item = crate::widget::PaneScale> {
+        use crate::widget::PaneScale;
+        let Some(options) = self.pane_axis_options(pane) else {
+            return None.into_iter().chain(Vec::new());
+        };
+        let main = pane == self.main_series_pane();
+        let primary = if main {
+            self.main_series_scale
+        } else {
+            SeriesScale::Right
+        };
+        let mut keys = Vec::new();
+        let mut show_primary = !options.hide_unused && !matches!(primary, SeriesScale::Overlay(_));
+        for id in self.pane_series_iter(pane) {
+            if options.hide_unused && !self.is_series_visible(id) {
+                continue;
+            }
+            let Some(key) = self.source_axis_key(pane, id) else {
+                continue;
+            };
+            if key == PaneScale::Named(primary) && !matches!(primary, SeriesScale::Overlay(_)) {
+                show_primary = true;
+            } else if !matches!(key, PaneScale::Named(SeriesScale::Overlay(_)))
+                && !keys.contains(&key)
+            {
+                keys.push(key);
+            }
+        }
+        // The primary axis stays nearest the plot regardless of the series' draw order.
+        show_primary
+            .then_some(PaneScale::Named(primary))
+            .into_iter()
+            .chain(keys)
+    }
+
+    pub(in crate::widget) fn source_axis_key(
+        &self,
+        pane: PaneId,
+        id: SeriesId,
+    ) -> Option<crate::widget::PaneScale> {
+        use crate::widget::PaneScale;
+        if let Some(key) = self.series_scale(id) {
+            return Some(PaneScale::Named(key));
+        }
+        let study = self.indicators().find(|(member, _)| *member == id)?.1;
+        let main = pane == self.main_series_pane();
+        match study.scale() {
+            crate::studies::StudyScale::None => None,
+            crate::studies::StudyScale::Shared(key) => Some(PaneScale::Named(key)),
+            crate::studies::StudyScale::Independent
+                if (main || pane == PaneId::MAIN) && !study.is_volume() =>
+            {
+                Some(PaneScale::Study(id))
+            }
+            _ if (main || pane == PaneId::MAIN) && study.is_volume() => None,
+            _ => Some(PaneScale::Named(if main {
+                self.main_series_scale
+            } else {
+                SeriesScale::Right
+            })),
+        }
+    }
+
+    pub(in crate::widget) fn pane_scale_side(
+        &self,
+        pane: PaneId,
+        key: crate::widget::PaneScale,
+    ) -> Option<crate::model::AxisSide> {
+        use crate::model::AxisSide;
+        use crate::widget::PaneScale;
+        let side = self.pane_axis_options(pane)?.side;
+        let primary = PaneScale::Named(if pane == self.main_series_pane() {
+            self.main_series_scale
+        } else {
+            SeriesScale::Right
+        });
+        if (key == primary || matches!(key, PaneScale::Study(_)))
+            && !self.config.show_left_axis
+            && !self.config.show_right_axis
+        {
+            return None;
+        }
+        let right = if key == primary {
+            self.config.show_right_axis
+        } else {
+            key == PaneScale::Named(SeriesScale::Right)
+        };
+        Some(side.unwrap_or(if right {
+            AxisSide::Right
+        } else {
+            AxisSide::Left
+        }))
+    }
+
+    /// Whether the main series' axis is placed at the left edge, even while it is hidden.
+    pub(crate) fn main_axis_on_left(&self) -> bool {
+        self.pane_scale_side(
+            self.main_series_pane(),
+            crate::widget::PaneScale::Named(self.main_series_scale),
+        ) == Some(crate::model::AxisSide::Left)
+    }
+
+    pub(in crate::widget) fn pane_scale_axes(
+        &self,
+        pane: PaneId,
+        panel: Rect,
+        plot: Rect,
+    ) -> impl Iterator<Item = (crate::widget::PaneScale, Rect)> + '_ {
+        use crate::model::AxisSide;
+        let reference = self
+            .pane_layout
+            .panes
+            .iter()
+            .find(|pane| pane.id == self.main_series_pane() && pane.rect.is_positive())
+            .map_or(panel, |pane| pane.rect);
+        let padding = self
+            .config
+            .padding
+            .max(0.0)
+            .min(reference.width().min(reference.height()).max(0.0) / 2.0);
+        [AxisSide::Left, AxisSide::Right]
+            .into_iter()
+            .filter_map(move |side| {
+                let count = self.pane_scale_count(pane, side);
+                if count == 0 {
+                    return None;
+                }
+                let available = match side {
+                    AxisSide::Left => plot.left() - panel.left() - padding,
+                    AxisSide::Right => panel.right() - plot.right() - padding,
+                };
+                // Layout has already reserved these columns. Measurements can change while
+                // painting another pane, so use the allocated gutter for every pane this frame.
+                let columns = self
+                    .pane_layout
+                    .panes
+                    .iter()
+                    .filter(|item| {
+                        item.id == PaneId::MAIN
+                            || item.id == self.main_series_pane()
+                            || self.pane_shown(item)
+                    })
+                    .map(|item| {
+                        if item.id == pane {
+                            count
+                        } else {
+                            self.pane_scale_count(item.id, side)
+                        }
+                    })
+                    .max()
+                    .unwrap_or(0);
+                let width = available.max(0.0) / columns.max(1) as f32;
+                Some(
+                    self.pane_scale_keys(pane)
+                        .filter(move |key| self.pane_scale_side(pane, *key) == Some(side))
+                        .enumerate()
+                        .map(move |(at, key)| {
+                            let offset = at as f32 * width;
+                            let left = match side {
+                                AxisSide::Left => plot.left() - offset - width,
+                                AxisSide::Right => plot.right() + offset,
+                            };
+                            let right = if side == AxisSide::Right
+                                && at + 1 == count
+                                && panel.right() - (left + width) <= padding + 0.1
+                            {
+                                panel.right()
+                            } else {
+                                left + width
+                            };
+                            (key, Rect::from_x_y_ranges(left..=right, panel.y_range()))
+                        }),
+                )
+            })
+            .flatten()
+    }
+
+    pub(in crate::widget) fn primary_axis_side(&self) -> Option<crate::model::AxisSide> {
+        let pane = self.main_series_pane();
+        let key = crate::widget::PaneScale::Named(self.main_series_scale);
+        if self.pane_scale_keys(pane).any(|axis| axis == key) {
+            self.pane_scale_side(pane, key)
+        } else {
+            None
+        }
+    }
+
+    /// The drawn pane at a menu click, including its axis gutters.
+    #[cfg(feature = "ui")]
+    pub(crate) fn pane_at_position(&self, pos: egui::Pos2) -> Option<PaneId> {
+        self.pane_layout
+            .panes
+            .iter()
+            .find(|pane| pane.rect.contains(pos))
+            .map(|pane| pane.id)
+    }
+
+    #[cfg(feature = "ui")]
+    pub(crate) fn axis_at_position(
+        &self,
+        pos: egui::Pos2,
+    ) -> Option<(PaneId, crate::widget::PaneScale)> {
+        let pane = self
+            .pane_layout
+            .panes
+            .iter()
+            .find(|pane| pane.rect.contains(pos))?;
+        let plot =
+            Rect::from_x_y_ranges(self.last_rendered_price_rect.x_range(), pane.rect.y_range());
+        self.pane_scale_axes(pane.id, pane.rect, plot)
+            .find(|(_, axis)| axis.contains(pos))
+            .map(|(key, _)| (pane.id, key))
+    }
+
+    pub(in crate::widget) fn series_axis_keys(&self) -> Vec<SeriesScale> {
+        self.pane_scale_keys(self.main_series_pane())
+            .filter_map(|key| match key {
+                crate::widget::PaneScale::Named(key) if key != self.main_series_scale => Some(key),
+                _ => None,
+            })
+            .collect()
+    }
+
     pub(in crate::widget) fn ensure_series_scale(&mut self, scale: SeriesScale) {
         if scale != self.main_series_scale {
             self.series_scales
@@ -63,11 +472,7 @@ impl Chart {
         });
     }
 
-    pub(in crate::widget) fn pane_price_scale(
-        &self,
-        pane: PaneId,
-        key: SeriesScale,
-    ) -> &PriceScale {
+    pub(crate) fn pane_price_scale(&self, pane: PaneId, key: SeriesScale) -> &PriceScale {
         if pane == self.main_series_pane() && key == self.main_series_scale {
             self.state.price_scale()
         } else if pane == PaneId::MAIN && key != self.main_series_scale {
@@ -87,7 +492,7 @@ impl Chart {
         }
     }
 
-    pub(in crate::widget) fn pane_price_scale_mut(
+    pub(crate) fn pane_price_scale_mut(
         &mut self,
         pane: PaneId,
         key: SeriesScale,
@@ -332,15 +737,60 @@ impl Chart {
         }
     }
 
-    /// Adds screen-space room to an automatically fitted range. The data span occupies the
-    /// height left after the largest marker extents at each edge, so padding cannot compound
-    /// across frames. Manual ranges and panes too short for the extents keep their range.
+    /// Fits provider margins and marker extents together in screen space. Without provider
+    /// margins, retains the ordinary marker fit. Manual ranges and panes too short for the
+    /// requested space keep their range.
     pub(in crate::widget) fn fit_marker_bounds(
         scale: &mut PriceScale,
         rect: Rect,
         bounds: impl IntoIterator<Item = (f64, f32, f32)>,
+        margins: AutoscaleMargins,
     ) {
         if scale.is_manual() || rect.height() <= 0.0 {
+            return;
+        }
+        if margins != AutoscaleMargins::default() {
+            let options = scale.options().scale_margins;
+            let (mut top, mut bottom) =
+                (options.top.clamp(0.0, 1.0), options.bottom.clamp(0.0, 1.0));
+            if top + bottom >= 1.0 {
+                (top, bottom) = (0.0, 0.0);
+            }
+            let range = scale.range();
+            let span = range.max - range.min;
+            let (mut low, mut high) = (range.min + span * bottom, range.max - span * top);
+            if scale.options().invert_scale {
+                std::mem::swap(&mut top, &mut bottom);
+            }
+            let height = f64::from(rect.height());
+            let (mut top, mut bottom) = (
+                top * height + f64::from(margins.top),
+                bottom * height + f64::from(margins.bottom),
+            );
+            for (anchor, above, below) in bounds {
+                low = low.min(anchor);
+                high = high.max(anchor);
+                top = top.max(f64::from(above));
+                bottom = bottom.max(f64::from(below));
+            }
+            if top + bottom >= height {
+                return;
+            }
+            if low == high {
+                let half = scale.min_span() * 0.5;
+                low -= half;
+                high += half;
+            }
+            // Fit once with both requests, so fitting one edge cannot consume the other's space.
+            if scale.options().invert_scale {
+                std::mem::swap(&mut top, &mut bottom);
+            }
+            scale.options_mut().scale_margins = crate::scales::PriceScaleMargins {
+                top: top / height,
+                bottom: bottom / height,
+            };
+            scale.autoscale(low, high);
+            scale.options_mut().scale_margins = options;
             return;
         }
         let map = scale.map(scale.transform(), rect.top(), rect.bottom());
@@ -384,8 +834,13 @@ impl Chart {
         scale.options_mut().scale_margins = margins;
     }
 
-    /// Fits the main pane's markers after every series has fitted its own price scale.
-    pub(in crate::widget) fn fit_marker_scales(&mut self, painter: &Painter, rect: Rect) {
+    /// Fits pixel contributions after every series in the main pane has fitted its prices.
+    pub(in crate::widget) fn fit_marker_scales(
+        &mut self,
+        painter: &Painter,
+        rect: Rect,
+        margins: &std::collections::HashMap<SeriesScale, AutoscaleMargins>,
+    ) {
         let map = self.state.price_scale().map(
             self.state.price_scale().transform(),
             rect.top(),
@@ -401,10 +856,22 @@ impl Chart {
                 other.entry(item.options.scale).or_default().extend(bounds);
             }
         }
-        Self::fit_marker_bounds(self.state.price_scale_mut(), rect, main);
+        for key in margins.keys().filter(|key| **key != self.main_series_scale) {
+            other.entry(*key).or_default();
+        }
+        let main_margins = margins
+            .get(&self.main_series_scale)
+            .copied()
+            .unwrap_or_default();
+        Self::fit_marker_bounds(self.state.price_scale_mut(), rect, main, main_margins);
         for (key, bounds) in other {
             let scale = self.pane_price_scale_mut(self.main_series_pane(), key);
-            Self::fit_marker_bounds(scale, rect, bounds);
+            Self::fit_marker_bounds(
+                scale,
+                rect,
+                bounds,
+                margins.get(&key).copied().unwrap_or_default(),
+            );
         }
     }
 
@@ -442,9 +909,9 @@ impl Chart {
             .map(|bar| bar.close)
     }
 
-    /// The range the bars of `item` in view contribute to the fit of its scale: the prices its
-    /// chart type draws and the columns' base, or what its autoscale provider makes of them.
-    pub(in crate::widget) fn series_fit(&self, item: &PriceSeries) -> Option<(f64, f64)> {
+    /// The contribution of `item` in view: its rendered prices and columns' base, or the
+    /// range and pixel margins its autoscale provider supplies.
+    pub(in crate::widget) fn series_fit(&self, item: &PriceSeries) -> Option<AutoscaleInfo> {
         let heikin_ashi = (item.options.chart_type == ChartType::Heikin)
             .then(|| item.heikin_ashi.bars(&item.bars, item.revision));
         let bars = &heikin_ashi.as_deref().unwrap_or(&item.bars)[self.series_range(item)];
@@ -471,8 +938,8 @@ impl Chart {
                 }))
             });
         match &item.options.style.autoscale {
-            Some(provider) => provider.range(bars, default),
-            None => default,
+            Some(provider) => provider.info(bars, default),
+            None => default.map(Into::into),
         }
     }
 
@@ -525,6 +992,7 @@ impl Chart {
         for key in keys {
             self.pane_price_scale_mut(pane, key);
             let mut bounds = (f64::INFINITY, f64::NEG_INFINITY);
+            let mut margins = AutoscaleMargins::default();
             let mut reference = None;
             let mode = self.pane_price_scale(pane, key).options().mode;
             let mut include = |bounds: &mut (f64, f64), value: f64, transform: PriceTransform| {
@@ -545,9 +1013,12 @@ impl Chart {
                 for value in self
                     .series_fit(item)
                     .into_iter()
-                    .flat_map(|(low, high)| [low, high])
+                    .chain(self.primitive_autoscale(item.id))
+                    .flat_map(|info| {
+                        margins.merge(info.margins);
+                        [info.price_range.0, info.price_range.1]
+                    })
                     .chain(self.marker_prices(&item.markers, &[], item.marker_options))
-                    .chain(self.primitive_prices(item.id))
                 {
                     include(&mut bounds, value, transform);
                 }
@@ -591,8 +1062,11 @@ impl Chart {
                         include(&mut bounds, value, transform);
                     }
                 }
-                for value in self.primitive_prices(id) {
-                    include(&mut bounds, value, transform);
+                for info in self.primitive_autoscale(id) {
+                    margins.merge(info.margins);
+                    for value in [info.price_range.0, info.price_range.1] {
+                        include(&mut bounds, value, transform);
+                    }
                 }
             }
             let Some(mut transform) = reference else {
@@ -621,12 +1095,17 @@ impl Chart {
                     self.series_marker_bounds(painter, item.id, self.series_map(item, rect))
                 })
                 .collect();
-            Self::fit_marker_bounds(self.pane_price_scale_mut(pane, key), rect, markers);
+            Self::fit_marker_bounds(self.pane_price_scale_mut(pane, key), rect, markers, margins);
         }
     }
 
     /// Fits independent ranges in the main series' pane and returns its primary values.
-    pub(in crate::widget) fn fit_secondary_series(&mut self) -> Vec<f64> {
+    pub(in crate::widget) fn fit_secondary_series(
+        &mut self,
+    ) -> (
+        Vec<f64>,
+        std::collections::HashMap<SeriesScale, AutoscaleMargins>,
+    ) {
         let pane = self.main_series_pane();
         let keys: Vec<_> = self
             .studies
@@ -640,21 +1119,29 @@ impl Chart {
         for key in keys {
             self.ensure_series_scale(key);
         }
-        let mut values =
-            std::collections::HashMap::<SeriesScale, (PriceTransform, f64, f64)>::new();
+        let mut values = std::collections::HashMap::<
+            SeriesScale,
+            (PriceTransform, f64, f64, AutoscaleMargins),
+        >::new();
         for item in self.main_pane_series() {
             let transform = self.series_transform(item);
             let key = item.options.scale;
-            let entry = values
-                .entry(key)
-                .or_insert((transform, f64::INFINITY, f64::NEG_INFINITY));
+            let entry = values.entry(key).or_insert((
+                transform,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                AutoscaleMargins::default(),
+            ));
             let markers = self.marker_prices(&item.markers, &[], item.marker_options);
             for value in self
                 .series_fit(item)
                 .into_iter()
-                .flat_map(|(min, max)| [min, max])
+                .chain(self.primitive_autoscale(item.id))
+                .flat_map(|info| {
+                    entry.3.merge(info.margins);
+                    [info.price_range.0, info.price_range.1]
+                })
                 .chain(markers)
-                .chain(self.primitive_prices(item.id))
             {
                 let value = transform.to_scale(value);
                 if value.is_finite() {
@@ -684,11 +1171,17 @@ impl Chart {
                 continue;
             }
             let transform = self.shared_study_transform(id, study.as_ref(), key);
-            let entry = values
-                .entry(key)
-                .or_insert((transform, f64::INFINITY, f64::NEG_INFINITY));
-            for value in shared_prices(study.as_ref(), start..end).chain(self.primitive_prices(id))
-            {
+            let entry = values.entry(key).or_insert((
+                transform,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                AutoscaleMargins::default(),
+            ));
+            let primitive_prices = self.primitive_autoscale(id).flat_map(|info| {
+                entry.3.merge(info.margins);
+                [info.price_range.0, info.price_range.1]
+            });
+            for value in shared_prices(study.as_ref(), start..end).chain(primitive_prices) {
                 if transform.mode == PriceScaleMode::Logarithmic && value <= 0.0 {
                     continue;
                 }
@@ -700,9 +1193,13 @@ impl Chart {
             }
         }
         let mut main = Vec::new();
-        for (key, (transform, min, max)) in values {
+        let mut pixel_margins = std::collections::HashMap::new();
+        for (key, (transform, min, max, margins)) in values {
             if !min.is_finite() {
                 continue;
+            }
+            if margins != AutoscaleMargins::default() {
+                pixel_margins.insert(key, margins);
             }
             if key == self.main_series_scale {
                 main.extend([min, max]);
@@ -718,7 +1215,7 @@ impl Chart {
                 scale.autoscale(min, max);
             }
         }
-        main
+        (main, pixel_margins)
     }
 
     pub(in crate::widget) fn update_shared_study_maps(&mut self, rect: Rect) {
@@ -838,31 +1335,6 @@ impl Chart {
                         (bar.close, (text, color), true)
                     }),
             )
-    }
-
-    pub(in crate::widget) fn series_axis_keys(&self) -> Vec<SeriesScale> {
-        let mut keys = Vec::new();
-        for item in self.main_pane_series() {
-            let key = item.options.scale;
-            if key != self.main_series_scale
-                && !matches!(key, SeriesScale::Overlay(_))
-                && !keys.contains(&key)
-            {
-                keys.push(key);
-            }
-        }
-        for (&id, study) in self.study_ids.iter().zip(self.studies.indicators()) {
-            if let crate::studies::StudyScale::Shared(key) = study.scale()
-                && study.is_visible()
-                && self.series_pane(id) == Some(self.main_series_pane())
-                && key != self.main_series_scale
-                && !matches!(key, SeriesScale::Overlay(_))
-                && !keys.contains(&key)
-            {
-                keys.push(key);
-            }
-        }
-        keys
     }
 }
 

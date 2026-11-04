@@ -53,7 +53,7 @@
 
 use crate::chart::coords::ChartMapping;
 use crate::chart::selection::SeriesId;
-use crate::model::Bar;
+use crate::model::{AutoscaleInfo, Bar};
 use crate::studies::Indicator;
 use chrono::{DateTime, Utc};
 use egui::{Color32, CursorIcon, Painter, Pos2, Rect};
@@ -321,6 +321,14 @@ pub trait Primitive: Send {
     fn autoscale(&self, bars: &[Bar], visible: Range<usize>) -> Option<(f64, f64)> {
         let _ = (bars, visible);
         None
+    }
+
+    /// Prices and extra top/bottom logical pixels to fit on the attached series' pane and
+    /// scale. Shared scales take the largest request at each screen edge. Manual ranges
+    /// ignore this contribution. Independent overlay studies retain their own value-only fit.
+    /// The default preserves [`autoscale`](Self::autoscale) with zero extra margins.
+    fn autoscale_info(&self, bars: &[Bar], visible: Range<usize>) -> Option<AutoscaleInfo> {
+        self.autoscale(bars, visible).map(Into::into)
     }
 
     /// Whether the pointer at `pos` is over the primitive, and the cursor to show there.
