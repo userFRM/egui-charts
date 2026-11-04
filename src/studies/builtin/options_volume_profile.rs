@@ -160,6 +160,7 @@ impl OptionsVolumeProfile {
     /// A date cutoff uses the last selected expiry. Dates end at the next UTC midnight;
     /// live bands age with UTC time, historical bands with the chain query's `as_of` instant.
     /// Missing inputs or an expired date remove both bounds and their expiry/method label.
+    /// The fill spans the visible pane even when only one underlying bar has arrived.
     /// Returns `None` for an empty symbol or expiry list.
     pub fn from_chain(
         chain: OptionChain,
@@ -727,12 +728,12 @@ impl Indicator for OptionsVolumeProfile {
         }
     }
     fn fills(&self) -> Vec<crate::studies::StudyFill> {
-        if self.move_band().is_none() {
+        let Some((_, [low, high])) = self.move_band() else {
             return Vec::new();
-        }
+        };
         vec![crate::studies::StudyFill {
-            first: crate::studies::FillBoundary::Plot(6),
-            second: crate::studies::FillBoundary::Plot(7),
+            first: crate::studies::FillBoundary::Level(low),
+            second: crate::studies::FillBoundary::Level(high),
             color: self.colors[0].gamma_multiply(0.16),
             inverted_color: None,
         }]
@@ -1068,14 +1069,58 @@ mod tests {
             }
             let (_, text) = study.plot_label().unwrap();
             assert!(text.contains(&expiry.to_string()) && text.contains(label));
-            let fill = study.fills().remove(0);
-            assert!(matches!(fill.first, crate::studies::FillBoundary::Plot(6)));
-            assert!(matches!(fill.second, crate::studies::FillBoundary::Plot(7)));
+            assert!(!study.fills().is_empty());
         }
         for (line, color) in [(6, Color32::YELLOW), (7, Color32::LIGHT_BLUE)] {
             study.set_color(line, color);
             assert_eq!(study.plot_style(line).color, color);
             assert_eq!(study.colors()[line], color);
+        }
+        #[cfg(feature = "widget")]
+        for count in [1, 2] {
+            let data = (0..count)
+                .map(|day| {
+                    Bar::new(
+                        time + chrono::TimeDelta::days(day),
+                        100.0,
+                        101.0,
+                        99.0,
+                        100.0,
+                        1.0,
+                    )
+                })
+                .collect();
+            let mut chart = crate::widget::Chart::new(crate::model::BarData::from_bars(data));
+            chart.set_symbol("SAMPLE");
+            chart.set_timeframe(crate::model::Timeframe::Day1);
+            chart.add_indicator(study.clone_box());
+            let fill_color = study.fills()[0].color;
+            let ctx = egui::Context::default();
+            let mut painted = false;
+            for _ in 0..2 {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(800.0, 500.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        chart.show(ui);
+                    },
+                );
+                painted |= output.shapes.iter().any(|shape| {
+                    matches!(&shape.shape, egui::Shape::Mesh(mesh)
+                        if mesh.vertices.len() >= 4
+                            && mesh.vertices.iter().all(|vertex| vertex.color == fill_color))
+                });
+                output.drop_without_applying_deltas();
+            }
+            assert!(
+                painted,
+                "expected move has no filled band with {count} underlying bars"
+            );
         }
         study
             .set_input("move_method", InputValue::Choice(0))
