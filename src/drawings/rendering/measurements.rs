@@ -146,7 +146,7 @@ impl Drawing {
         self.render_line_text(painter, start + offset, end + offset, above);
     }
 
-    /// Plain readouts beside an extended line; the midpoint is independent of selection and
+    /// Readout card beside an extended line; the midpoint is independent of selection and
     /// readout visibility. Its screen midpoint remains on the line on logarithmic scales.
     pub(super) fn render_line_measurements(
         &self,
@@ -179,30 +179,21 @@ impl Drawing {
         {
             return;
         }
-        let galley = painter.layout_no_wrap(text, self.annotation_font(), self.color32());
+        let galley = stats_galley(painter, text);
+        let size = galley.size() + CARD_PADDING * 2.0;
         let (left, right) = if a.x <= b.x { (a, b) } else { (b, a) };
         let gap = DESIGN_TOKENS.spacing.sm + self.stroke_width / 2.0;
         // Side readouts sit away from the line's continuation, including horizontal lines.
         let rising = right.y < left.y;
-        let left_label = (
-            left + egui::vec2(-gap, if rising { -gap } else { gap }),
-            if rising {
-                Align2::RIGHT_BOTTOM
-            } else {
-                Align2::RIGHT_TOP
-            },
-        );
-        let right_label = (
-            right + egui::vec2(gap, if rising { gap } else { -gap }),
-            if rising {
-                Align2::LEFT_TOP
-            } else {
-                Align2::LEFT_BOTTOM
-            },
-        );
         let (pos, align) = match settings.position {
-            P::Auto if b.x < a.x => left_label,
-            P::Left => left_label,
+            P::Left => (
+                left + egui::vec2(-gap, if rising { -gap } else { gap }),
+                if rising {
+                    Align2::RIGHT_BOTTOM
+                } else {
+                    Align2::RIGHT_TOP
+                },
+            ),
             P::Center => {
                 let direction = right - left;
                 let mut normal = if direction.length_sq() == 0.0 {
@@ -220,16 +211,19 @@ impl Drawing {
                 {
                     normal = -normal;
                 }
-                let clearance = gap + normal.abs().dot(galley.size()) / 2.0;
+                let clearance = gap + normal.abs().dot(size) / 2.0;
                 (a.lerp(b, 0.5) + normal * clearance, Align2::CENTER_CENTER)
             }
-            P::Right | P::Auto => right_label,
+            P::Right => (
+                right + egui::vec2(gap, if rising { gap } else { -gap }),
+                if rising {
+                    Align2::LEFT_TOP
+                } else {
+                    Align2::LEFT_BOTTOM
+                },
+            ),
         };
-        let min = align
-            .anchor_size(pos, galley.size())
-            .min
-            .clamp(clip.min, clip.max - galley.size().min(clip.size()));
-        painter.galley(min, galley, self.color32());
+        paint_stats_card(painter, align, pos, galley, size);
     }
 
     /// Readouts use raw prices and timestamps. Only inclination and length depend on the
@@ -494,18 +488,34 @@ impl Drawing {
     }
 }
 
+/// Padding between a stats card's border and its text.
+const CARD_PADDING: egui::Vec2 = egui::vec2(8.0, 6.0);
+
 /// Paints `text` on a card in the theme's tooltip colours, placed at `pos` by `align` and
 /// moved inside the painter's clip rect.
 fn stats_card(painter: &egui::Painter, align: Align2, pos: Pos2, text: String) -> Rect {
-    let theme = painter.ctx().active_theme();
-    let chart = theme.chart;
-    let galley = painter.layout_no_wrap(
+    let galley = stats_galley(painter, text);
+    let size = galley.size() + CARD_PADDING * 2.0;
+    paint_stats_card(painter, align, pos, galley, size)
+}
+
+fn stats_galley(painter: &egui::Painter, text: String) -> std::sync::Arc<egui::Galley> {
+    painter.layout_no_wrap(
         text,
         egui::FontId::proportional(typography::SM_MD),
-        chart.axis_text,
-    );
-    let padding = egui::vec2(8.0, 6.0);
-    let size = galley.size() + padding * 2.0;
+        painter.ctx().active_theme().chart.axis_text,
+    )
+}
+
+fn paint_stats_card(
+    painter: &egui::Painter,
+    align: Align2,
+    pos: Pos2,
+    galley: std::sync::Arc<egui::Galley>,
+    size: egui::Vec2,
+) -> Rect {
+    let theme = painter.ctx().active_theme();
+    let chart = theme.chart;
     let clip = painter.clip_rect();
     let min = align
         .anchor_size(pos, size)
@@ -520,7 +530,7 @@ fn stats_card(painter: &egui::Painter, align: Align2, pos: Pos2, text: String) -
         Stroke::new(1.0, theme.ui.border),
         egui::StrokeKind::Inside,
     );
-    painter.galley(min + padding, galley, chart.axis_text);
+    painter.galley(min + CARD_PADDING, galley, chart.axis_text);
     card
 }
 
@@ -840,9 +850,7 @@ mod tests {
                 (false, true, true),
             ] {
                 let mut previous_position = None;
-                let mut left_position = None;
-                let mut right_position = None;
-                for position in [P::Left, P::Center, P::Right, P::Auto] {
+                for position in [P::Left, P::Center, P::Right] {
                     drawing.line_measurements = LineMeasurements {
                         persistent,
                         position,
@@ -864,33 +872,14 @@ mod tests {
                     });
                     assert_eq!(text.is_some(), visible, "{selected} {persistent}");
                     if let Some(text) = text {
-                        match position {
-                            P::Left => left_position = Some(text.pos),
-                            P::Right => right_position = Some(text.pos),
-                            P::Auto => assert_eq!(
-                                Some(text.pos),
-                                if reverse {
-                                    left_position
-                                } else {
-                                    right_position
-                                }
-                            ),
-                            P::Center => {}
-                        }
-                        if position != P::Auto {
-                            assert_ne!(Some(text.pos), previous_position);
-                            previous_position = Some(text.pos);
-                        }
+                        assert_ne!(Some(text.pos), previous_position);
+                        previous_position = Some(text.pos);
                         assert!(
                             Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 400.0))
                                 .contains_rect(Rect::from_min_size(text.pos, text.galley.size()))
                         );
                         let bounds = Rect::from_min_size(text.pos, text.galley.size());
-                        let side = if position == P::Right || position == P::Auto && !reverse {
-                            1.0
-                        } else {
-                            -1.0
-                        };
+                        let side = if position == P::Right { 1.0 } else { -1.0 };
                         for corner in [
                             bounds.min,
                             bounds.max,

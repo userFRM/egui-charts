@@ -766,8 +766,6 @@ pub enum LineMeasurementPosition {
     /// After the right anchor.
     #[default]
     Right,
-    /// Follow the second anchor, placing text beyond it in the direction of the move.
-    Auto,
 }
 
 /// Independent readouts for an extended line. All start hidden, including on older saves.

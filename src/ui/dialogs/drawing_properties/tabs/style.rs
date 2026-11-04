@@ -116,7 +116,6 @@ impl StyleTab {
                                 LineMeasurementPosition::Left,
                                 LineMeasurementPosition::Center,
                                 LineMeasurementPosition::Right,
-                                LineMeasurementPosition::Auto,
                             ],
                             |position| {
                                 l10n::text(
@@ -125,7 +124,6 @@ impl StyleTab {
                                         LineMeasurementPosition::Left => "Left",
                                         LineMeasurementPosition::Center => "Center",
                                         LineMeasurementPosition::Right => "Right",
-                                        LineMeasurementPosition::Auto => "Auto",
                                     },
                                 )
                             },
