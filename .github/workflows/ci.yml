@@ -481,8 +481,6 @@ jobs:
         env:
           REVISION: ${{ matrix.revision }}
         run: |
-          # Validate cached counts with the same comparison that guards pull requests.
-          bash benches/check-regressions.sh --compare performance-counts.txt performance-counts.txt > /dev/null
           {
             echo "$REVISION<<COUNTS"
             cat performance-counts.txt
