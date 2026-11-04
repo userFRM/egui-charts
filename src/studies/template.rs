@@ -121,7 +121,8 @@ impl StudyTemplate {
     }
 
     /// Reconstruct a study through `factory`, which resolves [`name`](Self::name) to a built-in
-    /// or host-registered study. Fails like [`create`](Self::create).
+    /// or host-registered study. Uses the saved settings rather than the factory's host defaults.
+    /// Fails like [`create`](Self::create).
     pub fn create_with(
         &self,
         factory: &IndicatorFactory,
@@ -129,7 +130,7 @@ impl StudyTemplate {
         let upgraded = self.upgraded();
         let template = upgraded.as_ref().unwrap_or(self);
         let study = factory
-            .create(&template.name)
+            .create_registered(&template.name)
             .ok_or_else(|| crate::studies::StudyError::UnknownStudy(template.name.clone()))?;
         // Automatic drawings saved before their swings could follow volatility used the fixed
         // percentage they were saved with.

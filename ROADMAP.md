@@ -138,7 +138,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Additional-symbol and additional-interval histories, source selection and confirmed/developing value alignment. Volume profiles and zones span chart bars sharing their time; markers appear on the last such bar once the chart values reach their source bar.
 - [x] Incremental updates or scheduled recalculation as chart data changes.
 - [x] Applied-study editor with Inputs, Style and Visibility pages and atomic validated changes. Per-study status values have an independent Style switch; saved editing permissions guard settings, legend and context edits. Study help requests the metadata article through the host from the legend or menu.
-- [x] Study templates capture inputs and presentation; built-in studies reconstruct through `StudyTemplate`.
+- [x] Study templates capture inputs and presentation; built-in studies reconstruct through `StudyTemplate`. `IndicatorFactory::set_defaults` validates batches of typed study defaults for subsequent additions, including those from a chooser using that factory. Existing studies and restored templates, layouts and clipboard copies retain their explicit settings.
 - [ ] Offer interval and wait-for-close inputs for OHLC-based studies as well as source-aware studies.
 - [ ] Expose every supported plot type in the Style editor.
 - [ ] Add a configurable per-chart study limit and rejection feedback.
