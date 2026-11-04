@@ -246,18 +246,9 @@ impl DepthPanel {
             orders: &[],
             positions: &[],
             trades: &trades,
-            session_open: trades.last().and_then(|trade| {
-                let sessions = chart
-                    .bar_clock()
-                    .sessions()
-                    .with_timeframe(crate::model::Timeframe::Min1);
-                sessions
-                    .opens([trade.ts])
-                    .into_iter()
-                    .rev()
-                    .find(|(open, _)| *open <= trade.ts)
-                    .map(|(open, _)| open)
-            }),
+            session_open: trades
+                .last()
+                .and_then(|trade| super::view::session_open(chart, trade.ts)),
             last_fill: None,
             logo: None,
         };
@@ -1075,7 +1066,6 @@ impl Ladder {
                             }
                         }
                     }
-
 
                     // The sizes in view, the lock and the buttons that cancel every buy or every sell.
                     let (total_rect, _) = ui.allocate_exact_size(vec2(width, 28.0), Sense::hover());

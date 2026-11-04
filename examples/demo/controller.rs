@@ -1726,24 +1726,11 @@ impl DemoApp {
                         panel_action = Some(SidePanel::OrderFlow);
                         ui.close();
                     }
-                    for (label, panel, icon, available) in [
-                        (
-                            "Time and sales",
-                            SidePanel::TimeAndSales,
-                            &icons::SETTINGS_EVENTS,
-                            self.api_samples,
-                        ),
-                        (
-                            "Depth",
-                            SidePanel::Depth,
-                            &icons::FIXED_RANGE_VOLUME_PROFILE,
-                            egui_charts::ui::widget_bar::DepthPanel::is_available(&self.chart),
-                        ),
-                    ] {
-                        if available && menu_item(ui, label, icon, None).clicked() {
-                            panel_action = Some(panel);
-                            ui.close();
-                        }
+                    if egui_charts::ui::widget_bar::DepthPanel::is_available(&self.chart)
+                        && menu_item(ui, "Depth", &icons::FIXED_RANGE_VOLUME_PROFILE, None).clicked()
+                    {
+                        panel_action = Some(SidePanel::Depth);
+                        ui.close();
                     }
                     if ui.ctx().content_rect().width() < 600.0 {
                         for (label, panel, icon) in [
@@ -1759,7 +1746,16 @@ impl DemoApp {
                                 &icons::WIDGET_BAR_LAYERS,
                             ),
                             ("Data Window", SidePanel::DataWindow, &icons::TABLE),
-                        ] {
+                            (
+                                "Time and sales",
+                                SidePanel::TimeAndSales,
+                                &icons::SETTINGS_EVENTS,
+                            ),
+                        ]
+                        .into_iter()
+                        .filter(|(_, panel, _)| {
+                            self.api_samples || *panel != SidePanel::TimeAndSales
+                        }) {
                             if menu_item(ui, label, icon, None).clicked() {
                                 panel_action = Some(panel);
                                 ui.close();
