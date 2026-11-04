@@ -454,7 +454,7 @@ impl Chart {
                 if !control.is_positive() {
                     continue;
                 }
-                let row = label.union(control).intersect(rect);
+                let outline = label.union(control).intersect(rect);
                 let name = l10n::text(ui.ctx(), "Remove series");
                 let response = ui
                     .interact(
@@ -464,7 +464,10 @@ impl Chart {
                     )
                     .on_hover_text(&name);
                 response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
-                if ui.rect_contains_pointer(row) || response.has_focus() {
+                let revealed = (ui.input(|input| input.pointer.hover_pos().is_some())
+                    && ui.rect_contains_pointer(outline))
+                    || response.has_focus();
+                if revealed {
                     let theme = ui.active_theme();
                     plot.rect_filled(
                         control,
@@ -476,7 +479,7 @@ impl Chart {
                         },
                     );
                     plot.rect_stroke(
-                        row,
+                        outline,
                         theme.radius.sm,
                         egui::Stroke::new(1.0, theme.ui.accent),
                         egui::StrokeKind::Inside,
@@ -497,7 +500,8 @@ impl Chart {
                 if response.hovered() {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 }
-                if response.clicked() {
+                // A tap that never revealed the button must not delete a series unseen.
+                if revealed && response.clicked() {
                     remove = Some(item.id);
                 }
             }
@@ -814,6 +818,29 @@ mod tests {
                 let rows = labels(painted);
                 assert_eq!(rows.len(), 3);
                 let pos = Pos2::new(rows[1].right() + 18.0, rows[1].center().y);
+                // A touch tap leaves no hover, so it must not remove an unrevealed row.
+                let tap = Pos2::new(rows[2].right() + 18.0, rows[2].center().y);
+                let button = |pressed, extra| {
+                    let mut events = vec![Event::PointerButton {
+                        pos: tap,
+                        button: PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    }];
+                    events.extend(extra);
+                    events
+                };
+                frame(
+                    &ctx,
+                    &mut chart,
+                    0.15,
+                    button(true, [Event::PointerMoved(tap)]),
+                );
+                frame(&ctx, &mut chart, 0.16, button(false, [Event::PointerGone]));
+                assert!(
+                    chart.series().any(|(id, _)| id == ids[2]),
+                    "touch tap removed"
+                );
                 chart
                     .selection
                     .select(ChartElementId::Series(ids[1]), Some(0));
