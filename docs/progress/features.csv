@@ -173,7 +173,7 @@ Chart,Crosshair and interaction,Pinch zoom and two-finger pan,done,library,src/w
 Chart,Crosshair and interaction,Price scale and time scale context menus,done,library,src/ui/context_menu/mod.rs;src/ui/context_menu/chart_menus/mod.rs;src/ui/context_menu/axis.rs;src/widget/series/scales/mod.rs;src/widget/pane/controls.rs,2044
 Chart,Crosshair and interaction,Programmatic crosshair positioning,done,library,src/widget/sync.rs;src/widget/frame/mod.rs;src/widget/pane/render/mod.rs;src/widget/export.rs,1883
 Chart,Crosshair and interaction,Scroll and scale handler group switches,done,library,src/config/interaction.rs;src/widget/pan_zoom/mod.rs;src/widget/pane/controls.rs;src/widget/series/paint.rs,1888
-Chart,Crosshair and interaction,Table view of chart data,done,library,src/widget/export.rs;src/ui/dialogs/data_table.rs;src/ui/context_menu/mod.rs,
+Chart,Crosshair and interaction,Table view of chart data,done,library,src/widget/export.rs;src/ui/dialogs/data_table.rs;src/ui/context_menu/mod.rs;src/widget/readout.rs;src/widget/studies.rs;src/widget/mod.rs;src/widget/builder.rs;examples/demo/controller.rs,2100
 Chart,Crosshair and interaction,Touch crosshair tracking,done,library,src/config/interaction.rs;src/config/tooltip.rs;src/widget/interaction.rs;src/widget/frame/mod.rs;src/widget/pane/render/mod.rs,1889
 Chart,Crosshair and interaction,Undo and redo,done,library,src/widget/history.rs;src/widget/feed/mod.rs;examples/demo/controller.rs;src/widget/series/mod.rs;src/widget/replay.rs;src/widget/pane/render/mod.rs;src/widget/events.rs;src/widget/series/options.rs;examples/demo/comparison.rs;terminal/src/compare.rs,
 Chart,Crosshair and interaction,Zoom-to-rectangle tool,done,library,src/widget/pan_zoom/mod.rs;src/widget/pan_zoom/box_zoom.rs,
