@@ -5,7 +5,9 @@ use egui::{Color32, FontId, Rect, Sense, Stroke, Ui, pos2, vec2};
 use crate::chart::coords::ChartMapping;
 use crate::model::{Alert, AlertCondition, AlertSource, AlertStatus};
 
-/// Draw price thresholds and return a replacement alert after a drag.
+/// Draw threshold markers and optional pane-wide lines, returning a replacement after a drag
+/// or a marker menu change. Submit it through the same service as panel edits so storage and undo
+/// retain the display choices. A fired marker blinks until its blinking option is disabled.
 /// Supply only alerts for this pane, resolving symbol or watchlist membership in the host.
 /// With `active_only` unset, triggered, disabled and expired alerts are drawn dimmed.
 /// Call after drawing the chart, then submit the result through the host's alerts service.
@@ -64,13 +66,73 @@ pub fn render_alert_levels<'a>(
                 if !y.is_finite() || !mapping.is_y_visible(y) {
                     continue;
                 }
-                let hit = Rect::from_min_max(
-                    pos2(mapping.rect.left(), y - 6.0),
-                    pos2(mapping.rect.right(), y + 6.0),
+                let marker_x = mapping.rect.right() - 12.0;
+                let caption = |value| {
+                    let name = if alert.name.is_empty() {
+                        "Alert"
+                    } else {
+                        &alert.name
+                    };
+                    format!("{name}  {}", format(value))
+                };
+                let mut galley = labels.then(|| {
+                    painter.layout_no_wrap(
+                        caption(staged),
+                        FontId::proportional(12.0),
+                        Color32::PLACEHOLDER,
+                    )
+                });
+                let label_bounds = |y, size: egui::Vec2| {
+                    Rect::from_min_size(
+                        pos2(
+                            (marker_x - size.x - 16.0).max(mapping.rect.left()),
+                            y - size.y - 4.0,
+                        ),
+                        size + vec2(8.0, 2.0),
+                    )
+                };
+                let mut hit = Rect::from_min_max(
+                    pos2(marker_x - 12.0, y - 9.0),
+                    pos2(mapping.rect.right(), y + 9.0),
                 )
                 .intersect(mapping.rect);
-                let response = ui.interact(hit, key, Sense::drag()).on_hover_ui(|ui| {
+                if let Some(galley) = &galley {
+                    hit = hit.union(label_bounds(y, galley.size()).intersect(mapping.rect));
+                }
+                let mut response = ui.interact(hit, key, Sense::click_and_drag());
+                if alert.extend_line {
+                    let line = Rect::from_min_max(
+                        pos2(mapping.rect.left(), y - 6.0),
+                        pos2(mapping.rect.right(), y + 6.0),
+                    )
+                    .intersect(mapping.rect);
+                    response |= ui.interact(line, key.with("line"), Sense::click_and_drag());
+                }
+                let response = response.on_hover_ui(|ui| {
+                    ui.label(&alert.symbol);
+                    if !alert.name.is_empty() {
+                        ui.label(&alert.name);
+                    }
+                    ui.label(crate::localization::text(ui.ctx(), condition.to_string()));
                     ui.label(crate::localization::text(ui.ctx(), "Drag alert level"));
+                });
+                response.context_menu(|ui| {
+                    let mut updated = alert.clone();
+                    let line = ui
+                        .checkbox(
+                            &mut updated.extend_line,
+                            crate::localization::text(ui.ctx(), "Line across chart"),
+                        )
+                        .changed();
+                    let blink = ui
+                        .checkbox(
+                            &mut updated.blink_on_trigger,
+                            crate::localization::text(ui.ctx(), "Blink after firing"),
+                        )
+                        .changed();
+                    if line || blink {
+                        changed = Some(updated);
+                    }
                 });
                 let mut value = staged;
                 if response.dragged()
@@ -115,27 +177,63 @@ pub fn render_alert_levels<'a>(
                     }
                 }
                 let y = mapping.price_to_y(value);
-                painter.hline(mapping.rect.x_range(), y, Stroke::new(1.0, color));
-                if labels {
-                    let name = if alert.name.is_empty() {
-                        "Alert"
+                if alert.extend_line {
+                    painter.hline(mapping.rect.x_range(), y, Stroke::new(1.0, color));
+                }
+                let blinking = alert.blink_on_trigger
+                    && (alert.last_triggered_at.is_some()
+                        || alert.status == AlertStatus::Triggered);
+                let marker_color = if blinking {
+                    let bright = ui.input(|input| (input.time * 2.0).floor() as i64 % 2 == 0);
+                    ui.ctx()
+                        .request_repaint_after(std::time::Duration::from_millis(100));
+                    if bright {
+                        color
                     } else {
-                        &alert.name
-                    };
-                    let text = format!("{name}  {}", format(value));
-                    let font = FontId::proportional(12.0);
+                        color.gamma_multiply(0.2)
+                    }
+                } else {
+                    color
+                };
+                let center = pos2(marker_x, y);
+                painter.circle_filled(center, 6.0, marker_color);
+                #[cfg(feature = "icons")]
+                crate::icons::icons::ALERTS
+                    .as_image_tinted(vec2(10.0, 10.0), ui.visuals().panel_fill)
+                    .paint_at(ui, Rect::from_center_size(center, vec2(10.0, 10.0)));
+                #[cfg(not(feature = "icons"))]
+                {
+                    painter.line_segment(
+                        [center - vec2(0.0, 3.0), center + vec2(0.0, 1.0)],
+                        Stroke::new(1.5, ui.visuals().panel_fill),
+                    );
+                    painter.circle_filled(center + vec2(0.0, 3.0), 0.8, ui.visuals().panel_fill);
+                }
+                if let Some(mut galley) = galley.take() {
+                    if value != staged {
+                        galley = painter.layout_no_wrap(
+                            caption(value),
+                            FontId::proportional(12.0),
+                            Color32::PLACEHOLDER,
+                        );
+                    }
                     let text_color = if active {
                         ui.visuals().text_color()
                     } else {
                         ui.visuals().weak_text_color()
                     };
-                    let galley = painter.layout_no_wrap(text, font, text_color);
-                    let label = Rect::from_min_size(
-                        pos2(mapping.rect.left() + 8.0, y - galley.size().y - 4.0),
-                        galley.size() + vec2(8.0, 2.0),
-                    );
+                    let text_color = if blinking && marker_color != color {
+                        text_color.gamma_multiply(0.2)
+                    } else {
+                        text_color
+                    };
+                    let label = label_bounds(y, galley.size());
                     painter.rect_filled(label, 2.0, ui.visuals().panel_fill);
-                    painter.galley(label.min + vec2(4.0, 1.0), galley, text_color);
+                    painter.galley_with_override_text_color(
+                        label.min + vec2(4.0, 1.0),
+                        galley,
+                        text_color,
+                    );
                 }
             }
         }
@@ -168,9 +266,88 @@ mod tests {
     use crate::theme::Theme;
 
     #[test]
+    fn restored_marker_options_control_extension_and_blinking_independently() {
+        for theme in [Theme::light(), Theme::dark()] {
+            for line in [false, true] {
+                for blink in [false, true] {
+                    let stored = serde_json::json!({
+                        "id": "saved", "symbol": "SAMPLE", "condition": {"Above": 100.0},
+                        "last_triggered_at": "2026-10-01T10:00:00Z",
+                        "extend_line": line, "blink_on_trigger": blink
+                    });
+                    let alert: Alert = serde_json::from_value(stored).unwrap();
+                    let alert: Alert =
+                        serde_json::from_str(&serde_json::to_string(&alert).unwrap()).unwrap();
+                    let mut colors = Vec::new();
+                    for time in [0.0, 0.75] {
+                        // Fresh UI contexts also exercise reload, without transient animation state.
+                        let ctx = egui::Context::default();
+                        #[cfg(feature = "icons")]
+                        crate::icons::install_loader(&ctx);
+                        crate::theme::apply_to_egui(&ctx, &theme);
+                        let mut output = ctx.run_ui(
+                            egui::RawInput {
+                                time: Some(time),
+                                ..Default::default()
+                            },
+                            |ui| {
+                                let rect =
+                                    Rect::from_min_size(pos2(20.0, 20.0), vec2(400.0, 200.0));
+                                let mapping = ChartMapping::new(
+                                    rect,
+                                    6.0,
+                                    0,
+                                    0,
+                                    0.0,
+                                    PriceMap::new(
+                                        PriceTransform::default(),
+                                        PriceRange::new(90.0, 110.0),
+                                        rect.top(),
+                                        rect.bottom(),
+                                        false,
+                                    ),
+                                );
+                                render_alert_levels(
+                                    ui,
+                                    &mapping,
+                                    [&alert],
+                                    Color32::GOLD,
+                                    false,
+                                    false,
+                                    |p| p.to_string(),
+                                );
+                            },
+                        );
+                        let lines = output.shapes.iter().filter(|shape| matches!(&shape.shape,
+                            egui::Shape::LineSegment { points, .. } if points[0] == pos2(20.0, 120.0) && points[1] == pos2(420.0, 120.0)
+                        )).count();
+                        assert_eq!(lines, usize::from(line));
+                        let marker = output
+                            .shapes
+                            .iter()
+                            .find_map(|shape| match &shape.shape {
+                                egui::Shape::Circle(circle) if circle.radius == 6.0 => Some(circle),
+                                _ => None,
+                            })
+                            .expect("a marker remains without the line or text labels");
+                        // Halfway through [90,110] maps to halfway down the 200-point pane.
+                        assert_eq!(marker.center, pos2(408.0, 120.0));
+                        colors.push(marker.fill);
+                        output.textures_delta.clear();
+                        output.drop_without_applying_deltas();
+                    }
+                    assert_eq!(colors[0] != colors[1], blink);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn inactive_levels_follow_the_filter_and_stay_dimmed() {
         for theme in [Theme::light(), Theme::dark()] {
             let ctx = egui::Context::default();
+            #[cfg(feature = "icons")]
+            crate::icons::install_loader(&ctx);
             crate::theme::apply_to_egui(&ctx, &theme);
             for status in [
                 AlertStatus::Active,
@@ -181,6 +358,8 @@ mod tests {
                 let mut alert = Alert::new("SAMPLE", AlertCondition::Crossing(100.0));
                 alert.id = Some(AlertId("level".into()));
                 alert.status = status;
+                alert.extend_line = true;
+                alert.blink_on_trigger = false;
                 for active_only in [false, true] {
                     let mut output = ctx.run_ui(Default::default(), |ui| {
                         let rect = ui.max_rect();
@@ -214,7 +393,11 @@ mod tests {
                     let lines: Vec<_> = shapes
                         .iter()
                         .filter_map(|s| match s.shape {
-                            egui::Shape::LineSegment { stroke, .. } => Some(stroke.color),
+                            egui::Shape::LineSegment { points, stroke }
+                                if points[0].y == points[1].y =>
+                            {
+                                Some(stroke.color)
+                            }
                             _ => None,
                         })
                         .collect();

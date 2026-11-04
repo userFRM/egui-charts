@@ -727,7 +727,16 @@ impl DemoApp {
                 .flatten()
                 .filter(|panel| *panel != SidePanel::TimeAndSales),
             data_window_expanded: true,
-            alerts: AlertsPanel::default(),
+            alerts: {
+                let mut panel = AlertsPanel::default();
+                if let Some(options) = cc
+                    .storage
+                    .and_then(|storage| eframe::get_value(storage, "alert_list_options"))
+                {
+                    panel.set_options(options);
+                }
+                panel
+            },
             alert_host: {
                 let alerts = cc
                     .storage
@@ -1482,6 +1491,7 @@ impl eframe::App for DemoApp {
         );
         eframe::set_value(storage, "watchlists", &self.watchlist.lists());
         eframe::set_value(storage, "alerts", &self.alert_host.engine().alerts());
+        eframe::set_value(storage, "alert_list_options", self.alerts.options());
         self.checkpoint_replay();
         eframe::set_value(storage, "replay_session", &self.replay_session);
         self.checkpoint_workspace();
@@ -6802,6 +6812,12 @@ mod tests {
         assert_eq!(app.top_toolbar.layout_menu.layouts, ["Unnamed"]);
         assert_eq!(app.layout_tabs.len(), 1);
         // Opening a layout keeps the host's alert preferences and applied toast lifetime.
+        let mut list_options = app.alerts.options().clone();
+        list_options.name = false;
+        list_options.source_icon = false;
+        list_options.descending = false;
+        list_options.sort = egui_charts::ui::widget_bar::AlertSortKey::Fired;
+        app.alerts.set_options(list_options.clone());
         let mut settings = app.settings_state.clone();
         settings.alerts.notification_seconds = 12;
         settings.alerts.show_active_only = false;
@@ -6813,6 +6829,7 @@ mod tests {
         app.poll_storage(&ctx);
         assert_eq!(app.settings_state.alerts, settings.alerts);
         let saved = |app: &DemoApp| {
+            assert_eq!(app.alerts.options(), &list_options);
             assert_eq!(app.layout.sync_group(0), Some("A"));
             assert_eq!(app.layout.sync_group(1), Some("B"));
             assert!(app.layout.is_detached(1));
