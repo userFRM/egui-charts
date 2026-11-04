@@ -179,10 +179,7 @@ impl ChartSettingsState {
         settings.scales_and_lines.axis_layout = chart
             .pane_axis_options(chart.main_series_pane())
             .unwrap_or_default();
-        settings.scales_and_lines.price_scale_left = chart.pane_scale_side(
-            chart.main_series_pane(),
-            crate::widget::PaneScale::Named(chart.main_series_scale),
-        ) == Some(crate::model::AxisSide::Left);
+        settings.scales_and_lines.price_scale_left = chart.main_axis_on_left();
         settings.scales_and_lines.show_currency = config.show_currency;
         settings.scales_and_lines.show_unit = config.show_unit;
         settings.scales_and_lines.show_scale_mode_buttons = config.show_scale_mode_buttons;
@@ -395,11 +392,7 @@ impl ChartSettingsState {
         crosshair.horz_line_style = self.crosshair.line_style;
         crosshair.vert_line_style = crosshair.horz_line_style;
         let mut axis_layout = self.scales_and_lines.axis_layout;
-        if self.scales_and_lines.price_scale_left
-            != (chart.pane_scale_side(
-                chart.main_series_pane(),
-                crate::widget::PaneScale::Named(chart.main_series_scale),
-            ) == Some(crate::model::AxisSide::Left))
+        if self.scales_and_lines.price_scale_left != chart.main_axis_on_left()
             && axis_layout.side.is_some()
         {
             axis_layout.side = Some(if self.scales_and_lines.price_scale_left {

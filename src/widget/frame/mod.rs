@@ -723,7 +723,9 @@ impl Chart {
             .pane_scale_axes(main_pane, rect, chart_rect)
             .into_iter()
             .find(|(key, _)| *key == super::PaneScale::Named(self.main_series_scale))
-            .map_or(Rect::NOTHING, |(_, axis)| axis);
+            .map_or(Rect::NOTHING, |(_, axis)| {
+                Rect::from_x_y_ranges(axis.x_range(), chart_rect.y_range())
+            });
         let time_axis_rect = shared_time_axis.unwrap_or_else(|| {
             Rect::from_min_max(
                 Pos2::new(chart_rect.min.x, chart_rect.max.y),

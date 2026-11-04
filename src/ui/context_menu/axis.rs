@@ -5,7 +5,7 @@ use crate::icons::icons;
 use crate::model::{AxisSide, PaneAxisOptions};
 use crate::scales::{PriceScaleMode, TimezoneMode};
 use crate::theme::ThemeExt;
-use crate::widget::{Chart, PaneId, PaneScale};
+use crate::widget::{Chart, PaneId, PaneScale, SeriesId};
 use egui::{Context, Id, Pos2, Rect};
 
 #[derive(Clone)]
@@ -15,6 +15,7 @@ enum Action {
     Mode(PriceScaleMode),
     Invert,
     LockRatio,
+    PlaceLeft(bool),
     Layout(PaneAxisOptions),
     Merge(AxisSide),
     LastValue,
@@ -65,7 +66,7 @@ impl AxisMenus {
             .get_rendered_indicator_panes()
             .last()
             .map_or(plot.bottom(), |pane| pane.panel_rect.bottom());
-        let target = chart.axis_at_position(pos);
+        let target = chart.axis_at_position(pos).filter(|_| pos.y < bottom);
         let price = target.is_some();
         let time = config.show_time_labels
             && Rect::from_min_max(
@@ -138,16 +139,7 @@ impl AxisMenus {
                 PaneScale::Named(crate::model::SeriesScale::Right),
             ));
             let PaneScale::Named(key) = key else {
-                return layout_entries(chart.pane_axis_options(pane).unwrap_or_default())
-                    .into_iter()
-                    .filter(|entry| !matches!(entry, MenuEntry::Separator))
-                    .map(|entry| {
-                        entry.map(&|action| match action {
-                            LayoutAction::Options(options) => Action::Layout(options),
-                            LayoutAction::Merge(side) => Action::Merge(side),
-                        })
-                    })
-                    .collect();
+                return Self::layout_rows(chart, pane);
             };
             let scale = chart.pane_price_scale(pane, key);
             let mut entries = vec![
@@ -176,6 +168,26 @@ impl AxisMenus {
                     scale.bar_ratio_locked(),
                 ),
                 MenuEntry::Separator,
+            ]);
+            if chart.series_pane(SeriesId::MAIN) == Some(pane)
+                && chart.series_scale(SeriesId::MAIN) == Some(key)
+            {
+                let axis = PaneScale::Named(key);
+                entries.extend([
+                    row(
+                        "Place scale on left",
+                        Action::PlaceLeft(true),
+                        chart.pane_scales(pane, AxisSide::Left).contains(&axis),
+                    ),
+                    row(
+                        "Place scale on right",
+                        Action::PlaceLeft(false),
+                        chart.pane_scales(pane, AxisSide::Right).contains(&axis),
+                    ),
+                    MenuEntry::Separator,
+                ]);
+            }
+            entries.extend([
                 row(
                     "Last price label",
                     Action::LastValue,
@@ -200,19 +212,23 @@ impl AxisMenus {
                 row("High and low", Action::HighLow, config.show_high_low),
                 MenuEntry::Separator,
                 row("Scale settings…", Action::Settings, false),
+                MenuEntry::Separator,
             ]);
-            entries.extend(
-                layout_entries(chart.pane_axis_options(pane).unwrap_or_default())
-                    .into_iter()
-                    .map(|entry| {
-                        entry.map(&|action| match action {
-                            LayoutAction::Options(options) => Action::Layout(options),
-                            LayoutAction::Merge(side) => Action::Merge(side),
-                        })
-                    }),
-            );
+            entries.extend(Self::layout_rows(chart, pane));
             entries
         }
+    }
+
+    fn layout_rows(chart: &Chart, pane: PaneId) -> Vec<MenuEntry<Action>> {
+        layout_entries(chart.pane_axis_options(pane).unwrap_or_default())
+            .into_iter()
+            .map(|entry| {
+                entry.map(&|action| match action {
+                    LayoutAction::Options(options) => Action::Layout(options),
+                    LayoutAction::Merge(side) => Action::Merge(side),
+                })
+            })
+            .collect()
     }
 
     pub(super) fn show(&mut self, ctx: &Context, chart: &mut Chart) -> Option<ContextMenuAction> {
@@ -299,6 +315,18 @@ impl AxisMenus {
                             .set_bar_ratio_locked(locked, spacing, height);
                     }
                 }
+                Action::PlaceLeft(left) => {
+                    let options = chart.pane_axis_options(pane).unwrap_or_default();
+                    chart.set_pane_axis_options(
+                        pane,
+                        PaneAxisOptions {
+                            side: None,
+                            ..options
+                        },
+                    );
+                    chart.config_mut().show_left_axis = left;
+                    chart.config_mut().show_right_axis = !left;
+                }
                 Action::Layout(_) | Action::Merge(_) => unreachable!("layout was applied above"),
                 Action::LastValue => {
                     chart.config_mut().show_symbol_last_val = !chart.config().show_symbol_last_val
@@ -342,7 +370,7 @@ pub(super) fn layout_entries(options: PaneAxisOptions) -> Vec<MenuEntry<LayoutAc
         }
         MenuEntry::Item(item)
     };
-    let mut entries = vec![MenuEntry::Separator];
+    let mut entries = Vec::new();
     for (label, side) in [
         ("Axes on left", AxisSide::Left),
         ("Axes on right", AxisSide::Right),
@@ -350,7 +378,7 @@ pub(super) fn layout_entries(options: PaneAxisOptions) -> Vec<MenuEntry<LayoutAc
         entries.push(row(
             label,
             LayoutAction::Options(PaneAxisOptions {
-                side: Some(side),
+                side: (options.side != Some(side)).then_some(side),
                 ..options
             }),
             options.side == Some(side),
@@ -437,5 +465,98 @@ mod tests {
                 "a removed target cannot retain an axis menu"
             );
         }
+    }
+
+    /// The corner under the axis opens no price menu, and only the main series' axis offers
+    /// its own placement.
+    #[test]
+    fn price_menu_follows_axis_rows_and_offers_main_axis_placement() {
+        let ctx = Context::default();
+        let mut chart = crate::widget::test_frames::chart(&[100.0], &[101.0]);
+        chart.config_mut().show_volume = false;
+        chart.add_series(crate::widget::SeriesOptions {
+            scale: crate::model::SeriesScale::Left,
+            ..Default::default()
+        });
+        crate::widget::test_frames::frame(&ctx, &mut chart, 0.0, vec![]);
+        let plot = chart.get_rendered_price_rect();
+        let mut menus = AxisMenus::default();
+        let click = |menus: &mut AxisMenus, chart: &mut Chart, at: f64, pos: Pos2| {
+            for (step, pressed) in [true, false].into_iter().enumerate() {
+                ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0))),
+                        time: Some(at + step as f64 * 0.1),
+                        events: vec![
+                            Event::PointerMoved(pos),
+                            Event::PointerButton {
+                                pos,
+                                button: PointerButton::Secondary,
+                                pressed,
+                                modifiers: Modifiers::NONE,
+                            },
+                        ],
+                        ..Default::default()
+                    },
+                    |ui| {
+                        menus.open_from_pointer(ui.ctx(), chart);
+                        menus.show(ui.ctx(), chart);
+                    },
+                )
+                .drop_without_applying_deltas();
+            }
+        };
+        let x = plot.right() + 8.0;
+        click(
+            &mut menus,
+            &mut chart,
+            0.1,
+            Pos2::new(x, plot.bottom() + 8.0),
+        );
+        assert!(!menus.is_open(), "the corner under the axis");
+        click(&mut menus, &mut chart, 0.4, Pos2::new(x, plot.center().y));
+        assert!(menus.is_open(), "the axis itself");
+
+        let places = |target: PaneScale| {
+            AxisMenus::entries(false, &chart, Some((PaneId::MAIN, target)))
+                .iter()
+                .filter(|entry| {
+                    matches!(entry, MenuEntry::Item(item) if matches!(item.action, Action::PlaceLeft(_)))
+                })
+                .count()
+        };
+        let main = PaneScale::Named(crate::model::SeriesScale::Right);
+        assert_eq!(places(main), 2);
+        assert_eq!(places(PaneScale::Named(crate::model::SeriesScale::Left)), 0);
+    }
+
+    /// Choosing the active side again returns the pane to placement by assignment, the only
+    /// way back in a secondary pane.
+    #[test]
+    fn layout_rows_toggle_the_active_side_off() {
+        let side_after = |options, label: &str| {
+            layout_entries(options)
+                .into_iter()
+                .find_map(|entry| match entry {
+                    MenuEntry::Item(item) if item.label == label => match item.action {
+                        LayoutAction::Options(next) => Some(next.side),
+                        LayoutAction::Merge(_) => None,
+                    },
+                    _ => None,
+                })
+        };
+        let left = PaneAxisOptions {
+            side: Some(AxisSide::Left),
+            ..Default::default()
+        };
+        assert_eq!(side_after(left, "Axes on left"), Some(None));
+        assert_eq!(
+            side_after(left, "Axes on right"),
+            Some(Some(AxisSide::Right))
+        );
+        assert_eq!(
+            side_after(Default::default(), "Axes on left"),
+            Some(Some(AxisSide::Left))
+        );
     }
 }

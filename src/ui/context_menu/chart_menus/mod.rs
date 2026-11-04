@@ -387,7 +387,6 @@ impl ChartMenus {
                 icon: None,
                 entries: super::axis::layout_entries(options)
                     .into_iter()
-                    .filter(|entry| !matches!(entry, MenuEntry::Separator))
                     .map(|entry| {
                         entry.map(&|action| match action {
                             super::axis::LayoutAction::Options(options) => {

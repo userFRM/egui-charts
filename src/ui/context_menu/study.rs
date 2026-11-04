@@ -213,10 +213,10 @@ impl StudyContextMenu {
         self.next_scale = (0..)
             .find(|key| !self.shared_scales.contains(key))
             .unwrap_or(0);
-        self.axis_side = if chart.config().show_right_axis || !chart.config().show_left_axis {
-            "right"
-        } else {
+        self.axis_side = if chart.main_axis_on_left() {
             "left"
+        } else {
+            "right"
         };
         self.panes = other_panes(Some(ctx), chart, chart.series_pane(id));
         self.has_interval = chart.timeframe().is_some();

@@ -862,8 +862,9 @@ impl Chart {
                 .max()
                 .unwrap_or(0) as f32
         };
+        let right_width = self.measured_axis_width.max(self.config.right_axis_width);
         let right_axis =
-            columns(AxisSide::Right) * self.measured_axis_width.max(self.config.right_axis_width);
+            (columns(AxisSide::Right) * right_width).min(right_width.max(available * 0.5));
         let primary_left = self.primary_axis_side() == Some(AxisSide::Left);
         let primary_width = if primary_left {
             self.measured_axis_width.max(self.config.left_axis_width)

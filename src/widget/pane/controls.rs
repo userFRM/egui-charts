@@ -108,7 +108,13 @@ impl Chart {
                             )
                             .clicked()
                         {
-                            chart.place_pane_scales(pane_id, side);
+                            chart.set_pane_axis_options(
+                                pane_id,
+                                crate::model::PaneAxisOptions {
+                                    side: (options.side != Some(side)).then_some(side),
+                                    ..options
+                                },
+                            );
                             ui.close();
                         }
                     }

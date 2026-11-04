@@ -31,7 +31,7 @@ pub enum AxisSide {
 #[serde(default)]
 pub struct PaneAxisOptions {
     /// Override the usual side of every labelled scale. `None` follows scale assignments
-    /// and the chart's axis visibility settings.
+    /// and the chart's axis visibility settings, which can still hide the pane's own axis.
     pub side: Option<AxisSide>,
     /// Omit axes without visible sources, retaining their options for when a source returns.
     /// Enabled by default; a visible source waiting for data still owns its axis.

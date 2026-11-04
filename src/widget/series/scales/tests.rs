@@ -2964,6 +2964,17 @@ fn pane_axis_commands_enumerate_sources_and_restore_layout() {
             PaneScale::Named(SeriesScale::Separate(8)),
         ];
         assert_eq!(chart.pane_scales(pane, AxisSide::Left), left);
+        // Listed axes lead to their scale; absent axes and independent studies have none.
+        assert!(std::ptr::eq(
+            chart.pane_scale(pane, left[0]).unwrap(),
+            chart.series_price_scale(ids[0]).unwrap()
+        ));
+        assert!(
+            chart
+                .pane_scale(pane, PaneScale::Named(SeriesScale::Separate(99)))
+                .is_none()
+        );
+        assert!(chart.pane_scale(pane, PaneScale::Study(ids[0])).is_none());
         assert!(chart.pane_scales(other, AxisSide::Right).is_empty());
         assert!(chart.pane_scales(PaneId(999), AxisSide::Left).is_empty());
         assert!(!chart.place_pane_scales(PaneId(999), AxisSide::Left));
@@ -3142,6 +3153,11 @@ fn pane_axis_commands_enumerate_sources_and_restore_layout() {
                 .set_scale(crate::studies::StudyScale::Shared(key))
         );
         // Hosts can edit a study and save before a frame creates its named scale.
+        assert!(
+            chart
+                .pane_scale(PaneId::MAIN, PaneScale::Named(key))
+                .is_none()
+        );
         let pending = chart.snapshot().unwrap();
         let mut restored = Chart::new(BarData::from_bars(bars(&[100.0; 30])));
         restored.restore(&pending).unwrap();
@@ -3149,7 +3165,9 @@ fn pane_axis_commands_enumerate_sources_and_restore_layout() {
             restored.pane_scales(PaneId::MAIN, AxisSide::Left),
             [PaneScale::Named(key)]
         );
-        let scale = chart.pane_price_scale_mut(PaneId::MAIN, key);
+        let scale = chart
+            .pane_scale_mut(PaneId::MAIN, PaneScale::Named(key))
+            .unwrap();
         scale.set_range(80.0, 120.0);
         scale.set_price_precision(Some(3));
         scale.options_mut().invert_scale = true;
@@ -3171,4 +3189,39 @@ fn pane_axis_commands_enumerate_sources_and_restore_layout() {
             [PaneScale::Named(key)]
         );
     }
+}
+
+/// The main axis reports the width of its placed side, a chart with both price axes off stays
+/// without them after a placement, and own-scale volume never takes an axis of the initial pane.
+#[test]
+fn placed_axes_report_their_side_and_respect_hidden_chart_axes() {
+    use crate::model::AxisSide;
+    use crate::scales::PriceScaleId;
+    let ctx = egui::Context::default();
+    let mut chart = Chart::new(BarData::from_bars(bars(&[100.0; 30])));
+    chart.config.show_volume = false;
+    assert!(chart.place_pane_scales(PaneId::MAIN, AxisSide::Left));
+    frame(&ctx, &mut chart, 0.0, vec![]);
+    assert!(chart.price_axis_width(PriceScaleId::Left) > 0.0);
+    assert_eq!(chart.price_axis_width(PriceScaleId::Right), 0.0);
+    chart.config.show_left_axis = false;
+    chart.config.show_right_axis = false;
+    assert!(chart.pane_scales(PaneId::MAIN, AxisSide::Left).is_empty());
+
+    let mut chart = Chart::new(BarData::from_bars(bars(&[100.0; 30])));
+    chart.config.show_volume = false;
+    chart.add_indicator(Box::new(crate::studies::Volume::new(20)));
+    let other = chart.add_pane();
+    assert!(chart.move_series_to_pane(SeriesId::MAIN, other));
+    assert!(chart.pane_scales(PaneId::MAIN, AxisSide::Right).is_empty());
+    frame(&ctx, &mut chart, 0.1, vec![]);
+    let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 0.2, vec![]);
+    let rows = chart.pane_layout.panes[0].rect.y_range();
+    let plot = chart.get_rendered_price_rect();
+    assert!(
+        !painted.iter().any(|shape| matches!(shape,
+            egui::Shape::Text(text) if text.pos.x > plot.right() && rows.contains(text.pos.y)
+        )),
+        "own-scale volume paints no axis labels"
+    );
 }

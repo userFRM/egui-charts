@@ -1099,6 +1099,32 @@ fn initial_axis_passes_keep_zoom_and_later_measurements_keep_range() {
     assert!((new_width / chart.state.time_scale().bar_spacing() - width / spacing).abs() < 1e-4);
 }
 
+/// Extra columns share at most half of a narrow widget on either edge. Four 70-point columns
+/// need 280 points, so 240 and 320 keep half for the plot and 800 fits all of them.
+#[test]
+fn extra_axis_columns_leave_narrow_plots_half_the_width() {
+    use crate::model::{AxisSide, SeriesScale};
+    use crate::widget::SeriesOptions;
+    for side in [AxisSide::Left, AxisSide::Right] {
+        for (width, plot) in [(240.0, 120.0), (320.0, 160.0), (800.0, 520.0)] {
+            let mut chart = chart(&[100.0], &[110.0]);
+            chart.config.show_volume = false;
+            chart.config.right_axis_width = 70.0;
+            chart.config.left_axis_width = 70.0;
+            for key in 0..3 {
+                chart.add_series(SeriesOptions {
+                    scale: SeriesScale::Separate(key),
+                    ..Default::default()
+                });
+            }
+            assert!(chart.place_pane_scales(crate::widget::PaneId::MAIN, side));
+            let layout = chart
+                .calculate_layout_rects(Rect::from_min_size(Pos2::ZERO, egui::vec2(width, 450.0)));
+            assert_eq!(layout.price_rect.width(), plot, "{side:?} at {width}");
+        }
+    }
+}
+
 #[test]
 fn plot_uses_the_interior_and_configured_axis_widths() {
     for (width, height, padding, left, right, studies, left_gutter) in [

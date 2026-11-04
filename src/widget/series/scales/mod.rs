@@ -188,6 +188,37 @@ impl Chart {
             .collect()
     }
 
+    /// The scale behind an axis of [`Self::pane_scales`]. `None` for an axis the pane does not
+    /// display, an independent study, which maps itself, or a study assignment before the
+    /// frame that creates its scale.
+    pub fn pane_scale(&self, pane: PaneId, axis: crate::widget::PaneScale) -> Option<&PriceScale> {
+        let crate::widget::PaneScale::Named(key) = axis else {
+            return None;
+        };
+        if !self.pane_scale_keys(pane).contains(&axis) {
+            None
+        } else if pane == PaneId::MAIN && key != self.main_series_scale {
+            self.series_scales.get(&key)
+        } else {
+            Some(self.pane_price_scale(pane, key))
+        }
+    }
+
+    /// Changes options or a manual range on the scale behind an axis of [`Self::pane_scales`].
+    /// `None` for an axis the pane does not display or an independent study, which maps itself.
+    pub fn pane_scale_mut(
+        &mut self,
+        pane: PaneId,
+        axis: crate::widget::PaneScale,
+    ) -> Option<&mut PriceScale> {
+        let crate::widget::PaneScale::Named(key) = axis else {
+            return None;
+        };
+        self.pane_scale_keys(pane)
+            .contains(&axis)
+            .then(|| self.pane_price_scale_mut(pane, key))
+    }
+
     fn pane_scale_keys(&self, pane: PaneId) -> Vec<crate::widget::PaneScale> {
         use crate::widget::PaneScale;
         let Some(options) = self.pane_axis_options(pane) else {
@@ -247,7 +278,7 @@ impl Chart {
             {
                 Some(PaneScale::Study(id))
             }
-            _ if main && study.is_volume() => None,
+            _ if (main || pane == PaneId::MAIN) && study.is_volume() => None,
             _ => Some(PaneScale::Named(if main {
                 self.main_series_scale
             } else {
@@ -263,34 +294,36 @@ impl Chart {
     ) -> Option<crate::model::AxisSide> {
         use crate::model::AxisSide;
         use crate::widget::PaneScale;
-        if let Some(side) = self.pane_axis_options(pane)?.side {
-            return Some(side);
-        }
-        let primary = if pane == self.main_series_pane() {
+        let side = self.pane_axis_options(pane)?.side;
+        let primary = PaneScale::Named(if pane == self.main_series_pane() {
             self.main_series_scale
         } else {
             SeriesScale::Right
-        };
-        if key == PaneScale::Named(primary) {
-            if self.config.show_right_axis {
-                Some(AxisSide::Right)
-            } else if self.config.show_left_axis {
-                Some(AxisSide::Left)
-            } else {
-                None
-            }
-        } else if matches!(key, PaneScale::Study(_))
+        });
+        if (key == primary || matches!(key, PaneScale::Study(_)))
             && !self.config.show_left_axis
             && !self.config.show_right_axis
         {
-            None
-        } else {
-            Some(if key == PaneScale::Named(SeriesScale::Right) {
-                AxisSide::Right
-            } else {
-                AxisSide::Left
-            })
+            return None;
         }
+        let right = if key == primary {
+            self.config.show_right_axis
+        } else {
+            key == PaneScale::Named(SeriesScale::Right)
+        };
+        Some(side.unwrap_or(if right {
+            AxisSide::Right
+        } else {
+            AxisSide::Left
+        }))
+    }
+
+    /// Whether the main series' axis is placed at the left edge, even while it is hidden.
+    pub(crate) fn main_axis_on_left(&self) -> bool {
+        self.pane_scale_side(
+            self.main_series_pane(),
+            crate::widget::PaneScale::Named(self.main_series_scale),
+        ) == Some(crate::model::AxisSide::Left)
     }
 
     pub(in crate::widget) fn pane_scale_axes(
