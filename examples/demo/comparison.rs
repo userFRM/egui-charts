@@ -1208,8 +1208,26 @@ mod tests {
         let ids: Vec<_> = app.chart.series().map(|(id, _)| id).collect();
         check(&app);
         for id in ids {
+            // Selecting a row keeps the view; zooming brings the latest bars of the series back.
+            let bars = app.chart.bars(*id);
+            let (earlier, latest) = (bars[bars.len() / 2].time, bars[bars.len() - 1].time);
+            let settle_view = |app: &mut DemoApp| {
+                for _ in 0..3 {
+                    super::super::tests::ui_frame(&ctx, egui::vec2(1440.0, 900.0), vec![], |ui| {
+                        app.chart.show(ui);
+                    });
+                }
+                app.chart.visible_time_range().unwrap()
+            };
+            app.chart.scroll_to_time(earlier);
+            let before = settle_view(&mut app);
+            assert!(before.to < latest);
+            let sources = app.build_source_items();
+            app.handle_object_tree(A::Select(row), &sources);
+            assert_eq!(settle_view(&mut app).to, before.to);
             let sources = app.build_source_items();
             app.handle_object_tree(A::Delete(super::super::indicator_tree_id(id)), &sources);
+            assert!(settle_view(&mut app).to >= latest);
             assert!(app.chart.series_order(id).is_none());
             check(&app);
             assert!(app.chart.undo());
@@ -1221,6 +1239,15 @@ mod tests {
         assert_eq!(app.chart.series().count(), 3);
         check(&app);
     }
+        // Rows follow the draw order of their pane, whichever series moved.
+        let main = super::super::MAIN_SERIES_ID;
+        let sources = app.build_source_items();
+        app.handle_object_tree(A::BringToFront(main), &sources);
+        let layer = |app: &DemoApp, id| {
+            let rows = app.build_source_items();
+            rows.iter().find(|item| item.id == id).unwrap().z_index
+        };
+        assert!(layer(&app, main) > layer(&app, row));
 
     /// Pointer frames keep loaded comparisons intact; trades and view changes still refresh
     /// their bars, and a history restore that cleared the bars loads them again.

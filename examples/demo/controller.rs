@@ -2440,7 +2440,6 @@ impl DemoApp {
                 SourceItem::data_source(indicator_tree_id(id), &options.name).with_series_id(id);
             item.visible = self.chart.is_series_visible(id);
             item.color = options.color;
-            item.z_index = self.chart.series_order(id).unwrap_or(0) as i32;
             items.push(item);
         }
 
@@ -2451,10 +2450,11 @@ impl DemoApp {
                 panes
                     .iter()
                     .position(|pane| Some(*pane) == self.chart.series_pane(id)),
-                self.chart.series_order(id),
+                std::cmp::Reverse(self.chart.series_order(id)),
             )
         });
 
+        // The tree lists higher layers first, so each pane reads from its front series to its back.
         // Live indicators.
         for (id, ind) in self.chart.indicators() {
             let color = ind.colors().first().copied().unwrap_or(egui::Color32::GRAY);
@@ -2465,6 +2465,10 @@ impl DemoApp {
         }
 
         // Live drawings.
+        let rows = items.len() as i32;
+        for (row, item) in (0..).zip(&mut items) {
+            item.z_index = rows - row;
+        }
         for d in self.chart.drawings().listed_drawings() {
             let mut item =
                 SourceItem::drawing(d.id, d.tool_type, d.color32()).with_panes(&self.chart);

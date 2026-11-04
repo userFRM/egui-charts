@@ -109,14 +109,6 @@ impl ObjectTreePanel {
                     chart.reveal_drawing(*id);
                 } else {
                     chart.drawings_mut().deselect();
-                    if let Some(id) = sources
-                        .iter()
-                        .find(|s| s.id == *id && is_added_series(s))
-                        .and_then(|s| s.series_id)
-                        && let Some(time) = chart.bars(id).last().map(|bar| bar.time)
-                    {
-                        chart.scroll_to_time(time);
-                    }
                 }
             }
             ObjectTreeAction::ClearSelection => {
@@ -172,7 +164,7 @@ impl ObjectTreePanel {
                 let Some(source) = sources.iter().find(|s| s.id == *id) else {
                     return false;
                 };
-                if !source.is_drawing() && !source.is_indicator() && !is_added_series(source) {
+                if !source.is_drawing() && !source.is_indicator() && !source.is_added_series() {
                     return false;
                 }
                 delete(chart, source);
@@ -258,7 +250,7 @@ impl ObjectTreePanel {
             ObjectTreeAction::ZoomTo(id) => {
                 if let Some(series) = sources
                     .iter()
-                    .find(|s| s.id == *id && s.source_type == SourceType::DataSource)
+                    .find(|s| s.id == *id && s.is_added_series())
                     .and_then(|s| s.series_id)
                 {
                     if let Some(time) = chart.bars(series).last().map(|bar| bar.time) {
@@ -295,7 +287,7 @@ fn set_visible(chart: &mut Chart, source: &SourceItem, visible: bool) -> bool {
     if source.source_type == SourceType::DataSource && source.series_id == Some(SeriesId::MAIN) {
         chart.set_main_series_visible(visible);
         true
-    } else if is_added_series(source) {
+    } else if source.is_added_series() {
         source
             .series_id
             .is_some_and(|id| chart.set_series_visible(id, visible))
@@ -313,13 +305,8 @@ fn set_visible(chart: &mut Chart, source: &SourceItem, visible: bool) -> bool {
     }
 }
 
-fn is_added_series(source: &SourceItem) -> bool {
-    source.source_type == SourceType::DataSource
-        && source.series_id.is_some_and(|id| id != SeriesId::MAIN)
-}
-
 fn delete(chart: &mut Chart, source: &SourceItem) {
-    if source.is_indicator() || is_added_series(source) {
+    if source.is_indicator() || source.is_added_series() {
         if let Some(id) = source.series_id {
             chart.remove_series(id);
         }

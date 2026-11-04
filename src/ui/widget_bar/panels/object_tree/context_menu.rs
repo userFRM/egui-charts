@@ -64,7 +64,7 @@ pub(super) fn render_item_menu(
     }
 
     // Rename
-    if (item.is_drawing() || bar_series)
+    if item.is_drawing()
         && ui
             .selectable_label(false, l10n::text(ui.ctx(), "Rename…"))
             .clicked()
@@ -159,7 +159,7 @@ pub(super) fn render_item_menu(
     ui.separator();
 
     // Zoom to
-    if item.is_drawing()
+    if (item.is_drawing() || item.is_added_series())
         && ui
             .selectable_label(false, l10n::text(ui.ctx(), "Zoom to object"))
             .clicked()
@@ -176,10 +176,7 @@ pub(super) fn render_item_menu(
     } else {
         "Delete"
     };
-    if (item.source_type != SourceType::DataSource
-        || item
-            .series_id
-            .is_some_and(|id| id != crate::widget::SeriesId::MAIN))
+    if (item.source_type != SourceType::DataSource || item.is_added_series())
         && ui
             .selectable_label(false, l10n::text(ui.ctx(), delete_label))
             .clicked()

@@ -304,6 +304,14 @@ impl SourceItem {
         self.source_type == SourceType::Drawing
     }
 
+    /// Check if this is a bar series added to the chart, not the main series
+    pub(super) fn is_added_series(&self) -> bool {
+        self.source_type == SourceType::DataSource
+            && self
+                .series_id
+                .is_some_and(|id| id != crate::widget::SeriesId::MAIN)
+    }
+
     /// Check if this is an indicator
     pub fn is_indicator(&self) -> bool {
         self.source_type == SourceType::Indicator
