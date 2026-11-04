@@ -1413,9 +1413,13 @@ mod tests {
     #[test]
     fn paper_account_resets_on_replay_start_and_rewind_but_not_forward_steps() {
         let ctx = egui::Context::default();
-        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        // The recorded-execution assertions need an open session, regardless of wall time.
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2024-03-15T16:30:00Z".parse().unwrap(),
+            true,
+        );
         super::super::tests::settle(&mut app, &ctx);
-        app.live.set_paused(true);
         for _ in 0..4 {
             ctx.run_ui(
                 egui::RawInput {
