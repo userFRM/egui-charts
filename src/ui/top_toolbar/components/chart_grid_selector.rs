@@ -46,7 +46,7 @@ impl ChartGridSelector {
     pub fn show(&mut self, ui: &mut Ui) -> Option<ChartLayoutMode> {
         // Sized and labelled like the toolbar buttons beside it, with their tooltip.
         let button = ToolbarIconButton::new(
-            layout_icon(self.current),
+            &layout_icon(self.current),
             "Chart layout",
             &TopToolbarConfig::default(),
         )
@@ -262,50 +262,110 @@ fn sync_switch(ui: &mut Ui, on: &mut bool, label: &str, effect: &str) {
 }
 
 /// The glyph of `layout` on the trigger and in the menu: its cells, as the layout tiles the charts.
-fn layout_icon(layout: ChartLayoutMode) -> &'static Icon {
+fn layout_icon(layout: ChartLayoutMode) -> Icon {
     use ChartLayoutMode as M;
     match layout {
-        M::Single => &icons::LAYOUT_SINGLE,
-        M::TwoHorizontal => &icons::LAYOUT_TWO_HORIZONTAL,
-        M::TwoVertical => &icons::LAYOUT_TWO_VERTICAL,
-        M::Three => &icons::LAYOUT_THREE,
-        M::ThreeHorizontal => &icons::LAYOUT_THREE_HORIZONTAL,
-        M::ThreeVertical => &icons::LAYOUT_THREE_VERTICAL,
-        M::ThreeLargeLeft => &icons::LAYOUT_THREE_LARGE_LEFT,
-        M::ThreeLargeRight => &icons::LAYOUT_THREE_LARGE_RIGHT,
-        M::ThreeLargeTop => &icons::LAYOUT_THREE_LARGE_TOP,
-        M::Four => &icons::LAYOUT_FOUR,
-        M::FourHorizontal => &icons::LAYOUT_FOUR_HORIZONTAL,
-        M::FourVertical => &icons::LAYOUT_FOUR_VERTICAL,
-        M::FourLargeLeft => &icons::LAYOUT_FOUR_LARGE_LEFT,
-        M::FourLargeRight => &icons::LAYOUT_FOUR_LARGE_RIGHT,
-        M::FourLargeTop => &icons::LAYOUT_FOUR_LARGE_TOP,
-        M::FourLargeBottom => &icons::LAYOUT_FOUR_LARGE_BOTTOM,
-        M::Five => &icons::LAYOUT_FIVE,
-        M::FiveHorizontal => &icons::LAYOUT_FIVE_HORIZONTAL,
-        M::FiveVertical => &icons::LAYOUT_FIVE_VERTICAL,
-        M::FiveLargeLeft => &icons::LAYOUT_FIVE_LARGE_LEFT,
-        M::FiveLargeRight => &icons::LAYOUT_FIVE_LARGE_RIGHT,
-        M::FiveLargeTop => &icons::LAYOUT_FIVE_LARGE_TOP,
-        M::FiveLargeBottom => &icons::LAYOUT_FIVE_LARGE_BOTTOM,
-        M::Six => &icons::LAYOUT_SIX,
-        M::SixHorizontal => &icons::LAYOUT_SIX_HORIZONTAL,
-        M::SixVertical => &icons::LAYOUT_SIX_VERTICAL,
-        M::SixLargeLeft => &icons::LAYOUT_SIX_LARGE_LEFT,
-        M::SixLargeRight => &icons::LAYOUT_SIX_LARGE_RIGHT,
-        M::SixLargeTop => &icons::LAYOUT_SIX_LARGE_TOP,
-        M::SixLargeBottom => &icons::LAYOUT_SIX_LARGE_BOTTOM,
-        M::Seven => &icons::LAYOUT_SEVEN,
-        M::Eight => &icons::LAYOUT_EIGHT,
-        M::Nine => &icons::LAYOUT_NINE,
-        M::Ten => &icons::LAYOUT_TEN,
-        M::Eleven => &icons::LAYOUT_ELEVEN,
-        M::Twelve => &icons::LAYOUT_TWELVE,
-        M::Thirteen => &icons::LAYOUT_THIRTEEN,
-        M::Fourteen => &icons::LAYOUT_FOURTEEN,
-        M::Fifteen => &icons::LAYOUT_FIFTEEN,
-        M::Sixteen => &icons::LAYOUT_SIXTEEN,
-        M::Tabs => &icons::LAYOUT_TABS,
+        M::Single => icons::LAYOUT_SINGLE,
+        M::TwoHorizontal => icons::LAYOUT_TWO_HORIZONTAL,
+        M::TwoVertical => icons::LAYOUT_TWO_VERTICAL,
+        M::Three => icons::LAYOUT_THREE,
+        M::ThreeHorizontal => icons::LAYOUT_THREE_HORIZONTAL,
+        M::ThreeVertical => icons::LAYOUT_THREE_VERTICAL,
+        M::ThreeLargeLeft => icons::LAYOUT_THREE_LARGE_LEFT,
+        M::ThreeLargeRight => icons::LAYOUT_THREE_LARGE_RIGHT,
+        M::ThreeLargeTop => icons::LAYOUT_THREE_LARGE_TOP,
+        M::Four => icons::LAYOUT_FOUR,
+        M::FourHorizontal => icons::LAYOUT_FOUR_HORIZONTAL,
+        M::FourVertical => icons::LAYOUT_FOUR_VERTICAL,
+        M::FourLargeLeft => icons::LAYOUT_FOUR_LARGE_LEFT,
+        M::FourLargeRight => icons::LAYOUT_FOUR_LARGE_RIGHT,
+        M::FourLargeTop => icons::LAYOUT_FOUR_LARGE_TOP,
+        M::FourLargeBottom => icons::LAYOUT_FOUR_LARGE_BOTTOM,
+        M::Five => icons::LAYOUT_FIVE,
+        M::FiveHorizontal => icons::LAYOUT_FIVE_HORIZONTAL,
+        M::FiveVertical => icons::LAYOUT_FIVE_VERTICAL,
+        M::FiveLargeLeft => icons::LAYOUT_FIVE_LARGE_LEFT,
+        M::FiveLargeRight => icons::LAYOUT_FIVE_LARGE_RIGHT,
+        M::FiveLargeTop => icons::LAYOUT_FIVE_LARGE_TOP,
+        M::FiveLargeBottom => icons::LAYOUT_FIVE_LARGE_BOTTOM,
+        M::Six => icons::LAYOUT_SIX,
+        M::SixTwoColumns => Icon::new(
+            "chart-grid-2x3.svg",
+            br##"<svg xmlns="http://www.w3.org/2000/svg" color="#fff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3.75" y="5.25" width="16.5" height="13.5" rx=".75"/><path d="M12 5.25v13.5M3.75 9.75h16.5M3.75 14.25h16.5"/></svg>"##,
+        ),
+        M::SixHorizontal => icons::LAYOUT_SIX_HORIZONTAL,
+        M::SixVertical => icons::LAYOUT_SIX_VERTICAL,
+        M::SixLargeLeft => icons::LAYOUT_SIX_LARGE_LEFT,
+        M::SixLargeRight => icons::LAYOUT_SIX_LARGE_RIGHT,
+        M::SixLargeTop => icons::LAYOUT_SIX_LARGE_TOP,
+        M::SixLargeBottom => icons::LAYOUT_SIX_LARGE_BOTTOM,
+        M::Seven => icons::LAYOUT_SEVEN,
+        M::SevenHorizontal => Icon::new(
+            "chart-grid-7x1.svg",
+            br##"<svg xmlns="http://www.w3.org/2000/svg" color="#fff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3.75" y="5.25" width="16.5" height="13.5" rx=".75"/><path d="M6.10714 5.25v13.5M8.46429 5.25v13.5M10.8214 5.25v13.5M13.1786 5.25v13.5M15.5357 5.25v13.5M17.8929 5.25v13.5"/></svg>"##,
+        ),
+        M::Eight => icons::LAYOUT_EIGHT,
+        M::EightVertical => Icon::new(
+            "chart-grid-1x8.svg",
+            br##"<svg xmlns="http://www.w3.org/2000/svg" color="#fff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3.75" y="5.25" width="16.5" height="13.5" rx=".75"/><path d="M3.75 6.9375h16.5M3.75 8.625h16.5M3.75 10.3125h16.5M3.75 12h16.5M3.75 13.6875h16.5M3.75 15.375h16.5M3.75 17.0625h16.5"/></svg>"##,
+        ),
+        M::EightTwoColumns => Icon::new(
+            "chart-grid-2x4.svg",
+            br##"<svg xmlns="http://www.w3.org/2000/svg" color="#fff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3.75" y="5.25" width="16.5" height="13.5" rx=".75"/><path d="M12 5.25v13.5M3.75 8.625h16.5M3.75 12h16.5M3.75 15.375h16.5"/></svg>"##,
+        ),
+        M::EightHorizontal => Icon::new(
+            "chart-grid-8x1.svg",
+            br##"<svg xmlns="http://www.w3.org/2000/svg" color="#fff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3.75" y="5.25" width="16.5" height="13.5" rx=".75"/><path d="M5.8125 5.25v13.5M7.875 5.25v13.5M9.9375 5.25v13.5M12 5.25v13.5M14.0625 5.25v13.5M16.125 5.25v13.5M18.1875 5.25v13.5"/></svg>"##,
+        ),
+        M::Nine => icons::LAYOUT_NINE,
+        M::NineVertical => Icon::new(
+            "chart-grid-1x9.svg",
+            br##"<svg xmlns="http://www.w3.org/2000/svg" color="#fff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3.75" y="5.25" width="16.5" height="13.5" rx=".75"/><path d="M3.75 6.75h16.5M3.75 8.25h16.5M3.75 9.75h16.5M3.75 11.25h16.5M3.75 12.75h16.5M3.75 14.25h16.5M3.75 15.75h16.5M3.75 17.25h16.5"/></svg>"##,
+        ),
+        M::NineHorizontal => Icon::new(
+            "chart-grid-9x1.svg",
+            br##"<svg xmlns="http://www.w3.org/2000/svg" color="#fff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3.75" y="5.25" width="16.5" height="13.5" rx=".75"/><path d="M5.58333 5.25v13.5M7.41667 5.25v13.5M9.25 5.25v13.5M11.0833 5.25v13.5M12.9167 5.25v13.5M14.75 5.25v13.5M16.5833 5.25v13.5M18.4167 5.25v13.5"/></svg>"##,
+        ),
+        M::Ten => icons::LAYOUT_TEN,
+        M::TenHorizontal => Icon::new(
+            "chart-grid-10x1.svg",
+            br##"<svg xmlns="http://www.w3.org/2000/svg" color="#fff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3.75" y="5.25" width="16.5" height="13.5" rx=".75"/><path d="M5.4 5.25v13.5M7.05 5.25v13.5M8.7 5.25v13.5M10.35 5.25v13.5M12 5.25v13.5M13.65 5.25v13.5M15.3 5.25v13.5M16.95 5.25v13.5M18.6 5.25v13.5"/></svg>"##,
+        ),
+        M::TenVertical => Icon::new(
+            "chart-grid-1x10.svg",
+            br##"<svg xmlns="http://www.w3.org/2000/svg" color="#fff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3.75" y="5.25" width="16.5" height="13.5" rx=".75"/><path d="M3.75 6.6h16.5M3.75 7.95h16.5M3.75 9.3h16.5M3.75 10.65h16.5M3.75 12h16.5M3.75 13.35h16.5M3.75 14.7h16.5M3.75 16.05h16.5M3.75 17.4h16.5"/></svg>"##,
+        ),
+        M::TenFiveColumns => Icon::new(
+            "chart-grid-5x2.svg",
+            br##"<svg xmlns="http://www.w3.org/2000/svg" color="#fff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3.75" y="5.25" width="16.5" height="13.5" rx=".75"/><path d="M7.05 5.25v13.5M10.35 5.25v13.5M13.65 5.25v13.5M16.95 5.25v13.5M3.75 12h16.5"/></svg>"##,
+        ),
+        M::Eleven => icons::LAYOUT_ELEVEN,
+        M::Twelve => icons::LAYOUT_TWELVE,
+        M::TwelveHorizontal => Icon::new(
+            "chart-grid-12x1.svg",
+            br##"<svg xmlns="http://www.w3.org/2000/svg" color="#fff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3.75" y="5.25" width="16.5" height="13.5" rx=".75"/><path d="M5.125 5.25v13.5M6.5 5.25v13.5M7.875 5.25v13.5M9.25 5.25v13.5M10.625 5.25v13.5M12 5.25v13.5M13.375 5.25v13.5M14.75 5.25v13.5M16.125 5.25v13.5M17.5 5.25v13.5M18.875 5.25v13.5"/></svg>"##,
+        ),
+        M::TwelveThreeColumns => Icon::new(
+            "chart-grid-3x4.svg",
+            br##"<svg xmlns="http://www.w3.org/2000/svg" color="#fff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3.75" y="5.25" width="16.5" height="13.5" rx=".75"/><path d="M9.25 5.25v13.5M14.75 5.25v13.5M3.75 8.625h16.5M3.75 12h16.5M3.75 15.375h16.5"/></svg>"##,
+        ),
+        M::TwelveSixColumns => Icon::new(
+            "chart-grid-6x2.svg",
+            br##"<svg xmlns="http://www.w3.org/2000/svg" color="#fff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3.75" y="5.25" width="16.5" height="13.5" rx=".75"/><path d="M6.5 5.25v13.5M9.25 5.25v13.5M12 5.25v13.5M14.75 5.25v13.5M17.5 5.25v13.5M3.75 12h16.5"/></svg>"##,
+        ),
+        M::Thirteen => icons::LAYOUT_THIRTEEN,
+        M::Fourteen => icons::LAYOUT_FOURTEEN,
+        M::FourteenSevenColumns => Icon::new(
+            "chart-grid-7x2.svg",
+            br##"<svg xmlns="http://www.w3.org/2000/svg" color="#fff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3.75" y="5.25" width="16.5" height="13.5" rx=".75"/><path d="M6.10714 5.25v13.5M8.46429 5.25v13.5M10.8214 5.25v13.5M13.1786 5.25v13.5M15.5357 5.25v13.5M17.8929 5.25v13.5M3.75 12h16.5"/></svg>"##,
+        ),
+        M::Fifteen => icons::LAYOUT_FIFTEEN,
+        M::Sixteen => icons::LAYOUT_SIXTEEN,
+        M::SixteenEightColumns => Icon::new(
+            "chart-grid-8x2.svg",
+            br##"<svg xmlns="http://www.w3.org/2000/svg" color="#fff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3.75" y="5.25" width="16.5" height="13.5" rx=".75"/><path d="M5.8125 5.25v13.5M7.875 5.25v13.5M9.9375 5.25v13.5M12 5.25v13.5M14.0625 5.25v13.5M16.125 5.25v13.5M18.1875 5.25v13.5M3.75 12h16.5"/></svg>"##,
+        ),
+        M::Tabs => icons::LAYOUT_TABS,
     }
 }
 
@@ -317,6 +377,58 @@ mod tests {
         Harness,
         kittest::{NodeT, Queryable},
     };
+
+    /// Each regular arrangement is reachable by its own menu item and returns its saved preset.
+    #[test]
+    fn regular_arrangements_select_their_saved_preset() {
+        for width in [320.0, 1440.0] {
+            let mut harness = Harness::builder()
+                .with_size(egui::vec2(width, 900.0))
+                .with_context_setup(|ctx| {
+                    egui_extras::install_image_loaders(ctx);
+                    crate::theme::apply_to_egui(ctx, &crate::theme::Theme::light());
+                })
+                .build_ui_state(
+                    |ui, state: &mut (ChartGridSelector, Option<ChartLayoutMode>)| {
+                        if let Some(selected) = state.0.show(ui) {
+                            state.1 = Some(selected);
+                        }
+                    },
+                    (ChartGridSelector::default(), None),
+                );
+            for (label, name) in [
+                ("2x3 Grid", "SixTwoColumns"),
+                ("7 Horizontal", "SevenHorizontal"),
+                ("8 Vertical", "EightVertical"),
+                ("2x4 Grid", "EightTwoColumns"),
+                ("8 Horizontal", "EightHorizontal"),
+                ("9 Vertical", "NineVertical"),
+                ("9 Horizontal", "NineHorizontal"),
+                ("10 Horizontal", "TenHorizontal"),
+                ("10 Vertical", "TenVertical"),
+                ("5x2 Grid", "TenFiveColumns"),
+                ("12 Horizontal", "TwelveHorizontal"),
+                ("3x4 Grid", "TwelveThreeColumns"),
+                ("6x2 Grid", "TwelveSixColumns"),
+                ("7x2 Grid", "FourteenSevenColumns"),
+                ("8x2 Grid", "SixteenEightColumns"),
+            ] {
+                harness.state_mut().1 = None;
+                harness
+                    .get_by_role_and_label(Role::Button, "Chart layout")
+                    .click();
+                harness.run();
+                harness
+                    .get_by_role_and_label(Role::MenuItemRadio, label)
+                    .click();
+                harness.run();
+                let state = harness.state();
+                assert_eq!(serde_json::to_value(state.0.current()).unwrap(), name);
+                assert_eq!(state.1, Some(state.0.current()), "{label}, width {width}");
+                assert!(harness.query_by_role(Role::MenuItemRadio).is_none());
+            }
+        }
+    }
 
     /// Clicking a synchronization switch changes that option alone, and the menu stays open on the
     /// switch's new state.
