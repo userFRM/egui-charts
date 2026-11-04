@@ -289,6 +289,7 @@ fn layout_icon(layout: ChartLayoutMode) -> &'static Icon {
         M::FiveLargeTop => &icons::LAYOUT_FIVE_LARGE_TOP,
         M::FiveLargeBottom => &icons::LAYOUT_FIVE_LARGE_BOTTOM,
         M::Six => &icons::LAYOUT_SIX,
+        M::SixTwoColumns => &icons::LAYOUT_SIX_TWO_COLUMNS,
         M::SixHorizontal => &icons::LAYOUT_SIX_HORIZONTAL,
         M::SixVertical => &icons::LAYOUT_SIX_VERTICAL,
         M::SixLargeLeft => &icons::LAYOUT_SIX_LARGE_LEFT,
@@ -296,15 +297,29 @@ fn layout_icon(layout: ChartLayoutMode) -> &'static Icon {
         M::SixLargeTop => &icons::LAYOUT_SIX_LARGE_TOP,
         M::SixLargeBottom => &icons::LAYOUT_SIX_LARGE_BOTTOM,
         M::Seven => &icons::LAYOUT_SEVEN,
+        M::SevenHorizontal => &icons::LAYOUT_SEVEN_HORIZONTAL,
         M::Eight => &icons::LAYOUT_EIGHT,
+        M::EightVertical => &icons::LAYOUT_EIGHT_VERTICAL,
+        M::EightTwoColumns => &icons::LAYOUT_EIGHT_TWO_COLUMNS,
+        M::EightHorizontal => &icons::LAYOUT_EIGHT_HORIZONTAL,
         M::Nine => &icons::LAYOUT_NINE,
+        M::NineVertical => &icons::LAYOUT_NINE_VERTICAL,
+        M::NineHorizontal => &icons::LAYOUT_NINE_HORIZONTAL,
         M::Ten => &icons::LAYOUT_TEN,
+        M::TenHorizontal => &icons::LAYOUT_TEN_HORIZONTAL,
+        M::TenVertical => &icons::LAYOUT_TEN_VERTICAL,
+        M::TenFiveColumns => &icons::LAYOUT_TEN_FIVE_COLUMNS,
         M::Eleven => &icons::LAYOUT_ELEVEN,
         M::Twelve => &icons::LAYOUT_TWELVE,
+        M::TwelveHorizontal => &icons::LAYOUT_TWELVE_HORIZONTAL,
+        M::TwelveThreeColumns => &icons::LAYOUT_TWELVE_THREE_COLUMNS,
+        M::TwelveSixColumns => &icons::LAYOUT_TWELVE_SIX_COLUMNS,
         M::Thirteen => &icons::LAYOUT_THIRTEEN,
         M::Fourteen => &icons::LAYOUT_FOURTEEN,
+        M::FourteenSevenColumns => &icons::LAYOUT_FOURTEEN_SEVEN_COLUMNS,
         M::Fifteen => &icons::LAYOUT_FIFTEEN,
         M::Sixteen => &icons::LAYOUT_SIXTEEN,
+        M::SixteenEightColumns => &icons::LAYOUT_SIXTEEN_EIGHT_COLUMNS,
         M::Tabs => &icons::LAYOUT_TABS,
     }
 }
@@ -317,6 +332,58 @@ mod tests {
         Harness,
         kittest::{NodeT, Queryable},
     };
+
+    /// Each regular arrangement is reachable by its own menu item and returns its saved preset.
+    #[test]
+    fn regular_arrangements_select_their_saved_preset() {
+        for width in [320.0, 1440.0] {
+            let mut harness = Harness::builder()
+                .with_size(egui::vec2(width, 900.0))
+                .with_context_setup(|ctx| {
+                    egui_extras::install_image_loaders(ctx);
+                    crate::theme::apply_to_egui(ctx, &crate::theme::Theme::light());
+                })
+                .build_ui_state(
+                    |ui, state: &mut (ChartGridSelector, Option<ChartLayoutMode>)| {
+                        if let Some(selected) = state.0.show(ui) {
+                            state.1 = Some(selected);
+                        }
+                    },
+                    (ChartGridSelector::default(), None),
+                );
+            for (label, name) in [
+                ("2x3 Grid", "SixTwoColumns"),
+                ("7 Horizontal", "SevenHorizontal"),
+                ("8 Vertical", "EightVertical"),
+                ("2x4 Grid", "EightTwoColumns"),
+                ("8 Horizontal", "EightHorizontal"),
+                ("9 Vertical", "NineVertical"),
+                ("9 Horizontal", "NineHorizontal"),
+                ("10 Horizontal", "TenHorizontal"),
+                ("10 Vertical", "TenVertical"),
+                ("5x2 Grid", "TenFiveColumns"),
+                ("12 Horizontal", "TwelveHorizontal"),
+                ("3x4 Grid", "TwelveThreeColumns"),
+                ("6x2 Grid", "TwelveSixColumns"),
+                ("7x2 Grid", "FourteenSevenColumns"),
+                ("8x2 Grid", "SixteenEightColumns"),
+            ] {
+                harness.state_mut().1 = None;
+                harness
+                    .get_by_role_and_label(Role::Button, "Chart layout")
+                    .click();
+                harness.run();
+                harness
+                    .get_by_role_and_label(Role::MenuItemRadio, label)
+                    .click();
+                harness.run();
+                let state = harness.state();
+                assert_eq!(serde_json::to_value(state.0.current()).unwrap(), name);
+                assert_eq!(state.1, Some(state.0.current()), "{label}, width {width}");
+                assert!(harness.query_by_role(Role::MenuItemRadio).is_none());
+            }
+        }
+    }
 
     /// Clicking a synchronization switch changes that option alone, and the menu stays open on the
     /// switch's new state.
