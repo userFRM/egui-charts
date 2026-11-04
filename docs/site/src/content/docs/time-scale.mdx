@@ -24,7 +24,8 @@ Call the scene's `show(ui, &mut chart)` before `chart.show(ui)` on each frame.
 ## Fit and scroll
 
 [`fit_content`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.fit_content)
-fits the stored history and keeps the configured right margin.
+fits the stored history of the main series and of every added series, hidden ones included,
+and keeps the configured right margin.
 [`scroll_to_position`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.scroll_to_position)
 positions the latest bar relative to the right edge in bars: positive positions
 leave space on the right, negative positions scroll into history.

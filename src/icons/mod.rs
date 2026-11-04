@@ -486,6 +486,13 @@ pub mod icons {
     /// Three charts side by side in the top half, one in the bottom half.
     pub const LAYOUT_FOUR_LARGE_BOTTOM: Icon =
         crate::icon_from_path!("ui/layout-4-large-bottom.svg");
+    /// Two columns in the left half, two rows in the right half.
+    pub const LAYOUT_FOUR_SPLIT_LEFT: Icon = crate::icon_from_path!("ui/layout-4-split-left.svg");
+    /// Two rows in the left half, two columns in the right half.
+    pub const LAYOUT_FOUR_SPLIT_RIGHT: Icon = crate::icon_from_path!("ui/layout-4-split-right.svg");
+    /// Two columns in the top half, two rows in the bottom half.
+    pub const LAYOUT_FOUR_SPLIT_BOTTOM: Icon =
+        crate::icon_from_path!("ui/layout-4-split-bottom.svg");
     /// Layout five SVG icon.
     pub const LAYOUT_FIVE: Icon = crate::icon_from_path!("ui/layout-5.svg");
     /// Five columns.
@@ -501,6 +508,12 @@ pub mod icons {
     /// Four charts side by side in the top half, one in the bottom half.
     pub const LAYOUT_FIVE_LARGE_BOTTOM: Icon =
         crate::icon_from_path!("ui/layout-5-large-bottom.svg");
+    /// Two columns in the left half, three rows in the right half.
+    pub const LAYOUT_FIVE_SPLIT_LEFT: Icon = crate::icon_from_path!("ui/layout-5-split-left.svg");
+    /// Three rows in the left half, two columns in the right half.
+    pub const LAYOUT_FIVE_SPLIT_RIGHT: Icon = crate::icon_from_path!("ui/layout-5-split-right.svg");
+    /// Two charts in the top half, three in the bottom half.
+    pub const LAYOUT_FIVE_TWO_TOP: Icon = crate::icon_from_path!("ui/layout-5-2-top.svg");
     /// Layout six SVG icon.
     pub const LAYOUT_SIX: Icon = crate::icon_from_path!("ui/layout-6.svg");
     /// Two columns and three rows.
@@ -518,10 +531,16 @@ pub mod icons {
     /// Five charts side by side in the top half, one in the bottom half.
     pub const LAYOUT_SIX_LARGE_BOTTOM: Icon =
         crate::icon_from_path!("ui/layout-6-large-bottom.svg");
+    /// Two charts in the top half, four in the bottom half.
+    pub const LAYOUT_SIX_TWO_TOP: Icon = crate::icon_from_path!("ui/layout-6-2-top.svg");
+    /// Four charts in the top half, two in the bottom half.
+    pub const LAYOUT_SIX_FOUR_TOP: Icon = crate::icon_from_path!("ui/layout-6-4-top.svg");
     /// Layout seven SVG icon.
     pub const LAYOUT_SEVEN: Icon = crate::icon_from_path!("ui/layout-7.svg");
     /// Seven columns.
     pub const LAYOUT_SEVEN_HORIZONTAL: Icon = crate::icon_from_path!("ui/layout-7-columns.svg");
+    /// One chart in the left half, six stacked in the right half.
+    pub const LAYOUT_SEVEN_LARGE_LEFT: Icon = crate::icon_from_path!("ui/layout-7-large-left.svg");
     /// Layout eight SVG icon.
     pub const LAYOUT_EIGHT: Icon = crate::icon_from_path!("ui/layout-8.svg");
     /// Eight rows.
@@ -536,6 +555,8 @@ pub mod icons {
     pub const LAYOUT_NINE_VERTICAL: Icon = crate::icon_from_path!("ui/layout-9-rows.svg");
     /// Nine columns.
     pub const LAYOUT_NINE_HORIZONTAL: Icon = crate::icon_from_path!("ui/layout-9-columns.svg");
+    /// Five charts in the top half, four in the bottom half.
+    pub const LAYOUT_NINE_FIVE_TOP: Icon = crate::icon_from_path!("ui/layout-9-5-top.svg");
     /// Layout ten SVG icon.
     pub const LAYOUT_TEN: Icon = crate::icon_from_path!("ui/layout-10.svg");
     /// Ten columns.

@@ -129,7 +129,7 @@ impl Chart {
         }
         let mut study = crate::studies::ConfiguredStudy::new(
             factory
-                .create(&copied.name)
+                .create_registered(&copied.name)
                 .ok_or_else(|| StudyError::UnknownStudy(copied.name.clone()))?,
         );
         study.apply_settings(&copied.inputs, copied.settings)?;
