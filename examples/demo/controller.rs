@@ -1214,12 +1214,16 @@ impl DemoApp {
             self.chart.end_user_action();
         }
 
-        if let Some(edit) = self.indicator_settings.show(ctx, &self.theme) {
+        if let Some(edit) = self
+            .indicator_settings
+            .show_for_chart(ctx, &self.theme, &self.chart)
+        {
             self.chart.begin_user_action();
             let result = self
                 .chart
                 .indicator_mut(edit.id)
-                .ok_or_else(|| "Study was removed".to_owned())
+                .filter(|study| study.user_edit_enabled())
+                .ok_or_else(|| "Study is unavailable for editing".to_owned())
                 .and_then(|study| {
                     study
                         .apply_settings(&edit.inputs, edit.settings)
@@ -1342,7 +1346,11 @@ impl DemoApp {
 
     fn remove_all_indicators(&mut self) {
         let chart = &mut self.chart;
-        let ids: Vec<SeriesId> = chart.indicators().map(|(id, _)| id).collect();
+        let ids: Vec<SeriesId> = chart
+            .indicators()
+            .filter(|(_, study)| study.user_edit_enabled())
+            .map(|(id, _)| id)
+            .collect();
         for id in ids {
             chart.remove_series(id);
         }
@@ -1710,10 +1718,31 @@ impl DemoApp {
                 let mut heatmap_enabled = self.liquidity_heatmap;
                 let mut largest_profile = self.largest_order_profile;
                 let mut paused = self.live.paused();
+                let mut study_permission = None;
                 let mut toolbar = std::mem::take(&mut self.top_toolbar);
                 let state = self.state.clone();
                 let action = toolbar.show_with_menu(ui, &state, |ui| {
                     sample = self.show_demo_controls(ui);
+                    let editing = menu_item(
+                        ui,
+                        "Study editing",
+                        &icons::LOCK,
+                        Some(&icons::CHEVRON_RIGHT),
+                    );
+                    egui::containers::menu::SubMenu::new()
+                        .config(
+                            egui::containers::menu::MenuConfig::new()
+                                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside),
+                        )
+                        .show(ui, &editing, |ui| {
+                            for (id, study) in self.chart.indicators() {
+                                let mut enabled = study.user_edit_enabled();
+                                menu_toggle(ui, study.name(), &icons::SETTINGS, &mut enabled);
+                                if enabled != study.user_edit_enabled() {
+                                    study_permission = Some((id, enabled));
+                                }
+                            }
+                        });
                     ui.separator();
                     menu_toggle(
                         ui,
@@ -1817,6 +1846,11 @@ impl DemoApp {
                     }
                 });
                 self.top_toolbar = toolbar;
+                if let Some((id, enabled)) = study_permission {
+                    self.chart.user_action(|chart| {
+                        chart.set_indicator_user_edit_enabled(id, enabled);
+                    });
+                }
                 if let Some(panel) = panel_action {
                     self.open_panel = (self.open_panel != Some(panel)).then_some(panel);
                     self.widget_bar.active_widget = None;
@@ -2470,7 +2504,10 @@ impl DemoApp {
             ObjectTreeAction::ChangeColor(id, color) => {
                 let chart = &mut self.chart;
                 if let Some(study) = indicator_from_tree_id(id) {
-                    if let Some(ind) = chart.indicator_mut(study) {
+                    if let Some(ind) = chart
+                        .indicator_mut(study)
+                        .filter(|study| study.user_edit_enabled())
+                    {
                         ind.set_color(0, color);
                     }
                 } else {
@@ -3290,6 +3327,7 @@ impl DemoApp {
             StudyContextMenuAction::AddToFavorites(name) => {
                 self.indicator_dialog.favorites.insert(name);
             }
+            StudyContextMenuAction::Help(url) => ctx.open_url(egui::OpenUrl::new_tab(url)),
             StudyContextMenuAction::Copy => self.copy_study(ctx, id),
             StudyContextMenuAction::ObjectTree => {
                 self.open_panel = Some(SidePanel::ObjectTree);

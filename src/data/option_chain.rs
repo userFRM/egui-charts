@@ -262,6 +262,11 @@ impl OptionChain {
         self.0.read(|state| Arc::clone(&state.rows))
     }
 
+    /// The underlying, expiry range and historical instant of this subscription.
+    pub fn query(&self) -> OptionChainQuery {
+        self.0.read(|state| state.query.clone())
+    }
+
     /// Last feed or validation error, cleared by the next accepted snapshot.
     pub fn error(&self) -> Option<FeedError> {
         self.0.read(|state| state.error.clone())

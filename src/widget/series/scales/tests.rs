@@ -1,6 +1,5 @@
 use super::*;
 use crate::model::{BarData, LineStyle, SeriesDisplayFormat, SeriesFormat};
-use crate::tokens::DESIGN_TOKENS;
 use crate::widget::test_frames::frame;
 use crate::widget::{PaneId, SeriesId, SeriesOptions};
 use chrono::{TimeDelta, Utc};
@@ -1551,6 +1550,135 @@ fn comparisons_share_percent_ranges_with_individual_visible_references() {
     }
 }
 
+/// Saved strokes draw independently on main and added series, at their first visible close:
+/// (close - base) / base * 100 = 0%, or close / base * 100 = 100.
+#[test]
+fn relative_base_lines_use_each_series_stroke_and_visibility() {
+    for own_pane in [false, true] {
+        for mode in [
+            PriceScaleMode::Normal,
+            PriceScaleMode::Logarithmic,
+            PriceScaleMode::Percentage,
+            PriceScaleMode::IndexedTo100,
+        ] {
+            for (pattern, dash, gap) in [
+                ("Solid", 0.0, 0.0),
+                ("Dashed", 4.0, 4.0),
+                ("Dotted", 1.0, 3.0),
+                ("LargeDashed", 8.0, 8.0),
+                ("SparseDotted", 1.0, 7.0),
+            ] {
+                let ctx = egui::Context::default();
+                let mut chart = Chart::new(BarData::from_bars(bars(&[100.0, 110.0, 90.0])));
+                let added = chart.add_series(SeriesOptions {
+                    scale: SeriesScale::Separate(2),
+                    ..Default::default()
+                });
+                chart.set_data(added, bars(&[200.0, 180.0, 220.0]));
+                if own_pane {
+                    let pane = chart.add_pane();
+                    assert!(chart.move_series_to_pane(added, pane));
+                }
+                let cases = [
+                    (SeriesId::MAIN, Color32::MAGENTA, 3.0, 100.0),
+                    (added, Color32::GOLD, 2.0, 200.0),
+                ];
+                for (id, color, width, _) in cases {
+                    let mut saved = serde_json::to_value(chart.series_style(id).unwrap()).unwrap();
+                    saved["base_line_color"] = serde_json::to_value(color).unwrap();
+                    saved["base_line_width"] = serde_json::json!(width);
+                    saved["base_line_style"] =
+                        serde_json::json!(if id == added { "LargeDashed" } else { pattern });
+                    saved["base_line_visible"] = serde_json::json!(true);
+                    *chart.series_style_mut(id).unwrap() = serde_json::from_value(saved).unwrap();
+                    chart.series_price_scale_mut(id).unwrap().options_mut().mode = mode;
+                }
+                for (at, hidden_line, hidden_series) in [
+                    (0.0, None, None),
+                    (0.1, Some(SeriesId::MAIN), None),
+                    (0.2, Some(added), None),
+                    (0.3, None, Some(SeriesId::MAIN)),
+                    (0.4, None, Some(added)),
+                ] {
+                    for (id, ..) in cases {
+                        chart.series_style_mut(id).unwrap().base_line_visible =
+                            hidden_line != Some(id);
+                        assert!(chart.set_series_visible(id, hidden_series != Some(id)));
+                    }
+                    let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, at, vec![]);
+                    for (id, color, width, base) in cases {
+                        let (pattern, dash, gap) = if id == added {
+                            ("LargeDashed", 8.0, 8.0)
+                        } else {
+                            (pattern, dash, gap)
+                        };
+                        let mut segments = Vec::new();
+                        for shape in &painted {
+                            match shape {
+                                egui::Shape::LineSegment { points, stroke }
+                                    if stroke.color == color =>
+                                {
+                                    assert_eq!(stroke.width, width);
+                                    segments.push(*points);
+                                }
+                                egui::Shape::Mesh(mesh)
+                                    if mesh.vertices.first().is_some_and(|v| v.color == color) =>
+                                {
+                                    for dot in mesh.vertices.as_chunks::<4>().0 {
+                                        let positions: [Pos2; 4] =
+                                            std::array::from_fn(|at| dot[at].pos);
+                                        let rect = Rect::from_points(&positions);
+                                        assert_eq!(rect.height(), width);
+                                        segments.push([
+                                            egui::pos2(rect.left(), rect.center().y),
+                                            egui::pos2(rect.right(), rect.center().y),
+                                        ]);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        let visible = matches!(
+                            mode,
+                            PriceScaleMode::Percentage | PriceScaleMode::IndexedTo100
+                        ) && hidden_line != Some(id)
+                            && hidden_series != Some(id);
+                        assert_eq!(
+                            !segments.is_empty(),
+                            visible,
+                            "{id:?} {mode:?} {pattern} pane={own_pane}"
+                        );
+                        if !visible {
+                            continue;
+                        }
+                        let map = chart.series_price_map(id).unwrap();
+                        assert_eq!(
+                            map.transform().to_scale(base),
+                            if mode == PriceScaleMode::Percentage {
+                                0.0
+                            } else {
+                                100.0
+                            }
+                        );
+                        for points in &segments {
+                            let tolerance = if dash == 1.0 { 0.51 } else { 0.01 };
+                            assert!((points[0].y - map.price_to_y(base)).abs() < tolerance);
+                            assert_eq!(points[0].y, points[1].y);
+                        }
+                        if pattern == "Solid" {
+                            assert_eq!(segments.len(), 1);
+                        } else {
+                            assert!(segments.len() > 2);
+                            assert!((segments[0][1].x - segments[0][0].x - dash).abs() < 0.01);
+                            assert!((segments[1][0].x - segments[0][1].x - gap).abs() < 0.01);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Secondary history and corrections use the main merge rules, and visibility/removal
 /// cannot lose data or resurrect an id. A scale move preserves the other memberships.
 #[test]
@@ -1678,7 +1806,7 @@ fn series_style_draws_columns_and_lines_and_fits_provided_ranges() {
     assert!((range.min - 48.75).abs() < 1e-10 && (range.max - 61.25).abs() < 1e-10);
     for (price, color) in [
         (220.0, Color32::GOLD),
-        (200.0, DESIGN_TOKENS.semantic.extended.gray),
+        (200.0, Color32::from_rgb(178, 181, 190)),
     ] {
         assert!(painted.iter().any(|shape| matches!(shape,
             egui::Shape::LineSegment { points, stroke }
