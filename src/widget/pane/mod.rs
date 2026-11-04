@@ -1097,6 +1097,25 @@ impl Chart {
 mod tests {
     use crate::widget::test_frames::chart;
     use egui::{Context, Pos2, RawInput, Rect, Vec2};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    /// A primitive that counts its detachments.
+    struct Attachment(Arc<AtomicUsize>);
+    impl crate::widget::Primitive for Attachment {
+        fn draw(
+            &self,
+            _: &egui::Painter,
+            _: &crate::widget::PrimitiveView<'_>,
+            _: crate::widget::PrimitivePass,
+        ) {
+        }
+        fn detached(&mut self) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
 
     /// A host series moved into a pane leaves the price scale, panes share the height by
     /// stretch factor across resizes, and a pane can sit above the price pane.
@@ -1195,22 +1214,8 @@ mod tests {
     fn removing_original_pane_preserves_survivors_and_cleans_up_content() {
         use crate::model::{LogicalRange, Marker, PriceLine};
         use crate::widget::test_frames::{frame, shapes};
-        use crate::widget::{
-            PaneId, Primitive, PrimitivePass, PrimitiveView, SeriesId, SeriesOptions,
-        };
-        use egui::{Color32, Painter};
-        use std::sync::{
-            Arc,
-            atomic::{AtomicUsize, Ordering},
-        };
-
-        struct Attachment(Arc<AtomicUsize>);
-        impl Primitive for Attachment {
-            fn draw(&self, _: &Painter, _: &PrimitiveView<'_>, _: PrimitivePass) {}
-            fn detached(&mut self) {
-                self.0.fetch_add(1, Ordering::Relaxed);
-            }
-        }
+        use crate::widget::{PaneId, SeriesId, SeriesOptions};
+        use egui::Color32;
 
         for removed_series_first in [false, true] {
             let ctx = Context::default();
@@ -1464,19 +1469,7 @@ mod tests {
     fn removing_original_pane_preserves_relocated_main_series() {
         use crate::model::{LogicalRange, Marker, PriceLine};
         use crate::widget::test_frames::frame;
-        use crate::widget::{PaneId, Primitive, PrimitivePass, PrimitiveView, SeriesId};
-        use std::sync::{
-            Arc,
-            atomic::{AtomicUsize, Ordering},
-        };
-
-        struct Attachment(Arc<AtomicUsize>);
-        impl Primitive for Attachment {
-            fn draw(&self, _: &egui::Painter, _: &PrimitiveView<'_>, _: PrimitivePass) {}
-            fn detached(&mut self) {
-                self.0.fetch_add(1, Ordering::Relaxed);
-            }
-        }
+        use crate::widget::{PaneId, SeriesId};
 
         let ctx = Context::default();
         let mut chart = chart(&[100.0], &[110.0]);
