@@ -152,16 +152,7 @@ impl ChartState {
         {
             self.revision = next_revision();
         }
-        let shown = self.elements.as_deref().unwrap_or(&self.data.bars);
-        let shown = if shown.is_empty() {
-            &self.fallback
-        } else {
-            shown
-        };
-        #[cfg(feature = "widget")]
-        self.time_scale
-            .refresh_numeric_positions(shown, self.revision);
-        self.time_scale.set_bar_cnt(shown.len());
+        self.sync_time_scale();
         first_changed
     }
 
@@ -169,12 +160,24 @@ impl ChartState {
     /// Indices returned by the chart hover and selection APIs refer to this series. When the
     /// main series is empty, the widget can supply whitespace slots from added series.
     pub fn shown(&self) -> &[Bar] {
-        let shown = self.elements.as_deref().unwrap_or(&self.data.bars);
-        if shown.is_empty() {
-            &self.fallback
-        } else {
-            shown
+        Self::domain(&self.data.bars, self.elements.as_deref(), &self.fallback)
+    }
+
+    /// The main series' shown bars, or the shared whitespace slots when it has none.
+    fn domain<'a>(data: &'a [Bar], elements: Option<&'a [Bar]>, fallback: &'a [Bar]) -> &'a [Bar] {
+        match elements.unwrap_or(data) {
+            [] => fallback,
+            shown => shown,
         }
+    }
+
+    /// Points the time scale at the shown bars.
+    fn sync_time_scale(&mut self) {
+        let shown = Self::domain(&self.data.bars, self.elements.as_deref(), &self.fallback);
+        #[cfg(feature = "widget")]
+        self.time_scale
+            .refresh_numeric_positions(shown, self.revision);
+        self.time_scale.set_bar_cnt(shown.len());
     }
 
     /// Shares added-series timestamps without taking their values into the main series.
@@ -201,61 +204,24 @@ impl ChartState {
         if self.fallback_series == keys {
             return;
         }
-        let appended = self.fallback_series.len() == series.len()
-            && self.fallback_series.iter().zip(&series).all(
-                |((old_revision, len, last), (bars, revision))| {
-                    old_revision == revision
-                        && *len <= bars.len()
-                        && *last
-                            == len
-                                .checked_sub(1)
-                                .and_then(|index| bars.get(index))
-                                .map(|bar| bar.time)
-                },
-            );
+        let times: std::collections::BTreeSet<_> = series
+            .iter()
+            .flat_map(|(bars, _)| bars.iter().map(|bar| bar.time))
+            .collect();
+        let bars: Vec<_> = times.into_iter().map(Bar::whitespace).collect();
         let old_len = self.fallback.len();
-        let mut first_changed = old_len;
-        if appended {
-            for ((_, len, _), (bars, _)) in self.fallback_series.iter().zip(&series) {
-                for bar in &bars[*len..] {
-                    let at = self.fallback.partition_point(|point| point.time < bar.time);
-                    if self
-                        .fallback
-                        .get(at)
-                        .is_none_or(|point| point.time != bar.time)
-                    {
-                        first_changed = first_changed.min(at);
-                        self.fallback.insert(at, Bar::whitespace(bar.time));
-                    }
-                }
-            }
-        } else {
-            let times: std::collections::BTreeSet<_> = series
-                .iter()
-                .flat_map(|(bars, _)| bars.iter().map(|bar| bar.time))
-                .collect();
-            let bars: Vec<_> = times.into_iter().map(Bar::whitespace).collect();
-            first_changed = self
-                .fallback
-                .iter()
-                .zip(&bars)
-                .position(|(old, new)| old.time != new.time)
-                .unwrap_or(old_len.min(bars.len()));
-            self.fallback = bars;
-        }
+        let first_changed = self
+            .fallback
+            .iter()
+            .zip(&bars)
+            .position(|(old, new)| old.time != new.time)
+            .unwrap_or(old_len.min(bars.len()));
+        self.fallback = bars;
         if first_changed < old_len.saturating_sub(1) || self.fallback.len() < old_len {
             self.revision = next_revision();
         }
         self.fallback_series = keys;
-        let shown = self.elements.as_deref().unwrap_or(&self.data.bars);
-        let shown = if shown.is_empty() {
-            &self.fallback
-        } else {
-            shown
-        };
-        self.time_scale
-            .refresh_numeric_positions(shown, self.revision);
-        self.time_scale.set_bar_cnt(shown.len());
+        self.sync_time_scale();
     }
 
     #[cfg(feature = "widget")]
@@ -291,15 +257,7 @@ impl ChartState {
             )
         });
         self.elements = elements;
-        let shown = self.elements.as_deref().unwrap_or(&self.data.bars);
-        let shown = if shown.is_empty() {
-            &self.fallback
-        } else {
-            shown
-        };
-        self.time_scale
-            .refresh_numeric_positions(shown, self.revision);
-        self.time_scale.set_bar_cnt(shown.len());
+        self.sync_time_scale();
         match kept {
             Some((_, true)) if follow && near_live => self.time_scale.scroll_to_realtime(),
             Some(_) if follow && near_live => {}
