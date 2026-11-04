@@ -374,7 +374,7 @@ impl Chart {
                 .iter()
                 .find(|series| series.id == item.series)
             {
-                view.mapping.price = self.pane_series_map(pane, series, coords.rect, coords.price);
+                view.mapping.price = self.series_map(series, coords.rect);
             }
             Some((item, view))
         })

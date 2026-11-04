@@ -1,7 +1,7 @@
 //! Host watermarks: lines of text and an image, aligned anywhere in the price pane.
 
 use crate::config::FontWeight;
-use egui::{Align2, Color32, FontId, Painter, Rect, Shape, Ui, Vec2};
+use egui::{Align2, Color32, FontFamily, FontId, Painter, Rect, Shape, Ui, Vec2};
 
 /// One line of text of a [`Watermark`].
 #[derive(Clone, Debug, PartialEq)]
@@ -10,6 +10,9 @@ pub struct WatermarkLine {
     pub text: String,
     /// Font size in points; the line is 1.2 times as tall.
     pub size: f32,
+    /// Font family, proportional by default. Named families must already be installed in the
+    /// host's [`egui::FontDefinitions`]. Independent of the chart's axis family.
+    pub family: FontFamily,
     /// Default [`FontWeight::Normal`].
     pub weight: FontWeight,
     /// Colour, usually translucent.
@@ -17,11 +20,12 @@ pub struct WatermarkLine {
 }
 
 impl WatermarkLine {
-    /// Creates a line of normal weight.
+    /// Creates a proportional line of normal weight.
     pub fn new(text: impl Into<String>, size: f32, color: Color32) -> Self {
         Self {
             text: text.into(),
             size,
+            family: FontFamily::Proportional,
             weight: FontWeight::Normal,
             color,
         }
@@ -31,6 +35,13 @@ impl WatermarkLine {
     #[must_use]
     pub fn with_weight(mut self, weight: FontWeight) -> Self {
         self.weight = weight;
+        self
+    }
+
+    /// Sets the font family from the fonts installed by the host.
+    #[must_use]
+    pub fn with_family(mut self, family: FontFamily) -> Self {
+        self.family = family;
         self
     }
 }
@@ -110,7 +121,7 @@ pub(crate) fn render_watermark(ui: &Ui, painter: &Painter, rect: Rect, watermark
         .map(|line| {
             let galley = painter.layout_no_wrap(
                 line.text.clone(),
-                FontId::proportional(line.size),
+                FontId::new(line.size, line.family.clone()),
                 line.color,
             );
             (line, galley)
@@ -159,12 +170,35 @@ mod tests {
         let (bold, plain) = (Color32::from_rgb(1, 2, 3), Color32::from_rgb(4, 5, 6));
         let texture = egui::TextureId::User(7);
         let ctx = egui::Context::default();
+        let family = FontFamily::Name("Host Mono".into());
+        let mut fonts = egui::FontDefinitions::default();
+        fonts.families.insert(
+            family.clone(),
+            fonts.families[&FontFamily::Monospace].clone(),
+        );
+        ctx.set_fonts(fonts);
         let mut chart = chart(&[100.0], &[110.0]);
-        for align in [
-            Align2::LEFT_TOP,
-            Align2::CENTER_CENTER,
-            Align2::RIGHT_BOTTOM,
+        chart.config_mut().axis_font_family = FontFamily::Monospace;
+        for (align, custom) in [
+            (Align2::LEFT_TOP, false),
+            (Align2::CENTER_CENTER, false),
+            (Align2::RIGHT_BOTTOM, false),
+            (Align2::LEFT_TOP, true),
+            (Align2::CENTER_CENTER, true),
+            (Align2::RIGHT_BOTTOM, true),
         ] {
+            let title = WatermarkLine::new("AAPL", 40.0, bold).with_weight(FontWeight::Bold);
+            let detail = WatermarkLine::new("Apple Inc", 20.0, plain);
+            let title = if custom {
+                title.with_family(family.clone())
+            } else {
+                title
+            };
+            let detail = if custom {
+                detail.with_family(FontFamily::Monospace)
+            } else {
+                detail
+            };
             chart.set_watermark(Some(
                 Watermark::default()
                     .with_image(
@@ -174,8 +208,8 @@ mod tests {
                         ))
                         .max_size(Vec2::new(100.0, 50.0)),
                     )
-                    .with_line(WatermarkLine::new("AAPL", 40.0, bold).with_weight(FontWeight::Bold))
-                    .with_line(WatermarkLine::new("Apple Inc", 20.0, plain))
+                    .with_line(title.clone())
+                    .with_line(detail.clone())
                     .with_align(align)
                     .with_padding(10.0),
             ));
@@ -208,6 +242,11 @@ mod tests {
                     .iter()
                     .filter_map(|shape| match shape {
                         Shape::Text(t) if t.fallback_color == color => {
+                            let line = if color == bold { &title } else { &detail };
+                            assert_eq!(
+                                t.galley.job.sections[0].format.font_id,
+                                FontId::new(line.size, line.family.clone())
+                            );
                             Some(t.galley.rect.translate(t.pos.to_vec2()))
                         }
                         _ => None,

@@ -186,6 +186,8 @@ impl Chart {
             .as_ref()
             .or(theme.as_ref())
             .map(|theme| crate::theme::ThemeScope::new(ui.ctx(), theme));
+        let _font_scope =
+            rendering::axes::AxisFontScope::new(ui.ctx(), &self.config.axis_font_family);
         let size = self.size;
         let show = |ui: &mut Ui| {
             if let Some(theme) = &theme {
@@ -1017,7 +1019,7 @@ impl Chart {
         #[cfg(not(feature = "studies"))]
         let profile_prices = std::iter::empty();
         // Fit the price scale, then apply this frame's price zoom
-        let series_values = self.fit_secondary_series(main_pane);
+        let series_values = self.fit_secondary_series();
         let mut primitive_prices = self.main_primitive_prices();
         for idx in &study_indices {
             let study = &self.rendered_studies().indicators()[*idx];

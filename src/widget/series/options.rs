@@ -80,8 +80,8 @@ pub struct SeriesOptions {
     /// hide the border; the default is the design-token thick stroke.
     #[serde(default = "default_crosshair_marker_border_width")]
     pub crosshair_marker_border_width: f32,
-    /// Scale shared with the series carrying the same assignment in the price pane. In another
-    /// pane the series uses that pane's scale.
+    /// Scale shared with members carrying the same assignment in this series' pane.
+    /// Assignments in different panes have independent options and ranges.
     pub scale: SeriesScale,
     /// The price [`ChartType::Columns`] rise above or fall below, which the scale's fit then
     /// includes; `None` raises them from the pane bottom.
@@ -311,6 +311,10 @@ impl Indicator for SeriesLegend {
         StudyFormat::Price
     }
 
+    fn precision(&self) -> Option<usize> {
+        self.precision
+    }
+
     fn name(&self) -> &str {
         &self.name
     }
@@ -383,6 +387,7 @@ impl Chart {
         self.ensure_series_scale(options.scale);
         let renamed = self.price_series[at].options.name != options.name;
         self.price_series[at].options = options;
+        self.series_price_scale_mut(id);
         if renamed && self.is_fed(id) {
             self.set_data(id, Vec::new());
             self.fill_fed_series();
@@ -643,6 +648,7 @@ impl Chart {
         } else if let Some(at) = self.price_series.iter().position(|item| item.id == id) {
             self.ensure_series_scale(scale);
             self.price_series[at].options.scale = scale;
+            self.series_price_scale_mut(id);
         } else {
             return false;
         }
@@ -690,43 +696,16 @@ impl Chart {
 
     /// The scale shared by this present bar series, including its options and fitted range.
     pub fn series_price_scale(&self, id: SeriesId) -> Option<&PriceScale> {
-        let scale = self.series_scale(id)?;
-        Some(
-            match self
-                .pane_layout
-                .panes
-                .iter()
-                .find(|pane| Some(pane.id) == self.series_pane(id))
-            {
-                Some(pane) if pane.id == PaneId::MAIN && scale != self.main_series_scale => {
-                    self.secondary_scale(scale)
-                }
-                Some(pane) if pane.id != self.main_series_pane() => &pane.scale,
-                Some(pane) if pane.id != PaneId::MAIN => self.state.price_scale(),
-                _ => self.secondary_scale(scale),
-            },
-        )
+        Some(self.pane_price_scale(self.series_pane(id)?, self.series_scale(id)?))
     }
 
     /// Changes options or a manual range on the scale of this bar series, as returned by
     /// [`series_price_scale`](Self::series_price_scale).
     /// Range bounds use scale units, such as percent in percentage mode.
     pub fn series_price_scale_mut(&mut self, id: SeriesId) -> Option<&mut PriceScale> {
-        let scale = self.series_scale(id)?;
-        if let Some(at) = self.pane_layout.panes.iter().position(|pane| {
-            Some(pane.id) == self.series_pane(id)
-                && pane.id != self.main_series_pane()
-                && (pane.id != PaneId::MAIN || scale == self.main_series_scale)
-        }) {
-            Some(&mut self.pane_layout.panes[at].scale)
-        } else if scale == self.main_series_scale
-            || (self.series_pane(id) == Some(self.main_series_pane())
-                && self.main_series_pane() != PaneId::MAIN)
-        {
-            Some(self.state.price_scale_mut())
-        } else {
-            self.series_scales.get_mut(&scale)
-        }
+        let pane = self.series_pane(id)?;
+        let key = self.series_scale(id)?;
+        Some(self.pane_price_scale_mut(pane, key))
     }
 
     /// The price mapping of a present bar series, the main one included, as last drawn in its
@@ -735,18 +714,6 @@ impl Chart {
     /// before its pane is first drawn.
     pub fn series_price_map(&self, id: SeriesId) -> Option<PriceMap> {
         let pane = self.series_pane(id)?;
-        if pane == PaneId::MAIN
-            && pane != self.main_series_pane()
-            && self.series_scale(id)? != self.main_series_scale
-        {
-            let item = self.price_series.iter().find(|item| item.id == id)?;
-            return self
-                .pane_layout
-                .panes
-                .iter()
-                .find(|pane| pane.id == PaneId::MAIN && pane.rect.is_positive())
-                .map(|pane| self.series_map(item, pane.rect));
-        }
         if pane != self.main_series_pane() {
             return self
                 .pane_layout
@@ -754,8 +721,20 @@ impl Chart {
                 .iter()
                 .find(|pane| Some(pane.id) == self.series_pane(id) && pane.rect.is_positive())
                 .map(|pane| {
-                    self.series_display_map(id, pane.price_map())
-                        .with_thousands_sep(self.config.thousands_sep)
+                    if let Some(item) = self.price_series.iter().find(|item| item.id == id) {
+                        self.series_map(item, pane.rect)
+                    } else {
+                        let study = self
+                            .indicators()
+                            .find(|(study, _)| *study == id)
+                            .expect("present study")
+                            .1;
+                        let mut coords = self.get_chart_mapping().with_rect(pane.rect);
+                        let scale = self.pane_price_scale(pane.id, SeriesScale::Right);
+                        coords.price =
+                            scale.map(scale.transform(), pane.rect.top(), pane.rect.bottom());
+                        self.pane_study_mapping(pane.id, study, &coords).price
+                    }
                 });
         }
         let rect = self.last_rendered_price_rect;
@@ -764,8 +743,17 @@ impl Chart {
         } else if id == SeriesId::MAIN {
             Some(self.last_price_map)
         } else {
-            let item = self.price_series.iter().find(|item| item.id == id)?;
-            Some(self.series_map(item, rect))
+            self.price_series
+                .iter()
+                .find(|item| item.id == id)
+                .map(|item| self.series_map(item, rect))
+                .or_else(|| {
+                    let study = self.indicators().find(|(study, _)| *study == id)?.1;
+                    Some(
+                        crate::chart::rendering::study_mapping(study, &self.get_chart_mapping())
+                            .price,
+                    )
+                })
         }
     }
 
