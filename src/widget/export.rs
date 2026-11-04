@@ -24,7 +24,8 @@ pub struct ImageExportOptions {
     /// Omit the chart and header backgrounds, retaining plot and drawing colours.
     pub transparent_background: bool,
     /// Draw the crosshair where the pointer last placed it over the plots, or where
-    /// [`Chart::set_crosshair_position`] or a synchronized chart placed it since.
+    /// [`Chart::set_crosshair_position`], [`Chart::set_series_crosshair_position`] or a
+    /// synchronized chart placed it since.
     pub include_crosshair: bool,
     /// Draw [`PrimitivePass::Above`](super::PrimitivePass::Above) content above the plots and
     /// persistent drawings. Defaults to `true`, independently of `include_crosshair`.
@@ -546,7 +547,12 @@ impl Chart {
         chart.theme_override = Some(theme);
         if let Some((time, price)) = self.last_crosshair.filter(|_| options.include_crosshair) {
             match price {
-                Some(price) => chart.set_crosshair_position(Some((time, price))),
+                Some(price) => match self.last_crosshair_series {
+                    Some(series) => {
+                        chart.set_series_crosshair_position(series, Some((time, price)))
+                    }
+                    None => chart.set_crosshair_position(Some((time, price))),
+                },
                 None => {
                     chart.set_synced_crosshair_time(Some(time));
                     chart.chart_options.crosshair.horz_line_visible = false;
@@ -587,6 +593,7 @@ impl Chart {
                 fed: series.fed,
                 bars: series.bars.clone(),
                 revision: series.revision,
+                last_price_pulse: std::cell::Cell::new(None),
                 heikin_ashi: Default::default(),
                 feed: series.feed.clone(),
                 markers: series.markers.clone(),

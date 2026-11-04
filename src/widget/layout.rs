@@ -70,6 +70,8 @@ pub enum ChartLayoutMode {
     FiveLargeBottom,
     /// Three columns and two rows.
     Six,
+    /// Two columns and three rows.
+    SixTwoColumns,
     /// Six columns.
     SixHorizontal,
     /// Six rows.
@@ -84,24 +86,52 @@ pub enum ChartLayoutMode {
     SixLargeBottom,
     /// Seven charts in four columns.
     Seven,
+    /// Seven columns.
+    SevenHorizontal,
     /// Four columns and two rows.
     Eight,
+    /// Eight rows.
+    EightVertical,
+    /// Two columns and four rows.
+    EightTwoColumns,
+    /// Eight columns.
+    EightHorizontal,
     /// Three columns and three rows.
     Nine,
+    /// Nine rows.
+    NineVertical,
+    /// Nine columns.
+    NineHorizontal,
     /// Ten charts in four columns.
     Ten,
+    /// Ten columns.
+    TenHorizontal,
+    /// Ten rows.
+    TenVertical,
+    /// Five columns and two rows.
+    TenFiveColumns,
     /// Eleven charts in four columns.
     Eleven,
     /// Four columns and three rows.
     Twelve,
+    /// Twelve columns.
+    TwelveHorizontal,
+    /// Three columns and four rows.
+    TwelveThreeColumns,
+    /// Six columns and two rows.
+    TwelveSixColumns,
     /// Thirteen charts in four columns.
     Thirteen,
     /// Fourteen charts in four columns.
     Fourteen,
+    /// Seven columns and two rows.
+    FourteenSevenColumns,
     /// Fifteen charts in four columns.
     Fifteen,
     /// Four columns and four rows.
     Sixteen,
+    /// Eight columns and two rows.
+    SixteenEightColumns,
     /// One tab per supplied chart, up to sixteen.
     Tabs,
 }
@@ -134,6 +164,7 @@ impl ChartLayoutMode {
             Self::FiveLargeTop,
             Self::FiveLargeBottom,
             Self::Six,
+            Self::SixTwoColumns,
             Self::SixHorizontal,
             Self::SixVertical,
             Self::SixLargeLeft,
@@ -141,15 +172,29 @@ impl ChartLayoutMode {
             Self::SixLargeTop,
             Self::SixLargeBottom,
             Self::Seven,
+            Self::SevenHorizontal,
             Self::Eight,
+            Self::EightVertical,
+            Self::EightTwoColumns,
+            Self::EightHorizontal,
             Self::Nine,
+            Self::NineVertical,
+            Self::NineHorizontal,
             Self::Ten,
+            Self::TenHorizontal,
+            Self::TenVertical,
+            Self::TenFiveColumns,
             Self::Eleven,
             Self::Twelve,
+            Self::TwelveHorizontal,
+            Self::TwelveThreeColumns,
+            Self::TwelveSixColumns,
             Self::Thirteen,
             Self::Fourteen,
+            Self::FourteenSevenColumns,
             Self::Fifteen,
             Self::Sixteen,
+            Self::SixteenEightColumns,
             Self::Tabs,
         ]
     }
@@ -181,6 +226,7 @@ impl ChartLayoutMode {
             Self::FiveLargeTop => "1 Top, 4 Bottom",
             Self::FiveLargeBottom => "4 Top, 1 Bottom",
             Self::Six => "3x2 Grid",
+            Self::SixTwoColumns => "2x3 Grid",
             Self::SixHorizontal => "6 Horizontal",
             Self::SixVertical => "6 Vertical",
             Self::SixLargeLeft => "1 Left, 5 Right",
@@ -188,15 +234,29 @@ impl ChartLayoutMode {
             Self::SixLargeTop => "1 Top, 5 Bottom",
             Self::SixLargeBottom => "5 Top, 1 Bottom",
             Self::Seven => "7 Charts",
+            Self::SevenHorizontal => "7 Horizontal",
             Self::Eight => "4x2 Grid",
+            Self::EightVertical => "8 Vertical",
+            Self::EightTwoColumns => "2x4 Grid",
+            Self::EightHorizontal => "8 Horizontal",
             Self::Nine => "3x3 Grid",
+            Self::NineVertical => "9 Vertical",
+            Self::NineHorizontal => "9 Horizontal",
             Self::Ten => "10 Charts",
+            Self::TenHorizontal => "10 Horizontal",
+            Self::TenVertical => "10 Vertical",
+            Self::TenFiveColumns => "5x2 Grid",
             Self::Eleven => "11 Charts",
             Self::Twelve => "4x3 Grid",
+            Self::TwelveHorizontal => "12 Horizontal",
+            Self::TwelveThreeColumns => "3x4 Grid",
+            Self::TwelveSixColumns => "6x2 Grid",
             Self::Thirteen => "13 Charts",
             Self::Fourteen => "14 Charts",
+            Self::FourteenSevenColumns => "7x2 Grid",
             Self::Fifteen => "15 Charts",
             Self::Sixteen => "4x4 Grid",
+            Self::SixteenEightColumns => "8x2 Grid",
             Self::Tabs => "Tabs",
         }
     }
@@ -247,6 +307,7 @@ impl ChartLayoutMode {
             Self::FiveLargeTop => Rows(&[1, 4]),
             Self::FiveLargeBottom => Rows(&[4, 1]),
             Self::Six => Rows(&[3, 3]),
+            Self::SixTwoColumns => Rows(&[2, 2, 2]),
             Self::SixHorizontal => Rows(&[6]),
             Self::SixVertical => Rows(&[1, 1, 1, 1, 1, 1]),
             Self::SixLargeLeft => Columns(&[1, 5]),
@@ -254,15 +315,29 @@ impl ChartLayoutMode {
             Self::SixLargeTop => Rows(&[1, 5]),
             Self::SixLargeBottom => Rows(&[5, 1]),
             Self::Seven => Rows(&[4, 3]),
+            Self::SevenHorizontal => Rows(&[7]),
             Self::Eight => Rows(&[4, 4]),
+            Self::EightVertical => Rows(&[1, 1, 1, 1, 1, 1, 1, 1]),
+            Self::EightTwoColumns => Rows(&[2, 2, 2, 2]),
+            Self::EightHorizontal => Rows(&[8]),
             Self::Nine => Rows(&[3, 3, 3]),
+            Self::NineVertical => Rows(&[1, 1, 1, 1, 1, 1, 1, 1, 1]),
+            Self::NineHorizontal => Rows(&[9]),
             Self::Ten => Rows(&[4, 4, 2]),
+            Self::TenHorizontal => Rows(&[10]),
+            Self::TenVertical => Rows(&[1, 1, 1, 1, 1, 1, 1, 1, 1, 1]),
+            Self::TenFiveColumns => Rows(&[5, 5]),
             Self::Eleven => Rows(&[4, 4, 3]),
             Self::Twelve => Rows(&[4, 4, 4]),
+            Self::TwelveHorizontal => Rows(&[12]),
+            Self::TwelveThreeColumns => Rows(&[3, 3, 3, 3]),
+            Self::TwelveSixColumns => Rows(&[6, 6]),
             Self::Thirteen => Rows(&[4, 4, 4, 1]),
             Self::Fourteen => Rows(&[4, 4, 4, 2]),
+            Self::FourteenSevenColumns => Rows(&[7, 7]),
             Self::Fifteen => Rows(&[4, 4, 4, 3]),
             Self::Sixteen => Rows(&[4, 4, 4, 4]),
+            Self::SixteenEightColumns => Rows(&[8, 8]),
         }
     }
 }
@@ -915,6 +990,94 @@ mod tests {
     #[test]
     fn presets_preserve_chart_state_and_route_input_to_visible_slots() {
         let rect = Rect::from_min_size(pos2(54.0, 70.0), vec2(1386.0, 716.0));
+        // Saved preset names must restore their row-major geometry at narrow and wide sizes.
+        for (name, columns, rows) in [
+            ("SixTwoColumns", 2, 3),
+            ("SevenHorizontal", 7, 1),
+            ("EightVertical", 1, 8),
+            ("EightTwoColumns", 2, 4),
+            ("EightHorizontal", 8, 1),
+            ("NineVertical", 1, 9),
+            ("NineHorizontal", 9, 1),
+            ("TenHorizontal", 10, 1),
+            ("TenVertical", 1, 10),
+            ("TenFiveColumns", 5, 2),
+            ("TwelveHorizontal", 12, 1),
+            ("TwelveThreeColumns", 3, 4),
+            ("TwelveSixColumns", 6, 2),
+            ("FourteenSevenColumns", 7, 2),
+            ("SixteenEightColumns", 8, 2),
+        ] {
+            let saved = format!("\"{name}\"");
+            let mode: ChartLayoutMode = serde_json::from_str(&saved).expect(name);
+            assert_eq!(serde_json::to_string(&mode).unwrap(), saved);
+            assert!(ChartLayoutMode::all().contains(&mode));
+            assert_eq!(mode.chart_count(), columns * rows, "{name}");
+            assert_eq!(mode.grid_size(), (columns, rows), "{name}");
+            for width in [320.0, 1440.0] {
+                let bounds = Rect::from_min_size(pos2(54.0, 70.0), vec2(width, 716.0));
+                let mut layout = ChartLayout {
+                    mode,
+                    ..Default::default()
+                };
+                let cells = layout.visible_chart_rects(bounds, 16);
+                assert_eq!(cells.len(), columns * rows);
+                // Equal columns divide the width; only the rows reserve two-point gutters.
+                let size = vec2(width / columns as f32, (718.0 / rows as f32) - 2.0);
+                let ctx = egui::Context::default();
+                let mut charts: Vec<_> = (0..columns * rows).map(|_| chart(60)).collect();
+                let frame = |layout: &mut ChartLayout, charts: &mut [Chart], events| {
+                    let output = ctx.run_ui(
+                        RawInput {
+                            screen_rect: Some(bounds.expand(100.0)),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            ui.scope_builder(egui::UiBuilder::new().max_rect(bounds), |ui| {
+                                layout.show(ui, &mut charts.iter_mut().collect::<Vec<_>>());
+                            });
+                        },
+                    );
+                    output.drop_without_applying_deltas();
+                };
+                frame(&mut layout, &mut charts, vec![]);
+                for (slot, cell) in cells {
+                    let expected = bounds.min
+                        + vec2(
+                            (slot % columns) as f32 * size.x,
+                            (slot / columns) as f32 * (size.y + 2.0),
+                        );
+                    assert!((cell.min - expected).length() < 0.001, "{name}, {slot}");
+                    assert!((cell.size() - size).length() < 0.001, "{name}, {slot}");
+                    assert!(cell.is_positive() && bounds.contains(cell.center()));
+                    frame(
+                        &mut layout,
+                        &mut charts,
+                        vec![
+                            Event::PointerMoved(cell.center()),
+                            Event::PointerButton {
+                                pos: cell.center(),
+                                button: PointerButton::Primary,
+                                pressed: true,
+                                modifiers: Default::default(),
+                            },
+                        ],
+                    );
+                    assert_eq!(layout.active(), slot, "{name}, width {width}");
+                    frame(
+                        &mut layout,
+                        &mut charts,
+                        vec![Event::PointerButton {
+                            pos: cell.center(),
+                            button: PointerButton::Primary,
+                            pressed: false,
+                            modifiers: Default::default(),
+                        }],
+                    );
+                }
+            }
+        }
         let mut labels = std::collections::HashSet::new();
         for &mode in ChartLayoutMode::all() {
             assert!(labels.insert(mode.label()), "{mode:?}");

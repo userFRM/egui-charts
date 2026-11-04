@@ -109,22 +109,22 @@ impl Chart {
         // New drawings belong to the pane's first member, or to an empty pane itself.
         let mut owner = None;
         let members: Vec<_> = if let Some(pane) = pane {
-            let pane = self.pane_layout.panes.iter().find(|p| p.id == pane);
-            owner = pane.map(|p| p.members.first().map_or(p.id.0, |id| id.0));
-            pane.map(|p| {
-                std::iter::once(Some(p.id.0))
-                    .chain(p.members.iter().map(|id| Some(id.0)))
-                    .collect()
-            })
-            .unwrap_or_default()
+            let members = self.pane_series(pane);
+            owner = Some(members.first().map_or(pane.0, |id| id.0));
+            std::iter::once(Some(pane.0))
+                .chain(members.iter().map(|id| Some(id.0)))
+                .collect()
         } else {
             std::iter::once(None)
                 .chain(
-                    self.study_ids
+                    (self.main_series_pane() != super::PaneId::MAIN)
+                        .then_some(Some(self.main_series_pane().0)),
+                )
+                .chain(
+                    self.pane_series(self.main_series_pane())
                         .iter()
-                        .zip(self.rendered_studies().indicators())
-                        .filter(|(_, study)| study.is_overlay())
-                        .map(|(id, _)| Some(id.0)),
+                        .filter(|id| **id != super::SeriesId::MAIN)
+                        .map(|id| Some(id.0)),
                 )
                 .collect()
         };

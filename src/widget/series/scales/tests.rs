@@ -476,6 +476,317 @@ fn tick_formatters_receive_complete_axis_lists() {
     }
 }
 
+/// Added series pass explicit line, OHLC and area settings to both pane render paths and
+/// retain them in snapshots. Old options keep the same renderer defaults.
+#[test]
+fn added_series_styles_reach_frames_and_saved_layouts() {
+    use egui::Shape;
+    use serde_json::json;
+
+    for own_pane in [false, true] {
+        for (kind, settings) in [
+            (
+                "curve",
+                json!({"line_style": {"color": [255, 0, 255, 255], "width": 4.0, "line_type": "Curved"}}),
+            ),
+            (
+                "dash",
+                json!({"line_style": {"color": [255, 0, 255, 255], "width": 4.0, "style": "Dashed"}}),
+            ),
+            (
+                "dots",
+                json!({"chart_type": "StepLine", "line_style": {"color": [255, 0, 255, 255], "width": 4.0, "style": "Dotted"}}),
+            ),
+            (
+                "markers",
+                json!({"chart_type": "LineWithMarkers", "line_style": {"color": [255, 0, 255, 255], "width": 4.0, "line_type": "Curved"}}),
+            ),
+            (
+                "ohlc",
+                json!({"chart_type": "Bars", "bars_style": {"open_visible": false, "thin_bars": false}}),
+            ),
+            (
+                "thin",
+                json!({"chart_type": "Bars", "bars_style": {"open_visible": true, "thin_bars": true}}),
+            ),
+            (
+                "area",
+                json!({"chart_type": "Area", "area_style": {"line": {"width": 0.0}, "top_fill": [0, 0, 0, 200], "bottom_fill": [0, 0, 0, 40], "relative_gradient": false, "invert_filled_area": false}}),
+            ),
+            (
+                "relative",
+                json!({"chart_type": "Area", "area_style": {"line": {"width": 0.0}, "top_fill": [0, 0, 0, 200], "bottom_fill": [0, 0, 0, 40], "relative_gradient": true, "invert_filled_area": false}}),
+            ),
+            (
+                "inverted",
+                json!({"chart_type": "Area", "area_style": {"line": {"width": 0.0}, "top_fill": [0, 0, 0, 200], "bottom_fill": [0, 0, 0, 40], "relative_gradient": false, "invert_filled_area": true}}),
+            ),
+            (
+                "relative inverted",
+                json!({"chart_type": "Area", "area_style": {"line": {"width": 0.0}, "top_fill": [0, 0, 0, 200], "bottom_fill": [0, 0, 0, 40], "relative_gradient": true, "invert_filled_area": true}}),
+            ),
+        ] {
+            let ctx = egui::Context::default();
+            let data = bars(&[10.0, 20.0, 15.0, 25.0]);
+            let mut chart = Chart::new(BarData::from_bars(data.clone()));
+            chart.set_main_series_visible(false);
+            chart.config.show_volume = false;
+            let mut saved = serde_json::to_value(SeriesOptions {
+                up_color: Color32::MAGENTA,
+                down_color: Color32::MAGENTA,
+                scale: SeriesScale::Separate(7),
+                ..Default::default()
+            })
+            .unwrap();
+            saved
+                .as_object_mut()
+                .unwrap()
+                .extend(settings.as_object().unwrap().clone());
+            saved["last_price_animation"] = json!("OnDataUpdate");
+            let options: SeriesOptions = serde_json::from_value(saved).unwrap();
+            let id = chart.add_series(options.clone());
+            chart.set_data(id, data.clone());
+            if own_pane {
+                let pane = chart.add_pane();
+                assert!(chart.move_series_to_pane(id, pane));
+            }
+            let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 0.0, vec![]);
+            let map = chart.series_price_map(id).unwrap();
+            let rect = Rect::from_min_max(
+                Pos2::new(0.0, map.price_to_y(map.range().max)),
+                Pos2::new(800.0, map.price_to_y(map.range().min)),
+            );
+            match kind {
+                "curve" | "markers" => {
+                    let path = painted
+                        .iter()
+                        .find_map(|shape| match shape {
+                            Shape::Path(path)
+                                if path.stroke.color
+                                    == egui::epaint::ColorMode::Solid(Color32::MAGENTA) =>
+                            {
+                                Some(path)
+                            }
+                            _ => None,
+                        })
+                        .expect("explicit curved line");
+                    assert_eq!(path.stroke.width, 4.0);
+                    assert!(path.points.len() > data.len(), "{kind}: curve subdivision");
+                    for (index, bar) in data.iter().enumerate() {
+                        assert!(path.points.contains(&Pos2::new(
+                            chart.index_to_x(index as f64).unwrap(),
+                            map.price_to_y(bar.close)
+                        )));
+                    }
+                }
+                "dash" | "dots" | "ohlc" | "thin" => {
+                    let segments: Vec<_> = painted
+                        .iter()
+                        .filter_map(|shape| match shape {
+                            Shape::LineSegment { points, stroke }
+                                if stroke.color == Color32::MAGENTA =>
+                            {
+                                Some((points, stroke))
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    if matches!(kind, "ohlc" | "thin") {
+                        assert_eq!(
+                            segments.len(),
+                            data.len() * if kind == "ohlc" { 2 } else { 3 }
+                        );
+                        let width = if kind == "thin" {
+                            chart.config.wick_width
+                        } else {
+                            (chart.state.time_scale().bar_spacing() * chart.config.candle_width
+                                / 2.0)
+                                .max(1.5)
+                        };
+                        assert!(segments.iter().all(|(_, stroke)| stroke.width == width));
+                    } else {
+                        assert!(segments.len() > data.len(), "{kind}: patterned stroke");
+                        assert!(segments.iter().all(|(_, stroke)| stroke.width == 4.0));
+                    }
+                }
+                _ => {
+                    let mesh = painted
+                        .iter()
+                        .find_map(|shape| match shape {
+                            Shape::Mesh(mesh)
+                                if mesh.vertices.len() == data.len() * 2
+                                    && mesh.vertices[1].color.r() == 0 =>
+                            {
+                                Some(mesh)
+                            }
+                            _ => None,
+                        })
+                        .expect("explicit area gradient");
+                    let relative = kind.contains("relative");
+                    let inverted = kind.contains("inverted");
+                    let top = if relative && !inverted {
+                        map.price_to_y(25.0)
+                    } else {
+                        rect.top()
+                    };
+                    let bottom = if relative && inverted {
+                        map.price_to_y(10.0)
+                    } else {
+                        rect.bottom()
+                    };
+                    for pair in mesh.vertices.as_chunks::<2>().0 {
+                        assert_eq!(
+                            pair[1].pos.y,
+                            if inverted { rect.top() } else { rect.bottom() }
+                        );
+                        for vertex in pair {
+                            // Linear alpha interpolation: 200 at the top, 40 at the bottom.
+                            let fraction = (vertex.pos.y - top) / (bottom - top);
+                            let expected = (200.0 - 160.0 * fraction.clamp(0.0, 1.0)).round() as u8;
+                            assert!(
+                                vertex.color.a().abs_diff(expected) <= 1,
+                                "{kind}: gradient at {:?}",
+                                vertex.pos
+                            );
+                        }
+                    }
+                }
+            }
+            #[cfg(feature = "ui")]
+            {
+                let saved = serde_json::to_string(&chart.snapshot().unwrap()).unwrap();
+                let mut restored = Chart::new(BarData::from_bars(data.clone()));
+                restored
+                    .restore(&serde_json::from_str(&saved).unwrap())
+                    .unwrap();
+                assert_eq!(restored.series().next().unwrap().1, &options);
+                let restored_id = restored.restored_series_id(id.0).unwrap();
+                assert_eq!(
+                    restored.series_pane(restored_id) == Some(PaneId::MAIN),
+                    !own_pane
+                );
+            }
+        }
+    }
+    let mut legacy = serde_json::to_value(SeriesOptions::default()).unwrap();
+    for field in [
+        "line_style",
+        "bars_style",
+        "area_style",
+        "last_price_animation",
+    ] {
+        legacy.as_object_mut().unwrap().remove(field);
+    }
+    assert_eq!(
+        serde_json::from_value::<SeriesOptions>(legacy).unwrap(),
+        SeriesOptions::default()
+    );
+}
+
+/// Update pulses are independent of the main series, other added series and pane scales.
+/// An expired or hidden pulse requests no repaint; a continuous pulse keeps running.
+#[test]
+fn added_series_pulses_run_independently_and_stop_repainting() {
+    use egui::Shape;
+
+    for chart_type in [
+        ChartType::Line,
+        ChartType::StepLine,
+        ChartType::LineWithMarkers,
+        ChartType::Area,
+        ChartType::Baseline,
+    ] {
+        let ctx = egui::Context::default();
+        let data = bars(&[10.0, 20.0, 15.0, 25.0]);
+        let mut chart = Chart::new(BarData::from_bars(bars(&[1000.0, 2000.0, 1500.0, 2500.0])));
+        let mut ids = Vec::new();
+        for (at, color) in [Color32::MAGENTA, Color32::GOLD].into_iter().enumerate() {
+            let mut saved = serde_json::to_value(SeriesOptions {
+                chart_type,
+                color,
+                up_color: color,
+                down_color: color,
+                marker_radius: Some(0.0),
+                scale: SeriesScale::Separate(at as u64),
+                ..Default::default()
+            })
+            .unwrap();
+            saved["last_price_animation"] = serde_json::json!("OnDataUpdate");
+            let id = chart.add_series(serde_json::from_value(saved).unwrap());
+            chart.set_data(id, data.clone());
+            if at == 1 {
+                let pane = chart.add_pane();
+                chart.move_series_to_pane(id, pane);
+            }
+            ids.push(id);
+        }
+        let dots = |painted: &[Shape], color| {
+            painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Circle(dot) if dot.radius == 3.0 && dot.fill == color => {
+                        Some(dot.center)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 0.0, vec![]);
+        assert!(dots(&painted, Color32::MAGENTA).is_empty());
+        assert!(dots(&painted, Color32::GOLD).is_empty());
+        chart.update(
+            SeriesId::MAIN,
+            bars(&[1000.0, 2000.0, 1500.0, 2400.0]).pop().unwrap(),
+        );
+        let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 0.5, vec![]);
+        assert!(dots(&painted, Color32::MAGENTA).is_empty());
+        assert!(dots(&painted, Color32::GOLD).is_empty());
+        for (step, id) in ids.iter().enumerate() {
+            chart.update(*id, bars(&[10.0, 20.0, 15.0, 24.0]).pop().unwrap());
+            let painted =
+                crate::widget::test_frames::shapes(&ctx, &mut chart, 1.0 + step as f64, vec![]);
+            let color = if step == 0 {
+                Color32::MAGENTA
+            } else {
+                Color32::GOLD
+            };
+            let map = chart.series_price_map(*id).unwrap();
+            assert_eq!(
+                dots(&painted, color),
+                [Pos2::new(
+                    chart.index_to_x(3.0).unwrap(),
+                    map.price_to_y(24.0)
+                )],
+                "{chart_type:?}"
+            );
+            if step == 0 {
+                assert!(dots(&painted, Color32::GOLD).is_empty());
+            }
+        }
+        for time in [5.0, 5.1, 5.2] {
+            let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, time, vec![]);
+            assert!(dots(&painted, Color32::MAGENTA).is_empty());
+            assert!(dots(&painted, Color32::GOLD).is_empty());
+        }
+        assert!(
+            !ctx.has_requested_repaint(),
+            "{chart_type:?}: expired update pulses"
+        );
+        let mut saved = serde_json::to_value(chart.series().next().unwrap().1).unwrap();
+        saved["last_price_animation"] = serde_json::json!("Continuous");
+        chart.set_series_options(ids[0], serde_json::from_value(saved).unwrap());
+        let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 6.0, vec![]);
+        assert_eq!(dots(&painted, Color32::MAGENTA).len(), 1);
+        assert!(dots(&painted, Color32::GOLD).is_empty());
+        assert!(ctx.has_requested_repaint());
+        chart.set_series_visible(ids[0], false);
+        for time in [7.0, 7.1, 7.2] {
+            frame(&ctx, &mut chart, time, vec![]);
+        }
+        assert!(!ctx.has_requested_repaint());
+    }
+}
+
 /// Added candles keep independent body, wick and inside-border colours in either pane.
 /// A zero width suppresses the border even when the bar supplies its colour.
 #[test]
@@ -1223,6 +1534,16 @@ fn added_series_value_tags_use_their_scale_precision_and_name() {
 #[test]
 fn series_scales_fit_visible_members_and_reserve_their_axes() {
     let ctx = egui::Context::default();
+    for key in [SeriesScale::Right, SeriesScale::Separate(2)] {
+        let mut chart = Chart::new(BarData::from_bars(bars(&[100.0, 110.0])));
+        assert!(chart.set_series_scale(SeriesId::MAIN, key));
+        let widget = Rect::from_min_size(Pos2::new(7.0, 11.0), egui::vec2(800.0, 400.0));
+        assert_eq!(
+            chart.calculate_layout_rects(widget).price_rect.left(),
+            widget.left() + chart.config.padding,
+            "the primary right axis needs no left gutter: {key:?}"
+        );
+    }
     for key in [
         SeriesScale::Right,
         SeriesScale::Left,
@@ -2265,4 +2586,215 @@ fn series_data_is_queried_popped_and_reported() {
             .unwrap()
             .is_whitespace()
     );
+}
+
+/// Moving the main plot retains its bars and x positions while painting, picking and saving
+/// its annotations in the destination pane. Returning it is one undoable placement edit.
+#[test]
+fn main_series_moves_with_rendering_pointer_and_saved_placement() {
+    use crate::model::PriceLine;
+    use crate::widget::{ChartElementId, ChartEvent, PointerTarget};
+    use egui::{Event, Modifiers, PointerButton, Shape};
+
+    for (above, inverted) in [(false, false), (true, true)] {
+        let ctx = egui::Context::default();
+        let data = bars(&[100.0, 110.0, 120.0].repeat(33));
+        let mut chart = Chart::new(BarData::from_bars(data.clone()));
+        chart.set_chart_type(ChartType::Line);
+        chart.config.show_volume = above;
+        chart.config.right_axis_width = 150.0;
+        chart.config.left_axis_width = 150.0;
+        chart.chart_options.crosshair.mode = crate::config::CrosshairMode::Normal;
+        let mut params = chart.chart_type_params().clone();
+        params.styles.line.color = Color32::RED;
+        chart.set_chart_type_params(params);
+        let other = chart.add_series(SeriesOptions {
+            color: Color32::BLUE,
+            scale: if above {
+                SeriesScale::Separate(9)
+            } else {
+                SeriesScale::Right
+            },
+            ..Default::default()
+        });
+        chart.set_data(other, bars(&[1000.0; 99]));
+        let pane = chart.add_pane();
+        chart.set_preserve_empty_pane(pane, true);
+        let companion = chart.add_series(SeriesOptions {
+            scale: SeriesScale::Separate(7),
+            ..Default::default()
+        });
+        chart.set_data(companion, bars(&[105.0; 99]));
+        assert!(chart.move_series_to_pane(companion, pane));
+        chart
+            .series_price_scale_mut(companion)
+            .unwrap()
+            .set_range(102.0, 108.0);
+        chart
+            .pane_price_scale_mut(pane, SeriesScale::Right)
+            .set_range(200.0, 300.0);
+        let mut members = vec![companion];
+        #[cfg(feature = "studies")]
+        {
+            let average = chart.add_indicator(Box::new(crate::studies::SMA::new(3)));
+            assert!(chart.move_series_to_pane(average, pane));
+            members.push(average);
+        }
+        chart
+            .series_price_scale_mut(SeriesId::MAIN)
+            .unwrap()
+            .set_range(90.0, 130.0);
+        chart
+            .series_price_scale_mut(SeriesId::MAIN)
+            .unwrap()
+            .options_mut()
+            .invert_scale = inverted;
+        if above {
+            chart.move_pane(pane, 0);
+        }
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        assert_eq!(chart.last_rendered_volume_rect.is_positive(), above);
+        let x = chart.get_chart_mapping().idx_to_x(70);
+        let original_members: Vec<_> = chart
+            .pane_series(PaneId::MAIN)
+            .into_iter()
+            .filter(|id| *id != SeriesId::MAIN)
+            .collect();
+        chart.set_markers(
+            SeriesId::MAIN,
+            vec![
+                crate::model::Marker::new(data[60].time)
+                    .at_price(112.0, crate::model::MarkerPos::AtPriceMiddle)
+                    .with_shape(crate::model::MarkerShape::Circle)
+                    .with_color(Color32::MAGENTA),
+            ],
+        );
+        chart.set_price_lines(
+            SeriesId::MAIN,
+            vec![PriceLine::new(115.0, Color32::GOLD).with_style(LineStyle::Solid)],
+        );
+        assert!(chart.user_action(|chart| chart.move_series_to_pane(SeriesId::MAIN, pane)));
+        assert_eq!(chart.series_pane(SeriesId::MAIN), Some(pane));
+        members.push(SeriesId::MAIN);
+        assert_eq!(chart.pane_series(pane), members);
+        assert_eq!(chart.pane_series(PaneId::MAIN), original_members);
+        let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 0.1, vec![]);
+        let rect = chart
+            .pane_layout
+            .panes
+            .iter()
+            .find(|item| item.id == pane)
+            .unwrap()
+            .rect;
+        let mapping = chart.get_chart_mapping();
+        #[cfg(feature = "studies")]
+        assert!(
+            !chart.last_rendered_volume_rect.is_positive(),
+            "the original pane's volume does not capture the main plot's pointer values"
+        );
+        assert!(rect.contains_rect(mapping.rect));
+        assert!((mapping.idx_to_x(70) - x).abs() < 0.01);
+        assert_eq!(chart.bars(SeriesId::MAIN), data);
+        let map = chart.series_price_map(SeriesId::MAIN).unwrap();
+        assert_eq!(map, mapping.price);
+        let original_map = chart.series_price_map(other).unwrap();
+        assert!(original_map.range().contains(1000.0));
+        assert_ne!(original_map, map);
+        // Halfway through [90, 130], 110 maps to the vertical midpoint, inverted or not.
+        assert!((map.price_to_y(110.0) - mapping.rect.center().y).abs() < 1e-4);
+        let companion_map = chart.series_price_map(companion).unwrap();
+        assert_eq!(
+            (companion_map.range().min, companion_map.range().max),
+            (102.0, 108.0)
+        );
+        assert_ne!(companion_map, map);
+        assert!((companion_map.price_to_y(105.0) - mapping.rect.center().y).abs() < 1e-4);
+        #[cfg(feature = "studies")]
+        {
+            let rendered = chart
+                .get_rendered_indicator_panes()
+                .iter()
+                .find(|study| study.chart_rect == mapping.rect)
+                .unwrap();
+            assert_eq!(
+                chart.series_price_map(chart.study_ids[rendered.indicator_idx]),
+                Some(rendered.mapping.price)
+            );
+        }
+        assert!(
+            painted.iter().any(|shape| matches!(shape, Shape::Path(path)
+            if path.stroke.color == egui::epaint::ColorMode::Solid(Color32::RED)
+                && path.points.len() > 3 && path.points.iter().all(|point| rect.contains(*point))))
+        );
+        assert!(painted.iter().any(|shape| matches!(shape, Shape::LineSegment { points, stroke }
+            if stroke.color == Color32::GOLD && points.iter().all(|point| (point.y - map.price_to_y(115.0)).abs() < 0.01))));
+        assert!(painted.iter().any(|shape| matches!(shape, Shape::Circle(circle)
+            if circle.fill == Color32::MAGENTA && (circle.center.y - map.price_to_y(112.0)).abs() < 0.01 && rect.contains(circle.center))));
+        let pos = Pos2::new(mapping.idx_to_x(70), map.price_to_y(110.0));
+        frame(&ctx, &mut chart, 0.2, vec![Event::PointerMoved(pos)]);
+        for pressed in [true, false] {
+            frame(
+                &ctx,
+                &mut chart,
+                0.3,
+                vec![Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                }],
+            );
+        }
+        assert_eq!(
+            chart.selected_element(),
+            Some(ChartElementId::Series(SeriesId::MAIN))
+        );
+        assert!(chart.drain_events().any(|event| matches!(event, ChartEvent::Click { position, .. }
+            if position.series == SeriesId::MAIN && position.pane == usize::from(!above)
+                && (position.price - 110.0).abs() < 1e-4
+                && position.target == Some(PointerTarget::Element(ChartElementId::Series(SeriesId::MAIN))))));
+        assert!(chart.undo());
+        assert_eq!(chart.series_pane(SeriesId::MAIN), Some(PaneId::MAIN));
+        assert!(chart.redo());
+        assert_eq!(chart.series_pane(SeriesId::MAIN), Some(pane));
+        let range = chart.series_price_scale(SeriesId::MAIN).unwrap().range();
+        assert_eq!((range.min, range.max), (90.0, 130.0));
+        #[cfg(feature = "ui")]
+        {
+            let saved =
+                serde_json::from_str(&serde_json::to_string(&chart.snapshot().unwrap()).unwrap())
+                    .unwrap();
+            chart.restore(&saved).unwrap();
+            let restored = chart.series_pane(SeriesId::MAIN).unwrap();
+            assert_ne!(restored, PaneId::MAIN);
+            frame(&ctx, &mut chart, 0.4, vec![]);
+            assert!(chart.pane_series(restored).contains(&SeriesId::MAIN));
+            assert_eq!(chart.bars(SeriesId::MAIN), data);
+            let restored_companion = chart
+                .price_series
+                .iter()
+                .find(|item| item.options.scale == SeriesScale::Separate(7))
+                .unwrap()
+                .id;
+            let range = chart
+                .series_price_scale(restored_companion)
+                .unwrap()
+                .range();
+            assert_eq!((range.min, range.max), (102.0, 108.0));
+            let range = chart.series_price_scale(SeriesId::MAIN).unwrap().range();
+            assert_eq!((range.min, range.max), (90.0, 130.0));
+            assert!(
+                chart.user_action(|chart| chart.move_series_to_pane(SeriesId::MAIN, PaneId::MAIN))
+            );
+            assert!(chart.undo());
+            assert_eq!(chart.series_pane(SeriesId::MAIN), Some(restored));
+        }
+        let destination = chart.series_pane(SeriesId::MAIN).unwrap();
+        assert!(chart.move_series_to_pane(SeriesId::MAIN, PaneId::MAIN));
+        assert_eq!(chart.series_pane(SeriesId::MAIN), Some(PaneId::MAIN));
+        let range = chart
+            .pane_price_scale(destination, SeriesScale::Right)
+            .range();
+        assert_eq!((range.min, range.max), (200.0, 300.0));
+    }
 }

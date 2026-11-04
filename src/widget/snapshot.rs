@@ -74,8 +74,8 @@ pub struct SavedPane {
     /// Keep the pane when its last study leaves.
     #[serde(default)]
     pub preserve: bool,
-    /// Saved study and series ids in legend order. In the price pane this is the draw order,
-    /// including the main series as id 0; older layouts leave it empty for the default order.
+    /// Saved study and series ids in draw order, with the main series as id 0 in its assigned
+    /// pane. Older layouts leave the price pane empty for the default order.
     /// Empty in version 1 layouts.
     #[serde(default)]
     pub members: Vec<usize>,
@@ -302,7 +302,8 @@ impl Chart {
                         } else {
                             pane.members.iter().map(|id| id.0).collect()
                         },
-                        scale: (*id != PaneId::MAIN).then(|| pane.scale.clone()),
+                        scale: (*id != PaneId::MAIN || *id != self.main_series_pane())
+                            .then(|| pane.scale.clone()),
                         scales: pane.scales.clone(),
                     }
                 })
@@ -380,6 +381,7 @@ impl Chart {
         if let Some(scale) = &snapshot.price_scale {
             *self.state.price_scale_mut() = scale.clone();
         }
+        self.move_series_to_pane(super::SeriesId::MAIN, PaneId::MAIN);
         let mut replaced: Vec<_> = self.indicators().map(|(id, _)| id).collect();
         if snapshot.series.is_some() {
             replaced.extend(self.series().map(|(id, _)| id));
@@ -403,6 +405,14 @@ impl Chart {
                     self.add_pane()
                 },
             );
+        }
+        // Restore ownership before added-series ranges can write to the main scale.
+        if let Some(at) = snapshot
+            .panes
+            .iter()
+            .position(|pane| pane.members.contains(&0))
+        {
+            self.move_series_to_pane(super::SeriesId::MAIN, panes[&at]);
         }
         for (saved, study) in snapshot.studies.iter().zip(studies) {
             let id = self.add_indicator(study);
@@ -465,7 +475,10 @@ impl Chart {
                     saved
                         .members
                         .iter()
-                        .position(|old| self.restored_studies.get(old) == Some(&id.0))
+                        .position(|old| {
+                            (*old == 0 && *id == super::SeriesId::MAIN)
+                                || self.restored_studies.get(old) == Some(&id.0)
+                        })
                         .unwrap_or(usize::MAX)
                 });
             }
@@ -541,11 +554,29 @@ fn check(snapshot: &ChartSnapshot, factory: &IndicatorFactory) -> Result<Checked
         })
         .collect::<Result<Vec<_>, _>>()?;
     check_source_links(&snapshot.studies, &studies)?;
+    let main_pane = snapshot
+        .panes
+        .iter()
+        .position(|pane| pane.members.contains(&0))
+        .or_else(|| snapshot.panes.iter().position(|pane| pane.main));
+    if snapshot
+        .panes
+        .iter()
+        .flat_map(|pane| &pane.members)
+        .filter(|id| **id == 0)
+        .count()
+        > 1
+    {
+        return Err(RestoreError::Layout(
+            "Main series belongs to multiple panes",
+        ));
+    }
     for (at, pane) in snapshot.panes.iter().enumerate() {
-        if !pane.main || pane.members.is_empty() {
+        if pane.members.is_empty() {
             continue;
         }
         let expected: std::collections::HashSet<_> = std::iter::once(super::SeriesId::MAIN.0)
+            .filter(|_| Some(at) == main_pane)
             .chain(
                 snapshot
                     .studies
