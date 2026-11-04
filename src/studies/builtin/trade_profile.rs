@@ -74,6 +74,23 @@ pub struct TradeProfile {
 }
 
 impl TradeProfile {
+    /// Inclusive lower and upper value area rows after each contributing bar of `flow`, the
+    /// footprint this profile was calculated from, paired with its opening time. Uses
+    /// [`FootprintBar::value_area`], including its share and tie rules.
+    pub fn developing_value_area(
+        &self,
+        flow: &Footprint,
+        share: f64,
+    ) -> Vec<(DateTime<Utc>, (i64, i64))> {
+        let mut volume = FootprintBar::empty(self.range.start);
+        flow.complete_bars(self.range.clone())
+            .filter_map(|bar| {
+                volume.absorb(bar);
+                volume.value_area(share).map(|area| (bar.time, area))
+            })
+            .collect()
+    }
+
     /// Local volume maxima and minima, respectively, between the first and last traded rows.
     /// Untraded rows have zero volume, so a gap between traded rows is a valley; it is
     /// evaluated as one span, however wide. Rows of equal smoothed volume form one plateau,
