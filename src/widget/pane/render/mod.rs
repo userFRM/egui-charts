@@ -741,7 +741,8 @@ impl Chart {
                     crosshair_options.vert_line_visible = false;
                     crosshair_options.horz_line_visible = false;
                 }
-                crosshair_options.horz_label_visible &= panel.draw_axis;
+                crosshair_options.horz_label_visible &=
+                    panel.draw_axis || host_position && target_panel;
 
                 // Use show_aligned_interactive to get pane info for hit testing
                 let mut child =

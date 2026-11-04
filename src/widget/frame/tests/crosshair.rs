@@ -7,13 +7,16 @@ fn programmatic_crosshair_uses_the_target_series_scale_and_pane() {
     use crate::scales::CustomPriceFormatter;
     use crate::widget::{ImageExportOptions, SeriesId, SeriesOptions};
 
-    for (scale, secondary, inverted, above) in [
-        (Some(SeriesScale::Left), false, false, false),
-        (None, false, false, false),
-        (Some(SeriesScale::Left), false, true, false),
-        (Some(SeriesScale::Overlay(1)), false, false, false),
-        (Some(SeriesScale::Left), true, false, false),
-        (Some(SeriesScale::Left), true, false, true),
+    for (scale, secondary, inverted, above, moved_main) in [
+        (Some(SeriesScale::Left), false, false, false, false),
+        (None, false, false, false, false),
+        (Some(SeriesScale::Left), false, true, false, false),
+        (Some(SeriesScale::Overlay(1)), false, false, false, false),
+        (Some(SeriesScale::Left), true, false, false, false),
+        (Some(SeriesScale::Left), true, false, true, false),
+        (None, false, false, false, true),
+        (Some(SeriesScale::Left), false, false, false, true),
+        (Some(SeriesScale::Left), true, true, true, true),
     ] {
         let ctx = egui::Context::default();
         let mut chart = chart(&[100.0], &[200.0]);
@@ -37,6 +40,12 @@ fn programmatic_crosshair_uses_the_target_series_scale_and_pane() {
             chart.set_data(id, bars);
             if secondary {
                 let pane = chart.add_pane();
+                let sibling = chart.add_series(SeriesOptions {
+                    scale,
+                    ..Default::default()
+                });
+                chart.set_data(sibling, chart.bars(id).to_vec());
+                assert!(chart.move_series_to_pane(sibling, pane));
                 chart.move_series_to_pane(id, pane);
                 if above {
                     chart.move_pane(pane, 0);
@@ -44,6 +53,14 @@ fn programmatic_crosshair_uses_the_target_series_scale_and_pane() {
             }
             id
         });
+        if moved_main {
+            let pane = if secondary {
+                chart.series_pane(id).unwrap()
+            } else {
+                chart.add_pane()
+            };
+            assert!(chart.move_series_to_pane(SeriesId::MAIN, pane));
+        }
         chart.set_series_formatter(
             id,
             Some(std::sync::Arc::new(CustomPriceFormatter::new(|price| {
@@ -81,12 +98,13 @@ fn programmatic_crosshair_uses_the_target_series_scale_and_pane() {
         chart.set_series_crosshair_position(id, Some((time, price)));
         let painted = shapes(&ctx, &mut chart, 0.1, vec![Event::PointerGone]);
         let main = chart.get_rendered_price_rect();
-        let pane = if secondary {
+        let separate_pane = chart.series_pane(id) != chart.series_pane(SeriesId::MAIN);
+        let pane = if separate_pane {
             chart
                 .pane_layout
                 .panes
                 .iter()
-                .find(|pane| pane.members.contains(&id))
+                .find(|pane| Some(pane.id) == chart.series_pane(id))
                 .unwrap()
                 .rect
         } else {
@@ -95,7 +113,11 @@ fn programmatic_crosshair_uses_the_target_series_scale_and_pane() {
         // 137.5 in [100, 200], or 1375 in [1000, 2000], is 3/8 up the range.
         let expected_y = pane.top() + pane.height() * if inverted { 0.375 } else { 0.625 };
         let horizontal = lines(&painted, true);
-        assert_eq!(horizontal.len(), 1, "{scale:?} {secondary} {inverted}");
+        assert_eq!(
+            horizontal.len(),
+            1,
+            "{scale:?} {secondary} {inverted} {moved_main}"
+        );
         assert!(
             (horizontal[0][0].y - expected_y).abs() < 0.02,
             "{horizontal:?}, expected {expected_y}"
@@ -127,7 +149,7 @@ fn programmatic_crosshair_uses_the_target_series_scale_and_pane() {
         let exported = shapes(&ctx, &mut snapshot, 0.2, vec![]);
         assert_eq!(lines(&exported, true), horizontal);
         // The pointer wins, then the saved host position returns when the pointer leaves.
-        for (step, rect) in [Some(main), secondary.then_some(pane)]
+        for (step, rect) in [Some(main), separate_pane.then_some(pane)]
             .into_iter()
             .flatten()
             .enumerate()

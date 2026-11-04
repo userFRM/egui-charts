@@ -3333,8 +3333,7 @@ impl Chart {
                         // price range for a time alone
                         let target = self.synced_crosshair_series;
                         let main_target = target.is_none_or(|id| {
-                            self.series_pane(id) == Some(super::PaneId::MAIN)
-                                && self.is_series_visible(id)
+                            self.series_pane(id) == Some(main_pane) && self.is_series_visible(id)
                         });
                         let map = target
                             .filter(|_| main_target)
