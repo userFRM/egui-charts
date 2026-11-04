@@ -4,8 +4,12 @@ use crate::localization as l10n;
 use egui::{Pos2, Rect, Sense, Ui};
 
 impl Chart {
+    /// Whether this frame is a Ctrl/Command double-click that collapses the pointed pane. Pane
+    /// and chart handlers drop their own double-click on it. A maximised pane has no other pane
+    /// to collapse, so it keeps the ordinary double-click.
     pub(in crate::widget) fn pane_collapse_click(&self, ctx: &egui::Context) -> bool {
         self.has_panes()
+            && self.pane_layout.maximized.is_none()
             && self.pointer_commands_enabled(ctx)
             && ctx.input(|input| {
                 input.modifiers.command
@@ -17,6 +21,8 @@ impl Chart {
             })
     }
 
+    /// Collapses or restores the pane under the pointer, as one undoable edit that keeps its
+    /// stretch, and focuses the chart.
     pub(super) fn pane_collapse_shortcut(&mut self, ui: &Ui) {
         if !ui.is_enabled() || !self.pane_collapse_click(ui.ctx()) {
             return;
@@ -35,6 +41,7 @@ impl Chart {
         }
     }
 
+    /// Header row of a collapsed price pane; a click restores it.
     pub(super) fn collapsed_price_header(&mut self, ui: &mut Ui, rect: Rect) {
         let response = ui.interact(rect, ui.scope_id().with("collapsed_price"), Sense::click());
         ui.painter().text(

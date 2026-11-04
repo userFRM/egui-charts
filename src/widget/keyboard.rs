@@ -182,6 +182,8 @@ impl super::Chart {
         true
     }
 
+    /// Pane and price under `pos`, read on that pane's own scale. `None` outside the plot, over
+    /// a collapsed pane or at a price that is not finite.
     #[cfg(feature = "ui")]
     pub(crate) fn pointer_price(&self, pos: egui::Pos2) -> Option<(super::PaneId, f64)> {
         let mapping = self.get_chart_mapping();
