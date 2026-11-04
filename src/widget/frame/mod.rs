@@ -3030,8 +3030,9 @@ impl Chart {
                 legend_bottom = bottom;
             }
         }
-        let legend_bottom = self.paint_secondary_legend(
+        let (legend_bottom, overlay_remove) = self.paint_secondary_legend(
             ui,
+            shown.id,
             &painter,
             price_rect,
             legend_bottom + 4.0,
@@ -3632,6 +3633,9 @@ impl Chart {
         }
         if let Some(action) = series_action {
             self.apply_main_series_action(action);
+        }
+        if let Some(id) = overlay_remove {
+            self.user_action(|chart| chart.remove_series(id));
         }
         self.main_pane_actions(ui, rect, chart_rect);
         self.record_host_click(ui, &response);
