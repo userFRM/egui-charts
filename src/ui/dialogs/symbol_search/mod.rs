@@ -842,14 +842,20 @@ impl SymbolSearchDialog {
     fn list_expression(&mut self, ctx: &Context, all_symbols: &[Instrument]) {
         self.expression_status = None;
         let text = self.search_query.trim();
+        let query = crate::services::SymbolQuery::new(text);
+        let name = query.qualified().map_or(text, |(_, name)| name);
         if self.config.max_results == 0
             || self.search_query.chars().count() < self.config.min_search_len
             || !text.contains(['+', '-', '*', '/', '(', ')'])
             || !matches!(self.category.0, None | Some(SymbolType::Spread))
-            || self
-                .filtered_symbols
-                .iter()
-                .any(|symbol| symbol.symbol.eq_ignore_ascii_case(text))
+            || self.filtered_symbols.iter().any(|symbol| {
+                symbol.symbol.eq_ignore_ascii_case(text)
+                    || symbol
+                        .symbol
+                        .rsplit(':')
+                        .next()
+                        .is_some_and(|ticker| ticker.eq_ignore_ascii_case(name))
+            })
         {
             return;
         }
@@ -1497,11 +1503,18 @@ mod tests {
     /// unknown symbols and malformed text are reported instead.
     #[test]
     fn spread_queries_list_the_expression_or_report_why_not() {
-        let symbols: Vec<_> = create_test_symbols()
+        let mut symbols: Vec<_> = create_test_symbols()
             .into_iter()
             .map(|symbol| symbol.with_exchange("NASDAQ"))
             .collect();
+        symbols.push(
+            Instrument::new("BRK-B")
+                .with_exchange("NASDAQ")
+                .with_symbol_type(SymbolType::Stock),
+        );
         for (query, min_length, limit, expected, status) in [
+            ("BRK-B", 1, 20, None, None),
+            ("NASDAQ:BRK-B", 1, 20, None, None),
             ("aapl - tsla", 1, 20, Some("AAPL-TSLA"), None),
             ("NASDAQ:aapl-NASDAQ:tsla", 1, 20, Some("AAPL-TSLA"), None),
             (
@@ -1527,6 +1540,15 @@ mod tests {
                 .first()
                 .filter(|symbol| symbol.symbol_type == Some(SymbolType::Spread));
             assert_eq!(spread.map(|s| s.symbol.as_str()), expected, "{query}");
+            if query.ends_with("BRK-B") {
+                assert!(
+                    dialog
+                        .filtered_symbols
+                        .iter()
+                        .any(|symbol| symbol.symbol == "BRK-B"
+                            && symbol.symbol_type == Some(SymbolType::Stock))
+                );
+            }
             let shown = dialog.expression_status.as_ref();
             assert_eq!(shown.map(|(text, _)| text.as_str()), status, "{query}");
         }
