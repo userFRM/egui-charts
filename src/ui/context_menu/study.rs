@@ -568,6 +568,38 @@ mod tests {
                 "{action:?}"
             );
         }
+        use crate::ui::widget_bar::panels::object_tree::{
+            ObjectTreeAction, ObjectTreePanel, SourceItem,
+        };
+        let mut tree = ObjectTreePanel::new();
+        let sources = [SourceItem::indicator(1, "SMA", egui::Color32::BLUE).with_series_id(id)];
+        for action in [
+            ObjectTreeAction::RemoveIndicator(1),
+            ObjectTreeAction::Delete(1),
+            ObjectTreeAction::DeleteSelected,
+            ObjectTreeAction::RemoveAllIndicators,
+        ] {
+            tree.state_mut().select(1);
+            assert!(tree.apply_to_chart(&mut chart, &action, &sources));
+            assert!(chart.indicators().next().unwrap().1.snapshot_settings() == before);
+        }
+        chart
+            .selection
+            .select(crate::widget::ChartElementId::Indicator(id), None);
+        crate::widget::test_frames::frame(&ctx, &mut chart, 0.0, vec![]);
+        crate::widget::test_frames::frame(
+            &ctx,
+            &mut chart,
+            0.1,
+            vec![egui::Event::Key {
+                key: egui::Key::Delete,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert!(chart.indicators().next().unwrap().1.snapshot_settings() == before);
         apply(&mut chart, id, &StudyContextMenuAction::ToggleVisibility);
         assert!(!chart.indicators().next().unwrap().1.is_visible());
         apply(&mut chart, id, &StudyContextMenuAction::ToggleVisibility);

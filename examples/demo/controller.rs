@@ -1333,7 +1333,11 @@ impl DemoApp {
 
     fn remove_all_indicators(&mut self) {
         let chart = &mut self.chart;
-        let ids: Vec<SeriesId> = chart.indicators().map(|(id, _)| id).collect();
+        let ids: Vec<SeriesId> = chart
+            .indicators()
+            .filter(|(_, study)| study.user_edit_enabled())
+            .map(|(id, _)| id)
+            .collect();
         for id in ids {
             chart.remove_series(id);
         }
@@ -2468,7 +2472,10 @@ impl DemoApp {
             ObjectTreeAction::ChangeColor(id, color) => {
                 let chart = &mut self.chart;
                 if let Some(study) = indicator_from_tree_id(id) {
-                    if let Some(ind) = chart.indicator_mut(study) {
+                    if let Some(ind) = chart
+                        .indicator_mut(study)
+                        .filter(|study| study.user_edit_enabled())
+                    {
                         ind.set_color(0, color);
                     }
                 } else {
