@@ -272,7 +272,11 @@ impl ObjectTreePanel {
             }
             ObjectTreeAction::RemoveAllDrawings => chart.drawings_mut().clear_all(),
             ObjectTreeAction::RemoveAllIndicators => {
-                let ids: Vec<SeriesId> = chart.indicators().map(|(id, _)| id).collect();
+                let ids: Vec<SeriesId> = chart
+                    .indicators()
+                    .filter(|(_, study)| study.user_edit_enabled())
+                    .map(|(id, _)| id)
+                    .collect();
                 for id in ids {
                     chart.remove_series(id);
                 }
@@ -307,7 +311,9 @@ fn set_visible(chart: &mut Chart, source: &SourceItem, visible: bool) -> bool {
 
 fn delete(chart: &mut Chart, source: &SourceItem) {
     if source.is_indicator() || source.is_added_series() {
-        if let Some(id) = source.series_id {
+        if let Some(id) = source.series_id
+            && (source.is_added_series() || chart.indicator_user_edit_enabled(id))
+        {
             chart.remove_series(id);
         }
     } else if source.is_drawing() {
@@ -426,6 +432,32 @@ mod tests {
     fn apply(tree: &mut ObjectTreePanel, chart: &mut Chart, action: ObjectTreeAction) {
         let rows = rows(chart);
         chart.user_action(|chart| tree.apply_to_chart(chart, &action, &rows));
+    }
+
+    #[test]
+    fn deleting_added_series_preserves_read_only_studies() {
+        for bulk in [false, true] {
+            let mut chart = chart(&[100.0], &[200.0]);
+            let study = chart.add_indicator(Box::new(crate::studies::SMA::new(2)));
+            chart.set_indicator_user_edit_enabled(study, false);
+            let added = chart.add_series(crate::widget::SeriesOptions::default());
+            let sources = [
+                SourceItem::indicator(1, "SMA", egui::Color32::GRAY).with_series_id(study),
+                SourceItem::data_source(2, "Comparison").with_series_id(added),
+            ];
+            let mut tree = ObjectTreePanel::new();
+            if bulk {
+                tree.state_mut().select(1);
+                tree.state_mut().toggle_selection(2);
+                tree.apply_to_chart(&mut chart, &ObjectTreeAction::DeleteSelected, &sources);
+            } else {
+                for id in [1, 2] {
+                    tree.apply_to_chart(&mut chart, &ObjectTreeAction::Delete(id), &sources);
+                }
+            }
+            assert!(chart.indicators().any(|(id, _)| id == study));
+            assert!(chart.series().all(|(id, _)| id != added));
+        }
     }
 
     #[test]

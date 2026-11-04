@@ -6,6 +6,7 @@ mod scales;
 
 pub use options::SeriesOptions;
 pub(super) use options::{PriceSeries, SeriesLegend, base_line};
+pub(super) use paint::paint_last_price_pulse;
 
 use super::change_marks::ChangeMarks;
 use super::{Chart, ChartElementId, DataOperation, SeriesId};
@@ -66,6 +67,21 @@ pub struct BarsInRange {
     pub bars_after: f64,
 }
 
+/// A valued bar selected by [`Chart::series_last_value`], on its series' price scale.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SeriesLastValue {
+    /// The selected bar's close in raw price units.
+    pub value: f64,
+    /// Its logical position on the shared horizontal scale, including gaps.
+    pub index: f64,
+    /// Its y coordinate in the chart's [`Ui`](egui::Ui), possibly outside the pane.
+    pub coordinate: f32,
+    /// Its last-value tag colour, including any per-bar override.
+    pub color: egui::Color32,
+    /// The value formatted as [`Chart::format_series_price`] formats it, without a name.
+    pub text: String,
+}
+
 /// Handle of a price line added with [`Chart::add_price_line`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PriceLineId(u64);
@@ -75,7 +91,9 @@ impl Chart {
     /// bar series shown in a pane other than the main one, or [`SeriesId::MAIN`] from the main
     /// series' legend button.
     pub fn take_indicator_settings_request(&mut self) -> Option<SeriesId> {
-        self.indicator_settings_request.take()
+        self.indicator_settings_request
+            .take()
+            .filter(|id| !self.study_ids.contains(id) || self.indicator_user_edit_enabled(*id))
     }
 
     /// Replaces the bars of `series`, for history or a replay window. Invalid bars (a non-finite
@@ -779,6 +797,7 @@ impl Chart {
         let follow = self.chart_options.time_scale.shift_visible_range_on_new_bar;
         self.state
             .set_elements(built.map(|(elements, _)| elements), follow);
+        self.refresh_time_scale_content();
         #[cfg(feature = "drawings")]
         self.project_drawing_points();
     }

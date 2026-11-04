@@ -145,12 +145,14 @@ impl DemoApp {
         chart.set_data(SeriesId::MAIN, source.state().data().bars.clone());
         chart.set_event_visibility(source.event_visibility().clone());
         chart.set_mark_source(Some(Arc::new(super::marks::DemoMarks {
-            bars: chart.bars(SeriesId::MAIN).to_vec(),
+            live: live.clone(),
+            extended_hours: source.extended_hours(),
             samples: self.api_samples,
             notifications: source
                 .event_visibility()
                 .show_news_notifications
                 .then(|| self.notification_host.clone()),
+            times: Default::default(),
         })));
         if let Some(scale) = source.series_scale(SeriesId::MAIN) {
             chart.set_series_scale(SeriesId::MAIN, scale);

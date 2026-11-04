@@ -35,12 +35,14 @@ then create a destination with
 accepts an added series or study and its destination
 [`PaneId`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.PaneId.html).
 It returns `false` for the main series, unknown IDs or a custom study that
-rejects the placement. Use `PaneId::MAIN` to move an added series back.
+rejects the placement. Use `PaneId::MAIN` to move an added series back while the original pane exists.
 
-In the main pane, the added series follows
+In every pane, the added series follows
 [`SeriesOptions::scale`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.SeriesOptions.html#structfield.scale).
-In a lower pane, it uses that pane's scale. This is why the scene assigns volume
-an independent scale for its return to the main pane. Change its active scale
+Each pane keeps its own scale for every assignment, so a moved series joins the
+destination pane's scale with the same assignment, with that scale's options and
+range. The scene assigns volume an independent scale so that it does not share
+the price axis on its return to the main pane. Change its active scale
 through [`series_price_scale_mut`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.series_price_scale_mut),
 as in the [price scale guide](price-scale.mdx).
 
@@ -51,8 +53,12 @@ so the same destination remains available. Inspect placement with
 [`pane_series`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.pane_series)
 and [`series_pane`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.series_pane).
 [`remove_pane`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.remove_pane)
-also removes the series and studies it contains; move them out first to keep them.
-The main pane cannot be removed.
+also removes the series, studies, markers, price lines and drawings it contains
+(locked drawings included); move them out first to keep them. This applies to
+the original price pane too, as long as another pane remains: the surviving
+panes keep their IDs, order, data and the shared time mapping, and snapshots
+save and restore the layout without it. Removing the final pane returns `false`
+and keeps its content. To clear only the secondary panes, skip `PaneId::MAIN`.
 
 ## Set pane sizes
 

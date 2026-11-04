@@ -44,7 +44,7 @@ pub use grid::{render_grid, render_vertical_grid};
 pub use indicator::IndicatorRenderer;
 pub(crate) use indicator::paint_study_plot;
 pub use legend::{Legend, LegendStatus, QuoteSide, StudyAction};
-pub(crate) use legend::{SeriesAction, study_controls};
+pub(crate) use legend::{SeriesAction, controls_width, study_controls};
 pub(crate) use markers::{
     marker_bounds, render_change_mark, render_event_badges, render_event_breaks,
 };

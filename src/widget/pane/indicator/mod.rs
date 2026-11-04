@@ -81,6 +81,7 @@ pub struct IndicatorPane {
     pub(super) price_map: Option<PriceMap>,
     pub(super) price_formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
     pub(super) overlay: bool,
+    pub(super) draw_axis: bool,
     pub(super) legend_offset: f32,
     pub(super) pane_controls: bool,
     pub(super) axis_rect: Option<Rect>,
@@ -103,6 +104,7 @@ impl IndicatorPane {
             price_map: None,
             price_formatter: None,
             overlay: false,
+            draw_axis: true,
             legend_offset: 0.0,
             pane_controls: false,
             axis_rect: None,
@@ -552,11 +554,16 @@ impl IndicatorPane {
                         indicator.precision().unwrap_or(2).min(255) as u8,
                     )),
                     &options,
-                    if left_axis {
-                        chart_rect.left()
-                    } else {
-                        rect.right()
-                    },
+                    self.axis_rect.map_or_else(
+                        || {
+                            if left_axis {
+                                chart_rect.left()
+                            } else {
+                                rect.right()
+                            }
+                        },
+                        |axis| axis.right(),
+                    ),
                     None,
                     Some(match self.price_formatter.as_deref() {
                         Some(formatter) => mapping.price.transform().label(
@@ -594,7 +601,7 @@ impl IndicatorPane {
                 row,
                 controls,
                 response.id.with("study_controls"),
-                indicator.is_visible(),
+                indicator,
             )
         });
         let legend_rect = Rect::from_min_max(
@@ -631,7 +638,7 @@ impl IndicatorPane {
         })
     }
 
-    pub(super) fn calculate_y_range(
+    pub(in crate::widget) fn calculate_y_range(
         &self,
         indicator: &dyn Indicator,
         visible_range: &Range<usize>,

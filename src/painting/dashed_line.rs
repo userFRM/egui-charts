@@ -186,7 +186,7 @@ fn draw_dashed_segments_inner(
     let segments = segments.into_iter();
     let mut dots = Mesh::default();
     let mut key = None;
-    let dotted = dash_len == 1.0 && stroke.width == 1.0;
+    let dotted = dash_len == 1.0;
     if stroke.width.is_finite()
         && stroke.width > 0.0
         && dash_len.is_finite()
@@ -333,7 +333,7 @@ fn append_dashed_segment(
         return;
     };
     let clip = clip.expand(stroke.width * 0.5);
-    if dash_len != 1.0 || stroke.width != 1.0 || (start.x != end.x && start.y != end.y) {
+    if dash_len != 1.0 || !stroke.width.is_finite() || (start.x != end.x && start.y != end.y) {
         // One paint list lock for all dashes, not one per dash.
         let mut dashes = Vec::new();
         visible_dashes(start, end, clip, dash_len, gap_len, phase, |a, b| {
@@ -342,7 +342,7 @@ fn append_dashed_segment(
         painter.extend(dashes);
         return;
     }
-    // A mesh keeps one-point dots square; thin rectangles are tessellated as lines. Callers
+    // A mesh keeps one-point dots visible; short segments can round to zero length. Callers
     // reserve the mesh for the clipped spans, so adding dots never copies growing buffers.
     let vertical = start.x == end.x;
     let (across, across_clip) = if vertical {
@@ -372,8 +372,8 @@ fn append_dashed_segment(
             ));
         });
     }
-    let edge = ((across - 0.5) * pixels_per_point).round() / pixels_per_point;
-    let width = (across + 0.5) - (across - 0.5);
+    let width = stroke.width;
+    let edge = ((across - width * 0.5) * pixels_per_point).round() / pixels_per_point;
     for &(min, len) in &spans.spans {
         let rect = if vertical {
             Rect::from_min_size(Pos2::new(edge, min), egui::vec2(width, len))
@@ -594,8 +594,15 @@ mod tests {
             (Pos2::new(-50.0, 30.75), Pos2::new(150.0, 30.75), 0.0),
             (Pos2::new(-50.0, 50.5), Pos2::new(150.0, 50.5), 1.0),
         ];
-        // Batches repeat across scales, gaps and colours, so a kept mesh must match them all.
-        for color in [Color32::from_white_alpha(80), Color32::RED] {
+        // One-point dots keep their thickness at every width instead of rounding to zero.
+        for (width, color) in [
+            (1.0, Color32::from_white_alpha(80)),
+            (1.0, Color32::RED),
+            (2.0, Color32::from_white_alpha(80)),
+            (2.0, Color32::RED),
+            (3.0, Color32::from_white_alpha(80)),
+            (3.0, Color32::RED),
+        ] {
             for scale in [1.0, 1.25, 2.0] {
                 for gap in [0.0, 3.0, 7.0] {
                     let render = |batch| {
@@ -609,7 +616,7 @@ mod tests {
                             |_| {
                                 let painter =
                                     Painter::new(ctx.clone(), LayerId::background(), rect);
-                                let stroke = Stroke::new(1.0, color);
+                                let stroke = Stroke::new(width, color);
                                 if batch {
                                     draw_dashed_segments(&painter, segments, stroke, 1.0, gap);
                                 } else {
@@ -639,6 +646,14 @@ mod tests {
                         std::thread::scope(|scope| scope.spawn(|| render(false)).join().unwrap());
                     assert_eq!(count, 1);
                     assert_eq!(individual_count, 5);
+                    for dot in batched.vertices.as_chunks::<4>().0 {
+                        let positions: [Pos2; 4] = std::array::from_fn(|at| dot[at].pos);
+                        let size = Rect::from_points(&positions).size();
+                        assert!(
+                            (size.x - width).abs() < 0.001 || (size.y - width).abs() < 0.001,
+                            "dot thickness: {size:?}, width={width}"
+                        );
+                    }
                     assert_eq!(batched.vertices, individual.vertices);
                     assert_eq!(batched.indices, individual.indices);
                 }

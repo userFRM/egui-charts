@@ -64,7 +64,7 @@ pub struct SavedSeries {
 /// One pane of a [`ChartSnapshot`].
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SavedPane {
-    /// Whether it is the price pane.
+    /// Whether it is the original price pane. A layout may omit that pane.
     pub main: bool,
     /// Its share of the chart height; see [`Chart::pane_stretch_factor`].
     pub stretch: f32,
@@ -74,14 +74,17 @@ pub struct SavedPane {
     /// Keep the pane when its last study leaves.
     #[serde(default)]
     pub preserve: bool,
-    /// Saved study and series ids in legend order. In the price pane this is the draw order,
-    /// including the main series as id 0; older layouts leave it empty for the default order.
+    /// Saved study and series ids in draw order, with the main series as id 0 in its assigned
+    /// pane. Older layouts leave the price pane empty for the default order.
     /// Empty in version 1 layouts.
     #[serde(default)]
     pub members: Vec<usize>,
     /// The pane's price scale, including its manual range.
     #[serde(default)]
     pub scale: Option<crate::scales::PriceScale>,
+    /// Additional named scales in this pane, including options and manual ranges.
+    #[serde(default)]
+    pub scales: Vec<(crate::model::SeriesScale, crate::scales::PriceScale)>,
 }
 
 /// What a chart shows and how: everything a user sets on it, without the bars, which come from
@@ -299,7 +302,9 @@ impl Chart {
                         } else {
                             pane.members.iter().map(|id| id.0).collect()
                         },
-                        scale: (*id != PaneId::MAIN).then(|| pane.scale.clone()),
+                        scale: (*id != PaneId::MAIN || *id != self.main_series_pane())
+                            .then(|| pane.scale.clone()),
+                        scales: pane.scales.clone(),
                     }
                 })
                 .collect(),
@@ -343,6 +348,16 @@ impl Chart {
         factory: &IndicatorFactory,
     ) -> Result<Vec<SkippedDrawing>, RestoreError> {
         let (studies, drawings) = check(snapshot, factory)?;
+        let main_present = snapshot.panes.iter().any(|pane| pane.main);
+        let main_source_present =
+            main_present || snapshot.panes.iter().any(|pane| pane.members.contains(&0));
+        if !main_source_present {
+            self.remove_series(super::SeriesId::MAIN);
+        } else if !self.main_series_present {
+            self.main_series_present = true;
+            let paused = self.feed_link.as_ref().is_some_and(|link| link.host_paused);
+            self.set_feed_paused(paused);
+        }
         self.set_symbol(snapshot.symbol.clone());
         if let Some(interval) = snapshot.interval {
             self.set_timeframe(interval);
@@ -376,6 +391,11 @@ impl Chart {
         if let Some(scale) = &snapshot.price_scale {
             *self.state.price_scale_mut() = scale.clone();
         }
+        if self.panes().contains(&PaneId::MAIN) {
+            self.move_series_to_pane(super::SeriesId::MAIN, PaneId::MAIN);
+        } else {
+            self.leave_panes(super::SeriesId::MAIN);
+        }
         let mut replaced: Vec<_> = self.indicators().map(|(id, _)| id).collect();
         if snapshot.series.is_some() {
             replaced.extend(self.series().map(|(id, _)| id));
@@ -388,7 +408,18 @@ impl Chart {
         self.restored_studies.clear();
         self.pane_layout
             .panes
-            .retain(|pane| pane.id == PaneId::MAIN || !pane.members.is_empty());
+            .retain(|pane| (main_present && pane.id == PaneId::MAIN) || !pane.members.is_empty());
+        if main_present
+            && !self
+                .pane_layout
+                .panes
+                .iter()
+                .any(|pane| pane.id == PaneId::MAIN)
+        {
+            self.pane_layout
+                .panes
+                .push(super::pane::Pane::new(PaneId::MAIN));
+        }
         let mut panes: HashMap<usize, PaneId> = HashMap::new();
         for (at, pane) in snapshot.panes.iter().enumerate() {
             panes.insert(
@@ -396,9 +427,23 @@ impl Chart {
                 if pane.main {
                     PaneId::MAIN
                 } else {
-                    self.add_pane()
+                    let id = self.add_pane();
+                    self.pane_layout
+                        .panes
+                        .last_mut()
+                        .expect("pane was added")
+                        .preserve = true;
+                    id
                 },
             );
+        }
+        // Restore ownership before added-series ranges can write to the main scale.
+        if let Some(at) = snapshot
+            .panes
+            .iter()
+            .position(|pane| pane.members.contains(&0))
+        {
+            self.move_series_to_pane(super::SeriesId::MAIN, panes[&at]);
         }
         for (saved, study) in snapshot.studies.iter().zip(studies) {
             let id = self.add_indicator(study);
@@ -461,12 +506,18 @@ impl Chart {
                     saved
                         .members
                         .iter()
-                        .position(|old| self.restored_studies.get(old) == Some(&id.0))
+                        .position(|old| {
+                            (*old == 0 && *id == super::SeriesId::MAIN)
+                                || self.restored_studies.get(old) == Some(&id.0)
+                        })
                         .unwrap_or(usize::MAX)
                 });
             }
             if let Some(scale) = &saved.scale {
                 pane.scale = scale.clone();
+            }
+            for (key, scale) in &saved.scales {
+                *pane.assigned_scale_mut(*key) = scale.clone();
             }
             if saved.main && !saved.members.is_empty() {
                 self.pane_layout.main = saved
@@ -534,11 +585,29 @@ fn check(snapshot: &ChartSnapshot, factory: &IndicatorFactory) -> Result<Checked
         })
         .collect::<Result<Vec<_>, _>>()?;
     check_source_links(&snapshot.studies, &studies)?;
+    let main_pane = snapshot
+        .panes
+        .iter()
+        .position(|pane| pane.members.contains(&0))
+        .or_else(|| snapshot.panes.iter().position(|pane| pane.main));
+    if snapshot
+        .panes
+        .iter()
+        .flat_map(|pane| &pane.members)
+        .filter(|id| **id == 0)
+        .count()
+        > 1
+    {
+        return Err(RestoreError::Layout(
+            "Main series belongs to multiple panes",
+        ));
+    }
     for (at, pane) in snapshot.panes.iter().enumerate() {
-        if !pane.main || pane.members.is_empty() {
+        if pane.members.is_empty() {
             continue;
         }
         let expected: std::collections::HashSet<_> = std::iter::once(super::SeriesId::MAIN.0)
+            .filter(|_| Some(at) == main_pane)
             .chain(
                 snapshot
                     .studies
@@ -589,7 +658,9 @@ fn check(snapshot: &ChartSnapshot, factory: &IndicatorFactory) -> Result<Checked
         .price_scale
         .as_ref()
         .is_some_and(|scale| !valid_scale(scale))
-        || snapshot.panes.iter().filter(|pane| pane.main).count() != 1
+        || snapshot.panes.is_empty()
+        || snapshot.panes.iter().filter(|pane| pane.main).count() > 1
+        || (main_pane.is_none() && snapshot.main_series_visible)
         || snapshot.studies.iter().map(|study| study.id)
             .chain(snapshot.series.iter().flatten().map(|series| series.id))
             .any(|id| id == super::SeriesId::MAIN.0)
@@ -609,9 +680,16 @@ fn check(snapshot: &ChartSnapshot, factory: &IndicatorFactory) -> Result<Checked
         || snapshot
             .panes
             .iter()
-            .filter_map(|pane| pane.scale.as_ref())
+            .flat_map(|pane| pane.scale.iter().chain(pane.scales.iter().map(|(_, scale)| scale)))
             .chain(snapshot.series.iter().flatten().filter_map(|series| series.price_scale.as_ref()))
             .any(|scale| !valid_scale(scale))
+        || snapshot.panes.iter().any(|pane| {
+            let keys: std::collections::HashSet<_> =
+                pane.scales.iter().map(|(key, _)| *key).collect();
+            (pane.main && !keys.is_empty())
+                || keys.contains(&crate::model::SeriesScale::Right)
+                || keys.len() != pane.scales.len()
+        })
         || snapshot
             .studies
             .iter()

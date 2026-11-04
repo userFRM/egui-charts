@@ -1,6 +1,6 @@
 //! Crosshair snapping and study legend actions shared by the chart panes.
 
-use super::{Chart, ChartElementId, PaneId, RightClickTarget, SeriesId};
+use super::{Chart, ChartElementId, RightClickTarget, SeriesId};
 use crate::chart::rendering::{ChartMapping, SeriesAction, StudyAction, study_mapping};
 use crate::config::CrosshairMode;
 use crate::scales::PriceMap;
@@ -136,9 +136,8 @@ impl Chart {
                 !close_only
                     && time_based
                     && study.is_visible()
-                    && study.is_overlay()
                     && !study.is_volume()
-                    && self.series_pane(**id) == Some(PaneId::MAIN)
+                    && self.series_pane(**id) == Some(self.main_series_pane())
             })
             .flat_map(|(_, study)| {
                 let scale = study_mapping(study.as_ref(), &coords).price;
@@ -218,6 +217,11 @@ impl Chart {
                     .indicator_value_at(id, bar_idx)
                     .map_or(f64::NAN, |(_, value)| value),
             });
+            return;
+        }
+        if !matches!(action, StudyAction::ToggleVisibility(_))
+            && !self.indicator_user_edit_enabled(id)
+        {
             return;
         }
         self.user_action(|chart| match action {

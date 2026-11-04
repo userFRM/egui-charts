@@ -462,10 +462,7 @@ impl super::Chart {
                 let position = scale.visible_logical_range().length() - scale.base_idx() as f32;
                 self.scroll_to_position(position, true);
             }
-            A::FitContent => {
-                self.pending_scroll_time = None;
-                self.state.time_scale_mut().fit_content();
-            }
+            A::FitContent => self.fit_content(),
             A::ResetChart | A::ResetZoom => self.reset_chart_view(),
             A::ToggleLogScale | A::TogglePercentageScale => {
                 let mode = if action == A::ToggleLogScale {
@@ -522,7 +519,8 @@ impl super::Chart {
             #[cfg(feature = "drawings")]
             A::DeleteSelectedDrawing => match self.selection.selected_id() {
                 Some(super::ChartElementId::Indicator(id))
-                    if self.drawings.selected_ids().next().is_none() =>
+                    if self.drawings.selected_ids().next().is_none()
+                        && self.indicator_user_edit_enabled(id) =>
                 {
                     self.remove_series(id);
                 }
@@ -547,7 +545,9 @@ impl super::Chart {
             }
             #[cfg(not(feature = "drawings"))]
             A::DeleteSelectedDrawing => {
-                if let Some(super::ChartElementId::Indicator(id)) = self.selection.selected_id() {
+                if let Some(super::ChartElementId::Indicator(id)) = self.selection.selected_id()
+                    && self.indicator_user_edit_enabled(id)
+                {
                     self.remove_series(id);
                 }
             }

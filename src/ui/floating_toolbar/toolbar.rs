@@ -259,7 +259,11 @@ impl FloatingSelectionToolbar {
                     .clone()
                     .map(|alert| DrawingContextMenuAction::AddAlert(Box::new(alert)));
             }
-            FloatingToolbarAction::DrawingMenu(action) => return Some(action),
+            FloatingToolbarAction::DrawingMenu(action)
+                if !action.apply_interval_visibility(chart, id) =>
+            {
+                return Some(action);
+            }
             _ => {}
         }
         ui.ctx().request_repaint();

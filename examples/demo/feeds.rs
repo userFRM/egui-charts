@@ -169,6 +169,41 @@ impl Quotes for DemoQuotes {
 }
 
 impl super::DemoApp {
+    /// Returns and seasonality use daily history independently of the chart's interval or replay.
+    pub(super) fn market_history(&self) -> Vec<Bar> {
+        use egui_charts::model::{BarClock, Timeframe};
+        let mut clock = BarClock::new(Timeframe::Day1);
+        if self.chart.bar_clock().has_session() {
+            clock = clock.with_session(
+                crate::sampledata::us_equity_zone(),
+                crate::sampledata::us_equity_session(),
+                self.chart.extended_hours(),
+            );
+        }
+        self.live
+            .snapshot(Timeframe::Day1, clock, self.chart.extended_hours())
+    }
+
+    /// Range presets fit available bars and state a limit when the selected detail cannot reach it.
+    pub(super) fn explain_history_limit(
+        &mut self,
+        range: egui_charts::ui::timeframe_toolbar::DateRange,
+    ) {
+        let bars = self.chart.bars(egui_charts::widget::SeriesId::MAIN);
+        if let (Some(first), Some(last)) = (bars.first(), bars.last())
+            && crate::sampledata::range_start(range, last.time)
+                .is_some_and(|start| start < first.time)
+        {
+            self.notify(format!(
+                "Synthetic {} history starts {}. Daily and longer intervals provide 26 years.",
+                self.state.timeframe,
+                first.time.format("%Y-%m-%d %H:%M UTC")
+            ));
+        } else if bars.is_empty() {
+            self.notify("No synthetic bars at this interval yet. Wait for chart loading or choose a longer interval.");
+        }
+    }
+
     /// Prices every demo instrument independently of chart focus and watchlist membership.
     pub(super) fn feed_paper_prices(&self) {
         if self.replay.is_none() {
@@ -512,6 +547,8 @@ pub(super) fn hotlist(query: &HotlistQuery, live: &LiveFeed) -> Vec<HotlistEntry
 pub(super) struct DemoNotifications(
     Mutex<(Vec<Notification>, Option<Events<Notification>>)>,
     Mutex<Vec<std::sync::Weak<egui_charts::services::OrderFlowDetectors>>>,
+    /// News delivery must not depend on whether the bounded log still contains the headline.
+    Mutex<BTreeMap<String, DateTime<Utc>>>,
 );
 
 impl DemoNotifications {
@@ -540,6 +577,11 @@ impl DemoNotifications {
 
     /// Keep supplied headlines quiet on repeated viewport requests.
     pub(super) fn notify_event(&self, symbol: &str, event: &egui_charts::model::TimeScaleEvent) {
+        let mut latest = self.2.lock().unwrap_or_else(|e| e.into_inner());
+        if latest.get(symbol).is_some_and(|time| *time >= event.time) {
+            return;
+        }
+        latest.insert(symbol.to_owned(), event.time);
         let mut entry = Notification::new(event.time, &event.title);
         entry.body = event.details.clone();
         entry.symbol = Some(symbol.into());
@@ -776,15 +818,21 @@ pub(super) fn period_returns(bars: &[Bar]) -> Vec<PeriodReturn> {
         .unwrap_or(last.time);
     [
         ("1W", last.time - TimeDelta::days(7)),
-        ("1M", last.time - TimeDelta::days(30)),
-        ("3M", last.time - TimeDelta::days(91)),
-        ("6M", last.time - TimeDelta::days(182)),
+        ("1M", last.time - chrono::Months::new(1)),
+        ("3M", last.time - chrono::Months::new(3)),
+        ("6M", last.time - chrono::Months::new(6)),
         ("YTD", year_start),
-        ("1Y", last.time - TimeDelta::days(365)),
+        ("1Y", last.time - chrono::Months::new(12)),
     ]
     .into_iter()
     .map(|(period, since)| {
-        let base = bars.iter().rev().find(|bar| bar.time <= since);
+        let base = bars.iter().rev().find(|bar| {
+            if period == "YTD" {
+                bar.time < since
+            } else {
+                bar.time <= since
+            }
+        });
         let percent = base
             .filter(|base| base.close > 0.0)
             .map(|base| (last.close / base.close - 1.0) * 100.0);
@@ -835,6 +883,225 @@ pub(super) fn seasonality(bars: &[Bar]) -> Seasonality {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_intervals_warm_up_and_page_without_execution_history() {
+        use egui_charts::model::{BarClock, Timeframe};
+        use egui_charts::studies::{Indicator, SMA};
+        // This path falls 1/hour until 06:00, then rises 3/hour until 18:00.
+        // Splitting at 04:00 gives close 96 and volume 400; at 05:00, 95 and 500.
+        for (day, previous, split, hours) in [
+            (
+                "2026-03-08T00:00:00Z",
+                "2026-03-07T05:00:00Z",
+                "2026-03-08T05:00:00Z",
+                5,
+            ),
+            (
+                "2026-03-09T00:00:00Z",
+                "2026-03-08T05:00:00Z",
+                "2026-03-09T04:00:00Z",
+                4,
+            ),
+            (
+                "2026-11-01T00:00:00Z",
+                "2026-10-31T04:00:00Z",
+                "2026-11-01T04:00:00Z",
+                4,
+            ),
+            (
+                "2026-11-02T00:00:00Z",
+                "2026-11-01T04:00:00Z",
+                "2026-11-02T05:00:00Z",
+                5,
+            ),
+        ] {
+            let bar = Bar::new(day.parse().unwrap(), 100.0, 130.0, 94.0, 106.0, 2400.0);
+            let clock =
+                BarClock::new(Timeframe::Day1).with_timezone(crate::sampledata::us_equity_zone());
+            let split_price = 100.0 - f64::from(hours);
+            assert_eq!(
+                crate::sampledata::calendar_history(&[bar], &[], clock),
+                vec![
+                    Bar::new(
+                        previous.parse().unwrap(),
+                        100.0,
+                        100.0,
+                        split_price,
+                        split_price,
+                        f64::from(hours) * 100.0
+                    ),
+                    Bar::new(
+                        split.parse().unwrap(),
+                        split_price,
+                        130.0,
+                        94.0,
+                        106.0,
+                        2400.0 - f64::from(hours) * 100.0
+                    ),
+                ]
+            );
+        }
+        let now = "2026-11-03T15:00:00Z".parse().unwrap();
+        let daily = Bar::new(
+            "2026-11-02T00:00:00Z".parse().unwrap(),
+            100.0,
+            130.0,
+            94.0,
+            106.0,
+            2400.0,
+        );
+        let clock = BarClock::new(Timeframe::Day1)
+            .with_timezone(crate::sampledata::us_equity_zone())
+            .with_session(
+                crate::sampledata::us_equity_zone(),
+                crate::sampledata::us_equity_session(),
+                false,
+            );
+        assert_eq!(
+            crate::sampledata::calendar_history(&[daily.clone()], &[], clock.clone()),
+            vec![Bar {
+                time: "2026-11-02T05:00:00Z".parse().unwrap(),
+                ..daily.clone()
+            }]
+        );
+        assert!(
+            crate::sampledata::calendar_history(
+                &[Bar {
+                    time: "2026-11-01T00:00:00Z".parse().unwrap(),
+                    ..daily
+                }],
+                &[],
+                clock
+            )
+            .is_empty(),
+            "a shifted stock calendar must not invent Sunday bars"
+        );
+        let feed = Arc::new(LiveFeed::new("SAMPLE", now));
+        super::super::tests::finish_feed(&feed);
+        for timeframe in [Timeframe::Day1, Timeframe::Week1, Timeframe::Month1] {
+            let bars = feed.snapshot(timeframe, BarClock::new(timeframe), false);
+            assert!(bars.len() > 300, "{timeframe} must warm a 200-period study");
+            let mut sma = SMA::new(200);
+            sma.calculate(&bars);
+            let expected = bars[..200].iter().map(|bar| bar.close).sum::<f64>() / 200.0;
+            assert!((sma.values().value(0, 199).unwrap() - expected).abs() < 1e-8);
+            let latest = history_page(&bars, None, None, 100);
+            let older = history_page(&bars, None, Some(latest.bars[0].time), 100);
+            assert_eq!(older.bars, bars[bars.len() - 200..bars.len() - 100]);
+            assert!(!older.end_of_history);
+            let ctx = egui::Context::default();
+            let mut chart = egui_charts::ChartBuilder::new()
+                .with_feed(feed.clone())
+                .with_symbol("SAMPLE")
+                .with_timeframe(timeframe)
+                .with_initial_bars(256)
+                .with_visible_candles(16)
+                .build();
+            for _ in 0..4 {
+                super::super::tests::finish_feed(&feed);
+                ctx.run_ui(Default::default(), |ui| {
+                    chart.show(ui);
+                })
+                .drop_without_applying_deltas();
+            }
+            let held = chart.bars(egui_charts::widget::SeriesId::MAIN).len();
+            assert!(held >= 256);
+            // Initial layout may fetch another page per frame to fill the viewport.
+            if bars.len() > 4 * 256 {
+                assert!(
+                    held < bars.len(),
+                    "the live subscription must not bypass history paging"
+                );
+            }
+        }
+        let daily = feed.snapshot(Timeframe::Day1, BarClock::new(Timeframe::Day1), false);
+        assert!(
+            period_returns(&daily)
+                .iter()
+                .all(|value| value.percent.is_some())
+        );
+        // Twenty-six years of daily bars leave the minute archive and executions bounded.
+        assert!(
+            feed.snapshot(Timeframe::Min1, BarClock::new(Timeframe::Min1), false)
+                .len()
+                < 11_000
+        );
+    }
+
+    #[test]
+    fn period_returns_use_calendar_lookbacks_and_the_previous_year_close() {
+        let bars: Vec<_> = [
+            ("2023-12-31", 50.0),
+            ("2024-02-28", 80.0),
+            ("2024-02-29", 100.0),
+            ("2024-08-28", 125.0),
+            ("2024-11-28", 160.0),
+            ("2024-12-31", 100.0),
+            ("2025-01-01", 150.0),
+            ("2025-01-28", 160.0),
+            ("2025-01-29", 180.0),
+            ("2025-02-21", 125.0),
+            ("2025-02-28", 200.0),
+        ]
+        .into_iter()
+        .map(|(day, close)| {
+            Bar::new(
+                format!("{day}T00:00:00Z").parse().unwrap(),
+                close,
+                close,
+                close,
+                close,
+                1.0,
+            )
+        })
+        .collect();
+        for (actual, expected) in period_returns(&bars)
+            .iter()
+            .zip([60.0, 25.0, 25.0, 60.0, 100.0, 150.0])
+        {
+            assert!(
+                (actual.percent.unwrap() - expected).abs() < 1e-9,
+                "{}",
+                actual.period
+            );
+        }
+    }
+
+    #[test]
+    fn evicted_news_stays_quiet_when_history_is_reloaded_or_replayed() {
+        use egui_charts::model::{EventKind, TimeScaleEvent};
+        let notifications = DemoNotifications::default();
+        let event = |minute| TimeScaleEvent {
+            id: format!("sample-{minute}"),
+            time: DateTime::UNIX_EPOCH + TimeDelta::minutes(minute),
+            kind: EventKind::News,
+            title: format!("Headline {minute}"),
+            details: "Synthetic news".into(),
+        };
+        for minute in 0..120 {
+            notifications.notify_event("SAMPLE", &event(minute));
+        }
+        notifications.notify_event("SAMPLE", &event(0));
+        notifications.notify_event("SAMPLE", &event(119));
+        let state = notifications.0.lock().unwrap();
+        assert_eq!(state.0.len(), 100);
+        assert_eq!(state.0.last().unwrap().time, event(119).time);
+        drop(state);
+        notifications.notify_event("BTCUSD", &event(0));
+        assert_eq!(
+            notifications
+                .0
+                .lock()
+                .unwrap()
+                .0
+                .last()
+                .unwrap()
+                .symbol
+                .as_deref(),
+            Some("BTCUSD")
+        );
+    }
 
     fn demo_frame(
         app: &mut super::super::DemoApp,

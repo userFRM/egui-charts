@@ -255,13 +255,19 @@ impl DrawingManager {
             edit(drawing);
             if old.locked && drawing.locked {
                 let visible = drawing.visible;
+                let timeframe_visibility = drawing.timeframe_visibility.clone();
                 let label = drawing.label.clone();
                 let folder = drawing.folder.clone();
                 *drawing = old.clone();
-                if visible == old.visible && label == old.label && folder == old.folder {
+                if visible == old.visible
+                    && timeframe_visibility == old.timeframe_visibility
+                    && label == old.label
+                    && folder == old.folder
+                {
                     return;
                 }
                 drawing.visible = visible;
+                drawing.timeframe_visibility = timeframe_visibility;
                 drawing.label = label;
                 drawing.folder = folder;
             }
@@ -319,16 +325,22 @@ impl DrawingManager {
             let old = drawing.clone();
             edit(drawing);
             if old.locked && drawing.locked {
-                let (visible, label, folder) = (
+                let (visible, timeframe_visibility, label, folder) = (
                     drawing.visible,
+                    drawing.timeframe_visibility.clone(),
                     drawing.label.clone(),
                     drawing.folder.clone(),
                 );
                 *drawing = old.clone();
-                if visible == old.visible && label == old.label && folder == old.folder {
+                if visible == old.visible
+                    && timeframe_visibility == old.timeframe_visibility
+                    && label == old.label
+                    && folder == old.folder
+                {
                     continue;
                 }
                 drawing.visible = visible;
+                drawing.timeframe_visibility = timeframe_visibility;
                 drawing.label = label;
                 drawing.folder = folder;
             }

@@ -31,11 +31,26 @@ pub(crate) fn hit_profile(
     let profiles = study.volume_profiles(profile_range(coords));
     profiles.into_iter().find_map(|plot| {
         let profile = &plot.profile;
-        let (poc, (va_low, va_high)) = profile.poc_and_value_area(plot.config.value_area())?;
         let span = profile_span(&plot, coords);
         if span.start >= span.end || point.x < span.start || point.x > span.end {
             return None;
         }
+        if profile.exposure.is_some() {
+            return crate::painting::volume_profile::exposure_rects(
+                profile,
+                plot.config.display,
+                span,
+                price_to_y,
+            )
+            .into_iter()
+            .any(|(_, rect, _)| rect.expand(tolerance).contains(point))
+            .then(|| {
+                coords
+                    .x_to_idx(point.x)
+                    .clamp(plot.bars.start, plot.bars.end - 1)
+            });
+        }
+        let (poc, (va_low, va_high)) = profile.poc_and_value_area(plot.config.value_area())?;
         let y_at = |row: usize| price_to_y(profile.low + row as f64 * profile.row_height);
         let on_level = [
             (y_at(poc) + y_at(poc + 1)) * 0.5,

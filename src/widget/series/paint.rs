@@ -4,7 +4,9 @@ use super::{PriceSeries, base_line};
 use crate::chart::rendering;
 use crate::chart::rendering::{RenderContext, StyleColors};
 use crate::localization as l10n;
-use crate::model::{Bar, ChartType, MarkerZOrder, PriceLine, PriceSource, SeriesScale};
+use crate::model::{
+    Bar, ChartType, LastPriceAnimation, MarkerZOrder, PriceLine, PriceSource, SeriesScale,
+};
 use crate::scales::{PriceMap, PriceScaleMode};
 use crate::theme::ThemeExt;
 use crate::widget::Chart;
@@ -169,6 +171,33 @@ impl Chart {
             ),
             x,
         );
+        if let Some(last) = crate::model::last_with_value(&item.bars)
+            && let Some(color) = rendering::candles::line_color_at(
+                options.chart_type,
+                &type_params.styles,
+                type_params.baseline,
+                &map,
+                rect,
+                last.close,
+                last,
+            )
+            && let Some(index) = crate::model::index_at(main, last.time)
+        {
+            paint_last_price_pulse(
+                plot,
+                rect,
+                Pos2::new(
+                    self.state
+                        .time_scale()
+                        .idx_to_coord_precise(index, rect.left(), rect.width()),
+                    map.price_to_y(last.close),
+                ),
+                color,
+                options.last_price_animation,
+                (last.time, last.close),
+                &item.last_price_pulse,
+            );
+        }
         let style = &item.options.style;
         let price_line = self
             .series_last_bar(item)
@@ -182,7 +211,7 @@ impl Chart {
                 .with_style(style.price_line_style)
                 .with_axis_label(false)
             });
-        let base_line = base_line(&map).filter(|_| style.base_line_visible);
+        let base_line = base_line(&map, style);
         let lines = item.lines.iter().map(|(_, line)| line);
         for line in base_line.iter().chain(&price_line).chain(lines) {
             crate::chart::rendering::render_price_line(
@@ -498,8 +527,7 @@ impl Chart {
         colors: &StyleColors,
     ) -> f32 {
         let study_axis = crate::config::PriceAxisOptions {
-            show_study_values: self.config.show_indicator_last_val
-                && self.config.price_axis.show_study_values,
+            show_study_values: self.config.price_axis.show_study_values,
             ..self.config.price_axis
         };
         let mut measured = 0.0_f32;
@@ -607,5 +635,41 @@ impl Chart {
             .on_hover_text(l10n::text(ui.ctx(), &item.options.name));
         }
         measured
+    }
+}
+
+/// Paint a visible pulse and request another frame only while its period is active.
+pub(in crate::widget) fn paint_last_price_pulse(
+    painter: &egui::Painter,
+    rect: Rect,
+    point: Pos2,
+    color: egui::Color32,
+    animation: LastPriceAnimation,
+    last: (chrono::DateTime<chrono::Utc>, f64),
+    state: &std::cell::Cell<Option<(chrono::DateTime<chrono::Utc>, f64, f64)>>,
+) {
+    if animation == LastPriceAnimation::Disabled {
+        return;
+    }
+    let now = painter.ctx().input(|input| input.time);
+    let started = match state.get() {
+        Some((time, price, started)) if time == last.0 && price.total_cmp(&last.1).is_eq() => {
+            started
+        }
+        previous => {
+            // The first price seen is loaded history, not an update.
+            let started = previous.map_or(f64::NEG_INFINITY, |_| now);
+            state.set(Some((last.0, last.1, started)));
+            started
+        }
+    };
+    let period = rendering::candles::LAST_PRICE_PULSE_SECONDS;
+    let phase = match animation {
+        LastPriceAnimation::Continuous => (now / period).fract(),
+        _ => (now - started) / period,
+    };
+    if (0.0..1.0).contains(&phase) && rect.contains(point) {
+        rendering::candles::render_last_price_pulse(painter, point, color, phase as f32);
+        painter.ctx().request_repaint();
     }
 }

@@ -81,7 +81,7 @@ fn pixel_conflation_threshold() -> Option<f32> {
 pub struct PriceAxisOptions {
     /// Allow value tags to overlap instead of moving them to free vertical slots.
     pub allow_label_overlap: bool,
-    /// Display study values on price axes when study values are enabled.
+    /// Display study value tags on price axes, independently of the status line values.
     pub show_study_values: bool,
     /// Study value tag colour; `None` follows each plot's colour.
     pub study_value_color: Option<Color32>,
@@ -293,6 +293,11 @@ pub struct ChartConfig {
     /// Font size of the price and time axis labels in logical pixels; `None` follows the theme.
     /// Default: None
     pub axis_font_size: Option<f32>,
+    /// Font family of this chart's price and time axis labels and tags, including study panes.
+    /// Named families must already be installed in the host's [`egui::FontDefinitions`].
+    /// Defaults to proportional, including for saved configurations without this field.
+    #[serde(default)]
+    pub axis_font_family: egui::FontFamily,
     /// Character that groups the thousands of the built-in price labels: the ticks and tags of
     /// price scales, the crosshair label and the legend's prices write `42,541.77` with the
     /// default `','`. `None` writes plain digits (`42541.77`), and so do `'.'` and the ASCII
@@ -514,6 +519,7 @@ impl Default for ChartConfig {
             // Text color
             text_color: chart.axis_text,
             axis_font_size: None,
+            axis_font_family: egui::FontFamily::Proportional,
             thousands_sep: Some(','),
             // Candle bodies leave room for the wider volume bars
             candle_width: 0.6,
@@ -634,6 +640,26 @@ impl ChartConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saved_axis_family_defaults_and_round_trips_host_names() {
+        let mut saved = serde_json::to_value(ChartConfig::default()).unwrap();
+        saved.as_object_mut().unwrap().remove("axis_font_family");
+        let restored: ChartConfig = serde_json::from_value(saved).unwrap();
+        assert_eq!(restored.axis_font_family, egui::FontFamily::Proportional);
+        for family in [
+            egui::FontFamily::Monospace,
+            egui::FontFamily::Name("Host Sans".into()),
+        ] {
+            let config = ChartConfig {
+                axis_font_family: family.clone(),
+                ..Default::default()
+            };
+            let restored: ChartConfig =
+                serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
+            assert_eq!(restored.axis_font_family, family);
+        }
+    }
 
     #[test]
     fn with_theme_recolours_session_breaks_and_watermark() {

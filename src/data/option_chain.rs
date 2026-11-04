@@ -262,6 +262,11 @@ impl OptionChain {
         self.0.read(|state| Arc::clone(&state.rows))
     }
 
+    /// The underlying, expiry range and historical instant of this subscription.
+    pub fn query(&self) -> OptionChainQuery {
+        self.0.read(|state| state.query.clone())
+    }
+
     /// Last feed or validation error, cleared by the next accepted snapshot.
     pub fn error(&self) -> Option<FeedError> {
         self.0.read(|state| state.error.clone())
@@ -357,10 +362,13 @@ pub struct OptionExposure {
     pub rows: Vec<OptionExposureRow>,
     /// Contracts omitted because an input was unknown. Zero open interest is not missing.
     pub missing_contracts: usize,
+    /// Finite underlying price where the provider's model has zero gamma.
+    /// Replaced with every snapshot; never computed from the listed strike exposures.
+    pub zero_gamma: Option<f64>,
 }
 
 impl OptionExposure {
-    /// An observation with no model label or missing contracts.
+    /// An observation with no model label, zero-gamma level or missing contracts.
     pub fn new(
         kind: OptionExposureKind,
         time: DateTime<Utc>,
@@ -374,6 +382,7 @@ impl OptionExposure {
             model: None,
             rows,
             missing_contracts: 0,
+            zero_gamma: None,
         }
     }
 
@@ -485,6 +494,9 @@ impl OptionExposure {
                 "exposure kind differs from query".into(),
             ));
         }
+        if self.zero_gamma.is_some_and(|price| !price.is_finite()) {
+            return Err(FeedError::InvalidData("zero gamma price".into()));
+        }
         if self.rows.len() > 100_000 {
             return Err(FeedError::InvalidData(
                 "exposure rows exceeds 100,000".into(),
@@ -527,7 +539,8 @@ pub struct OptionExposureSink(Weak<Snapshot<ExposureState>>);
 
 impl OptionExposureSink {
     /// Replace the held snapshot and wake the host. Refuse the whole snapshot for a nonfinite
-    /// figure, invalid strike, expiry outside the query, different kind or over 100,000 rows.
+    /// figure, invalid strike or zero-gamma price, expiry outside the query, different kind
+    /// or over 100,000 rows.
     /// Report [`FeedError::InvalidData`] without changing the previous snapshot; an accepted
     /// push clears the error. Inactive sinks ignore pushes.
     pub fn push(&self, value: OptionExposure) -> Result<(), FeedError> {
@@ -606,6 +619,11 @@ impl OptionExposureHandle {
         );
         feed.option_exposure(query, OptionExposureSink(Arc::downgrade(&snapshot)));
         Some(Self(snapshot))
+    }
+
+    /// The symbol, expiry range, sensitivity and observation instant of this subscription.
+    pub fn query(&self) -> OptionExposureQuery {
+        self.0.read(|state| state.query.clone())
     }
 
     /// Latest accepted snapshot, exactly as delivered, or `None` until one arrives.
@@ -847,6 +865,11 @@ mod tests {
             for strike in [f64::NAN, f64::INFINITY, -1.0, 0.0] {
                 let mut bad = supplied.clone();
                 bad.rows[0].strike = strike;
+                invalid.push(bad);
+            }
+            for price in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+                let mut bad = supplied.clone();
+                bad.zero_gamma = Some(price);
                 invalid.push(bad);
             }
             let mut bad = supplied.clone();

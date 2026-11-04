@@ -420,6 +420,14 @@ struct SavedOptions {
     candle_border_width: f32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     baseline_style: Option<egui_charts::model::BaselineStyle>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    line_style: Option<egui_charts::model::LinePlotStyle>,
+    #[serde(default)]
+    bars_style: egui_charts::model::BarsStyle,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    area_style: Option<egui_charts::model::AreaStyle>,
+    #[serde(default)]
+    last_price_animation: egui_charts::model::LastPriceAnimation,
     width: f32,
     #[serde(default)]
     marker_radius: Option<f32>,
@@ -454,11 +462,25 @@ struct SavedStyle {
     price_line_width: f32,
     price_line_style: egui_charts::model::LineStyle,
     base_line_visible: bool,
+    #[serde(default = "default_base_line_color")]
+    base_line_color: egui::Color32,
+    #[serde(default = "default_base_line_width")]
+    base_line_width: f32,
+    #[serde(default)]
+    base_line_style: egui_charts::model::LineStyle,
     #[serde(skip)]
     autoscale: Option<egui_charts::model::AutoscaleProvider>,
     hit_tolerance: f32,
     #[serde(default)]
     alerts: egui_charts::model::SeriesAlerts,
+}
+
+fn default_base_line_color() -> egui::Color32 {
+    egui_charts::model::SeriesStyle::default().base_line_color
+}
+
+fn default_base_line_width() -> f32 {
+    egui_charts::model::SeriesStyle::default().base_line_width
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]

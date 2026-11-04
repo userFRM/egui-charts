@@ -47,7 +47,7 @@ pub use crate::model::NodeSensitivity;
 /// One bar's executed volume and intrabar delta path, starting at zero.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FootprintBar {
-    /// Bar open, obtained from the supplied [`BarClock`].
+    /// Bar open from the supplied clock or trade-bar allocation.
     pub time: DateTime<Utc>,
     /// Traded levels in ascending price order; empty prices allocate nothing.
     pub levels: BTreeMap<i64, FootprintLevel>,
@@ -240,6 +240,9 @@ pub struct Footprint {
     tick_size: f64,
     ticks_per_row: u32,
     bars: BTreeMap<DateTime<Utc>, FootprintBar>,
+    trade_bars: super::inbox::TradeBars,
+    /// First contributing exchange timestamp, before equal-time opens are disambiguated.
+    trade_starts: BTreeMap<DateTime<Utc>, DateTime<Utc>>,
     /// Price rows held across all bars.
     rows: usize,
     last: Option<DateTime<Utc>>,
@@ -278,6 +281,8 @@ impl Footprint {
             tick_size,
             ticks_per_row,
             bars: BTreeMap::new(),
+            trade_bars: Default::default(),
+            trade_starts: BTreeMap::new(),
             rows: 0,
             last: None,
             min_size: 0.0,
@@ -328,6 +333,22 @@ impl Footprint {
         through: DateTime<Utc>,
         held: impl IntoIterator<Item = &'a Tick>,
     ) {
+        if self.clock.timeframe().is_some_and(|tf| tf.is_trade_based()) {
+            // Keep the allocation anchor: rebuilding from the retained suffix shifts count bars.
+            if let Some(open) = self
+                .trade_starts
+                .iter()
+                .filter(|(_, first)| **first <= through)
+                .map(|(open, _)| *open)
+                .next_back()
+            {
+                self.incomplete_through = self.incomplete_through.max(Some(open));
+                self.bars.retain(|time, _| *time > open);
+                self.trade_starts.retain(|time, _| *time > open);
+                self.rows = self.bars.values().map(|bar| bar.levels.len()).sum();
+            }
+            return;
+        }
         let open = self.clock.bar_open(through);
         self.incomplete_through = self.incomplete_through.max(Some(open));
         self.bars = self.bars.split_off(&open);
@@ -335,6 +356,8 @@ impl Footprint {
             let mut part = Self {
                 clock: self.clock.clone(),
                 bars: BTreeMap::new(),
+                trade_bars: Default::default(),
+                trade_starts: BTreeMap::new(),
                 rows: 0,
                 last: None,
                 ..*self
@@ -355,13 +378,6 @@ impl Footprint {
 
     /// Counts the bar holding `first`, the oldest execution held, and earlier bars as
     /// incomplete: executions before it may exist that never arrived.
-    #[cfg_attr(
-        not(feature = "widget"),
-        expect(
-            dead_code,
-            reason = "only the chart widget knows where its trades begin"
-        )
-    )]
     pub(crate) fn received_from(&mut self, first: DateTime<Utc>) {
         let open = self.clock.bar_open(first);
         self.incomplete_through = self.incomplete_through.max(Some(open));
@@ -372,15 +388,40 @@ impl Footprint {
         {
             if let Some((time, bar)) = self.bars.pop_first() {
                 self.rows -= bar.levels.len();
+                self.trade_starts.remove(&time);
                 self.incomplete_through = self.incomplete_through.max(Some(time));
             }
         }
     }
 
+    /// Copies changed sink allocations without replaying or shifting their grouping anchor.
+    #[cfg(feature = "widget")]
+    pub(crate) fn copy_trade_bars(&mut self, source: &Self, from: Option<DateTime<Utc>>) {
+        let Some(from) = from.or_else(|| source.bars.first_key_value().map(|(time, _)| *time))
+        else {
+            return;
+        };
+        let removed = self.bars.split_off(&from);
+        self.rows -= removed.values().map(|bar| bar.levels.len()).sum::<usize>();
+        self.trade_starts.retain(|time, _| *time < from);
+        for (time, bar) in source.bars.range(from..) {
+            self.rows += bar.levels.len();
+            self.bars.insert(*time, bar.clone());
+        }
+        self.trade_starts.extend(
+            source
+                .trade_starts
+                .range(from..)
+                .map(|(time, first)| (*time, *first)),
+        );
+        self.incomplete_through = self.incomplete_through.max(source.incomplete_through);
+        self.enforce_budget();
+    }
+
     /// Restricts executions to this inclusive size range, before aggregation.
     /// Must be called before adding trades. Invalid ranges return an error without changing it.
     pub fn set_size_filter(&mut self, min: f64, max: f64) -> Result<(), FeedError> {
-        if self.last.is_some() {
+        if self.last.is_some() || self.trade_bars.forming.is_some() {
             return Err(FeedError::InvalidData(
                 "footprint size filter must be set before the first trade".into(),
             ));
@@ -429,13 +470,15 @@ impl Footprint {
             .then_some(level as i64)
     }
 
-    /// Aggregated bars in chronological order.
+    /// Aggregated bars in opening order. Trade-based bars sharing an exchange timestamp
+    /// have distinct opens, spaced one nanosecond apart as in `aggregate_trades`.
     pub fn bars(&self) -> &BTreeMap<DateTime<Utc>, FootprintBar> {
         &self.bars
     }
 
     /// The aggregated bar containing `time`, using the same UTC slots as trade aggregation.
-    /// Accepts a bar stamped anywhere inside its slot, as the feed history contract does.
+    /// Accepts a bar stamped anywhere inside its time slot, as the feed history contract does.
+    /// Trade-based bars require their exact allocated opening time.
     pub fn bar_at(&self, time: DateTime<Utc>) -> Option<&FootprintBar> {
         self.bars.get(&self.clock.bar_open(time))
     }
@@ -457,8 +500,29 @@ impl Footprint {
 
     /// Adds an execution, returning whether it passed the size filter. Invalid, out-of-order
     /// or overflowing input returns an error and changes nothing. Unknown side stays unknown.
-    /// Zero-sized executions are ignored.
+    /// Trade-based intervals use the same grouping anchor and fill splits as `aggregate_trades`;
+    /// push every execution, including those outside the size filter. A filter tests the original
+    /// execution size before summing its allocated parts. Zero-sized executions add no volume
+    /// but count toward tick-bar boundaries.
     pub fn push(&mut self, trade: &Tick) -> Result<bool, FeedError> {
+        self.push_allocated(trade, None)
+    }
+
+    /// Adds a part already allocated by the live sink, without starting another grouping anchor.
+    pub(crate) fn push_part(
+        &mut self,
+        trade: &Tick,
+        open: DateTime<Utc>,
+        size: f64,
+    ) -> Result<bool, FeedError> {
+        self.push_allocated(trade, Some((open, size)))
+    }
+
+    fn push_allocated(
+        &mut self,
+        trade: &Tick,
+        part: Option<(DateTime<Utc>, f64)>,
+    ) -> Result<bool, FeedError> {
         if !trade.price.is_finite() {
             return Err(FeedError::InvalidData(format!(
                 "footprint trade price must be finite, got {:?}",
@@ -483,26 +547,57 @@ impl Footprint {
                 trade.ts
             )));
         }
-        if trade.size < self.min_size || trade.size > self.max_size || trade.size == 0.0 {
-            return Ok(false);
-        }
-        let time = self.clock.bar_open(trade.ts);
-        if self
-            .bars
-            .get(&time)
-            .is_some_and(|bar| !(bar.volume() + trade.size).is_finite())
+        let mut allocation = self.trade_bars.clone();
+        let single = part.unwrap_or((self.clock.bar_open(trade.ts), trade.size));
+        let split;
+        let parts = if part.is_none()
+            && let Some(timeframe) = self.clock.timeframe().filter(|tf| tf.is_trade_based())
+        {
+            split = allocation
+                .push(timeframe, trade, Some(self.tick_size))
+                .map_err(|()| {
+                    FeedError::InvalidData(
+                        "footprint trade does not fold into the bars of the interval".into(),
+                    )
+                })?
+                .into_iter()
+                .map(|(bar, size)| (bar.time, size))
+                .collect::<Vec<_>>();
+            split.as_slice()
+        } else {
+            std::slice::from_ref(&single)
+        };
+        let accepted =
+            trade.size >= self.min_size && trade.size <= self.max_size && trade.size > 0.0;
+        if accepted
+            && parts.iter().any(|(time, size)| {
+                self.bars
+                    .get(time)
+                    .is_some_and(|bar| !(bar.volume() + size).is_finite())
+            })
         {
             return Err(FeedError::InvalidData("footprint volume overflow".into()));
         }
-        let bar = self.bars.entry(time).or_insert_with(|| FootprintBar {
-            time,
-            levels: BTreeMap::new(),
-            bid: 0.0,
-            ask: 0.0,
-            unknown: 0.0,
-            min_delta: 0.0,
-            max_delta: 0.0,
-        });
+        self.trade_bars = allocation;
+        if !accepted {
+            return Ok(false);
+        }
+        for &(time, size) in parts {
+            self.add_part(trade, level, time, size);
+        }
+        self.last = Some(trade.ts);
+        self.enforce_budget();
+        Ok(true)
+    }
+
+    fn add_part(&mut self, trade: &Tick, level: i64, time: DateTime<Utc>, size: f64) {
+        if self.clock.timeframe().is_some_and(|tf| tf.is_trade_based()) {
+            self.trade_starts.entry(time).or_insert(trade.ts);
+        }
+        let bar = self
+            .bars
+            .entry(time)
+            .or_insert_with(|| FootprintBar::empty(time));
         let row = bar.levels.entry(level).or_insert_with(|| {
             self.rows += 1;
             FootprintLevel {
@@ -512,23 +607,20 @@ impl Footprint {
         });
         match trade.side {
             Some(OrderSide::Buy) => {
-                row.ask += trade.size;
-                bar.ask += trade.size;
+                row.ask += size;
+                bar.ask += size;
             }
             Some(OrderSide::Sell) => {
-                row.bid += trade.size;
-                bar.bid += trade.size;
+                row.bid += size;
+                bar.bid += size;
             }
             _ => {
-                row.unknown += trade.size;
-                bar.unknown += trade.size;
+                row.unknown += size;
+                bar.unknown += size;
             }
         }
         bar.min_delta = bar.min_delta.min(bar.delta());
         bar.max_delta = bar.max_delta.max(bar.delta());
-        self.last = Some(trade.ts);
-        self.enforce_budget();
-        Ok(true)
     }
 }
 
@@ -582,6 +674,126 @@ mod tests {
             assert_eq!(
                 result.unwrap_err().to_string(),
                 format!("invalid data: {expected}")
+            );
+        }
+    }
+
+    /// Hand allocations: count and range bars close after the second fill; a volume bar
+    /// takes 3 of the sell of 6, and a delta bar takes 7 of the sell of 8 after a buy of 2.
+    #[test]
+    fn trade_intervals_keep_exact_fill_allocations_and_equal_timestamp_bars() {
+        use OrderSide::{Buy, Sell};
+        let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let cases = [
+            (
+                "2t",
+                vec![(100.0, 2.0, Buy), (101.0, 3.0, Sell), (102.0, 4.0, Buy)],
+                vec![(5.0, -1.0, -1.0, 2.0), (4.0, 4.0, 0.0, 4.0)],
+            ),
+            (
+                "5v",
+                vec![(100.0, 2.0, Buy), (101.0, 6.0, Sell)],
+                vec![(5.0, -1.0, -1.0, 2.0), (3.0, -3.0, -3.0, 0.0)],
+            ),
+            (
+                "2r",
+                vec![(100.0, 2.0, Buy), (102.0, 3.0, Sell), (101.0, 4.0, Buy)],
+                vec![(5.0, -1.0, -1.0, 2.0), (4.0, 4.0, 0.0, 4.0)],
+            ),
+            (
+                "5delta",
+                vec![(100.0, 2.0, Buy), (101.0, 8.0, Sell)],
+                vec![(9.0, -5.0, -5.0, 2.0), (1.0, -1.0, -1.0, 0.0)],
+            ),
+        ];
+        for (interval, fills, expected) in cases {
+            let clock = BarClock::new(interval.parse().unwrap());
+            let mut flow = Footprint::new(clock.clone(), 1.0, 1).unwrap();
+            let trades: Vec<_> = fills
+                .into_iter()
+                .map(|(price, size, side)| Tick::new(start, price, size, Some(side)))
+                .collect();
+            for trade in &trades {
+                flow.push(trade).unwrap();
+            }
+            let source = super::super::OrderFlowInput::footprint();
+            source.set_tick_size(Some(1.0));
+            for trade in &trades {
+                source.push_trade(&clock, trade);
+            }
+            assert_eq!(
+                source.footprints_from(start).bars,
+                *flow.bars(),
+                "{interval}: standalone source"
+            );
+            let got: Vec<_> = flow
+                .bars()
+                .values()
+                .map(|b| (b.volume(), b.delta(), b.min_delta, b.max_delta))
+                .collect();
+            assert_eq!(got, expected, "{interval}");
+            let candles =
+                super::super::aggregate_trades_with_tick_size(&trades, clock, Some(1.0)).unwrap();
+            for (bar, candle) in flow.bars().values().zip(&candles) {
+                assert_eq!(
+                    (bar.time, bar.volume()),
+                    (candle.time, candle.volume),
+                    "{interval}"
+                );
+                assert_eq!(flow.bar_at(candle.time), Some(bar));
+            }
+            assert_eq!(flow.bars().len(), candles.len());
+            let profile = flow.profile(start, start + TimeDelta::nanoseconds(1));
+            assert_eq!(profile.volume(), trades.iter().map(|t| t.size).sum::<f64>());
+            // Rebuilds use the new interval rather than the previous bar's timestamp slots.
+            let mut minute = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+            for trade in &trades {
+                minute.push(trade).unwrap();
+            }
+            assert_eq!(minute.bars().len(), 1);
+            assert_eq!(minute.bars()[&start], profile);
+        }
+        for (interval, min_size, fills, expected) in [
+            (
+                "5v",
+                3.0,
+                vec![(2.0, Buy), (6.0, Sell)],
+                vec![(3.0, -3.0), (3.0, -3.0)],
+            ),
+            (
+                "2t",
+                3.0,
+                vec![(2.0, Buy), (3.0, Sell), (4.0, Buy)],
+                vec![(3.0, -3.0), (4.0, 4.0)],
+            ),
+            (
+                "2t",
+                0.0,
+                vec![(0.0, Buy), (2.0, Buy), (3.0, Sell)],
+                vec![(2.0, 2.0), (3.0, -3.0)],
+            ),
+        ] {
+            let mut flow =
+                Footprint::new(BarClock::new(interval.parse().unwrap()), 1.0, 1).unwrap();
+            flow.set_size_filter(min_size, 10.0).unwrap();
+            for (i, (size, side)) in fills.into_iter().enumerate() {
+                flow.push(&Tick::new(start, 100.0, size, Some(side)))
+                    .unwrap();
+                if i == 0 {
+                    assert!(
+                        flow.set_size_filter(min_size, 10.0).is_err(),
+                        "the grouping anchor already consumed this execution"
+                    );
+                }
+            }
+            let got: Vec<_> = flow
+                .bars()
+                .values()
+                .map(|bar| (bar.volume(), bar.delta()))
+                .collect();
+            assert_eq!(
+                got, expected,
+                "{interval}: original size filter and zero-size count"
             );
         }
     }
