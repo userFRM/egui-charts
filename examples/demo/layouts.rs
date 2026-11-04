@@ -619,6 +619,13 @@ impl DemoApp {
                 return false;
             }
         };
+        if let Some(groups) = &groups
+            && let Err(error) = self.layout.clone().set_sizes(&groups.sizes, true)
+        {
+            self.toasts
+                .error(format!("Could not open chart sizes: {error}"));
+            return false;
+        }
         let mut comparisons = match comparisons {
             Ok(saved) if saved.is_empty() => (0..layout.charts.len()).map(|_| Vec::new()).collect(),
             Ok(saved) if saved.len() == layout.charts.len() => saved,
@@ -1105,6 +1112,19 @@ mod tests {
         super::super::tests::finish_spreads(&mut app.chart, &mut app.spreads);
         app.layout.sync.sync_drawings = true;
         app.ensure_chart_slots(ChartLayoutMode::Four);
+        super::super::tests::settle(&mut app, &ctx);
+        let mut sizes = app.layout.sizes(ChartLayoutMode::Four);
+        sizes.weights[1] = vec![3.0, 2.0];
+        app.layout.set_sizes(&[sizes], true).unwrap();
+        let saved_sizes = app.layout.saved_sizes();
+        let saved = app.capture_layout().unwrap();
+        let comparisons = app.capture_comparisons().unwrap();
+        app.storage
+            .save_layout_groups("Sized", &app.layout_groups())
+            .unwrap();
+        app.layout.reset_sizes(true);
+        assert!(app.restore_layout("Sized".into(), saved, Ok(comparisons)));
+        assert_eq!(app.layout.saved_sizes(), saved_sizes);
         for copy in &mut app.extra_charts {
             let spread = copy
                 .chart

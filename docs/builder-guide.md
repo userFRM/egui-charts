@@ -72,12 +72,13 @@ with CORS. The adapter uses GET with percent-encoded query values.
 |---|---|---|
 | `/config` | No parameters | `{"supported_resolutions":["1","15","1D"],"exchanges":[{"value":"X"}],"symbols_types":[{"value":"stock"}]}` |
 | `/symbols` | `symbol`; optional `conversion` | One symbol object as below |
-| `/search` | `query`, `type`, `exchange`, `offset`, [`limit`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/services/struct.SymbolQuery.html#structfield.limit) | Array of symbol objects, best first, after the requested offset, at most the limit; empty filters mean all |
+| `/search` | `query`, `type`, `exchange`, `offset`, [`limit`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/services/struct.SymbolQuery.html#structfield.limit); `country`, `sector`, `source` when set | Array of symbol objects, best first, after the requested offset, at most the limit; empty filters mean all |
 | `/history` | `symbol`, `resolution`, `countback`, `extended_hours`; optional `from`, `to`, `conversion` | Column history as below |
 
 A symbol object requires `name` (`symbol` is also accepted). Optional `ticker`
 is the identifier used for subsequent requests. Metadata fields are `description`,
-`exchange`, `type` (lowercase model symbol type), `minmov`, `pricescale`,
+`exchange`, `country`, `sector`, `source`, `root`, `logo`, `exchange_logo`,
+`type` (lowercase model symbol type), `minmov`, `pricescale`,
 `volume_precision`, `currency_code`, `timezone`, `session`, `supported_resolutions`
 and `data_status` (`streaming`, `delayed_streaming` or `endofday`). Price tick size
 is `minmov / pricescale`, with `minmov` defaulting to one. Time zones use the

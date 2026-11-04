@@ -5,7 +5,7 @@ use crate::chart::coords::ChartMapping;
 use crate::chart::primitives::{
     Primitive, PrimitiveHit, PrimitiveId, PrimitivePass, PrimitiveView,
 };
-use crate::model::Bar;
+use crate::model::{AutoscaleInfo, AutoscaleMargins, Bar};
 use crate::studies::Indicator;
 use egui::{Painter, Pos2};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -270,21 +270,29 @@ impl Chart {
             .filter(move |item| item.series == series)
     }
 
-    /// The prices the primitives of `series` add to the fit of its scale.
-    pub(super) fn primitive_prices(&self, series: SeriesId) -> impl Iterator<Item = f64> + '_ {
+    /// Prices and screen space the primitives of `series` add to its scale's fit.
+    pub(super) fn primitive_autoscale(
+        &self,
+        series: SeriesId,
+    ) -> impl Iterator<Item = AutoscaleInfo> + '_ {
         let (start, end) = self.state.visible_range();
         self.primitives_of(series)
-            .filter_map(move |item| item.get().autoscale(self.state.shown(), start..end))
-            .flat_map(|(min, max)| [min, max])
+            .filter_map(move |item| item.get().autoscale_info(self.state.shown(), start..end))
     }
 
     /// The prices the primitives of the main series and of the overlay studies on the main
     /// scale add to its fit.
-    pub(super) fn main_primitive_prices(&self) -> Vec<f64> {
+    pub(super) fn main_primitive_prices(&self) -> (Vec<f64>, AutoscaleMargins) {
         let studies = self.rendered_studies().indicators();
         let mut prices = Vec::new();
+        let mut margins = AutoscaleMargins::default();
+        let mut include = |info: AutoscaleInfo| {
+            prices.extend([info.price_range.0, info.price_range.1]);
+            margins.merge(info.margins);
+        };
         if self.main_series_visible {
-            prices.extend(self.primitive_prices(SeriesId::MAIN));
+            self.primitive_autoscale(SeriesId::MAIN)
+                .for_each(&mut include);
         }
         for (idx, id) in self.study_ids.iter().enumerate() {
             if self.series_pane(*id) == Some(self.main_series_pane())
@@ -294,10 +302,10 @@ impl Chart {
                 && self.study_autoscale[idx]
                 && !self.config.scale_price_chart_only
             {
-                prices.extend(self.primitive_prices(*id));
+                self.primitive_autoscale(*id).for_each(&mut include);
             }
         }
-        prices
+        (prices, margins)
     }
 
     /// Whether a renderer draws the study `series` in place of its plots.
@@ -502,6 +510,34 @@ mod tests {
         }
         fn detached(&mut self) {
             self.1.lock().unwrap().push(format!("{} detached", self.0));
+        }
+    }
+
+    /// `axis` is the main price axis of the pane: its column beside the plot and its plot's
+    /// rows, without the corner beside the time axis.
+    #[test]
+    fn main_axis_primitives_draw_in_their_column_and_rows() {
+        struct AxisRect(Arc<Mutex<Option<egui::Rect>>>);
+        impl Primitive for AxisRect {
+            fn draw_price_axis(&self, _: &egui::Painter, axis: egui::Rect, _: &PrimitiveView<'_>) {
+                *self.0.lock().unwrap() = Some(axis);
+            }
+        }
+        for side in [crate::model::AxisSide::Right, crate::model::AxisSide::Left] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[10.0], &[20.0]);
+            chart.place_pane_scales(crate::widget::PaneId::MAIN, side);
+            let seen = Arc::default();
+            chart.attach_primitive(SeriesId::MAIN, AxisRect(Arc::clone(&seen)));
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let axis = seen.lock().unwrap().unwrap();
+            let plot = chart.get_rendered_price_rect();
+            assert_eq!(axis.y_range(), plot.y_range(), "{side:?}");
+            let touching = match side {
+                crate::model::AxisSide::Right => axis.left() == plot.right(),
+                crate::model::AxisSide::Left => axis.right() == plot.left(),
+            };
+            assert!(touching, "{side:?}: {axis:?} beside {plot:?}");
         }
     }
 
@@ -1088,14 +1124,14 @@ mod tests {
                     5.0,
                     CursorIcon::Crosshair,
                 ),
-                (renderer, "lower", 8.0, CursorIcon::Grab),
+                (renderer.clone(), "lower", 8.0, CursorIcon::Grab),
                 (
                     PointerTarget::Primitive(second_id),
                     "second",
                     5.0,
                     CursorIcon::PointingHand,
                 ),
-                (renderer, "upper", 8.0, CursorIcon::ResizeVertical),
+                (renderer.clone(), "upper", 8.0, CursorIcon::ResizeVertical),
                 (renderer, "lower", 0.0, CursorIcon::Grab),
             ]
             .into_iter()

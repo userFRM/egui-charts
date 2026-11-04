@@ -4,9 +4,10 @@ mod options;
 mod paint;
 mod scales;
 
-pub use options::SeriesOptions;
+pub use options::{PaneScale, SeriesOptions};
 pub(super) use options::{PriceSeries, SeriesLegend, base_line};
 pub(super) use paint::paint_last_price_pulse;
+pub(super) use scales::axis_label_rect;
 
 use super::change_marks::ChangeMarks;
 use super::{Chart, ChartElementId, DataOperation, SeriesId};
