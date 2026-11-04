@@ -176,8 +176,10 @@ impl ChartSettingsState {
         settings.status_line.show_last_day_change = config.show_last_day_change;
         settings.status_line.indicator_background_opacity =
             (config.indicator_backdrop_opacity.clamp(0.0, 1.0) * 100.0).round() as u8;
-        settings.scales_and_lines.price_scale_left =
-            !config.show_right_axis && config.show_left_axis;
+        settings.scales_and_lines.axis_layout = chart
+            .pane_axis_options(chart.main_series_pane())
+            .unwrap_or_default();
+        settings.scales_and_lines.price_scale_left = chart.main_axis_on_left();
         settings.scales_and_lines.show_currency = config.show_currency;
         settings.scales_and_lines.show_unit = config.show_unit;
         settings.scales_and_lines.show_scale_mode_buttons = config.show_scale_mode_buttons;
@@ -389,6 +391,17 @@ impl ChartSettingsState {
         crosshair.vert_line_width = self.crosshair.line_width;
         crosshair.horz_line_style = self.crosshair.line_style;
         crosshair.vert_line_style = crosshair.horz_line_style;
+        let mut axis_layout = self.scales_and_lines.axis_layout;
+        if self.scales_and_lines.price_scale_left != chart.main_axis_on_left()
+            && axis_layout.side.is_some()
+        {
+            axis_layout.side = Some(if self.scales_and_lines.price_scale_left {
+                crate::model::AxisSide::Left
+            } else {
+                crate::model::AxisSide::Right
+            });
+        }
+        chart.set_pane_axis_options(chart.main_series_pane(), axis_layout);
         let config = chart.config_mut();
         config.bullish_color = self.candle_colors.body_up;
         config.bearish_color = self.candle_colors.body_down;
@@ -435,8 +448,10 @@ impl ChartSettingsState {
         config.show_indicator_labels = self.status_line.show_indicator_titles;
         config.show_indicator_inputs = self.status_line.show_indicator_inputs;
         config.show_indicator_last_val = self.status_line.show_indicator_values;
-        config.show_right_axis = !self.scales_and_lines.price_scale_left;
-        config.show_left_axis = self.scales_and_lines.price_scale_left;
+        if axis_layout.side.is_none() {
+            config.show_right_axis = !self.scales_and_lines.price_scale_left;
+            config.show_left_axis = self.scales_and_lines.price_scale_left;
+        }
         config.show_currency = self.scales_and_lines.show_currency;
         config.show_unit = self.scales_and_lines.show_unit;
         config.show_scale_mode_buttons = self.scales_and_lines.show_scale_mode_buttons;

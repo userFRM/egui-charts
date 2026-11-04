@@ -33,8 +33,9 @@ pub struct Alert {
     /// Host watchlist identifier. When present, evaluate independently on each member symbol.
     #[serde(default)]
     pub watchlist: Option<String>,
-    /// The timeframe whose bars the alert is evaluated on. `None` for an alert that has not been
-    /// fixed to one yet; `AlertEngine` fixes it to the first timeframe it evaluates the alert on.
+    /// Calculation interval of the first condition. `None` until selected;
+    /// `AlertEngine` selects it from primary-series input. An explicit
+    /// additional interval does not select the first condition's interval.
     #[serde(default)]
     pub timeframe: Option<Timeframe>,
     /// Independent creation inputs, retained through edits, copies and storage. Legacy alerts
@@ -44,9 +45,15 @@ pub struct Alert {
     /// Value tested by the first condition.
     #[serde(default)]
     pub source: AlertSource,
-    /// Additional conditions, all required on the same bar as the first condition.
+    /// Additional conditions, all required at the same event time as the first condition.
+    /// An alert accepts at most five conditions including the first. Independent intervals need
+    /// time-based bars; conditions on one execution-based interval remain supported.
     #[serde(default)]
     pub additional_conditions: Vec<AlertRule>,
+    /// Optional interval overrides in `additional_conditions` order. Missing entries and `None`
+    /// follow `timeframe`. Keep entries aligned when removing or reordering additional rules.
+    #[serde(default)]
+    pub additional_timeframes: Vec<Option<Timeframe>>,
     /// When the alert fires.
     pub condition: AlertCondition,
     /// Whether the alert fires once or on every occurrence.
@@ -69,7 +76,7 @@ pub struct Alert {
 }
 
 /// The source view and study definitions captured when an alert is created. The alert's
-/// symbol and timeframe select its main series; auxiliary requests follow these saved studies.
+/// symbol and condition intervals select their bars; auxiliary requests follow these saved studies.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AlertInputs {
     /// Calendar zone; `None` follows the system's local calendar.
@@ -163,6 +170,7 @@ impl Alert {
             inputs: None,
             source: AlertSource::Price,
             additional_conditions: Vec::new(),
+            additional_timeframes: Vec::new(),
             frequency: if matches!(condition, AlertCondition::StrategyFills(_)) {
                 AlertFrequency::EveryTime
             } else {
@@ -178,6 +186,38 @@ impl Alert {
 }
 
 impl Alert {
+    /// Distinct calculation intervals, shortest nominal duration first, preserving condition
+    /// order for ties. An unset first interval uses one minute
+    /// until the engine fixes it to its first input. Additional unset intervals follow it.
+    pub fn timeframes(&self) -> Vec<Timeframe> {
+        let mut intervals = Vec::new();
+        for (_, _, interval) in self.rules() {
+            if !intervals.contains(&interval) {
+                intervals.push(interval);
+            }
+        }
+        intervals.sort_by_key(Timeframe::duration_ms);
+        intervals
+    }
+
+    pub(crate) fn rules(&self) -> impl Iterator<Item = (&AlertSource, &AlertCondition, Timeframe)> {
+        let first = self.timeframe.unwrap_or_default();
+        std::iter::once((&self.source, &self.condition, first)).chain(
+            self.additional_conditions
+                .iter()
+                .enumerate()
+                .map(move |(index, rule)| {
+                    let interval = self
+                        .additional_timeframes
+                        .get(index)
+                        .copied()
+                        .flatten()
+                        .unwrap_or(first);
+                    (&rule.source, &rule.condition, interval)
+                }),
+        )
+    }
+
     /// Every input tested by the alert, including comparison outputs and additional rules.
     pub fn sources(&self) -> impl Iterator<Item = &AlertSource> {
         std::iter::once((&self.source, &self.condition))
@@ -345,7 +385,7 @@ pub enum AlertCondition {
     /// previous evaluation, just as a crossing does.
     Channel {
         /// Stable sources of the two boundary lines, retained through drawing edits and storage.
-        boundaries: [AlertSource; 2],
+        boundaries: Box<[AlertSource; 2]>,
         /// State or transition to test.
         comparison: AlertChannelComparison,
     },
@@ -416,7 +456,7 @@ impl std::fmt::Display for AlertChannelComparison {
     }
 }
 
-/// One additional condition of an alert; all rules must hold on the same bar.
+/// One additional condition of an alert; all rules must hold at the same event time.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AlertRule {
     /// The value to test.
@@ -439,9 +479,7 @@ impl AlertCondition {
     pub(crate) fn partners(&self) -> [Option<&AlertSource>; 2] {
         match self {
             Self::Compare { other, .. } => [Some(other), None],
-            Self::Channel {
-                boundaries: [a, b], ..
-            } => [Some(a), Some(b)],
+            Self::Channel { boundaries, .. } => [Some(&boundaries[0]), Some(&boundaries[1])],
             _ => [None, None],
         }
     }
@@ -466,9 +504,9 @@ impl AlertCondition {
                 percent.is_finite() && *percent != 0.0 && *bars > 0
             }
             Self::Compare { other, .. } => other.is_valid(),
-            Self::Channel {
-                boundaries: [a, b], ..
-            } => a != b && a.is_valid() && b.is_valid(),
+            Self::Channel { boundaries, .. } => {
+                boundaries[0] != boundaries[1] && boundaries.iter().all(AlertSource::is_valid)
+            }
             Self::VolumeAboveAverage { multiplier, bars } => {
                 multiplier.is_finite() && *multiplier > 0.0 && *bars > 0
             }
@@ -538,6 +576,12 @@ impl Alert {
                 .additional_conditions
                 .iter()
                 .all(|rule| !matches!(rule.condition, AlertCondition::StrategyFills(_)))
+            && self.additional_conditions.len() < 5
+            && self.additional_timeframes.len() <= self.additional_conditions.len()
+            && {
+                let intervals = self.timeframes();
+                intervals.len() == 1 || intervals.iter().all(|interval| !interval.is_trade_based())
+            }
             && self.source.is_valid()
             && self.condition.is_valid()
             && self
@@ -663,6 +707,7 @@ mod tests {
     fn stored_named_compound_alert_round_trips() {
         let stored = serde_json::json!({
             "symbol": "AAPL", "name": "Momentum", "message": "Check momentum",
+            "timeframe": "Hour1", "additional_timeframes": ["Min5"],
             "watchlist": "technology", "source": {"Study": {"id": "rsi", "output": 0}},
             "condition": {"Above": 70.0}, "frequency": "OncePerBarClose",
             "additional_conditions": [{"source": "Price", "condition": {"EnteringChannel": {"lower": 100.0, "upper": 110.0}}}]
@@ -724,7 +769,7 @@ mod tests {
     #[test]
     fn saved_alerts_require_finite_levels_ordered_channels_and_positive_lookbacks() {
         type Edit = fn(&mut Alert);
-        let rows: [(Edit, bool); 22] = [
+        let rows: [(Edit, bool); 28] = [
             (
                 |a| a.condition = AlertCondition::StrategyFills("run".into()),
                 true,
@@ -746,6 +791,65 @@ mod tests {
                         source: AlertSource::Price,
                         condition: AlertCondition::StrategyFills("run".into()),
                     });
+                },
+                false,
+            ),
+            (
+                |a| {
+                    let rule: AlertRule = serde_json::from_value(
+                        serde_json::json!({"source":"Price", "condition":{"Above":1.0}}),
+                    )
+                    .unwrap();
+                    a.additional_conditions = vec![rule; 4];
+                },
+                true,
+            ),
+            (
+                |a| {
+                    let rule: AlertRule = serde_json::from_value(
+                        serde_json::json!({"source":"Price", "condition":{"Above":1.0}}),
+                    )
+                    .unwrap();
+                    a.additional_conditions = vec![rule; 5];
+                },
+                false,
+            ),
+            (
+                |a| {
+                    *a = serde_json::from_value(serde_json::json!({
+                    "symbol":"SAMPLE", "condition":{"Above":1.0}, "additional_timeframes":["Min5"]
+                })).unwrap()
+                },
+                false,
+            ),
+            (
+                |a| {
+                    a.condition = AlertCondition::StrategyFills("run".into());
+                    a.additional_conditions.push(AlertRule {
+                        source: AlertSource::Price,
+                        condition: AlertCondition::Above(1.0),
+                    });
+                },
+                false,
+            ),
+            (
+                |a| {
+                    *a = serde_json::from_value(serde_json::json!({
+                        "symbol":"SAMPLE", "timeframe":{"Ticks":2}, "condition":{"Above":1.0},
+                        "additional_conditions":[{"source":"Volume","condition":{"Above":1.0}}]
+                    }))
+                    .unwrap()
+                },
+                true,
+            ),
+            (
+                |a| {
+                    *a = serde_json::from_value(serde_json::json!({
+                        "symbol":"SAMPLE", "timeframe":"Min1", "condition":{"Above":1.0},
+                        "additional_timeframes":[{"Ticks":2}],
+                        "additional_conditions":[{"source":"Volume","condition":{"Above":1.0}}]
+                    }))
+                    .unwrap()
                 },
                 false,
             ),
@@ -902,6 +1006,7 @@ mod tests {
                 timeframe: None,
                 inputs: None,
                 additional_conditions: Vec::new(),
+                additional_timeframes: Vec::new(),
                 symbol: "AAPL".into(),
                 condition: AlertCondition::CrossingUp(101.5),
                 frequency: AlertFrequency::Once,

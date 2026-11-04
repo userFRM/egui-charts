@@ -12,7 +12,7 @@ use super::{
     Datafeed, FeedCapabilities, FeedError, FeedStatus, HistoryPage, HistoryRequest, Reply,
     Subscription, SubscriptionId,
 };
-use crate::model::{Instrument, SymbolType};
+use crate::model::Instrument;
 use protocol::{Columns, Config, Symbol, history_url, url};
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
@@ -28,6 +28,9 @@ const REFRESH: Duration = Duration::from_secs(5);
 /// and the host's symbol search dialog. Subscriptions refresh bars every five seconds,
 /// retry recoverable failures with backoff and stop on unsubscribe or chart drop. An HTTP
 /// request already in flight may finish, but its answer is discarded after cancellation.
+/// Search sends qualified text unchanged in `query`, keeps the explicit `exchange` independent,
+/// and includes `country`, `sector` and `source` parameters only when those filters are set.
+/// Symbol objects may report those fields alongside `root`, `logo` and `exchange_logo`.
 ///
 /// ```
 /// # #[cfg(feature = "widget")] {
@@ -145,27 +148,11 @@ impl Drop for HttpDatafeed {
 impl HttpDatafeed {
     pub(crate) fn search_symbols(
         &self,
-        text: String,
-        symbol_type: Option<SymbolType>,
-        exchange: Option<String>,
-        offset: usize,
+        params: &[(&str, String)],
         limit: usize,
         reply: Reply<Vec<Instrument>>,
     ) {
-        let target = url(
-            &self.base,
-            "search",
-            &[
-                ("query", text),
-                (
-                    "type",
-                    symbol_type.map(|kind| kind.to_string()).unwrap_or_default(),
-                ),
-                ("exchange", exchange.unwrap_or_default()),
-                ("offset", offset.to_string()),
-                ("limit", limit.to_string()),
-            ],
-        );
+        let target = url(&self.base, "search", params);
         get(target, String::new(), move |result| {
             reply.send(result.and_then(|symbols: Vec<Symbol>| {
                 symbols

@@ -72,6 +72,20 @@ impl HostMenuEntry {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum ChartContextAction {
+    /// Joining the displayed scales of a pane, already applied with undo support.
+    MergePaneAxes {
+        /// The pane at the original click.
+        pane: crate::widget::PaneId,
+        /// The edge where its shared axis is displayed.
+        side: crate::model::AxisSide,
+    },
+    /// A pane's axis layout, already applied with undo support by [`ChartMenus`].
+    PaneAxes {
+        /// The pane at the original click.
+        pane: crate::widget::PaneId,
+        /// Its new saved axis layout.
+        options: crate::model::PaneAxisOptions,
+    },
     /// A registered host entry, with the original click context.
     Host {
         /// The registered entry id.
@@ -122,6 +136,7 @@ pub struct ChartMenus {
     pub host_entries: Vec<HostMenuEntry>,
     context: Option<HostMenuContext>,
     just_opened: bool,
+    pane_axes: Option<(crate::widget::PaneId, crate::model::PaneAxisOptions)>,
 }
 
 impl ChartMenus {
@@ -224,6 +239,9 @@ impl ChartMenus {
                 } => TradeProfileMenu::open(chart, pos, time),
                 _ => None,
             };
+            self.pane_axes = chart
+                .pane_at_position(pos)
+                .and_then(|pane| chart.pane_axis_options(pane).map(|options| (pane, options)));
             self.just_opened = true;
             // A new right-click supersedes any menu still open.
             self.chart.close();
@@ -285,6 +303,12 @@ impl ChartMenus {
                 &entries,
                 std::mem::take(&mut self.just_opened),
             ) {
+                if let Some(ChartContextAction::MergePaneAxes { pane, side }) = &picked {
+                    chart.user_action(|chart| chart.merge_pane_scales(*pane, *side));
+                }
+                if let Some(ChartContextAction::PaneAxes { pane, options }) = &picked {
+                    chart.user_action(|chart| chart.set_pane_axis_options(*pane, *options));
+                }
                 if let Some(ChartContextAction::Drawing(action)) = &picked
                     && let RightClickTarget::Drawing { drawing_id, .. } = context.target
                 {
@@ -360,6 +384,27 @@ impl ChartMenus {
                 ChartContextAction::Drawing,
             ),
         };
+        if let Some((pane, options)) = self.pane_axes
+            && matches!(context.target, RightClickTarget::Background { .. })
+        {
+            entries.push(MenuEntry::Submenu {
+                label: "Pane axes".into(),
+                icon: None,
+                entries: super::axis::layout_entries(options)
+                    .into_iter()
+                    .map(|entry| {
+                        entry.map(&|action| match action {
+                            super::axis::LayoutAction::Options(options) => {
+                                ChartContextAction::PaneAxes { pane, options }
+                            }
+                            super::axis::LayoutAction::Merge(side) => {
+                                ChartContextAction::MergePaneAxes { pane, side }
+                            }
+                        })
+                    })
+                    .collect(),
+            });
+        }
         if let Some(tpo) = &self.tpo {
             let mut profile = tagged(tpo.entries(), ChartContextAction::Chart);
             if !entries.is_empty() {
