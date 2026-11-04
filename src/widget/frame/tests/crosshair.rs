@@ -135,8 +135,13 @@ fn programmatic_crosshair_uses_the_target_series_scale_and_pane() {
         assert_eq!(tag.is_some(), axis, "{scale:?} {secondary}");
         if let Some(tag) = tag {
             assert!(pane.y_range().contains(tag.pos.y));
-            if scale == Some(SeriesScale::Left) && !secondary {
-                assert!(tag.pos.x < main.left());
+            if scale == Some(SeriesScale::Left) {
+                assert!(
+                    tag.pos.x < horizontal[0][0].x,
+                    "{scale:?} {secondary} {moved_main}: label {:?}, line {:?}",
+                    tag.pos,
+                    horizontal[0]
+                );
             }
         }
         let mut snapshot = chart.export_snapshot(
