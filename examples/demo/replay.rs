@@ -1306,7 +1306,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = DemoApp::new_at(
             &eframe::CreationContext::_new_kittest(ctx.clone()),
-            "2026-11-03T16:00:00Z".parse().unwrap(),
+            "2026-10-27T23:59:59Z".parse().unwrap(),
             true,
         );
         super::super::tests::settle(&mut app, &ctx);
@@ -1353,10 +1353,7 @@ mod tests {
         assert!(app.restore_layout("Unit sample".into(), saved, Ok(Vec::new())));
         app.regenerate_bars();
         super::super::tests::settle(&mut app, &ctx);
-        app.live.set_paused(false);
-        app.live
-            .advance(app.live.now() + chrono::TimeDelta::seconds(2));
-        app.live.set_paused(true);
+        app.advance_sample_to(app.live.now() + chrono::TimeDelta::minutes(2));
         super::super::tests::settle(&mut app, &ctx);
         let mut events = Vec::new();
         app.live.read_recording(&mut events);
@@ -1404,8 +1401,13 @@ mod tests {
             app.chart.instrument().unwrap().currency.as_deref(),
             Some("USD")
         );
-        let restored = app.chart.bars(SeriesId::MAIN)[0].close;
-        assert!((restored - raw[0].close).abs() < 1e-7);
+        let restored = &app.chart.bars(SeriesId::MAIN)[0];
+        // Streaming can evict the oldest minutes, so compare the same historical bar by time.
+        let original = raw
+            .iter()
+            .find(|bar| bar.time == restored.time)
+            .expect("the restored historical bar must exist in the original snapshot");
+        assert!((restored.close - original.close).abs() < 1e-7);
     }
 
     #[test]

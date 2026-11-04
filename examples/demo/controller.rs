@@ -673,7 +673,14 @@ impl DemoApp {
                 .and_then(|storage| eframe::get_value(storage, "demo_formatting"))
                 .unwrap_or_default(),
             top_toolbar,
-            drawing_toolbar: DrawingToolbar::default(),
+            drawing_toolbar: {
+                let mut toolbar = DrawingToolbar::default();
+                toolbar.state.cursor_favorites = cc
+                    .storage
+                    .and_then(|storage| eframe::get_value(storage, "cursor_favorites"))
+                    .unwrap_or_default();
+                toolbar
+            },
             selection_toolbar: FloatingSelectionToolbar::new(),
             timeframe_toolbar,
             widget_bar,
@@ -1474,6 +1481,11 @@ impl eframe::App for DemoApp {
             storage,
             "interval_preferences",
             &self.top_toolbar.timeframe_selector.preferences(),
+        );
+        eframe::set_value(
+            storage,
+            "cursor_favorites",
+            &self.drawing_toolbar.state.cursor_favorites,
         );
         eframe::set_value(
             storage,
@@ -2520,14 +2532,14 @@ impl DemoApp {
         };
         for request in requests {
             use egui_charts::ui::widget_bar::{MarketDetail, MarketDetailRequest};
-            let bars = self.chart.bars(SeriesId::MAIN);
+            let bars = self.market_history();
             match request {
                 MarketDetailRequest::PeriodReturns(symbol) => self
                     .symbol_details
-                    .set_period_returns(&symbol, MarketDetail::Ready(feeds::period_returns(bars))),
+                    .set_period_returns(&symbol, MarketDetail::Ready(feeds::period_returns(&bars))),
                 MarketDetailRequest::Seasonality(symbol) => self
                     .symbol_details
-                    .set_seasonality(&symbol, MarketDetail::Ready(feeds::seasonality(bars))),
+                    .set_seasonality(&symbol, MarketDetail::Ready(feeds::seasonality(&bars))),
                 _ => {}
             }
         }
@@ -2833,6 +2845,7 @@ impl DemoApp {
     fn handle_timeframe_toolbar(&mut self, action: TimeframeToolbarAction) {
         match action {
             TimeframeToolbarAction::DateRangeChanged(range) => {
+                self.explain_history_limit(range);
                 let visible = visible_bars_for_range(range, self.chart.bars(SeriesId::MAIN));
                 let width = self.chart.get_rendered_price_rect().width();
                 // Include the latest slot in the scale's exclusive data range.
@@ -4751,10 +4764,21 @@ mod tests {
                     ]),
                 );
             }
-            for explicit in [false, true, true].into_iter().take(restarts) {
+            for (restart, explicit) in [false, true, true].into_iter().take(restarts).enumerate() {
                 let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
                 cc.storage = Some(&storage);
                 let mut app = DemoApp::new(&cc);
+                use egui_charts::ui::drawing_toolbar::categories::cursors::CursorType;
+                assert_eq!(
+                    app.drawing_toolbar.state.cursor_favorites,
+                    if restart == 0 {
+                        &[][..]
+                    } else {
+                        CursorType::all()
+                    },
+                    "cursor favourites survive a restart; older settings start empty"
+                );
+                app.drawing_toolbar.state.cursor_favorites = CursorType::all().to_vec();
                 if legacy_document.is_some() {
                     assert_eq!(app.state.symbol, "AAPL");
                     assert_eq!(app.state.timeframe, Timeframe::Min5);

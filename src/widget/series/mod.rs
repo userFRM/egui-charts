@@ -6,6 +6,7 @@ mod scales;
 
 pub use options::SeriesOptions;
 pub(super) use options::{PriceSeries, SeriesLegend, base_line};
+pub(super) use paint::paint_last_price_pulse;
 
 use super::change_marks::ChangeMarks;
 use super::{Chart, ChartElementId, DataOperation, SeriesId};
@@ -64,6 +65,21 @@ pub struct BarsInRange {
     /// are selected, or the series' last bar is selected, measured from the unrounded right
     /// edge instead. Negative when that edge lies after the last bar.
     pub bars_after: f64,
+}
+
+/// A valued bar selected by [`Chart::series_last_value`], on its series' price scale.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SeriesLastValue {
+    /// The selected bar's close in raw price units.
+    pub value: f64,
+    /// Its logical position on the shared horizontal scale, including gaps.
+    pub index: f64,
+    /// Its y coordinate in the chart's [`Ui`](egui::Ui), possibly outside the pane.
+    pub coordinate: f32,
+    /// Its last-value tag colour, including any per-bar override.
+    pub color: egui::Color32,
+    /// The value formatted as [`Chart::format_series_price`] formats it, without a name.
+    pub text: String,
 }
 
 /// Handle of a price line added with [`Chart::add_price_line`].

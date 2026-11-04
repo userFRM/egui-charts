@@ -503,6 +503,8 @@ pub mod icons {
         crate::icon_from_path!("ui/layout-5-large-bottom.svg");
     /// Layout six SVG icon.
     pub const LAYOUT_SIX: Icon = crate::icon_from_path!("ui/layout-6.svg");
+    /// Two columns and three rows.
+    pub const LAYOUT_SIX_TWO_COLUMNS: Icon = crate::icon_from_path!("ui/layout-6-2x3.svg");
     /// Six columns.
     pub const LAYOUT_SIX_HORIZONTAL: Icon = crate::icon_from_path!("ui/layout-6-columns.svg");
     /// Six rows.
@@ -518,24 +520,52 @@ pub mod icons {
         crate::icon_from_path!("ui/layout-6-large-bottom.svg");
     /// Layout seven SVG icon.
     pub const LAYOUT_SEVEN: Icon = crate::icon_from_path!("ui/layout-7.svg");
+    /// Seven columns.
+    pub const LAYOUT_SEVEN_HORIZONTAL: Icon = crate::icon_from_path!("ui/layout-7-columns.svg");
     /// Layout eight SVG icon.
     pub const LAYOUT_EIGHT: Icon = crate::icon_from_path!("ui/layout-8.svg");
+    /// Eight rows.
+    pub const LAYOUT_EIGHT_VERTICAL: Icon = crate::icon_from_path!("ui/layout-8-rows.svg");
+    /// Two columns and four rows.
+    pub const LAYOUT_EIGHT_TWO_COLUMNS: Icon = crate::icon_from_path!("ui/layout-8-2x4.svg");
+    /// Eight columns.
+    pub const LAYOUT_EIGHT_HORIZONTAL: Icon = crate::icon_from_path!("ui/layout-8-columns.svg");
     /// Layout nine SVG icon.
     pub const LAYOUT_NINE: Icon = crate::icon_from_path!("ui/layout-9.svg");
+    /// Nine rows.
+    pub const LAYOUT_NINE_VERTICAL: Icon = crate::icon_from_path!("ui/layout-9-rows.svg");
+    /// Nine columns.
+    pub const LAYOUT_NINE_HORIZONTAL: Icon = crate::icon_from_path!("ui/layout-9-columns.svg");
     /// Layout ten SVG icon.
     pub const LAYOUT_TEN: Icon = crate::icon_from_path!("ui/layout-10.svg");
+    /// Ten columns.
+    pub const LAYOUT_TEN_HORIZONTAL: Icon = crate::icon_from_path!("ui/layout-10-columns.svg");
+    /// Ten rows.
+    pub const LAYOUT_TEN_VERTICAL: Icon = crate::icon_from_path!("ui/layout-10-rows.svg");
+    /// Five columns and two rows.
+    pub const LAYOUT_TEN_FIVE_COLUMNS: Icon = crate::icon_from_path!("ui/layout-10-5x2.svg");
     /// Layout eleven SVG icon.
     pub const LAYOUT_ELEVEN: Icon = crate::icon_from_path!("ui/layout-11.svg");
     /// Layout twelve SVG icon.
     pub const LAYOUT_TWELVE: Icon = crate::icon_from_path!("ui/layout-12.svg");
+    /// Twelve columns.
+    pub const LAYOUT_TWELVE_HORIZONTAL: Icon = crate::icon_from_path!("ui/layout-12-columns.svg");
+    /// Three columns and four rows.
+    pub const LAYOUT_TWELVE_THREE_COLUMNS: Icon = crate::icon_from_path!("ui/layout-12-3x4.svg");
+    /// Six columns and two rows.
+    pub const LAYOUT_TWELVE_SIX_COLUMNS: Icon = crate::icon_from_path!("ui/layout-12-6x2.svg");
     /// Layout thirteen SVG icon.
     pub const LAYOUT_THIRTEEN: Icon = crate::icon_from_path!("ui/layout-13.svg");
     /// Layout fourteen SVG icon.
     pub const LAYOUT_FOURTEEN: Icon = crate::icon_from_path!("ui/layout-14.svg");
+    /// Seven columns and two rows.
+    pub const LAYOUT_FOURTEEN_SEVEN_COLUMNS: Icon = crate::icon_from_path!("ui/layout-14-7x2.svg");
     /// Layout fifteen SVG icon.
     pub const LAYOUT_FIFTEEN: Icon = crate::icon_from_path!("ui/layout-15.svg");
     /// Layout sixteen SVG icon.
     pub const LAYOUT_SIXTEEN: Icon = crate::icon_from_path!("ui/layout-16.svg");
+    /// Eight columns and two rows.
+    pub const LAYOUT_SIXTEEN_EIGHT_COLUMNS: Icon = crate::icon_from_path!("ui/layout-16-8x2.svg");
     /// One chart with a tab strip, for the tabbed preset.
     pub const LAYOUT_TABS: Icon = crate::icon_from_path!("ui/layout-tabs.svg");
     /// Layout setup SVG icon.

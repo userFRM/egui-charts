@@ -43,7 +43,8 @@ For HLC area,
 controls fill opacity and close-line width; the main chart's bullish and bearish
 colours supply the bands. Added areas use
 [`SeriesOptions::color`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.SeriesOptions.html#structfield.color)
-and `width` with the default downward gradient. Added HLC areas use `up_color`
+and `width` with the default downward gradient, unless `area_style` supplies the
+line and gradient settings above. Added HLC areas use `up_color`
 and `down_color` with default HLC style. Both types can be
 [added series](../chart-types.mdx#added-series-restrictions).
 

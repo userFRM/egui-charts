@@ -36,8 +36,10 @@ IDs keep their scales independent. Use
 [`set_series_scale`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_series_scale)
 to reassign a present series, or
 [`series_price_scale_mut`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.series_price_scale_mut)
-to edit its current scale. Below the main pane, the series uses its
-[destination pane's scale](panes.mdx#move-an-added-series).
+to edit its current scale. Each pane has its own scales for these assignments,
+so a series moved to another pane joins the
+[destination pane's scale](panes.mdx#move-an-added-series) with the same
+assignment.
 
 ## Choose the transform
 

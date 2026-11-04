@@ -53,8 +53,12 @@ pub struct ChartPointer {
     /// returned by [`Chart::study_values_at`]; [`Chart::set_cursor_data_policy`] can include
     /// hidden studies and plots. Missing values remain `None`; empty between main-series points.
     pub studies: Vec<(SeriesId, StudyValue)>,
-    /// The drawing, series or study line under the pointer, in the priority a click selects.
+    /// The drawing, primitive, series or study under the pointer. Custom hit priority is
+    /// documented by [`PrimitiveHit`](super::PrimitiveHit).
     pub target: Option<PointerTarget>,
+    /// The winning primitive or custom renderer's object, including its cursor and host data.
+    /// `target` identifies its primitive or series; `None` for drawings and built-in plots.
+    pub primitive_hit: Option<super::PrimitiveHit>,
     /// Modifier keys held during the event.
     pub modifiers: Modifiers,
     /// Device that produced the event.
@@ -83,6 +87,7 @@ impl ChartPointer {
             && self.previous_close == other.previous_close
             && self.studies == other.studies
             && self.target == other.target
+            && self.primitive_hit == other.primitive_hit
             && self.modifiers == other.modifiers
             && self.kind == other.kind
             && match (&self.bar, &other.bar) {
@@ -115,7 +120,7 @@ pub enum PointerTarget {
     Element(ChartElementId),
     /// A drawing, by its drawing id.
     Drawing(usize),
-    /// A primitive whose [`hit_test`](super::Primitive::hit_test) reports the pointer.
+    /// A primitive whose [`hit_test_result`](super::Primitive::hit_test_result) reports the pointer.
     Primitive(super::PrimitiveId),
 }
 
@@ -301,6 +306,7 @@ pub(super) struct HostEvents {
     input_frame: Option<(u64, Modifiers)>,
     /// What the pointer is over this frame, resolved while the plots are drawn.
     pub target: Option<PointerTarget>,
+    pub primitive_hit: Option<super::PrimitiveHit>,
     pub volume_map: Option<crate::scales::PriceMap>,
     #[cfg(feature = "drawings")]
     dropped_images: Vec<egui::DroppedFileHandle>,
@@ -597,34 +603,54 @@ impl Chart {
         // Panes are counted as drawn, from the top; the price pane may sit below others.
         let pane_index = |id: super::PaneId| {
             (self.pane_layout.panes.iter())
-                .filter(|pane| pane.id == super::PaneId::MAIN || self.pane_shown(pane))
+                .filter(|pane| {
+                    pane.id == super::PaneId::MAIN
+                        || pane.id == self.main_series_pane()
+                        || self.pane_shown(pane)
+                })
                 .position(|pane| pane.id == id)
                 .unwrap_or_default()
         };
         let (series, price, pane) = if let Some(group) =
             self.pane_layout.panes.iter().find(|group| {
-                group.id != super::PaneId::MAIN
+                group.id != self.main_series_pane()
                     && group.rect.contains(pos)
                     && plot.x_range().contains(pos.x)
             }) {
-            let owner = *self.pane_series(group.id).first()?;
-            let map = group.price_map();
-            let closes = group.members.iter().filter_map(|id| {
+            let members = self.pane_series(group.id);
+            let owner = *members.first()?;
+            let map = self
+                .series_price_map(owner)
+                .unwrap_or_else(|| group.price_map());
+            let closes = members.iter().filter_map(|id| {
                 let item =
                     (self.price_series.iter()).find(|item| item.id == *id && item.visible)?;
                 let at = item
                     .bars
                     .binary_search_by_key(&time?, |bar| bar.time)
                     .ok()?;
-                (!item.bars[at].is_whitespace()).then_some(item.bars[at].close)
+                let own = self.series_price_map(*id).unwrap_or(map);
+                (!item.bars[at].is_whitespace()).then(|| {
+                    let value = item.bars[at].close;
+                    if own == map {
+                        value
+                    } else {
+                        map.y_to_price(own.price_to_y(value))
+                    }
+                })
             });
-            let values = group
-                .members
+            let values = members
                 .iter()
                 .filter_map(|id| self.study_ids.iter().position(|study| study == id))
-                .map(|index| &self.rendered_studies().indicators()[index])
-                .filter(|study| study.is_visible())
-                .flat_map(|study| {
+                .map(|index| {
+                    (
+                        self.study_ids[index],
+                        &self.rendered_studies().indicators()[index],
+                    )
+                })
+                .filter(|(_, study)| study.is_visible())
+                .flat_map(|(id, study)| {
+                    let own = self.series_price_map(id).unwrap_or(map);
                     (0..study.line_count())
                         .filter(|line| {
                             let plot = study.plot_style(*line);
@@ -636,7 +662,15 @@ impl Chart {
                                 )
                         })
                         .filter_map(move |line| {
-                            bar_at.and_then(|index| study.plot_value(line, index))
+                            bar_at
+                                .and_then(|index| study.plot_value(line, index))
+                                .map(|value| {
+                                    if own == map {
+                                        value
+                                    } else {
+                                        map.y_to_price(own.price_to_y(value))
+                                    }
+                                })
                         })
                 })
                 .chain(closes)
@@ -652,14 +686,14 @@ impl Chart {
             (
                 SeriesId::VOLUME,
                 magnet(map, values),
-                pane_index(super::PaneId::MAIN),
+                pane_index(self.main_series_pane()),
             )
         } else if plot.contains(pos) {
             let snapped = bar_at.map_or(pos, |index| {
                 self.snap_crosshair(pos, &self.last_price_map, index)
             });
             let price = self.last_price_map.y_to_price(snapped.y);
-            (SeriesId::MAIN, price, pane_index(super::PaneId::MAIN))
+            (SeriesId::MAIN, price, pane_index(self.main_series_pane()))
         } else {
             return None;
         };
@@ -691,6 +725,7 @@ impl Chart {
                 self.study_rows_at_with_policy(index, self.host_events.cursor_data_policy)
             }),
             target: self.host_events.target,
+            primitive_hit: self.host_events.primitive_hit.clone(),
             modifiers: origin
                 .as_ref()
                 .map_or_else(|| ui.input(|input| input.modifiers), |(_, keys)| *keys),
