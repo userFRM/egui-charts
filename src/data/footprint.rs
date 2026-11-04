@@ -12,7 +12,7 @@ pub(crate) fn meets_threshold(value: f64, threshold: f64) -> bool {
     value >= threshold * (1.0 - 1e-9)
 }
 
-/// Executed volume at one grouped price, with sells on the bid and buys on the ask.
+/// Executed volume and execution counts at one grouped price, sells on the bid and buys on the ask.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FootprintLevel {
     /// Integer price level, in multiples of [`Footprint::price_step`].
@@ -23,9 +23,35 @@ pub struct FootprintLevel {
     pub ask: f64,
     /// Volume whose aggressor is unknown. Never assigned to either side.
     pub unknown: f64,
+    /// Number of sell aggressor executions contributing to this row.
+    pub bid_trades: u64,
+    /// Number of buy aggressor executions contributing to this row.
+    pub ask_trades: u64,
+    /// Number of executions whose aggressor is unknown.
+    pub unknown_trades: u64,
 }
 
 impl FootprintLevel {
+    pub(crate) fn absorb(&mut self, next: &Self) {
+        self.bid += next.bid;
+        self.ask += next.ask;
+        self.unknown += next.unknown;
+        self.bid_trades += next.bid_trades;
+        self.ask_trades += next.ask_trades;
+        self.unknown_trades += next.unknown_trades;
+    }
+
+    /// Total executions, including those whose aggressor is unknown.
+    pub fn trades(&self) -> u64 {
+        self.bid_trades + self.ask_trades + self.unknown_trades
+    }
+
+    /// Total volume divided by executions; undefined when no execution was counted.
+    pub fn average_size(&self) -> Option<f64> {
+        let trades = self.trades();
+        (trades > 0).then(|| self.volume() / trades as f64)
+    }
+
     /// Buy volume minus sell volume.
     pub fn delta(&self) -> f64 {
         self.ask - self.bid
@@ -90,9 +116,7 @@ impl FootprintBar {
                 level,
                 ..Default::default()
             });
-            target.bid += row.bid;
-            target.ask += row.ask;
-            target.unknown += row.unknown;
+            target.absorb(row);
         }
     }
 
@@ -104,6 +128,18 @@ impl FootprintBar {
     /// Total executed volume.
     pub fn volume(&self) -> f64 {
         self.bid + self.ask + self.unknown
+    }
+
+    /// Executions summed across price rows, including unknown sides. An execution split
+    /// across trade-based bars counts once in each bar it contributes to.
+    pub fn trades(&self) -> u64 {
+        self.levels.values().map(FootprintLevel::trades).sum()
+    }
+
+    /// Total volume divided by executions; undefined when no execution was counted.
+    pub fn average_size(&self) -> Option<f64> {
+        let trades = self.trades();
+        (trades > 0).then(|| self.volume() / trades as f64)
     }
 
     /// Delta as a percentage of all executed volume; undefined for zero volume.
@@ -487,6 +523,7 @@ impl Footprint {
     /// opening with the first of them: the exact profile of a span of the chart. Bars before
     /// [`complete_from`](Self::complete_from) are left out, as their executions are not all
     /// held. Empty when no complete bar traded there or `last` precedes `first`.
+    /// Counts add the contributing bars, including split executions counted in more than one bar.
     pub fn profile(&self, first: DateTime<Utc>, last: DateTime<Utc>) -> FootprintBar {
         let (first, last) = (self.clock.bar_open(first), self.clock.bar_open(last));
         let mut profile = FootprintBar::empty(first);
@@ -608,14 +645,17 @@ impl Footprint {
         match trade.side {
             Some(OrderSide::Buy) => {
                 row.ask += size;
+                row.ask_trades += 1;
                 bar.ask += size;
             }
             Some(OrderSide::Sell) => {
                 row.bid += size;
+                row.bid_trades += 1;
                 bar.bid += size;
             }
             _ => {
                 row.unknown += size;
+                row.unknown_trades += 1;
                 bar.unknown += size;
             }
         }
@@ -751,7 +791,26 @@ mod tests {
                 minute.push(trade).unwrap();
             }
             assert_eq!(minute.bars().len(), 1);
-            assert_eq!(minute.bars()[&start], profile);
+            let rebuilt = &minute.bars()[&start];
+            let uncounted = |bar: &FootprintBar| {
+                let mut bar = bar.clone();
+                for row in bar.levels.values_mut() {
+                    (row.bid_trades, row.ask_trades, row.unknown_trades) = (0, 0, 0);
+                }
+                bar
+            };
+            assert_eq!(uncounted(rebuilt), uncounted(&profile));
+            assert_eq!(rebuilt.trades(), trades.len() as u64);
+            // A split execution contributes once to each of the two bars it reaches.
+            assert_eq!(
+                flow.bars()
+                    .values()
+                    .map(FootprintBar::trades)
+                    .collect::<Vec<_>>(),
+                [2, 1],
+                "{interval}: per-bar executions"
+            );
+            assert_eq!(profile.trades(), 3);
         }
         for (interval, min_size, fills, expected) in [
             (
@@ -796,6 +855,51 @@ mod tests {
                 "{interval}: original size filter and zero-size count"
             );
         }
+    }
+
+    /// 2 + 6 + 4 + 8 = 20 from four executions, so the mean is 5. A size filter from 5
+    /// upward retains 6 and 8: volume 14, two executions, mean 7.
+    #[test]
+    fn execution_counts_follow_sides_filters_and_grouping() {
+        let start = "2026-01-05T10:00:00Z".parse().unwrap();
+        let fills = [
+            Tick::new(start, 100.0, 2.0, Some(OrderSide::Buy)),
+            Tick::new(start, 100.0, 6.0, Some(OrderSide::Buy)),
+            Tick::new(start, 100.0, 4.0, Some(OrderSide::Sell)),
+            Tick::new(start, 100.0, 8.0, None),
+            Tick::new(start, 100.0, 0.0, None),
+        ];
+        for (min, max, sides, volume, average) in [
+            (0.0, f64::MAX, (1, 2, 1), 20.0, Some(5.0)),
+            (5.0, f64::MAX, (0, 1, 1), 14.0, Some(7.0)),
+            (2.0, 4.0, (1, 1, 0), 6.0, Some(3.0)),
+            (9.0, f64::MAX, (0, 0, 0), 0.0, None),
+        ] {
+            let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+            flow.set_size_filter(min, max).unwrap();
+            for trade in &fills {
+                flow.push(trade).unwrap();
+            }
+            let bar = flow.profile(start, start);
+            let row = bar.levels.get(&100).cloned().unwrap_or_default();
+            assert_eq!((row.bid_trades, row.ask_trades, row.unknown_trades), sides);
+            assert_eq!((row.volume(), row.average_size()), (volume, average));
+            assert_eq!((bar.trades(), bar.average_size()), (row.trades(), average));
+        }
+        let mut grouped = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 2).unwrap();
+        for (price, size, side) in [
+            (100.0, 2.0, Some(OrderSide::Sell)),
+            (101.0, 6.0, Some(OrderSide::Buy)),
+            (101.0, 4.0, None),
+        ] {
+            grouped.push(&Tick::new(start, price, size, side)).unwrap();
+        }
+        let bar = &grouped.bars()[&start];
+        assert_eq!(bar.levels.len(), 1);
+        assert_eq!((bar.trades(), bar.average_size()), (3, Some(4.0)));
+        assert_eq!(bar.levels[&50].trades(), 3);
+        assert_eq!(FootprintLevel::default().average_size(), None);
+        assert_eq!(FootprintBar::empty(start).average_size(), None);
     }
 
     #[test]
@@ -890,6 +994,7 @@ mod tests {
         let mut held = new();
         trades[2..].iter().for_each(|t| _ = held.push(t));
         assert_eq!(flow.bars(), held.bars());
+        assert_eq!(flow.bars()[&start].trades(), 5);
         assert_eq!(
             (flow.bars()[&start].min_delta, flow.bars()[&start].max_delta),
             (0.0, 2.0)

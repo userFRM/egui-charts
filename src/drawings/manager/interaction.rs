@@ -1256,7 +1256,11 @@ mod tests {
     fn new_drawings_take_their_tool_style_then_the_saved_default() {
         let place = |manager: &mut DrawingManager, tool| {
             manager.start_drawing_with_coords(tool, Pos2::new(10.0, 10.0), |x| x, f64::from);
-            manager.curr_drawing.take().unwrap()
+            manager
+                .curr_drawing
+                .take()
+                .or_else(|| manager.drawings.pop())
+                .unwrap()
         };
         let mut manager = DrawingManager::new();
         let line = place(&mut manager, DrawingToolType::TrendLine);
@@ -1264,6 +1268,59 @@ mod tests {
         assert_ne!(line.color, rect.color);
         assert_eq!(line.fill_color, None);
         assert_eq!(rect.fill_color.unwrap()[..3], rect.color[..3]);
+
+        for (tool, color, width, fill) in [
+            (
+                DrawingToolType::Polyline,
+                [0, 188, 212, 255],
+                2.0,
+                Some([0, 188, 212, 51]),
+            ),
+            (
+                DrawingToolType::Arc,
+                [233, 30, 99, 255],
+                2.0,
+                Some([233, 30, 99, 51]),
+            ),
+            (
+                DrawingToolType::PriceRange,
+                [41, 98, 255, 255],
+                2.0,
+                Some([41, 98, 255, 38]),
+            ),
+            (
+                DrawingToolType::Measure,
+                [41, 98, 255, 255],
+                2.0,
+                Some([41, 98, 255, 38]),
+            ),
+            (DrawingToolType::AnchoredVWAP, [41, 98, 255, 255], 1.0, None),
+            (DrawingToolType::Pitchfan, [242, 54, 69, 255], 2.0, None),
+        ] {
+            let drawing = place(&mut manager, tool);
+            assert_eq!(
+                (drawing.color, drawing.stroke_width, drawing.fill_color),
+                (color, width, fill),
+                "{tool:?}"
+            );
+            if tool == DrawingToolType::Pitchfan {
+                let config = drawing.pitchfork.as_ref().unwrap();
+                let visible: Vec<_> = config
+                    .levels
+                    .iter()
+                    .filter(|level| level.visible)
+                    .map(|level| (level.value, level.color))
+                    .collect();
+                assert_eq!(
+                    visible,
+                    [
+                        (0.0, [242, 54, 69, 255]),
+                        (0.5, [0, 188, 212, 255]),
+                        (1.0, [41, 98, 255, 255])
+                    ]
+                );
+            }
+        }
 
         manager.options.default_color = Some([1, 2, 3, 255]);
         let rect = place(&mut manager, DrawingToolType::Rect);
