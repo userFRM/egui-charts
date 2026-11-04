@@ -1534,6 +1534,16 @@ fn added_series_value_tags_use_their_scale_precision_and_name() {
 #[test]
 fn series_scales_fit_visible_members_and_reserve_their_axes() {
     let ctx = egui::Context::default();
+    for key in [SeriesScale::Right, SeriesScale::Separate(2)] {
+        let mut chart = Chart::new(BarData::from_bars(bars(&[100.0, 110.0])));
+        assert!(chart.set_series_scale(SeriesId::MAIN, key));
+        let widget = Rect::from_min_size(Pos2::new(7.0, 11.0), egui::vec2(800.0, 400.0));
+        assert_eq!(
+            chart.calculate_layout_rects(widget).price_rect.left(),
+            widget.left() + chart.config.padding,
+            "the primary right axis needs no left gutter: {key:?}"
+        );
+    }
     for key in [
         SeriesScale::Right,
         SeriesScale::Left,

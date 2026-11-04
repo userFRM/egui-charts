@@ -547,8 +547,7 @@ impl Chart {
                 let mut panel = IndicatorPane::with_config(config);
                 panel.legend_backdrop = self.config.indicator_backdrop_opacity;
                 panel.axis_options = crate::config::PriceAxisOptions {
-                    show_study_values: self.config.show_indicator_last_val
-                        && self.config.price_axis.show_study_values,
+                    show_study_values: self.config.price_axis.show_study_values,
                     ..self.config.price_axis
                 };
                 let assignment = id
@@ -617,7 +616,7 @@ impl Chart {
                     drawn_axes.push(assignment);
                 }
                 let member_map = panel.price_map.expect("member mapping");
-                let hover = if touch_readout.touch_input
+                let pointer = if touch_readout.touch_input
                     && self.chart_options.tooltip.enabled
                     && self.chart_options.tooltip.on_long_press
                 {
@@ -629,7 +628,12 @@ impl Chart {
                         })
                     })
                 };
-                let mut hover = hover
+                let host_position = pointer.is_none() && self.synced_crosshair_price.is_some();
+                let target_pane = self
+                    .synced_crosshair_series
+                    .is_some_and(|target| members.contains(&target));
+                let target_panel = target_pane && id == self.synced_crosshair_series;
+                let mut hover = pointer
                     .or_else(|| {
                         self.synced_crosshair_bar_idx
                             .filter(|index| index.is_finite() && *index >= 0.0)
@@ -642,9 +646,17 @@ impl Chart {
                                     } else {
                                         index.round()
                                     };
-                                Pos2::new(pane_mapping.index_to_x(index), plot.center().y)
+                                Pos2::new(
+                                    pane_mapping.index_to_x(index),
+                                    if target_panel {
+                                        member_map
+                                            .price_to_y(self.synced_crosshair_price.unwrap_or(0.0))
+                                    } else {
+                                        plot.center().y
+                                    },
+                                )
                             })
-                            .filter(|pos| plot.contains(*pos))
+                            .filter(|pos| plot.x_range().contains(pos.x))
                     })
                     .filter(|_| !self.menu_open && !egui::Popup::is_any_open(ui.ctx()))
                     .and_then(|pos| self.crosshair_position(pos, &pane_mapping));
@@ -653,7 +665,19 @@ impl Chart {
                     crosshair_options.style = crate::config::CrosshairStyle::Arrow;
                 }
 
-                if crosshair_options.mode.snaps() {
+                if host_position {
+                    crosshair_options.mode = crate::config::CrosshairMode::Normal;
+                    if !target_panel {
+                        crosshair_options.horz_line_visible = false;
+                        crosshair_options.horz_label_visible = false;
+                        if crosshair_options.style == crate::config::CrosshairStyle::Dot {
+                            crosshair_options.style = crate::config::CrosshairStyle::Arrow;
+                        }
+                    }
+                }
+                if host_position && target_pane && !target_panel {
+                    hover = None;
+                } else if crosshair_options.mode.snaps() {
                     if let Some(pos) = &mut hover
                         && panel_rect.contains(*pos)
                         && let Some(bar) = panel.bar_index
@@ -725,7 +749,8 @@ impl Chart {
                     crosshair_options.vert_line_visible = false;
                     crosshair_options.horz_line_visible = false;
                 }
-                crosshair_options.horz_label_visible &= panel.draw_axis;
+                crosshair_options.horz_label_visible &=
+                    panel.draw_axis || host_position && target_panel;
 
                 // Use show_aligned_interactive to get pane info for hit testing
                 let mut child =
