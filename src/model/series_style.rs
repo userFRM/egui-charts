@@ -151,7 +151,8 @@ pub struct SeriesStyle {
     #[serde(skip)]
     pub autoscale: Option<AutoscaleProvider>,
     /// Horizontal distance in logical points from a bar's centre within which a click on its
-    /// high to low range selects the main series. Host series do not take clicks.
+    /// high to low range selects the main series. Host series do not take clicks. A column
+    /// series also selects a click this far outside its painted column in any direction.
     pub hit_tolerance: f32,
     /// Visibility and style of the series' alert levels.
     pub alerts: SeriesAlerts,
