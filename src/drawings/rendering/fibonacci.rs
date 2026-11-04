@@ -206,6 +206,9 @@ impl Drawing {
                 &config,
                 level,
             );
+            if !chart_rect.y_range().contains(y) {
+                continue;
+            }
             paint_price_label(
                 painter,
                 &config,
@@ -1407,12 +1410,21 @@ mod tests {
     fn fibonacci_label_content_and_side_follow_settings() {
         use crate::drawings::ChartPoint;
         let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(1400.0, 400.0));
-        for (tool, log, ratio, price) in [
-            (Tool::FibonacciRetracement, false, 0.25, 175.0),
-            (Tool::FibonacciExtension, false, 0.25, 175.0),
-            (Tool::FibonacciChannel, false, 0.5, 225.0),
+        for (tool, log, ratio, price, in_view) in [
+            (Tool::FibonacciRetracement, false, 0.25, 175.0, true),
+            (Tool::FibonacciExtension, false, 0.25, 175.0, true),
+            (Tool::FibonacciChannel, false, 0.5, 225.0, true),
             // Half the log translation from A=100 to C=150: B*sqrt(150/100).
-            (Tool::FibonacciChannel, true, 0.5, 244.9489742784),
+            (Tool::FibonacciChannel, true, 0.5, 244.9489742784, true),
+            // The price pane spans 10 to 1000; levels beyond it have no label.
+            (Tool::FibonacciRetracement, false, 2.0, 0.0, false),
+            (Tool::FibonacciRetracement, false, -10.0, 1200.0, false),
+            (Tool::FibonacciExtension, false, -2.0, -50.0, false),
+            (Tool::FibonacciExtension, false, 10.0, 1150.0, false),
+            (Tool::FibonacciRetracement, false, 1.9, 10.0, true),
+            (Tool::FibonacciRetracement, false, -8.0, 1000.0, true),
+            (Tool::FibonacciExtension, false, -1.4, 10.0, true),
+            (Tool::FibonacciExtension, false, 8.5, 1000.0, true),
         ] {
             for (show_prices, show_levels, percent, left, custom, extend) in [
                 (true, true, false, true, false, false),
@@ -1507,7 +1519,7 @@ mod tests {
                     (true, false) => formatted,
                     (false, false) => String::new(),
                 };
-                if expected.is_empty() {
+                if expected.is_empty() || !in_view {
                     assert!(texts.is_empty(), "{tool:?}");
                 } else {
                     assert_eq!(texts.len(), 1, "{tool:?}");

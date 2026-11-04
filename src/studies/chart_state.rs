@@ -47,6 +47,10 @@ pub struct ChartState {
     elements: Option<Arc<[Bar]>>,
     /// Time coordinate system (logical index <-> pixel mapping).
     time_scale: TimeScale,
+    /// Shared whitespace slots when the main series has no horizontal domain.
+    fallback: Vec<Bar>,
+    /// Prefix revisions, lengths and last times represented by the fallback slots.
+    fallback_series: Vec<(u64, usize, Option<chrono::DateTime<chrono::Utc>>)>,
     /// The main series' price scale.
     price_scale: PriceScale,
     /// Stack of previous zoom snapshots for the "zoom out" button.
@@ -61,6 +65,8 @@ impl Clone for ChartState {
         Self {
             data: self.data.clone(),
             elements: self.elements.clone(),
+            fallback: self.fallback.clone(),
+            fallback_series: self.fallback_series.clone(),
             time_scale: self.time_scale.clone(),
             price_scale: self.price_scale.clone(),
             zoom_history: self.zoom_history.clone(),
@@ -78,6 +84,8 @@ impl ChartState {
         Self {
             data,
             elements: None,
+            fallback: Vec::new(),
+            fallback_series: Vec::new(),
             time_scale,
             price_scale: PriceScale::new(PriceScaleOptions::default()),
             zoom_history: Vec::new(),
@@ -144,18 +152,76 @@ impl ChartState {
         {
             self.revision = next_revision();
         }
-        let shown = self.elements.as_deref().unwrap_or(&self.data.bars);
-        #[cfg(feature = "widget")]
-        self.time_scale
-            .refresh_numeric_positions(shown, self.revision);
-        self.time_scale.set_bar_cnt(shown.len());
+        self.sync_time_scale();
         first_changed
     }
 
     /// The series drawn on the time scale, one OHLC bar per element on price-based charts.
-    /// Indices returned by the chart hover and selection APIs refer to this series.
+    /// Indices returned by the chart hover and selection APIs refer to this series. When the
+    /// main series is empty, the widget can supply whitespace slots from added series.
     pub fn shown(&self) -> &[Bar] {
-        self.elements.as_deref().unwrap_or(&self.data.bars)
+        Self::domain(&self.data.bars, self.elements.as_deref(), &self.fallback)
+    }
+
+    /// The main series' shown bars, or the shared whitespace slots when it has none.
+    fn domain<'a>(data: &'a [Bar], elements: Option<&'a [Bar]>, fallback: &'a [Bar]) -> &'a [Bar] {
+        match elements.unwrap_or(data) {
+            [] => fallback,
+            shown => shown,
+        }
+    }
+
+    /// Points the time scale at the shown bars.
+    fn sync_time_scale(&mut self) {
+        let shown = Self::domain(&self.data.bars, self.elements.as_deref(), &self.fallback);
+        #[cfg(feature = "widget")]
+        self.time_scale
+            .refresh_numeric_positions(shown, self.revision);
+        self.time_scale.set_bar_cnt(shown.len());
+    }
+
+    /// Shares added-series timestamps without taking their values into the main series.
+    #[cfg(feature = "widget")]
+    pub(crate) fn set_fallback_series<'a>(
+        &mut self,
+        series: impl IntoIterator<Item = (&'a [Bar], u64)>,
+    ) {
+        // shown() can already contain the fallback; inspect the main domain alone.
+        let series: Vec<_> = if self
+            .elements
+            .as_deref()
+            .unwrap_or(&self.data.bars)
+            .is_empty()
+        {
+            series.into_iter().collect()
+        } else {
+            Vec::new()
+        };
+        let keys: Vec<_> = series
+            .iter()
+            .map(|(bars, revision)| (*revision, bars.len(), bars.last().map(|bar| bar.time)))
+            .collect();
+        if self.fallback_series == keys {
+            return;
+        }
+        let times: std::collections::BTreeSet<_> = series
+            .iter()
+            .flat_map(|(bars, _)| bars.iter().map(|bar| bar.time))
+            .collect();
+        let bars: Vec<_> = times.into_iter().map(Bar::whitespace).collect();
+        let old_len = self.fallback.len();
+        let first_changed = self
+            .fallback
+            .iter()
+            .zip(&bars)
+            .position(|(old, new)| old.time != new.time)
+            .unwrap_or(old_len.min(bars.len()));
+        self.fallback = bars;
+        if first_changed < old_len.saturating_sub(1) || self.fallback.len() < old_len {
+            self.revision = next_revision();
+        }
+        self.fallback_series = keys;
+        self.sync_time_scale();
     }
 
     #[cfg(feature = "widget")]
@@ -191,10 +257,7 @@ impl ChartState {
             )
         });
         self.elements = elements;
-        let shown = self.elements.as_deref().unwrap_or(&self.data.bars);
-        self.time_scale
-            .refresh_numeric_positions(shown, self.revision);
-        self.time_scale.set_bar_cnt(shown.len());
+        self.sync_time_scale();
         match kept {
             Some((_, true)) if follow && near_live => self.time_scale.scroll_to_realtime(),
             Some(_) if follow && near_live => {}

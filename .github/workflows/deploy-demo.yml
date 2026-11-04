@@ -14,6 +14,9 @@ on:
 env:
   ASTRO_TELEMETRY_DISABLED: "1"
   CARGO_TERM_COLOR: always
+  # Leave room for web artifacts when linking the native build checks.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
   TRUNK_VERSION: "0.21.14"
 
 # One run per ref at a time. A newer pull request push cancels the running build;
@@ -30,7 +33,16 @@ jobs:
     name: Build
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # Native checks share disk with the web builds; debug symbols are unused here.
+      CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
+      # The doc tests, the native examples and two release wasm builds no
+      # longer fit the runner's free disk; drop SDKs this job never uses.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:

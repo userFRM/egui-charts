@@ -14,7 +14,7 @@ use egui::Color32;
 /// Type of source in the tree
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SourceType {
-    /// Main data source (chart symbol and timeframe)
+    /// Main or added bar series.
     DataSource,
     /// Technical indicator (SMA, RSI, MACD, etc.)
     Indicator,
@@ -233,7 +233,7 @@ impl SourceItem {
         }
     }
 
-    /// Create a new data source (main chart symbol)
+    /// Create a main or added bar-series data source.
     ///
     /// # Arguments
     ///
@@ -302,6 +302,14 @@ impl SourceItem {
     /// Check if this is a drawing
     pub fn is_drawing(&self) -> bool {
         self.source_type == SourceType::Drawing
+    }
+
+    /// Check if this is a bar series added to the chart, not the main series
+    pub(super) fn is_added_series(&self) -> bool {
+        self.source_type == SourceType::DataSource
+            && self
+                .series_id
+                .is_some_and(|id| id != crate::widget::SeriesId::MAIN)
     }
 
     /// Check if this is an indicator

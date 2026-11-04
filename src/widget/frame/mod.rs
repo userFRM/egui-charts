@@ -493,6 +493,13 @@ impl Chart {
             rect,
             self.config.show_time_labels && shared_time_axis.is_none(),
         );
+        if rect.height() == 0.0
+            && let Some(axis) = shared_time_axis
+        {
+            layout.price_rect = Rect::from_x_y_ranges(axis.x_range(), rect.y_range());
+            layout.volume_rect = Rect::NOTHING;
+            layout.legend_rect = Rect::NOTHING;
+        }
         let time_axis_top = shared_time_axis.map_or(layout.price_rect.bottom(), |axis| axis.top());
         let statistics_rows = if let Some((_, config)) = footprint {
             config.statistics.then(|| config.statistics_rows.clone())
@@ -811,6 +818,14 @@ impl Chart {
         }
 
         // Draw background (solid or gradient)
+        if rect.height() == 0.0
+            && let Some(axis) = shared_time_axis
+        {
+            self.draw_background(
+                ui.painter(),
+                Rect::from_min_max(rect.min, Pos2::new(rect.right(), axis.bottom())),
+            );
+        }
         self.draw_background(&painter, rect);
         if let Some(axis) = shared_time_axis {
             self.draw_background(
@@ -833,7 +848,7 @@ impl Chart {
             rendering::render_watermark(ui, &painter, chart_rect, watermark);
         }
 
-        if self.state.data().is_empty() {
+        if self.state.data().is_empty() && self.state.shown().is_empty() {
             self.last_hover_bar_idx = None;
             self.last_crosshair = None;
             self.last_rendered_price_rect = layout.price_rect;
@@ -1040,7 +1055,9 @@ impl Chart {
             )
             .filter(|_| self.main_series_visible && time_based)
             .collect::<Vec<_>>();
-        let heikin_ashi = (self.chart_type == crate::model::ChartType::Heikin).then(|| {
+        let heikin_ashi = (self.chart_type == crate::model::ChartType::Heikin
+            && !self.state.data().is_empty())
+        .then(|| {
             self.heikin_ashi
                 .bars(&self.state.data().bars, self.state.revision())
         });
@@ -2184,8 +2201,7 @@ impl Chart {
         };
         let show_price_axis = self.config.show_right_axis || self.config.show_left_axis;
         let study_axis = crate::config::PriceAxisOptions {
-            show_study_values: self.config.show_indicator_last_val
-                && self.config.price_axis.show_study_values,
+            show_study_values: self.config.price_axis.show_study_values,
             ..self.config.price_axis
         };
         let currency = self
@@ -2286,8 +2302,8 @@ impl Chart {
         }
 
         let style = &self.main_series_style;
-        if let Some(line) = super::series::base_line(&price_map)
-            .filter(|_| self.main_series_visible && style.base_line_visible)
+        if self.main_series_visible
+            && let Some(line) = super::series::base_line(&price_map, style)
         {
             rendering::render_price_line(
                 &painter,

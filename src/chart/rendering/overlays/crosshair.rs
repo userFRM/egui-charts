@@ -571,20 +571,32 @@ mod tests {
                         None,
                     );
                 });
-                let (lines, dots): (Vec<_>, Vec<_>) = output
+                let lines: Vec<_> = output
                     .shapes
                     .iter()
                     .filter_map(|shape| match shape.shape {
                         Shape::LineSegment { points, stroke } => Some((points, stroke)),
                         _ => None,
                     })
-                    .partition(|(_, stroke)| stroke.color == Color32::RED);
+                    .collect();
+                let dots: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        Shape::Mesh(mesh) => Some(mesh),
+                        _ => None,
+                    })
+                    .collect();
                 // The dotted horizontal line is a row of one-point dots.
-                assert!(dots.iter().all(|([a, b], stroke)| {
-                    *stroke == Stroke::new(3.0, Color32::BLUE)
-                        && a.y == 100.0
-                        && b.y == 100.0
-                        && b.x - a.x <= 1.0
+                assert!(dots.iter().all(|mesh| {
+                    mesh.vertices.as_chunks::<4>().0.iter().all(|dot| {
+                        let positions: [Pos2; 4] = std::array::from_fn(|at| dot[at].pos);
+                        let rect = Rect::from_points(&positions);
+                        dot.iter().all(|vertex| vertex.color == Color32::BLUE)
+                            && rect.width() <= 1.0
+                            && rect.height() == 3.0
+                            && (rect.center().y - 100.0).abs() <= 0.5
+                    })
                 }));
                 let dots = !dots.is_empty();
                 let fill = |color| {
