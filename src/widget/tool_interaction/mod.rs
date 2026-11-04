@@ -193,45 +193,43 @@ impl Chart {
                 if index < 0.0 {
                     0
                 } else {
-                    first.saturating_add(1).min(bars.len())
+                    first.saturating_add(1)
                 }
             } else {
-                ((x_to_bar_precise(pointer.x + distance).ceil().max(0.0) as usize)
-                    .saturating_add(1))
-                .min(bars.len())
+                (x_to_bar_precise(pointer.x + distance).ceil().max(0.0) as usize).saturating_add(1)
             };
             for (i, bar) in bars.iter().enumerate().take(end).skip(first) {
-                let x = bar_to_x(i as f32);
-                let mut add_price = |price: f64| {
-                    if price.is_finite() {
-                        let point = Pos2::new(x, price_to_y(price));
-                        if point.is_finite() && (strong || price_rect.contains(point)) {
+                if pane.is_none() {
+                    for price in [bar.open, bar.high, bar.low, bar.close] {
+                        let point = Pos2::new(bar_to_x(i as f32), price_to_y(price));
+                        if price.is_finite()
+                            && point.is_finite()
+                            && (strong || price_rect.contains(point))
+                        {
                             drawing_manager.snap_targets.push(point);
                         }
                     }
-                };
-                if pane.is_none() {
-                    for price in [bar.open, bar.high, bar.low, bar.close] {
-                        add_price(price);
-                    }
                 }
-                for study in self
+            }
+            if drawing_manager.options.snap_to_indicators {
+                let mapping = crate::chart::rendering::ChartMapping {
+                    rect: price_rect,
+                    price: *price_map,
+                    ..self.get_chart_mapping()
+                };
+                for (_, study) in self
                     .study_ids
                     .iter()
                     .zip(self.rendered_studies().indicators())
-                    .filter(|(id, s)| {
-                        drawing_manager.options.snap_to_indicators
-                            && s.is_visible()
-                            && if pane.is_some() {
-                                members.contains(&Some(id.0))
-                            } else {
-                                !strong
-                                    && s.is_overlay()
-                                    && s.scale() == crate::studies::StudyScale::Main
-                            }
-                    })
-                    .map(|(_, study)| study)
+                    .filter(|(id, study)| study.is_visible() && members.contains(&Some(id.0)))
                 {
+                    // Use the renderer's map so independent, shared and volume scales snap
+                    // at the painted point rather than interpreting study units as prices.
+                    let study_map = self.pane_study_mapping(
+                        pane.unwrap_or(self.main_series_pane()),
+                        study.as_ref(),
+                        &mapping,
+                    );
                     for line in (0..study.line_count()).filter(|line| {
                         let plot = study.plot_style(*line);
                         plot.visible
@@ -241,8 +239,17 @@ impl Chart {
                                     | crate::studies::PlotType::BackgroundColor
                             )
                     }) {
-                        if let Some(price) = study.plot_value(line, i) {
-                            add_price(price);
+                        for i in first..end {
+                            if let Some(value) = study.plot_value(line, i) {
+                                let point =
+                                    Pos2::new(bar_to_x(i as f32), study_map.price_to_y(value));
+                                if value.is_finite()
+                                    && point.is_finite()
+                                    && (strong || price_rect.contains(point))
+                                {
+                                    drawing_manager.snap_targets.push(point);
+                                }
+                            }
                         }
                     }
                 }
@@ -1124,6 +1131,8 @@ mod tests {
             (true, false, 17.0, true, true, 3.0, false),
             (false, false, 15.0, true, false, 3.0, false),
             (true, false, 15.0, false, false, 3.0, false),
+            (true, true, 15.0, true, true, 3.0, false),
+            (true, true, 17.0, true, true, 3.0, false),
             (true, true, 20.0, false, true, 40.0, false),
             (true, false, 20.0, false, false, 40.0, false),
             (true, true, 10.0, false, true, 40.0, false),
@@ -1133,11 +1142,11 @@ mod tests {
         .map(|case| (case, "main", true))
         .chain([
             (
-                (true, false, 15.0, true, false, 3.0, false),
+                (true, false, 15.0, true, true, 3.0, false),
                 "independent",
                 true,
             ),
-            ((true, false, 15.0, true, false, 3.0, false), "none", true),
+            ((true, false, 15.0, true, true, 3.0, false), "none", true),
             (
                 (true, false, 15.0, true, false, 3.0, false),
                 "background",
@@ -1150,6 +1159,8 @@ mod tests {
             ),
             ((true, false, 15.0, true, true, 3.0, false), "pane", true),
             ((true, true, 15.0, true, true, 30.0, false), "pane", true),
+            ((true, false, 15.0, true, true, 3.0, false), "future", true),
+            ((true, true, 15.0, true, true, 3.0, false), "future", true),
             ((true, false, 15.0, true, false, 3.0, false), "main", false),
             ((true, false, 17.0, true, false, 3.0, false), "main", false),
             ((true, false, 20.0, true, true, 3.0, false), "main", false),
@@ -1171,7 +1182,14 @@ mod tests {
             })
             .with_line_count(2)
             .with_overlay(kind != "pane")
-            .with_offsets(vec![if kind == "displaced" { 1 } else { 0 }; 2])
+            .with_offsets(vec![
+                match kind {
+                    "displaced" => 1,
+                    "future" => 100,
+                    _ => 0,
+                };
+                2
+            ])
             .with_plot_types(vec![
                 if kind == "background" {
                     crate::studies::PlotType::BackgroundColor
@@ -1192,7 +1210,11 @@ mod tests {
             })));
             chart.set_indicator_visible(single, overlay_visible);
             let mut time = 0.0;
-            for (visible, start) in [(100, 0), (40, 20)] {
+            for (visible, start) in if kind == "future" {
+                [(100, 50), (40, 90)]
+            } else {
+                [(100, 0), (40, 20)]
+            } {
                 chart.drawings_mut().clear_all();
                 chart.drawings_mut().deselect();
                 chart.set_visible_bars(visible);
@@ -1213,8 +1235,44 @@ mod tests {
                 };
                 let (first, last) = chart.state.visible_range();
                 let middle = (first + last) / 2;
-                let bar = middle + (4 - middle % 3) % 3;
-                let target = Pos2::new(map.idx_to_x(bar), map.price_to_y(price));
+                let bar = if kind == "future" {
+                    110
+                } else {
+                    middle + (4 - middle % 3) % 3
+                };
+                let study_map = chart.pane_study_mapping(
+                    if kind == "pane" {
+                        chart.series_pane(id).unwrap()
+                    } else {
+                        chart.main_series_pane()
+                    },
+                    chart
+                        .rendered_studies()
+                        .indicators()
+                        .iter()
+                        .find(|study| study.name() == "Two levels")
+                        .unwrap()
+                        .as_ref(),
+                    &map,
+                );
+                let target_y = if kind == "independent" || kind == "none" {
+                    study_map.price_to_y(price)
+                } else {
+                    map.price_to_y(price)
+                };
+                if kind == "independent" || kind == "none" {
+                    // Values 15 and 17 fit 14.8..17.2 after 10% padding: 15 is 11/12
+                    // of the way down, independently of the main price range.
+                    let fraction = if price == 15.0 {
+                        11.0 / 12.0
+                    } else {
+                        1.0 / 12.0
+                    };
+                    assert!(
+                        (target_y - (map.rect.top() + map.rect.height() * fraction)).abs() < 0.001
+                    );
+                }
+                let target = Pos2::new(map.idx_to_x(bar), target_y);
                 let near = if off_scale {
                     Pos2::new(target.x + 2.0, map.price_to_y(17.0))
                 } else {
@@ -1228,7 +1286,12 @@ mod tests {
                             },
                         )
                 };
-                let expected_price = if snaps { price } else { map.y_to_price(near.y) };
+                let snapped_price = map.y_to_price(target.y);
+                let expected_price = if snaps {
+                    snapped_price
+                } else {
+                    map.y_to_price(near.y)
+                };
                 let button = |pos, pressed| Event::PointerButton {
                     pos,
                     button: PointerButton::Primary,
@@ -1288,7 +1351,7 @@ mod tests {
                     if off_scale {
                         map.price_to_y(17.0)
                     } else {
-                        map.price_to_y(price) + if price == 20.0 { offset } else { -offset }
+                        target_y + if price == 20.0 { offset } else { -offset }
                     },
                 ) + vec2(2.0, 0.0);
                 step(&mut chart, vec![Event::PointerMoved(from)]);
@@ -1297,10 +1360,14 @@ mod tests {
                 step(&mut chart, vec![Event::PointerMoved(to)]);
                 step(&mut chart, vec![button(to, false)]);
                 let after = chart.drawings().drawings[0].chart_points[0];
-                let want = if snaps { price } else { map.y_to_price(to.y) };
+                let want = if snaps {
+                    snapped_price
+                } else {
+                    map.y_to_price(to.y)
+                };
                 assert!(
                     (after.price - want).abs() < 1e-5,
-                    "drag: magnet {magnet}, price {price}, visible {visible}: {after:?}"
+                    "drag: {kind}, strong {strong}, magnet {magnet}, price {price}, visible {visible}: {after:?}"
                 );
                 assert!(chart.drawings().dragging_handle.is_none());
                 assert!(chart.undo());
