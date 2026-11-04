@@ -215,7 +215,7 @@ Chart,Multi-chart and sync,Sync interval,done,host,src/widget/layout.rs;src/widg
 Chart,Multi-chart and sync,Sync symbol,done,host,src/widget/layout.rs;src/widget/feed/mod.rs,
 Chart,Multi-chart and sync,Sync time,done,library,src/widget/layout.rs;src/widget/sync.rs;src/model/timescale.rs,
 Chart,Multi-chart and sync,Up to 16 charts per tab,done,library,src/widget/layout.rs,
-Chart,Panes,Collapse pane,done,library,src/widget/pane/mod.rs;src/widget/pane/controls.rs;src/widget/pane/render/mod.rs,
+Chart,Panes,Collapse pane,done,library,src/widget/pane/mod.rs;src/widget/pane/controls.rs;src/widget/pane/render/mod.rs;src/widget/frame/mod.rs;src/widget/keyboard.rs,2028
 Chart,Panes,Maximize pane,done,library,src/widget/pane/mod.rs;src/widget/pane/controls.rs;src/widget/pane/render/mod.rs;src/widget/pane/indicator/mod.rs,
 Chart,Panes,"Move indicator to another pane, merge, or new pane",done,library,src/widget/pane/mod.rs;src/widget/pane/controls.rs,
 Chart,Panes,Move pane up or down,done,library,src/widget/pane/mod.rs;src/widget/pane/controls.rs,
@@ -357,7 +357,7 @@ Drawings,Drawings,Gann square fixed,done,library,src/drawings/rendering/gann.rs;
 Drawings,Drawings,Ghost feed,done,library,src/ui/dialogs/drawing_properties/actions.rs;src/config/drawing_tool/behavior.rs;src/drawings/rendering/mod.rs;src/drawings/persistence.rs;src/drawings/rendering/trading/ghost_feed.rs;src/drawings/categories.rs;src/drawings/domain/ghost_feed.rs;src/drawings/domain/drawing.rs;src/ui/dialogs/drawing_properties/tabs/inputs.rs,
 Drawings,Drawings,Head and shoulders,done,library,src/drawings/rendering/patterns.rs;src/painting/dashed_line.rs;src/drawings/rendering/mod.rs;src/config/drawing_tool/behavior.rs;src/drawings/domain/drawing.rs,
 Drawings,Drawings,Highlighter,done,library,src/drawings/rendering/shapes.rs;src/widget/tool_interaction/interaction.rs;src/drawings/domain/drawing.rs;src/drawings/services/handle.rs;src/drawings/rendering/style.rs;src/drawings/rendering/outline.rs,
-Drawings,Drawings,Horizontal line,done,library,src/drawings/rendering/lines.rs;src/config/drawing_tool/behavior.rs;src/ui/dialogs/drawing_properties/tabs/style.rs;src/painting/dashed_line.rs;src/drawings/manager/paint.rs;src/widget/frame/mod.rs,
+Drawings,Drawings,Horizontal line,done,library,src/drawings/rendering/lines.rs;src/config/drawing_tool/behavior.rs;src/ui/dialogs/drawing_properties/tabs/style.rs;src/painting/dashed_line.rs;src/drawings/manager/paint.rs;src/widget/frame/mod.rs;src/widget/drawing_api.rs;src/ui/context_menu/mod.rs;src/ui/context_menu/chart_menus/mod.rs;src/widget/keyboard.rs,2028
 Drawings,Drawings,Horizontal ray,done,library,src/drawings/rendering/lines.rs;src/drawings/rendering/mod.rs;src/ui/dialogs/drawing_properties/tabs/style.rs;src/painting/dashed_line.rs;src/drawings/manager/paint.rs;src/widget/frame/mod.rs,
 Drawings,Drawings,Icons and emojis,done,library,src/ui/drawing_toolbar/glyph_picker.rs;src/drawings/manager/mod.rs;src/drawings/rendering/media.rs;src/drawings/glyphs.rs;src/drawings/manager/interaction.rs;src/drawings/services/handle.rs,
 Drawings,Drawings,Ideas,done,host,src/drawings/rendering/media.rs;src/widget/tool_interaction/text.rs;src/drawings/categories.rs;src/model/post.rs;src/services/posts.rs;src/widget/posts.rs;src/widget/events.rs;src/drawings/manager/interaction.rs;src/ui/ideas.rs,
@@ -863,7 +863,7 @@ Terminal,Alerts,Notification: in-app popup when an alert fires,done,library,src/
 Terminal,Alerts,Notification: mobile app push,missing,host,,
 Terminal,Alerts,Notification: webhook,missing,host,,
 Terminal,Alerts,"Price operators: crossing, crossing up, crossing down, greater than, less than",done,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs,
-Terminal,Alerts,Quick alert from the price-scale '+' or the chart context menu,done,library,src/ui/context_menu/mod.rs;src/chart/rendering/overlays/crosshair.rs;src/chart/rendering/axes/mod.rs;src/config/chart.rs;src/widget/settings/apply.rs;src/ui/context_menu/chart_menus/mod.rs;terminal/src/alerts.rs;src/widget/frame/mod.rs,
+Terminal,Alerts,Quick alert from the price-scale '+' or the chart context menu,done,library,src/ui/context_menu/mod.rs;src/chart/rendering/overlays/crosshair.rs;src/chart/rendering/axes/mod.rs;src/config/chart.rs;src/widget/settings/apply.rs;src/ui/context_menu/chart_menus/mod.rs;src/widget/keyboard.rs;terminal/src/alerts.rs;src/widget/frame/mod.rs;examples/demo/controller.rs,2028
 Terminal,Alerts,Server-side evaluation,done,host,src/services/alerts.rs;src/ui/widget_bar/panels/alerts_panel.rs,
 Terminal,Alerts,Trigger frequency,done,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs;src/services/alert_engine.rs,
 Terminal,Alerts,Watchlist alerts,done,host,src/ui/dialogs/alert_dialog/dialog.rs;src/services/alert_engine.rs;src/services/alert_evaluator.rs;src/services/alert_feed.rs;terminal/src/alerts.rs,
@@ -956,7 +956,7 @@ Terminal,Trading panel,Execution markers on the chart,done,library,src/ui/tradin
 Terminal,Trading panel,Order and position lines on the chart,done,library,src/chart/rendering/trading_lines/mod.rs;src/chart/rendering/trading_lines/position.rs;src/ui/trading/mod.rs;src/ui/trading/view.rs;src/chart/rendering/axes/mod.rs;src/widget/frame/mod.rs,
 Terminal,Trading panel,Order ticket,done,library,src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/view.rs;src/ui/trading/ticket/form.rs;src/ui/trading/mod.rs;src/ui/trading/widgets.rs;terminal/src/trading.rs,
 Terminal,Trading panel,Paper trading account,done,library,src/services/paper.rs;src/model/trading.rs;examples/demo/feeds.rs;examples/demo/controller.rs;examples/demo/live.rs,
-Terminal,Trading panel,Place an order from the chart context menu,done,host,src/ui/trading/mod.rs;src/ui/trading/view.rs;src/ui/context_menu/mod.rs;terminal/src/trading.rs,
+Terminal,Trading panel,Place an order from the chart context menu,done,host,src/ui/trading/mod.rs;src/ui/trading/view.rs;src/ui/context_menu/mod.rs;terminal/src/trading.rs;src/ui/context_menu/chart_menus/mod.rs;src/widget/keyboard.rs;examples/demo/controller.rs,2028
 Terminal,Trading panel,"Position line with P&L, close and reverse",done,host,src/chart/rendering/trading_lines/mod.rs;src/chart/rendering/trading_lines/position.rs;src/ui/trading/mod.rs;src/ui/trading/view.rs;src/chart/rendering/axes/mod.rs;src/widget/frame/mod.rs,
 Terminal,Trading panel,Several take-profit levels on one order,done,host,src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/form.rs;src/chart/rendering/trading_lines/mod.rs;src/ui/trading/account_panel/view.rs;src/services/paper.rs,
 Terminal,Trading panel,"Show/hide positions, orders and executions",partial,library,src/ui/trading/mod.rs;src/ui/trading/view.rs;terminal/src/trading.rs,

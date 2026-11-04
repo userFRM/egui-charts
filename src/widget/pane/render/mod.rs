@@ -141,16 +141,25 @@ impl Chart {
                 .min((available.height() - axis_height).max(0.0) / gap_count.max(1) as f32)
         };
         let usable_height = (available.height() - axis_height - gap * gap_count as f32).max(0.0);
-        let main_minimum = if main_present { 40.0 } else { 0.0 };
+        let main_collapsed = maximized.is_none()
+            && self
+                .pane_layout
+                .panes
+                .iter()
+                .any(|pane| pane.id == main_pane && pane.collapsed == Some(true));
+        let main_expanded = main_present && !main_collapsed;
+        let main_minimum = if main_expanded { 40.0 } else { 0.0 };
         let auto_collapse = usable_height
             / (if main_present { 3.0 } else { 0.0 } + pane_count as f32).max(1.0)
             < 40.0;
-        let row_height = 24.0_f32.min(usable_height / pane_count.max(1) as f32);
-        let mut expanded_budget = ((usable_height - row_height * pane_count as f32 - main_minimum)
+        let row_count = pane_count + usize::from(main_collapsed);
+        let row_height = 24.0_f32.min(usable_height / row_count.max(1) as f32);
+        let mut expanded_budget = ((usable_height - row_height * row_count as f32 - main_minimum)
             / (40.0 - row_height))
             .max(0.0) as usize;
         for (idx, id, collapsed) in &mut panes {
             if *id == main_pane {
+                *collapsed = main_collapsed;
                 continue;
             }
             *collapsed = maximized.is_none()
@@ -198,12 +207,12 @@ impl Chart {
                 }
             }
         }
-        let main_min = if !main_present || maximized.is_some_and(|id| id != main_pane) {
+        let main_min = if !main_expanded || maximized.is_some_and(|id| id != main_pane) {
             0.0
         } else {
             40.0
         };
-        let expanded_count = expanded.len().saturating_sub(usize::from(main_present));
+        let expanded_count = expanded.len().saturating_sub(usize::from(main_expanded));
         let pane_budget = (remaining - main_min).max(0.0);
         let minimum = (pane_budget / expanded_count.max(1) as f32).min(40.0);
         let excess: f32 = desired
@@ -224,10 +233,10 @@ impl Chart {
             if at > 0 {
                 top += gap;
             }
-            let height = if *id == main_pane {
-                main_height
-            } else if *collapsed {
+            let height = if *collapsed {
                 row_height
+            } else if *id == main_pane {
+                main_height
             } else {
                 *height
             };
@@ -263,10 +272,15 @@ impl Chart {
                     Sense::click_and_drag(),
                 )
             });
+        let price_frame = if main_collapsed {
+            Rect::from_min_size(main_rect.min, egui::vec2(main_rect.width(), 0.0))
+        } else {
+            main_rect
+        };
         let response = ui
             .scope_builder(
                 egui::UiBuilder::new()
-                    .max_rect(main_rect)
+                    .max_rect(price_frame)
                     .layout(egui::Layout::top_down(egui::Align::LEFT)),
                 |ui| self.show_internal(ui, Some(time_axis), shared_plot.as_ref(), footprint),
             )
@@ -939,9 +953,12 @@ impl Chart {
                     });
                     ui.ctx()
                         .accesskit_node_builder(toggle.id, |node| node.set_expanded(!collapsed));
-                    if toggle.clicked() && !control_clicked {
+                    if toggle.clicked() && !control_clicked && !ui.input(|i| i.modifiers.command) {
                         pending_pane_collapse = Some((pane_id, !collapsed));
                         ui.ctx().request_repaint();
+                    }
+                    if self.pane_collapse_click(ui.ctx()) {
+                        pane_response.flags.remove(egui::response::Flags::CLICKED);
                     }
                     let mut pane_coords = coords.to_mapping(chart_rect, y_min, y_max);
                     pane_coords.price = member_map;
@@ -1521,6 +1538,11 @@ impl Chart {
             Some((id, ..)) => self.indicator_settings_request = Some(id),
             None => {}
         }
+
+        if main_collapsed {
+            self.collapsed_price_header(ui, main_rect);
+        }
+        self.pane_collapse_shortcut(ui);
 
         ui.advance_cursor_after_rect(available);
         ui.spacing_mut().item_spacing = host_spacing;
