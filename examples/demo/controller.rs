@@ -3949,6 +3949,14 @@ mod tests {
     /// The toolbar's real flyout toggles studies in both directions, including after undo.
     #[test]
     fn hide_indicator_menu_restores_studies_and_follows_undo() {
+        let is_visible = |chart: &Chart, id| {
+            chart
+                .indicators()
+                .find(|(study, _)| *study == id)
+                .unwrap()
+                .1
+                .is_visible()
+        };
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
         let id = app
@@ -3980,13 +3988,9 @@ mod tests {
             "Hide all",
             "Hide indicators",
         ] {
-            let visible = !app.chart.indicator(id).unwrap().is_visible();
+            let visible = !is_visible(&app.chart, id);
             choose(&mut app, label);
-            assert_eq!(
-                app.chart.indicator(id).unwrap().is_visible(),
-                visible,
-                "{label}"
-            );
+            assert_eq!(is_visible(&app.chart, id), visible, "{label}");
         }
         app.handle_top_toolbar(&ctx, TopToolbarAction::Undo);
         ui_frame(&ctx, size, vec![], |ui| {
@@ -3994,7 +3998,7 @@ mod tests {
         });
         assert!(app.drawing_toolbar.state.hide_indicators);
         choose(&mut app, "Hide indicators");
-        assert!(app.chart.indicator(id).unwrap().is_visible());
+        assert!(is_visible(&app.chart, id));
         app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
         app.activate_chart_slot(1);
         let other = app.chart.indicators().next().unwrap().0;
@@ -4018,7 +4022,7 @@ mod tests {
         app.poll_storage(&ctx);
         let restored = app.chart.indicators().next().unwrap().0;
         choose(&mut app, "Hide indicators");
-        assert!(app.chart.indicator(restored).unwrap().is_visible());
+        assert!(is_visible(&app.chart, restored));
     }
 
     /// Menu picks read settings, restored charts and history instead of host-side flags.
