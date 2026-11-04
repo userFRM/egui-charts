@@ -9,6 +9,7 @@ use egui_charts::{
 
 /// Compare complete executions with a shorter retained history and a lost book.
 pub struct ExecutionDepth {
+    start: DateTime<Utc>,
     recent: bool,
     lost_depth: bool,
     flow: Footprint,
@@ -38,17 +39,19 @@ impl ExecutionDepth {
         chart.set_timeframe(Timeframe::Min1);
         chart.set_visible_bars(14);
         let mut scene = Self {
+            start,
             recent: false,
             lost_depth: false,
             flow: Footprint::new(BarClock::new(Timeframe::Min1), 0.25, 1).unwrap(),
             executions: OrderFlowInput::footprint(),
             books: OrderFlowInput::book(1),
         };
-        scene.rebuild(start);
+        scene.rebuild();
         (chart, scene)
     }
 
-    fn rebuild(&mut self, start: DateTime<Utc>) {
+    fn rebuild(&mut self) {
+        let start = self.start;
         let clock = BarClock::new(Timeframe::Min1);
         self.flow = Footprint::new(clock.clone(), 0.25, 1).unwrap();
         self.executions.clear();
@@ -91,7 +94,7 @@ impl ExecutionDepth {
 
     /// Read coverage from the sources; let the chart fall back to candles outside it.
     pub fn show(&mut self, ui: &mut egui::Ui, chart: &mut Chart) {
-        let start = DateTime::UNIX_EPOCH + TimeDelta::days(20_000);
+        let start = self.start;
         let mut changed = false;
         ui.horizontal_wrapped(|ui| {
             changed |= ui
@@ -102,7 +105,7 @@ impl ExecutionDepth {
                 .changed();
         });
         if changed {
-            self.rebuild(start);
+            self.rebuild();
         }
         let flow = self.executions.footprints_from(start);
         let books = self.books.books_from(start);
@@ -137,10 +140,10 @@ mod tests {
     #[test]
     fn shorter_execution_history_keeps_candles_and_book_loss_removes_latest_sizes() {
         let (chart, mut scene) = ExecutionDepth::new();
-        let start = DateTime::UNIX_EPOCH + TimeDelta::days(20_000);
+        let start = scene.start;
         scene.recent = true;
         scene.lost_depth = true;
-        scene.rebuild(start);
+        scene.rebuild();
         let flow = scene.executions.footprints_from(start);
         assert_eq!(flow.complete_from, Some(start + TimeDelta::minutes(6)));
         assert_eq!(flow.bars.len(), 6);
