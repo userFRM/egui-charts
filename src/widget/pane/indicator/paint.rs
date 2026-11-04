@@ -397,7 +397,7 @@ impl IndicatorPane {
             width = width.max(tag.width() + 5.0 + 6.0);
         }
         self.axis_tags = tags.clone();
-        if self.overlay {
+        if !self.draw_axis {
             return width;
         }
         if self.axis_options.border_visible {
@@ -428,7 +428,12 @@ impl IndicatorPane {
         for mark in crate::chart::rendering::price_marks(&map, self.price_formatter.as_deref()) {
             let y = mark.y_coord;
             if y >= full_rect.min.y + 10.0 && y <= full_rect.max.y - 10.0 {
-                let label = if self.price_formatter.is_some() {
+                let label = if self.price_formatter.is_some()
+                    || matches!(
+                        map.transform().mode,
+                        crate::scales::PriceScaleMode::Percentage
+                            | crate::scales::PriceScaleMode::IndexedTo100
+                    ) {
                     mark.label
                 } else {
                     indicator.format_value(mark.price)

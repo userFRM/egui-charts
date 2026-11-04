@@ -305,25 +305,23 @@ impl Chart {
     pub(super) fn series_axis_owner(&self, id: super::SeriesId) -> super::SeriesId {
         let (pane, scale) = if id == super::SeriesId::MAIN {
             // Removing the main series leaves its axis in the price pane.
-            (Some(super::PaneId::MAIN), Some(self.main_series_scale))
+            (Some(self.main_series_pane()), Some(self.main_series_scale))
         } else {
             (self.series_pane(id), self.series_scale(id))
         };
-        if pane == Some(super::PaneId::MAIN)
+        if pane == Some(self.main_series_pane())
             && scale == Some(self.main_series_scale)
             && self.main_series_present
             && self.main_series_visible
         {
             return super::SeriesId::MAIN;
         }
-        self.price_series
-            .iter()
-            .find(|item| {
-                item.visible
-                    && self.series_pane(item.id) == pane
-                    && (pane != Some(super::PaneId::MAIN) || Some(item.options.scale) == scale)
-            })
-            .map_or(id, |item| item.id)
+        pane.and_then(|pane| {
+            self.pane_series(pane)
+                .into_iter()
+                .find(|item| self.is_series_visible(*item) && self.series_scale(*item) == scale)
+        })
+        .unwrap_or(id)
     }
 
     pub(super) fn series_display_map(
