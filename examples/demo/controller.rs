@@ -3399,7 +3399,12 @@ impl DemoApp {
         match action {
             SeriesContextMenuAction::OpenSettings => {
                 let id = match self.chart.selected_element() {
-                    Some(egui_charts::widget::ChartElementId::Series(id)) => id,
+                    // Volume is a selectable series too, and its settings are the chart's.
+                    Some(egui_charts::widget::ChartElementId::Series(id))
+                        if self.chart.series().any(|(series, _)| series == id) =>
+                    {
+                        id
+                    }
                     _ => SeriesId::MAIN,
                 };
                 self.open_indicator_settings(id);

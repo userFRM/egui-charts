@@ -43,9 +43,15 @@ impl ComparisonSettings {
                             ui.combo_select(
                                 "type",
                                 &mut self.options.chart_type,
+                                // Added series draw neither footprints nor volume profiles.
                                 ChartType::all().iter().copied().filter(|kind| {
                                     !kind.is_time_independent()
-                                        && *kind != ChartType::TimePriceOpportunity
+                                        && !matches!(
+                                            kind,
+                                            ChartType::TimePriceOpportunity
+                                                | ChartType::VolumeFootprint
+                                                | ChartType::SessionVolumeProfile
+                                        )
                                 }),
                                 |kind| kind.name().to_owned(),
                             );
@@ -82,11 +88,12 @@ impl ComparisonSettings {
                                 ui.add(egui::DragValue::new(radius).range(0.0..=20.0));
                             }
                             ui.end_row();
-                            ui.label("Crosshair marker radius");
+                            let label = ui.label("Crosshair marker radius");
                             ui.add(
                                 egui::DragValue::new(&mut self.options.crosshair_marker_radius)
                                     .range(0.0..=20.0),
-                            );
+                            )
+                            .labelled_by(label.id);
                             ui.end_row();
                             optional_color(
                                 ui,
@@ -100,13 +107,14 @@ impl ComparisonSettings {
                                 &mut self.options.crosshair_marker_border_color,
                                 egui::Color32::WHITE,
                             );
-                            ui.label("Crosshair border width");
+                            let label = ui.label("Crosshair border width");
                             ui.add(
                                 egui::DragValue::new(
                                     &mut self.options.crosshair_marker_border_width,
                                 )
                                 .range(0.0..=10.0),
-                            );
+                            )
+                            .labelled_by(label.id);
                             ui.end_row();
                             let mut base = self.options.columns_base.is_some();
                             if ui.checkbox(&mut base, "Column base").changed() {
@@ -181,16 +189,18 @@ impl ComparisonSettings {
                     );
                     ui.checkbox(&mut self.options.style.price_line_visible, "Price line");
                     FormGrid::new("comparison_lines").show(ui, |ui| {
-                        ui.label("Value source");
-                        ui.combo_select(
-                            "value_source",
-                            &mut self.options.style.price_line_source,
-                            [PriceLineSource::LastBar, PriceLineSource::LastVisible],
-                            |v| match v {
-                                PriceLineSource::LastBar => "Last bar".into(),
-                                PriceLineSource::LastVisible => "Last visible bar".into(),
-                            },
-                        );
+                        let label = ui.label("Value source");
+                        ui.label_inputs_by(label.id, |ui| {
+                            ui.combo_select(
+                                "value_source",
+                                &mut self.options.style.price_line_source,
+                                [PriceLineSource::LastBar, PriceLineSource::LastVisible],
+                                |v| match v {
+                                    PriceLineSource::LastBar => "Last bar".into(),
+                                    PriceLineSource::LastVisible => "Last visible bar".into(),
+                                },
+                            );
+                        });
                         ui.end_row();
                         optional_color(
                             ui,
@@ -198,19 +208,22 @@ impl ComparisonSettings {
                             &mut self.options.style.price_line_color,
                             self.options.color,
                         );
-                        ui.label("Price line width");
+                        let label = ui.label("Price line width");
                         ui.add(
                             egui::DragValue::new(&mut self.options.style.price_line_width)
                                 .range(0.1..=10.0),
-                        );
+                        )
+                        .labelled_by(label.id);
                         ui.end_row();
-                        ui.label("Price line pattern");
-                        ui.combo_select(
-                            "price_line_pattern",
-                            &mut self.options.style.price_line_style,
-                            [LineStyle::Solid, LineStyle::Dashed, LineStyle::Dotted],
-                            |v| format!("{v:?}"),
-                        );
+                        let label = ui.label("Price line pattern");
+                        ui.label_inputs_by(label.id, |ui| {
+                            ui.combo_select(
+                                "price_line_pattern",
+                                &mut self.options.style.price_line_style,
+                                [LineStyle::Solid, LineStyle::Dashed, LineStyle::Dotted],
+                                |v| format!("{v:?}"),
+                            );
+                        });
                         ui.end_row();
                     });
                     ui.checkbox(&mut self.options.style.base_line_visible, "Base line");
@@ -222,27 +235,31 @@ impl ComparisonSettings {
                         }
                         if let Some(format) = &mut self.options.style.display_format {
                             FormGrid::new("comparison_format").show(ui, |ui| {
-                                ui.label("Units");
-                                ui.combo_select(
-                                    "units",
-                                    &mut format.kind,
-                                    [
-                                        SeriesFormat::Price,
-                                        SeriesFormat::Volume,
-                                        SeriesFormat::Percentage,
-                                    ],
-                                    |v| format!("{v:?}"),
-                                );
+                                let label = ui.label("Units");
+                                ui.label_inputs_by(label.id, |ui| {
+                                    ui.combo_select(
+                                        "units",
+                                        &mut format.kind,
+                                        [
+                                            SeriesFormat::Price,
+                                            SeriesFormat::Volume,
+                                            SeriesFormat::Percentage,
+                                        ],
+                                        |v| format!("{v:?}"),
+                                    );
+                                });
                                 ui.end_row();
-                                ui.label("Decimals");
-                                ui.add(egui::DragValue::new(&mut format.precision).range(0..=12));
+                                let label = ui.label("Decimals");
+                                ui.add(egui::DragValue::new(&mut format.precision).range(0..=12))
+                                    .labelled_by(label.id);
                                 ui.end_row();
-                                ui.label("Minimum movement");
+                                let label = ui.label("Minimum movement");
                                 ui.add(
                                     egui::DragValue::new(&mut format.min_move)
                                         .range(0.00000001..=1e10)
                                         .speed(0.01),
-                                );
+                                )
+                                .labelled_by(label.id);
                                 ui.end_row();
                             });
                         }
@@ -281,18 +298,20 @@ impl ComparisonSettings {
                             ui.label("Pane price scale");
                         }
                         ui.end_row();
-                        ui.label("Scale mode");
-                        ui.combo_select(
-                            "scale_mode",
-                            &mut self.scale.options_mut().mode,
-                            [
-                                PriceScaleMode::Normal,
-                                PriceScaleMode::Logarithmic,
-                                PriceScaleMode::Percentage,
-                                PriceScaleMode::IndexedTo100,
-                            ],
-                            |v| v.to_string(),
-                        );
+                        let label = ui.label("Scale mode");
+                        ui.label_inputs_by(label.id, |ui| {
+                            ui.combo_select(
+                                "scale_mode",
+                                &mut self.scale.options_mut().mode,
+                                [
+                                    PriceScaleMode::Normal,
+                                    PriceScaleMode::Logarithmic,
+                                    PriceScaleMode::Percentage,
+                                    PriceScaleMode::IndexedTo100,
+                                ],
+                                |v| v.to_string(),
+                            );
+                        });
                         ui.end_row();
                     });
                     ui.checkbox(&mut self.scale.options_mut().invert_scale, "Invert scale");
@@ -1189,25 +1208,6 @@ mod tests {
             assert!(app.chart.redo());
             check(&app);
             app.chart.set_series_visible(*id, true);
-            let sources = app.build_source_items();
-            app.handle_object_tree(A::ZoomTo(row), &sources);
-            let sources = app.build_source_items();
-            app.handle_object_tree(A::OpenProperties(row), &sources);
-            assert_eq!(app.comparison_settings.take().unwrap().id, *id);
-        }
-        let row = super::super::indicator_tree_id(ids[0]);
-        let sources = app.build_source_items();
-        app.handle_object_tree(A::SendToBack(row), &sources);
-        assert_eq!(app.chart.series_order(ids[0]), Some(0));
-        let sources = app.build_source_items();
-        app.handle_object_tree(A::BringToFront(row), &sources);
-        assert!(app.chart.series_order(ids[0]).unwrap() > 0);
-        app.handle_layout_action(LayoutAction::SaveAs("Series tree".into()));
-        app.poll_storage(&ctx);
-        super::super::tests::settle(&mut app, &ctx);
-        let ids: Vec<_> = app.chart.series().map(|(id, _)| id).collect();
-        check(&app);
-        for id in ids {
             // Selecting a row keeps the view; zooming brings the latest bars of the series back.
             let bars = app.chart.bars(*id);
             let (earlier, latest) = (bars[bars.len() / 2].time, bars[bars.len() - 1].time);
@@ -1226,8 +1226,36 @@ mod tests {
             app.handle_object_tree(A::Select(row), &sources);
             assert_eq!(settle_view(&mut app).to, before.to);
             let sources = app.build_source_items();
-            app.handle_object_tree(A::Delete(super::super::indicator_tree_id(id)), &sources);
+            app.handle_object_tree(A::ZoomTo(row), &sources);
             assert!(settle_view(&mut app).to >= latest);
+            let sources = app.build_source_items();
+            app.handle_object_tree(A::OpenProperties(row), &sources);
+            assert_eq!(app.comparison_settings.take().unwrap().id, *id);
+        }
+        let row = super::super::indicator_tree_id(ids[0]);
+        let sources = app.build_source_items();
+        app.handle_object_tree(A::SendToBack(row), &sources);
+        assert_eq!(app.chart.series_order(ids[0]), Some(0));
+        let sources = app.build_source_items();
+        app.handle_object_tree(A::BringToFront(row), &sources);
+        assert!(app.chart.series_order(ids[0]).unwrap() > 0);
+        // Rows follow the draw order of their pane, whichever series moved.
+        let main = super::super::MAIN_SERIES_ID;
+        let sources = app.build_source_items();
+        app.handle_object_tree(A::BringToFront(main), &sources);
+        let layer = |app: &DemoApp, id| {
+            let rows = app.build_source_items();
+            rows.iter().find(|item| item.id == id).unwrap().z_index
+        };
+        assert!(layer(&app, main) > layer(&app, row));
+        app.handle_layout_action(LayoutAction::SaveAs("Series tree".into()));
+        app.poll_storage(&ctx);
+        super::super::tests::settle(&mut app, &ctx);
+        let ids: Vec<_> = app.chart.series().map(|(id, _)| id).collect();
+        check(&app);
+        for id in ids {
+            let sources = app.build_source_items();
+            app.handle_object_tree(A::Delete(super::super::indicator_tree_id(id)), &sources);
             assert!(app.chart.series_order(id).is_none());
             check(&app);
             assert!(app.chart.undo());
@@ -1239,15 +1267,6 @@ mod tests {
         assert_eq!(app.chart.series().count(), 3);
         check(&app);
     }
-        // Rows follow the draw order of their pane, whichever series moved.
-        let main = super::super::MAIN_SERIES_ID;
-        let sources = app.build_source_items();
-        app.handle_object_tree(A::BringToFront(main), &sources);
-        let layer = |app: &DemoApp, id| {
-            let rows = app.build_source_items();
-            rows.iter().find(|item| item.id == id).unwrap().z_index
-        };
-        assert!(layer(&app, main) > layer(&app, row));
 
     /// Pointer frames keep loaded comparisons intact; trades and view changes still refresh
     /// their bars, and a history restore that cleared the bars loads them again.
