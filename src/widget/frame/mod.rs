@@ -12,7 +12,7 @@ use crate::chart::overlays::FootprintConfig;
 use crate::chart::rendering::{self, ChartMapping, RenderContext, StyleColors};
 use crate::data::Footprint;
 use crate::localization as l10n;
-use crate::model::{ChartType, MarkerZOrder, PriceLine};
+use crate::model::{AutoscaleMargins, ChartType, MarkerZOrder, PriceLine};
 use crate::theme::ThemeExt;
 use egui::{Pos2, Rect, Response, Sense, Ui, Vec2};
 
@@ -850,7 +850,13 @@ impl Chart {
 
         // Draw watermark overlay (if enabled)
         self.draw_watermark(ui, &painter, chart_rect);
-        if let Some(watermark) = &self.watermark {
+        if let Some(watermark) = self
+            .pane_layout
+            .panes
+            .iter()
+            .find(|pane| pane.id == main_pane)
+            .and_then(|pane| pane.watermark.as_ref())
+        {
             rendering::render_watermark(ui, &painter, chart_rect, watermark);
         }
 
@@ -1032,8 +1038,8 @@ impl Chart {
         #[cfg(not(feature = "studies"))]
         let profile_prices = std::iter::empty();
         // Fit the price scale, then apply this frame's price zoom
-        let series_values = self.fit_secondary_series();
-        let mut primitive_prices = self.main_primitive_prices();
+        let (series_values, mut margins) = self.fit_secondary_series();
+        let (mut primitive_prices, mut primitive_margins) = self.main_primitive_prices();
         for idx in &study_indices {
             let study = &self.rendered_studies().indicators()[*idx];
             if study.is_visible()
@@ -1068,7 +1074,7 @@ impl Chart {
             self.heikin_ashi
                 .bars(&self.state.data().bars, self.state.revision())
         });
-        let (transform, data_range) = self.state.fit_price_scale_with_series(
+        let (transform, fit) = self.state.fit_price_scale_with_series(
             (if self.chart_type.is_time_independent() {
                 &self.element_studies.studies
             } else {
@@ -1106,6 +1112,14 @@ impl Chart {
             series_values,
         );
         drop(heikin_ashi);
+        let data_range = fit.price_range;
+        primitive_margins.merge(fit.margins);
+        if primitive_margins != AutoscaleMargins::default() {
+            margins
+                .entry(self.main_series_scale)
+                .or_default()
+                .merge(primitive_margins);
+        }
         if self.main_series_visible
             && footprint.is_none()
             && self.chart_type == ChartType::TimePriceOpportunity
@@ -1191,7 +1205,7 @@ impl Chart {
                 }
             }
         }
-        self.fit_marker_scales(&painter, price_rect);
+        self.fit_marker_scales(&painter, price_rect, &margins);
         self.apply_price_zoom(pending_price_zoom, &response, price_rect, transform);
         let bar_spacing = self.state.time_scale().bar_spacing();
         if self.config.lock_price_to_bar_ratio != self.last_ratio_lock {

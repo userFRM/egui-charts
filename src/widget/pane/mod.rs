@@ -8,7 +8,7 @@ pub use indicator::{IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, Pa
 pub use render::RenderedIndicatorPane;
 
 use super::volume;
-use super::{Chart, SeriesId};
+use super::{Chart, SeriesId, Watermark};
 #[cfg(feature = "drawings")]
 use crate::drawings::persistence::StoredPane;
 use egui::{Color32, Rect, Vec2};
@@ -91,6 +91,8 @@ pub(super) struct Pane {
     pub(super) scales: Vec<(crate::model::SeriesScale, crate::scales::PriceScale)>,
     /// Panel rect in the last frame; [`Rect::NOTHING`] when the pane was not drawn.
     pub(super) rect: Rect,
+    /// Host watermark painted behind this pane's series; see [`Chart::set_pane_watermark`].
+    pub(super) watermark: Option<Watermark>,
 }
 
 impl Pane {
@@ -106,6 +108,7 @@ impl Pane {
             scale: Self::new_scale(),
             scales: Vec::new(),
             rect: Rect::NOTHING,
+            watermark: None,
         }
     }
 
@@ -405,6 +408,19 @@ impl Chart {
         self.next_series += 1;
         self.pane_layout.panes.push(Pane::new(id));
         id
+    }
+
+    /// Paints a host watermark behind the series in `pane`, sized, aligned and clipped to its
+    /// plot. `None` clears only that pane's watermark. It follows pane resizing and ordering,
+    /// is hidden with a collapsed pane, and is dropped when the pane is removed.
+    /// Returns `false` for an unknown or removed pane without changing another pane.
+    pub fn set_pane_watermark(&mut self, pane: PaneId, watermark: Option<Watermark>) -> bool {
+        self.sync_panes();
+        let Some(at) = self.pane_index(pane) else {
+            return false;
+        };
+        self.pane_layout.panes[at].watermark = watermark;
+        true
     }
 
     /// Removes a pane, its series, studies, markers, price lines and drawings, including locked
@@ -1030,6 +1046,261 @@ mod tests {
         fn detached(&mut self) {
             self.0.fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    /// A 2:1 image fits half the padded plot: its height is (pane height - 20) / 2.
+    /// The following 10 point line adds 12 points to the aligned block. Layout changes must
+    /// move both parts together, and neither text nor an explicitly oversized image may leak.
+    #[test]
+    fn pane_watermarks_follow_layout_clip_and_export_independently() {
+        use crate::widget::{
+            ImageExportOptions, PaneId, SeriesId, SeriesOptions, Watermark, WatermarkLine,
+        };
+        use egui::{Align2, Color32, Shape, load::SizedTexture};
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[110.0]);
+        chart.config_mut().show_volume = false;
+        let main_color = Color32::from_rgb(21, 43, 65);
+        let pane_color = Color32::from_rgb(32, 54, 76);
+        chart.set_watermark(Some(Watermark::default().with_line(WatermarkLine::new(
+            "MAIN WATERMARK",
+            20.0,
+            main_color,
+        ))));
+        let pane = chart.add_pane();
+        for _ in 0..2 {
+            let series = chart.add_series(SeriesOptions::default());
+            chart.set_data(series, chart.bars(SeriesId::MAIN).to_vec());
+            assert!(chart.move_series_to_pane(series, pane));
+        }
+        let texture = egui::TextureId::User(77);
+        let watermark = Watermark::default()
+            .with_image(
+                egui::Image::from_texture(SizedTexture::new(texture, Vec2::new(200.0, 100.0)))
+                    .fit_to_fraction(Vec2::splat(0.5)),
+            )
+            .with_line(WatermarkLine::new("PANE WATERMARK", 10.0, pane_color))
+            .with_padding(10.0);
+        let render = |chart: &mut crate::Chart| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(800.0, 600.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        chart.show(ui);
+                    });
+                },
+            );
+            let painted = std::mem::take(&mut output.shapes);
+            output.drop_without_applying_deltas();
+            painted
+        };
+        for height in [120.0, 240.0] {
+            assert!(chart.set_pane_height(pane, height));
+            assert!(chart.move_pane(pane, usize::from(height == 120.0)));
+            for align in [
+                Align2::LEFT_TOP,
+                Align2::CENTER_TOP,
+                Align2::RIGHT_TOP,
+                Align2::LEFT_CENTER,
+                Align2::CENTER_CENTER,
+                Align2::RIGHT_CENTER,
+                Align2::LEFT_BOTTOM,
+                Align2::CENTER_BOTTOM,
+                Align2::RIGHT_BOTTOM,
+            ] {
+                assert!(chart.set_pane_watermark(pane, Some(watermark.clone().with_align(align))));
+                let painted = render(&mut chart);
+                let panel = chart
+                    .pane_layout
+                    .panes
+                    .iter()
+                    .find(|item| item.id == pane)
+                    .unwrap()
+                    .rect;
+                let plot = Rect::from_x_y_ranges(
+                    chart.get_rendered_price_rect().x_range(),
+                    panel.y_range(),
+                );
+                assert!((plot.height() - height).abs() < 0.01);
+                let inner = plot.shrink(10.0);
+                let image_height = (height - 20.0) / 2.0;
+                let top = match align.y() {
+                    egui::Align::Min => inner.top(),
+                    egui::Align::Center => inner.center().y - (image_height + 12.0) / 2.0,
+                    egui::Align::Max => inner.bottom() - image_height - 12.0,
+                };
+                let images: Vec<_> = painted
+                    .iter()
+                    .filter(|shape| shape.shape.texture_id() == texture)
+                    .collect();
+                assert_eq!(images.len(), 1, "one image per pane, {height} {align:?}");
+                let image = images[0].shape.visual_bounding_rect();
+                assert!((image.height() - image_height).abs() <= 1.0);
+                assert!((image.width() - 2.0 * image_height).abs() <= 1.0);
+                assert!((image.top() - top).abs() <= 0.5);
+                let edge = |part: Rect| match align.x() {
+                    egui::Align::Min => part.left() - inner.left(),
+                    egui::Align::Center => part.center().x - inner.center().x,
+                    egui::Align::Max => part.right() - inner.right(),
+                };
+                assert!(edge(image).abs() <= 0.5);
+                let text: Vec<_> = painted
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        Shape::Text(text) if text.fallback_color == pane_color => Some(text),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(text.len(), 1);
+                let bounds = text[0].galley.rect.translate(text[0].pos.to_vec2());
+                assert!((bounds.center().y - top - image_height - 6.0).abs() < 0.01);
+                assert!(edge(bounds).abs() < 0.01);
+                assert!(painted.iter().any(|shape| matches!(&shape.shape, Shape::Text(text) if text.fallback_color == main_color)));
+            }
+        }
+        let oversized = Watermark::default()
+            .with_image(
+                egui::Image::from_texture(SizedTexture::new(texture, Vec2::new(2000.0, 1000.0)))
+                    .fit_to_exact_size(Vec2::new(2000.0, 1000.0)),
+            )
+            .with_line(WatermarkLine::new("WIDE ".repeat(200), 20.0, pane_color));
+        assert!(chart.set_pane_watermark(pane, Some(oversized)));
+        let painted = render(&mut chart);
+        let panel = chart
+            .pane_layout
+            .panes
+            .iter()
+            .find(|item| item.id == pane)
+            .unwrap()
+            .rect;
+        let plot =
+            Rect::from_x_y_ranges(chart.get_rendered_price_rect().x_range(), panel.y_range());
+        for shape in painted.iter().filter(|shape| {
+            shape.shape.texture_id() == texture
+                || matches!(&shape.shape, Shape::Text(text) if text.fallback_color == pane_color)
+        }) {
+            assert!(
+                plot.contains_rect(shape.clip_rect),
+                "watermark escaped its plot: {shape:?}"
+            );
+        }
+        assert!(chart.set_pane_watermark(pane, Some(watermark.clone())));
+        for include_watermark in [true, false] {
+            let mut image = chart
+                .export_image(
+                    &ctx,
+                    &ImageExportOptions {
+                        size: [800, 600],
+                        include_title: false,
+                        include_timestamp: false,
+                        include_watermark,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            for color in [main_color, pane_color] {
+                assert_eq!(image.primitives.iter().any(|primitive| matches!(&primitive.primitive,
+                    egui::epaint::Primitive::Mesh(mesh) if mesh.vertices.iter().any(|vertex| vertex.color == color))), include_watermark);
+            }
+            assert_eq!(
+                image
+                    .primitives
+                    .iter()
+                    .any(|primitive| matches!(&primitive.primitive,
+                egui::epaint::Primitive::Mesh(mesh) if mesh.texture_id == texture)),
+                include_watermark
+            );
+            image.textures_delta.clear();
+        }
+        assert!(chart.set_pane_watermark(pane, None));
+        let painted = render(&mut chart);
+        assert!(
+            !painted
+                .iter()
+                .any(|shape| shape.shape.texture_id() == texture)
+        );
+        assert!(painted.iter().any(
+            |shape| matches!(&shape.shape, Shape::Text(text) if text.fallback_color == main_color)
+        ));
+        assert!(chart.set_pane_watermark(pane, Some(watermark.clone())));
+        assert!(
+            render(&mut chart)
+                .iter()
+                .any(|shape| shape.shape.texture_id() == texture)
+        );
+        assert!(chart.remove_pane(pane));
+        assert!(!chart.set_pane_watermark(pane, None));
+        assert!(chart.pane_layout.panes.iter().all(|item| item.id != pane));
+        let replacement = chart.add_pane();
+        assert_ne!(replacement, pane);
+        assert!(
+            chart
+                .pane_layout
+                .panes
+                .iter()
+                .find(|item| item.id == replacement)
+                .unwrap()
+                .watermark
+                .is_none()
+        );
+        let painted = render(&mut chart);
+        assert!(
+            !painted
+                .iter()
+                .any(|shape| shape.shape.texture_id() == texture)
+        );
+        assert!(chart.set_pane_watermark(replacement, Some(watermark)));
+        assert!(
+            render(&mut chart)
+                .iter()
+                .any(|shape| shape.shape.texture_id() == texture)
+        );
+        chart
+            .pane_layout
+            .panes
+            .iter_mut()
+            .find(|item| item.id == replacement)
+            .unwrap()
+            .collapsed = Some(true);
+        assert!(
+            !render(&mut chart)
+                .iter()
+                .any(|shape| shape.shape.texture_id() == texture)
+        );
+        chart
+            .pane_layout
+            .panes
+            .iter_mut()
+            .find(|item| item.id == replacement)
+            .unwrap()
+            .collapsed = Some(false);
+        assert!(chart.move_series_to_pane(SeriesId::MAIN, replacement));
+        let painted = render(&mut chart);
+        assert!(
+            painted
+                .iter()
+                .any(|shape| shape.shape.texture_id() == texture)
+        );
+        assert!(painted.iter().any(
+            |shape| matches!(&shape.shape, Shape::Text(text) if text.fallback_color == main_color)
+        ));
+        assert!(chart.remove_pane(PaneId::MAIN));
+        assert!(!chart.set_pane_watermark(PaneId::MAIN, None));
+        let painted = render(&mut chart);
+        assert!(
+            painted
+                .iter()
+                .any(|shape| shape.shape.texture_id() == texture)
+        );
+        assert!(!painted.iter().any(
+            |shape| matches!(&shape.shape, Shape::Text(text) if text.fallback_color == main_color)
+        ));
     }
 
     /// A host series moved into a pane leaves the price scale, panes share the height by

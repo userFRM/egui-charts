@@ -224,6 +224,7 @@ impl Chart {
         self.record_study(id);
         self.pending_from[at] = Some(0);
         self.next_refresh[at] = f64::NEG_INFINITY;
+        self.readout_revision = crate::model::next_revision();
         Some(self.studies.indicators_mut()[at].as_mut())
     }
 
@@ -258,7 +259,7 @@ impl Chart {
         let sources =
             self.study_data
                 .data(requests, &self.symbol, self.timeframe, self.replay_time());
-        refresh_values(
+        let (wait, changed) = refresh_values(
             self.studies.indicators_mut(),
             &self.study_ids,
             bars,
@@ -266,7 +267,11 @@ impl Chart {
             &mut self.next_refresh,
             now,
             &sources,
-        )
+        );
+        if changed {
+            self.readout_revision = crate::model::next_revision();
+        }
+        wait
     }
 
     pub(super) fn refresh_element_studies(&mut self, now: f64) -> Option<f64> {
@@ -290,6 +295,7 @@ impl Chart {
             now,
             &sources,
         )
+        .0
     }
 
     pub(super) fn rendered_studies(&self) -> &crate::studies::IndicatorRegistry {
@@ -457,10 +463,12 @@ pub(super) fn refresh_values(
     next_refresh: &mut [f64],
     now: f64,
     sources: &[crate::studies::StudyData<'_>],
-) -> Option<f64> {
+) -> (Option<f64>, bool) {
+    let mut changed = false;
     let order = super::studies::order(studies, ids);
     for at in 0..studies.len() {
         if !order.contains(&at) {
+            changed |= pending_from[at].is_some();
             studies[at].update_source(bars, 0, &[]);
             pending_from[at] = None;
         }
@@ -526,6 +534,7 @@ pub(super) fn refresh_values(
             }
         }
         super::studies::update(studies, ids, at, bars, from, sources);
+        changed = true;
         pending_from[at] = None;
         if !incremental {
             recomputed = true;
@@ -559,6 +568,7 @@ pub(super) fn refresh_values(
         let left = if from == 0 {
             if !study.values().is_empty() {
                 study.update(&[], 0);
+                changed = true;
             }
             0.0
         } else {
@@ -566,7 +576,7 @@ pub(super) fn refresh_values(
         };
         wait = Some(wait.map_or(left, |wait| wait.min(left)));
     }
-    wait
+    (wait, changed)
 }
 
 /// Least time in seconds between two full recomputes of a study while bars stream; a study
