@@ -70,8 +70,6 @@ pub(crate) enum SeriesAction {
     ToggleVisibility,
     /// Remove the series.
     Remove,
-    /// Show or hide the built-in session and data marks.
-    SetMarketStatus(bool),
 }
 
 /// An in-pane legend. Historical readout data and current quotes are supplied independently.
@@ -228,6 +226,7 @@ impl<'a> Legend<'a> {
         if !bounds.is_positive() {
             return (None, None, plot.top(), None, None);
         }
+        #[cfg_attr(not(feature = "icons"), allow(unused_mut))]
         let mut series_action = None;
         let id = ui.next_auto_id().with(("series_legend", self.symbol));
         ui.skip_ahead_auto_ids(1);
@@ -236,16 +235,6 @@ impl<'a> Legend<'a> {
         #[cfg(feature = "icons")]
         let title_start = layout.pos;
         if self.show_title {
-            let mut status_menu = |ui: &mut Ui| {
-                let mut shown = self.show_market_status;
-                if ui
-                    .checkbox(&mut shown, l10n::text(ui.ctx(), "Market status"))
-                    .changed()
-                {
-                    series_action = Some(SeriesAction::SetMarketStatus(shown));
-                    ui.close();
-                }
-            };
             let image = self.badge.clone().or_else(|| {
                 self.instrument
                     .and_then(|instrument| instrument.logo.as_deref())
@@ -306,7 +295,6 @@ impl<'a> Legend<'a> {
                 pill_width + 8.0
             } + host_width;
             let title_width = (bounds.right() - layout.pos.x - status_width - 64.0).max(0.0);
-            let name_start = layout.pos;
             layout.text(
                 title,
                 theme.text.chart_title,
@@ -317,16 +305,6 @@ impl<'a> Legend<'a> {
                 },
                 title_width,
             );
-            ui.interact(
-                Rect::from_min_max(
-                    name_start,
-                    Pos2::new(layout.pos.x, layout.pos.y + layout.height),
-                )
-                .intersect(bounds),
-                id.with("status_menu"),
-                Sense::CLICK,
-            )
-            .context_menu(&mut status_menu);
             if !pill.is_empty() {
                 let pill_rect = layout.reserve(Vec2::new(pill_width, 18.0));
                 let (mut left, last) = (pill_rect.left(), pill.len() - 1);
@@ -352,12 +330,11 @@ impl<'a> Legend<'a> {
                         .interact(
                             rect.intersect(bounds),
                             id.with(("market_status", index)),
-                            Sense::CLICK,
+                            Sense::hover(),
                         )
                         .on_hover_text(name.clone());
                     response
                         .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, true, &name));
-                    response.context_menu(&mut status_menu);
                 }
             }
             for status in self.statuses {
@@ -1096,88 +1073,6 @@ fn format_volume(volume: f64) -> String {
 #[cfg(test)]
 mod mark_tests {
     use super::*;
-
-    /// The status menu reaches the saved setting through chart history and can restore a hidden mark.
-    #[cfg(feature = "ui")]
-    #[test]
-    fn status_menu_changes_are_saved_and_undoable() {
-        use crate::widget::test_frames::{chart, shapes};
-        use egui::{Event, Modifiers, PointerButton, Shape};
-        let ctx = egui::Context::default();
-        let mut chart = chart(&[100.0], &[110.0]);
-        chart.set_symbol("ABC");
-        chart.set_timeframe(crate::model::Timeframe::Hour1);
-        let mut instrument = Instrument::new("ABC");
-        instrument.description = Some("ABC".into());
-        instrument.data_status = Some(DataStatus::Delayed);
-        chart.set_instrument(Some(instrument));
-        let text_rect = |painted: &[Shape], label: &str| {
-            painted.iter().find_map(|shape| match shape {
-                Shape::Text(text) if text.galley.text() == label => {
-                    Some(text.visual_bounding_rect())
-                }
-                _ => None,
-            })
-        };
-        let mut time = 0.0;
-        let mut frame = |chart: &mut crate::Chart, events| {
-            time += 0.1;
-            shapes(&ctx, chart, time, events)
-        };
-        frame(&mut chart, vec![]);
-        let mut painted = frame(&mut chart, vec![]);
-        for shown in [false, true] {
-            let anchor = if shown {
-                text_rect(&painted, "ABC · 1h").expect("title remains when status is hidden")
-            } else {
-                text_rect(&painted, "D").expect("delayed status is visible by default")
-            }
-            .center();
-            for pressed in [true, false] {
-                frame(
-                    &mut chart,
-                    vec![
-                        Event::PointerMoved(anchor),
-                        Event::PointerButton {
-                            pos: anchor,
-                            button: PointerButton::Secondary,
-                            pressed,
-                            modifiers: Modifiers::NONE,
-                        },
-                    ],
-                );
-            }
-            assert!(chart.take_right_click().is_none());
-            painted = frame(&mut chart, vec![]);
-            let menu = text_rect(&painted, "Market status")
-                .expect("status context menu")
-                .center();
-            for pressed in [true, false] {
-                frame(
-                    &mut chart,
-                    vec![
-                        Event::PointerMoved(menu),
-                        Event::PointerButton {
-                            pos: menu,
-                            button: PointerButton::Primary,
-                            pressed,
-                            modifiers: Modifiers::NONE,
-                        },
-                    ],
-                );
-            }
-            assert_eq!(chart.config().show_market_status, shown);
-            let saved = chart.snapshot().unwrap();
-            assert_eq!(saved.config.as_ref().unwrap().show_market_status, shown);
-            assert!(chart.undo());
-            assert_eq!(chart.config().show_market_status, !shown);
-            assert!(chart.redo());
-            assert_eq!(chart.config().show_market_status, shown);
-            chart.restore(&saved).unwrap();
-            painted = frame(&mut chart, vec![]);
-            assert_eq!(text_rect(&painted, "D").is_some(), shown);
-        }
-    }
 
     /// Session and data glyphs have distinct shapes, readable contrast and accessible names.
     /// The status toggle leaves host marks and the logo independent.

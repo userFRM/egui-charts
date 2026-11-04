@@ -186,7 +186,6 @@ impl Chart {
             SeriesAction::Remove => {
                 chart.remove_series(SeriesId::MAIN);
             }
-            SeriesAction::SetMarketStatus(shown) => chart.config.show_market_status = shown,
         });
     }
 
