@@ -138,7 +138,7 @@ pub struct Instrument {
     pub source: Option<String>,
     /// Root shared by related instruments, such as "ES" for the contracts of a futures root or
     /// one security listed on several exchanges. Symbol search lists the first instrument of a
-    /// root and offers the others under it.
+    /// root and offers the others under it, keeping the futures of each exchange apart.
     pub root: Option<String>,
     /// Instrument type.
     pub symbol_type: Option<SymbolType>,
