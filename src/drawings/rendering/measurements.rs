@@ -23,32 +23,10 @@ impl Drawing {
         if self.points.len() >= 2 && self.chart_points.len() >= 2 {
             let start = self.points[0];
             let end = self.points[1];
-            let cp1 = &self.chart_points[0];
-            let cp2 = &self.chart_points[1];
-
-            // Calculate price change to determine color (RED for down, BLUE for up)
-            let price_diff = cp2.price - cp1.price;
-            let is_measuring_down = price_diff < 0.0;
-
-            // Color based on direction: Red for down, Blue for up
-            let base_color = if is_measuring_down {
-                DESIGN_TOKENS.semantic.extended.bearish // Red (down)
-            } else {
-                DESIGN_TOKENS.semantic.extended.accent // Blue (up)
-            };
-
-            // Draw SEMI-TRANSPARENT RECTANGLE filling the area from start to cursor
-            // Color changes based on direction: red down, blue up
             let rect = egui::Rect::from_two_pos(start, end);
-            let fill_color = self.fill_color32().unwrap_or_else(|| {
-                Color32::from_rgba_unmultiplied(
-                    base_color.r(),
-                    base_color.g(),
-                    base_color.b(),
-                    30, // Very transparent
-                )
-            });
-            painter.rect_filled(rect, 0.0, fill_color);
+            if let Some(fill) = self.fill_color32() {
+                painter.rect_filled(rect, 0.0, fill);
+            }
 
             let line_stroke = self.stroke();
 
@@ -594,6 +572,20 @@ mod tests {
         assert!(output.iter().any(
             |s| matches!(s, egui::Shape::LineSegment { stroke, .. } if *stroke == expected_stroke)
         ));
+        let points = &chart.drawings().drawings[0].points;
+        let area = Rect::from_two_pos(points[0], points[1]);
+        assert!(
+            output
+                .iter()
+                .any(|s| matches!(s, egui::Shape::Rect(r) if r.rect == area && r.fill.a() > 0))
+        );
+        chart.drawings_mut().drawings[0].fill_color = None;
+        let output = shapes(&ctx, &mut chart, 0.1, vec![]);
+        assert!(
+            !output
+                .iter()
+                .any(|s| matches!(s, egui::Shape::Rect(r) if r.rect == area && r.fill.a() > 0))
+        );
     }
 
     /// 100 to 110 over bars 0 to 20 is 10 (10%) high and 20 bars wide.
