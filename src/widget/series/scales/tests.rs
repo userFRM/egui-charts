@@ -3041,6 +3041,12 @@ fn main_series_moves_with_rendering_pointer_and_saved_placement() {
         let original_map = chart.series_price_map(other).unwrap();
         assert!(original_map.range().contains(1000.0));
         assert_ne!(original_map, map);
+        let original_scale = chart.series_price_scale(other).unwrap();
+        let shared = chart
+            .shared_price_scale(chart.series_scale(other).unwrap())
+            .unwrap();
+        assert_eq!(shared.range(), original_scale.range());
+        assert_eq!(shared.options(), original_scale.options());
         // Halfway through [90, 130], 110 maps to the vertical midpoint, inverted or not.
         assert!((map.price_to_y(110.0) - mapping.rect.center().y).abs() < 1e-4);
         let companion_map = chart.series_price_map(companion).unwrap();
