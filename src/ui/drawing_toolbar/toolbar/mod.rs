@@ -209,6 +209,12 @@ impl DrawingToolbar {
 
     /// Render the toolbar and return the full action
     pub fn show_with_action(&mut self, ui: &mut Ui) -> DrawingToolbarAction {
+        if self.state.preferences.hidden {
+            let position = ui.available_rect_before_wrap().min + Vec2::splat(8.0);
+            return self
+                .show_floating_with_action(ui, position)
+                .unwrap_or(DrawingToolbarAction::None);
+        }
         let mut action = DrawingToolbarAction::None;
 
         // A tool's shortcut selects it, unless the user is typing.
@@ -655,7 +661,7 @@ impl DrawingToolbar {
                 state.snap_to_indicators,
             ),
             "Hide" => HideMenu::show_submenu(ui, trading, state),
-            "Remove" => RemoveMenu::show_submenu(ui),
+            "Remove" => RemoveMenu::show_submenu(ui, state),
             "Icons/Emojis" => state.glyph_picker.show(ui, registry),
             _ => {
                 let favorites = &mut state.favorites;
@@ -735,16 +741,24 @@ impl DrawingToolbar {
             // switch it on.
             A::ToggleMagnet if !self.state.magnet_mode => return None,
             A::ToggleMagnet => self.state.magnet_mode = false,
+            A::SetToolbarVisible(visible) => self.state.preferences.hidden = !visible,
+            A::SetLockedDrawingRemoval(include) => {
+                self.state.preferences.remove_locked = Some(*include);
+            }
             A::HideAllDrawings => self.state.hide_drawings = !self.state.hide_drawings,
             A::HideAllIndicators => self.state.hide_indicators = !self.state.hide_indicators,
             A::HideAllPoss => self.state.hide_positions = !self.state.hide_positions,
             A::HideAllOrders => self.state.hide_orders = !self.state.hide_orders,
             A::HideAll => {
                 let state = &mut self.state;
-                state.hide_drawings = true;
-                state.hide_indicators = true;
-                state.hide_positions = true;
-                state.hide_orders = true;
+                let trading = !self.hidden.contains(&Control::Trading);
+                let hidden = !state.all_hidden(trading);
+                state.hide_drawings = hidden;
+                state.hide_indicators = hidden;
+                if trading {
+                    state.hide_positions = hidden;
+                    state.hide_orders = hidden;
+                }
             }
             A::InsertEmoji { .. } => self.select_tool(DrawingToolType::FontIcon),
             A::InsertGlyph { icon_name, .. } => {

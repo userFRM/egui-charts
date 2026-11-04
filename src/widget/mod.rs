@@ -145,7 +145,7 @@ pub use snapshot::{
     ChartSnapshot, RestoreError, SavedAnnotations, SavedLayout, SavedPane, SavedSeries, SavedStudy,
 };
 mod volume;
-pub use layout::{ChartLayout, ChartLayoutMode, ChartSyncOptions};
+pub use layout::{ChartLayout, ChartLayoutMode, ChartLayoutSizing, ChartSyncOptions};
 pub(crate) mod sync;
 mod time_scale;
 use feed::FeedLink;

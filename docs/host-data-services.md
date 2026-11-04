@@ -2,6 +2,23 @@
 
 The host owns instrument catalogs, analytics, analyst estimates and market heatmap values. These APIs render and route that data without acquiring it or computing analytics.
 
+## Try a report handoff
+
+On the published guide, select **Run example** to render a `StrategyReport` delivered by a
+synthetic host. Change **Fee per round trip**, then select **Deliver host report**. The
+delivery counter changes once; ordinary chart frames do not execute the host's strategy.
+The library computes metrics from the supplied trades and marked equity. The initial
+two trades return +48 and -22 after fees, giving net profit 26, a 50% win rate and maximum
+drawdown 22. An undefined annualized metric displays N/A.
+
+<!-- example -->
+
+`host_result` is the host's data boundary and `HostReport::show` is its small egui renderer.
+No account, remote storage or market data service is included. A production host supplies
+the actual result and decides when to deliver a replacement. The
+[strategy report guide](strategy-report.md#try-a-host-produced-report) gives the hand
+calculation and the complete report panel integration.
+
 ## Symbol search
 
 Connect an [`Arc<dyn services::SymbolSearch>`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/services/trait.SymbolSearch.html) with [`SymbolSearchDialog::set_search_service`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/dialogs/symbol_search/struct.SymbolSearchDialog.html#method.set_search_service) and [`CompareSymbolsDialog::set_search_service`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/dialogs/symbol_search/struct.CompareSymbolsDialog.html#method.set_search_service). Both dialogs keep accepting a local symbol list when no service is attached. The service returns promptly and answers through [`data::Reply<Vec<model::Instrument>>`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Reply.html); only the current text and filters can supply visible results.
