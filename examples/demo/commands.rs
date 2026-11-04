@@ -838,6 +838,9 @@ mod tests {
             click_at_width(&mut app, &ctx, "Copy symbol", width);
             assert!(!egui::Popup::is_any_open(&ctx));
             click_at_width(&mut app, &ctx, "Menu", width);
+            if width < 600.0 {
+                click_at_width(&mut app, &ctx, "Panels", width);
+            }
             click_at_width(&mut app, &ctx, "Order flow", width);
             assert!(app.open_panel == Some(super::super::SidePanel::OrderFlow));
             assert!(app.widget_bar.active_widget.is_none());
@@ -845,6 +848,9 @@ mod tests {
             app.execute_search_command(&ctx, "samples");
             assert!(app.open_panel == Some(super::super::SidePanel::OrderFlow));
             click_at_width(&mut app, &ctx, "Menu", width);
+            if width < 600.0 {
+                click_at_width(&mut app, &ctx, "Panels", width);
+            }
             click_at_width(&mut app, &ctx, "Order flow", width);
             assert!(app.open_panel.is_none());
             if width < 600.0 {

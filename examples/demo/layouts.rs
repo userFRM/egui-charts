@@ -941,7 +941,10 @@ mod tests {
                     ("Object Tree", Some(super::super::SidePanel::ObjectTree)),
                     ("Alerts", Some(super::super::SidePanel::Alerts)),
                     ("Data Window", Some(super::super::SidePanel::DataWindow)),
-                    ("Watchlist", Some(super::super::SidePanel::Watchlist)),
+                    (
+                        "Watchlist and details",
+                        Some(super::super::SidePanel::Watchlist),
+                    ),
                     (
                         "Time and sales",
                         Some(super::super::SidePanel::TimeAndSales),
@@ -950,6 +953,8 @@ mod tests {
                     ("Keyboard shortcuts", None),
                 ] {
                     let labels = click(&mut app, egui::pos2(22.0, 20.0));
+                    let panels = labels.iter().find(|(text, _)| text == "Panels").unwrap().1;
+                    let labels = click(&mut app, panels.center());
                     let rect = labels
                         .iter()
                         .find(|(text, _)| text == label)
