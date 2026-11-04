@@ -261,6 +261,86 @@ fn sync_switch(ui: &mut Ui, on: &mut bool, label: &str, effect: &str) {
     }
 }
 
+const FOUR_SPLIT_LEFT: Icon = Icon::new(
+    "ui/layout-four-split-left.svg",
+    br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+  <rect x="3.75" y="5.25" width="16.5" height="13.5" rx=".75"/>
+  <path d="M12 5.25v13.5M7.875 5.25v13.5M12 12h8.25"/>
+</svg>"##,
+);
+
+const FOUR_SPLIT_RIGHT: Icon = Icon::new(
+    "ui/layout-four-split-right.svg",
+    br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+  <rect x="3.75" y="5.25" width="16.5" height="13.5" rx=".75"/>
+  <path d="M12 5.25v13.5M16.125 5.25v13.5M3.75 12H12"/>
+</svg>"##,
+);
+
+const FOUR_SPLIT_BOTTOM: Icon = Icon::new(
+    "ui/layout-four-split-bottom.svg",
+    br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+  <rect x="3.75" y="5.25" width="16.5" height="13.5" rx=".75"/>
+  <path d="M3.75 12h16.5M12 5.25V12M3.75 15.375h16.5"/>
+</svg>"##,
+);
+
+const FIVE_SPLIT_LEFT: Icon = Icon::new(
+    "ui/layout-five-split-left.svg",
+    br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+  <rect x="3.75" y="5.25" width="16.5" height="13.5" rx=".75"/>
+  <path d="M12 5.25v13.5M7.875 5.25v13.5M12 9.75h8.25M12 14.25h8.25"/>
+</svg>"##,
+);
+
+const FIVE_SPLIT_RIGHT: Icon = Icon::new(
+    "ui/layout-five-split-right.svg",
+    br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+  <rect x="3.75" y="5.25" width="16.5" height="13.5" rx=".75"/>
+  <path d="M12 5.25v13.5M16.125 5.25v13.5M3.75 9.75H12M3.75 14.25H12"/>
+</svg>"##,
+);
+
+const FIVE_TWO_TOP: Icon = Icon::new(
+    "ui/layout-five-two-top.svg",
+    br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+  <rect x="3.75" y="5.25" width="16.5" height="13.5" rx=".75"/>
+  <path d="M3.75 12h16.5M12 5.25V12M9.25 12v6.75M14.75 12v6.75"/>
+</svg>"##,
+);
+
+const SIX_TWO_TOP: Icon = Icon::new(
+    "ui/layout-six-two-top.svg",
+    br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+  <rect x="3.75" y="5.25" width="16.5" height="13.5" rx=".75"/>
+  <path d="M3.75 12h16.5M12 5.25v13.5M7.875 12v6.75M16.125 12v6.75"/>
+</svg>"##,
+);
+
+const SIX_FOUR_TOP: Icon = Icon::new(
+    "ui/layout-six-four-top.svg",
+    br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+  <rect x="3.75" y="5.25" width="16.5" height="13.5" rx=".75"/>
+  <path d="M3.75 12h16.5M12 5.25v13.5M7.875 5.25V12M16.125 5.25V12"/>
+</svg>"##,
+);
+
+const SEVEN_LARGE_LEFT: Icon = Icon::new(
+    "ui/layout-seven-large-left.svg",
+    br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+  <rect x="3.75" y="5.25" width="16.5" height="13.5" rx=".75"/>
+  <path d="M12 5.25v13.5M12 7.5h8.25M12 9.75h8.25M12 12h8.25M12 14.25h8.25M12 16.5h8.25"/>
+</svg>"##,
+);
+
+const NINE_FIVE_TOP: Icon = Icon::new(
+    "ui/layout-nine-five-top.svg",
+    br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+  <rect x="3.75" y="5.25" width="16.5" height="13.5" rx=".75"/>
+  <path d="M3.75 12h16.5M7.05 5.25V12M10.35 5.25V12M13.65 5.25V12M16.95 5.25V12M7.875 12v6.75M12 12v6.75M16.125 12v6.75"/>
+</svg>"##,
+);
+
 /// The glyph of `layout` on the trigger and in the menu: its cells, as the layout tiles the charts.
 fn layout_icon(layout: ChartLayoutMode) -> &'static Icon {
     use ChartLayoutMode as M;
@@ -281,6 +361,9 @@ fn layout_icon(layout: ChartLayoutMode) -> &'static Icon {
         M::FourLargeRight => &icons::LAYOUT_FOUR_LARGE_RIGHT,
         M::FourLargeTop => &icons::LAYOUT_FOUR_LARGE_TOP,
         M::FourLargeBottom => &icons::LAYOUT_FOUR_LARGE_BOTTOM,
+        M::FourSplitLeft => &FOUR_SPLIT_LEFT,
+        M::FourSplitRight => &FOUR_SPLIT_RIGHT,
+        M::FourSplitBottom => &FOUR_SPLIT_BOTTOM,
         M::Five => &icons::LAYOUT_FIVE,
         M::FiveHorizontal => &icons::LAYOUT_FIVE_HORIZONTAL,
         M::FiveVertical => &icons::LAYOUT_FIVE_VERTICAL,
@@ -288,6 +371,9 @@ fn layout_icon(layout: ChartLayoutMode) -> &'static Icon {
         M::FiveLargeRight => &icons::LAYOUT_FIVE_LARGE_RIGHT,
         M::FiveLargeTop => &icons::LAYOUT_FIVE_LARGE_TOP,
         M::FiveLargeBottom => &icons::LAYOUT_FIVE_LARGE_BOTTOM,
+        M::FiveSplitLeft => &FIVE_SPLIT_LEFT,
+        M::FiveSplitRight => &FIVE_SPLIT_RIGHT,
+        M::FiveTwoTop => &FIVE_TWO_TOP,
         M::Six => &icons::LAYOUT_SIX,
         M::SixTwoColumns => &icons::LAYOUT_SIX_TWO_COLUMNS,
         M::SixHorizontal => &icons::LAYOUT_SIX_HORIZONTAL,
@@ -296,8 +382,11 @@ fn layout_icon(layout: ChartLayoutMode) -> &'static Icon {
         M::SixLargeRight => &icons::LAYOUT_SIX_LARGE_RIGHT,
         M::SixLargeTop => &icons::LAYOUT_SIX_LARGE_TOP,
         M::SixLargeBottom => &icons::LAYOUT_SIX_LARGE_BOTTOM,
+        M::SixTwoTop => &SIX_TWO_TOP,
+        M::SixFourTop => &SIX_FOUR_TOP,
         M::Seven => &icons::LAYOUT_SEVEN,
         M::SevenHorizontal => &icons::LAYOUT_SEVEN_HORIZONTAL,
+        M::SevenLargeLeft => &SEVEN_LARGE_LEFT,
         M::Eight => &icons::LAYOUT_EIGHT,
         M::EightVertical => &icons::LAYOUT_EIGHT_VERTICAL,
         M::EightTwoColumns => &icons::LAYOUT_EIGHT_TWO_COLUMNS,
@@ -305,6 +394,7 @@ fn layout_icon(layout: ChartLayoutMode) -> &'static Icon {
         M::Nine => &icons::LAYOUT_NINE,
         M::NineVertical => &icons::LAYOUT_NINE_VERTICAL,
         M::NineHorizontal => &icons::LAYOUT_NINE_HORIZONTAL,
+        M::NineFiveTop => &NINE_FIVE_TOP,
         M::Ten => &icons::LAYOUT_TEN,
         M::TenHorizontal => &icons::LAYOUT_TEN_HORIZONTAL,
         M::TenVertical => &icons::LAYOUT_TEN_VERTICAL,
@@ -333,9 +423,9 @@ mod tests {
         kittest::{NodeT, Queryable},
     };
 
-    /// Each regular arrangement is reachable by its own menu item and returns its saved preset.
+    /// Each arrangement is reachable by its own menu item and returns its saved preset.
     #[test]
-    fn regular_arrangements_select_their_saved_preset() {
+    fn arrangements_select_their_saved_preset() {
         for width in [320.0, 1440.0] {
             let mut harness = Harness::builder()
                 .with_size(egui::vec2(width, 900.0))
@@ -352,6 +442,16 @@ mod tests {
                     (ChartGridSelector::default(), None),
                 );
             for (label, name) in [
+                ("2 Columns Left, 2 Rows Right", "FourSplitLeft"),
+                ("2 Rows Left, 2 Columns Right", "FourSplitRight"),
+                ("2 Columns Top, 2 Rows Bottom", "FourSplitBottom"),
+                ("2 Columns Left, 3 Rows Right", "FiveSplitLeft"),
+                ("3 Rows Left, 2 Columns Right", "FiveSplitRight"),
+                ("2 Top, 3 Bottom", "FiveTwoTop"),
+                ("2 Top, 4 Bottom", "SixTwoTop"),
+                ("4 Top, 2 Bottom", "SixFourTop"),
+                ("1 Left, 6 Right", "SevenLargeLeft"),
+                ("5 Top, 4 Bottom", "NineFiveTop"),
                 ("2x3 Grid", "SixTwoColumns"),
                 ("7 Horizontal", "SevenHorizontal"),
                 ("8 Vertical", "EightVertical"),

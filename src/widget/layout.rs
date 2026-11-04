@@ -13,9 +13,9 @@ mod drawings;
 #[cfg(feature = "drawings")]
 use drawings::DrawingLinks;
 
-/// Multi-chart arrangement. Changing presets retains the host's hidden charts. Charts fill a preset
-/// in slot order, row by row from the top; presets with a large chart at the left or right fill
-/// column by column from the left.
+/// Multi-chart arrangement. Changing presets retains the host's hidden charts. Row arrangements
+/// fill from the top, column arrangements from the left. Independently divided halves fill the
+/// left or top half first, following its rows or columns before filling the other half.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
 )]
@@ -54,6 +54,12 @@ pub enum ChartLayoutMode {
     FourLargeTop,
     /// Three charts side by side in the top half, one in the bottom half.
     FourLargeBottom,
+    /// Two columns in the left half, two rows in the right half.
+    FourSplitLeft,
+    /// Two rows in the left half, two columns in the right half.
+    FourSplitRight,
+    /// Two columns in the top half, two rows in the bottom half.
+    FourSplitBottom,
     /// Five charts in three columns.
     Five,
     /// Five columns.
@@ -68,6 +74,12 @@ pub enum ChartLayoutMode {
     FiveLargeTop,
     /// Four charts side by side in the top half, one in the bottom half.
     FiveLargeBottom,
+    /// Two columns in the left half, three rows in the right half.
+    FiveSplitLeft,
+    /// Three rows in the left half, two columns in the right half.
+    FiveSplitRight,
+    /// Two charts in the top half, three in the bottom half.
+    FiveTwoTop,
     /// Three columns and two rows.
     Six,
     /// Two columns and three rows.
@@ -84,10 +96,16 @@ pub enum ChartLayoutMode {
     SixLargeTop,
     /// Five charts side by side in the top half, one in the bottom half.
     SixLargeBottom,
+    /// Two charts in the top half, four in the bottom half.
+    SixTwoTop,
+    /// Four charts in the top half, two in the bottom half.
+    SixFourTop,
     /// Seven charts in four columns.
     Seven,
     /// Seven columns.
     SevenHorizontal,
+    /// One chart in the left half, six stacked in the right half.
+    SevenLargeLeft,
     /// Four columns and two rows.
     Eight,
     /// Eight rows.
@@ -102,6 +120,8 @@ pub enum ChartLayoutMode {
     NineVertical,
     /// Nine columns.
     NineHorizontal,
+    /// Five charts in the top half, four in the bottom half.
+    NineFiveTop,
     /// Ten charts in four columns.
     Ten,
     /// Ten columns.
@@ -156,6 +176,9 @@ impl ChartLayoutMode {
             Self::FourLargeRight,
             Self::FourLargeTop,
             Self::FourLargeBottom,
+            Self::FourSplitLeft,
+            Self::FourSplitRight,
+            Self::FourSplitBottom,
             Self::Five,
             Self::FiveHorizontal,
             Self::FiveVertical,
@@ -163,6 +186,9 @@ impl ChartLayoutMode {
             Self::FiveLargeRight,
             Self::FiveLargeTop,
             Self::FiveLargeBottom,
+            Self::FiveSplitLeft,
+            Self::FiveSplitRight,
+            Self::FiveTwoTop,
             Self::Six,
             Self::SixTwoColumns,
             Self::SixHorizontal,
@@ -171,8 +197,11 @@ impl ChartLayoutMode {
             Self::SixLargeRight,
             Self::SixLargeTop,
             Self::SixLargeBottom,
+            Self::SixTwoTop,
+            Self::SixFourTop,
             Self::Seven,
             Self::SevenHorizontal,
+            Self::SevenLargeLeft,
             Self::Eight,
             Self::EightVertical,
             Self::EightTwoColumns,
@@ -180,6 +209,7 @@ impl ChartLayoutMode {
             Self::Nine,
             Self::NineVertical,
             Self::NineHorizontal,
+            Self::NineFiveTop,
             Self::Ten,
             Self::TenHorizontal,
             Self::TenVertical,
@@ -218,6 +248,9 @@ impl ChartLayoutMode {
             Self::FourLargeRight => "3 Left, 1 Right",
             Self::FourLargeTop => "1 Top, 3 Bottom",
             Self::FourLargeBottom => "3 Top, 1 Bottom",
+            Self::FourSplitLeft => "2 Columns Left, 2 Rows Right",
+            Self::FourSplitRight => "2 Rows Left, 2 Columns Right",
+            Self::FourSplitBottom => "2 Columns Top, 2 Rows Bottom",
             Self::Five => "3 Top, 2 Bottom",
             Self::FiveHorizontal => "5 Horizontal",
             Self::FiveVertical => "5 Vertical",
@@ -225,6 +258,9 @@ impl ChartLayoutMode {
             Self::FiveLargeRight => "4 Left, 1 Right",
             Self::FiveLargeTop => "1 Top, 4 Bottom",
             Self::FiveLargeBottom => "4 Top, 1 Bottom",
+            Self::FiveSplitLeft => "2 Columns Left, 3 Rows Right",
+            Self::FiveSplitRight => "3 Rows Left, 2 Columns Right",
+            Self::FiveTwoTop => "2 Top, 3 Bottom",
             Self::Six => "3x2 Grid",
             Self::SixTwoColumns => "2x3 Grid",
             Self::SixHorizontal => "6 Horizontal",
@@ -233,8 +269,11 @@ impl ChartLayoutMode {
             Self::SixLargeRight => "5 Left, 1 Right",
             Self::SixLargeTop => "1 Top, 5 Bottom",
             Self::SixLargeBottom => "5 Top, 1 Bottom",
+            Self::SixTwoTop => "2 Top, 4 Bottom",
+            Self::SixFourTop => "4 Top, 2 Bottom",
             Self::Seven => "7 Charts",
             Self::SevenHorizontal => "7 Horizontal",
+            Self::SevenLargeLeft => "1 Left, 6 Right",
             Self::Eight => "4x2 Grid",
             Self::EightVertical => "8 Vertical",
             Self::EightTwoColumns => "2x4 Grid",
@@ -242,6 +281,7 @@ impl ChartLayoutMode {
             Self::Nine => "3x3 Grid",
             Self::NineVertical => "9 Vertical",
             Self::NineHorizontal => "9 Horizontal",
+            Self::NineFiveTop => "5 Top, 4 Bottom",
             Self::Ten => "10 Charts",
             Self::TenHorizontal => "10 Horizontal",
             Self::TenVertical => "10 Vertical",
@@ -266,22 +306,18 @@ impl ChartLayoutMode {
         if *self == Self::Tabs {
             return 16;
         }
-        let (Tracks::Rows(cells) | Tracks::Columns(cells)) = self.tracks();
-        cells.iter().sum()
+        self.tracks().chart_count()
     }
 
-    /// Maximum columns and rows. A row or column with fewer cells than another stretches them to
-    /// fill it.
+    /// Maximum columns and rows, counting subdivisions within each half. A row or column with
+    /// fewer cells than another stretches them to fill it.
     pub fn grid_size(&self) -> (usize, usize) {
-        match self.tracks() {
-            Tracks::Rows(cells) => (cells.iter().copied().max().unwrap_or(1), cells.len()),
-            Tracks::Columns(cells) => (cells.len(), cells.iter().copied().max().unwrap_or(1)),
-        }
+        self.tracks().grid_size()
     }
 
     /// How the preset divides its rectangle. Tabs show one chart at a time in one cell.
     fn tracks(&self) -> Tracks {
-        use Tracks::{Columns, Rows};
+        use Tracks::{Columns, Halves, Rows};
         match self {
             Self::Single | Self::Tabs => Rows(&[1]),
             Self::TwoHorizontal => Rows(&[2]),
@@ -299,6 +335,18 @@ impl ChartLayoutMode {
             Self::FourLargeRight => Columns(&[3, 1]),
             Self::FourLargeTop => Rows(&[1, 3]),
             Self::FourLargeBottom => Rows(&[3, 1]),
+            Self::FourSplitLeft => Halves {
+                by_rows: false,
+                halves: [&Rows(&[2]), &Columns(&[2])],
+            },
+            Self::FourSplitRight => Halves {
+                by_rows: false,
+                halves: [&Columns(&[2]), &Rows(&[2])],
+            },
+            Self::FourSplitBottom => Halves {
+                by_rows: true,
+                halves: [&Rows(&[2]), &Columns(&[2])],
+            },
             Self::Five => Rows(&[3, 2]),
             Self::FiveHorizontal => Rows(&[5]),
             Self::FiveVertical => Rows(&[1, 1, 1, 1, 1]),
@@ -306,6 +354,15 @@ impl ChartLayoutMode {
             Self::FiveLargeRight => Columns(&[4, 1]),
             Self::FiveLargeTop => Rows(&[1, 4]),
             Self::FiveLargeBottom => Rows(&[4, 1]),
+            Self::FiveSplitLeft => Halves {
+                by_rows: false,
+                halves: [&Rows(&[2]), &Columns(&[3])],
+            },
+            Self::FiveSplitRight => Halves {
+                by_rows: false,
+                halves: [&Columns(&[3]), &Rows(&[2])],
+            },
+            Self::FiveTwoTop => Rows(&[2, 3]),
             Self::Six => Rows(&[3, 3]),
             Self::SixTwoColumns => Rows(&[2, 2, 2]),
             Self::SixHorizontal => Rows(&[6]),
@@ -314,8 +371,11 @@ impl ChartLayoutMode {
             Self::SixLargeRight => Columns(&[5, 1]),
             Self::SixLargeTop => Rows(&[1, 5]),
             Self::SixLargeBottom => Rows(&[5, 1]),
+            Self::SixTwoTop => Rows(&[2, 4]),
+            Self::SixFourTop => Rows(&[4, 2]),
             Self::Seven => Rows(&[4, 3]),
             Self::SevenHorizontal => Rows(&[7]),
+            Self::SevenLargeLeft => Columns(&[1, 6]),
             Self::Eight => Rows(&[4, 4]),
             Self::EightVertical => Rows(&[1, 1, 1, 1, 1, 1, 1, 1]),
             Self::EightTwoColumns => Rows(&[2, 2, 2, 2]),
@@ -323,6 +383,7 @@ impl ChartLayoutMode {
             Self::Nine => Rows(&[3, 3, 3]),
             Self::NineVertical => Rows(&[1, 1, 1, 1, 1, 1, 1, 1, 1]),
             Self::NineHorizontal => Rows(&[9]),
+            Self::NineFiveTop => Rows(&[5, 4]),
             Self::Ten => Rows(&[4, 4, 2]),
             Self::TenHorizontal => Rows(&[10]),
             Self::TenVertical => Rows(&[1, 1, 1, 1, 1, 1, 1, 1, 1, 1]),
@@ -349,10 +410,90 @@ impl std::fmt::Display for ChartLayoutMode {
 }
 
 /// The cells of a preset: rows from the top or columns from the left, each holding the given
-/// number of equal cells. Charts fill one row or column after the other.
+/// number of equal cells. A half can divide across the other axis independently. Charts fill one
+/// row, column or half after the other.
 enum Tracks {
     Rows(&'static [usize]),
     Columns(&'static [usize]),
+    Halves {
+        by_rows: bool,
+        halves: [&'static Tracks; 2],
+    },
+}
+
+impl Tracks {
+    fn chart_count(&self) -> usize {
+        match self {
+            Self::Rows(cells) | Self::Columns(cells) => cells.iter().sum(),
+            Self::Halves { halves, .. } => halves.iter().map(|half| half.chart_count()).sum(),
+        }
+    }
+
+    fn grid_size(&self) -> (usize, usize) {
+        match self {
+            Self::Rows(cells) => (cells.iter().copied().max().unwrap_or(1), cells.len()),
+            Self::Columns(cells) => (cells.len(), cells.iter().copied().max().unwrap_or(1)),
+            Self::Halves { by_rows, halves } => {
+                let (a, b) = (halves[0].grid_size(), halves[1].grid_size());
+                if *by_rows {
+                    (a.0.max(b.0), a.1 + b.1)
+                } else {
+                    (a.0 + b.0, a.1.max(b.1))
+                }
+            }
+        }
+    }
+
+    fn rects(&self, rect: Rect, count: usize) -> Vec<Rect> {
+        let (by_rows, tracks) = match self {
+            Tracks::Rows(tracks) => (true, tracks),
+            Tracks::Columns(tracks) => (false, tracks),
+            Tracks::Halves { by_rows, halves } => {
+                let first_count = halves[0].chart_count().min(count);
+                let outer = if *by_rows {
+                    Tracks::Rows(&[1, 1])
+                } else {
+                    Tracks::Columns(&[1, 1])
+                };
+                let bounds = outer.rects(
+                    rect,
+                    usize::from(first_count < count) + usize::from(count > 0),
+                );
+                let mut rects = Vec::with_capacity(count);
+                for (half, bounds) in halves.iter().zip(bounds) {
+                    let cells = half.chart_count().min(count - rects.len());
+                    rects.extend(half.rects(bounds, cells));
+                }
+                return rects;
+            }
+        };
+        // Fewer charts than the preset holds fill its first rows or columns; empty ones go.
+        let tracks: Vec<usize> = tracks
+            .iter()
+            .scan(count, |left, &cells| {
+                let cells = cells.min(*left);
+                *left -= cells;
+                (cells > 0).then_some(cells)
+            })
+            .collect();
+        let mut rects = Vec::with_capacity(count);
+        for (track, &cells) in tracks.iter().enumerate() {
+            for cell in 0..cells {
+                let (column, columns, row, rows) = if by_rows {
+                    (cell, cells, track, tracks.len())
+                } else {
+                    (track, tracks.len(), cell, cells)
+                };
+                let width = rect.width() / columns as f32;
+                let height = ((rect.height() - 2.0 * (rows - 1) as f32) / rows as f32).max(0.0);
+                rects.push(Rect::from_min_size(
+                    rect.min + Vec2::new(column as f32 * width, row as f32 * (height + 2.0)),
+                    Vec2::new(width, height),
+                ));
+            }
+        }
+        rects
+    }
 }
 
 /// Independent synchronization switches within each layout group.
@@ -865,36 +1006,7 @@ impl ChartLayout {
                 .map(|index| if index == slot { rect } else { Rect::NOTHING })
                 .collect();
         }
-        let (by_rows, tracks) = match self.mode.tracks() {
-            Tracks::Rows(tracks) => (true, tracks),
-            Tracks::Columns(tracks) => (false, tracks),
-        };
-        // Fewer charts than the preset holds fill its first rows or columns; empty ones go.
-        let tracks: Vec<usize> = tracks
-            .iter()
-            .scan(count, |left, &cells| {
-                let cells = cells.min(*left);
-                *left -= cells;
-                (cells > 0).then_some(cells)
-            })
-            .collect();
-        let mut rects = Vec::with_capacity(count);
-        for (track, &cells) in tracks.iter().enumerate() {
-            for cell in 0..cells {
-                let (column, columns, row, rows) = if by_rows {
-                    (cell, cells, track, tracks.len())
-                } else {
-                    (track, tracks.len(), cell, cells)
-                };
-                let width = rect.width() / columns as f32;
-                let height = ((rect.height() - 2.0 * (rows - 1) as f32) / rows as f32).max(0.0);
-                rects.push(Rect::from_min_size(
-                    rect.min + Vec2::new(column as f32 * width, row as f32 * (height + 2.0)),
-                    Vec2::new(width, height),
-                ));
-            }
-        }
-        rects
+        self.mode.tracks().rects(rect, count)
     }
 }
 
@@ -990,8 +1102,8 @@ mod tests {
     #[test]
     fn presets_preserve_chart_state_and_route_input_to_visible_slots() {
         let rect = Rect::from_min_size(pos2(54.0, 70.0), vec2(1386.0, 716.0));
-        // Saved preset names must restore their row-major geometry at narrow and wide sizes.
-        for (name, columns, rows) in [
+        // Saved presets restore their geometry and stable slot order at narrow and wide sizes.
+        let regular = [
             ("SixTwoColumns", 2, 3),
             ("SevenHorizontal", 7, 1),
             ("EightVertical", 1, 8),
@@ -1007,25 +1119,170 @@ mod tests {
             ("TwelveSixColumns", 6, 2),
             ("FourteenSevenColumns", 7, 2),
             ("SixteenEightColumns", 8, 2),
-        ] {
+        ]
+        .into_iter()
+        .map(|(name, columns, rows)| {
+            let width = 1200.0 / columns as f32;
+            let height = 724.0 / rows as f32 - 2.0;
+            (
+                name,
+                (columns, rows),
+                (0..columns * rows)
+                    .map(|slot| {
+                        [
+                            (slot % columns) as f32 * width,
+                            (slot / columns) as f32 * (height + 2.0),
+                            width,
+                            height,
+                        ]
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        });
+        // Half-height is 360, with a two-point gutter. Splitting a half again gives 179.
+        let divided = [
+            (
+                "FourSplitLeft",
+                (3, 2),
+                vec![
+                    [0.0, 0.0, 300.0, 722.0],
+                    [300.0, 0.0, 300.0, 722.0],
+                    [600.0, 0.0, 600.0, 360.0],
+                    [600.0, 362.0, 600.0, 360.0],
+                ],
+            ),
+            (
+                "FourSplitRight",
+                (3, 2),
+                vec![
+                    [0.0, 0.0, 600.0, 360.0],
+                    [0.0, 362.0, 600.0, 360.0],
+                    [600.0, 0.0, 300.0, 722.0],
+                    [900.0, 0.0, 300.0, 722.0],
+                ],
+            ),
+            (
+                "FourSplitBottom",
+                (2, 3),
+                vec![
+                    [0.0, 0.0, 600.0, 360.0],
+                    [600.0, 0.0, 600.0, 360.0],
+                    [0.0, 362.0, 1200.0, 179.0],
+                    [0.0, 543.0, 1200.0, 179.0],
+                ],
+            ),
+            (
+                "FiveSplitLeft",
+                (3, 3),
+                vec![
+                    [0.0, 0.0, 300.0, 722.0],
+                    [300.0, 0.0, 300.0, 722.0],
+                    [600.0, 0.0, 600.0, 718.0 / 3.0],
+                    [600.0, 724.0 / 3.0, 600.0, 718.0 / 3.0],
+                    [600.0, 1448.0 / 3.0, 600.0, 718.0 / 3.0],
+                ],
+            ),
+            (
+                "FiveSplitRight",
+                (3, 3),
+                vec![
+                    [0.0, 0.0, 600.0, 718.0 / 3.0],
+                    [0.0, 724.0 / 3.0, 600.0, 718.0 / 3.0],
+                    [0.0, 1448.0 / 3.0, 600.0, 718.0 / 3.0],
+                    [600.0, 0.0, 300.0, 722.0],
+                    [900.0, 0.0, 300.0, 722.0],
+                ],
+            ),
+            (
+                "FiveTwoTop",
+                (3, 2),
+                vec![
+                    [0.0, 0.0, 600.0, 360.0],
+                    [600.0, 0.0, 600.0, 360.0],
+                    [0.0, 362.0, 400.0, 360.0],
+                    [400.0, 362.0, 400.0, 360.0],
+                    [800.0, 362.0, 400.0, 360.0],
+                ],
+            ),
+            (
+                "SixTwoTop",
+                (4, 2),
+                vec![
+                    [0.0, 0.0, 600.0, 360.0],
+                    [600.0, 0.0, 600.0, 360.0],
+                    [0.0, 362.0, 300.0, 360.0],
+                    [300.0, 362.0, 300.0, 360.0],
+                    [600.0, 362.0, 300.0, 360.0],
+                    [900.0, 362.0, 300.0, 360.0],
+                ],
+            ),
+            (
+                "SixFourTop",
+                (4, 2),
+                vec![
+                    [0.0, 0.0, 300.0, 360.0],
+                    [300.0, 0.0, 300.0, 360.0],
+                    [600.0, 0.0, 300.0, 360.0],
+                    [900.0, 0.0, 300.0, 360.0],
+                    [0.0, 362.0, 600.0, 360.0],
+                    [600.0, 362.0, 600.0, 360.0],
+                ],
+            ),
+            (
+                "SevenLargeLeft",
+                (2, 6),
+                vec![
+                    [0.0, 0.0, 600.0, 722.0],
+                    [600.0, 0.0, 600.0, 712.0 / 6.0],
+                    [600.0, 724.0 / 6.0, 600.0, 712.0 / 6.0],
+                    [600.0, 1448.0 / 6.0, 600.0, 712.0 / 6.0],
+                    [600.0, 2172.0 / 6.0, 600.0, 712.0 / 6.0],
+                    [600.0, 2896.0 / 6.0, 600.0, 712.0 / 6.0],
+                    [600.0, 3620.0 / 6.0, 600.0, 712.0 / 6.0],
+                ],
+            ),
+            (
+                "NineFiveTop",
+                (5, 2),
+                vec![
+                    [0.0, 0.0, 240.0, 360.0],
+                    [240.0, 0.0, 240.0, 360.0],
+                    [480.0, 0.0, 240.0, 360.0],
+                    [720.0, 0.0, 240.0, 360.0],
+                    [960.0, 0.0, 240.0, 360.0],
+                    [0.0, 362.0, 300.0, 360.0],
+                    [300.0, 362.0, 300.0, 360.0],
+                    [600.0, 362.0, 300.0, 360.0],
+                    [900.0, 362.0, 300.0, 360.0],
+                ],
+            ),
+        ];
+        for (name, grid, expected) in regular.chain(divided) {
             let saved = format!("\"{name}\"");
             let mode: ChartLayoutMode = serde_json::from_str(&saved).expect(name);
             assert_eq!(serde_json::to_string(&mode).unwrap(), saved);
             assert!(ChartLayoutMode::all().contains(&mode));
-            assert_eq!(mode.chart_count(), columns * rows, "{name}");
-            assert_eq!(mode.grid_size(), (columns, rows), "{name}");
+            assert_eq!(mode.chart_count(), expected.len(), "{name}");
+            assert_eq!(mode.grid_size(), grid, "{name}");
             for width in [320.0, 1440.0] {
-                let bounds = Rect::from_min_size(pos2(54.0, 70.0), vec2(width, 716.0));
+                let bounds = Rect::from_min_size(pos2(54.0, 70.0), vec2(width, 722.0));
                 let mut layout = ChartLayout {
                     mode,
                     ..Default::default()
                 };
                 let cells = layout.visible_chart_rects(bounds, 16);
-                assert_eq!(cells.len(), columns * rows);
-                // Equal columns divide the width; only the rows reserve two-point gutters.
-                let size = vec2(width / columns as f32, (718.0 / rows as f32) - 2.0);
+                assert_eq!(cells.len(), expected.len());
                 let ctx = egui::Context::default();
-                let mut charts: Vec<_> = (0..columns * rows).map(|_| chart(60)).collect();
+                let mut charts: Vec<_> = (0..16)
+                    .map(|slot| {
+                        let mut chart = chart(60);
+                        chart.set_symbol(format!("SLOT_{slot}"));
+                        chart.user_action(|chart| {
+                            chart.set_chart_type(crate::model::ChartType::Line)
+                        });
+                        chart
+                    })
+                    .collect();
                 let frame = |layout: &mut ChartLayout, charts: &mut [Chart], events| {
                     let output = ctx.run_ui(
                         RawInput {
@@ -1042,14 +1299,50 @@ mod tests {
                     output.drop_without_applying_deltas();
                 };
                 frame(&mut layout, &mut charts, vec![]);
+                layout.mode = ChartLayoutMode::Single;
+                frame(&mut layout, &mut charts, vec![]);
+                layout.mode = mode;
+                frame(&mut layout, &mut charts, vec![]);
+                for (slot, chart) in charts.iter_mut().enumerate() {
+                    assert_eq!(chart.symbol(), format!("SLOT_{slot}"));
+                    assert!(chart.undo(), "{name}, slot {slot} keeps its history");
+                    assert_eq!(chart.chart_type(), crate::model::ChartType::Candles);
+                    assert!(chart.redo());
+                    assert_eq!(chart.chart_type(), crate::model::ChartType::Line);
+                }
+                #[cfg(feature = "ui")]
+                {
+                    let saved = super::super::SavedLayout {
+                        mode,
+                        charts: charts
+                            .iter()
+                            .map(|chart| chart.snapshot().unwrap())
+                            .collect(),
+                    };
+                    let restored =
+                        super::super::SavedLayout::from_json(&saved.to_json().unwrap()).unwrap();
+                    layout.mode = restored.mode;
+                    assert_eq!(
+                        layout.visible_chart_rects(bounds, restored.charts.len()),
+                        cells
+                    );
+                    for (slot, snapshot) in restored.charts.iter().enumerate() {
+                        let mut chart = chart(60);
+                        chart.restore(snapshot).unwrap();
+                        assert_eq!(chart.symbol(), format!("SLOT_{slot}"));
+                    }
+                }
                 for (slot, cell) in cells {
-                    let expected = bounds.min
-                        + vec2(
-                            (slot % columns) as f32 * size.x,
-                            (slot / columns) as f32 * (size.y + 2.0),
-                        );
-                    assert!((cell.min - expected).length() < 0.001, "{name}, {slot}");
-                    assert!((cell.size() - size).length() < 0.001, "{name}, {slot}");
+                    let [x, y, w, h] = expected[slot];
+                    let expected = Rect::from_min_size(
+                        bounds.min + vec2(x * width / 1200.0, y),
+                        vec2(w * width / 1200.0, h),
+                    );
+                    assert!((cell.min - expected.min).length() < 0.001, "{name}, {slot}");
+                    assert!(
+                        (cell.size() - expected.size()).length() < 0.001,
+                        "{name}, {slot}"
+                    );
                     assert!(cell.is_positive() && bounds.contains(cell.center()));
                     frame(
                         &mut layout,
@@ -1085,41 +1378,46 @@ mod tests {
                 mode,
                 ..Default::default()
             };
-            let rects = layout.rects(rect, mode.chart_count());
-            assert_eq!(rects.len(), mode.chart_count());
-            if mode == ChartLayoutMode::Tabs {
-                continue;
-            }
-            let area: f32 = rects.iter().map(Rect::area).sum();
-            // Each cell above the bottom edge leaves a two-point gap below it.
-            let gaps: f32 = rects
-                .iter()
-                .filter(|cell| cell.bottom() < rect.bottom() - 1.0)
-                .map(|cell| 2.0 * cell.width())
-                .sum();
-            assert!((area + gaps - rect.area()).abs() < 1.0, "{mode:?}");
-            for (index, cell) in rects.iter().enumerate() {
-                assert!(rect.contains_rect(*cell));
-                assert!(
-                    rects[..index]
-                        .iter()
-                        .all(|other| other.intersect(*cell).area() == 0.0)
-                );
-            }
-            if mode == ChartLayoutMode::Four {
-                assert_eq!(rects[0], Rect::from_min_size(rect.min, vec2(693.0, 357.0)));
-                assert_eq!(rects[2].top(), 429.0);
-                assert_eq!(rects[1].left(), 747.0);
-            }
-            if mode == ChartLayoutMode::ThreeLargeLeft {
-                assert_eq!(
-                    rects,
-                    [
-                        Rect::from_min_size(rect.min, vec2(693.0, 716.0)),
-                        Rect::from_min_size(pos2(747.0, 70.0), vec2(693.0, 357.0)),
-                        Rect::from_min_size(pos2(747.0, 429.0), vec2(693.0, 357.0)),
-                    ]
-                );
+            for count in 0..=mode.chart_count() {
+                let rects = layout.rects(rect, count);
+                assert_eq!(rects.len(), count);
+                if count == 0 {
+                    continue;
+                }
+                if mode == ChartLayoutMode::Tabs {
+                    continue;
+                }
+                let area: f32 = rects.iter().map(Rect::area).sum();
+                // Each cell above the bottom edge leaves a two-point gap below it.
+                let gaps: f32 = rects
+                    .iter()
+                    .filter(|cell| cell.bottom() < rect.bottom() - 1.0)
+                    .map(|cell| 2.0 * cell.width())
+                    .sum();
+                assert!((area + gaps - rect.area()).abs() < 1.0, "{mode:?}");
+                for (index, cell) in rects.iter().enumerate() {
+                    assert!(rect.contains_rect(*cell));
+                    assert!(
+                        rects[..index]
+                            .iter()
+                            .all(|other| other.intersect(*cell).area() == 0.0)
+                    );
+                }
+                if mode == ChartLayoutMode::Four && count == mode.chart_count() {
+                    assert_eq!(rects[0], Rect::from_min_size(rect.min, vec2(693.0, 357.0)));
+                    assert_eq!(rects[2].top(), 429.0);
+                    assert_eq!(rects[1].left(), 747.0);
+                }
+                if mode == ChartLayoutMode::ThreeLargeLeft && count == mode.chart_count() {
+                    assert_eq!(
+                        rects,
+                        [
+                            Rect::from_min_size(rect.min, vec2(693.0, 716.0)),
+                            Rect::from_min_size(pos2(747.0, 70.0), vec2(693.0, 357.0)),
+                            Rect::from_min_size(pos2(747.0, 429.0), vec2(693.0, 357.0)),
+                        ]
+                    );
+                }
             }
         }
         // Fewer charts than a preset holds fill its first rows, which share the full height.
