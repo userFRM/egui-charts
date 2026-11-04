@@ -116,7 +116,7 @@ fn same_bar(left: &Bar, right: &Bar) -> bool {
 ///
 /// Annotations follow paint order: normal markers and added-series price lines sit with
 /// their series; above-series markers precede main-series price lines and drawings; top
-/// markers follow drawings. In the main pane, above-pass primitives follow top markers.
+/// markers follow drawings. Above-pass primitives follow top markers.
 /// Later annotations in the same layer win. Only the clipped parts painted this frame can be targeted.
 /// Existing drawing and custom-hit precedence applies when no annotation wins.
 #[derive(Debug, Clone, PartialEq, Eq)]

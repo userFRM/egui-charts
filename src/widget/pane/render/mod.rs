@@ -1346,6 +1346,43 @@ impl Chart {
                     &members,
                     crate::model::MarkerZOrder::Top,
                 );
+                if !self.hide_foreground {
+                    use crate::widget::{PrimitivePass, primitives};
+                    let painter = ui
+                        .painter()
+                        .with_clip_rect(chart_rect.intersect(ui.clip_rect()));
+                    let backgrounds = primitives::backgrounds(
+                        &painter,
+                        self.pane_primitives(&members, &pane_mapping),
+                        PrimitivePass::Above,
+                        self.merge_groups.factor(),
+                    );
+                    primitives::paint_backgrounds(&painter, backgrounds);
+                    for (item, view) in self.pane_primitives(&members, &pane_mapping) {
+                        item.draw(
+                            &painter,
+                            &view,
+                            PrimitivePass::Above,
+                            self.merge_groups.factor(),
+                        );
+                    }
+                    if self.host_events.annotation_target.borrow().is_some()
+                        && let Some(hit) = ui
+                            .input(|input| input.pointer.interact_pos())
+                            .filter(|pos| chart_rect.contains(*pos))
+                            .and_then(|pos| {
+                                primitives::primitive_at(
+                                    self.pane_primitives(&members, &pane_mapping),
+                                    pos,
+                                )
+                            })
+                            .filter(|hit| hit.result.pass == PrimitivePass::Above)
+                    {
+                        self.cover_annotation_hit();
+                        self.host_events.target = Some(hit.target);
+                        self.host_events.primitive_hit = Some(hit.result);
+                    }
+                }
                 // Study settings stay on the legend button and the context menu.
                 if pane_response.double_clicked() && drawing_hit.is_none() {
                     pending_pane_maximize = Some(pane_id);
