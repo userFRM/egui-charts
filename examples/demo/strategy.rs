@@ -173,6 +173,16 @@ impl DemoApp {
         if self.strategy_report.report().is_none() {
             return;
         }
+        let chart_type = self.chart.chart_type();
+        if self.live_strategy.is_none() && self.strategy_report.settings().chart_type != chart_type
+        {
+            let mut settings = self.strategy_report.settings().clone();
+            settings.chart_type = chart_type;
+            settings.recalculate_on_history &= !chart_type.transforms_data();
+            if let Err(error) = self.strategy_report.set_settings(settings) {
+                log::warn!("Cannot update strategy candles: {error}");
+            }
+        }
         let mut clear = false;
         let action = egui::Panel::bottom("strategy_report")
             .resizable(true)
@@ -205,6 +215,12 @@ impl DemoApp {
                 )
             })
             .inner;
+        if self.live_strategy.is_none() && self.strategy_report.settings().chart_type != chart_type
+        {
+            let kind = self.strategy_report.settings().chart_type;
+            self.state.chart_type = kind;
+            self.chart.set_chart_type(kind);
+        }
         if clear {
             self.stop_live_strategy();
             self.strategy_report.set_report(None, &[]);
