@@ -614,7 +614,9 @@ impl Chart {
                     && plot.x_range().contains(pos.x)
             }) {
             let owner = *self.pane_series(group.id).first()?;
-            let map = group.price_map();
+            let map = self
+                .series_price_map(owner)
+                .unwrap_or_else(|| group.price_map());
             let closes = group.members.iter().filter_map(|id| {
                 let item =
                     (self.price_series.iter()).find(|item| item.id == *id && item.visible)?;
@@ -622,15 +624,29 @@ impl Chart {
                     .bars
                     .binary_search_by_key(&time?, |bar| bar.time)
                     .ok()?;
-                (!item.bars[at].is_whitespace()).then_some(item.bars[at].close)
+                let own = self.series_price_map(*id).unwrap_or(map);
+                (!item.bars[at].is_whitespace()).then(|| {
+                    let value = item.bars[at].close;
+                    if own == map {
+                        value
+                    } else {
+                        map.y_to_price(own.price_to_y(value))
+                    }
+                })
             });
             let values = group
                 .members
                 .iter()
                 .filter_map(|id| self.study_ids.iter().position(|study| study == id))
-                .map(|index| &self.rendered_studies().indicators()[index])
-                .filter(|study| study.is_visible())
-                .flat_map(|study| {
+                .map(|index| {
+                    (
+                        self.study_ids[index],
+                        &self.rendered_studies().indicators()[index],
+                    )
+                })
+                .filter(|(_, study)| study.is_visible())
+                .flat_map(|(id, study)| {
+                    let own = self.series_price_map(id).unwrap_or(map);
                     (0..study.line_count())
                         .filter(|line| {
                             let plot = study.plot_style(*line);
@@ -642,7 +658,15 @@ impl Chart {
                                 )
                         })
                         .filter_map(move |line| {
-                            bar_at.and_then(|index| study.plot_value(line, index))
+                            bar_at
+                                .and_then(|index| study.plot_value(line, index))
+                                .map(|value| {
+                                    if own == map {
+                                        value
+                                    } else {
+                                        map.y_to_price(own.price_to_y(value))
+                                    }
+                                })
                         })
                 })
                 .chain(closes)

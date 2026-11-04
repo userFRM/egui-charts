@@ -3,8 +3,9 @@
 use crate::chart::rendering;
 use crate::data::FeedState;
 use crate::model::{
-    AreaStyle, Bar, BaselineStyle, ChartType, ChartTypeParams, ChartTypeStyles, LinePlotStyle,
-    LineStyle, Marker, MarkerOptions, PriceLine, SeriesScale, SeriesStyle,
+    AreaStyle, Bar, BarsStyle, BaselineStyle, ChartType, ChartTypeParams, ChartTypeStyles,
+    LastPriceAnimation, LinePlotStyle, LineStyle, Marker, MarkerOptions, PriceLine, SeriesScale,
+    SeriesStyle,
 };
 use crate::scales::StudyFormat;
 use crate::scales::{PriceMap, PriceScale, PriceScaleMode};
@@ -54,6 +55,21 @@ pub struct SeriesOptions {
     /// non-positive or non-finite widths disable borders, including per-bar border colours.
     #[serde(default)]
     pub candle_border_width: f32,
+    /// Line, Step line and Line with markers style. `None` uses `color` and `width`,
+    /// with straight, solid segments. Also supplies the Area line without `area_style`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_style: Option<LinePlotStyle>,
+    /// OHLC open ticks and stroke thickness, independent of the main series.
+    #[serde(default)]
+    pub bars_style: BarsStyle,
+    /// Area line and gradient style. `None` uses `line_style` (or `color` and `width`),
+    /// a fill in `color` fading to transparent, a relative gradient and downward fill.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area_style: Option<AreaStyle>,
+    /// Pulse at the last valued bar of a line-based series, independently of other series.
+    /// The first displayed history starts no update pulse; a changed last time or close does.
+    #[serde(default)]
+    pub last_price_animation: LastPriceAnimation,
     /// Independent baseline line and fill styles. `None` uses `up_color`, `down_color` and
     /// `width`, with flat fills at the default opacity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -61,7 +77,7 @@ pub struct SeriesOptions {
     /// Line width in logical pixels.
     pub width: f32,
     /// Point marker radius in logical points for Line with markers, Area and Baseline.
-    /// Overrides `baseline_style`'s radius. `None` keeps that style's radius or the chart
+    /// Overrides `area_style`'s and `baseline_style`'s radii. `None` keeps their radius or the chart
     /// type's default: 3 for Line with markers, hidden for Area and Baseline.
     /// Non-positive or non-finite radii hide markers.
     #[serde(default)]
@@ -80,8 +96,8 @@ pub struct SeriesOptions {
     /// hide the border; the default is the design-token thick stroke.
     #[serde(default = "default_crosshair_marker_border_width")]
     pub crosshair_marker_border_width: f32,
-    /// Scale shared with the series carrying the same assignment in the price pane. In another
-    /// pane the series uses that pane's scale.
+    /// Scale shared with members carrying the same assignment in this series' pane.
+    /// Assignments in different panes have independent options and ranges.
     pub scale: SeriesScale,
     /// The price [`ChartType::Columns`] rise above or fall below, which the scale's fit then
     /// includes; `None` raises them from the pane bottom.
@@ -104,6 +120,10 @@ impl Default for SeriesOptions {
             up_color: DESIGN_TOKENS.semantic.extended.bullish,
             down_color: DESIGN_TOKENS.semantic.extended.bearish,
             candle_border_width: 0.0,
+            line_style: None,
+            bars_style: BarsStyle::default(),
+            area_style: None,
+            last_price_animation: LastPriceAnimation::Disabled,
             baseline_style: None,
             width: 2.0,
             marker_radius: None,
@@ -137,8 +157,7 @@ impl SeriesOptions {
         self
     }
 
-    /// The line, area and baseline styles in the series colours, unless `baseline_style`
-    /// supplies an explicit baseline style, and the columns' base.
+    /// Explicit per-type styles, with the series colours and widths as fallbacks.
     pub(super) fn type_params(&self) -> ChartTypeParams {
         let line = |color| LinePlotStyle {
             color,
@@ -162,19 +181,25 @@ impl SeriesOptions {
         if let Some(radius) = self.marker_radius {
             baseline.marker_radius = radius;
         }
+        let line_style = self.line_style.clone().unwrap_or_else(|| line(self.color));
+        let mut area = self.area_style.clone().unwrap_or_else(|| AreaStyle {
+            line: line_style.clone(),
+            top_fill: fill(self.color, 115),
+            bottom_fill: Color32::TRANSPARENT,
+            ..Default::default()
+        });
+        if let Some(radius) = self.marker_radius {
+            area.marker_radius = radius;
+        }
         ChartTypeParams {
             styles: ChartTypeStyles {
-                line: line(self.color),
-                step_line: line(self.color),
-                line_with_markers: line(self.color),
+                line: line_style.clone(),
+                step_line: line_style.clone(),
+                line_with_markers: line_style,
                 marker_radius: self.marker_radius.unwrap_or(3.0),
-                area: AreaStyle {
-                    line: line(self.color),
-                    marker_radius: self.marker_radius.unwrap_or(0.0),
-                    top_fill: fill(self.color, 115),
-                    bottom_fill: Color32::TRANSPARENT,
-                    ..Default::default()
-                },
+                area,
+                bars: self.bars_style.clone(),
+                last_price_animation: self.last_price_animation,
                 baseline,
                 crosshair_marker_radius: self.crosshair_marker_radius,
                 crosshair_marker_fill: self.crosshair_marker_fill,
@@ -212,6 +237,8 @@ pub(in crate::widget) struct PriceSeries {
     pub bars: Vec<Bar>,
     /// Changes when bars other than the last one change, as the main bars' revision does.
     pub revision: u64,
+    /// Last observed time and close, and the input time the pulse started.
+    pub last_price_pulse: std::cell::Cell<Option<(chrono::DateTime<chrono::Utc>, f64, f64)>>,
     pub heikin_ashi: rendering::candles::HeikinAshiCache,
     pub feed: FeedState,
     pub markers: crate::widget::marks::TimeOrdered<Marker>,
@@ -311,6 +338,10 @@ impl Indicator for SeriesLegend {
         StudyFormat::Price
     }
 
+    fn precision(&self) -> Option<usize> {
+        self.precision
+    }
+
     fn name(&self) -> &str {
         &self.name
     }
@@ -356,6 +387,7 @@ impl Chart {
             fed: false,
             bars: Vec::new(),
             revision: crate::model::next_revision(),
+            last_price_pulse: std::cell::Cell::new(None),
             heikin_ashi: Default::default(),
             feed: FeedState::default(),
             markers: Default::default(),
@@ -383,6 +415,7 @@ impl Chart {
         self.ensure_series_scale(options.scale);
         let renamed = self.price_series[at].options.name != options.name;
         self.price_series[at].options = options;
+        self.series_price_scale_mut(id);
         if renamed && self.is_fed(id) {
             self.set_data(id, Vec::new());
             self.fill_fed_series();
@@ -643,6 +676,7 @@ impl Chart {
         } else if let Some(at) = self.price_series.iter().position(|item| item.id == id) {
             self.ensure_series_scale(scale);
             self.price_series[at].options.scale = scale;
+            self.series_price_scale_mut(id);
         } else {
             return false;
         }
@@ -698,7 +732,7 @@ impl Chart {
                 .iter()
                 .find(|pane| pane.members.contains(&id))
             {
-                Some(pane) => &pane.scale,
+                Some(pane) => pane.assigned_scale(scale),
                 None => self.secondary_scale(scale),
             },
         )
@@ -715,7 +749,7 @@ impl Chart {
             .iter()
             .position(|pane| pane.members.contains(&id))
         {
-            Some(&mut self.pane_layout.panes[at].scale)
+            Some(self.pane_layout.panes[at].assigned_scale_mut(scale))
         } else if scale == self.main_series_scale {
             Some(self.state.price_scale_mut())
         } else {
@@ -735,8 +769,22 @@ impl Chart {
                 .iter()
                 .find(|pane| pane.members.contains(&id) && pane.rect.is_positive())
                 .map(|pane| {
-                    self.series_display_map(id, pane.price_map())
-                        .with_thousands_sep(self.config.thousands_sep)
+                    if let Some(item) = self.price_series.iter().find(|item| item.id == id) {
+                        self.series_map(item, pane.rect)
+                    } else {
+                        let study = self
+                            .indicators()
+                            .find(|(study, _)| *study == id)
+                            .expect("present study")
+                            .1;
+                        if matches!(study.scale(), crate::studies::StudyScale::Shared(_)) {
+                            let mut coords = self.get_chart_mapping().with_rect(pane.rect);
+                            coords.price = pane.price_map();
+                            crate::chart::rendering::study_mapping(study, &coords).price
+                        } else {
+                            pane.price_map()
+                        }
+                    }
                 });
         }
         let rect = self.last_rendered_price_rect;

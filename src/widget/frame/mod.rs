@@ -186,6 +186,8 @@ impl Chart {
             .as_ref()
             .or(theme.as_ref())
             .map(|theme| crate::theme::ThemeScope::new(ui.ctx(), theme));
+        let _font_scope =
+            rendering::axes::AxisFontScope::new(ui.ctx(), &self.config.axis_font_family);
         let size = self.size;
         let show = |ui: &mut Ui| {
             if let Some(theme) = &theme {
@@ -386,7 +388,6 @@ impl Chart {
     /// keeps repainting while a visible pulse runs.
     fn paint_last_price_pulse(
         &self,
-        ui: &Ui,
         painter: &egui::Painter,
         price_rect: Rect,
         coords: &ChartMapping,
@@ -419,28 +420,15 @@ impl Chart {
         .filter(|_| animation != LastPriceAnimation::Disabled) else {
             return;
         };
-        let now = ui.input(|input| input.time);
-        let started = match self.last_price_pulse.get() {
-            Some((time, seen, started)) if time == last.time && seen.total_cmp(&price).is_eq() => {
-                started
-            }
-            previous => {
-                // The first price seen is the loaded history, not an update.
-                let started = previous.map_or(f64::NEG_INFINITY, |_| now);
-                self.last_price_pulse.set(Some((last.time, price, started)));
-                started
-            }
-        };
-        let period = rendering::candles::LAST_PRICE_PULSE_SECONDS;
-        let phase = match animation {
-            LastPriceAnimation::Continuous => (now / period).fract(),
-            _ => (now - started) / period,
-        };
-        let point = Pos2::new(coords.idx_to_x(index), coords.price.price_to_y(price));
-        if (0.0..1.0).contains(&phase) && price_rect.contains(point) {
-            rendering::candles::render_last_price_pulse(painter, point, color, phase as f32);
-            ui.ctx().request_repaint();
-        }
+        super::series::paint_last_price_pulse(
+            painter,
+            price_rect,
+            Pos2::new(coords.idx_to_x(index), coords.price.price_to_y(price)),
+            color,
+            animation,
+            (last.time, price),
+            &self.last_price_pulse,
+        );
     }
 
     /// Internal rendering method that orchestrates all modules
@@ -927,7 +915,10 @@ impl Chart {
                 let first = flow.complete_from()?;
                 let candles =
                     self.state.shown()[start_idx..end_idx].partition_point(|bar| bar.time < first);
-                let ranges = self.execution_profile_ranges(start_idx + candles..end_idx)?;
+                let settings = self.trade_profile_settings();
+                let extend = settings.extend_poc || settings.extend_vah || settings.extend_val;
+                let profile_start = if extend { 0 } else { start_idx + candles };
+                let ranges = self.execution_profile_ranges(profile_start..end_idx)?;
                 let mapping = self.get_chart_mapping().with_rect(price_rect);
                 let bars = &self.state.data().bars;
                 let mut profiles = crate::studies::trade_profiles(flow, &ranges);
@@ -935,11 +926,15 @@ impl Chart {
                     let first = bars.partition_point(|b| b.time < profile.range.start);
                     let end = bars.partition_point(|b| b.time < profile.range.end);
                     first < end
-                        && mapping.idx_to_x(end - 1) >= price_rect.left()
                         && mapping.idx_to_x(first) - mapping.bar_spacing * 0.45
                             <= price_rect.right()
                 });
-                Some((flow.price_step(), flow.tick_size(), profiles))
+                // Sessions left of the view only draw their extensions.
+                let shown = profiles.partition_point(|profile| {
+                    let end = bars.partition_point(|b| b.time < profile.range.end);
+                    mapping.idx_to_x(end - 1) < price_rect.left()
+                });
+                Some((flow.price_step(), flow.tick_size(), profiles, shown))
             });
         let fixed_footprint = self
             .feed_link
@@ -982,8 +977,8 @@ impl Chart {
         #[cfg(feature = "studies")]
         let profile_prices = execution_profiles
             .iter()
-            .flat_map(|(step, tick, profiles)| {
-                profiles.iter().flat_map(move |profile| {
+            .flat_map(|(step, tick, profiles, shown)| {
+                profiles[*shown..].iter().flat_map(move |profile| {
                     profile
                         .volume
                         .levels
@@ -1510,15 +1505,7 @@ impl Chart {
             }
         };
         let last_price_line = last.filter(|_| self.main_series_visible).map(|last| {
-            let color = style
-                .price_line_color
-                .or_else(|| last.colors.as_ref().and_then(|own| own.color))
-                .unwrap_or(if last.close >= last.open {
-                    self.config.bullish_color
-                } else {
-                    self.config.bearish_color
-                });
-            PriceLine::new(last.close, color)
+            PriceLine::new(last.close, self.main_value_color(last))
                 .with_width(if self.config.show_price_line && style.price_line_visible {
                     style.price_line_width
                 } else {
@@ -1910,14 +1897,15 @@ impl Chart {
                         );
                     }
                     #[cfg(feature = "studies")]
-                    if session_profiles && let Some((step, tick, profiles)) = &execution_profiles {
+                    if session_profiles
+                        && let (Some((_, _, profiles, _)), Some(flow)) = (&execution_profiles, feed)
+                    {
                         crate::chart::overlays::render_session_volume_profiles(
                             &clipped_painter,
                             &mapping,
                             bars,
                             profiles,
-                            *step,
-                            *tick,
+                            flow,
                             self.trade_profile_settings(),
                         );
                     }
@@ -1945,7 +1933,7 @@ impl Chart {
                         |index, min_x| merged_x(volume, index, min_x),
                     );
                 }
-                self.paint_last_price_pulse(ui, &clipped_painter, price_rect, &coords);
+                self.paint_last_price_pulse(&clipped_painter, price_rect, &coords);
             }
         };
         let paint_unhovered = |id: &super::SeriesId| {
@@ -2957,8 +2945,8 @@ impl Chart {
             self.main_pane_series(),
         );
         #[cfg(feature = "studies")]
-        if let Some((step, tick, profiles)) = &execution_profiles {
-            for profile in profiles {
+        if let Some((step, tick, profiles, shown)) = &execution_profiles {
+            for profile in &profiles[*shown..] {
                 let levels = &profile.volume.levels;
                 let Some(((&low, _), (&high, _))) =
                     levels.first_key_value().zip(levels.last_key_value())

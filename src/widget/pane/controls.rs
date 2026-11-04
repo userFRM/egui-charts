@@ -14,95 +14,92 @@ impl Chart {
         if rect.height() <= 24.0 {
             return;
         }
-        let axis = if self.config.show_right_axis {
-            Rect::from_min_max(Pos2::new(plot.right(), rect.top()), rect.max)
-        } else if self.config.show_left_axis {
-            Rect::from_min_max(rect.min, Pos2::new(plot.left(), rect.bottom()))
-        } else {
-            return;
-        };
-        let pane = &mut self.pane_layout.panes[idx];
-        let response = ui
-            .interact(
-                axis,
-                ui.scope_id().with((pane.id, "price_axis")),
-                Sense::click_and_drag(),
-            )
-            .on_hover_cursor(egui::CursorIcon::ResizeVertical);
-        if response.dragged()
-            && self.chart_options.handle_scale.enabled
-            && self
-                .chart_options
-                .handle_scale
-                .axis_pressed_mouse_move
-                .price
-        {
-            let anchor_y = ui
-                .input(|input| input.pointer.press_origin())
-                .map_or(rect.center().y, |pos| pos.y);
-            let map = pane
-                .scale
-                .map(pane.scale.transform(), rect.top(), rect.bottom());
-            let anchor = map.transform().to_scale(map.y_to_price(anchor_y));
-            pane.scale.zoom(
-                (f64::from(response.drag_delta().y) / f64::from(rect.height())).exp(),
-                anchor,
-            );
-            ui.ctx().request_repaint();
-        }
-        if response.double_clicked()
-            && self.chart_options.handle_scale.enabled
-            && self
-                .chart_options
-                .handle_scale
-                .axis_double_click_reset
-                .price
-        {
-            self.user_action(|chart| chart.pane_layout.panes[idx].scale.reset());
-            ui.ctx().request_repaint();
-        }
-        response.context_menu(|ui| {
-            self.user_action(|chart| {
-                let pane = &mut chart.pane_layout.panes[idx];
-                if ui
-                    .selectable_label(!pane.scale.is_manual(), l10n::text(ui.ctx(), "Auto scale"))
-                    .clicked()
-                {
-                    pane.scale.reset();
-                    ui.close();
-                }
-                ui.separator();
-                use crate::scales::PriceScaleMode;
-                for mode in [
-                    PriceScaleMode::Normal,
-                    PriceScaleMode::Logarithmic,
-                    PriceScaleMode::Percentage,
-                    PriceScaleMode::IndexedTo100,
-                ] {
+        let axes = self.pane_axes(self.pane_layout.panes[idx].id, rect, plot);
+        for (key, axis) in axes {
+            let pane = &mut self.pane_layout.panes[idx];
+            let response = ui
+                .interact(
+                    axis,
+                    ui.scope_id().with((pane.id, key, "price_axis")),
+                    Sense::click_and_drag(),
+                )
+                .on_hover_cursor(egui::CursorIcon::ResizeVertical);
+            if response.dragged()
+                && self.chart_options.handle_scale.enabled
+                && self
+                    .chart_options
+                    .handle_scale
+                    .axis_pressed_mouse_move
+                    .price
+            {
+                let anchor_y = ui
+                    .input(|input| input.pointer.press_origin())
+                    .map_or(rect.center().y, |pos| pos.y);
+                let scale = pane.assigned_scale_mut(key);
+                let map = scale.map(scale.transform(), rect.top(), rect.bottom());
+                let anchor = map.transform().to_scale(map.y_to_price(anchor_y));
+                scale.zoom(
+                    (f64::from(response.drag_delta().y) / f64::from(rect.height())).exp(),
+                    anchor,
+                );
+                ui.ctx().request_repaint();
+            }
+            if response.double_clicked()
+                && self.chart_options.handle_scale.enabled
+                && self
+                    .chart_options
+                    .handle_scale
+                    .axis_double_click_reset
+                    .price
+            {
+                self.user_action(|chart| {
+                    chart.pane_layout.panes[idx].assigned_scale_mut(key).reset()
+                });
+                ui.ctx().request_repaint();
+            }
+            response.context_menu(|ui| {
+                self.user_action(|chart| {
+                    let scale = chart.pane_layout.panes[idx].assigned_scale_mut(key);
                     if ui
-                        .selectable_label(
-                            pane.scale.options().mode == mode,
-                            l10n::text(ui.ctx(), mode.to_string()),
-                        )
+                        .selectable_label(!scale.is_manual(), l10n::text(ui.ctx(), "Auto scale"))
                         .clicked()
                     {
-                        pane.scale.options_mut().mode = mode;
-                        pane.scale.reset();
+                        scale.reset();
                         ui.close();
                     }
-                }
-                ui.separator();
-                if ui
-                    .checkbox(
-                        &mut pane.scale.options_mut().invert_scale,
-                        l10n::text(ui.ctx(), "Invert scale"),
-                    )
-                    .changed()
-                {
-                    ui.close();
-                }
+                    ui.separator();
+                    use crate::scales::PriceScaleMode;
+                    for mode in [
+                        PriceScaleMode::Normal,
+                        PriceScaleMode::Logarithmic,
+                        PriceScaleMode::Percentage,
+                        PriceScaleMode::IndexedTo100,
+                    ] {
+                        if ui
+                            .selectable_label(
+                                scale.options().mode == mode,
+                                l10n::text(ui.ctx(), mode.to_string()),
+                            )
+                            .clicked()
+                        {
+                            scale.options_mut().mode = mode;
+                            scale.reset();
+                            ui.close();
+                        }
+                    }
+                    ui.separator();
+                    if ui
+                        .checkbox(
+                            &mut scale.options_mut().invert_scale,
+                            l10n::text(ui.ctx(), "Invert scale"),
+                        )
+                        .changed()
+                    {
+                        ui.close();
+                    }
+                });
             });
-        });
+        }
     }
 
     /// Whether the buttons of the pane drawn in `rect` show, by the configured visibility.

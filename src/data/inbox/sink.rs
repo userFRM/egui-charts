@@ -509,7 +509,7 @@ impl TakenIds {
 }
 
 /// Exact execution allocations shared by chart bars and standalone stream inputs.
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct TradeBars {
     pub(crate) forming: Option<DateTime<Utc>>,
     current: Option<(Bar, u64)>,
@@ -754,7 +754,7 @@ impl Live {
         self.event_closed = state.closed;
         for (i, (bar, size)) in bars.into_iter().enumerate() {
             for input in &self.study_inputs {
-                input.push_trade_part(tick, bar.time, size, i == 0);
+                input.push_trade_part(&self.clock, tick, bar.time, size, i == 0);
             }
             self.updates.bars.insert(bar.time, (bar, Origin::Live));
         }

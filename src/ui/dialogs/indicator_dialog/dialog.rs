@@ -12,6 +12,7 @@ use super::{
 use crate::data::inbox::Inbox;
 use crate::data::{
     Datafeed, FeedCapabilities, FeedError, MetricSeries, OptionChain, OptionChainQuery,
+    OptionExposureHandle, OptionExposureKind, OptionExposureQuery,
 };
 use crate::icons::icons;
 use crate::localization as l10n;
@@ -259,6 +260,21 @@ impl IndicatorDialog {
                     if self.factory.has("Options Volume Profile") {
                         continue;
                     }
+                    let exposure = capabilities
+                        .declares(FeedService::OptionExposure, instrument)
+                        .then(|| {
+                            let ctx = ctx.clone();
+                            OptionExposureHandle::new(
+                                &**feed,
+                                OptionExposureQuery::new(
+                                    symbol,
+                                    first..=last,
+                                    OptionExposureKind::Gamma,
+                                ),
+                                move || ctx.request_repaint(),
+                            )
+                            .expect("validated options exposure query")
+                        });
                     let ctx = ctx.clone();
                     let chain = OptionChain::new(
                         &**feed,
@@ -271,14 +287,18 @@ impl IndicatorDialog {
                         IndicatorFactory::PROFILES,
                         "Options Volume Profile",
                         move || {
-                            Box::new(
-                                OptionsVolumeProfile::from_chain(
-                                    chain.clone(),
-                                    &symbol,
-                                    dates.clone(),
-                                )
-                                .expect("validated options profile inputs"),
+                            let mut profile = OptionsVolumeProfile::from_chain(
+                                chain.clone(),
+                                &symbol,
+                                dates.clone(),
                             )
+                            .expect("validated options profile inputs");
+                            if let Some(exposure) = &exposure {
+                                profile = profile
+                                    .with_exposure(exposure.clone())
+                                    .expect("matching gamma subscription");
+                            }
+                            Box::new(profile)
                         },
                     );
                     self.option_profile_registered = true;
