@@ -2,6 +2,8 @@
 
 use crate::studies::{StudyCandle, StudyZone};
 
+/// Horizontal line at each enabled output's latest value, across the clip rect. A missing latest
+/// value, a hidden output or a bar-colouring plot draws none.
 pub(crate) fn paint_price_lines(
     painter: &egui::Painter,
     study: &dyn crate::studies::Indicator,
@@ -44,6 +46,8 @@ pub(crate) fn paint_price_lines(
     }
 }
 
+/// Reference levels and the band between them for a study drawn over the main series, which
+/// has no pane of its own to show them.
 pub(crate) fn paint_overlay_levels(
     painter: &egui::Painter,
     study: &dyn crate::studies::Indicator,
