@@ -12,7 +12,7 @@ use crate::chart::overlays::FootprintConfig;
 use crate::chart::rendering::{self, ChartMapping, RenderContext, StyleColors};
 use crate::data::Footprint;
 use crate::localization as l10n;
-use crate::model::{ChartType, MarkerZOrder, PriceLine};
+use crate::model::{AutoscaleMargins, ChartType, MarkerZOrder, PriceLine};
 use crate::theme::ThemeExt;
 use egui::{Pos2, Rect, Response, Sense, Ui, Vec2};
 
@@ -1026,11 +1026,7 @@ impl Chart {
         let profile_prices = std::iter::empty();
         // Fit the price scale, then apply this frame's price zoom
         let (series_values, mut margins) = self.fit_secondary_series();
-        let (mut primitive_prices, primitive_margins) = self.main_primitive_prices();
-        margins
-            .entry(self.main_series_scale)
-            .or_default()
-            .merge(primitive_margins);
+        let (mut primitive_prices, mut primitive_margins) = self.main_primitive_prices();
         for idx in &study_indices {
             let study = &self.rendered_studies().indicators()[*idx];
             if study.is_visible()
@@ -1104,10 +1100,13 @@ impl Chart {
         );
         drop(heikin_ashi);
         let data_range = fit.price_range;
-        margins
-            .entry(self.main_series_scale)
-            .or_default()
-            .merge(fit.margins);
+        primitive_margins.merge(fit.margins);
+        if primitive_margins != AutoscaleMargins::default() {
+            margins
+                .entry(self.main_series_scale)
+                .or_default()
+                .merge(primitive_margins);
+        }
         if self.main_series_visible
             && footprint.is_none()
             && self.chart_type == ChartType::TimePriceOpportunity

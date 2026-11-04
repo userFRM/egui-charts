@@ -2079,6 +2079,7 @@ fn autoscale_contributions_reserve_pixels_per_pane_and_scale() {
                     "hidden and detached contributors release their space"
                 );
                 for (step, margins) in [
+                    AutoscaleMargins::default(),
                     AutoscaleMargins {
                         top: f32::NAN,
                         bottom: -5.0,

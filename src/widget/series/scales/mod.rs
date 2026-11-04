@@ -794,7 +794,9 @@ impl Chart {
             if !min.is_finite() {
                 continue;
             }
-            pixel_margins.insert(key, margins);
+            if margins != AutoscaleMargins::default() {
+                pixel_margins.insert(key, margins);
+            }
             if key == self.main_series_scale {
                 main.extend([min, max]);
             } else {
