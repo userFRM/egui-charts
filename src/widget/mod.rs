@@ -99,6 +99,7 @@ mod navigation;
 mod palette;
 pub(crate) mod pan_zoom;
 mod pane;
+#[doc(inline)]
 pub use pane::{ChartLayoutRects, PaneId, PaneOptions, RenderedIndicatorPane};
 #[cfg(feature = "drawings")]
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
@@ -133,8 +134,8 @@ mod drawing_api;
 pub use drawing_api::DrawingError;
 mod studies_data;
 pub use crate::chart::primitives::{
-    PriceAxisLabel, Primitive, PrimitiveHit, PrimitiveId, PrimitivePass, PrimitiveView,
-    TimeAxisLabel,
+    PanePrimitive, PanePrimitiveView, PriceAxisLabel, Primitive, PrimitiveHit, PrimitiveId,
+    PrimitivePass, PrimitiveView, TimeAxisLabel,
 };
 pub use pane::VisualOrder;
 pub use series::{BarsInRange, MismatchDirection, PriceLineId, SeriesLastValue};
