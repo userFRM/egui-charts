@@ -491,7 +491,8 @@ pub mod icons {
     /// Two rows in the left half, two columns in the right half.
     pub const LAYOUT_FOUR_SPLIT_RIGHT: Icon = crate::icon_from_path!("ui/layout-4-split-right.svg");
     /// Two columns in the top half, two rows in the bottom half.
-    pub const LAYOUT_FOUR_SPLIT_BOTTOM: Icon = crate::icon_from_path!("ui/layout-4-split-bottom.svg");
+    pub const LAYOUT_FOUR_SPLIT_BOTTOM: Icon =
+        crate::icon_from_path!("ui/layout-4-split-bottom.svg");
     /// Layout five SVG icon.
     pub const LAYOUT_FIVE: Icon = crate::icon_from_path!("ui/layout-5.svg");
     /// Five columns.
