@@ -769,20 +769,8 @@ mod tests {
                 "Copy symbol",
             ]
             .into_iter()
-            .chain(
-                (width < 600.0)
-                    .then_some([
-                        "Watchlist",
-                        "Alerts",
-                        "Object Tree",
-                        "Data Window",
-                        "Time and sales",
-                        "Session notes",
-                        "Keyboard shortcuts",
-                    ])
-                    .into_iter()
-                    .flatten(),
-            ) {
+            .chain((width < 600.0).then_some("Panels"))
+            {
                 let pos = label_pos(&output, label);
                 assert_eq!(pos.x, origin, "{width}: {label}");
                 let icon = output
@@ -806,7 +794,8 @@ mod tests {
             output.drop_without_applying_deltas();
             click_at_width(&mut app, &ctx, "Largest order profile", width);
             assert!(
-                !app.largest_order_profile,
+                app.chart.order_book_view().profile
+                    != egui_charts::chart::overlays::BookProfile::LargestOrder,
                 "disabled profile must not toggle"
             );
             for paused in [false, true] {
@@ -837,8 +826,15 @@ mod tests {
             }
             click_at_width(&mut app, &ctx, "Liquidity heatmap", width);
             click_at_width(&mut app, &ctx, "Largest order profile", width);
-            assert!(app.liquidity_heatmap);
-            assert!(app.largest_order_profile);
+            assert!(
+                super::super::ChartSettingsState::from_chart(&app.chart)
+                    .order_flow
+                    .show_heatmap
+            );
+            assert_eq!(
+                app.chart.order_book_view().profile,
+                egui_charts::chart::overlays::BookProfile::LargestOrder
+            );
             click_at_width(&mut app, &ctx, "Copy symbol", width);
             assert!(!egui::Popup::is_any_open(&ctx));
             click_at_width(&mut app, &ctx, "Menu", width);
@@ -851,6 +847,87 @@ mod tests {
             click_at_width(&mut app, &ctx, "Menu", width);
             click_at_width(&mut app, &ctx, "Order flow", width);
             assert!(app.open_panel.is_none());
+            if width < 600.0 {
+                app.enable_samples();
+                let panels = super::super::SidePanel::BUILT_IN
+                    .into_iter()
+                    .map(|(panel, icon)| (icon.tooltip().to_owned(), Some(panel), None))
+                    .chain(std::iter::once((
+                        "Data Window".into(),
+                        Some(super::super::SidePanel::DataWindow),
+                        None,
+                    )))
+                    .chain(app.widget_bar.widgets.iter().map(|widget| {
+                        (
+                            widget.tooltip.clone(),
+                            super::super::SidePanel::from_widget(widget.id),
+                            Some(widget.id),
+                        )
+                    }))
+                    .collect::<Vec<_>>();
+                for (label, panel, widget) in panels {
+                    for opening in [true, false] {
+                        click_at_width(&mut app, &ctx, "Menu", width);
+                        click_at_width(&mut app, &ctx, "Panels", width);
+                        click_at_width(&mut app, &ctx, &label, width);
+                        egui::Popup::close_all(&ctx);
+                        assert!(app.open_panel == panel.filter(|_| opening), "{label}");
+                        if panel.is_none() {
+                            assert_eq!(
+                                app.widget_bar.active_widget,
+                                widget.filter(|_| opening),
+                                "{label}"
+                            );
+                        } else {
+                            assert!(app.widget_bar.active_widget.is_none());
+                        }
+                        // Both transitions retain one active panel, without drawing it twice.
+                        for resized in [1440.0, width] {
+                            frame_at_width(&mut app, &ctx, vec![], resized)
+                                .drop_without_applying_deltas();
+                            assert!(
+                                app.open_panel == panel.filter(|_| opening),
+                                "resize {label}"
+                            );
+                        }
+                    }
+                }
+                let size = egui::vec2(width, 320.0);
+                let draw = |app: &mut DemoApp, events| {
+                    super::super::tests::ui_frame(&ctx, size, events, |ui| {
+                        app.show_top_toolbar(ui, app.theme.chart.bg);
+                    })
+                };
+                for _ in 0..3 {
+                    draw(&mut app, vec![]);
+                }
+                super::super::tests::ui_click(&ctx, size, egui::pos2(20.0, 20.0), |ui| {
+                    app.show_top_toolbar(ui, app.theme.chart.bg);
+                });
+                let texts = draw(&mut app, vec![]);
+                let panel_menu = texts
+                    .iter()
+                    .find(|(text, _)| text == "Panels")
+                    .expect("landscape panel menu")
+                    .1;
+                assert!(
+                    egui::Rect::from_min_size(egui::Pos2::ZERO, size).contains_rect(panel_menu)
+                );
+                super::super::tests::ui_click(&ctx, size, panel_menu.center(), |ui| {
+                    app.show_top_toolbar(ui, app.theme.chart.bg);
+                });
+                let texts = draw(&mut app, vec![]);
+                let watchlist = texts
+                    .iter()
+                    .find(|(text, _)| text == "Watchlist and details")
+                    .expect("landscape panel action")
+                    .1;
+                super::super::tests::ui_click(&ctx, size, watchlist.center(), |ui| {
+                    app.show_top_toolbar(ui, app.theme.chart.bg);
+                });
+                assert!(app.open_panel == Some(super::super::SidePanel::Watchlist));
+                egui::Popup::close_all(&ctx);
+            }
         }
     }
 

@@ -65,31 +65,10 @@ impl AutoDrawingKind {
 
     /// The Fibonacci levels and options a study of this kind starts with.
     fn default_fibonacci(self) -> FibonacciConfig {
-        let mut fibonacci = if self == Self::FibonacciExtension {
-            FibonacciConfig::extension_default()
-        } else {
-            FibonacciConfig::default()
-        };
-        for level in &mut fibonacci.levels {
-            let hex = match level.value {
-                0.0 | 1.0 => [120, 123, 134, 255],
-                0.236 | 2.618 => [244, 67, 54, 255],
-                0.382 => [129, 199, 132, 255],
-                0.5 => [76, 175, 80, 255],
-                0.618 => [0, 150, 136, 255],
-                0.786 => [100, 181, 246, 255],
-                1.618 => [41, 98, 255, 255],
-                _ => level.color,
-            };
-            level.color = hex;
-            if level.value == 1.272 || level.value == 2.0 {
-                level.visible = false;
-            }
+        FibonacciConfig {
+            extend_right: true,
+            ..FibonacciConfig::for_tool(self.tool())
         }
-        fibonacci.show_background = true;
-        fibonacci.background_opacity = 38;
-        fibonacci.extend_right = true;
-        fibonacci
     }
 
     fn tool(self) -> DrawingToolType {
@@ -685,6 +664,21 @@ mod tests {
                     .map(|p| (p.bar_idx as usize, p.price))
                     .collect();
                 assert_eq!(points, expected, "{name}");
+                if kind.fibonacci() {
+                    let config = drawing.fib_config.as_ref().unwrap();
+                    assert_eq!(config.levels.len(), 24, "{name}: listed levels");
+                    assert_eq!(
+                        config
+                            .visible_levels()
+                            .map(|level| level.value)
+                            .collect::<Vec<_>>(),
+                        [
+                            0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0, 1.618, 2.618, 3.618, 4.236
+                        ]
+                    );
+                    assert!(config.show_background);
+                    assert_eq!(config.background_opacity, 51);
+                }
                 if kind == AutoDrawingKind::FibonacciRetracement {
                     let mut drawing = drawing.clone();
                     drawing.update_screen_coords(|b| b, |p| p as f32);

@@ -103,8 +103,8 @@ impl Chart {
         }
     }
 
-    /// Renders the price pane and every other drawn pane in their order, sharing the height by
-    /// stretch factor, with x-axes aligned to the price pane and one time axis below them all.
+    /// Renders the existing panes in order, sharing the height by stretch factor, with aligned
+    /// horizontal mappings and one time axis below them all.
     pub(in crate::widget) fn show_with_panes(
         &mut self,
         ui: &mut Ui,
@@ -119,6 +119,7 @@ impl Chart {
         let available = ui.available_rect_before_wrap();
         let maximized = self.pane_layout.maximized;
         let main_pane = self.main_series_pane();
+        let main_present = self.panes().contains(&main_pane);
         // The drawn panes from top to bottom, the price pane included, and whether each is
         // collapsed.
         let mut panes: Vec<_> = self
@@ -133,7 +134,8 @@ impl Chart {
             })
             .map(|(idx, pane)| (idx, pane.id, false))
             .collect();
-        let pane_count = panes.len().saturating_sub(1);
+        let pane_count = panes.len().saturating_sub(usize::from(main_present));
+        let gap_count = panes.len().saturating_sub(1);
         let axis_height = self.time_axis_height().min(available.height());
         let gap = if maximized.is_some() {
             0.0
@@ -141,12 +143,15 @@ impl Chart {
             DESIGN_TOKENS
                 .spacing
                 .hairline
-                .min((available.height() - axis_height).max(0.0) / pane_count.max(1) as f32)
+                .min((available.height() - axis_height).max(0.0) / gap_count.max(1) as f32)
         };
-        let usable_height = (available.height() - axis_height - gap * pane_count as f32).max(0.0);
-        let auto_collapse = usable_height / (3.0 + pane_count as f32) < 40.0;
+        let usable_height = (available.height() - axis_height - gap * gap_count as f32).max(0.0);
+        let main_minimum = if main_present { 40.0 } else { 0.0 };
+        let auto_collapse = usable_height
+            / (if main_present { 3.0 } else { 0.0 } + pane_count as f32).max(1.0)
+            < 40.0;
         let row_height = 24.0_f32.min(usable_height / pane_count.max(1) as f32);
-        let mut expanded_budget = ((usable_height - row_height * pane_count as f32 - 40.0)
+        let mut expanded_budget = ((usable_height - row_height * pane_count as f32 - main_minimum)
             / (40.0 - row_height))
             .max(0.0) as usize;
         for (idx, id, collapsed) in &mut panes {
@@ -198,12 +203,12 @@ impl Chart {
                 }
             }
         }
-        let main_min = if maximized.is_some_and(|id| id != main_pane) {
+        let main_min = if !main_present || maximized.is_some_and(|id| id != main_pane) {
             0.0
         } else {
             40.0
         };
-        let expanded_count = expanded.len() - 1;
+        let expanded_count = expanded.len().saturating_sub(usize::from(main_present));
         let pane_budget = (remaining - main_min).max(0.0);
         let minimum = (pane_budget / expanded_count.max(1) as f32).min(40.0);
         let excess: f32 = desired
@@ -239,32 +244,36 @@ impl Chart {
             self.pane_layout.panes[*idx].rect = rect;
             rects.push(rect);
         }
-        let main_at = panes
-            .iter()
-            .position(|(_, id, _)| *id == main_pane)
-            .expect("the price pane is always drawn");
-        let main_rect = rects[main_at];
-        let plot = self.pane_layout_rects(main_rect, false).price_rect;
+        let main_at = panes.iter().position(|(_, id, _)| *id == main_pane);
+        // The retained horizontal scale and time axis still run through the price frame.
+        let main_rect = main_at.map_or_else(
+            || Rect::from_min_size(available.min, egui::vec2(available.width(), 0.0)),
+            |at| rects[at],
+        );
+        let plot = self
+            .pane_layout_rects(if main_present { main_rect } else { available }, false)
+            .price_rect;
         let time_axis = Rect::from_min_max(
             Pos2::new(plot.left(), available.bottom() - axis_height),
             Pos2::new(plot.right(), available.bottom()),
         );
-        let maximized_plot = maximized.filter(|id| *id != main_pane).map(|id| {
-            ui.interact(
-                Rect::from_min_max(
-                    Pos2::new(plot.left(), available.top()),
-                    Pos2::new(plot.right(), time_axis.top()),
-                ),
-                ui.scope_id().with((id, "plot")),
-                Sense::click_and_drag(),
-            )
-        });
+        let shared_plot =
+            (main_at.is_none() || maximized.is_some_and(|id| id != main_pane)).then(|| {
+                ui.interact(
+                    Rect::from_min_max(
+                        Pos2::new(plot.left(), available.top()),
+                        Pos2::new(plot.right(), time_axis.top()),
+                    ),
+                    ui.scope_id().with((maximized, "plot")),
+                    Sense::click_and_drag(),
+                )
+            });
         let response = ui
             .scope_builder(
                 egui::UiBuilder::new()
                     .max_rect(main_rect)
                     .layout(egui::Layout::top_down(egui::Align::LEFT)),
-                |ui| self.show_internal(ui, Some(time_axis), maximized_plot.as_ref(), footprint),
+                |ui| self.show_internal(ui, Some(time_axis), shared_plot.as_ref(), footprint),
             )
             .inner;
         let touch_readout = crate::widget::interaction::touch_crosshair(ui, response.id);
@@ -325,7 +334,7 @@ impl Chart {
         let hover_rect = Rect::from_min_max(
             Pos2::new(
                 plot.left(),
-                if main_at == 0 {
+                if main_at == Some(0) {
                     plot.top()
                 } else {
                     available.top()
@@ -839,7 +848,12 @@ impl Chart {
                         menu,
                     } = interaction;
 
-                    let mut pane_response = match &maximized_plot {
+                    let mut pane_response = match shared_plot.as_ref().filter(|_| {
+                        maximized.is_some()
+                            || ui
+                                .input(|input| input.pointer.interact_pos())
+                                .is_some_and(|pos| chart_rect.contains(pos))
+                    }) {
                         Some(plot) => pane_response.union(plot.clone()),
                         None => pane_response.interact(Sense::click_and_drag()),
                     };
@@ -1406,7 +1420,14 @@ impl Chart {
 
         ui.advance_cursor_after_rect(available);
         ui.spacing_mut().item_spacing = host_spacing;
-        response
+        if main_present {
+            response
+        } else {
+            Response {
+                rect: available,
+                ..response
+            }
+        }
     }
 }
 
