@@ -1,7 +1,8 @@
 //! Floating strip of favourite drawing tools.
 
+use super::super::categories::cursors::CursorType;
 use super::super::{components::render_svg_at_rect_themed, icons};
-use super::DrawingToolbar;
+use super::{DrawingToolbar, DrawingToolbarAction};
 use crate::drawings::DrawingToolType;
 use crate::icons::icons as embedded_icons;
 use crate::localization as l10n;
@@ -11,22 +12,39 @@ use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Id, Pos2, Rect, Sense, Ui, Vec2};
 
 impl DrawingToolbar {
-    /// Render the floating strip of favourite drawing tools.
+    /// Render the floating strip and return a drawing pick. Cursor picks update toolbar state;
+    /// use [`Self::show_floating_with_action`] to receive their host actions as well.
     ///
     /// [`Self::show`] and [`Self::show_with_action`] already draw it beside the toolbar and return
     /// a tool picked on it; call this only to place the strip elsewhere, before them, as a
     /// second call in the same pass draws nothing.
     ///
-    /// The strip lists [`ToolbarState::favorites`][favorites], so starring or unstarring a tool changes it
-    /// at once, and it is hidden while there are none. `position` places it until it has been
+    /// The strip lists [`ToolbarState::favorites`][favorites] and
+    /// [`ToolbarState::cursor_favorites`][cursor_favorites], so starring or unstarring changes it
+    /// at once, and it is hidden while both lists are empty. `position` places it until it has been
     /// moved; afterwards [`ToolbarState::floating_pos`][floating_pos] holds its position. Its grip drags it, kept
     /// on screen, and its close button clears [`ToolbarState::floating_visible`][floating_visible], as the
     /// favourites button of the toolbar does.
     ///
     /// [favorites]: super::super::state::ToolbarState::favorites
+    /// [cursor_favorites]: super::super::state::ToolbarState::cursor_favorites
     /// [floating_pos]: super::super::state::ToolbarState::floating_pos
     /// [floating_visible]: super::super::state::ToolbarState::floating_visible
     pub fn show_floating(&mut self, ui: &mut Ui, position: Pos2) -> Option<DrawingToolType> {
+        match self.show_floating_with_action(ui, position) {
+            Some(DrawingToolbarAction::SelectTool(tool)) => Some(tool),
+            _ => None,
+        }
+    }
+
+    /// Render the favourite tools and cursors, applying the pick and returning its host action.
+    /// Use this instead of [`Self::show_floating`] when placing the strip separately and handling
+    /// cursor actions. The regular toolbar already calls it.
+    pub fn show_floating_with_action(
+        &mut self,
+        ui: &mut Ui,
+        position: Pos2,
+    ) -> Option<DrawingToolbarAction> {
         let pass = ui.ctx().cumulative_pass_nr();
         if self.strip_pass == Some(pass) {
             return None;
@@ -38,7 +56,9 @@ impl DrawingToolbar {
             .copied()
             .filter(|tool| self.registry.availability(*tool).visible)
             .collect();
-        if !self.state.floating_visible || tools.is_empty() {
+        if !self.state.floating_visible
+            || (tools.is_empty() && self.state.cursor_favorites.is_empty())
+        {
             return None;
         }
         self.strip_pass = Some(pass);
@@ -101,7 +121,30 @@ impl DrawingToolbar {
                                 );
 
                                 if response.on_hover_text(translated_label).clicked() && enabled {
-                                    new_selection = Some(tool);
+                                    new_selection = Some(DrawingToolbarAction::SelectTool(tool));
+                                }
+                            }
+
+                            for cursor in &self.state.cursor_favorites {
+                                let selected = self.state.sel_tool.is_none()
+                                    && !self.state.zoom_mode_active
+                                    && if *cursor == CursorType::Eraser {
+                                        self.state.eraser_mode_enabled
+                                    } else {
+                                        !self.state.eraser_mode_enabled
+                                            && self.state.current_cursor_type == *cursor
+                                    };
+                                let response =
+                                    crate::ui_kit::buttons::IconButton::new(cursor.icon())
+                                        .selected(selected)
+                                        .tooltip(cursor.name())
+                                        .show(ui);
+                                if response.clicked() {
+                                    new_selection = Some(if *cursor == CursorType::Eraser {
+                                        DrawingToolbarAction::ToggleEraserMode
+                                    } else {
+                                        DrawingToolbarAction::SetCursorType(*cursor)
+                                    });
                                 }
                             }
 
@@ -123,11 +166,7 @@ impl DrawingToolbar {
             ui.ctx().request_repaint();
         }
 
-        if let Some(tool) = new_selection {
-            self.select_tool(tool);
-        }
-
-        new_selection
+        self.apply_pick(new_selection?)
     }
 
     /// The dotted grip at the strip's leading edge. Returns how far the user dragged it.

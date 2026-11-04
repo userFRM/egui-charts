@@ -673,7 +673,14 @@ impl DemoApp {
                 .and_then(|storage| eframe::get_value(storage, "demo_formatting"))
                 .unwrap_or_default(),
             top_toolbar,
-            drawing_toolbar: DrawingToolbar::default(),
+            drawing_toolbar: {
+                let mut toolbar = DrawingToolbar::default();
+                toolbar.state.cursor_favorites = cc
+                    .storage
+                    .and_then(|storage| eframe::get_value(storage, "cursor_favorites"))
+                    .unwrap_or_default();
+                toolbar
+            },
             selection_toolbar: FloatingSelectionToolbar::new(),
             timeframe_toolbar,
             widget_bar,
@@ -1482,6 +1489,11 @@ impl eframe::App for DemoApp {
             storage,
             "interval_preferences",
             &self.top_toolbar.timeframe_selector.preferences(),
+        );
+        eframe::set_value(
+            storage,
+            "cursor_favorites",
+            &self.drawing_toolbar.state.cursor_favorites,
         );
         eframe::set_value(
             storage,
@@ -4790,10 +4802,21 @@ mod tests {
                     ]),
                 );
             }
-            for explicit in [false, true, true].into_iter().take(restarts) {
+            for (restart, explicit) in [false, true, true].into_iter().take(restarts).enumerate() {
                 let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
                 cc.storage = Some(&storage);
                 let mut app = DemoApp::new(&cc);
+                use egui_charts::ui::drawing_toolbar::categories::cursors::CursorType;
+                assert_eq!(
+                    app.drawing_toolbar.state.cursor_favorites,
+                    if restart == 0 {
+                        &[][..]
+                    } else {
+                        CursorType::all()
+                    },
+                    "cursor favourites survive a restart; older settings start empty"
+                );
+                app.drawing_toolbar.state.cursor_favorites = CursorType::all().to_vec();
                 if legacy_document.is_some() {
                     assert_eq!(app.state.symbol, "AAPL");
                     assert_eq!(app.state.timeframe, Timeframe::Min5);
