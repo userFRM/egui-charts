@@ -83,7 +83,8 @@ impl Backtest {
     /// from its open to its close, then from its previous close to each new close, and decides
     /// again with that forming bar included in the context. Its fills and orders are retained
     /// when the bar closes; unseen intrabar extremes are never replayed over observed ticks.
-    /// Identical snapshots do nothing. Fill callbacks still exclude the unfinished bar.
+    /// Identical snapshots do nothing. Live fill callbacks exclude the unfinished bar;
+    /// historical tick callbacks see their developing candle.
     ///
     /// A correction before the previous forming bar, removed history, changed settings or inputs
     /// rebuilds from the start using `Strategy::prepare` to reset decision state. Replayed fills
@@ -168,10 +169,17 @@ impl Backtest {
             self.live = Some(live);
             return Vec::new();
         }
+        let candles = (self.settings.chart_type == ChartType::Heikin)
+            .then(|| crate::model::BarData::from_bars(bars.to_vec()).to_heikin_ashi());
+        let decision_bars = candles.as_ref().map_or(bars, |data| data.bars.as_slice());
         let calculation_bars = if self.settings.recalculate_on_every_update {
-            bars
+            decision_bars
+        } else if self.settings.recalculate_on_history
+            && !self.settings.chart_type.transforms_data()
+        {
+            &[]
         } else {
-            &bars[..closed]
+            &decision_bars[..closed]
         };
         if rebuild {
             strategy.prepare(calculation_bars);
@@ -187,7 +195,8 @@ impl Backtest {
             rejected: live.rejected,
             settings: &self.settings,
             strategy,
-            history: &[],
+            history: Cow::Borrowed(&[]),
+            prices: bars,
             trading: false,
             tick: live.tick,
             fills: Some(&mut fills),
@@ -213,11 +222,22 @@ impl Backtest {
             let observed = live.forming.is_some_and(|(time, _)| time == bar.time);
             if observed {
                 if live.bars.get(index).is_none_or(|old| !same_bar(old, bar)) {
-                    run.forming_bar(bars, index, live.forming.map(|(_, price)| price), false);
+                    run.forming_bar(
+                        decision_bars,
+                        index,
+                        live.forming.map(|(_, price)| price),
+                        false,
+                    );
                 }
                 live.forming = None;
             }
-            run.closed_bar(&bars[..closed], index, &finer, &mut live.report, !observed);
+            run.closed_bar(
+                &decision_bars[..closed],
+                index,
+                &finer,
+                &mut live.report,
+                !observed,
+            );
             if rebuild
                 && replayed(bar.time)
                 && let Some(fills) = &mut run.fills
@@ -233,8 +253,15 @@ impl Backtest {
                 .forming
                 .filter(|(time, _)| *time == bar.time)
                 .map(|(_, price)| price);
-            if run.forming_bar(bars, closed, previous_price, true) {
-                live.forming = Some((bar.time, bar.close));
+            if run.forming_bar(decision_bars, closed, previous_price, true) {
+                let execution = if self.settings.chart_type == ChartType::Heikin
+                    && !self.settings.original_price_fills
+                {
+                    &decision_bars[closed]
+                } else {
+                    bar
+                };
+                live.forming = Some((bar.time, execution.close));
             }
             if rebuild
                 && replayed(bar.time)
@@ -274,19 +301,31 @@ impl<'a> Run<'a> {
             .settings
             .start_time
             .is_none_or(|start| bar.time >= start);
-        if !valid_bar(bar) {
+        if !valid_bar(bar) || !valid_bar(&self.prices[index]) {
             return false;
         }
-        self.history = &bars[..index];
+        self.history = Cow::Borrowed(&bars[..index]);
         self.forming = true;
+        let execution = if self.settings.chart_type == ChartType::Heikin
+            && self.settings.original_price_fills
+        {
+            &self.prices[index]
+        } else {
+            bar
+        };
         if self.trading {
             if previous.is_none() {
                 self.tick += 1;
+                self.pass_delays();
             }
-            self.fill_along(previous.unwrap_or(bar.open), bar.close, bar.time);
+            self.fill_along(
+                previous.unwrap_or(execution.open),
+                execution.close,
+                bar.time,
+            );
         }
         if decide {
-            self.history = &bars[..=index];
+            self.history = Cow::Borrowed(&bars[..=index]);
             self.decide(bar.close, false);
         }
         true

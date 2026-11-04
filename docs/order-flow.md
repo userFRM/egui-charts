@@ -25,8 +25,8 @@ host owns retrieval, stream sequencing, retention and recovery. See
 [`Footprint::new(chart.bar_clock(), tick_size, ticks_per_row)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Footprint.html#method.new) aggregates executions without
 estimating their aggressor from candles. Replay chronological historical trades once and append
 new executions with [`push`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Footprint.html#method.push); rebuild on corrections. Unknown aggressors contribute to total
-volume and remain outside bid/ask delta. [`Chart::show_footprint`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.show_footprint) draws the four numeric modes,
-profiles, grouped rows, imbalances, POC and value area in place of the price series. Its
+volume and remain outside bid/ask delta. [`Chart::show_footprint`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.show_footprint) draws volume, delta, trade count and
+average size columns, profiles, grouped rows, imbalances, POC and value area in place of the price series. Its
 [`FootprintConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/overlays/struct.FootprintConfig.html) controls the presentation: cell colour, number abbreviation and zero display,
 value-sized fonts, extreme ask/bid ratios and the pullback range. Automatic grouping affects
 display only.

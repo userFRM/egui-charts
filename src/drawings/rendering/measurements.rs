@@ -7,7 +7,7 @@ use crate::drawings::domain::{Drawing, DrawingToolType};
 use crate::model::{Bar, percent_change};
 use crate::scales::price_decimals;
 use crate::scales::{DefaultPriceFormatter, PriceFormatter, VolumeFormatter};
-use crate::styles::{stroke, typography};
+use crate::styles::typography;
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Align2, Color32, Pos2, Rect, Stroke};
@@ -23,40 +23,12 @@ impl Drawing {
         if self.points.len() >= 2 && self.chart_points.len() >= 2 {
             let start = self.points[0];
             let end = self.points[1];
-            let cp1 = &self.chart_points[0];
-            let cp2 = &self.chart_points[1];
-
-            // Calculate price change to determine color (RED for down, BLUE for up)
-            let price_diff = cp2.price - cp1.price;
-            let is_measuring_down = price_diff < 0.0;
-
-            // Color based on direction: Red for down, Blue for up
-            let base_color = if is_measuring_down {
-                DESIGN_TOKENS.semantic.extended.bearish // Red (down)
-            } else {
-                DESIGN_TOKENS.semantic.extended.accent // Blue (up)
-            };
-
-            // Draw SEMI-TRANSPARENT RECTANGLE filling the area from start to cursor
-            // Color changes based on direction: red down, blue up
             let rect = egui::Rect::from_two_pos(start, end);
-            let fill_color = self.fill_color32().unwrap_or_else(|| {
-                Color32::from_rgba_unmultiplied(
-                    base_color.r(),
-                    base_color.g(),
-                    base_color.b(),
-                    30, // Very transparent
-                )
-            });
-            painter.rect_filled(rect, 0.0, fill_color);
+            if let Some(fill) = self.fill_color32() {
+                painter.rect_filled(rect, 0.0, fill);
+            }
 
-            let line_color = Color32::from_rgba_unmultiplied(
-                base_color.r(),
-                base_color.g(),
-                base_color.b(),
-                150,
-            );
-            let line_stroke = Stroke::new(stroke::MEDIUM, line_color);
+            let line_stroke = self.stroke();
 
             let center = rect.center();
             arrow(
@@ -584,6 +556,9 @@ mod tests {
         let mut chart = chart(&[90.0], &[110.0]);
         let ctx = egui::Context::default();
         let mut drawing = Drawing::new(1, DrawingToolType::Measure);
+        drawing.color = [12, 34, 56, 255];
+        drawing.stroke_width = 3.0;
+        let expected_stroke = drawing.stroke();
         drawing.chart_points = vec![ChartPoint::new(30.0, 100.0), ChartPoint::new(40.0, 95.0)];
         drawing.completed = true;
         chart.drawings_mut().drawings.push(drawing);
@@ -594,6 +569,23 @@ mod tests {
         assert!(output.iter().any(
             |s| matches!(s,egui::Shape::Text(t) if t.galley.job.text.contains("-5.00 (-5.00%)  -20 ticks"))
         ));
+        // The chart can cache meshes; inspect styling through the shared renderer fixture.
+        let mut drawing = chart.drawings().drawings[0].clone();
+        drawing.points = vec![Pos2::new(100.0, 100.0), Pos2::new(300.0, 250.0)];
+        let area = Rect::from_two_pos(drawing.points[0], drawing.points[1]);
+        for fill in [Some([12, 34, 56, 80]), None] {
+            drawing.fill_color = fill;
+            let output = super::super::tests::paint(&drawing);
+            assert!(output.iter().any(
+                |s| matches!(s, egui::Shape::LineSegment { stroke, .. } if *stroke == expected_stroke)
+            ));
+            assert_eq!(
+                output.iter().any(|s| matches!(s,
+                    egui::Shape::Rect(r) if r.rect == area && r.fill.a() > 0
+                )),
+                fill.is_some()
+            );
+        }
     }
 
     /// 100 to 110 over bars 0 to 20 is 10 (10%) high and 20 bars wide.

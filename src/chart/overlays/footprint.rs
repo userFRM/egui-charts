@@ -115,7 +115,8 @@ impl Default for FootprintConfig {
             extreme_ratio: false,
             pullback: false,
             statistics: false,
-            statistics_rows: FootprintStatistic::ALL.to_vec(),
+            // Keep the existing volume statistics selected; execution metrics are opt-in.
+            statistics_rows: FootprintStatistic::ALL[..9].to_vec(),
             #[cfg(feature = "studies")]
             studies: None,
         }
@@ -594,6 +595,18 @@ fn cell_text(
             format!("{} / {}", signed(row.delta()), number(row.volume()))
         }
         FootprintMode::DominantSide => number(row.bid.max(row.ask)),
+        FootprintMode::BidAskTrades
+            if hidden(row.bid_trades as f64) && hidden(row.ask_trades as f64) =>
+        {
+            String::new()
+        }
+        FootprintMode::BidAskTrades => format!(
+            "{} × {}",
+            number(row.bid_trades as f64),
+            number(row.ask_trades as f64)
+        ),
+        FootprintMode::Trades => number(row.trades() as f64),
+        FootprintMode::AverageSize => row.average_size().map_or_else(String::new, number),
     }
 }
 
@@ -655,9 +668,7 @@ fn group_bar(source: &FootprintBar, group: i64) -> FootprintBar {
             level: key,
             ..Default::default()
         });
-        target.bid += row.bid;
-        target.ask += row.ask;
-        target.unknown += row.unknown;
+        target.absorb(row);
     }
     shown
 }
@@ -713,7 +724,9 @@ fn cell_color(
 
 /// Draws a compact per-bar statistics table under the footprint at the same x coordinates.
 /// Rows show total, bid, ask, delta, minimum and maximum intrabar delta, cumulative delta,
-/// delta percentage, and ask/bid ratio (undefined for zero volume or bid). Bars before
+/// delta percentage and ask/bid ratio (undefined without a denominator). Select execution
+/// counts and average size with [`render_footprint_statistics_rows`] or
+/// [`FootprintConfig::statistics_rows`] in [`crate::widget::Chart::show_footprint`]. Bars before
 /// [`Footprint::complete_from`] get no column and no share of the cumulative delta.
 /// Shared labels occupy the left margin. Numeric columns stay aligned with their bars and
 /// use unabbreviated volume values when they fit, then compact units. Percentages have one
@@ -735,11 +748,14 @@ pub fn render_footprint_statistics(
         bars,
         flow,
         text_color,
-        &FootprintStatistic::ALL,
+        &FootprintStatistic::ALL[..9],
     );
 }
 
-pub(crate) fn render_footprint_statistics_rows(
+/// Draws the selected statistics in their supplied order, including execution counts and average
+/// size. An empty selection draws nothing. Uses the same fitting and clipping rules as
+/// [`render_footprint_statistics`]; an undefined average is shown as `n/a`.
+pub fn render_footprint_statistics_rows(
     painter: &Painter,
     mapping: &ChartMapping,
     bars: &[Bar],
@@ -796,6 +812,8 @@ pub(crate) fn render_footprint_statistics_rows(
             Some(cumulative),
             row.delta_percent(),
             (row.bid > 0.0).then(|| row.ask / row.bid),
+            Some(row.trades() as f64),
+            row.average_size(),
         ];
         let values: Vec<_> = rows.iter().map(|row| values[*row as usize]).collect();
         columns.push((x, values));
@@ -1356,57 +1374,74 @@ mod tests {
         // Rows are 13.3 points high, or 10.5 with a top of 102.8: still tall enough for the
         // default 10-point numbers. The last case puts the plot edge through the first column:
         // its numbers are left out.
-        for (minimum, auto, high, left, expected) in [
-            (14.0, None, 102.0, 0.0, 0),
-            (10.0, None, 102.0, 0.0, 8),
-            (10.0, Some(30.0), 102.0, 0.0, 4),
-            (10.0, None, 102.8, 0.0, 8),
-            (10.0, None, 102.0, 30.0, 6),
+        for modes in [
+            vec![
+                FootprintMode::BidAsk,
+                FootprintMode::Volume,
+                FootprintMode::Delta,
+                FootprintMode::DeltaVolume,
+            ],
+            vec![
+                FootprintMode::BidAskTrades,
+                FootprintMode::Trades,
+                FootprintMode::AverageSize,
+                FootprintMode::Volume,
+            ],
         ] {
-            let map = mapping(high);
-            let plot = ChartMapping::new(
-                Rect::from_min_max(pos2(left, 0.0), rect.max),
-                240.0,
-                0,
-                0,
-                0.0,
-                map.price,
-            );
-            let ctx = egui::Context::default();
-            let config = FootprintConfig {
-                modes: vec![
-                    FootprintMode::BidAsk,
-                    FootprintMode::Volume,
-                    FootprintMode::Delta,
-                    FootprintMode::DeltaVolume,
-                ],
-                min_text_height: minimum,
-                auto_row_height: auto,
-                ..Default::default()
-            };
-            let mut output = ctx.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(rect),
+            for (minimum, auto, ticks, high, left, expected) in [
+                (14.0, None, 0, 102.0, 0.0, 0),
+                (10.0, None, 0, 102.0, 0.0, 8),
+                (10.0, Some(30.0), 0, 102.0, 0.0, 4),
+                (10.0, None, 2, 102.0, 0.0, 4),
+                (10.0, None, 0, 102.8, 0.0, 8),
+                (10.0, None, 0, 102.0, 30.0, 6),
+            ] {
+                let map = mapping(high);
+                let plot = ChartMapping::new(
+                    Rect::from_min_max(pos2(left, 0.0), rect.max),
+                    240.0,
+                    0,
+                    0,
+                    0.0,
+                    map.price,
+                );
+                let ctx = egui::Context::default();
+                let config = FootprintConfig {
+                    modes: modes.clone(),
+                    row_ticks: ticks,
+                    min_text_height: minimum,
+                    auto_row_height: auto,
                     ..Default::default()
-                },
-                |ui| render_footprint(ui.painter(), &plot, &bars, &flow, &config),
-            );
-            output.textures_delta.clear();
-            let texts: Vec<_> = output
-                .shapes
-                .iter()
-                .filter_map(|shape| match &shape.shape {
-                    Shape::Text(text) => Some(text.galley.text()),
-                    _ => None,
-                })
-                .collect();
-            assert_eq!(
-                texts.len(),
-                expected,
-                "minimum {minimum}, auto {auto:?}, top {high}, left {left}: {texts:?}"
-            );
-            if auto.is_some() {
-                assert_eq!(texts, ["2 × 7", "9", "+5", "+5 / 9"]);
+                };
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(rect),
+                        ..Default::default()
+                    },
+                    |ui| render_footprint(ui.painter(), &plot, &bars, &flow, &config),
+                );
+                output.textures_delta.clear();
+                let texts: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        Shape::Text(text) => Some(text.galley.text()),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    texts.len(),
+                    expected,
+                    "minimum {minimum}, auto {auto:?}, top {high}, left {left}: {texts:?}"
+                );
+                if auto.is_some() || ticks > 0 {
+                    let expected = if modes[0] == FootprintMode::BidAsk {
+                        ["2 × 7", "9", "+5", "+5 / 9"]
+                    } else {
+                        ["1 × 2", "3", "3", "9"]
+                    };
+                    assert_eq!(texts, expected);
+                }
             }
         }
         // Both diagonals can dominate at the same price; keep both side colours.
@@ -1633,34 +1668,37 @@ mod tests {
 
     /// Shared row labels and complete numeric columns survive narrow detail widths; a short pane
     /// reports unavailable detail instead of clipping a row. The first bar has 13 buys and 3 sells:
-    /// delta 10, 62.5%, ask/bid 4.33:1; the second adds 2500 sells.
+    /// delta 10, 62.5%, ask/bid 4.33:1, three executions averaging 16/3; the second adds 2500 sells.
     #[test]
     fn statistics_keep_shared_rows_and_aligned_values_or_explain_the_overview() {
         let time = "2026-01-05T10:00:00Z".parse().unwrap();
         let next = time + chrono::TimeDelta::minutes(1);
         let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 0.25, 1).unwrap();
-        for (time, bid, ask) in [(time, 3.0, 13.0), (next, 2500.0, 0.0)] {
-            for (size, side) in [(bid, OrderSide::Sell), (ask, OrderSide::Buy)] {
-                if size > 0.0 {
-                    flow.push(&Tick::new(time, 100.0, size, Some(side)))
-                        .unwrap();
-                }
-            }
+        for (at, price, size, side) in [
+            (time, 100.0, 3.0, OrderSide::Sell),
+            (time, 100.25, 5.0, OrderSide::Buy),
+            (time, 100.25, 8.0, OrderSide::Buy),
+            (next, 100.0, 2500.0, OrderSide::Sell),
+        ] {
+            flow.push(&Tick::new(at, price, size, Some(side))).unwrap();
         }
         let bars = [
-            Bar::new(time, 100.0, 100.0, 100.0, 100.0, 16.0),
+            Bar::new(time, 100.0, 100.25, 100.0, 100.25, 16.0),
             Bar::new(next, 100.0, 100.0, 100.0, 100.0, 2500.0),
         ];
-        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(240.0, 112.0));
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(240.0, 136.0));
         let empty = Footprint::new(BarClock::new(Timeframe::Min1), 0.25, 1).unwrap();
         for (spacing, available, large, height) in [
-            (60.0, true, false, 112.0),
-            (40.0, true, false, 112.0),
-            (3.0, true, false, 112.0),
-            (60.0, false, false, 112.0),
-            (40.0, true, true, 112.0),
+            (60.0, true, false, 136.0),
+            (40.0, true, false, 136.0),
+            (3.0, true, false, 136.0),
+            (60.0, false, false, 136.0),
+            (40.0, true, true, 136.0),
             (60.0, true, false, 90.0),
+            (60.0, true, false, 112.0),
         ] {
+            // The default renderer keeps its nine rows, which fit the panes hosts already reserve.
+            let count = if height == 112.0 { 9 } else { 11 };
             let rect = Rect::from_min_size(rect.min, vec2(rect.width(), height));
             let mut shown = flow.clone();
             let mut bars = bars.clone();
@@ -1685,7 +1723,7 @@ mod tests {
                     PriceTransform::default(),
                     PriceRange::new(99.0, 102.0),
                     0.0,
-                    112.0,
+                    136.0,
                     false,
                 ),
             );
@@ -1695,13 +1733,19 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| {
-                    render_footprint_statistics(
-                        ui.painter(),
-                        &map,
-                        &bars,
-                        if available { &shown } else { &empty },
-                        Color32::WHITE,
-                    )
+                    let flow = if available { &shown } else { &empty };
+                    if count == 9 {
+                        render_footprint_statistics(ui.painter(), &map, &bars, flow, Color32::WHITE)
+                    } else {
+                        render_footprint_statistics_rows(
+                            ui.painter(),
+                            &map,
+                            &bars,
+                            flow,
+                            Color32::WHITE,
+                            &FootprintStatistic::ALL,
+                        )
+                    }
                 },
             );
             output.textures_delta.clear();
@@ -1737,8 +1781,8 @@ mod tests {
             }
             assert_eq!(
                 texts.len(),
-                27,
-                "nine labels and two complete columns at {spacing}"
+                count * 3,
+                "{count} labels and two complete columns at {spacing}"
             );
             assert_eq!(
                 texts
@@ -1748,23 +1792,26 @@ mod tests {
                 1
             );
             for (column, expected) in [
-                ["16", "3", "13", "10", "-3", "10", "10", "62.5%", "4.33:1"],
+                [
+                    "16", "3", "13", "10", "-3", "10", "10", "62.5%", "4.33:1", "3", "5.333",
+                ],
                 if large {
                     [
                         "123.5M", "123.5M", "0", "-123.5M", "-123.5M", "0", "-123.5M", "-100.0%",
-                        "0.00:1",
+                        "0.00:1", "2", "61.7M",
                     ]
                 } else {
                     [
                         "2500", "2500", "0", "-2500", "-2500", "0", "-2490", "-100.0%", "0.00:1",
+                        "1", "2500",
                     ]
                 },
             ]
             .into_iter()
             .enumerate()
             {
-                for (line, expected) in expected.into_iter().enumerate() {
-                    let text = texts[9 + column * 9 + line];
+                for (line, expected) in expected.into_iter().take(count).enumerate() {
+                    let text = texts[count + column * count + line];
                     assert_eq!(text.galley.text(), expected);
                     assert!(
                         (text.pos.x + text.galley.size().x * 0.5 - map.idx_to_x(column)).abs()
@@ -1964,10 +2011,20 @@ mod tests {
             bid,
             ask,
             unknown,
+            ..Default::default()
         };
         let config = |abbreviate, show_zero| FootprintConfig {
             abbreviate,
             show_zero,
+            ..Default::default()
+        };
+        let counted = FootprintLevel {
+            bid: 4.0,
+            ask: 8.0,
+            unknown: 8.0,
+            bid_trades: 1,
+            ask_trades: 2,
+            unknown_trades: 1,
             ..Default::default()
         };
         #[rustfmt::skip]
@@ -1986,6 +2043,13 @@ mod tests {
             (FootprintMode::Delta, row(3.0, 3.0, 0.0), config(false, false), ""),
             (FootprintMode::DominantSide, row(5.0, 3.0, 0.0), config(false, true), "5"),
             (FootprintMode::DominantSide, row(2.0, 3.0, 9.0), config(false, true), "3"),
+            (FootprintMode::BidAskTrades, counted.clone(), config(false, true), "1 × 2"),
+            (FootprintMode::Trades, counted.clone(), config(false, true), "4"),
+            (FootprintMode::AverageSize, counted, config(false, true), "5"),
+            (FootprintMode::BidAskTrades, row(0.0, 0.0, 0.0), config(false, false), ""),
+            (FootprintMode::BidAskTrades, row(0.0, 0.0, 0.0), config(false, true), "0 × 0"),
+            (FootprintMode::Trades, row(0.0, 0.0, 0.0), config(false, true), "0"),
+            (FootprintMode::AverageSize, row(0.0, 0.0, 0.0), config(false, true), ""),
         ];
         for (mode, row, config, expected) in texts {
             assert_eq!(

@@ -722,10 +722,7 @@ pub fn axis_settings_button(ui: &mut egui::Ui, corner: Rect) -> egui::Response {
         egui::Sense::click(),
     );
     crate::icons::icons::SETTINGS
-        .as_image_tinted(
-            Vec2::splat(16.0),
-            ui.ctx().active_theme().chart.axis_text_secondary,
-        )
+        .as_image_tinted(Vec2::splat(16.0), ui.ctx().active_theme().ui.text)
         .paint_at(
             ui,
             Rect::from_center_size(target.center(), Vec2::splat(16.0)),
@@ -1208,41 +1205,57 @@ mod tests {
     #[test]
     fn axis_controls_emit_their_actions() {
         use egui::{Event, Modifiers, PointerButton};
-        let ctx = Context::default();
-        let tag = Rect::from_min_max(Pos2::new(100.0, 100.0), Pos2::new(180.0, 121.0));
-        let corner = Rect::from_min_max(Pos2::new(200.0, 200.0), Pos2::new(260.0, 228.0));
-        let mut actions = Vec::new();
-        for (pos, expected) in [
-            (Pos2::new(87.0, 110.5), Some("add")),
-            (tag.center(), None),
-            (corner.center(), Some("settings")),
-        ] {
-            let before = actions.len();
-            for pressed in [None, Some(true), Some(false)] {
-                let mut input = RawInput::default();
-                input.events.push(Event::PointerMoved(pos));
-                if let Some(pressed) = pressed {
-                    input.events.push(Event::PointerButton {
-                        pos,
-                        button: PointerButton::Primary,
-                        pressed,
-                        modifiers: Modifiers::NONE,
+        let mut custom = crate::theme::Theme::dark();
+        custom.ui.text = Color32::from_rgb(123, 100, 90);
+        for theme in crate::theme::presets()
+            .into_iter()
+            .map(|(_, theme)| theme)
+            .chain([custom])
+        {
+            let ctx = Context::default();
+            crate::icons::install_loader(&ctx);
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let tag = Rect::from_min_max(Pos2::new(100.0, 100.0), Pos2::new(180.0, 121.0));
+            let corner = Rect::from_min_max(Pos2::new(200.0, 200.0), Pos2::new(260.0, 228.0));
+            let mut actions = Vec::new();
+            for (pos, expected) in [
+                (Pos2::new(87.0, 110.5), Some("add")),
+                (tag.center(), None),
+                (corner.center(), Some("settings")),
+            ] {
+                let before = actions.len();
+                for pressed in [None, Some(true), Some(false)] {
+                    let mut input = RawInput::default();
+                    input.events.push(Event::PointerMoved(pos));
+                    if let Some(pressed) = pressed {
+                        input.events.push(Event::PointerButton {
+                            pos,
+                            button: PointerButton::Primary,
+                            pressed,
+                            modifiers: Modifiers::NONE,
+                        });
+                    }
+                    let output = ctx.run_ui(input, |ui| {
+                        if let Some(price) = crosshair_price_action(ui, tag, 704.64, Color32::WHITE)
+                        {
+                            assert_eq!(price, 704.64);
+                            actions.push("add");
+                        }
+                        if axis_settings_button(ui, corner).clicked() {
+                            actions.push("settings");
+                        }
                     });
+                    let ink = output.shapes.iter().find_map(|shape| match &shape.shape {
+                        Shape::Rect(rect) if rect.brush.is_some() => Some(rect.fill),
+                        _ => None,
+                    });
+                    assert_eq!(ink, Some(theme.ui.text));
+                    output.drop_without_applying_deltas();
                 }
-                let output = ctx.run_ui(input, |ui| {
-                    if let Some(price) = crosshair_price_action(ui, tag, 704.64, Color32::WHITE) {
-                        assert_eq!(price, 704.64);
-                        actions.push("add");
-                    }
-                    if axis_settings_button(ui, corner).clicked() {
-                        actions.push("settings");
-                    }
-                });
-                output.drop_without_applying_deltas();
+                assert_eq!(actions[before..].first().copied(), expected);
             }
-            assert_eq!(actions[before..].first().copied(), expected);
+            assert_eq!(actions, ["add", "settings"]);
         }
-        assert_eq!(actions, ["add", "settings"]);
     }
 
     /// Study tags keep their optional names and choose readable text for the plot fill.
