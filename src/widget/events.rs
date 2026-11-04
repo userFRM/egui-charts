@@ -53,11 +53,11 @@ pub struct ChartPointer {
     /// returned by [`Chart::study_values_at`]; [`Chart::set_cursor_data_policy`] can include
     /// hidden studies and plots. Missing values remain `None`; empty between main-series points.
     pub studies: Vec<(SeriesId, StudyValue)>,
-    /// The drawing, primitive, series or study under the pointer. Custom hit priority is
+    /// The annotation, drawing, primitive, series or study under the pointer. Custom hit priority is
     /// documented by [`PrimitiveHit`](super::PrimitiveHit).
     pub target: Option<PointerTarget>,
     /// The winning primitive or custom renderer's object, including its cursor and host data.
-    /// `target` identifies its primitive or series; `None` for drawings and built-in plots.
+    /// `target` identifies its primitive or series; `None` for annotations, drawings and built-in plots.
     pub primitive_hit: Option<super::PrimitiveHit>,
     /// Modifier keys held during the event.
     pub modifiers: Modifiers,
@@ -113,7 +113,13 @@ fn same_bar(left: &Bar, right: &Bar) -> bool {
 }
 
 /// The object under the pointer of a [`ChartPointer`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Annotations follow paint order: normal markers and added-series price lines sit with
+/// their series; above-series markers precede main-series price lines and drawings; top
+/// markers follow drawings. In the main pane, above-pass primitives follow top markers.
+/// Later annotations in the same layer win. Only the clipped parts painted this frame can be targeted.
+/// Existing drawing and custom-hit precedence applies when no annotation wins.
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PointerTarget {
     /// A series or study line, as a click there would select it.
@@ -122,6 +128,22 @@ pub enum PointerTarget {
     Drawing(usize),
     /// A primitive whose [`hit_test_result`](super::Primitive::hit_test_result) reports the pointer.
     Primitive(super::PrimitiveId),
+    /// A painted bar marker. The host ID remains stable when the marker list changes.
+    Marker {
+        /// The series that owns the marker.
+        series: SeriesId,
+        /// The identity supplied by the host, or `None` for an unnamed marker.
+        id: Option<String>,
+        /// Time of the marker, mapped to its displayed element on price-based charts.
+        time: DateTime<Utc>,
+    },
+    /// A painted custom price line with its live handle.
+    PriceLine {
+        /// The series that owns the line.
+        series: SeriesId,
+        /// The handle returned by [`Chart::add_price_line`].
+        id: super::PriceLineId,
+    },
 }
 
 /// The device behind a [`ChartPointer`].
@@ -306,6 +328,7 @@ pub(super) struct HostEvents {
     input_frame: Option<(u64, Modifiers)>,
     /// What the pointer is over this frame, resolved while the plots are drawn.
     pub target: Option<PointerTarget>,
+    pub annotation_target: std::cell::RefCell<Option<PointerTarget>>,
     pub primitive_hit: Option<super::PrimitiveHit>,
     pub volume_map: Option<crate::scales::PriceMap>,
     #[cfg(feature = "drawings")]
@@ -724,8 +747,19 @@ impl Chart {
             studies: bar_at.map_or_else(Vec::new, |index| {
                 self.study_rows_at_with_policy(index, self.host_events.cursor_data_policy)
             }),
-            target: self.host_events.target,
-            primitive_hit: self.host_events.primitive_hit.clone(),
+            target: self
+                .host_events
+                .annotation_target
+                .borrow()
+                .clone()
+                .or_else(|| self.host_events.target.clone()),
+            primitive_hit: self
+                .host_events
+                .annotation_target
+                .borrow()
+                .is_none()
+                .then(|| self.host_events.primitive_hit.clone())
+                .flatten(),
             modifiers: origin
                 .as_ref()
                 .map_or_else(|| ui.input(|input| input.modifiers), |(_, keys)| *keys),

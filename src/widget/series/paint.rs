@@ -103,6 +103,14 @@ impl Chart {
         if main.is_empty() {
             return;
         }
+        if self.host_events.annotation_target.borrow().is_some()
+            && plot.ctx().pointer_interact_pos().is_some_and(|pos| {
+                plot.clip_rect().contains(pos)
+                    && self.hit_price_series(item, pos, rect, map).is_some()
+            })
+        {
+            self.cover_annotation_hit();
+        }
         let range = self.series_range(item);
         // One neighbour at each edge keeps clipped segments continuous during scrolling.
         let start = range.start.saturating_sub(1);
@@ -212,8 +220,7 @@ impl Chart {
                 .with_axis_label(false)
             });
         let base_line = base_line(&map, style);
-        let lines = item.lines.iter().map(|(_, line)| line);
-        for line in base_line.iter().chain(&price_line).chain(lines) {
+        for line in base_line.iter().chain(&price_line) {
             crate::chart::rendering::render_price_line(
                 plot,
                 rect,
@@ -223,6 +230,9 @@ impl Chart {
                 false,
                 rect.right(),
             );
+        }
+        for (id, line) in &item.lines {
+            self.paint_annotation_line(plot, rect, &map, item.id, *id, line);
         }
         if let Some(marks) = &item.change_marks {
             marks.paint(plot, |time, close| {
@@ -234,7 +244,7 @@ impl Chart {
                 Some(Pos2::new(x, map.price_to_y(close)))
             });
         }
-        if item.marker_options.z_order == MarkerZOrder::Normal || self.in_pane(item.id) {
+        if item.marker_options.z_order == MarkerZOrder::Normal {
             self.paint_series_markers(plot, rect, item, map);
         }
     }
@@ -323,7 +333,7 @@ impl Chart {
                     &map,
                     &coords,
                 );
-                self.record_mark_hits(item.id, hits);
+                self.record_mark_hits(plot, item.id, hits);
             }
         }
     }
