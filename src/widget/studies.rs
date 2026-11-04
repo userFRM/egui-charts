@@ -1157,7 +1157,8 @@ mod tests {
         );
         #[cfg(feature = "ui")]
         {
-            let mut dialog = crate::ui::dialogs::IndicatorSettingsDialog::default();
+            let mut dialog =
+                crate::ui::dialogs::indicator_dialog::IndicatorSettingsDialog::default();
             assert!(!dialog.open_for_chart(&chart, id));
             let saved = chart.snapshot().unwrap();
             let saved = serde_json::to_string(&saved).unwrap();
