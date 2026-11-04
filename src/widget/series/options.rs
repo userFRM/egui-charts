@@ -3,8 +3,9 @@
 use crate::chart::rendering;
 use crate::data::FeedState;
 use crate::model::{
-    AreaStyle, Bar, BaselineStyle, ChartType, ChartTypeParams, ChartTypeStyles, LinePlotStyle,
-    LineStyle, Marker, MarkerOptions, PriceLine, SeriesScale, SeriesStyle,
+    AreaStyle, Bar, BarsStyle, BaselineStyle, ChartType, ChartTypeParams, ChartTypeStyles,
+    LastPriceAnimation, LinePlotStyle, LineStyle, Marker, MarkerOptions, PriceLine, SeriesScale,
+    SeriesStyle,
 };
 use crate::scales::StudyFormat;
 use crate::scales::{PriceMap, PriceScale, PriceScaleMode};
@@ -54,6 +55,21 @@ pub struct SeriesOptions {
     /// non-positive or non-finite widths disable borders, including per-bar border colours.
     #[serde(default)]
     pub candle_border_width: f32,
+    /// Line, Step line and Line with markers style. `None` uses `color` and `width`,
+    /// with straight, solid segments. Also supplies the Area line without `area_style`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_style: Option<LinePlotStyle>,
+    /// OHLC open ticks and stroke thickness, independent of the main series.
+    #[serde(default)]
+    pub bars_style: BarsStyle,
+    /// Area line and gradient style. `None` uses `line_style` (or `color` and `width`),
+    /// a fill in `color` fading to transparent, a relative gradient and downward fill.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area_style: Option<AreaStyle>,
+    /// Pulse at the last valued bar of a line-based series, independently of other series.
+    /// The first displayed history starts no update pulse; a changed last time or close does.
+    #[serde(default)]
+    pub last_price_animation: LastPriceAnimation,
     /// Independent baseline line and fill styles. `None` uses `up_color`, `down_color` and
     /// `width`, with flat fills at the default opacity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -61,7 +77,7 @@ pub struct SeriesOptions {
     /// Line width in logical pixels.
     pub width: f32,
     /// Point marker radius in logical points for Line with markers, Area and Baseline.
-    /// Overrides `baseline_style`'s radius. `None` keeps that style's radius or the chart
+    /// Overrides `area_style`'s and `baseline_style`'s radii. `None` keeps their radius or the chart
     /// type's default: 3 for Line with markers, hidden for Area and Baseline.
     /// Non-positive or non-finite radii hide markers.
     #[serde(default)]
@@ -104,6 +120,10 @@ impl Default for SeriesOptions {
             up_color: DESIGN_TOKENS.semantic.extended.bullish,
             down_color: DESIGN_TOKENS.semantic.extended.bearish,
             candle_border_width: 0.0,
+            line_style: None,
+            bars_style: BarsStyle::default(),
+            area_style: None,
+            last_price_animation: LastPriceAnimation::Disabled,
             baseline_style: None,
             width: 2.0,
             marker_radius: None,
@@ -137,8 +157,7 @@ impl SeriesOptions {
         self
     }
 
-    /// The line, area and baseline styles in the series colours, unless `baseline_style`
-    /// supplies an explicit baseline style, and the columns' base.
+    /// Explicit per-type styles, with the series colours and widths as fallbacks.
     pub(super) fn type_params(&self) -> ChartTypeParams {
         let line = |color| LinePlotStyle {
             color,
@@ -162,19 +181,25 @@ impl SeriesOptions {
         if let Some(radius) = self.marker_radius {
             baseline.marker_radius = radius;
         }
+        let line_style = self.line_style.clone().unwrap_or_else(|| line(self.color));
+        let mut area = self.area_style.clone().unwrap_or_else(|| AreaStyle {
+            line: line_style.clone(),
+            top_fill: fill(self.color, 115),
+            bottom_fill: Color32::TRANSPARENT,
+            ..Default::default()
+        });
+        if let Some(radius) = self.marker_radius {
+            area.marker_radius = radius;
+        }
         ChartTypeParams {
             styles: ChartTypeStyles {
-                line: line(self.color),
-                step_line: line(self.color),
-                line_with_markers: line(self.color),
+                line: line_style.clone(),
+                step_line: line_style.clone(),
+                line_with_markers: line_style,
                 marker_radius: self.marker_radius.unwrap_or(3.0),
-                area: AreaStyle {
-                    line: line(self.color),
-                    marker_radius: self.marker_radius.unwrap_or(0.0),
-                    top_fill: fill(self.color, 115),
-                    bottom_fill: Color32::TRANSPARENT,
-                    ..Default::default()
-                },
+                area,
+                bars: self.bars_style.clone(),
+                last_price_animation: self.last_price_animation,
                 baseline,
                 crosshair_marker_radius: self.crosshair_marker_radius,
                 crosshair_marker_fill: self.crosshair_marker_fill,
@@ -212,6 +237,8 @@ pub(in crate::widget) struct PriceSeries {
     pub bars: Vec<Bar>,
     /// Changes when bars other than the last one change, as the main bars' revision does.
     pub revision: u64,
+    /// Last observed time and close, and the input time the pulse started.
+    pub last_price_pulse: std::cell::Cell<Option<(chrono::DateTime<chrono::Utc>, f64, f64)>>,
     pub heikin_ashi: rendering::candles::HeikinAshiCache,
     pub feed: FeedState,
     pub markers: crate::widget::marks::TimeOrdered<Marker>,
@@ -360,6 +387,7 @@ impl Chart {
             fed: false,
             bars: Vec::new(),
             revision: crate::model::next_revision(),
+            last_price_pulse: std::cell::Cell::new(None),
             heikin_ashi: Default::default(),
             feed: FeedState::default(),
             markers: Default::default(),

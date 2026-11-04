@@ -388,7 +388,6 @@ impl Chart {
     /// keeps repainting while a visible pulse runs.
     fn paint_last_price_pulse(
         &self,
-        ui: &Ui,
         painter: &egui::Painter,
         price_rect: Rect,
         coords: &ChartMapping,
@@ -421,28 +420,15 @@ impl Chart {
         .filter(|_| animation != LastPriceAnimation::Disabled) else {
             return;
         };
-        let now = ui.input(|input| input.time);
-        let started = match self.last_price_pulse.get() {
-            Some((time, seen, started)) if time == last.time && seen.total_cmp(&price).is_eq() => {
-                started
-            }
-            previous => {
-                // The first price seen is the loaded history, not an update.
-                let started = previous.map_or(f64::NEG_INFINITY, |_| now);
-                self.last_price_pulse.set(Some((last.time, price, started)));
-                started
-            }
-        };
-        let period = rendering::candles::LAST_PRICE_PULSE_SECONDS;
-        let phase = match animation {
-            LastPriceAnimation::Continuous => (now / period).fract(),
-            _ => (now - started) / period,
-        };
-        let point = Pos2::new(coords.idx_to_x(index), coords.price.price_to_y(price));
-        if (0.0..1.0).contains(&phase) && price_rect.contains(point) {
-            rendering::candles::render_last_price_pulse(painter, point, color, phase as f32);
-            ui.ctx().request_repaint();
-        }
+        super::series::paint_last_price_pulse(
+            painter,
+            price_rect,
+            Pos2::new(coords.idx_to_x(index), coords.price.price_to_y(price)),
+            color,
+            animation,
+            (last.time, price),
+            &self.last_price_pulse,
+        );
     }
 
     /// Internal rendering method that orchestrates all modules
@@ -1947,7 +1933,7 @@ impl Chart {
                         |index, min_x| merged_x(volume, index, min_x),
                     );
                 }
-                self.paint_last_price_pulse(ui, &clipped_painter, price_rect, &coords);
+                self.paint_last_price_pulse(&clipped_painter, price_rect, &coords);
             }
         };
         let paint_unhovered = |id: &super::SeriesId| {

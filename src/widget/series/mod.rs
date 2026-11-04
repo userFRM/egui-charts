@@ -6,6 +6,7 @@ mod scales;
 
 pub use options::SeriesOptions;
 pub(super) use options::{PriceSeries, SeriesLegend, base_line};
+pub(super) use paint::paint_last_price_pulse;
 
 use super::change_marks::ChangeMarks;
 use super::{Chart, ChartElementId, DataOperation, SeriesId};
