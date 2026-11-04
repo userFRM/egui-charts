@@ -53,7 +53,12 @@ struct Evaluation {
 
 impl Evaluation {
     fn new(alert: &Alert, timeframe: Timeframe, factory: &IndicatorFactory) -> Self {
-        let inputs = alert.inputs.as_deref().cloned().unwrap_or_default();
+        let mut inputs = alert.inputs.as_deref().cloned().unwrap_or_default();
+        // A captured span counts bars of the source chart's interval, as in `prepare_alert`.
+        if timeframe != alert.timeframe.unwrap_or_default() {
+            inputs.start = None;
+            inputs.visible = None;
+        }
         let mut required: HashSet<_> = alert
             .rules()
             .filter(|(_, _, interval)| *interval == timeframe)
@@ -343,14 +348,9 @@ impl AlertEvaluator {
             run.ready = false;
             let subject = run.subject(symbol, None);
             let reader = &self.feeds[&subject];
-            if !reader.ready() {
-                continue;
-            }
             let all = reader.bars();
-            let bars = &all[all.partition_point(|bar| {
-                run.start
-                    .is_some_and(|start| bar.time < reader.clock().bar_open(start))
-            })..];
+            let bars =
+                &all[all.partition_point(|bar| run.start.is_some_and(|start| bar.time < start))..];
             let Some(first) = bars.first() else {
                 continue;
             };
@@ -382,10 +382,8 @@ impl AlertEvaluator {
             }
             let reader = &self.feeds[&subject];
             let all = reader.bars();
-            let bars = &all[all.partition_point(|bar| {
-                run.start
-                    .is_some_and(|start| bar.time < reader.clock().bar_open(start))
-            })..];
+            let bars =
+                &all[all.partition_point(|bar| run.start.is_some_and(|start| bar.time < start))..];
             let data: Vec<_> = requests
                 .iter()
                 .map(|(request, _)| {
@@ -420,10 +418,9 @@ impl AlertEvaluator {
         let mut subjects: HashMap<_, Vec<_>> = HashMap::new();
         for ((id, symbol, _), run) in &self.runs {
             let reader = &self.feeds[&run.subject(symbol, None)];
-            let from = reader.bars().partition_point(|bar| {
-                run.start
-                    .is_some_and(|start| bar.time < reader.clock().bar_open(start))
-            });
+            let from = reader
+                .bars()
+                .partition_point(|bar| run.start.is_some_and(|start| bar.time < start));
             subjects
                 .entry((id, symbol))
                 .or_default()
@@ -443,7 +440,7 @@ impl AlertEvaluator {
                     )
                 })
                 .collect();
-            engine.update_alert_intervals(id, symbol, &inputs, now, |timeframe, source, at| {
+            engine.update_matching(Some(id), symbol, &inputs, now, |timeframe, source, at| {
                 let (run, reader, from) = contexts
                     .iter()
                     .find(|(run, _, _)| run.timeframe == timeframe)?;
@@ -461,7 +458,17 @@ impl AlertEvaluator {
                         } else {
                             crate::scales::PriceScaleMode::Normal
                         };
-                        match live.iter().find(|data| reader.matches_view(data)) {
+                        let holder = live
+                            .iter()
+                            .filter(|data| {
+                                reader.matches_view(data)
+                                    && data
+                                        .drawings
+                                        .iter()
+                                        .any(|drawing| drawing.alert_level(source).is_some())
+                            })
+                            .min_by_key(|data| !reader.matches(data));
+                        match holder {
                             Some(data) => data.drawings.iter().find_map(|drawing| {
                                 let level = drawing.alert_level(source)?;
                                 let index = crate::model::index_at_with_timeframe(
@@ -478,6 +485,8 @@ impl AlertEvaluator {
                                     .find(|(index, ..)| *index == level)
                                     .map(|(.., value)| value)
                             }),
+                            // Removed from its open chart, whatever storage still holds.
+                            None if live.iter().any(|data| reader.matches(data)) => None,
                             None => reader.drawing_value(source, *from + at, scale),
                         }
                     }
@@ -544,6 +553,63 @@ mod tests {
         }
     }
 
+    /// A market with more history than any request reaches.
+    #[derive(Default)]
+    struct DeepFeed(Mutex<Vec<Timeframe>>);
+
+    impl Datafeed for DeepFeed {
+        fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
+            self.0.lock().unwrap().push(request.timeframe);
+            let step = request.timeframe.duration_ms() / 60_000;
+            let last = request
+                .before
+                .map_or(0, |before| before.timestamp() / 60 - step);
+            let bars = (0..request.count as i64)
+                .rev()
+                .map(|n| bar(last - n * step, 100.0))
+                .collect();
+            reply.send(Ok(HistoryPage::new(bars, false)));
+        }
+
+        fn subscribe(&self, _: Subscription) {}
+
+        fn unsubscribe(&self, _: SubscriptionId) {}
+    }
+
+    #[test]
+    fn saved_start_reaches_back_only_on_the_source_interval() {
+        let feed = Arc::new(DeepFeed::default());
+        let mut evaluator = AlertEvaluator::new(feed.clone());
+        let mut alert: Alert = serde_json::from_value(serde_json::json!({
+            "symbol":"SYM", "timeframe":"Min5", "condition":{"Above":1000.0},
+            "additional_timeframes":["Min1"],
+            "additional_conditions":[{"source":"Volume","condition":{"Above":1000.0}}]
+        }))
+        .unwrap();
+        // 6000 minutes needs a second page of 1000 five-minute bars and six of one-minute bars.
+        alert.inputs = Some(Box::new(AlertInputs {
+            start: Some(bar(-6000, 0.0).time),
+            ..Default::default()
+        }));
+        let engine = AlertEngine::new().with_alerts(vec![alert]);
+        #[cfg(feature = "ui")]
+        let ctx = egui::Context::default();
+        for _ in 0..8 {
+            evaluator.poll(
+                &engine,
+                &IndicatorFactory::new(),
+                &[],
+                #[cfg(feature = "ui")]
+                &ctx,
+                DateTime::from_timestamp(1000, 0).unwrap(),
+            );
+        }
+        let pages = feed.0.lock().unwrap();
+        let count = |timeframe| pages.iter().filter(|tf| **tf == timeframe).count();
+        assert_eq!(count(Timeframe::Min5), 2, "the source chart's span");
+        assert_eq!(count(Timeframe::Min1), 1, "only the initial bar count");
+    }
+
     #[test]
     fn interval_feeds_calculate_saved_studies_independently_and_release_together() {
         let feed = Arc::new(Feed::default());
@@ -551,12 +617,11 @@ mod tests {
         let mut factory = IndicatorFactory::new();
         factory.register("Pair mean", || Box::new(crate::studies::SMA::new(2)));
         // Means are (50+150)/2=100 on five minutes and (200+300)/2=250 on one minute.
-        let alert: Alert = serde_json::from_value(serde_json::json!({
+        let mut alert: Alert = serde_json::from_value(serde_json::json!({
             "symbol":"SYM", "timeframe":"Min5", "source":{"Study":{"id":"7","output":0}},
             "condition":{"Above":90.0}, "additional_timeframes":["Min1"],
             "additional_conditions":[{"source":{"Study":{"id":"7","output":0}},"condition":{"Below":110.0}}]
         })).unwrap();
-        let mut alert = alert;
         alert.message = "{{value}} on {{timeframe}}".into();
         alert.inputs = Some(Box::new(AlertInputs {
             studies: vec![crate::model::AlertStudy {
@@ -588,12 +653,21 @@ mod tests {
             alert = serde_json::from_value(stored).unwrap();
         }
         #[cfg(feature = "ui")]
-        let live = [AlertData {
-            request: AlertFeed::history_request("SYM", Timeframe::Min15),
-            bars: &drawing_bars,
-            history_complete: true,
-            drawings: std::slice::from_ref(&drawing),
-        }];
+        // The first chart of this symbol lacks the drawing and must not hide the chart holding it.
+        let live = [
+            AlertData {
+                request: AlertFeed::history_request("SYM", Timeframe::Hour1),
+                bars: &[],
+                history_complete: true,
+                drawings: &[],
+            },
+            AlertData {
+                request: AlertFeed::history_request("SYM", Timeframe::Min15),
+                bars: &drawing_bars,
+                history_complete: true,
+                drawings: std::slice::from_ref(&drawing),
+            },
+        ];
         #[cfg(not(feature = "ui"))]
         let live: [AlertData<'_>; 0] = [];
         let delivered = Arc::new(Mutex::new(Vec::new()));

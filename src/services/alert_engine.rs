@@ -35,13 +35,13 @@ use crate::model::{
 /// *Synchronization.* Each interval evaluates its own newest forming bar, including its own
 /// lookbacks and preceding source values. For `OncePerBarClose`, the shortest interval uses its
 /// newest completed bar; other intervals keep their live observations. Each completed occurrence
-/// is evaluated once after compatible observations arrive. The shortest interval supplies the occurrence bar. Other observations must cover its event time:
-/// a forming observation covers its clock's bar window; a completed observation covers the
-/// window beginning at its close. Window ends are excluded. Observations from later windows
-/// cannot satisfy an earlier event, nor can expired observations satisfy a newer one. Each direct
-/// update evaluates the latest overlapping observations; `AlertEvaluator` gathers a complete poll
-/// before evaluating. Missing or non-finite sources make their conditions false. Price and volume
-/// come from each interval's own bars.
+/// is evaluated once after compatible observations arrive. The shortest interval supplies the
+/// occurrence bar. Other observations must cover its event time: a forming observation covers its
+/// clock's bar window; a completed observation covers the window beginning at its close. Window
+/// ends are excluded. Observations from later windows cannot satisfy an earlier event, nor can
+/// expired observations satisfy a newer one. Each direct update evaluates the latest overlapping
+/// observations; `AlertEvaluator` gathers a complete poll before evaluating. Missing or non-finite
+/// sources make their conditions false. Price and volume come from each interval's own bars.
 /// Messages retain the first condition's interval and source values. Hosts feeding the engine
 /// directly use UTC windows; the evaluator retains feed calendars.
 ///
@@ -247,10 +247,10 @@ impl AlertEngine {
     }
 
     /// Updates active conditions of `symbol` on `timeframe` against the newest of `bars`, oldest
-    /// first, at the time `now`. Feed every interval in [`Alert::timeframes`]. `value` resolves a study or drawing source at
-    /// a bar index of `bars`, for instance with `Chart::alert_value`; price and volume come from
-    /// `bars`. Call it each frame with the bars of every live chart, but not with a chart in
-    /// replay.
+    /// first, at the time `now`. Feed every interval in [`Alert::timeframes`]. `value` resolves a
+    /// study or drawing source at a bar index of `bars`, for instance with `Chart::alert_value`;
+    /// price and volume come from `bars`. Call it each frame with the bars of every live chart, but
+    /// not with a chart in replay.
     pub fn update(
         &self,
         symbol: &str,
@@ -288,19 +288,8 @@ impl AlertEngine {
         );
     }
 
-    #[cfg(feature = "studies")]
-    pub(super) fn update_alert_intervals(
-        &self,
-        id: &AlertId,
-        symbol: &str,
-        inputs: &[(&BarClock, &[Bar])],
-        now: DateTime<Utc>,
-        value: impl Fn(Timeframe, &AlertSource, usize) -> Option<f64>,
-    ) {
-        self.update_matching(Some(id), symbol, inputs, now, value);
-    }
-
-    fn update_matching(
+    /// Updates the active alerts of `symbol`, or only `id`, with one set of interval inputs.
+    pub(super) fn update_matching(
         &self,
         id: Option<&AlertId>,
         symbol: &str,
@@ -638,8 +627,7 @@ fn observe(
     };
     let intervals = alert.timeframes();
     let closed = alert.frequency == AlertFrequency::OncePerBarClose
-        && timeframe.duration_ms() == intervals[0].duration_ms()
-        && (timeframe == intervals[0] || timeframe.as_str() == intervals[0].as_str());
+        && timeframe.as_str() == intervals[0].as_str();
     let Some(index) = bars.len().checked_sub(if closed { 2 } else { 1 }) else {
         if let Some(observation) = run.intervals.get_mut(&timeframe) {
             observation.available = false;
@@ -727,17 +715,15 @@ fn observe(
             })
         });
     let event = if closed {
-        let Some(time) = clock
-            .next_open(bar.time)
-            .or_else(|| bars.get(index + 1).map(|bar| bar.time))
-        else {
-            return false;
-        };
-        time
+        clock.next_open(bar.time).unwrap_or(bars[index + 1].time)
     } else {
         bar.time
     };
-    let message = alert.expand_message(symbol, timeframe, bar, |src| source(src, index));
+    let message = if holds {
+        alert.expand_message(symbol, timeframe, bar, |src| source(src, index))
+    } else {
+        String::new()
+    };
     run.intervals.insert(
         timeframe,
         Observation {
@@ -1237,11 +1223,7 @@ mod tests {
                 let send = |tf, minute, close, volume| {
                     let mut bars = vec![bar(minute, close, volume)];
                     if closed && tf == Timeframe::Min1 {
-                        bars.push(bar(
-                            minute + if tf == Timeframe::Min5 { 5 } else { 1 },
-                            1.0,
-                            1.0,
-                        ));
+                        bars.push(bar(minute + 1, 1.0, 1.0));
                     }
                     host.engine
                         .update("SYM", tf, &bars, time(1000), |_, _| None);
