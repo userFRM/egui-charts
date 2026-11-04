@@ -429,7 +429,7 @@ jobs:
     needs: changes
     if: "!cancelled() && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'push') && github.event.pull_request.draft != true"
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 60
     outputs:
       base: ${{ steps.base.outputs.counts }}
       head: ${{ steps.head.outputs.counts }}

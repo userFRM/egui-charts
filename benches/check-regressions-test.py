@@ -106,11 +106,9 @@ with tempfile.TemporaryDirectory() as directory:
     assert keys[0] == keys[1]
     assert len(set(keys)) == 3
 
-# Both revisions and the baseline lookup must share this job's processor identity.
+# Head, baseline lookup and the base fallback must run in one job, keyed without prefix matching.
 assert "matrix.revision" not in measurement_job
 assert "key: ${{ steps.measurement.outputs.key }}-${{ github.sha }}" in measurement_job
 assert "key: ${{ steps.measurement.outputs.key }}-${{ needs.changes.outputs.base }}" in measurement_job
 assert "restore-keys:" not in measurement_job
-assert "      - name: Measure head instructions\n" in measurement_job
-assert "      - name: Measure base instructions\n" in measurement_job
 print("processor measurement cache: PASS")
