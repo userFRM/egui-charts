@@ -92,7 +92,7 @@ impl Evaluation {
                     .find(|study| study.id == id)
                     .ok_or_else(|| format!("Alert has no saved inputs for study {id}"))?;
                 let study = factory
-                    .create(&saved.name)
+                    .create_registered(&saved.name)
                     .ok_or_else(|| format!("Unknown alert study: {}", saved.name))?;
                 let mut study = ConfiguredStudy::new(study);
                 for (id, value) in &saved.inputs {
