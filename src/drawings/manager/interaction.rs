@@ -9,6 +9,71 @@ use crate::model::PostLink;
 use egui::Pos2;
 
 impl DrawingManager {
+    /// Whether a modifier area gesture owns the pointer, including after modifier release
+    /// or cancellation until the primary button is released.
+    pub(crate) fn box_selection_input(&mut self, ui: &egui::Ui) -> bool {
+        let frame = ui.ctx().cumulative_frame_nr();
+        let (pressed, held, modifier, origin) = ui.input(|i| {
+            (
+                i.pointer.primary_pressed(),
+                i.pointer.primary_down() || i.pointer.primary_released(),
+                i.modifiers.ctrl || i.modifiers.command,
+                i.pointer.press_origin(),
+            )
+        });
+        if pressed && self.selection.area_press.is_none_or(|(at, _)| at != frame) {
+            let empty = self.active_tool.is_none()
+                && !self.eraser_mode
+                && modifier
+                && origin.is_some_and(|p| {
+                    (if self.pane_clips.is_empty() {
+                        self.pane_rect.contains(p)
+                    } else {
+                        self.pane_clips.values().any(|rect| rect.contains(p))
+                    }) && self.hit_test(p).is_none()
+                });
+            self.selection.area_press = Some((frame, empty));
+        }
+        held && (self.selection.area.is_some()
+            || (modifier && self.selection.area_press.is_some_and(|(_, empty)| empty)))
+    }
+
+    pub(crate) fn selection_area(&self) -> Option<&crate::drawings::services::SelectionArea> {
+        self.selection.area.as_ref()
+    }
+
+    pub(crate) fn begin_selection_area(&mut self, origin: Pos2, pane: egui::Rect) {
+        self.selection.begin_area(origin, pane);
+    }
+
+    pub(crate) fn end_selection_area(&mut self) {
+        self.selection.area = None;
+    }
+
+    pub(crate) fn update_selection_area(&mut self, ctx: &egui::Context, rect: egui::Rect) {
+        let painted = self.painted.lock().unwrap_or_else(|e| e.into_inner());
+        let ids: Vec<_> = self
+            .drawings
+            .iter()
+            .filter(|drawing| {
+                drawing.selectable
+                    && drawing.is_visible_on_timeframe(&self.curr_timeframe)
+                    && self.owns_pane(drawing)
+                    && painted
+                        .iter()
+                        .find(|p| p.id == drawing.id && p.points == drawing.points)
+                        .is_some_and(|p| {
+                            crate::drawings::services::SelectionService::intersects_painted(
+                                ctx, &p.shapes, rect,
+                            )
+                        })
+            })
+            .map(|d| d.id)
+            .collect();
+        drop(painted);
+        self.selection.update_area(ids);
+    }
+
     // === Handle delegation ===
 
     /// Returns the selection handle positions for a drawing (tool-type-aware).
@@ -867,6 +932,7 @@ impl DrawingManager {
     /// Cancels the in-progress drawing without adding it to the drawing list,
     /// and clears a finished measurement.
     pub fn cancel_curr_drawing(&mut self) {
+        self.selection.cancel_area();
         self.curr_drawing = None;
         self.preview_point = false;
         self.measurement = None;
