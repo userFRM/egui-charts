@@ -1,5 +1,23 @@
 # Calendar and viewport studies
 
+## Try retained market inputs
+
+On the published guide, select **Run example** to inspect the execution and book inputs a
+host study can read. **Retain last 6 bars only** moves the execution coverage boundary
+without changing the supplied candles; **Lose latest book** makes the latest depth
+unavailable. The source reads `OrderFlowInput::footprints_from` and `books_from` rather than
+estimating aggressors or book sizes from OHLCV. Each covered minute has volume 12 and delta
++5; its unknown-side unit adds volume only.
+
+<!-- example -->
+
+This example covers market-event inputs. The calendar and lower-interval contracts below
+remain independent; the [history and live studies guide](https://userfrm.github.io/egui-charts/docs/studies/live-data/)
+has a runnable history-paging and EMA scene. See [order-flow coverage](order-flow.md#footprints-and-books-for-host-studies)
+for the handles a custom study returns from `Indicator::order_flow_inputs`.
+
+## Calendar and lower-interval data
+
 [`IndicatorFactory`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/factory/struct.IndicatorFactory.html) includes Performance, Seasonality, Visible Average Price and Up/Down Volume.
 Performance compares the latest close with the last close on or before each calendar target in
 the instrument's trading calendar. On an interval shorter than a day it declares the chart

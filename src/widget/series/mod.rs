@@ -797,6 +797,7 @@ impl Chart {
         let follow = self.chart_options.time_scale.shift_visible_range_on_new_bar;
         self.state
             .set_elements(built.map(|(elements, _)| elements), follow);
+        self.refresh_time_scale_content();
         #[cfg(feature = "drawings")]
         self.project_drawing_points();
     }

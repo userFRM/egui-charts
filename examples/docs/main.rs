@@ -23,6 +23,9 @@ enum Scene {
     HostReadout(Box<scenes::recipes::HostReadout>),
     Synchronized(Box<scenes::recipes::Synchronized>),
     Export(scenes::recipes::Export),
+    OrderFlow(Box<scenes::order_flow::ExecutionDepth>),
+    RecordingReplay(scenes::recording_replay::RecordingReplay),
+    HostReport(scenes::host_report::HostReport),
 }
 
 impl ExampleApp {
@@ -30,6 +33,20 @@ impl ExampleApp {
         let mut scene = Scene::Chart;
         let chart = match name {
             "first-chart" => first_chart::first_chart(),
+            "order-flow" => {
+                let (chart, flow) = scenes::order_flow::ExecutionDepth::new();
+                scene = Scene::OrderFlow(Box::new(flow));
+                chart
+            }
+            "recording-replay" => {
+                let (chart, replay) = scenes::recording_replay::RecordingReplay::new();
+                scene = Scene::RecordingReplay(replay);
+                chart
+            }
+            "host-report" => {
+                scene = Scene::HostReport(scenes::host_report::HostReport::default());
+                first_chart::first_chart()
+            }
             "series" => scenes::series::lifecycle(),
             "annotations" => {
                 let mut chart = first_chart::first_chart();
@@ -155,6 +172,9 @@ impl eframe::App for ExampleApp {
                 Scene::HostReadout(scene) => return scene.show(ui, &mut self.chart),
                 Scene::Synchronized(scene) => return scene.show(ui, &mut self.chart),
                 Scene::Export(scene) => return scene.show(ui, &mut self.chart),
+                Scene::OrderFlow(scene) => return scene.show(ui, &mut self.chart),
+                Scene::RecordingReplay(scene) => return scene.show(ui, &mut self.chart),
+                Scene::HostReport(scene) => return scene.show(ui),
             }
             self.chart.show(ui);
         });
@@ -232,6 +252,9 @@ mod tests {
     fn every_guide_scene_can_start() {
         for name in [
             "first-chart",
+            "order-flow",
+            "recording-replay",
+            "host-report",
             "series",
             "series-candles",
             "series-line",

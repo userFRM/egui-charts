@@ -90,20 +90,26 @@ impl DrawingManager {
     /// To unload drawings without deleting them, clear [`Self::drawings`], then call
     /// [`Self::cancel_curr_drawing`] and [`Self::deselect`]. A bulk removal is one undo step.
     pub fn clear_all(&mut self) {
+        self.clear_all_with_locked(false);
+    }
+
+    /// Bulk removal with explicit permission to include locked drawings. Preserves locks in
+    /// undo and queues deletion of stored records exactly as [`Self::clear_all`] does.
+    pub fn clear_all_with_locked(&mut self, include_locked: bool) {
         self.history.push_snapshot(
             self.drawings
                 .iter()
                 .enumerate()
-                .filter(|(_, drawing)| !drawing.locked)
+                .filter(|(_, drawing)| include_locked || !drawing.locked)
                 .map(|(index, drawing)| (index, drawing.clone()))
                 .collect(),
         );
-        for drawing in self.drawings.iter().filter(|d| !d.locked) {
+        for drawing in self.drawings.iter().filter(|d| include_locked || !d.locked) {
             if drawing.saveable {
                 self.queue(DrawingSyncAction::Delete(sync_id(drawing)));
             }
         }
-        self.drawings.retain(|d| d.locked);
+        self.drawings.retain(|d| d.locked && !include_locked);
         self.cancel_curr_drawing();
         self.selection.deselect_all();
     }
@@ -255,13 +261,19 @@ impl DrawingManager {
             edit(drawing);
             if old.locked && drawing.locked {
                 let visible = drawing.visible;
+                let timeframe_visibility = drawing.timeframe_visibility.clone();
                 let label = drawing.label.clone();
                 let folder = drawing.folder.clone();
                 *drawing = old.clone();
-                if visible == old.visible && label == old.label && folder == old.folder {
+                if visible == old.visible
+                    && timeframe_visibility == old.timeframe_visibility
+                    && label == old.label
+                    && folder == old.folder
+                {
                     return;
                 }
                 drawing.visible = visible;
+                drawing.timeframe_visibility = timeframe_visibility;
                 drawing.label = label;
                 drawing.folder = folder;
             }
@@ -319,16 +331,22 @@ impl DrawingManager {
             let old = drawing.clone();
             edit(drawing);
             if old.locked && drawing.locked {
-                let (visible, label, folder) = (
+                let (visible, timeframe_visibility, label, folder) = (
                     drawing.visible,
+                    drawing.timeframe_visibility.clone(),
                     drawing.label.clone(),
                     drawing.folder.clone(),
                 );
                 *drawing = old.clone();
-                if visible == old.visible && label == old.label && folder == old.folder {
+                if visible == old.visible
+                    && timeframe_visibility == old.timeframe_visibility
+                    && label == old.label
+                    && folder == old.folder
+                {
                     continue;
                 }
                 drawing.visible = visible;
+                drawing.timeframe_visibility = timeframe_visibility;
                 drawing.label = label;
                 drawing.folder = folder;
             }

@@ -3,11 +3,30 @@
 The library consumes the host's historical and streaming executions, quotes and synchronized
 book through the existing [`Datafeed`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/trait.Datafeed.html) and [`Sink`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Sink.html). It supplies no market data service.
 
+## Try execution coverage and depth loss
+
+On the published guide, select **Run example** to open an isolated chart with synthetic data.
+Each minute contains 8 bought units, 3 sold units and 1 with no known aggressor: volume is
+12 and delta is +5. **Retain last 6 bars only** rebuilds the execution source with a shorter
+history. Its coverage begins at 00:06 UTC, and earlier candles remain visible without invented
+footprint cells. At narrow widths, zoom in until the cells fit; the chart uses candles while
+they would be too small to read. **Lose latest book** removes that bar's depth, leaving an
+unavailable readout until a synchronized snapshot is supplied again. Clear it to restore
+the sample snapshot. Depth and executions have separate coverage.
+
+<!-- example -->
+
+The source beside the running example supplies candles independently, pushes chronological
+fills through `Footprint` and `OrderFlowInput`, and reads `complete_from` and the last book.
+It uses the default footprint presentation. This is a finite integration sample; a production
+host owns retrieval, stream sequencing, retention and recovery. See
+[recording and replay](order-flow-replay.md#try-a-recording) for the same live sink driven by recorded events.
+
 [`Footprint::new(chart.bar_clock(), tick_size, ticks_per_row)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Footprint.html#method.new) aggregates executions without
 estimating their aggressor from candles. Replay chronological historical trades once and append
 new executions with [`push`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.Footprint.html#method.push); rebuild on corrections. Unknown aggressors contribute to total
-volume and remain outside bid/ask delta. [`Chart::show_footprint`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.show_footprint) draws the four numeric modes,
-profiles, grouped rows, imbalances, POC and value area in place of the price series. Its
+volume and remain outside bid/ask delta. [`Chart::show_footprint`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.show_footprint) draws volume, delta, trade count and
+average size columns, profiles, grouped rows, imbalances, POC and value area in place of the price series. Its
 [`FootprintConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/overlays/struct.FootprintConfig.html) controls the presentation: cell colour, number abbreviation and zero display,
 value-sized fonts, extreme ask/bid ratios and the pullback range. Automatic grouping affects
 display only.
