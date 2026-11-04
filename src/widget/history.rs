@@ -462,6 +462,7 @@ impl Chart {
                         && a.height == b.height
                         && a.preserve == b.preserve
                         && a.collapsed == b.collapsed
+                        && a.axes == b.axes
                         && a.scale.options() == b.scale.options()
                         && a.scale.is_manual() == b.scale.is_manual()
                         && (!a.scale.is_manual() || a.scale.range() == b.scale.range())

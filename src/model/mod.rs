@@ -107,7 +107,7 @@ pub use range_bar::{
 pub use renko::{RenkoBrick, RenkoConfig, RenkoDirection, to_renko_bricks};
 pub use replay::ReplaySession;
 pub(crate) use revision::next_revision;
-pub use series_scale::SeriesScale;
+pub use series_scale::{AxisSide, PaneAxisOptions, SeriesScale};
 pub use series_style::{
     AutoscaleInfo, AutoscaleMargins, AutoscaleProvider, PriceLineSource, SeriesAlerts,
     SeriesDisplayFormat, SeriesFormat, SeriesStyle,

@@ -513,6 +513,34 @@ mod tests {
         }
     }
 
+    /// `axis` is the main price axis of the pane: its column beside the plot and its plot's
+    /// rows, without the corner beside the time axis.
+    #[test]
+    fn main_axis_primitives_draw_in_their_column_and_rows() {
+        struct AxisRect(Arc<Mutex<Option<egui::Rect>>>);
+        impl Primitive for AxisRect {
+            fn draw_price_axis(&self, _: &egui::Painter, axis: egui::Rect, _: &PrimitiveView<'_>) {
+                *self.0.lock().unwrap() = Some(axis);
+            }
+        }
+        for side in [crate::model::AxisSide::Right, crate::model::AxisSide::Left] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[10.0], &[20.0]);
+            chart.place_pane_scales(crate::widget::PaneId::MAIN, side);
+            let seen = Arc::default();
+            chart.attach_primitive(SeriesId::MAIN, AxisRect(Arc::clone(&seen)));
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let axis = seen.lock().unwrap().unwrap();
+            let plot = chart.get_rendered_price_rect();
+            assert_eq!(axis.y_range(), plot.y_range(), "{side:?}");
+            let touching = match side {
+                crate::model::AxisSide::Right => axis.left() == plot.right(),
+                crate::model::AxisSide::Left => axis.right() == plot.left(),
+            };
+            assert!(touching, "{side:?}: {axis:?} beside {plot:?}");
+        }
+    }
+
     #[test]
     fn hooks_follow_attachment_bar_changes_and_removal() {
         let ctx = egui::Context::default();

@@ -11,7 +11,7 @@ use super::{AlertDialogAction, AlertDialogConfig};
 use crate::data::{FeedError, inbox::Inbox};
 use crate::model::{
     Alert, AlertChannelComparison, AlertComparison, AlertCondition, AlertFrequency, AlertRule,
-    AlertSource, NotificationSchedule, NotificationWindow, TimezoneId,
+    AlertSource, NotificationSchedule, NotificationWindow, Timeframe, TimezoneId,
 };
 use crate::services::{Storage, StoreKind};
 use crate::ui_kit::FormGrid;
@@ -48,6 +48,7 @@ pub struct AlertDialog {
     schedule_days: [bool; 7],
     /// The windows as `HH:MM` start and end texts.
     schedule_windows: Vec<[String; 2]>,
+    editing_condition: usize,
     preset_name: String,
     presets: BTreeMap<String, Alert>,
     storage: Option<Arc<dyn Storage>>,
@@ -80,6 +81,7 @@ impl AlertDialog {
             schedule_zone: String::new(),
             schedule_days: [false; 7],
             schedule_windows: Vec::new(),
+            editing_condition: 0,
             preset_name: String::new(),
             presets: BTreeMap::new(),
             storage: None,
@@ -116,6 +118,7 @@ impl AlertDialog {
         self.set_expiry_fields(alert.expires);
         self.set_schedule_fields(alert.schedule.as_deref());
         self.alert = alert;
+        self.editing_condition = 0;
         self.is_open = true;
     }
 
@@ -337,11 +340,17 @@ impl AlertDialog {
                         schedule = self.schedule();
                         valid = self.alert.is_valid() && expiry.is_ok() && schedule.is_ok();
                         if !self.alert.is_valid() {
-                            status_message(
-                                ui,
-                                MessageKind::Error,
-                                "Check the subject, levels and lookback",
-                            );
+                            let intervals = self.alert.timeframes();
+                            let message = if self.alert.additional_conditions.len() > 4 {
+                                "An alert accepts five conditions"
+                            } else if intervals.len() > 1
+                                && intervals.iter().any(|interval| interval.is_trade_based())
+                            {
+                                "Mixed intervals need time-based bars"
+                            } else {
+                                "Check the subject, levels and lookback"
+                            };
+                            status_message(ui, MessageKind::Error, message);
                         }
                         if let Err(error) = expiry {
                             status_message(ui, MessageKind::Error, error);
@@ -550,43 +559,95 @@ impl AlertDialog {
             ui.end_row();
         });
         ui.separator();
-        if !matches!(self.alert.condition, AlertCondition::StrategyFills(_)) {
+        let fills = matches!(self.alert.condition, AlertCondition::StrategyFills(_));
+        if !fills && !self.alert.additional_conditions.is_empty() {
             ui.label(l10n::text(
                 ui.ctx(),
-                "All conditions must hold on the same bar",
+                "Every condition must be true together",
             ));
+            for (index, (source, condition, interval)) in self.alert.rules().enumerate() {
+                let preview = rule_preview(ui.ctx(), source, condition, interval, &self.sources);
+                if ui
+                    .add(
+                        egui::Button::new(preview)
+                            .selected(self.editing_condition == index)
+                            .wrap(),
+                    )
+                    .accessible_name(l10n::format_text(
+                        ui.ctx(),
+                        "Edit condition {0}",
+                        &[("0", (index + 1).to_string())],
+                    ))
+                    .clicked()
+                {
+                    self.editing_condition = index;
+                }
+            }
         }
-        ui.push_id("first", |ui| {
-            rule_form(
-                ui,
-                &mut self.alert.source,
-                &mut self.alert.condition,
-                &self.sources,
-            )
-        });
-        let mut remove = None;
-        for (index, rule) in self.alert.additional_conditions.iter_mut().enumerate() {
-            ui.push_id(index, |ui| {
-                ui.separator();
+        self.editing_condition = self
+            .editing_condition
+            .min(self.alert.additional_conditions.len());
+        ui.push_id(("rule", self.editing_condition), |ui| {
+            if self.editing_condition == 0 {
+                if !fills {
+                    let source_interval = self.alert.timeframe;
+                    interval_picker(ui, &mut self.alert.timeframe, "Chart interval");
+                    if self.alert.timeframe != source_interval
+                        && let Some(inputs) = &mut self.alert.inputs
+                    {
+                        // A captured span counts bars of the interval it was captured on.
+                        inputs.start = None;
+                        inputs.visible = None;
+                    }
+                }
+                rule_form(
+                    ui,
+                    &mut self.alert.source,
+                    &mut self.alert.condition,
+                    &self.sources,
+                );
+            } else {
+                let index = self.editing_condition - 1;
+                self.alert
+                    .additional_timeframes
+                    .resize(self.alert.additional_conditions.len(), None);
+                interval_picker(
+                    ui,
+                    &mut self.alert.additional_timeframes[index],
+                    "Follow first interval",
+                );
+                let rule = &mut self.alert.additional_conditions[index];
                 rule_form(ui, &mut rule.source, &mut rule.condition, &self.sources);
                 if ui
                     .button(l10n::text(ui.ctx(), "Remove condition"))
                     .clicked()
                 {
-                    remove = Some(index);
+                    self.alert.additional_conditions.remove(index);
+                    self.alert.additional_timeframes.remove(index);
                 }
-            });
-        }
-        if let Some(index) = remove {
-            self.alert.additional_conditions.remove(index);
-        }
-        if !matches!(self.alert.condition, AlertCondition::StrategyFills(_))
-            && ui.button(l10n::text(ui.ctx(), "Add condition")).clicked()
+            }
+        });
+        if !fills
+            && ui
+                .add_enabled(
+                    self.alert.additional_conditions.len() < 4,
+                    egui::Button::new(l10n::text(ui.ctx(), "Add condition")),
+                )
+                .on_disabled_hover_text(l10n::text(ui.ctx(), "An alert accepts five conditions"))
+                .clicked()
         {
+            self.alert
+                .additional_timeframes
+                .resize(self.alert.additional_conditions.len(), None);
+            self.alert.additional_timeframes.push(self.alert.timeframe);
             self.alert.additional_conditions.push(AlertRule {
                 source: self.alert.source.clone(),
                 condition: self.alert.condition.clone(),
             });
+            self.editing_condition = self.alert.additional_conditions.len();
+        }
+        while self.alert.additional_timeframes.last() == Some(&None) {
+            self.alert.additional_timeframes.pop();
         }
         if self.storage.is_some() {
             ui.separator();
@@ -640,6 +701,61 @@ const DAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 struct PresetDocument {
     version: u32,
     presets: BTreeMap<String, Alert>,
+}
+
+fn interval_picker(ui: &mut Ui, interval: &mut Option<Timeframe>, inherited: &str) {
+    ui.horizontal_wrapped(|ui| {
+        let label = ui.label(l10n::text(ui.ctx(), "Interval"));
+        egui::ComboBox::from_id_salt("interval")
+            .selected_text(
+                interval.map_or_else(|| l10n::text(ui.ctx(), inherited), |tf| tf.to_string()),
+            )
+            .show_ui(ui, |ui| {
+                ui.selectable_value(interval, None, l10n::text(ui.ctx(), inherited));
+                for value in Timeframe::all() {
+                    ui.selectable_value(interval, Some(value), value.to_string());
+                }
+            })
+            .response
+            .labelled_by(label.id);
+    });
+}
+
+fn rule_preview(
+    ctx: &egui::Context,
+    source: &AlertSource,
+    condition: &AlertCondition,
+    interval: Timeframe,
+    sources: &[(AlertSource, String)],
+) -> String {
+    let name = |source: &AlertSource| {
+        let label = sources
+            .iter()
+            .find(|(value, _)| value == source)
+            .map(|(_, label)| label.clone())
+            .unwrap_or_else(|| match source {
+                AlertSource::Price => "Price".into(),
+                AlertSource::Volume => "Volume".into(),
+                _ => format!("{source:?}"),
+            });
+        l10n::text(ctx, label)
+    };
+    let others: Vec<_> = condition
+        .partners()
+        .into_iter()
+        .flatten()
+        .map(name)
+        .collect();
+    format!(
+        "{} · {}{} · {interval}",
+        name(source),
+        l10n::text(ctx, condition.to_string()),
+        if others.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", others.join(", "))
+        }
+    )
 }
 
 fn source_picker(
@@ -716,7 +832,7 @@ fn drawing_channel(
     let b = levels.next()?.0.clone();
     let a = levels.next()?.0.clone();
     Some(AlertCondition::Channel {
-        boundaries: [a, b],
+        boundaries: Box::new([a, b]),
         comparison: AlertChannelComparison::Entering,
     })
 }
@@ -952,6 +1068,87 @@ mod tests {
     }
 
     #[test]
+    fn condition_previews_edit_intervals_limit_and_restore_the_host_request() {
+        use crate::model::{AlertInputs, Timeframe};
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut dialog = AlertDialog::new();
+        dialog.edit(Alert::new("SAMPLE", AlertCondition::Above(100.0)));
+        dialog.alert.timeframe = Some(Timeframe::Min5);
+        let seed = chrono::DateTime::from_timestamp(0, 0);
+        dialog.alert.inputs = Some(Box::new(AlertInputs {
+            start: seed,
+            visible: seed.map(|time| (time, time)),
+            ..Default::default()
+        }));
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(560.0, 900.0))
+            .build_ui_state(|ui, dialog: &mut AlertDialog| dialog.form(ui), dialog);
+        h.run();
+        assert!(h.query_by_label("Edit condition 1").is_none());
+        for _ in 0..4 {
+            h.get_by_label("Add condition").click();
+            h.run();
+        }
+        assert_eq!(h.state().alert.additional_conditions.len(), 4);
+        h.get_by_label("Add condition").click();
+        h.run();
+        assert_eq!(
+            h.state().alert.additional_conditions.len(),
+            4,
+            "five includes the first condition"
+        );
+        h.get_by_label("Edit condition 2").click();
+        h.run();
+        h.get_by_label("Interval").click();
+        h.run();
+        h.get_by_label("1h").scroll_to_me();
+        h.run();
+        h.get_by_label("1h").click();
+        h.run();
+        assert_eq!(
+            serde_json::to_value(&h.state().alert).unwrap()["additional_timeframes"][0],
+            serde_json::json!("Hour1")
+        );
+        let saved = serde_json::to_string(&h.state().alert).unwrap();
+        h.state_mut().edit(serde_json::from_str(&saved).unwrap());
+        h.run();
+        h.get_by_label("Edit condition 2").click();
+        h.run();
+        assert_eq!(
+            serde_json::to_value(&h.state().alert).unwrap()["additional_timeframes"][0],
+            serde_json::json!("Hour1")
+        );
+        assert_eq!(
+            h.state().alert.inputs.as_ref().unwrap().start,
+            seed,
+            "an additional interval leaves the source span"
+        );
+        h.get_by_label("Remove condition").click();
+        h.run();
+        assert_eq!(
+            serde_json::to_value(&h.state().alert).unwrap()["additional_timeframes"],
+            serde_json::json!(["Min5", "Min5", "Min5"])
+        );
+        h.get_by_label("Edit condition 1").click();
+        h.run();
+        h.get_by_label("Interval").click();
+        h.run();
+        h.get_by_label("1min").scroll_to_me();
+        h.run();
+        h.get_by_label("1min").click();
+        h.run();
+        assert!(h.state().alert.is_valid());
+        assert_eq!(h.state().alert.timeframe, Some(Timeframe::Min1));
+        assert_eq!(
+            serde_json::to_value(&h.state().alert).unwrap()["additional_timeframes"],
+            serde_json::json!(["Min5", "Min5", "Min5"])
+        );
+        // A span captured on the source chart's interval does not describe another interval.
+        let inputs = h.state().alert.inputs.as_ref().unwrap();
+        assert_eq!((inputs.start, inputs.visible), (None, None));
+    }
+
+    #[test]
     fn drawing_channel_keeps_selected_boundaries_through_edits() {
         use egui_kittest::{Harness, kittest::Queryable};
         for dark in [false, true] {
@@ -1100,10 +1297,10 @@ mod tests {
             dialog.alert.additional_conditions.push(AlertRule {
                 source: AlertSource::Price,
                 condition: AlertCondition::Channel {
-                    boundaries: [
+                    boundaries: Box::new([
                         AlertSource::Drawing("7".into()),
                         AlertSource::Drawing("7#1".into()),
-                    ],
+                    ]),
                     comparison: AlertChannelComparison::Entering,
                 },
             });
