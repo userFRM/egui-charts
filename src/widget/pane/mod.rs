@@ -3,6 +3,7 @@
 mod controls;
 mod indicator;
 mod render;
+pub use crate::chart::primitives::PaneId;
 pub use indicator::{IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneInteraction};
 pub use render::RenderedIndicatorPane;
 
@@ -14,17 +15,6 @@ use egui::{Color32, Rect, Vec2};
 
 /// A study's name and input values, which identify it across charts.
 type PaneStudy = (String, Vec<(String, serde_json::Value)>);
-
-/// Identifies a pane of a chart. [`PaneId::MAIN`] is the original price pane;
-/// [`Chart::add_pane`] and [`Chart::panes`] return the others. An id stays valid until its pane
-/// is removed. Added pane ids are never reused by the chart.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct PaneId(pub(super) usize);
-
-impl PaneId {
-    /// The original price pane, which can be removed. The main series can move elsewhere.
-    pub const MAIN: PaneId = PaneId(0);
-}
 
 /// Behaviour and colours of the separators between panes, set with
 /// [`Chart::with_pane_options`] or [`Chart::pane_options_mut`].
@@ -223,11 +213,15 @@ impl Chart {
             || pane.members.iter().any(|id| self.pane_member(*id))
     }
 
-    /// Whether `pane` is drawn below or above the price pane: it is empty or has a visible member.
+    /// Whether `pane` is drawn below or above the price pane: it is empty, owns a primitive or has a visible member.
     pub(super) fn pane_shown(&self, pane: &Pane) -> bool {
         pane.id != PaneId::MAIN
             && self.pane_listed(pane)
             && (pane.members.is_empty()
+                || self
+                    .primitives
+                    .iter()
+                    .any(|item| item.pane == Some(pane.id))
                 || pane
                     .members
                     .iter()
@@ -244,7 +238,7 @@ impl Chart {
                 .any(|pane| self.pane_shown(pane))
     }
 
-    fn pane_index(&self, pane: PaneId) -> Option<usize> {
+    pub(super) fn pane_index(&self, pane: PaneId) -> Option<usize> {
         self.pane_layout
             .panes
             .iter()

@@ -99,6 +99,7 @@ mod navigation;
 mod palette;
 pub(crate) mod pan_zoom;
 mod pane;
+#[doc(inline)]
 pub use pane::{ChartLayoutRects, PaneId, PaneOptions, RenderedIndicatorPane};
 #[cfg(feature = "drawings")]
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
@@ -133,8 +134,8 @@ mod drawing_api;
 pub use drawing_api::DrawingError;
 mod studies_data;
 pub use crate::chart::primitives::{
-    PriceAxisLabel, Primitive, PrimitiveHit, PrimitiveId, PrimitivePass, PrimitiveView,
-    TimeAxisLabel,
+    PanePrimitive, PanePrimitiveView, PriceAxisLabel, Primitive, PrimitiveHit, PrimitiveId,
+    PrimitivePass, PrimitiveView, TimeAxisLabel,
 };
 pub use pane::VisualOrder;
 pub use series::{BarsInRange, MismatchDirection, PriceLineId, SeriesLastValue};
@@ -145,7 +146,9 @@ pub use snapshot::{
     ChartSnapshot, RestoreError, SavedAnnotations, SavedLayout, SavedPane, SavedSeries, SavedStudy,
 };
 mod volume;
-pub use layout::{ChartLayout, ChartLayoutMode, ChartLayoutSizing, ChartSyncOptions};
+pub use layout::{
+    ChartLayout, ChartLayoutMode, ChartLayoutSizing, ChartLink, ChartLinkGroups, ChartSyncOptions,
+};
 pub(crate) mod sync;
 mod time_scale;
 use feed::FeedLink;
@@ -414,6 +417,8 @@ pub struct Chart {
     // =========================================================================
     /// This chart is an inactive, attached slot in a multi-chart layout for the current frame.
     pub(crate) layout_inactive: bool,
+    /// The layout's field selectors occupy the right end of the status line this frame.
+    pub(crate) layout_link_controls: bool,
     /// External crosshair position from synced chart (bar index)
     pub(crate) synced_crosshair_bar_idx: Option<f64>,
     /// Source period retained by time-based setters and resolved against the current bars.

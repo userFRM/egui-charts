@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use egui_charts::data::{MarketEvent, RecordingWriter, ReplayDriver, ReplayEvent};
 use egui_charts::model::{Bar, BarClock, Timeframe};
 use egui_charts::ui::replay::{ReplayAction, ReplayController, ReplayStartAction};
-use egui_charts::widget::SeriesId;
+use egui_charts::widget::{ChartLinkGroups, SeriesId};
 use std::collections::VecDeque;
 use std::num::NonZeroU64;
 use std::sync::Arc;
@@ -465,6 +465,8 @@ impl DemoApp {
 #[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(super) struct LayoutGroups {
     groups: [Option<String>; 16],
+    #[serde(default)]
+    links: [ChartLinkGroups; 16],
     detached: [bool; 16],
     sync: [bool; 6],
     #[serde(default)]
@@ -514,6 +516,7 @@ impl DemoApp {
         let sync = &self.layout.sync;
         LayoutGroups {
             sizes: self.layout.saved_sizes(),
+            links: self.layout.saved_link_groups(),
             groups: std::array::from_fn(|slot| self.layout.sync_group(slot).map(str::to_owned)),
             detached: std::array::from_fn(|slot| self.layout.is_detached(slot)),
             cents: std::array::from_fn(|slot| {
@@ -571,6 +574,8 @@ impl DemoApp {
         let Some(groups) = groups else {
             for slot in 0..16 {
                 self.layout.set_sync_group(slot, None);
+                self.layout
+                    .set_link_groups(slot, ChartLinkGroups::default(), true);
                 self.layout.set_detached(slot, false);
             }
             self.layout.sync = Default::default();
@@ -580,6 +585,8 @@ impl DemoApp {
         for slot in 0..16 {
             self.layout
                 .set_sync_group(slot, groups.groups[slot].clone());
+            self.layout
+                .set_link_groups(slot, groups.links[slot].clone(), true);
             self.layout.set_detached(slot, groups.detached[slot]);
         }
         let sync = &mut self.layout.sync;

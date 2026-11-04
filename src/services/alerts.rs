@@ -67,7 +67,7 @@ use crate::model::{Alert, AlertId};
 ///     fn watch(&self, events: Events<AlertEvent>) {
 ///         let mut state = self.0.lock().unwrap();
 ///         for alert in &state.alerts {
-///             events.push(AlertEvent::Upsert(alert.clone()));
+///             events.push(AlertEvent::Upsert(Box::new(alert.clone())));
 ///         }
 ///         state.events = Some(events);
 ///     }
@@ -81,7 +81,7 @@ use crate::model::{Alert, AlertId};
 ///         state.alerts.retain(|kept| kept.id != alert.id);
 ///         state.alerts.push(alert.clone());
 ///         if let Some(events) = &state.events {
-///             events.push(AlertEvent::Upsert(alert));
+///             events.push(AlertEvent::Upsert(Box::new(alert)));
 ///         }
 ///         reply.send(Ok(()));
 ///     }
@@ -121,6 +121,8 @@ pub trait Alerts: MaybeSend + 'static {
 
     /// Creates (`alert.id` is `None`) or replaces an alert. Keep `alert.inputs` with the alert:
     /// its independent study parameters and source view must survive copies and restoration.
+    /// Preserve display choices and creation time on edits, and retain the latest firing time
+    /// on every trigger, including repeats, so the manager and chart can restore their state.
     /// Answer `Ok` once the change is kept;
     /// the alert appears when `watch` pushes it, so push the saved alert, with its id, as
     /// [`AlertEvent::Upsert`].
@@ -135,7 +137,7 @@ pub trait Alerts: MaybeSend + 'static {
 #[non_exhaustive]
 pub enum AlertEvent {
     /// Adds the alert, or replaces the one with its id. An alert without an id is ignored.
-    Upsert(Alert),
+    Upsert(Box<Alert>),
     /// Removes the alert with this id, if any.
     Remove(AlertId),
     /// Removes every alert, so a host that reconnects can push its full list again.

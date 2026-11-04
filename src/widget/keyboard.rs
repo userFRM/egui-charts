@@ -159,6 +159,57 @@ pub(crate) fn shortcuts_suppressed(ctx: &Context) -> bool {
 }
 
 impl super::Chart {
+    /// Pointer commands yield to editors, popups and in-progress drawing operations.
+    pub(crate) fn pointer_commands_enabled(&self, ctx: &Context) -> bool {
+        if !self.chart_options.keyboard.enabled
+            || shortcuts_suppressed(ctx)
+            || ctx.text_edit_focused()
+            || self.menu_open
+            || egui::Popup::is_any_open(ctx)
+            || ctx.input(|input| input.pointer.is_decidedly_dragging())
+        {
+            return false;
+        }
+        #[cfg(feature = "drawings")]
+        if self.drawings.text_editor.is_some()
+            || self.drawings.curr_drawing.is_some()
+            || self.drawings.dragging_handle.is_some()
+            || self.drawings.active_tool.is_some()
+            || self.drawings.eraser_mode
+        {
+            return false;
+        }
+        true
+    }
+
+    /// Pane and price under `pos`, read on that pane's own scale. `None` outside the plot, over
+    /// a collapsed pane or at a price that is not finite.
+    #[cfg(feature = "ui")]
+    pub(crate) fn pointer_price(&self, pos: egui::Pos2) -> Option<(super::PaneId, f64)> {
+        let mapping = self.get_chart_mapping();
+        if !mapping.rect.x_range().contains(pos.x) {
+            return None;
+        }
+        let pane = self
+            .pane_layout
+            .panes
+            .iter()
+            .find(|pane| pane.rect.height() > 24.0 && pane.rect.contains(pos))?;
+        let map = if pane.id == self.main_series_pane() {
+            if !mapping.rect.contains(pos) {
+                return None;
+            }
+            mapping.price
+        } else {
+            pane.members
+                .first()
+                .and_then(|id| self.series_price_map(*id))
+                .unwrap_or_else(|| pane.price_map())
+        };
+        let price = map.y_to_price(pos.y);
+        price.is_finite().then_some((pane.id, price))
+    }
+
     /// Bindings used by this chart. Hosts pass this same map to help and menus.
     pub fn shortcuts(&self) -> &ShortcutMap {
         &self.keyboard.map

@@ -10,8 +10,9 @@
 
 use super::{
     ArrowStyle, BarsPatternConfig, ChartPoint, DrawingToolType, ElliottDegree, FibonacciConfig,
-    FontWeight, GANN_SQUARE_UNITS, GannConfig, GhostFeedConfig, ImageConfig, PitchforkConfig,
-    PositionSize, PositionSizing, RegressionTrendConfig, TimeframeVisibility, VwapConfig,
+    FontWeight, GANN_SQUARE_UNITS, GannConfig, GhostFeedConfig, ImageConfig, LineMeasurements,
+    PitchforkConfig, PositionSize, PositionSizing, RegressionTrendConfig, TimeframeVisibility,
+    VwapConfig,
 };
 
 use crate::data::VolumeProfileConfig;
@@ -177,6 +178,9 @@ pub struct Drawing {
     pub time_axis_label: bool,
 
     // === Tool-specific configuration (None uses the defaults) ===
+    /// Readouts and midpoint of an extended line. Other tools ignore these settings.
+    #[serde(default)]
+    pub line_measurements: LineMeasurements,
     /// Quantity of the long and short position tools
     pub position_size: Option<PositionSize>,
     /// Instrument economics for long and short position sizing. Older drawings use unit sizing.
@@ -470,6 +474,7 @@ impl Drawing {
             timeframe_visibility: TimeframeVisibility::all(),
             price_axis_label: true,
             time_axis_label: true,
+            line_measurements: LineMeasurements::default(),
             position_size: None,
             position_sizing: PositionSizing::default(),
             position_target_color: None,

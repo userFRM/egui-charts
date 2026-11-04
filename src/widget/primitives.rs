@@ -1,26 +1,60 @@
-//! Host primitives attached to series, and custom series drawn by them.
+//! Host primitives attached to series or panes, and custom series drawn by them.
 
-use super::{Chart, ChartElementId, PointerTarget, SeriesId};
+use super::{Chart, ChartElementId, PaneId, PointerTarget, SeriesId};
 use crate::chart::coords::ChartMapping;
 use crate::chart::primitives::{
-    Primitive, PrimitiveHit, PrimitiveId, PrimitivePass, PrimitiveView,
+    PanePrimitive, PanePrimitiveView, Primitive, PrimitiveHit, PrimitiveId, PrimitivePass,
+    PrimitiveView,
 };
 use crate::model::{AutoscaleInfo, AutoscaleMargins, Bar};
 use crate::studies::Indicator;
 use egui::{Painter, Pos2};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-/// A primitive and the series it is attached to.
+/// A primitive and its series or pane owner.
 #[derive(Clone)]
 pub(super) struct Attached {
     pub(super) id: PrimitiveId,
     pub(super) series: SeriesId,
+    /// A pane owner takes precedence over `series`, which is unused for pane drawing.
+    pub(super) pane: Option<PaneId>,
     /// Shared with image exports, which draw the same primitives.
     primitive: Arc<Mutex<dyn Primitive>>,
     /// Draws the study `series` in place of its plots.
     pub(super) replaces: bool,
     /// The series' bars last reported; `None` until `attached` ran.
     pub(super) seen: Option<Seen>,
+}
+
+/// Reuses pass ordering and hit ranking without exposing series or scale hooks to pane code.
+struct PaneDrawing<P>(PaneId, P);
+
+impl<P: PanePrimitive> Primitive for PaneDrawing<P> {
+    fn draw_background(&self, painter: &Painter, view: &PrimitiveView<'_>, pass: PrimitivePass) {
+        self.1
+            .draw_background(painter, &PanePrimitiveView::new(self.0, view), pass);
+    }
+
+    fn draw(&self, painter: &Painter, view: &PrimitiveView<'_>, pass: PrimitivePass) {
+        self.1
+            .draw(painter, &PanePrimitiveView::new(self.0, view), pass);
+    }
+
+    fn hit_test_result(&self, pos: Pos2, view: &PrimitiveView<'_>) -> Option<PrimitiveHit> {
+        self.1.hit_test(pos, &PanePrimitiveView::new(self.0, view))
+    }
+
+    fn attached(&mut self, ctx: &egui::Context, _: SeriesId) {
+        self.1.attached(ctx, self.0);
+    }
+
+    fn detached(&mut self) {
+        self.1.detached();
+    }
+
+    fn data_changed(&mut self, _: &[Bar]) {
+        self.1.update();
+    }
 }
 
 /// What identifies the bars of a series: a revision that changes with any bar but the last, the
@@ -93,6 +127,30 @@ impl Chart {
         self.attach(series, Arc::new(Mutex::new(primitive)), false)
     }
 
+    /// Attaches host drawing to an existing pane without selecting a series or price scale.
+    /// It survives member changes while that pane exists, including an empty retained pane.
+    /// Passes and backgrounds share attachment order with series primitives. See [`PanePrimitive`].
+    ///
+    /// Returns `None`, dropping `primitive` without calling hooks, for an unknown pane.
+    pub fn attach_pane_primitive(
+        &mut self,
+        pane: PaneId,
+        primitive: impl PanePrimitive + 'static,
+    ) -> Option<PrimitiveId> {
+        self.pane_index(pane)?;
+        let id = PrimitiveId(self.next_primitive);
+        self.next_primitive += 1;
+        self.primitives.push(Attached {
+            id,
+            series: SeriesId::MAIN,
+            pane: Some(pane),
+            primitive: Arc::new(Mutex::new(PaneDrawing(pane, primitive))),
+            replaces: false,
+            seen: None,
+        });
+        Some(id)
+    }
+
     /// Detaches a primitive, calling its [`detached`](Primitive::detached) hook if it was
     /// attached in a frame. Returns `false` for an unknown or already detached id.
     pub fn detach_primitive(&mut self, id: PrimitiveId) -> bool {
@@ -133,6 +191,7 @@ impl Chart {
         self.primitives.push(Attached {
             id,
             series,
+            pane: None,
             primitive,
             replaces,
             seen: None,
@@ -154,18 +213,29 @@ impl Chart {
         }
     }
 
+    fn attachment_source(&self, item: &Attached) -> Option<(Seen, &[Bar])> {
+        if let Some(pane) = item.pane {
+            let bars = self.state.data().bars.as_slice();
+            self.pane_index(pane)
+                .is_some()
+                .then(|| (seen(self.state.revision(), bars), bars))
+        } else {
+            self.primitive_source(item.series)
+        }
+    }
+
     /// Runs the lifecycle hooks before a frame is drawn: `detached` for the primitives of
     /// removed series, `attached` for new ones and `data_changed` when their bars changed.
     pub(super) fn sync_primitives(&mut self, ctx: &egui::Context) {
         let mut primitives = std::mem::take(&mut self.primitives);
         primitives.retain_mut(|item| {
-            let Some((current, bars)) = self.primitive_source(item.series) else {
+            let Some((current, bars)) = self.attachment_source(item) else {
                 if item.seen.is_some() {
                     item.get().detached();
                 }
                 return false;
             };
-            if item.seen != Some(current) {
+            if item.pane.is_some() || item.seen != Some(current) {
                 let mut primitive = item.get();
                 if item.seen.is_none() {
                     primitive.attached(ctx, item.series);
@@ -180,12 +250,12 @@ impl Chart {
         self.primitives = primitives;
     }
 
-    /// Marks every primitive as up to date with this chart's bars, so that an image export
-    /// draws them without running their hooks again.
+    /// Marks primitives as current for an image export, avoiding repeated attachment and
+    /// series data hooks. Pane update hooks still refresh their drawing state for the frame.
     pub(super) fn settle_primitives(&mut self) {
         for at in 0..self.primitives.len() {
             let current = self
-                .primitive_source(self.primitives[at].series)
+                .attachment_source(&self.primitives[at])
                 .map(|(current, _)| current);
             self.primitives[at].seen = current;
         }
@@ -235,6 +305,20 @@ impl Chart {
         Some(self.primitive_view(series, mapping))
     }
 
+    fn main_attachment_view(
+        &self,
+        item: &Attached,
+        coords: &ChartMapping,
+    ) -> Option<PrimitiveView<'_>> {
+        if let Some(pane) = item.pane {
+            return (pane == self.main_series_pane()
+                && self.pane_index(pane).is_some()
+                && coords.rect.is_positive())
+            .then(|| self.primitive_view(SeriesId::MAIN, coords.clone()));
+        }
+        self.main_view(item.series, coords)
+    }
+
     /// The primitives drawn in the main pane, with their views.
     pub(super) fn main_primitives<'a>(
         &'a self,
@@ -242,7 +326,7 @@ impl Chart {
     ) -> impl DoubleEndedIterator<Item = (&'a Attached, PrimitiveView<'a>)> + Clone {
         self.primitives
             .iter()
-            .filter_map(move |item| Some((item, self.main_view(item.series, coords)?)))
+            .filter_map(move |item| Some((item, self.main_attachment_view(item, coords)?)))
     }
 
     /// The primitives of every visible series, for the time axis the panes share. Those in a
@@ -252,6 +336,9 @@ impl Chart {
         coords: &'a ChartMapping,
     ) -> impl Iterator<Item = (&'a Attached, PrimitiveView<'a>)> {
         self.primitives.iter().filter_map(move |item| {
+            if item.pane.is_some() {
+                return None;
+            }
             let view = self.main_view(item.series, coords).or_else(|| {
                 self.is_series_visible(item.series)
                     .then(|| self.primitive_view(item.series, coords.clone()))
@@ -267,7 +354,7 @@ impl Chart {
     ) -> impl DoubleEndedIterator<Item = &Attached> {
         self.primitives
             .iter()
-            .filter(move |item| item.series == series)
+            .filter(move |item| item.pane.is_none() && item.series == series)
     }
 
     /// Prices and screen space the primitives of `series` add to its scale's fit.
@@ -340,13 +427,49 @@ impl Chart {
         }
     }
 
+    /// Pane decorations do not require loaded bars, unlike series rendering.
+    pub(super) fn paint_empty_pane_primitives(&mut self, ui: &egui::Ui, painter: &Painter) {
+        let coords = self.get_chart_mapping();
+        let painter = painter.with_clip_rect(painter.clip_rect().intersect(coords.rect));
+        for pass in [
+            PrimitivePass::Below,
+            PrimitivePass::Series,
+            PrimitivePass::Above,
+        ] {
+            if pass != PrimitivePass::Above || !self.hide_foreground {
+                paint_pass(
+                    &painter,
+                    self.main_primitives(&coords)
+                        .filter(|(item, _)| item.pane.is_some()),
+                    pass,
+                    1,
+                );
+            }
+        }
+        if let Some(hit) = ui
+            .input(|input| input.pointer.interact_pos())
+            .filter(|pos| coords.rect.contains(*pos))
+            .and_then(|pos| {
+                primitive_at(
+                    self.main_primitives(&coords)
+                        .filter(|(item, _)| item.pane.is_some()),
+                    pos,
+                )
+            })
+        {
+            ui.ctx().set_cursor_icon(hit.result.cursor);
+            self.host_events.target = Some(hit.target);
+            self.host_events.primitive_hit = Some(hit.result);
+        }
+    }
+
     /// Includes renderers of volume overlays, whose foregrounds normally draw with the series.
     pub(super) fn main_pass_primitives<'a>(
         &'a self,
         coords: &'a ChartMapping,
     ) -> impl DoubleEndedIterator<Item = (&'a Attached, PrimitiveView<'a>)> + Clone {
         self.primitives.iter().filter_map(move |item| {
-            let view = self.main_view(item.series, coords).or_else(|| {
+            let view = self.main_attachment_view(item, coords).or_else(|| {
                 if !item.replaces || self.series_pane(item.series) != Some(self.main_series_pane())
                 {
                     return None;
@@ -366,10 +489,15 @@ impl Chart {
     /// The visible primitives of a secondary pane, in attachment order, on their own scales.
     pub(super) fn pane_primitives<'a>(
         &'a self,
+        pane: PaneId,
         members: &'a [SeriesId],
         coords: &'a ChartMapping,
     ) -> impl DoubleEndedIterator<Item = (&'a Attached, PrimitiveView<'a>)> + Clone {
         self.primitives.iter().filter_map(move |item| {
+            if let Some(owner) = item.pane {
+                return (owner == pane)
+                    .then(|| (item, self.primitive_view(SeriesId::MAIN, coords.clone())));
+            }
             if !members.contains(&item.series) || !self.is_series_visible(item.series) {
                 return None;
             }
@@ -594,6 +722,274 @@ mod tests {
     const ABOVE: Color32 = Color32::from_rgb(7, 8, 9);
 
     #[test]
+    fn pane_attachments_follow_the_pane_through_empty_hidden_and_removed_members() {
+        #[derive(Default)]
+        struct Observed {
+            attached: usize,
+            detached: usize,
+            updates: usize,
+            passes: Vec<(bool, PrimitivePass)>,
+            rect: Option<egui::Rect>,
+        }
+        struct Decoration(PaneId, Arc<Mutex<Observed>>, bool);
+        impl Decoration {
+            fn paint(
+                &self,
+                painter: &Painter,
+                view: &PanePrimitiveView<'_>,
+                pass: PrimitivePass,
+                background: bool,
+            ) {
+                assert_eq!(view.pane, self.0);
+                assert!(view.rect.is_positive());
+                assert_eq!(painter.clip_rect(), view.rect);
+                if let Some(bar) = view.bars.get(70) {
+                    assert!(
+                        (view.time_to_x(bar.time).unwrap() - view.index_to_x(70.0)).abs() < 0.001
+                    );
+                    let half_day = bar.time + chrono::Duration::hours(12);
+                    let midpoint = (view.index_to_x(70.0) + view.index_to_x(71.0)) * 0.5;
+                    assert!((view.time_to_x(half_day).unwrap() - midpoint).abs() < 0.001);
+                }
+                let mut observed = self.1.lock().unwrap();
+                observed.rect = Some(view.rect);
+                observed.passes.push((background, pass));
+                if !background || self.2 {
+                    let color = match pass {
+                        PrimitivePass::Below => BELOW,
+                        PrimitivePass::Series => SERIES,
+                        PrimitivePass::Above => ABOVE,
+                    };
+                    painter.rect_filled(view.rect.expand(100.0), 0.0, color);
+                }
+            }
+        }
+        impl PanePrimitive for Decoration {
+            fn attached(&mut self, ctx: &egui::Context, pane: PaneId) {
+                assert_eq!(pane, self.0);
+                ctx.request_repaint();
+                self.1.lock().unwrap().attached += 1;
+            }
+            fn detached(&mut self) {
+                self.1.lock().unwrap().detached += 1;
+            }
+            fn update(&mut self) {
+                self.1.lock().unwrap().updates += 1;
+            }
+            fn draw_background(
+                &self,
+                painter: &Painter,
+                view: &PanePrimitiveView<'_>,
+                pass: PrimitivePass,
+            ) {
+                self.paint(painter, view, pass, true);
+            }
+            fn draw(&self, painter: &Painter, view: &PanePrimitiveView<'_>, pass: PrimitivePass) {
+                self.paint(painter, view, pass, false);
+            }
+            fn hit_test(&self, _: Pos2, _: &PanePrimitiveView<'_>) -> Option<PrimitiveHit> {
+                Some(PrimitiveHit {
+                    object_id: Some("pane decoration".into()),
+                    pass: PrimitivePass::Above,
+                    ..PrimitiveHit::new(CursorIcon::PointingHand)
+                })
+            }
+        }
+        for original in [false, true] {
+            for backgrounds in [false, true] {
+                let ctx = egui::Context::default();
+                let mut chart = chart(&[10.0], &[20.0]);
+                let added = chart.add_pane();
+                let (pane, other) = if original {
+                    chart.move_series_to_pane(SeriesId::MAIN, added);
+                    (PaneId::MAIN, added)
+                } else {
+                    (added, PaneId::MAIN)
+                };
+                for id in [pane, other] {
+                    if id != PaneId::MAIN {
+                        assert!(chart.set_preserve_empty_pane(id, true));
+                    }
+                }
+                let observed = Arc::new(Mutex::new(Observed::default()));
+                let id = chart
+                    .attach_pane_primitive(pane, Decoration(pane, observed.clone(), backgrounds))
+                    .unwrap();
+                let invalid = PaneId(usize::MAX);
+                assert!(
+                    chart
+                        .attach_pane_primitive(
+                            invalid,
+                            Decoration(invalid, observed.clone(), backgrounds)
+                        )
+                        .is_none()
+                );
+                // Attach while empty, then add, hide and remove members, and move the main
+                // series through the pane. Neither visibility nor membership owns the drawing.
+                let mut member = None;
+                for step in 0..9 {
+                    match step {
+                        1 => {
+                            let series = chart.add_series(SeriesOptions::default());
+                            chart.set_data(series, chart.bars(SeriesId::MAIN).to_vec());
+                            chart.move_series_to_pane(series, pane);
+                            member = Some(series);
+                        }
+                        2 => {
+                            chart.set_series_visible(member.unwrap(), false);
+                        }
+                        3 => {
+                            chart.remove_series(member.unwrap());
+                        }
+                        4 => {
+                            chart.move_series_to_pane(SeriesId::MAIN, pane);
+                        }
+                        5 => {
+                            chart.move_series_to_pane(SeriesId::MAIN, other);
+                        }
+                        6 => {
+                            chart.remove_series(SeriesId::MAIN);
+                        }
+                        7 => {
+                            chart.move_pane(pane, 0);
+                        }
+                        8 => {
+                            chart.set_pane_height(pane, 180.0);
+                        }
+                        _ => {}
+                    }
+                    frame(&ctx, &mut chart, step as f64, vec![]);
+                    let before = observed.lock().unwrap().updates;
+                    observed.lock().unwrap().passes.clear();
+                    let painted = shapes(&ctx, &mut chart, step as f64 + 0.1, vec![]);
+                    let state = observed.lock().unwrap();
+                    let panel = chart
+                        .pane_layout
+                        .panes
+                        .iter()
+                        .find(|item| item.id == pane)
+                        .unwrap()
+                        .rect;
+                    assert!(
+                        panel.contains_rect(state.rect.unwrap()),
+                        "drawing stays in its owning pane"
+                    );
+                    assert_eq!((state.attached, state.detached), (1, 0));
+                    assert!(state.updates > before, "each paint refreshes cached state");
+                    let expected: Vec<_> = [
+                        PrimitivePass::Below,
+                        PrimitivePass::Series,
+                        PrimitivePass::Above,
+                    ]
+                    .into_iter()
+                    .flat_map(|pass| [(true, pass), (false, pass)])
+                    .collect();
+                    assert_eq!(
+                        state.passes, expected,
+                        "original={original}, backgrounds={backgrounds}, step={step}"
+                    );
+                    let colors: Vec<_> = painted
+                        .iter()
+                        .filter_map(|shape| match shape {
+                            Shape::Rect(rect) if [BELOW, SERIES, ABOVE].contains(&rect.fill) => {
+                                Some(rect.fill)
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    let expected_colors: Vec<_> = [BELOW, SERIES, ABOVE]
+                        .into_iter()
+                        .flat_map(|color| {
+                            std::iter::repeat_n(color, if backgrounds { 2 } else { 1 })
+                        })
+                        .collect();
+                    assert_eq!(colors, expected_colors);
+                }
+                let pos = observed.lock().unwrap().rect.unwrap().center();
+                frame(&ctx, &mut chart, 9.0, vec![Event::PointerMoved(pos)]);
+                assert!(chart.drain_events().any(|event| matches!(event,
+                    ChartEvent::CrosshairMoved(Some(pointer))
+                        if pointer.target == Some(PointerTarget::Primitive(id))
+                        && pointer.primitive_hit.as_ref().unwrap().object_id.as_deref() == Some("pane decoration")
+                )));
+                let clicks = [true, false].map(|pressed| Event::PointerButton {
+                    pos,
+                    pressed,
+                    button: egui::PointerButton::Primary,
+                    modifiers: Default::default(),
+                });
+                frame(&ctx, &mut chart, 10.0, clicks.to_vec());
+                assert!(chart.drain_events().any(|event| matches!(event,
+                    ChartEvent::Click { position, .. } if position.target == Some(PointerTarget::Primitive(id))
+                )));
+                chart.pane_layout.maximized = Some(other);
+                observed.lock().unwrap().passes.clear();
+                frame(&ctx, &mut chart, 11.0, vec![]);
+                assert!(observed.lock().unwrap().passes.is_empty());
+                chart.pane_layout.maximized = None;
+                if pane != chart.main_series_pane() {
+                    chart
+                        .pane_layout
+                        .panes
+                        .iter_mut()
+                        .find(|item| item.id == pane)
+                        .unwrap()
+                        .collapsed = Some(true);
+                    observed.lock().unwrap().passes.clear();
+                    frame(&ctx, &mut chart, 12.0, vec![]);
+                    assert!(observed.lock().unwrap().passes.is_empty());
+                }
+                assert!(chart.remove_pane(pane));
+                frame(&ctx, &mut chart, 13.0, vec![]);
+                frame(&ctx, &mut chart, 14.0, vec![]);
+                assert_eq!(observed.lock().unwrap().detached, 1);
+                assert!(!chart.detach_primitive(id));
+                assert!(
+                    chart
+                        .attach_pane_primitive(pane, Decoration(pane, observed.clone(), false))
+                        .is_none()
+                );
+                // Explicit removal before the first frame runs neither lifecycle hook.
+                let pending = chart
+                    .attach_pane_primitive(other, Decoration(other, observed.clone(), false))
+                    .unwrap();
+                assert!(chart.detach_primitive(pending));
+                assert_eq!(observed.lock().unwrap().attached, 1);
+                let explicit = chart
+                    .attach_pane_primitive(other, Decoration(other, observed.clone(), false))
+                    .unwrap();
+                frame(&ctx, &mut chart, 15.0, vec![]);
+                assert!(chart.detach_primitive(explicit));
+                assert!(!chart.detach_primitive(explicit));
+                assert_eq!(observed.lock().unwrap().detached, 2);
+            }
+        }
+        let ctx = egui::Context::default();
+        let mut empty = Chart::new(Default::default());
+        let observed = Arc::new(Mutex::new(Observed::default()));
+        let id = empty
+            .attach_pane_primitive(
+                PaneId::MAIN,
+                Decoration(PaneId::MAIN, observed.clone(), false),
+            )
+            .unwrap();
+        frame(&ctx, &mut empty, 0.0, vec![]);
+        observed.lock().unwrap().passes.clear();
+        frame(&ctx, &mut empty, 0.1, vec![]);
+        assert_eq!(
+            observed.lock().unwrap().passes.len(),
+            6,
+            "a pane needs no history"
+        );
+        let pos = observed.lock().unwrap().rect.unwrap().center();
+        frame(&ctx, &mut empty, 1.0, vec![Event::PointerMoved(pos)]);
+        assert!(empty.drain_events().any(|event| matches!(event,
+            ChartEvent::CrosshairMoved(Some(pointer))
+                if pointer.time.is_none() && pointer.target == Some(PointerTarget::Primitive(id))
+        )));
+    }
+
+    #[test]
     fn backgrounds_precede_foregrounds_in_every_pass_and_pane() {
         struct Ordered {
             id: u8,
@@ -604,7 +1000,7 @@ mod tests {
             fn record(
                 &self,
                 painter: &Painter,
-                view: &PrimitiveView<'_>,
+                rect: egui::Rect,
                 pass: PrimitivePass,
                 background: bool,
             ) {
@@ -613,7 +1009,7 @@ mod tests {
                     .unwrap()
                     .push(format!("{pass:?} {background} {}", self.id));
                 painter.rect_filled(
-                    egui::Rect::from_min_size(view.mapping.rect.min, egui::vec2(8.0, 8.0)),
+                    egui::Rect::from_min_size(rect.min, egui::vec2(8.0, 8.0)),
                     0.0,
                     Color32::from_rgb(self.id, background as u8, pass as u8),
                 );
@@ -626,10 +1022,10 @@ mod tests {
                 view: &PrimitiveView<'_>,
                 pass: PrimitivePass,
             ) {
-                self.record(painter, view, pass, true);
+                self.record(painter, view.mapping.rect, pass, true);
             }
             fn draw(&self, painter: &Painter, view: &PrimitiveView<'_>, pass: PrimitivePass) {
-                self.record(painter, view, pass, false);
+                self.record(painter, view.mapping.rect, pass, false);
             }
             fn draw_background_merged(
                 &self,
@@ -640,9 +1036,9 @@ mod tests {
             ) {
                 if self.merged {
                     assert_eq!(factor, 4);
-                    self.record(painter, view, pass, true);
+                    self.record(painter, view.mapping.rect, pass, true);
                 } else {
-                    self.draw_background(painter, view, pass);
+                    Primitive::draw_background(self, painter, view, pass);
                 }
             }
             fn draw_merged(
@@ -654,10 +1050,23 @@ mod tests {
             ) {
                 if self.merged {
                     assert_eq!(factor, 4);
-                    self.record(painter, view, pass, false);
+                    self.record(painter, view.mapping.rect, pass, false);
                 } else {
-                    self.draw(painter, view, pass);
+                    Primitive::draw(self, painter, view, pass);
                 }
+            }
+        }
+        impl PanePrimitive for Ordered {
+            fn draw_background(
+                &self,
+                painter: &Painter,
+                view: &PanePrimitiveView<'_>,
+                pass: PrimitivePass,
+            ) {
+                self.record(painter, view.rect, pass, true);
+            }
+            fn draw(&self, painter: &Painter, view: &PanePrimitiveView<'_>, pass: PrimitivePass) {
+                self.record(painter, view.rect, pass, false);
             }
         }
         for (pane, move_main) in [(false, false), (true, false), (false, true), (true, true)] {
@@ -735,6 +1144,8 @@ mod tests {
                         };
                         assert!(chart.move_series_to_pane(SeriesId::MAIN, destination));
                     }
+                    let owner = chart.series_pane(id).unwrap();
+                    let decoration = chart.attach_pane_primitive(owner, probe(3)).unwrap();
                     if merged {
                         let mut options = chart.chart_options().clone();
                         options.time_scale.min_bar_spacing = 0.0;
@@ -752,7 +1163,7 @@ mod tests {
                         PrimitivePass::Above,
                     ] {
                         for background in [true, false] {
-                            for id in [1, 2] {
+                            for id in [1, 2, 3] {
                                 expected.push(format!("{pass:?} {background} {id}"));
                                 colors.push(Color32::from_rgb(id, background as u8, pass as u8));
                             }
@@ -774,6 +1185,7 @@ mod tests {
                         actual, colors,
                         "paint order: {kind}, pane={pane}, move_main={move_main}"
                     );
+                    assert!(chart.detach_primitive(decoration));
                     chart.set_series_visible(id, false);
                     chart.set_series_visible(other, false);
                     log.lock().unwrap().clear();
@@ -801,18 +1213,14 @@ mod tests {
             Some((0.0, 500.0))
         }
         fn price_axis_labels(&self, _: &PrimitiveView<'_>) -> Vec<PriceAxisLabel> {
-            vec![PriceAxisLabel {
-                price: 250.0,
-                text: "Level".into(),
-                color: SERIES,
-            }]
+            vec![PriceAxisLabel::new(250.0, "Level", SERIES)]
         }
         fn time_axis_labels(&self, view: &PrimitiveView<'_>) -> Vec<TimeAxisLabel> {
-            vec![TimeAxisLabel {
-                time: view.bars[90].time,
-                text: "A session label much wider than any price on the axis".into(),
-                color: ABOVE,
-            }]
+            vec![TimeAxisLabel::new(
+                view.bars[90].time,
+                "A session label much wider than any price on the axis",
+                ABOVE,
+            )]
         }
     }
 
@@ -877,6 +1285,233 @@ mod tests {
                 "the primitive still paints"
             );
             chart.detach_primitive(primitive);
+        }
+    }
+
+    #[test]
+    fn axis_tags_keep_fixed_positions_ink_ticks_and_clips_after_scroll_and_resize() {
+        struct Tags {
+            tick: bool,
+            offset: f32,
+        }
+        const INK: Color32 = Color32::from_rgb(211, 113, 17);
+        const FILL: Color32 = Color32::from_rgb(27, 43, 67);
+        impl Primitive for Tags {
+            fn price_axis_labels(&self, _: &PrimitiveView<'_>) -> Vec<PriceAxisLabel> {
+                let mut fixed = PriceAxisLabel::new(f64::NAN, "Fixed price", FILL);
+                fixed.fixed_coordinate = Some(self.offset);
+                fixed.text_color = Some(INK);
+                fixed.tick_visible = self.tick;
+                let automatic = PriceAxisLabel::new(15.0, "Auto price", Color32::WHITE);
+                let mut top = fixed.clone();
+                top.text = "Top price".into();
+                top.tick_visible = false;
+                // Fixed tags may overlap each other, and automatic tags stay underneath.
+                vec![fixed, automatic, top]
+            }
+            fn time_axis_labels(&self, view: &PrimitiveView<'_>) -> Vec<TimeAxisLabel> {
+                let mut fixed = TimeAxisLabel::new(view.bars[0].time, "Fixed time", FILL);
+                fixed.fixed_coordinate = Some(self.offset);
+                fixed.text_color = Some(INK);
+                fixed.tick_visible = self.tick;
+                let mut top = fixed.clone();
+                top.text = "Top time".into();
+                top.tick_visible = false;
+                vec![
+                    fixed,
+                    TimeAxisLabel::new(view.bars[90].time, "Auto time", Color32::WHITE),
+                    top,
+                ]
+            }
+        }
+        fn flatten(clip: egui::Rect, shape: Shape, out: &mut Vec<(egui::Rect, Shape)>) {
+            match shape {
+                Shape::Vec(shapes) => shapes
+                    .into_iter()
+                    .for_each(|shape| flatten(clip, shape, out)),
+                shape => out.push((clip, shape)),
+            }
+        }
+        for owner in ["main", "bars", "study"] {
+            for left in [false, true] {
+                let ctx = egui::Context::default();
+                let mut chart = chart(&[10.0], &[20.0]);
+                chart.config.show_volume = false;
+                chart.config.show_left_axis = left;
+                chart.config.show_right_axis = !left;
+                let id = match owner {
+                    "bars" => {
+                        let id = chart.add_series(SeriesOptions::default());
+                        chart.set_data(id, chart.bars(SeriesId::MAIN).to_vec());
+                        let pane = chart.add_pane();
+                        assert!(chart.move_series_to_pane(id, pane));
+                        id
+                    }
+                    "study" => chart.add_indicator(Box::new(
+                        CustomIndicator::new("Pane", |bars| {
+                            vec![IndicatorValue::Single(15.0); bars.len()]
+                        })
+                        .with_overlay(false),
+                    )),
+                    _ => SeriesId::MAIN,
+                };
+                for (step, (tick, offset, size, scroll)) in [
+                    (true, 50.0, egui::vec2(760.0, 540.0), 0.0),
+                    (false, 50.0, egui::vec2(680.0, 420.0), -10.0),
+                    (true, 0.0, egui::vec2(760.0, 540.0), 0.0),
+                    (false, f32::NAN, egui::vec2(760.0, 540.0), 0.0),
+                    (true, f32::INFINITY, egui::vec2(760.0, 540.0), 0.0),
+                    (true, -1000.0, egui::vec2(760.0, 540.0), 0.0),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    chart.set_size(Some(size));
+                    chart.scroll_to_position(scroll, false);
+                    let primitive = chart.attach_primitive(id, Tags { tick, offset }).unwrap();
+                    for at in 0..2 {
+                        frame(&ctx, &mut chart, (step * 3 + at) as f64, vec![]);
+                    }
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                Pos2::ZERO,
+                                egui::vec2(800.0, 600.0),
+                            )),
+                            time: Some((step * 3 + 2) as f64),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            chart.show(ui);
+                        },
+                    );
+                    let mut painted = Vec::new();
+                    for shape in std::mem::take(&mut output.shapes) {
+                        flatten(shape.clip_rect, shape.shape, &mut painted);
+                    }
+                    output.drop_without_applying_deltas();
+                    let plot = match owner {
+                        "bars" => {
+                            chart
+                                .pane_layout
+                                .panes
+                                .iter()
+                                .find(|pane| Some(pane.id) == chart.series_pane(id))
+                                .unwrap()
+                                .rect
+                        }
+                        "study" => chart.last_rendered_indicator_panes[0].chart_rect,
+                        _ => chart.last_rendered_price_rect,
+                    };
+                    let axis = chart.time_axis_rect;
+                    let find = |label: &str| {
+                        painted
+                            .iter()
+                            .enumerate()
+                            .find_map(|(at, (clip, shape))| match shape {
+                                Shape::Text(text)
+                                    if text.galley.text() == label
+                                        && clip.intersects(
+                                            text.galley.rect.translate(text.pos.to_vec2()),
+                                        ) =>
+                                {
+                                    Some((at, *clip, text))
+                                }
+                                _ => None,
+                            })
+                    };
+                    for (fixed, automatic, origin, price) in [
+                        ("Fixed price", "Auto price", plot.top(), true),
+                        ("Fixed time", "Auto time", axis.left(), false),
+                    ] {
+                        let visible = offset.is_finite() && offset >= 0.0;
+                        assert_eq!(
+                            find(fixed).is_some(),
+                            visible,
+                            "{owner}, left={left}, step={step}, {fixed}"
+                        );
+                        if let Some((at, clip, text)) = find(fixed) {
+                            let centre = text.pos + text.galley.size() / 2.0;
+                            let coordinate = if price { centre.y } else { centre.x };
+                            assert!(
+                                (coordinate - origin - offset).abs() < 0.01,
+                                "{coordinate} != {origin} + {offset}"
+                            );
+                            let (top_at, _, top) =
+                                find(if price { "Top price" } else { "Top time" }).unwrap();
+                            assert!(at < top_at);
+                            let top_centre = top.pos + top.galley.size() / 2.0;
+                            let top_coordinate = if price { top_centre.y } else { top_centre.x };
+                            assert!((top_coordinate - coordinate).abs() < 0.01);
+                            assert_eq!(text.fallback_color, INK);
+                            assert!(
+                                text.galley
+                                    .job
+                                    .sections
+                                    .iter()
+                                    .all(|s| s.format.color == INK)
+                            );
+                            if let Some((auto_at, _, auto)) = find(automatic) {
+                                assert!(auto_at < at);
+                                assert_eq!(auto.fallback_color, Color32::BLACK);
+                                let auto_y = auto.pos.y + auto.galley.size().y / 2.0;
+                                assert!(painted.iter().any(|(_, shape)| matches!(shape,
+                                    Shape::LineSegment { points, stroke }
+                                        if stroke.color == Color32::BLACK
+                                            && (points[0].x == points[1].x) != price
+                                            && (points[0].y - if price { auto_y } else { axis.top() }).abs() < 0.01
+                                )));
+                            }
+                            if price {
+                                assert!(clip.top() >= plot.top() && clip.bottom() <= plot.bottom());
+                            } else {
+                                assert!(axis.contains_rect(clip));
+                            }
+                        }
+                        let ticks = painted
+                            .iter()
+                            .filter(|(clip, shape)| match shape {
+                                Shape::LineSegment { points, stroke }
+                                    if stroke.color == INK
+                                        && (points[0].x == points[1].x) != price =>
+                                {
+                                    if price {
+                                        assert!(if left {
+                                            clip.right() <= points[0].x
+                                        } else {
+                                            clip.left() >= points[0].x
+                                        });
+                                        assert!(
+                                            clip.top() >= plot.top()
+                                                && clip.bottom() <= plot.bottom()
+                                        );
+                                    } else {
+                                        assert!(axis.contains_rect(*clip));
+                                    }
+                                    true
+                                }
+                                _ => false,
+                            })
+                            .count();
+                        assert_eq!(
+                            ticks,
+                            usize::from(tick && visible),
+                            "{fixed}, {owner}, step={step}"
+                        );
+                    }
+                    chart.detach_primitive(primitive);
+                }
+                chart.set_series_visible(id, false);
+                chart.attach_primitive(
+                    id,
+                    Tags {
+                        tick: true,
+                        offset: 50.0,
+                    },
+                );
+                assert!(!shapes(&ctx, &mut chart, 30.0, vec![]).iter().any(|shape|
+                    matches!(shape, Shape::Text(text) if text.galley.text().starts_with("Fixed "))));
+            }
         }
     }
 
