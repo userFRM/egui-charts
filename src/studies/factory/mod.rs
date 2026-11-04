@@ -38,15 +38,18 @@ type IndicatorConstructor = Box<dyn Fn() -> Box<dyn Indicator> + Send + Sync>;
 /// the value the rendering layer and legends display, and a new indicator is
 /// reachable through the factory the moment it is added to this list.
 macro_rules! register_builtins {
+    (@help $factory:expr, $($ty:ty),+ $(,)?) => {
+        $($factory.help_urls.insert(
+            std::any::type_name::<$ty>(),
+            concat!("https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.", stringify!($ty), ".html"),
+        );)+
+    };
     ($factory:expr, $($category:literal => [$($ty:ty),+ $(,)?]),+ $(,)?) => {
         $($(
             // Read the canonical name from a throwaway default instance so the
             // key is always exactly what the indicator reports at runtime.
             let key = <$ty as Default>::default().name().to_string();
-            $factory.help_urls.insert(
-                key.clone(),
-                concat!("https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.", stringify!($ty), ".html"),
-            );
+            register_builtins!(@help $factory, $ty);
             $factory.constructors.insert(
                 key,
                 (Some($category), Box::new(|| Box::new(<$ty as Default>::default()))),
@@ -71,7 +74,7 @@ macro_rules! register_builtins {
 pub struct IndicatorFactory {
     /// The category of each name, `None` for a built-in outside the catalogue, and its constructor.
     constructors: HashMap<String, (Option<&'static str>, IndicatorConstructor)>,
-    help_urls: HashMap<String, &'static str>,
+    help_urls: HashMap<&'static str, &'static str>,
 }
 
 impl IndicatorFactory {
@@ -108,41 +111,23 @@ impl IndicatorFactory {
     /// listed study of the same name would replace them.
     fn register_builtin(&mut self) {
         // Exported studies outside the catalogue, resolved by name so that saved copies load.
-        let unlisted: [(&str, fn() -> Box<dyn Indicator>); 7] = [
-            (
-                "https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.CVD.html",
-                || Box::new(CVD::default()),
-            ),
-            (
-                "https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.CloseToCloseVol.html",
-                || Box::new(CloseToCloseVol::default()),
-            ),
-            (
-                "https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.HL2.html",
-                || Box::new(HL2::default()),
-            ),
-            (
-                "https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.HLC3.html",
-                || Box::new(HLC3::default()),
-            ),
-            (
-                "https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.PriceChannel.html",
-                || Box::new(PriceChannel::default()),
-            ),
-            (
-                "https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.EhlersFisher.html",
-                || Box::new(EhlersFisher::default()),
-            ),
-            (
-                "https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.MACombination.html",
-                || Box::new(MACombination::ribbon()),
-            ),
+        register_builtins!(@help self, CVD, CloseToCloseVol, HL2, HLC3, PriceChannel, EhlersFisher, MACombination, OrderFlowStudy, ChartPatterns);
+        #[cfg(feature = "drawings")]
+        register_builtins!(@help self, AutoDrawing);
+        let unlisted: [fn() -> Box<dyn Indicator>; 7] = [
+            || Box::new(CVD::default()),
+            || Box::new(CloseToCloseVol::default()),
+            || Box::new(HL2::default()),
+            || Box::new(HLC3::default()),
+            || Box::new(PriceChannel::default()),
+            || Box::new(EhlersFisher::default()),
+            || Box::new(MACombination::ribbon()),
         ];
-        for (url, constructor) in unlisted {
-            let name = constructor().name().to_owned();
-            self.help_urls.insert(name.clone(), url);
-            self.constructors
-                .insert(name, (None, Box::new(constructor)));
+        for constructor in unlisted {
+            self.constructors.insert(
+                constructor().name().to_owned(),
+                (None, Box::new(constructor)),
+            );
         }
         register_builtins!(
             self,
@@ -387,7 +372,6 @@ impl IndicatorFactory {
             OrderFlowKind::LevelsTradedThrough { seconds: 0 },
         ] {
             let name = OrderFlowStudy::new(kind).name().to_owned();
-            self.help_urls.insert(name.clone(), "https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.OrderFlowStudy.html");
             self.constructors.insert(
                 name,
                 (
@@ -400,7 +384,6 @@ impl IndicatorFactory {
             let name = OrderFlowStudy::execution_delta(cumulative)
                 .name()
                 .to_owned();
-            self.help_urls.insert(name.clone(), "https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.OrderFlowStudy.html");
             self.constructors.insert(
                 name,
                 (
@@ -411,7 +394,6 @@ impl IndicatorFactory {
         }
         for family in PatternFamily::ALL {
             let name = ChartPatterns::new(family).name().to_owned();
-            self.help_urls.insert(name.clone(), "https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.ChartPatterns.html");
             self.constructors.insert(
                 name,
                 (
@@ -423,7 +405,6 @@ impl IndicatorFactory {
         #[cfg(feature = "drawings")]
         for kind in AutoDrawingKind::ALL {
             let name = AutoDrawing::new(kind, 5.0, 10).name().to_owned();
-            self.help_urls.insert(name.clone(), "https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.AutoDrawing.html");
             self.constructors.insert(
                 name,
                 (
@@ -468,7 +449,6 @@ impl IndicatorFactory {
         if name.trim().is_empty() {
             return false;
         }
-        self.help_urls.remove(&name);
         self.constructors
             .insert(name, (Some(category), Box::new(constructor)));
         true
@@ -508,14 +488,12 @@ impl IndicatorFactory {
     ///
     /// Returns `true` if it was present and removed, `false` otherwise.
     pub fn unregister(&mut self, name: &str) -> bool {
-        self.help_urls.remove(name);
         self.constructors.remove(name).is_some()
     }
 
     /// Remove all registered indicators, including built-ins.
     pub fn clear(&mut self) {
         self.constructors.clear();
-        self.help_urls.clear();
     }
 
     /// The number of names in [`list`](Self::list).
@@ -534,12 +512,12 @@ impl Default for IndicatorFactory {
 }
 
 // Resolve the built-in articles once so direct constructors retain the same help as the chooser.
-pub(crate) fn builtin_help_url(name: &str) -> Option<&'static str> {
-    static CATALOGUE: std::sync::OnceLock<HashMap<String, &'static str>> =
+pub(crate) fn builtin_help_url(study_type: &str) -> Option<&'static str> {
+    static CATALOGUE: std::sync::OnceLock<HashMap<&'static str, &'static str>> =
         std::sync::OnceLock::new();
     CATALOGUE
         .get_or_init(|| IndicatorFactory::new().help_urls)
-        .get(name)
+        .get(study_type)
         .copied()
 }
 

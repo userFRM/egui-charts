@@ -1108,6 +1108,13 @@ mod tests {
     #[test]
     fn study_metadata_keeps_values_and_blocks_user_settings() {
         use crate::studies::{IndicatorFactory, StudySettings};
+        let custom = crate::studies::CustomIndicator::new("SMA", |_| Vec::new());
+        assert!(
+            custom.help_url().is_none(),
+            "a shared name does not identify a built-in"
+        );
+        assert!(SMA::new(1).help_url().is_some());
+
         let mut chart = super::super::test_frames::chart(&[100.0], &[110.0]);
         let id = chart.add_indicator(Box::new(SMA::new(1)));
         let study = chart.indicator_mut(id).unwrap();

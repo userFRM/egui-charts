@@ -166,7 +166,7 @@ pub trait Indicator: Send {
     fn help_url(&self) -> Option<&str> {
         #[cfg(feature = "studies")]
         {
-            super::factory::builtin_help_url(self.name())
+            super::factory::builtin_help_url(std::any::type_name::<Self>())
         }
         #[cfg(not(feature = "studies"))]
         {
