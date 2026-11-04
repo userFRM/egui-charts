@@ -47,6 +47,12 @@ A marker with an
 emits
 [`ChartEvent::MarkClick`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/enum.ChartEvent.html#variant.MarkClick)
 on a primary click. [Drain events after showing the chart](../interaction.mdx#drain-events-once-per-frame)
-and route that id to your host action. Remove an annotation by replacing the
+and route that id to your host action. Hovering a marker or a price line sets
+[`ChartPointer::target`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.ChartPointer.html#structfield.target)
+to
+[`PointerTarget::Marker`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/enum.PointerTarget.html#variant.Marker)
+or
+[`PointerTarget::PriceLine`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/enum.PointerTarget.html#variant.PriceLine),
+which carry the series and the marker id or line handle. Remove an annotation by replacing the
 marker list without it. Interactive drawing tools and their persistence are
 covered by the [drawing guide](../drawings.mdx).
