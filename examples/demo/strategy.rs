@@ -159,6 +159,13 @@ impl DemoApp {
         }
         let mut report = sample_backtest(&self.state.symbol, self.state.timeframe, source);
         report.currency = self.chart.instrument().and_then(|i| i.currency.clone());
+        if let Some(tick) = self.chart.instrument().and_then(|i| i.tick_size) {
+            let mut settings = self.strategy_report.settings().clone();
+            settings.price_increment = tick;
+            if let Err(error) = self.strategy_report.set_settings(settings) {
+                log::warn!("Cannot use the instrument's price increment: {error}");
+            }
+        }
         self.strategy_report.set_report(Some(report), source);
         self.strategy_report
             .select_strategy("Consecutive Up/Down")
@@ -219,7 +226,9 @@ impl DemoApp {
         {
             let kind = self.strategy_report.settings().chart_type;
             self.state.chart_type = kind;
+            self.top_toolbar.chart_type_selector.current = kind;
             self.chart.set_chart_type(kind);
+            self.size_price_based_charts();
         }
         if clear {
             self.stop_live_strategy();
