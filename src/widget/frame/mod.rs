@@ -186,6 +186,8 @@ impl Chart {
             .as_ref()
             .or(theme.as_ref())
             .map(|theme| crate::theme::ThemeScope::new(ui.ctx(), theme));
+        let _font_scope =
+            rendering::axes::AxisFontScope::new(ui.ctx(), &self.config.axis_font_family);
         let size = self.size;
         let show = |ui: &mut Ui| {
             if let Some(theme) = &theme {
@@ -386,7 +388,6 @@ impl Chart {
     /// keeps repainting while a visible pulse runs.
     fn paint_last_price_pulse(
         &self,
-        ui: &Ui,
         painter: &egui::Painter,
         price_rect: Rect,
         coords: &ChartMapping,
@@ -419,28 +420,15 @@ impl Chart {
         .filter(|_| animation != LastPriceAnimation::Disabled) else {
             return;
         };
-        let now = ui.input(|input| input.time);
-        let started = match self.last_price_pulse.get() {
-            Some((time, seen, started)) if time == last.time && seen.total_cmp(&price).is_eq() => {
-                started
-            }
-            previous => {
-                // The first price seen is the loaded history, not an update.
-                let started = previous.map_or(f64::NEG_INFINITY, |_| now);
-                self.last_price_pulse.set(Some((last.time, price, started)));
-                started
-            }
-        };
-        let period = rendering::candles::LAST_PRICE_PULSE_SECONDS;
-        let phase = match animation {
-            LastPriceAnimation::Continuous => (now / period).fract(),
-            _ => (now - started) / period,
-        };
-        let point = Pos2::new(coords.idx_to_x(index), coords.price.price_to_y(price));
-        if (0.0..1.0).contains(&phase) && price_rect.contains(point) {
-            rendering::candles::render_last_price_pulse(painter, point, color, phase as f32);
-            ui.ctx().request_repaint();
-        }
+        super::series::paint_last_price_pulse(
+            painter,
+            price_rect,
+            Pos2::new(coords.idx_to_x(index), coords.price.price_to_y(price)),
+            color,
+            animation,
+            (last.time, price),
+            &self.last_price_pulse,
+        );
     }
 
     /// Internal rendering method that orchestrates all modules
@@ -451,6 +439,15 @@ impl Chart {
         shared_plot: Option<&Response>,
         footprint: Option<(&Footprint, &FootprintConfig)>,
     ) -> Response {
+        let main_pane = self.main_series_pane();
+        let order = self.main_series_order().to_vec();
+        let study_indices: Vec<_> = self
+            .study_ids
+            .iter()
+            .enumerate()
+            .filter(|(_, id)| self.series_pane(**id) == Some(main_pane))
+            .map(|(idx, _)| idx)
+            .collect();
         // Register the icon loader once per context, and the general SVG loader for UI images.
         #[cfg(feature = "icons")]
         {
@@ -927,7 +924,10 @@ impl Chart {
                 let first = flow.complete_from()?;
                 let candles =
                     self.state.shown()[start_idx..end_idx].partition_point(|bar| bar.time < first);
-                let ranges = self.execution_profile_ranges(start_idx + candles..end_idx)?;
+                let settings = self.trade_profile_settings();
+                let extend = settings.extend_poc || settings.extend_vah || settings.extend_val;
+                let profile_start = if extend { 0 } else { start_idx + candles };
+                let ranges = self.execution_profile_ranges(profile_start..end_idx)?;
                 let mapping = self.get_chart_mapping().with_rect(price_rect);
                 let bars = &self.state.data().bars;
                 let mut profiles = crate::studies::trade_profiles(flow, &ranges);
@@ -935,11 +935,15 @@ impl Chart {
                     let first = bars.partition_point(|b| b.time < profile.range.start);
                     let end = bars.partition_point(|b| b.time < profile.range.end);
                     first < end
-                        && mapping.idx_to_x(end - 1) >= price_rect.left()
                         && mapping.idx_to_x(first) - mapping.bar_spacing * 0.45
                             <= price_rect.right()
                 });
-                Some((flow.price_step(), flow.tick_size(), profiles))
+                // Sessions left of the view only draw their extensions.
+                let shown = profiles.partition_point(|profile| {
+                    let end = bars.partition_point(|b| b.time < profile.range.end);
+                    mapping.idx_to_x(end - 1) < price_rect.left()
+                });
+                Some((flow.price_step(), flow.tick_size(), profiles, shown))
             });
         let fixed_footprint = self
             .feed_link
@@ -982,8 +986,8 @@ impl Chart {
         #[cfg(feature = "studies")]
         let profile_prices = execution_profiles
             .iter()
-            .flat_map(|(step, tick, profiles)| {
-                profiles.iter().flat_map(move |profile| {
+            .flat_map(|(step, tick, profiles, shown)| {
+                profiles[*shown..].iter().flat_map(move |profile| {
                     profile
                         .volume
                         .levels
@@ -1002,7 +1006,22 @@ impl Chart {
         let profile_prices = std::iter::empty();
         // Fit the price scale, then apply this frame's price zoom
         let series_values = self.fit_secondary_series();
-        let primitive_prices = self.main_primitive_prices();
+        let mut primitive_prices = self.main_primitive_prices();
+        for idx in &study_indices {
+            let study = &self.rendered_studies().indicators()[*idx];
+            if study.is_visible()
+                && !study.is_overlay()
+                && self.study_autoscale[*idx]
+                && !self.config.scale_price_chart_only
+                && study.scale() == crate::studies::StudyScale::Main
+            {
+                let range = super::IndicatorPane::with_config(
+                    super::IndicatorPaneConfig::from_study(study.as_ref()),
+                )
+                .calculate_y_range(study.as_ref(), &(start_idx..end_idx));
+                primitive_prices.extend([range.0, range.1]);
+            }
+        }
         let target_prices = self.target_prices();
         let source_marks = self
             .mark_source
@@ -1029,10 +1048,14 @@ impl Chart {
             .indicators()
             .iter()
             .zip(&self.study_autoscale)
-            .filter(|(study, autoscale)| {
-                !self.config.scale_price_chart_only && **autoscale && !study.is_volume()
+            .enumerate()
+            .filter(|(idx, (study, autoscale))| {
+                study_indices.contains(idx)
+                    && !self.config.scale_price_chart_only
+                    && **autoscale
+                    && !study.is_volume()
             })
-            .map(|(study, _)| study.as_ref()),
+            .map(|(_, (study, _))| study.as_ref()),
             heikin_ashi.as_ref().map(|bars| &bars[start_idx..end_idx]),
             self.main_series_visible,
             self.main_series_style.autoscale.as_ref(),
@@ -1510,15 +1533,7 @@ impl Chart {
             }
         };
         let last_price_line = last.filter(|_| self.main_series_visible).map(|last| {
-            let color = style
-                .price_line_color
-                .or_else(|| last.colors.as_ref().and_then(|own| own.color))
-                .unwrap_or(if last.close >= last.open {
-                    self.config.bullish_color
-                } else {
-                    self.config.bearish_color
-                });
-            PriceLine::new(last.close, color)
+            PriceLine::new(last.close, self.main_value_color(last))
                 .with_width(if self.config.show_price_line && style.price_line_visible {
                     style.price_line_width
                 } else {
@@ -1587,13 +1602,11 @@ impl Chart {
         });
         self.host_events.volume_map = volume_map;
         // The main pane's visual order: overlays listed before the series are drawn under it.
-        let series_at = self
-            .pane_layout
-            .main
+        let series_at = order
             .iter()
             .position(|id| *id == super::SeriesId::MAIN)
             .unwrap_or(0);
-        let (behind, front) = self.pane_layout.main.split_at(series_at);
+        let (behind, front) = order.split_at(series_at);
         let main_visible_range = start_idx..(start_idx + visible_data.len());
         let volume_coords = show_volume.then(|| coords.with_rect(volume_rect));
         // Primitives are hit tested at the pointer, before the chart state is borrowed mutably.
@@ -1619,7 +1632,7 @@ impl Chart {
                     pos,
                 )
             } else {
-                self.pane_layout.main.iter().rev().fold(None, |best, id| {
+                order.iter().rev().fold(None, |best, id| {
                     primitives::best_hit(
                         best,
                         primitives::primitive_at(
@@ -1637,9 +1650,7 @@ impl Chart {
             .copied()
             .filter(|id| self.has_renderer(*id))
             .collect();
-        let hit_order: Vec<_> = self
-            .pane_layout
-            .main
+        let hit_order: Vec<_> = order
             .iter()
             .copied()
             .filter(|id| {
@@ -1708,7 +1719,7 @@ impl Chart {
                         super::ChartElementId::Indicator(id)
                         | super::ChartElementId::Series(id) => id,
                     };
-                    self.pane_layout.main.iter().position(|member| member == id)
+                    order.iter().position(|member| member == id)
                 })
         };
         // The element under the pointer goes last when hovered series are drawn on top.
@@ -1733,7 +1744,7 @@ impl Chart {
                 .iter()
                 .position(|study| study == id)
                 .map(|idx| &studies.indicators()[idx])
-                .filter(|study| study.is_visible() && study.is_overlay())
+                .filter(|study| study.is_visible())
             else {
                 return;
             };
@@ -1789,13 +1800,23 @@ impl Chart {
                         item.draw(&clipped_painter, &view, PrimitivePass::Series, factor);
                     }
                 }
-            } else {
+            } else if study.is_overlay() {
                 rendering::IndicatorRenderer::render(
                     &price_ctx,
                     std::slice::from_ref(study),
                     visible_data,
                     &price_map,
                     &coords,
+                );
+            } else {
+                let mapping = rendering::study_mapping(study.as_ref(), &coords);
+                rendering::IndicatorRenderer::render_study(
+                    &price_ctx,
+                    study.as_ref(),
+                    visible_data,
+                    start_idx,
+                    &mapping.price,
+                    &mapping,
                 );
             }
         };
@@ -1910,14 +1931,15 @@ impl Chart {
                         );
                     }
                     #[cfg(feature = "studies")]
-                    if session_profiles && let Some((step, tick, profiles)) = &execution_profiles {
+                    if session_profiles
+                        && let (Some((_, _, profiles, _)), Some(flow)) = (&execution_profiles, feed)
+                    {
                         crate::chart::overlays::render_session_volume_profiles(
                             &clipped_painter,
                             &mapping,
                             bars,
                             profiles,
-                            *step,
-                            *tick,
+                            flow,
                             self.trade_profile_settings(),
                         );
                     }
@@ -1945,7 +1967,7 @@ impl Chart {
                         |index, min_x| merged_x(volume, index, min_x),
                     );
                 }
-                self.paint_last_price_pulse(ui, &clipped_painter, price_rect, &coords);
+                self.paint_last_price_pulse(&clipped_painter, price_rect, &coords);
             }
         };
         let paint_unhovered = |id: &super::SeriesId| {
@@ -2420,12 +2442,16 @@ impl Chart {
         let mut independent_axis_width =
             self.paint_series_axes(ui, &painter, rect, price_rect, &colors);
         if show_price_axis {
-            let axes = studies.indicators().iter().filter(|study| {
-                study.is_visible()
-                    && study.is_overlay()
-                    && !study.is_volume()
-                    && study.scale() == crate::studies::StudyScale::Independent
-            });
+            let axes = studies
+                .indicators()
+                .iter()
+                .enumerate()
+                .filter(|(idx, study)| {
+                    study_indices.contains(idx)
+                        && study.is_visible()
+                        && !study.is_volume()
+                        && study.scale() == crate::studies::StudyScale::Independent
+                });
             let mut edge = price_rect.left()
                 - if self.config.show_left_axis {
                     self.config.left_axis_width.max(self.measured_axis_width)
@@ -2445,7 +2471,7 @@ impl Chart {
             let slot_width = (edge - rect.left() - padding).max(0.0)
                 / (axes.clone().count() + series_left).max(1) as f32;
             edge -= series_left as f32 * slot_width;
-            for study in axes {
+            for (_, study) in axes {
                 let mapping = crate::chart::rendering::study_mapping(study.as_ref(), &coords);
                 let axis = Rect::from_min_max(
                     Pos2::new(edge - slot_width, price_rect.top()),
@@ -2467,7 +2493,9 @@ impl Chart {
             for study in studies
                 .indicators()
                 .iter()
-                .filter(|study| study.is_overlay())
+                .enumerate()
+                .filter(|(idx, _)| study_indices.contains(idx))
+                .map(|(_, study)| study)
             {
                 if study.is_volume()
                     && !matches!(study.scale(), crate::studies::StudyScale::Shared(_))
@@ -2694,7 +2722,9 @@ impl Chart {
                 .finish_drawing_action(&mut self.drawings, drawing_history);
         }
         self.paint_marks(&clipped_price_ctx, &coords, MarkerZOrder::Top);
-        self.paint_primitives(&painter, &coords, PrimitivePass::Above);
+        if !self.hide_foreground {
+            self.paint_primitives(&painter, &coords, PrimitivePass::Above);
+        }
 
         // Placed after the drawings handled this frame's input, so a dragged line's tags move
         // with it in the same frame.
@@ -2798,7 +2828,7 @@ impl Chart {
             .study_ids
             .iter()
             .zip(self.rendered_studies().indicators())
-            .filter(|(_, study)| study.is_visible() && study.is_overlay())
+            .filter(|(id, study)| study.is_visible() && self.series_pane(**id) == Some(main_pane))
         {
             if let Some(table) = study.table() {
                 table_rect.max.y =
@@ -2930,6 +2960,7 @@ impl Chart {
                                 ),
                             ),
                             &colors,
+                            Some(&study_indices),
                         )
                     })
                     .inner;
@@ -2955,8 +2986,8 @@ impl Chart {
             self.main_pane_series(),
         );
         #[cfg(feature = "studies")]
-        if let Some((step, tick, profiles)) = &execution_profiles {
-            for profile in profiles {
+        if let Some((step, tick, profiles, shown)) = &execution_profiles {
+            for profile in &profiles[*shown..] {
                 let levels = &profile.volume.levels;
                 let Some(((&low, _), (&high, _))) =
                     levels.first_key_value().zip(levels.last_key_value())

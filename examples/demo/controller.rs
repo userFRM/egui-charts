@@ -2532,14 +2532,14 @@ impl DemoApp {
         };
         for request in requests {
             use egui_charts::ui::widget_bar::{MarketDetail, MarketDetailRequest};
-            let bars = self.chart.bars(SeriesId::MAIN);
+            let bars = self.market_history();
             match request {
                 MarketDetailRequest::PeriodReturns(symbol) => self
                     .symbol_details
-                    .set_period_returns(&symbol, MarketDetail::Ready(feeds::period_returns(bars))),
+                    .set_period_returns(&symbol, MarketDetail::Ready(feeds::period_returns(&bars))),
                 MarketDetailRequest::Seasonality(symbol) => self
                     .symbol_details
-                    .set_seasonality(&symbol, MarketDetail::Ready(feeds::seasonality(bars))),
+                    .set_seasonality(&symbol, MarketDetail::Ready(feeds::seasonality(&bars))),
                 _ => {}
             }
         }
@@ -2845,6 +2845,7 @@ impl DemoApp {
     fn handle_timeframe_toolbar(&mut self, action: TimeframeToolbarAction) {
         match action {
             TimeframeToolbarAction::DateRangeChanged(range) => {
+                self.explain_history_limit(range);
                 let visible = visible_bars_for_range(range, self.chart.bars(SeriesId::MAIN));
                 let width = self.chart.get_rendered_price_rect().width();
                 // Include the latest slot in the scale's exclusive data range.
