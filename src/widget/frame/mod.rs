@@ -444,6 +444,9 @@ impl Chart {
         shared_plot: Option<&Response>,
         footprint: Option<(&Footprint, &FootprintConfig)>,
     ) -> Response {
+        let primary_side = self.primary_axis_side();
+        let show_left_axis = primary_side == Some(crate::model::AxisSide::Left);
+        let show_right_axis = primary_side == Some(crate::model::AxisSide::Right);
         let main_pane = self.main_series_pane();
         let order = self.main_series_order().to_vec();
         let study_indices: Vec<_> = self
@@ -592,7 +595,7 @@ impl Chart {
             shared_plot.map_or_else(|| response.clone(), |plot| response.union(plot.clone()));
         let axis_corner = Rect::from_min_max(
             Pos2::new(
-                if self.config.show_right_axis {
+                if show_right_axis {
                     chart_rect.right()
                 } else {
                     rect.left()
@@ -600,7 +603,7 @@ impl Chart {
                 time_axis_top,
             ),
             Pos2::new(
-                if self.config.show_right_axis {
+                if show_right_axis {
                     rect.right()
                 } else {
                     chart_rect.left()
@@ -643,7 +646,7 @@ impl Chart {
             self.config.show_plus_button && !eraser_mode && !is_drawing_interaction;
         let show_axis_settings = !self.layout_inactive || ui.rect_contains_pointer(rect);
         let axis_interaction = cfg!(feature = "icons")
-            && (self.config.show_right_axis || self.config.show_left_axis)
+            && (show_right_axis || show_left_axis)
             && ui.input(|input| {
                 (input.pointer.any_down() || input.pointer.any_released())
                     && input
@@ -729,10 +732,12 @@ impl Chart {
         self.set_panning_cursor(ui, &time_response);
 
         // Define axis rects
-        let price_axis_rect = Rect::from_min_max(
-            Pos2::new(axis_corner.left(), chart_rect.top()),
-            Pos2::new(axis_corner.right(), chart_rect.bottom()),
-        );
+        let price_axis_rect = self
+            .pane_scale_axes(main_pane, rect, chart_rect)
+            .find(|(key, _)| *key == super::PaneScale::Named(self.main_series_scale))
+            .map_or(Rect::NOTHING, |(_, axis)| {
+                Rect::from_x_y_ranges(axis.x_range(), chart_rect.y_range())
+            });
         let time_axis_rect = shared_time_axis.unwrap_or_else(|| {
             Rect::from_min_max(
                 Pos2::new(chart_rect.min.x, chart_rect.max.y),
@@ -1564,7 +1569,7 @@ impl Chart {
                 })
                 .with_style(style.price_line_style)
                 .with_axis_label(
-                    (self.config.show_right_axis || self.config.show_left_axis)
+                    (show_right_axis || show_left_axis)
                         && self.config.show_symbol_last_val
                         && style.last_value_visible,
                 )
@@ -2203,7 +2208,7 @@ impl Chart {
 
         self.paint_marks(&clipped_price_ctx, &coords, MarkerZOrder::AboveSeries);
 
-        if self.config.show_right_axis || self.config.show_left_axis {
+        if show_right_axis || show_left_axis {
             let axis_painter =
                 painter.with_clip_rect(painter.clip_rect().intersect(price_axis_rect));
             for (item, view) in self.main_primitives(&coords) {
@@ -2215,12 +2220,12 @@ impl Chart {
         // The axis labels go at these depths, painted once the crosshair's tags are placed
         let price_labels = painter.add(egui::Shape::Noop);
 
-        let axis_edge = if self.config.show_right_axis {
-            rect.max.x
+        let axis_edge = if show_right_axis {
+            price_axis_rect.right()
         } else {
             price_rect.left()
         };
-        let show_price_axis = self.config.show_right_axis || self.config.show_left_axis;
+        let show_price_axis = show_right_axis || show_left_axis;
         let study_axis = crate::config::PriceAxisOptions {
             show_study_values: self.config.price_axis.show_study_values,
             ..self.config.price_axis
@@ -2482,53 +2487,24 @@ impl Chart {
         }
         let mut independent_axis_width =
             self.paint_series_axes(ui, &painter, rect, price_rect, &colors);
-        if show_price_axis {
-            let axes = studies
-                .indicators()
-                .iter()
-                .enumerate()
-                .filter(|(idx, study)| {
-                    study_indices.contains(idx)
-                        && study.is_visible()
-                        && !study.is_volume()
-                        && study.scale() == crate::studies::StudyScale::Independent
-                });
-            let mut edge = price_rect.left()
-                - if self.config.show_left_axis {
-                    self.config.left_axis_width.max(self.measured_axis_width)
-                } else {
-                    0.0
-                };
-            let padding = self
-                .config
-                .padding
-                .max(0.0)
-                .min(rect.width().min(rect.height()).max(0.0) / 2.0);
-            let series_left = self
-                .series_axis_keys()
-                .iter()
-                .filter(|key| **key != crate::model::SeriesScale::Right)
-                .count();
-            let slot_width = (edge - rect.left() - padding).max(0.0)
-                / (axes.clone().count() + series_left).max(1) as f32;
-            edge -= series_left as f32 * slot_width;
-            for (_, study) in axes {
-                let mapping = crate::chart::rendering::study_mapping(study.as_ref(), &coords);
-                let axis = Rect::from_min_max(
-                    Pos2::new(edge - slot_width, price_rect.top()),
-                    Pos2::new(edge, price_rect.bottom()),
-                );
-                edge -= slot_width;
-                independent_axis_width =
-                    independent_axis_width.max(crate::chart::rendering::render_study_axis(
-                        &painter,
-                        &[study.as_ref()],
-                        &mapping,
-                        axis,
-                        &study_axis,
-                        None,
-                    ));
-            }
+        for (key, axis) in self.pane_scale_axes(main_pane, rect, price_rect) {
+            let super::PaneScale::Study(id) = key else {
+                continue;
+            };
+            let Some(idx) = self.study_ids.iter().position(|study| *study == id) else {
+                continue;
+            };
+            let study = studies.indicators()[idx].as_ref();
+            let mapping = crate::chart::rendering::study_mapping(study, &coords);
+            independent_axis_width =
+                independent_axis_width.max(crate::chart::rendering::render_study_axis(
+                    &painter,
+                    &[study],
+                    &mapping,
+                    axis,
+                    &study_axis,
+                    None,
+                ));
         }
         if show_price_axis && study_axis.show_study_values {
             for study in studies
@@ -3505,8 +3481,8 @@ impl Chart {
             price_formatter.as_deref(),
         );
         if cfg!(feature = "icons")
-            && self.config.show_left_axis
-            && !self.config.show_right_axis
+            && show_left_axis
+            && !show_right_axis
             && self.config.show_plus_button
         {
             // Reserve the button before hover so entering the plot does not resize its panes.
@@ -3538,17 +3514,16 @@ impl Chart {
                 .size()
                 .x
                 + if currency.is_empty() { 16.0 } else { 26.0 };
-            let axis = Rect::from_min_max(
-                Pos2::new(
-                    if self.config.show_right_axis {
-                        price_rect.right()
-                    } else {
-                        rect.left()
-                    },
-                    price_rect.top(),
-                ),
-                Pos2::new(axis_edge, price_rect.bottom()),
-            );
+            let axis = if show_left_axis
+                && self.pane_scale_count(main_pane, crate::model::AxisSide::Left) == 1
+            {
+                Rect::from_min_max(
+                    Pos2::new(rect.left(), price_rect.top()),
+                    price_axis_rect.max,
+                )
+            } else {
+                price_axis_rect
+            };
             let (button, choice) =
                 rendering::render_axis_currency(ui, axis, currency, unit, &self.currency_choices);
             self.measured_axis_width = self.measured_axis_width.max(header_width);
@@ -3566,7 +3541,7 @@ impl Chart {
             time_tags.extend_from_slice(&tags);
             &time_tags
         };
-        if self.config.show_right_axis {
+        if show_right_axis {
             rendering::render_price_labels(
                 &price_ctx,
                 &price_map,
@@ -3576,7 +3551,7 @@ impl Chart {
                 price_labels,
                 price_formatter.as_deref(),
             );
-        } else if self.config.show_left_axis {
+        } else if show_left_axis {
             rendering::render_price_labels_at_pos(
                 &price_ctx,
                 &price_map,

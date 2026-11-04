@@ -137,8 +137,8 @@ pub use crate::chart::primitives::{
     TimeAxisLabel,
 };
 pub use pane::VisualOrder;
-pub use series::SeriesOptions;
 pub use series::{BarsInRange, MismatchDirection, PriceLineId, SeriesLastValue};
+pub use series::{PaneScale, SeriesOptions};
 #[cfg(feature = "ui")]
 #[cfg_attr(docsrs, doc(cfg(feature = "ui")))]
 pub use snapshot::{

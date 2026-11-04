@@ -3279,3 +3279,443 @@ fn main_series_moves_with_rendering_pointer_and_saved_placement() {
         assert_eq!((range.min, range.max), (200.0, 300.0));
     }
 }
+
+/// Saved axis layout changes columns without changing source units or manual bounds.
+/// Restore still waits for the host's bars; an attached, visible source keeps its axis.
+#[cfg(feature = "ui")]
+#[test]
+fn saved_pane_axes_preserve_independent_values_and_columns() {
+    use crate::scales::CustomPriceFormatter;
+    use std::sync::Arc;
+    for own_pane in [false, true] {
+        for side in ["Left", "Right"] {
+            let ctx = egui::Context::default();
+            let data = bars(&[100.0; 30]);
+            let mut chart = Chart::new(BarData::from_bars(data));
+            chart.config.show_volume = false;
+            chart.config.show_plus_button = false;
+            let pane = if own_pane {
+                chart.add_pane()
+            } else {
+                PaneId::MAIN
+            };
+            let mut ids = Vec::new();
+            for (key, values, bounds) in [
+                (SeriesScale::Separate(7), [10.0, 20.0], [0.0, 40.0]),
+                (SeriesScale::Separate(8), [1200.0, 2400.0], [1000.0, 3000.0]),
+            ] {
+                let id = chart.add_series(SeriesOptions {
+                    scale: key,
+                    ..Default::default()
+                });
+                chart.move_series_to_pane(id, pane);
+                chart.set_data(id, bars(&values.repeat(15)));
+                chart
+                    .series_price_scale_mut(id)
+                    .unwrap()
+                    .set_range(bounds[0], bounds[1]);
+                ids.push(id);
+            }
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let mut saved = serde_json::to_value(chart.snapshot().unwrap()).unwrap();
+            saved["panes"][usize::from(own_pane)]["axes"] = serde_json::json!({
+                "side": side, "hide_unused": true,
+            });
+            chart
+                .restore(&serde_json::from_value(saved).unwrap())
+                .unwrap();
+            let mut restored = Vec::new();
+            for (at, old) in ids.iter().enumerate() {
+                let id = chart.restored_series_id(old.0).unwrap();
+                let prefix = if at == 0 { "small" } else { "large" };
+                chart.set_series_formatter(
+                    id,
+                    Some(Arc::new(CustomPriceFormatter::new(move |value| {
+                        format!("{prefix}:{value:.0}")
+                    }))),
+                );
+                chart.set_data(
+                    id,
+                    bars(
+                        &if at == 0 {
+                            [10.0, 20.0]
+                        } else {
+                            [1200.0, 2400.0]
+                        }
+                        .repeat(15),
+                    ),
+                );
+                restored.push(id);
+            }
+            // Let automatic width measurement settle before comparing columns.
+            for time in [0.1, 0.2, 0.3] {
+                frame(&ctx, &mut chart, time, vec![]);
+            }
+            let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 0.4, vec![]);
+            let plot = chart.get_rendered_price_rect();
+            let mut column_x = Vec::new();
+            for prefix in ["small:", "large:"] {
+                let labels: Vec<_> = painted
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        egui::Shape::Text(text)
+                            if text.galley.text().starts_with(prefix)
+                                && (text.pos.x < plot.left() || text.pos.x > plot.right()) =>
+                        {
+                            Some(text)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert!(!labels.is_empty(), "{own_pane} {side}: {prefix}");
+                assert!(
+                    labels
+                        .iter()
+                        .all(|text| (text.pos.x < plot.left()) == (side == "Left")),
+                    "{own_pane} {side}"
+                );
+                // Right labels have a fixed leading inset. Left labels have a fixed trailing inset.
+                column_x.push(if side == "Right" {
+                    labels[0].pos.x
+                } else {
+                    labels[0].pos.x + labels[0].galley.size().x
+                });
+            }
+            assert!(
+                (column_x[0] - column_x[1]).abs() >= 1.0,
+                "{own_pane} {side}: {column_x:?}"
+            );
+            for (at, id) in restored.iter().enumerate() {
+                let map = chart.series_price_map(*id).unwrap();
+                let (low, high, value, fraction) = if at == 0 {
+                    (0.0, 40.0, 20.0, 0.5)
+                } else {
+                    (1000.0, 3000.0, 2400.0, 0.7)
+                };
+                assert_eq!((map.range().min, map.range().max), (low, high));
+                let (top, bottom) = map.extent();
+                // Linear interpolation: 20/40 = 1/2; (2400-1000)/(3000-1000) = 7/10.
+                assert!(
+                    (map.price_to_y(value) - (bottom - fraction * (bottom - top))).abs() < 0.001
+                );
+            }
+        }
+    }
+}
+
+/// Pane commands preserve membership and values, record one undo step, and retain the
+/// unused-axis policy through hide/show, empty history, pane moves and serialized layouts.
+#[test]
+fn pane_axis_commands_enumerate_sources_and_restore_layout() {
+    use crate::model::{AxisSide, PaneAxisOptions};
+    use crate::widget::PaneScale;
+    for placement in 0..4 {
+        let ctx = egui::Context::default();
+        let mut chart = Chart::new(BarData::from_bars(bars(&[100.0; 30])));
+        chart.config.show_volume = false;
+        if placement == 3 {
+            chart.set_series_scale(SeriesId::MAIN, SeriesScale::Separate(12));
+        }
+        let pane = if matches!(placement, 0 | 3) {
+            PaneId::MAIN
+        } else {
+            chart.add_pane()
+        };
+        if placement == 2 {
+            assert!(chart.move_series_to_pane(SeriesId::MAIN, pane));
+        }
+        let other = chart.add_pane();
+        chart.set_preserve_empty_pane(other, true);
+        let mut ids = Vec::new();
+        for key in [
+            SeriesScale::Left,
+            SeriesScale::Left,
+            SeriesScale::Separate(8),
+            SeriesScale::Overlay(3),
+        ] {
+            let id = chart.add_series(SeriesOptions {
+                scale: key,
+                ..Default::default()
+            });
+            assert!(chart.move_series_to_pane(id, pane));
+            chart.set_data(
+                id,
+                bars(
+                    &[if key == SeriesScale::Separate(8) {
+                        1000.0
+                    } else {
+                        10.0
+                    }; 30],
+                ),
+            );
+            ids.push(id);
+        }
+        let left = [
+            PaneScale::Named(SeriesScale::Left),
+            PaneScale::Named(SeriesScale::Separate(8)),
+        ];
+        assert_eq!(chart.pane_scales(pane, AxisSide::Left), left);
+        // Listed axes lead to their scale; absent axes and independent studies have none.
+        assert!(std::ptr::eq(
+            chart.pane_scale(pane, left[0]).unwrap(),
+            chart.series_price_scale(ids[0]).unwrap()
+        ));
+        assert!(
+            chart
+                .pane_scale(pane, PaneScale::Named(SeriesScale::Separate(99)))
+                .is_none()
+        );
+        assert!(chart.pane_scale(pane, PaneScale::Study(ids[0])).is_none());
+        assert!(chart.pane_scales(other, AxisSide::Right).is_empty());
+        assert!(chart.pane_scales(PaneId(999), AxisSide::Left).is_empty());
+        assert!(!chart.place_pane_scales(PaneId(999), AxisSide::Left));
+        assert!(!chart.merge_pane_scales(PaneId(999), AxisSide::Right));
+        let assignment = chart.series_scale(ids[0]);
+        chart
+            .series_price_scale_mut(ids[0])
+            .unwrap()
+            .set_range(0.0, 20.0);
+        chart
+            .series_price_scale_mut(ids[0])
+            .unwrap()
+            .set_price_precision(Some(4));
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let initial = chart.pane_axis_options(pane).unwrap();
+        for side in [AxisSide::Left, AxisSide::Right] {
+            assert!(chart.user_action(|chart| chart.place_pane_scales(pane, side)));
+            assert!(chart.pane_scales(pane, side).contains(&left[0]));
+            assert!(
+                chart
+                    .pane_scales(
+                        pane,
+                        if side == AxisSide::Left {
+                            AxisSide::Right
+                        } else {
+                            AxisSide::Left
+                        }
+                    )
+                    .is_empty()
+            );
+            assert_eq!(
+                chart.pane_axis_options(other),
+                Some(PaneAxisOptions::default())
+            );
+            assert!(chart.undo());
+            assert_eq!(chart.pane_axis_options(pane), Some(initial));
+            assert!(chart.redo());
+            let separate = chart.pane_axis_options(pane).unwrap();
+            assert!(chart.user_action(|chart| chart.merge_pane_scales(pane, side)));
+            let target = chart.series_scale(ids[0]).unwrap();
+            assert_eq!(chart.pane_scales(pane, side), [PaneScale::Named(target)]);
+            assert_eq!(
+                chart.format_series_price(ids[0], 10.0).as_deref(),
+                Some("10.0000")
+            );
+            assert_eq!(chart.bars(ids[0])[0].close, 10.0);
+            assert_eq!(chart.bars(ids[2])[0].close, 1000.0);
+            frame(&ctx, &mut chart, 0.1, vec![]);
+            let merged = chart.series_price_scale(ids[0]).unwrap();
+            if placement == 1 {
+                assert!(merged.is_manual());
+                assert_eq!((merged.range().min, merged.range().max), (0.0, 20.0));
+            } else {
+                assert!(merged.range().contains(10.0) && merged.range().contains(1000.0));
+            }
+            assert!(chart.undo());
+            assert_eq!(chart.pane_axis_options(pane), Some(separate));
+            assert_eq!(chart.series_scale(ids[0]), assignment);
+            let range = chart.series_price_scale(ids[0]).unwrap().range();
+            assert_eq!((range.min, range.max), (0.0, 20.0));
+            assert!(chart.redo());
+            assert_eq!(chart.pane_scales(pane, side), [PaneScale::Named(target)]);
+            assert!(chart.undo());
+            assert!(chart.undo());
+            assert_eq!(chart.pane_axis_options(pane), Some(initial));
+        }
+        // An independent study has its own axis identity in the main series' pane.
+        if placement != 1 {
+            let study = chart.add_indicator(Box::new(
+                crate::studies::CustomIndicator::new("independent", |_| {
+                    vec![crate::studies::IndicatorValue::Single(5.0); 30]
+                })
+                .with_scale(crate::studies::StudyScale::Independent),
+            ));
+            if placement == 2 {
+                chart.move_series_to_pane(study, pane);
+            }
+            assert!(
+                chart
+                    .pane_scales(pane, AxisSide::Left)
+                    .contains(&PaneScale::Study(study))
+            );
+            assert!(chart.user_action(|chart| chart.merge_pane_scales(pane, AxisSide::Right)));
+            assert_eq!(chart.pane_scales(pane, AxisSide::Right).len(), 1);
+            assert!(chart.indicators().find(|(id, _)| *id == study).is_some_and(
+                |(_, study)| matches!(study.scale(), crate::studies::StudyScale::Shared(_))
+            ));
+            assert!(chart.undo());
+            assert!(
+                chart
+                    .pane_scales(pane, AxisSide::Left)
+                    .contains(&PaneScale::Study(study))
+            );
+            chart.remove_series(study);
+        }
+        chart.place_pane_scales(pane, AxisSide::Right);
+        for id in &ids {
+            chart.set_series_visible(*id, false);
+        }
+        if placement != 1 {
+            chart.set_series_visible(SeriesId::MAIN, false);
+        }
+        assert!(chart.pane_scales(pane, AxisSide::Right).is_empty());
+        #[cfg(feature = "ui")]
+        if placement != 1 {
+            chart.place_pane_scales(pane, AxisSide::Left);
+            let settings = crate::widget::settings::ChartSettingsState::from_chart(&chart);
+            assert!(
+                settings.scales_and_lines.price_scale_left,
+                "hidden sources retain their configured side"
+            );
+            let axis_visibility = (chart.config.show_left_axis, chart.config.show_right_axis);
+            settings.apply_to_chart(&mut chart).unwrap();
+            assert_eq!(
+                (chart.config.show_left_axis, chart.config.show_right_axis),
+                axis_visibility,
+                "pane placement must not move another pane's axes"
+            );
+            assert_eq!(
+                chart.pane_axis_options(pane).unwrap().side,
+                Some(AxisSide::Left)
+            );
+            chart.place_pane_scales(pane, AxisSide::Right);
+        }
+        let options = chart.pane_axis_options(pane).unwrap();
+        assert!(options.hide_unused);
+        chart.set_pane_axis_options(
+            pane,
+            PaneAxisOptions {
+                hide_unused: false,
+                ..options
+            },
+        );
+        assert!(!chart.pane_scales(pane, AxisSide::Right).is_empty());
+        #[cfg(feature = "ui")]
+        {
+            let main_assignment = chart.series_scale(SeriesId::MAIN);
+            let saved = chart
+                .snapshot()
+                .unwrap_or_else(|error| panic!("placement {placement}: {error}"));
+            let saved = serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+            chart = Chart::new(BarData::from_bars(bars(&[100.0; 30])));
+            chart.restore(&saved).unwrap();
+            assert_eq!(chart.series_scale(SeriesId::MAIN), main_assignment);
+            for id in &mut ids {
+                *id = chart.restored_series_id(id.0).unwrap();
+            }
+        }
+        let pane = chart.series_pane(ids[0]).unwrap();
+        assert!(!chart.pane_axis_options(pane).unwrap().hide_unused);
+        chart.set_pane_axis_options(pane, options);
+        assert!(chart.pane_scales(pane, AxisSide::Right).is_empty());
+        chart.set_data(ids[0], Vec::new());
+        assert!(chart.set_series_visible(ids[0], true));
+        assert_eq!(chart.pane_scales(pane, AxisSide::Right), [left[0]]);
+        chart.set_data(ids[0], bars(&[10.0; 30]));
+        assert_eq!(chart.pane_scales(pane, AxisSide::Right), [left[0]]);
+        assert!(chart.move_series_to_pane(ids[0], other));
+        assert!(chart.pane_scales(pane, AxisSide::Right).is_empty());
+        assert_eq!(chart.pane_scales(other, AxisSide::Left), [left[0]]);
+        assert!(chart.move_series_to_pane(ids[0], pane));
+        assert_eq!(chart.pane_scales(pane, AxisSide::Right), [left[0]]);
+    }
+
+    #[cfg(feature = "ui")]
+    {
+        // A study-only axis has no saved bar-series record to carry its options or range.
+        let mut chart = Chart::new(BarData::from_bars(bars(&[100.0; 30])));
+        chart.set_series_scale(SeriesId::MAIN, SeriesScale::Overlay(40));
+        let study = chart.add_indicator(Box::new(crate::studies::SMA::new(3)));
+        let key = SeriesScale::Separate(9);
+        assert!(
+            chart
+                .indicator_mut(study)
+                .unwrap()
+                .set_scale(crate::studies::StudyScale::Shared(key))
+        );
+        // Hosts can edit a study and save before a frame creates its named scale.
+        assert!(
+            chart
+                .pane_scale(PaneId::MAIN, PaneScale::Named(key))
+                .is_none()
+        );
+        let pending = chart.snapshot().unwrap();
+        let mut restored = Chart::new(BarData::from_bars(bars(&[100.0; 30])));
+        restored.restore(&pending).unwrap();
+        assert_eq!(
+            restored.pane_scales(PaneId::MAIN, AxisSide::Left),
+            [PaneScale::Named(key)]
+        );
+        let scale = chart
+            .pane_scale_mut(PaneId::MAIN, PaneScale::Named(key))
+            .unwrap();
+        scale.set_range(80.0, 120.0);
+        scale.set_price_precision(Some(3));
+        scale.options_mut().invert_scale = true;
+        assert!(chart.merge_pane_scales(PaneId::MAIN, AxisSide::Right));
+        let saved =
+            serde_json::from_str(&serde_json::to_string(&chart.snapshot().unwrap()).unwrap())
+                .unwrap();
+        let mut restored = Chart::new(BarData::from_bars(bars(&[100.0; 30])));
+        restored.restore(&saved).unwrap();
+        let scale = restored.pane_price_scale(PaneId::MAIN, key);
+        assert!(scale.is_manual() && scale.options().invert_scale);
+        assert_eq!((scale.range().min, scale.range().max), (80.0, 120.0));
+        assert_eq!(
+            scale.map(Default::default(), 0.0, 1.0).price_precision(),
+            Some(3)
+        );
+        assert_eq!(
+            restored.pane_scales(PaneId::MAIN, AxisSide::Right),
+            [PaneScale::Named(key)]
+        );
+    }
+}
+
+/// The main axis reports the width of its placed side, a chart with both price axes off stays
+/// without them after a placement, and own-scale volume never takes an axis of the initial pane.
+#[test]
+fn placed_axes_report_their_side_and_respect_hidden_chart_axes() {
+    use crate::model::AxisSide;
+    use crate::scales::PriceScaleId;
+    let ctx = egui::Context::default();
+    let mut chart = Chart::new(BarData::from_bars(bars(&[100.0; 30])));
+    chart.config.show_volume = false;
+    assert!(chart.place_pane_scales(PaneId::MAIN, AxisSide::Left));
+    frame(&ctx, &mut chart, 0.0, vec![]);
+    assert!(chart.price_axis_width(PriceScaleId::Left) > 0.0);
+    assert_eq!(chart.price_axis_width(PriceScaleId::Right), 0.0);
+    chart.config.show_left_axis = false;
+    chart.config.show_right_axis = false;
+    assert!(chart.pane_scales(PaneId::MAIN, AxisSide::Left).is_empty());
+
+    #[cfg(feature = "studies")]
+    {
+        let mut chart = Chart::new(BarData::from_bars(bars(&[100.0; 30])));
+        chart.config.show_volume = false;
+        chart.add_indicator(Box::new(crate::studies::Volume::new(20)));
+        let other = chart.add_pane();
+        assert!(chart.move_series_to_pane(SeriesId::MAIN, other));
+        assert!(chart.pane_scales(PaneId::MAIN, AxisSide::Right).is_empty());
+        frame(&ctx, &mut chart, 0.1, vec![]);
+        let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 0.2, vec![]);
+        let rows = chart.pane_layout.panes[0].rect.y_range();
+        let plot = chart.get_rendered_price_rect();
+        assert!(
+            !painted.iter().any(|shape| matches!(shape,
+                egui::Shape::Text(text) if text.pos.x > plot.right() && rows.contains(text.pos.y)
+            )),
+            "own-scale volume paints no axis labels"
+        );
+    }
+}
