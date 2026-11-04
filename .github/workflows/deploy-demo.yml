@@ -14,6 +14,9 @@ on:
 env:
   ASTRO_TELEMETRY_DISABLED: "1"
   CARGO_TERM_COLOR: always
+  # Leave room for web artifacts when linking the native build checks.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
   TRUNK_VERSION: "0.21.14"
 
 # One run per ref at a time. A newer pull request push cancels the running build;
