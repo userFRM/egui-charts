@@ -1090,8 +1090,9 @@ mod tests {
         super::super::tests::settle(&mut app, &ctx);
         let mut bars = app.chart.bars(SeriesId::MAIN).to_vec();
         let at = bars.len() - 5;
-        bars[at].close = bars[at].high + 20.0;
-        bars[at].high = bars[at].close;
+        // The restored axis is inverted; keep the gesture above overlaid studies.
+        bars[at].close = bars[at].low * 0.5;
+        bars[at].low = bars[at].close;
         app.chart.set_data(restored, bars);
         app.chart.series_price_scale_mut(restored).unwrap().reset();
         for _ in 0..3 {
