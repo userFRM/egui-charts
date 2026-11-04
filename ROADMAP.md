@@ -75,7 +75,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Editable text, notes, callouts, price labels, comments, signposts and tables with persistent cell contents.
 - [x] Image annotations load an address through application-installed egui image loaders; local post and idea cards store editable supplied content.
 - [x] Searchable bundled icons, emoji and stickers with size controls and recent selections.
-- [x] Fibonacci retracement and extension fills share their level lines' horizontal span; channel levels extend to the pane edges.
+- [x] Fibonacci retracement and extension fills share their level lines' horizontal span; their labels show only for levels inside the price pane, including its boundaries. Channel levels extend to the pane edges.
 - [ ] Build the triangle pattern's two boundaries and apex, and correct its polygon fill.
 - [x] Three-drives ratios and the reversal zone are measured in price.
 - [x] Elliott impulse targets project the first price leg in its own direction, independent of zoom and scale.
@@ -91,7 +91,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Anchor handles, dragging, OHLC/study/drawing magnet snapping, repeated placement, locking and visibility controls.
 - [x] Undoable drawing creation, edits, deletion, ordering, flat groups and moves between panes.
 - [x] Properties edit style, tool inputs, text, timeframe visibility and validated price/time coordinates. Drawing menus and the selected toolbar offer current, higher, lower and all-interval visibility filters, with undo and saved templates. Time intervals compare by duration; trade intervals compare within their own unit.
-- [x] Public timestamp-based creation and anchor editing, drawing enumeration, per-tool defaults and custom drawing registration.
+- [x] Public timestamp-based creation and anchor editing, drawing enumeration, per-tool defaults and custom drawing registration. Creation uses each tool's style before saved overrides: arcs and polylines start with a 20% tint, price ranges and quick measure with a 15% tint, anchored VWAP at 1 px, and pitchfans with individual level colours.
 - [x] Per-drawing selection, saving and object-list flags; drawing change notifications and registry availability controls.
 - [x] Versioned drawing documents retain timestamp anchors, settings and flat groups, with migration and skipped-record reporting.
 - [x] `Chart::set_storage` loads and saves drawings per symbol and retains failed writes for retry.
@@ -114,7 +114,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Visible, fixed, session, periodic, anchored and auto-anchored volume profiles sum supplied executions in whole-tick rows, mark incomplete spans and fall back to finer-bar or chart-bar estimates, with translucent rows that keep candles readable, point of control and value area.
 - [x] Regression, rank correlation, pivot levels, ZigZag, candlestick patterns, seasonality and market-structure studies.
 - [x] Majority Rule reports +1, -1 or zero from the majority of rising versus falling closes over its lookback.
-- [x] Automatic trend-line, channel, Fibonacci and pitchfork studies use ZigZag pivots with the `drawings` feature.
+- [x] Automatic trend-line, channel, Fibonacci and pitchfork studies use ZigZag pivots with the `drawings` feature. Automatic Fibonacci drawings use the same initial level palette, visible ratios, spare levels and band opacity as manually placed drawings.
 - [x] Shared renderers support lines, steps, histograms, columns, dots, crosses, areas, shapes, bar/background colours and filled regions.
 - [x] MACD histogram columns, displaced Ichimoku cloud fills into visible future space, and separate Parabolic SAR dots.
 - [ ] Correct RSI zero-loss handling for very small price changes and the dependent divergence calculations.
