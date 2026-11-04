@@ -522,11 +522,10 @@ impl super::Chart {
             #[cfg(feature = "drawings")]
             A::DeleteSelectedDrawing => match self.selection.selected_id() {
                 Some(super::ChartElementId::Indicator(id))
-                    if self.drawings.selected_ids().next().is_none() =>
+                    if self.drawings.selected_ids().next().is_none()
+                        && self.indicator_user_edit_enabled(id) =>
                 {
-                    if self.indicator_user_edit_enabled(id) {
-                        self.remove_series(id);
-                    }
+                    self.remove_series(id);
                 }
                 _ => self.drawings.delete_selected(),
             },
