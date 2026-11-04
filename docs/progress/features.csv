@@ -428,7 +428,7 @@ Order flow,Order flow,Cumulative aggressor volume delta with resets,done,library
 Order flow,Order flow,Cumulative iceberg and stop counts over time with alerts,done,library,src/services/detectors/alerts.rs;src/services/detectors/mod.rs;src/ui/widget_bar/panels/order_flow.rs,1148;1149
 Order flow,Order flow,Current order book profile with quantity key and exact row readout,done,library,src/chart/overlays/book_profile.rs;src/widget/feed/mod.rs,
 Order flow,Order flow,Custom range profile drawn on the chart by selection,partial,library,src/drawings/rendering/trading/volume_profile.rs;src/data/volume_profile.rs;src/studies/builtin/trade_profile.rs;src/painting/volume_profile.rs;src/drawings/rendering/mod.rs,
-Order flow,Order flow,DOM levels panel beside the heatmap,partial,library,src/data/orders.rs;src/widget/feed/mod.rs,
+Order flow,Order flow,DOM levels panel beside the heatmap,done,library,src/data/orders.rs;src/widget/feed/mod.rs;src/ui/trading/dom.rs;examples/demo/controller.rs,1756
 Order flow,Order flow,Delta % and bid/ask ratio highlight markers on bars,done,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/studies/builtin/footprint_studies.rs;src/widget/frame/mod.rs,
 Order flow,Order flow,Delta POC per bar,done,library,src/studies/builtin/footprint_studies.rs;src/chart/overlays/footprint.rs;src/widget/frame/mod.rs,
 Order flow,Order flow,Delta split into trade-size ranges,done,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/studies/builtin/order_flow.rs;src/data/order_flow.rs;src/data/inbox/sink.rs;src/widget/feed/pump.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/chart/rendering/legend/mod.rs;src/widget/pane/indicator/paint.rs,
@@ -912,7 +912,7 @@ Terminal,Toolbars and panels,Compare / add symbol dialog,done,library,src/ui/dia
 Terminal,Toolbars and panels,Custom intervals,done,library,src/ui/top_toolbar/components/timeframe_selector/mod.rs;src/ui/top_toolbar/toolbar.rs;src/model/timeframe.rs;src/model/session/exchange.rs;terminal/src/time.rs,
 Terminal,Toolbars and panels,Data window,done,library,src/ui/widget_bar/panels/object_tree/data_window.rs;src/scales/horizontal.rs;src/scales/time_formatter.rs;terminal/src/panels.rs;src/widget/frame/mod.rs;terminal/src/drawings.rs,1939
 Terminal,Toolbars and panels,Demo showcase menu,done,library,examples/demo/commands.rs;examples/demo/controller.rs;examples/demo/annotations.rs;examples/demo/formatting.rs;src/ui/top_toolbar/toolbar.rs,1943;1994;2013
-Terminal,Toolbars and panels,Depth ladder for analysis without a trading account,missing,library,,
+Terminal,Toolbars and panels,Depth ladder for analysis without a trading account,done,library,src/ui/trading/dom.rs;src/ui/widget_bar/panels/mod.rs;examples/demo/controller.rs;examples/demo/live.rs,1756
 Terminal,Toolbars and panels,Favourite drawing tools floating bar,partial,library,src/ui/drawing_toolbar/toolbar/mod.rs;src/ui/drawing_toolbar/toolbar/floating.rs;src/ui/drawing_toolbar/state.rs;src/ui/drawing_toolbar/utilities/favorites.rs;src/services/settings.rs;examples/demo/layouts.rs,
 Terminal,Toolbars and panels,Favourite intervals pinned to the toolbar,done,library,src/ui/top_toolbar/toolbar.rs;src/ui/top_toolbar/components/timeframe_selector/mod.rs;terminal/src/time.rs,
 Terminal,Toolbars and panels,Fullscreen,done,library,src/ui/top_toolbar/toolbar.rs,

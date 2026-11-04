@@ -242,6 +242,7 @@ enum SidePanel {
     DataWindow,
     Watchlist,
     TimeAndSales,
+    Depth,
     OrderFlow,
     Highlights,
     Screener,
@@ -462,6 +463,7 @@ pub struct DemoApp {
     // Symbol search is open for the watchlist's add button: the pick joins the list.
     watchlist_search: bool,
     time_and_sales: TimeAndSalesPanel,
+    depth: egui_charts::ui::widget_bar::DepthPanel,
     order_flow: egui_charts::ui::widget_bar::OrderFlowPanel,
     // Below the watchlist: the chart symbol's synthetic details and notes kept in app storage.
     symbol_details: SymbolDetailsPanel,
@@ -767,6 +769,10 @@ impl DemoApp {
             watchlist_wide: false,
             watchlist_search: false,
             time_and_sales: TimeAndSalesPanel::default(),
+            depth: cc
+                .storage
+                .and_then(|storage| eframe::get_value(storage, "depth_panel"))
+                .unwrap_or_default(),
             symbol_details: SymbolDetailsPanel::new(),
             financials: None,
             highlights: NewsPanel::highlights(),
@@ -1459,6 +1465,7 @@ impl eframe::App for DemoApp {
         storage.remove_string("api_samples");
         eframe::set_value(storage, "event_visibility", self.chart.event_visibility());
         eframe::set_value(storage, "open_panel", &self.open_panel);
+        eframe::set_value(storage, "depth_panel", &self.depth);
         eframe::set_value(
             storage,
             "drawing_defaults",
@@ -1719,6 +1726,25 @@ impl DemoApp {
                         panel_action = Some(SidePanel::OrderFlow);
                         ui.close();
                     }
+                    for (label, panel, icon, available) in [
+                        (
+                            "Time and sales",
+                            SidePanel::TimeAndSales,
+                            &icons::SETTINGS_EVENTS,
+                            self.api_samples,
+                        ),
+                        (
+                            "Depth",
+                            SidePanel::Depth,
+                            &icons::FIXED_RANGE_VOLUME_PROFILE,
+                            egui_charts::ui::widget_bar::DepthPanel::is_available(&self.chart),
+                        ),
+                    ] {
+                        if available && menu_item(ui, label, icon, None).clicked() {
+                            panel_action = Some(panel);
+                            ui.close();
+                        }
+                    }
                     if ui.ctx().content_rect().width() < 600.0 {
                         for (label, panel, icon) in [
                             (
@@ -1733,16 +1759,7 @@ impl DemoApp {
                                 &icons::WIDGET_BAR_LAYERS,
                             ),
                             ("Data Window", SidePanel::DataWindow, &icons::TABLE),
-                            (
-                                "Time and sales",
-                                SidePanel::TimeAndSales,
-                                &icons::SETTINGS_EVENTS,
-                            ),
-                        ]
-                        .into_iter()
-                        .filter(|(_, panel, _)| {
-                            self.api_samples || *panel != SidePanel::TimeAndSales
-                        }) {
+                        ] {
                             if menu_item(ui, label, icon, None).clicked() {
                                 panel_action = Some(panel);
                                 ui.close();
@@ -2248,6 +2265,11 @@ impl DemoApp {
 
     fn show_side_panel(&mut self, ui: &mut egui::Ui) {
         self.widget_bar.show_panel(ui);
+        if self.open_panel == Some(SidePanel::Depth)
+            && !egui_charts::ui::widget_bar::DepthPanel::is_available(&self.chart)
+        {
+            return;
+        }
         let Some(which) = self.open_panel else {
             return;
         };
@@ -2277,6 +2299,7 @@ impl DemoApp {
                     self.show_watchlist(ui);
                 }
                 SidePanel::TimeAndSales => self.time_and_sales.show(ui),
+                SidePanel::Depth => self.depth.show(ui, &mut self.chart),
                 SidePanel::OrderFlow => {
                     for (kind, visible) in
                         self.order_flow
@@ -4575,6 +4598,113 @@ mod tests {
             self.0.remove(key);
         }
         fn flush(&mut self) {}
+    }
+
+    #[test]
+    fn depth_menu_requires_a_declaration_and_restores_its_view() {
+        use eframe::App;
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let now = "2026-10-27T14:00:00Z".parse().unwrap();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            now,
+            true,
+        );
+        settle(&mut app, &ctx);
+        let draw = |app: &mut DemoApp, events| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+            )
+        };
+        let click = |app: &mut DemoApp, label: &str| {
+            let output = draw(app, vec![]);
+            let pos = output
+                .platform_output
+                .accesskit_update
+                .as_ref()
+                .unwrap()
+                .nodes
+                .iter()
+                .find_map(|(_, node)| {
+                    if node.label() != Some(label) || node.role() == egui::accesskit::Role::Label {
+                        return None;
+                    }
+                    let rect = node.bounds()?;
+                    Some(egui::pos2(
+                        (rect.x0 + rect.x1) as f32 / 2.0,
+                        (rect.y0 + rect.y1) as f32 / 2.0,
+                    ))
+                })
+                .unwrap_or_else(|| panic!("missing control: {label}"));
+            output.drop_without_applying_deltas();
+            for pressed in [true, false] {
+                draw(
+                    app,
+                    vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            pressed,
+                            button: egui::PointerButton::Primary,
+                            modifiers: Default::default(),
+                        },
+                    ],
+                )
+                .drop_without_applying_deltas();
+            }
+        };
+        let has = |output: &egui::FullOutput, label: &str| {
+            output.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == label)
+        })
+        };
+        click(&mut app, "Menu");
+        let output = draw(&mut app, vec![]);
+        assert!(has(&output, "Depth"));
+        output.drop_without_applying_deltas();
+        click(&mut app, "Depth");
+        let output = draw(&mut app, vec![]);
+        assert!(has(&output, "Bid size"));
+        assert!(has(&output, "Center"));
+        output.drop_without_applying_deltas();
+        let mut storage = AppStorage::default();
+        app.save(&mut storage);
+        let saved = eframe::Storage::get_string(&storage, "depth_panel").unwrap();
+        let mut cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        cc.storage = Some(&storage);
+        let mut restored = DemoApp::new_at(&cc, now, true);
+        settle(&mut restored, &ctx);
+        let output = draw(&mut restored, vec![]);
+        assert!(has(&output, "Bid size"));
+        output.drop_without_applying_deltas();
+        let mut resaved = AppStorage::default();
+        restored.save(&mut resaved);
+        assert_eq!(
+            eframe::Storage::get_string(&resaved, "depth_panel"),
+            Some(saved)
+        );
+        let mut instrument = app.chart.instrument().unwrap().clone();
+        instrument.services = Some(vec![]);
+        app.chart = egui_charts::ChartBuilder::new()
+            .with_symbol(&instrument.symbol)
+            .build();
+        app.chart.set_instrument(Some(instrument));
+        let output = draw(&mut app, vec![]);
+        assert!(!has(&output, "Bid size"));
+        output.drop_without_applying_deltas();
+        click(&mut app, "Menu");
+        let output = draw(&mut app, vec![]);
+        assert!(!has(&output, "Depth"));
+        output.drop_without_applying_deltas();
     }
 
     #[test]

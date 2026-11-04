@@ -172,6 +172,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Order-flow detectors count new detections in feed-time windows, keep loaded history silent, and deliver live and rising-edge count alerts through the notification service.
 - [x] Sequenced aggregated-depth snapshots/deltas and per-order add, modify, cancel and execute events, with gap detection and resynchronisation.
 - [x] Public order book and order queue retain tick-aware prices, best quotes and queue priority.
+- [x] `DepthPanel` shares the ticket ladder's rows, optional columns and profiles without an account or order actions. The demo offers Depth for declared symbols; prices stay fixed through book updates until Center or Shift+Alt+C, and workspace storage retains the panel view.
 - [x] `DepthHistory` retains sampled resting-size columns in bounded tiers; the heatmap uses retained texture tiles and partial updates.
 - [x] Heatmap best bid/ask paths and a compact current-book profile of total or largest-order resting size, with host-supplied quantity units, a maximum-size key including offscreen levels and exact price, side and size on hover. The Order flow settings tab saves independent heatmap, book profile and volume bubble visibility and appearance; declared feed services and instrument tick size determine its controls.
 - [x] Volume bubbles aggregate by chart bar and price, adapt automatic grouping, sizing and borders to screen density, and offer side/delta colours, linear/square-root/logarithmic scaling and outlier limits.
