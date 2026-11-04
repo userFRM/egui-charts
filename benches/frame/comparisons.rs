@@ -64,7 +64,8 @@ pub fn samples(bars: usize, count: usize, frames: usize) -> Vec<super::frame::Sa
     }
     chart.set_visible_bars(200);
     let ctx = egui::Context::default();
-    let mut samples = Vec::with_capacity(frames);
+    // Keep setup-only and short measured runs on the same heap layout.
+    let mut samples = Vec::with_capacity(frames.max(60));
     for i in 0..60 + frames {
         let input = RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))),
