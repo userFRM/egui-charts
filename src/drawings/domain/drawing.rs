@@ -299,9 +299,9 @@ fn default_style(tool: DrawingToolType) -> DefaultStyle {
         T::Rect => filled(PURPLE, 51),
         T::RotatedRect => filled(GREEN, 51),
         T::Circle | T::Ellipse => filled(RED, 51),
-        // Polylines and arcs start unfilled.
-        T::Polyline | T::Brush => colored(CYAN),
-        T::Arc => colored(PINK),
+        T::Polyline => filled(CYAN, 51),
+        T::Brush => colored(CYAN),
+        T::Arc => filled(PINK, 51),
         T::Sector => DefaultStyle {
             color: [156, 156, 156, 255],
             width: 1.0,
@@ -353,6 +353,7 @@ fn default_style(tool: DrawingToolType) -> DefaultStyle {
             width: 1.0,
             ..LINE
         },
+        T::AnchoredVWAP => DefaultStyle { width: 1.0, ..LINE },
         T::XABCDPattern | T::CypherPattern => filled(BLUE, 38),
         T::HeadAndShoulders => filled(TEAL, 38),
         T::ABCDPattern | T::SineLine => colored(TEAL),
@@ -368,10 +369,9 @@ fn default_style(tool: DrawingToolType) -> DefaultStyle {
             fill: Some([106, 168, 79, 128]),
             ..LINE
         },
-        // Measure keeps its fill unset, which tints it by the direction of the move.
         T::Measure | T::PriceRange => DefaultStyle {
             font_size: 12.0,
-            ..LINE
+            ..filled(BLUE, 38)
         },
         T::DateRange | T::DateAndPriceRange => DefaultStyle {
             font_size: 12.0,
@@ -500,8 +500,19 @@ impl Drawing {
                     | DrawingToolType::SchiffPitchfork
                     | DrawingToolType::ModifiedSchiffPitchfork
                     | DrawingToolType::InsidePitchfork
+                    | DrawingToolType::Pitchfan
             )
-            .then(PitchforkConfig::default),
+            .then(|| {
+                let mut config = PitchforkConfig::default();
+                if tool_type == DrawingToolType::Pitchfan {
+                    for level in &mut config.levels {
+                        if level.value == 0.5 {
+                            level.color = CYAN;
+                        }
+                    }
+                }
+                config
+            }),
             elliott_degree: ElliottDegree::default(),
             channel_midline: tool_type == DrawingToolType::ParallelChannel,
             image: None,

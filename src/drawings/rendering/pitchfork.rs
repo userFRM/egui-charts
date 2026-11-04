@@ -144,7 +144,7 @@ impl Drawing {
         Some(lines)
     }
 
-    /// Bands stop on either side of a hidden level instead of bridging across it.
+    /// Bands join adjacent visible levels, ignoring the disabled spare levels.
     pub(super) fn pitchfork_bands(&self, rect: Rect) -> Vec<Vec<Pos2>> {
         let Some(base) = self.pitchfork_base_lines(rect) else {
             return Vec::new();
@@ -158,14 +158,10 @@ impl Drawing {
         }
         config
             .levels
-            .retain(|l| (0.0..=MAX_PITCHFORK_LEVEL).contains(&l.value));
+            .retain(|l| l.visible && (0.0..=MAX_PITCHFORK_LEVEL).contains(&l.value));
         config.levels.sort_by(|a, b| a.value.total_cmp(&b.value));
         let mut bands = Vec::new();
-        for pair in config
-            .levels
-            .windows(2)
-            .filter(|p| p[0].visible && p[1].visible)
-        {
+        for pair in config.levels.windows(2) {
             let inner = self.level_lines(&base, pair[0].value, rect);
             let outer = self.level_lines(&base, pair[1].value, rect);
             for (side, outside) in outer.iter().enumerate() {
@@ -229,14 +225,10 @@ impl Drawing {
             .unwrap_or_else(PitchforkConfig::legacy);
         config
             .levels
-            .retain(|l| (0.0..=MAX_PITCHFORK_LEVEL).contains(&l.value));
+            .retain(|l| l.visible && (0.0..=MAX_PITCHFORK_LEVEL).contains(&l.value));
         config.levels.sort_by(|a, b| a.value.total_cmp(&b.value));
         let mut bands = self.pitchfork_bands(rect).into_iter();
-        for pair in config
-            .levels
-            .windows(2)
-            .filter(|p| p[0].visible && p[1].visible)
-        {
+        for pair in config.levels.windows(2) {
             let color = if self.pitchfork.is_some() {
                 pair[1].color
             } else {
@@ -446,6 +438,12 @@ mod tests {
             ),
         ] {
             let mut drawing = Drawing::new(12, tool);
+            drawing.points = vec![a, b, c];
+            assert_eq!(
+                drawing.outline(rect).unwrap().areas.len(),
+                4,
+                "{tool:?}: default bands"
+            );
             // A fork saved without a config.
             drawing.pitchfork = None;
             drawing.points = vec![Pos2::ZERO, Pos2::new(10.0, 100.0), Pos2::new(20.0, -50.0)];
@@ -508,7 +506,7 @@ mod tests {
                 config
             );
             restored.points = drawing.points.clone();
-            assert_eq!(restored.outline(rect).unwrap().areas.len(), 2);
+            assert_eq!(restored.outline(rect).unwrap().areas.len(), 4);
             assert_eq!(
                 restored.pitchfork_lines(rect).unwrap().len(),
                 lines.len() - 2

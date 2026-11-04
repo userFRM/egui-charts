@@ -50,13 +50,7 @@ impl Drawing {
             });
             painter.rect_filled(rect, 0.0, fill_color);
 
-            let line_color = Color32::from_rgba_unmultiplied(
-                base_color.r(),
-                base_color.g(),
-                base_color.b(),
-                150,
-            );
-            let line_stroke = Stroke::new(stroke::MEDIUM, line_color);
+            let line_stroke = self.stroke();
 
             let center = rect.center();
             arrow(
@@ -584,6 +578,9 @@ mod tests {
         let mut chart = chart(&[90.0], &[110.0]);
         let ctx = egui::Context::default();
         let mut drawing = Drawing::new(1, DrawingToolType::Measure);
+        drawing.color = [12, 34, 56, 255];
+        drawing.stroke_width = 3.0;
+        let expected_stroke = drawing.stroke();
         drawing.chart_points = vec![ChartPoint::new(30.0, 100.0), ChartPoint::new(40.0, 95.0)];
         drawing.completed = true;
         chart.drawings_mut().drawings.push(drawing);
@@ -593,6 +590,9 @@ mod tests {
         let output = shapes(&ctx, &mut chart, 0.0, vec![]);
         assert!(output.iter().any(
             |s| matches!(s,egui::Shape::Text(t) if t.galley.job.text.contains("-5.00 (-5.00%)  -20 ticks"))
+        ));
+        assert!(output.iter().any(
+            |s| matches!(s, egui::Shape::LineSegment { stroke, .. } if *stroke == expected_stroke)
         ));
     }
 
