@@ -177,7 +177,9 @@ jobs:
     if: "!cancelled() && github.event.pull_request.draft != true"
     name: Test (${{ matrix.os }}, ${{ matrix.rust }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 30 || 20 }}
+    env:
+      CARGO_INCREMENTAL: 0
     strategy:
       fail-fast: false
       # Linux splits the feature subsets into the jobs below; every platform keeps the
@@ -194,21 +196,51 @@ jobs:
           CHANGES_RESULT: ${{ needs.changes.result }}
         run: test "$CHANGES_RESULT" = success
       - uses: actions/checkout@v7
-        if: needs.changes.outputs.docs == 'true'
+        if: needs.changes.outputs.docs == 'true' || (matrix.os == 'windows-latest' && needs.changes.outputs.native == 'true')
       - uses: dtolnay/rust-toolchain@master
-        if: needs.changes.outputs.docs == 'true'
+        if: needs.changes.outputs.docs == 'true' || (matrix.os == 'windows-latest' && needs.changes.outputs.native == 'true')
+        id: toolchain
         with:
           toolchain: ${{ matrix.rust }}
       - uses: Swatinem/rust-cache@v2
-        if: needs.changes.outputs.docs == 'true'
+        if: needs.changes.outputs.docs == 'true' && matrix.os != 'windows-latest'
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # Keep both dependency graphs; per-workspace cleanup would prune the other's artifacts.
+      - uses: actions/cache/restore@v5
+        if: matrix.os == 'windows-latest' && (needs.changes.outputs.docs == 'true' || needs.changes.outputs.native == 'true')
+        id: windows-cache
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: windows-native-v1-${{ runner.arch }}-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'examples/demo/Cargo.toml', 'examples/demo/Cargo.lock', '.github/workflows/ci.yml') }}
+          restore-keys: windows-native-v1-${{ runner.arch }}-${{ steps.toolchain.outputs.cachekey }}-
       - name: Run library tests (all features)
         if: needs.changes.outputs.rust == 'true'
         run: cargo test --all-features --lib
       - name: Run doc tests (no default features)
         if: needs.changes.outputs.docs == 'true'
         run: cargo test --doc --no-default-features
+      - name: Build native demo
+        if: matrix.os == 'windows-latest' && needs.changes.outputs.native == 'true'
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
+        run: cargo build --locked --manifest-path examples/demo/Cargo.toml
+      - name: Test demo controller
+        if: matrix.os == 'windows-latest' && needs.changes.outputs.native == 'true'
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
+        run: cargo test --locked --manifest-path examples/demo/Cargo.toml
+      - uses: actions/cache/save@v5
+        if: matrix.os == 'windows-latest' && github.ref == 'refs/heads/main' && steps.windows-cache.outputs.cache-primary-key != '' && steps.windows-cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ steps.windows-cache.outputs.cache-primary-key }}
 
   test-features:
     needs: changes
@@ -533,7 +565,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest]
     steps:
       - name: Check input classification
         shell: bash
