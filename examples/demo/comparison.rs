@@ -1087,8 +1087,13 @@ mod tests {
         );
         // The chart selects the right-clicked series before the host handles its action.
         app.chart.set_series_visible(restored, true);
-        app.chart.series_price_scale_mut(restored).unwrap().reset();
         super::super::tests::settle(&mut app, &ctx);
+        let mut bars = app.chart.bars(SeriesId::MAIN).to_vec();
+        let at = bars.len() - 5;
+        bars[at].close = bars[at].high + 20.0;
+        bars[at].high = bars[at].close;
+        app.chart.set_data(restored, bars);
+        app.chart.series_price_scale_mut(restored).unwrap().reset();
         for _ in 0..3 {
             ui_frame(&ctx, size, vec![], |ui| {
                 app.chart.show(ui);
