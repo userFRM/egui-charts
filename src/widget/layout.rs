@@ -9,6 +9,84 @@ use crate::theme::ThemeExt;
 use egui::{Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2};
 use std::sync::{Arc, Mutex};
 
+/// Narrowest chart that shows the field selectors in its header.
+const LINK_CONTROLS_MIN_WIDTH: f32 = 320.0;
+/// Space the selectors reserve at the right end of the status line.
+pub(super) const LINK_CONTROLS_INSET: f32 = 220.0;
+
+const LINK_MARKERS: [(&str, egui::Color32); 5] = [
+    ("🔶", egui::Color32::from_rgb(240, 150, 0)),
+    ("🍀", egui::Color32::from_rgb(110, 160, 70)),
+    ("💧", egui::Color32::from_rgb(70, 170, 225)),
+    ("❤️", egui::Color32::from_rgb(225, 65, 80)),
+    ("💩", egui::Color32::from_rgb(160, 105, 90)),
+];
+
+// These markers must also work in hosts without emoji fonts.
+fn paint_link_marker(ui: &Ui, rect: Rect, marker: &str) {
+    let Some(index) = LINK_MARKERS.iter().position(|(name, _)| *name == marker) else {
+        return;
+    };
+    let color = LINK_MARKERS[index].1;
+    let point = |x, y| rect.min + Vec2::new(x * rect.width(), y * rect.height());
+    let painter = ui.painter();
+    let polygon = |points: &[(f32, f32)]| {
+        painter.add(egui::Shape::convex_polygon(
+            points.iter().map(|&(x, y)| point(x, y)).collect(),
+            color,
+            Stroke::NONE,
+        ));
+    };
+    match index {
+        0 => polygon(&[(0.5, 0.0), (1.0, 0.5), (0.5, 1.0), (0.0, 0.5)]),
+        1 => {
+            for (x, y) in [(0.3, 0.3), (0.7, 0.3), (0.3, 0.7), (0.7, 0.7)] {
+                painter.circle_filled(point(x, y), rect.width() * 0.25, color);
+            }
+            painter.line_segment([point(0.5, 0.5), point(0.75, 1.0)], Stroke::new(2.0, color));
+        }
+        2 => polygon(&[
+            (0.5, 0.0),
+            (0.88, 0.6),
+            (0.9, 0.78),
+            (0.76, 0.95),
+            (0.5, 1.0),
+            (0.24, 0.95),
+            (0.1, 0.78),
+            (0.12, 0.6),
+        ]),
+        3 => {
+            for x in [0.28, 0.72] {
+                painter.circle_filled(point(x, 0.3), rect.width() * 0.28, color);
+            }
+            polygon(&[
+                (0.0, 0.35),
+                (1.0, 0.35),
+                (0.9, 0.65),
+                (0.5, 1.0),
+                (0.1, 0.65),
+            ]);
+        }
+        _ => {
+            for (inset, y) in [(0.3, 0.05), (0.15, 0.3), (0.0, 0.55)] {
+                painter.rect_filled(
+                    Rect::from_min_max(point(inset, y), point(1.0 - inset, y + 0.4)),
+                    rect.width() * 0.2,
+                    color,
+                );
+            }
+            for x in [0.35, 0.65] {
+                painter.circle_filled(point(x, 0.62), rect.width() * 0.1, egui::Color32::WHITE);
+                painter.circle_filled(point(x, 0.64), rect.width() * 0.05, egui::Color32::BLACK);
+            }
+            painter.line_segment(
+                [point(0.35, 0.83), point(0.65, 0.83)],
+                Stroke::new(1.0, egui::Color32::BLACK),
+            );
+        }
+    }
+}
+
 #[cfg(feature = "drawings")]
 mod drawings;
 #[cfg(feature = "drawings")]
@@ -727,6 +805,61 @@ impl Tracks {
     }
 }
 
+/// Membership for one linked chart field.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ChartLink {
+    /// Follow the layout-wide switch and legacy group. No individual marker is shown.
+    #[default]
+    Layout,
+    /// Exclude this field from synchronization, including the layout-wide switch.
+    Unlinked,
+    /// Link this field to charts carrying the same identifier, independently of the switch.
+    Group(String),
+}
+
+/// Independent symbol and interval memberships, suitable for host serialization.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ChartLinkGroups {
+    /// Symbol membership.
+    pub symbol: ChartLink,
+    /// Interval membership.
+    pub interval: ChartLink,
+}
+
+#[derive(Default)]
+struct LinkState {
+    groups: Arc<Mutex<[ChartLinkGroups; 16]>>,
+    pending: Vec<LinkChange>,
+}
+
+impl Clone for LinkState {
+    fn clone(&self) -> Self {
+        Self {
+            groups: Arc::new(Mutex::new(self.groups.lock().unwrap().clone())),
+            pending: Vec::new(),
+        }
+    }
+}
+
+pub(super) struct LinkChange {
+    groups: Arc<Mutex<[ChartLinkGroups; 16]>>,
+    index: usize,
+    symbol: Option<ChartLink>,
+    interval: Option<ChartLink>,
+}
+
+impl LinkChange {
+    pub(super) fn swap(&mut self) {
+        let mut groups = self.groups.lock().unwrap();
+        if let Some(symbol) = &mut self.symbol {
+            std::mem::swap(symbol, &mut groups[self.index].symbol);
+        }
+        if let Some(interval) = &mut self.interval {
+            std::mem::swap(interval, &mut groups[self.index].interval);
+        }
+    }
+}
+
 /// Independent synchronization switches within each layout group.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChartSyncOptions {
@@ -740,9 +873,11 @@ pub struct ChartSyncOptions {
     /// stored drawings whether this is on or off, so a drawing reaches them once a chart history
     /// edit writes it. Only drawings that are not saveable still sync between them here.
     pub sync_drawings: bool,
-    /// Synchronize symbol changes. A host without a feed must supply replacement bars.
+    /// Synchronize symbol changes for fields following the layout setting.
+    /// Explicit individual groups work independently. A host without a feed supplies bars.
     pub sync_symbol: bool,
-    /// Synchronize interval changes. A host without a feed must supply replacement bars.
+    /// Synchronize interval changes for fields following the layout setting.
+    /// Explicit individual groups work independently. A host without a feed supplies bars.
     pub sync_timeframe: bool,
     /// Apply host date-range selections to the group, independently of scrolling and zooming.
     pub sync_date_range: bool,
@@ -763,8 +898,9 @@ impl Default for ChartSyncOptions {
 
 /// Container state for up to sixteen host-owned charts. Supply charts in stable slot order.
 ///
-/// Each chart keeps its own feed, settings, scales, studies and drawings. An unnamed group
-/// synchronizes with other unnamed charts; named groups are isolated. Save this state and the
+/// Each chart keeps its own feed, settings, scales, studies and drawings. Legacy view groups
+/// isolate scrolling, crosshairs and drawings; unnamed view groups synchronize together.
+/// Symbol and interval memberships are independent through [`ChartLinkGroups`]. Save these and the
 /// charts through host storage as needed. Synchronization includes supplied slots hidden by a
 /// grid preset. The container does not acquire data or persist it. Charts that keep their
 /// drawings in the same storage (`Chart::set_storage`) read the drawings of their symbol again
@@ -786,11 +922,14 @@ pub struct ChartLayout {
     pub mode: ChartLayoutMode,
     /// Synchronization controls, applied within each group.
     pub sync: ChartSyncOptions,
+    /// Offer editable group identifiers instead of the default emoji choices.
+    pub text_sync_groups: bool,
     active: usize,
     /// The chart slot Alt+Enter shows alone in place of the preset.
     maximized: Option<usize>,
     focus_active: bool,
     groups: [Option<String>; 16],
+    links: LinkState,
     detached: [bool; 16],
     previous: [Option<(String, Option<Timeframe>)>; 16],
     previous_ranges: [Option<VisibleTimeRange>; 16],
@@ -939,16 +1078,243 @@ impl ChartLayout {
         }
     }
 
-    /// Assigns a named synchronization group; `None` restores the unnamed group.
+    /// Assigns the legacy group used by view/drawing links and layout-wide field switches.
+    /// `None` restores the unnamed view group and unlinks both symbol and interval.
+    /// Prefer [`Self::set_link_groups`] for independent field memberships.
     pub fn set_sync_group(&mut self, index: usize, group: Option<String>) {
+        let group = group.filter(|name| !name.trim().is_empty());
         if let Some(slot) = self.groups.get_mut(index) {
-            *slot = group;
+            *slot = group.clone();
+            let link = group.map_or(ChartLink::Unlinked, |_| ChartLink::Layout);
+            self.set_link_groups(
+                index,
+                ChartLinkGroups {
+                    symbol: link.clone(),
+                    interval: link,
+                },
+                true,
+            );
         }
     }
 
     /// The group assigned to a slot, or `None` for the unnamed group or an invalid slot.
     pub fn sync_group(&self, index: usize) -> Option<&str> {
         self.groups.get(index).and_then(|g| g.as_deref())
+    }
+
+    /// Memberships of all slots, including hidden charts, for host storage.
+    pub fn saved_link_groups(&self) -> [ChartLinkGroups; 16] {
+        self.links.groups.lock().unwrap().clone()
+    }
+
+    /// Memberships of a slot; invalid indices return `None`.
+    pub fn link_groups(&self, index: usize) -> Option<ChartLinkGroups> {
+        self.links.groups.lock().unwrap().get(index).cloned()
+    }
+
+    /// Sets independent field memberships. Empty identifiers are treated as unlinked.
+    /// Unless `skip_history` is true, records one undo step on the active chart at the next
+    /// [`Self::show`]. Undo restores only the fields changed by this call.
+    pub fn set_link_groups(
+        &mut self,
+        index: usize,
+        mut groups: ChartLinkGroups,
+        skip_history: bool,
+    ) {
+        for field in [&mut groups.symbol, &mut groups.interval] {
+            if matches!(field, ChartLink::Group(name) if name.trim().is_empty()) {
+                *field = ChartLink::Unlinked;
+            }
+        }
+        let mut current = self.links.groups.lock().unwrap();
+        let Some(slot) = current.get_mut(index) else {
+            return;
+        };
+        if !skip_history && *slot != groups {
+            self.links.pending.push(LinkChange {
+                groups: Arc::clone(&self.links.groups),
+                index,
+                symbol: (slot.symbol != groups.symbol).then(|| slot.symbol.clone()),
+                interval: (slot.interval != groups.interval).then(|| slot.interval.clone()),
+            });
+        }
+        *slot = groups;
+    }
+
+    fn record_links(&mut self, chart: &mut Chart) {
+        for change in self.links.pending.drain(..) {
+            chart.history.record_links(change);
+        }
+    }
+
+    /// Shows separate symbol and interval selectors for a chart slot. Returns whether edited.
+    /// The built-in chart corner menu uses these same controls. A host can place them elsewhere;
+    /// [`Self::show`] transfers their edits to the active chart's undo history.
+    pub fn show_link_groups(&mut self, ui: &mut Ui, index: usize) -> bool {
+        self.link_controls(ui, index, false)
+    }
+
+    fn link_controls(&mut self, ui: &mut Ui, index: usize, compact: bool) -> bool {
+        let Some(mut groups) = self.link_groups(index) else {
+            return false;
+        };
+        let before = groups.clone();
+        ui.push_id(("chart_links", index), |ui| {
+            for (label, short, field, enabled) in [
+                (
+                    "Symbol group",
+                    "S",
+                    &mut groups.symbol,
+                    self.sync.sync_symbol,
+                ),
+                (
+                    "Interval group",
+                    "I",
+                    &mut groups.interval,
+                    self.sync.sync_timeframe,
+                ),
+            ] {
+                let marker = match field {
+                    ChartLink::Group(name) => name.clone(),
+                    ChartLink::Layout | ChartLink::Unlinked => "○".to_owned(),
+                };
+                let label = l10n::text(ui.ctx(), label);
+                let painted = LINK_MARKERS.iter().any(|(emoji, _)| *emoji == marker);
+                let caption = if painted {
+                    format!("     {}", if compact { short } else { &label })
+                } else if compact {
+                    format!("{short} {}", marker.chars().take(2).collect::<String>())
+                } else {
+                    format!("{label}  {marker}")
+                };
+                let menu = ui.menu_button(caption, |ui| {
+                    ui.label(&label);
+                    if ui
+                        .selectable_label(
+                            *field == ChartLink::Unlinked
+                                || *field == ChartLink::Layout && !enabled,
+                            l10n::text(ui.ctx(), "Unlinked"),
+                        )
+                        .clicked()
+                    {
+                        *field = ChartLink::Unlinked;
+                        ui.close();
+                    }
+                    if !self.text_sync_groups {
+                        ui.horizontal(|ui| {
+                            for (emoji, _) in LINK_MARKERS {
+                                let selected =
+                                    matches!(field, ChartLink::Group(name) if name == emoji);
+                                let button = ui.add(
+                                    egui::Button::selectable(selected, "")
+                                        .min_size(Vec2::splat(28.0)),
+                                );
+                                button.widget_info(|| {
+                                    egui::WidgetInfo::selected(
+                                        egui::Role::MenuItemCheckBox,
+                                        button.enabled(),
+                                        selected,
+                                        emoji,
+                                    )
+                                });
+                                paint_link_marker(
+                                    ui,
+                                    Rect::from_center_size(button.rect.center(), Vec2::splat(16.0)),
+                                    emoji,
+                                );
+                                if button.clicked() {
+                                    *field = if selected {
+                                        ChartLink::Unlinked
+                                    } else {
+                                        ChartLink::Group(emoji.into())
+                                    };
+                                    ui.close();
+                                }
+                            }
+                        });
+                    }
+                    if self.text_sync_groups {
+                        ui.separator();
+                        let mut name = match field {
+                            ChartLink::Group(name) => name.clone(),
+                            _ => String::new(),
+                        };
+                        if ui.text_edit_singleline(&mut name).changed() {
+                            *field = if name.trim().is_empty() {
+                                ChartLink::Unlinked
+                            } else {
+                                ChartLink::Group(name)
+                            };
+                        }
+                    }
+                    ui.separator();
+                    if ui
+                        .selectable_label(
+                            *field == ChartLink::Layout && enabled,
+                            l10n::text(ui.ctx(), "Follow layout setting"),
+                        )
+                        .clicked()
+                    {
+                        *field = ChartLink::Layout;
+                        ui.close();
+                    }
+                });
+                if painted {
+                    paint_link_marker(
+                        ui,
+                        Rect::from_center_size(
+                            egui::pos2(
+                                menu.response.rect.left() + 14.0,
+                                menu.response.rect.center().y,
+                            ),
+                            Vec2::splat(14.0),
+                        ),
+                        &marker,
+                    );
+                }
+                menu.response.widget_info(|| {
+                    egui::WidgetInfo::labeled(
+                        egui::Role::Button,
+                        menu.response.enabled(),
+                        format!("{label} {marker}"),
+                    )
+                });
+                menu.response
+                    .on_hover_text(if !painted && matches!(field, ChartLink::Group(_)) {
+                        format!("{label} {marker}")
+                    } else {
+                        label
+                    });
+            }
+        });
+        let changed = groups != before;
+        if changed {
+            self.set_link_groups(index, groups, false);
+        }
+        changed
+    }
+
+    fn linked(&self, a: usize, b: usize, interval: bool) -> bool {
+        let groups = self.links.groups.lock().unwrap();
+        let field = |index: usize| {
+            if interval {
+                &groups[index].interval
+            } else {
+                &groups[index].symbol
+            }
+        };
+        match (field(a), field(b)) {
+            (ChartLink::Group(a), ChartLink::Group(b)) => a == b,
+            (ChartLink::Layout, ChartLink::Layout) => {
+                self.same_group(a, b)
+                    && if interval {
+                        self.sync.sync_timeframe
+                    } else {
+                        self.sync.sync_symbol
+                    }
+            }
+            _ => false,
+        }
     }
 
     /// Detaches a chart into an immediate viewport. Backends without native multi-window
@@ -989,7 +1355,8 @@ impl ChartLayout {
     }
 
     /// Shows the preset and synchronizes its charts. Click or scroll a panel to activate it.
-    /// Its corner menu offers detachment and named groups. The active border is painted
+    /// Its header and corner menu offer independent symbol and interval groups; the corner menu
+    /// also offers detachment. The active border is painted
     /// inside the chart; stacked charts have a two-point gap and side-by-side charts meet at their
     /// edge.
     /// Dragging a border resizes its neighbours and Shift also moves the borders aligned with it; a
@@ -1036,6 +1403,7 @@ impl ChartLayout {
             self.finish_resize();
         }
         self.record_sizes(charts[self.active]);
+        self.record_links(charts[self.active]);
         let (mut rects, mut dividers) = self.geometry(rect, count);
         if self.move_divider(ui) {
             (rects, dividers) = self.geometry(rect, count);
@@ -1114,6 +1482,9 @@ impl ChartLayout {
                         {
                             close = true;
                         }
+                        activate |= ui
+                            .horizontal(|ui| self.link_controls(ui, index, false))
+                            .inner;
                         egui::CentralPanel::default().show(ui, |ui| {
                             let response = chart.show(ui);
                             if focus {
@@ -1154,13 +1525,31 @@ impl ChartLayout {
                     .id_salt(("chart_slot", index)),
                 |ui| {
                     ui.shrink_clip_rect(rect);
+                    let link_controls = total > 1 && rect.width() >= LINK_CONTROLS_MIN_WIDTH;
+                    charts[index].layout_link_controls = link_controls;
                     let response = charts[index].show(ui);
+                    charts[index].layout_link_controls = false;
                     charts[index].layout_inactive = false;
                     if focus {
                         response.request_focus();
                     }
+                    if link_controls {
+                        ui.scope_builder(
+                            egui::UiBuilder::new().max_rect(Rect::from_min_size(
+                                egui::pos2(rect.right() - LINK_CONTROLS_INSET, rect.top() + 2.0),
+                                Vec2::new(110.0, 22.0),
+                            )),
+                            |ui| {
+                                ui.horizontal(|ui| {
+                                    self.link_controls(ui, index, true);
+                                });
+                            },
+                        );
+                    }
                     if index == self.active
-                        && (ui.rect_contains_pointer(rect) || egui::Popup::is_any_open(ui.ctx()))
+                        && (ui.rect_contains_pointer(rect)
+                            || egui::Popup::is_any_open(ui.ctx())
+                            || total > 1 && rect.width() < LINK_CONTROLS_MIN_WIDTH)
                         && charts[index]
                             .pane_layout
                             .maximized
@@ -1186,11 +1575,7 @@ impl ChartLayout {
                                     self.detached[index] = true;
                                     ui.close();
                                 }
-                                ui.label(l10n::text(ui.ctx(), "Sync group"));
-                                let mut group = self.groups[index].clone().unwrap_or_default();
-                                if ui.text_edit_singleline(&mut group).changed() {
-                                    self.groups[index] = (!group.is_empty()).then_some(group);
-                                }
+                                self.show_link_groups(ui, index);
                             });
                     }
                 },
@@ -1211,6 +1596,7 @@ impl ChartLayout {
             ui.memory_mut(|memory| memory.request_focus(id));
         }
         self.record_sizes(charts[self.active]);
+        self.record_links(charts[self.active]);
         self.focus_active = false;
         // Alt+Enter toggles the focused tile in a grid; a lone chart leaves it to the host.
         if self.mode != ChartLayoutMode::Tabs && count > 1 {
@@ -1293,13 +1679,13 @@ impl ChartLayout {
         let symbol_changed = previous.is_some_and(|p| p.0 != symbol);
         let timeframe_changed = previous.is_some_and(|p| p.1 != timeframe);
         for (index, chart) in charts.iter_mut().take(count).enumerate() {
-            if index == self.active || !self.same_group(index, self.active) {
+            if index == self.active {
                 continue;
             }
-            if self.sync.sync_symbol && symbol_changed {
+            if self.linked(index, self.active, false) && symbol_changed {
                 chart.set_symbol(&symbol);
             }
-            if self.sync.sync_timeframe
+            if self.linked(index, self.active, true)
                 && timeframe_changed
                 && let Some(tf) = timeframe
             {
@@ -2332,12 +2718,49 @@ mod tests {
                     );
                 },
             );
-            let group = output.shapes.iter().find_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) if text.galley.text() == "Sync group" => {
-                    Some(text.pos + text.galley.size() / 2.0)
+            let mut group: std::collections::HashMap<_, _> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some((
+                        text.galley.text().to_owned(),
+                        text.pos + text.galley.size() / 2.0,
+                    )),
+                    _ => None,
+                })
+                .collect();
+            let text_rects: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some((
+                        text.galley.text(),
+                        text.galley
+                            .rect
+                            .translate(text.pos.to_vec2())
+                            .intersect(shape.clip_rect),
+                        shape.clip_rect,
+                    )),
+                    _ => None,
+                })
+                .collect();
+            for (_, selector, _) in text_rects.iter().filter(|(text, ..)| *text == "S ○") {
+                // The hover data window is a separate overlay; only the chart's own clip holds titles.
+                for (_, title, _) in text_rects.iter().filter(|(text, _, clip)| {
+                    text.starts_with("LONG_SYMBOL_") && clip.left() == 0.0
+                }) {
+                    assert!(
+                        !selector.intersects(*title),
+                        "link controls must not cover the status title"
+                    );
                 }
-                _ => None,
-            });
+            }
+            // The menu fades in, so find the teardrop (the only eight-point marker) by shape, not colour.
+            for shape in &output.shapes {
+                if matches!(&shape.shape, egui::Shape::Path(path) if path.points.len() == 8) {
+                    group.insert("💧".into(), shape.shape.visual_bounding_rect().center());
+                }
+            }
             output.drop_without_applying_deltas();
             group
         };
@@ -2410,14 +2833,48 @@ mod tests {
         frame(&mut layout, &mut charts, vec![click(corner, true)]);
         frame(&mut layout, &mut charts, vec![click(corner, false)]);
         frame(&mut layout, &mut charts, vec![]);
-        let input =
-            frame(&mut layout, &mut charts, vec![]).expect("group editor") + vec2(100.0, 18.0);
-        assert!(input.x > 320.0);
+        let input = frame(&mut layout, &mut charts, vec![])["Symbol group  ○"];
         frame(&mut layout, &mut charts, vec![Event::PointerMoved(input)]);
         frame(&mut layout, &mut charts, vec![click(input, true)]);
         frame(&mut layout, &mut charts, vec![click(input, false)]);
-        frame(&mut layout, &mut charts, vec![Event::Text("Desk".into())]);
-        assert_eq!(layout.sync_group(0), Some("Desk"));
+        let emoji = frame(&mut layout, &mut charts, vec![])["💧"];
+        assert!(emoji.x > 320.0, "the submenu overlaps the next chart");
+        frame(&mut layout, &mut charts, vec![Event::PointerMoved(emoji)]);
+        frame(&mut layout, &mut charts, vec![click(emoji, true)]);
+        frame(&mut layout, &mut charts, vec![click(emoji, false)]);
+        assert_eq!(
+            layout.link_groups(0).unwrap(),
+            ChartLinkGroups {
+                symbol: ChartLink::Group("💧".into()),
+                interval: ChartLink::Layout,
+            }
+        );
+        assert!(charts[0].undo());
+        assert_eq!(layout.link_groups(0).unwrap(), ChartLinkGroups::default());
+        assert!(charts[0].redo());
+        assert_eq!(
+            layout.link_groups(0).unwrap().symbol,
+            ChartLink::Group("💧".into())
+        );
+        frame(&mut layout, &mut charts, vec![Event::PointerMoved(corner)]);
+        frame(&mut layout, &mut charts, vec![click(corner, true)]);
+        frame(&mut layout, &mut charts, vec![click(corner, false)]);
+        let input = frame(&mut layout, &mut charts, vec![])["     Symbol group"];
+        frame(&mut layout, &mut charts, vec![Event::PointerMoved(input)]);
+        frame(&mut layout, &mut charts, vec![click(input, true)]);
+        frame(&mut layout, &mut charts, vec![click(input, false)]);
+        let emoji = frame(&mut layout, &mut charts, vec![])["💧"];
+        frame(&mut layout, &mut charts, vec![Event::PointerMoved(emoji)]);
+        frame(&mut layout, &mut charts, vec![click(emoji, true)]);
+        frame(&mut layout, &mut charts, vec![click(emoji, false)]);
+        assert_eq!(
+            layout.link_groups(0).unwrap(),
+            ChartLinkGroups {
+                symbol: ChartLink::Unlinked,
+                interval: ChartLink::Layout,
+            },
+            "clicking the selected marker unlinks only its field"
+        );
         assert_eq!(layout.active(), 0);
         let escape = Event::Key {
             key: egui::Key::Escape,
@@ -2569,6 +3026,104 @@ mod tests {
         layout.apply_date_range(&mut refs, range);
         assert_ne!(refs[1].get_time_scale_state(), before);
         assert_eq!(refs[2].get_time_scale_state(), isolated);
+
+        // Clearing the legacy picker must exclude a chart, rather than joining unnamed charts.
+        {
+            let mut cleared = ChartLayout::default();
+            cleared.sync.sync_symbol = true;
+            cleared.sync.sync_timeframe = true;
+            cleared.set_sync_group(1, None);
+            cleared.previous[0] = Some(("SAMPLE".into(), Some(Timeframe::Min1)));
+            let mut charts = [chart(60), chart(60)];
+            charts[0].set_symbol("OTHER");
+            charts[0].set_timeframe(Timeframe::Hour1);
+            cleared.sync_state(&mut charts.iter_mut().collect::<Vec<_>>(), 2);
+            assert_eq!(charts[1].symbol(), "SAMPLE", "cleared symbol stays local");
+            assert_eq!(
+                charts[1].timeframe(),
+                Some(Timeframe::Min1),
+                "cleared interval stays local"
+            );
+        }
+
+        // Explicit field memberships work with either layout switch setting. Matching an
+        // interval marker to a symbol marker must never couple the two fields.
+        for enabled in [false, true] {
+            use ChartLink::{Group, Unlinked};
+            let mut linked = ChartLayout::default();
+            linked.sync.sync_symbol = enabled;
+            linked.sync.sync_timeframe = enabled;
+            let memberships = [
+                (Group("🔶".into()), Group("💧".into()), true, true),
+                (Group("🔶".into()), Group("🍀".into()), true, false),
+                (Group("🍀".into()), Group("💧".into()), false, true),
+                (Group("💧".into()), Group("🔶".into()), false, false),
+                (Unlinked, Unlinked, false, false),
+                (Group("".into()), Group("  ".into()), false, false),
+                (ChartLink::Layout, ChartLink::Layout, false, false),
+                (Unlinked, Group("💧".into()), false, true),
+                (Group("🔶".into()), Unlinked, true, false),
+            ];
+            let mut charts: Vec<_> = memberships.iter().map(|_| chart(60)).collect();
+            for (slot, (symbol, interval, ..)) in memberships.iter().enumerate() {
+                linked.set_link_groups(
+                    slot,
+                    ChartLinkGroups {
+                        symbol: symbol.clone(),
+                        interval: interval.clone(),
+                    },
+                    true,
+                );
+            }
+            linked.previous[0] = Some(("SAMPLE".into(), Some(Timeframe::Min1)));
+            charts[0].set_symbol("OTHER");
+            charts[0].set_timeframe(Timeframe::Hour1);
+            linked.sync_state(
+                &mut charts.iter_mut().collect::<Vec<_>>(),
+                memberships.len(),
+            );
+            for (chart, (_, _, symbol, interval)) in charts.iter().zip(&memberships) {
+                assert_eq!(chart.symbol(), if *symbol { "OTHER" } else { "SAMPLE" });
+                assert_eq!(
+                    chart.timeframe(),
+                    Some(if *interval {
+                        Timeframe::Hour1
+                    } else {
+                        Timeframe::Min1
+                    })
+                );
+            }
+            // An unlinked source cannot send updates either, even with both global switches on.
+            linked.active = 4;
+            linked.previous[4] = Some(("SAMPLE".into(), Some(Timeframe::Min1)));
+            charts[4].set_symbol("LOCAL");
+            charts[4].set_timeframe(Timeframe::Day1);
+            linked.sync_state(
+                &mut charts.iter_mut().collect::<Vec<_>>(),
+                memberships.len(),
+            );
+            assert_eq!(charts[0].symbol(), "OTHER");
+            assert_eq!(charts[0].timeframe(), Some(Timeframe::Hour1));
+
+            let mut groups = linked.link_groups(0).unwrap();
+            groups.symbol = Unlinked;
+            linked.set_link_groups(0, groups.clone(), false);
+            linked.record_links(&mut charts[0]);
+            groups.interval = Group("Host".into());
+            linked.set_link_groups(0, groups.clone(), true);
+            assert!(charts[0].undo());
+            groups.symbol = Group("🔶".into());
+            assert_eq!(linked.link_groups(0), Some(groups.clone()));
+            assert!(charts[0].redo());
+            groups.symbol = Unlinked;
+            assert_eq!(linked.link_groups(0), Some(groups.clone()));
+            let copy = linked.clone();
+            assert!(charts[0].undo());
+            assert_eq!(copy.link_groups(0), Some(groups));
+            let saved = serde_json::to_string(&copy.saved_link_groups()).unwrap();
+            let restored: [ChartLinkGroups; 16] = serde_json::from_str(&saved).unwrap();
+            assert_eq!(restored, copy.saved_link_groups());
+        }
 
         // A minute chart at the spacing floor must retain its UTC view after an hourly reload.
         let ctx = egui::Context::default();

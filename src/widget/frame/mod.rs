@@ -3008,7 +3008,14 @@ impl Chart {
                             Rect::from_min_max(
                                 price_rect.min,
                                 egui::pos2(
-                                    (price_rect.right() - 48.0).min(rect.right() - 100.0),
+                                    (price_rect.right() - 48.0).min(
+                                        rect.right()
+                                            - if self.layout_link_controls {
+                                                super::layout::LINK_CONTROLS_INSET
+                                            } else {
+                                                100.0
+                                            },
+                                    ),
                                     price_rect.bottom(),
                                 ),
                             ),
@@ -3031,8 +3038,9 @@ impl Chart {
                 legend_bottom = bottom;
             }
         }
-        let legend_bottom = self.paint_secondary_legend(
+        let (legend_bottom, overlay_remove) = self.paint_secondary_legend(
             ui,
+            shown.id,
             &painter,
             price_rect,
             legend_bottom + 4.0,
@@ -3633,6 +3641,9 @@ impl Chart {
         }
         if let Some(action) = series_action {
             self.apply_main_series_action(action);
+        }
+        if let Some(id) = overlay_remove {
+            self.user_action(|chart| chart.remove_series(id));
         }
         self.main_pane_actions(ui, rect, chart_rect);
         self.record_host_click(ui, &response);
