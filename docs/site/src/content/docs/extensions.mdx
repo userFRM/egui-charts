@@ -114,9 +114,16 @@ as this scene does, or
 [`PriceAxisLabel`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/struct.PriceAxisLabel.html)
 values from
 [`price_axis_labels`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/trait.Primitive.html#method.price_axis_labels).
-The chart places tags, chooses readable text against their fill, and omits price
-tags off the scale or without room. Time tags suppress underlying axis labels
-they cover.
+The chart places tags at their price or time, chooses readable text against their
+fill, draws a short tick at the plot edge, and omits price tags off the scale or
+without room. Time tags suppress underlying axis labels they cover.
+
+Set `text_color` to choose the text and tick colour, and `tick_visible` to `false`
+to omit the tick. Set `fixed_coordinate` to pin a tag instead: its centre is that
+many UI points from the top of the pane's price axis, or from the left edge of the
+shared time axis, whatever the price or time. A fixed tag is not moved to fit, is
+clipped at the axis edges, and paints above the automatic tags, with later fixed
+tags on top. A non-finite offset omits the tag.
 
 For other axis geometry, use
 [`draw_price_axis`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/trait.Primitive.html#method.draw_price_axis)

@@ -121,7 +121,7 @@ impl IndicatorPane {
                 if y >= rect.min.y && y <= rect.max.y {
                     let start = Pos2::new(rect.min.x, y);
                     let end = Pos2::new(rect.max.x, y);
-                    let stroke = Stroke::new(1.0_f32, live_color);
+                    let stroke = Stroke::new(indicator.level_width(*level), live_color);
                     let pattern = indicator.level_style(*level);
                     if pattern == crate::model::LineStyle::Solid {
                         painter.line_segment([start, end], stroke);
@@ -671,6 +671,9 @@ mod tests {
         let mut settings = edited.settings();
         settings.levels[0].value = Some(80.0);
         settings.levels[0].color = Color32::WHITE;
+        let mut settings = serde_json::to_value(settings).unwrap();
+        settings["levels"][0]["width"] = 3.0.into();
+        let mut settings: crate::studies::StudySettings = serde_json::from_value(settings).unwrap();
         settings.levels[0].pattern = crate::model::LineStyle::LargeDashed;
         settings.levels[1].visible = false;
         settings.level_fill_color = Color32::from_rgba_unmultiplied(1, 2, 3, 40);
@@ -723,6 +726,27 @@ mod tests {
                 });
                 let shapes = std::mem::take(&mut output.shapes);
                 output.drop_without_applying_deltas();
+                if study.has_settings() {
+                    let mut overlay = crate::studies::ConfiguredStudy::new(study.clone_box());
+                    overlay.set_overlay(true);
+                    let map = pane.price_map.unwrap();
+                    let coords =
+                        crate::chart::coords::ChartMapping::new(rect, 10.0, 0, 0, 0.0, map);
+                    let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                        crate::chart::rendering::IndicatorRenderer::render_study(
+                            &crate::chart::rendering::RenderContext::new(ui.painter(), rect),
+                            &overlay,
+                            &[],
+                            0,
+                            &map,
+                            &coords,
+                        );
+                    });
+                    assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                        egui::Shape::LineSegment { points, stroke } if stroke.color == color && stroke.width == 3.0 && (points[0].y - guide_ys[inverted as usize][0]).abs() < 0.001
+                    )));
+                    output.drop_without_applying_deltas();
+                }
                 let bands: Vec<_> = shapes
                     .iter()
                     .filter_map(|s| match &s.shape {
@@ -741,13 +765,14 @@ mod tests {
                         egui::Shape::LineSegment { points, stroke }
                             if stroke.color != Color32::BLACK =>
                         {
-                            Some((points, stroke.color))
+                            Some((points, stroke.color, stroke.width))
                         }
                         _ => None,
                     })
                     .collect();
                 assert!(!guides.is_empty());
-                for (guide, guide_color) in guides {
+                for (guide, guide_color, width) in guides {
+                    assert_eq!(width, if color == Color32::WHITE { 3.0 } else { 1.0 });
                     assert_eq!(guide_color, color);
                     assert!(
                         guide_ys[inverted as usize]

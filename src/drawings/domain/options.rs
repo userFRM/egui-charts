@@ -756,6 +756,45 @@ impl PositionSizing {
     }
 }
 
+/// Placement of an extended line's measurement text relative to its anchors.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LineMeasurementPosition {
+    /// Before the left anchor.
+    Left,
+    /// Above the middle of the anchors.
+    Center,
+    /// After the right anchor.
+    #[default]
+    Right,
+}
+
+/// Independent readouts for an extended line. All start hidden, including on older saves.
+/// Price changes follow anchor order; lengths and elapsed time are unsigned.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LineMeasurements {
+    /// Keep enabled readouts visible without selecting the line.
+    pub persistent: bool,
+    /// Price difference in the chart's price format.
+    pub price_change: bool,
+    /// Price difference as a percentage of the first anchor's price.
+    pub percent_change: bool,
+    /// Price difference in instrument pips, or ticks when pips are not defined.
+    pub pip_change: bool,
+    /// Number of bars between the anchors.
+    pub bar_count: bool,
+    /// Time between the anchors, using their timestamps.
+    pub elapsed_time: bool,
+    /// Screen length divided by the horizontal spacing of one bar, in periods.
+    pub length: bool,
+    /// Inclination on the displayed scale, in degrees.
+    pub inclination: bool,
+    /// Show a movable marker halfway along the displayed line segment.
+    pub midpoint: bool,
+    /// Where to place the readouts; right of the anchors by default.
+    pub position: LineMeasurementPosition,
+}
+
 /// How a long or short position drawing sizes its quantity.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum PositionSize {

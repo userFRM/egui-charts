@@ -1213,18 +1213,14 @@ mod tests {
             Some((0.0, 500.0))
         }
         fn price_axis_labels(&self, _: &PrimitiveView<'_>) -> Vec<PriceAxisLabel> {
-            vec![PriceAxisLabel {
-                price: 250.0,
-                text: "Level".into(),
-                color: SERIES,
-            }]
+            vec![PriceAxisLabel::new(250.0, "Level", SERIES)]
         }
         fn time_axis_labels(&self, view: &PrimitiveView<'_>) -> Vec<TimeAxisLabel> {
-            vec![TimeAxisLabel {
-                time: view.bars[90].time,
-                text: "A session label much wider than any price on the axis".into(),
-                color: ABOVE,
-            }]
+            vec![TimeAxisLabel::new(
+                view.bars[90].time,
+                "A session label much wider than any price on the axis",
+                ABOVE,
+            )]
         }
     }
 
@@ -1289,6 +1285,233 @@ mod tests {
                 "the primitive still paints"
             );
             chart.detach_primitive(primitive);
+        }
+    }
+
+    #[test]
+    fn axis_tags_keep_fixed_positions_ink_ticks_and_clips_after_scroll_and_resize() {
+        struct Tags {
+            tick: bool,
+            offset: f32,
+        }
+        const INK: Color32 = Color32::from_rgb(211, 113, 17);
+        const FILL: Color32 = Color32::from_rgb(27, 43, 67);
+        impl Primitive for Tags {
+            fn price_axis_labels(&self, _: &PrimitiveView<'_>) -> Vec<PriceAxisLabel> {
+                let mut fixed = PriceAxisLabel::new(f64::NAN, "Fixed price", FILL);
+                fixed.fixed_coordinate = Some(self.offset);
+                fixed.text_color = Some(INK);
+                fixed.tick_visible = self.tick;
+                let automatic = PriceAxisLabel::new(15.0, "Auto price", Color32::WHITE);
+                let mut top = fixed.clone();
+                top.text = "Top price".into();
+                top.tick_visible = false;
+                // Fixed tags may overlap each other, and automatic tags stay underneath.
+                vec![fixed, automatic, top]
+            }
+            fn time_axis_labels(&self, view: &PrimitiveView<'_>) -> Vec<TimeAxisLabel> {
+                let mut fixed = TimeAxisLabel::new(view.bars[0].time, "Fixed time", FILL);
+                fixed.fixed_coordinate = Some(self.offset);
+                fixed.text_color = Some(INK);
+                fixed.tick_visible = self.tick;
+                let mut top = fixed.clone();
+                top.text = "Top time".into();
+                top.tick_visible = false;
+                vec![
+                    fixed,
+                    TimeAxisLabel::new(view.bars[90].time, "Auto time", Color32::WHITE),
+                    top,
+                ]
+            }
+        }
+        fn flatten(clip: egui::Rect, shape: Shape, out: &mut Vec<(egui::Rect, Shape)>) {
+            match shape {
+                Shape::Vec(shapes) => shapes
+                    .into_iter()
+                    .for_each(|shape| flatten(clip, shape, out)),
+                shape => out.push((clip, shape)),
+            }
+        }
+        for owner in ["main", "bars", "study"] {
+            for left in [false, true] {
+                let ctx = egui::Context::default();
+                let mut chart = chart(&[10.0], &[20.0]);
+                chart.config.show_volume = false;
+                chart.config.show_left_axis = left;
+                chart.config.show_right_axis = !left;
+                let id = match owner {
+                    "bars" => {
+                        let id = chart.add_series(SeriesOptions::default());
+                        chart.set_data(id, chart.bars(SeriesId::MAIN).to_vec());
+                        let pane = chart.add_pane();
+                        assert!(chart.move_series_to_pane(id, pane));
+                        id
+                    }
+                    "study" => chart.add_indicator(Box::new(
+                        CustomIndicator::new("Pane", |bars| {
+                            vec![IndicatorValue::Single(15.0); bars.len()]
+                        })
+                        .with_overlay(false),
+                    )),
+                    _ => SeriesId::MAIN,
+                };
+                for (step, (tick, offset, size, scroll)) in [
+                    (true, 50.0, egui::vec2(760.0, 540.0), 0.0),
+                    (false, 50.0, egui::vec2(680.0, 420.0), -10.0),
+                    (true, 0.0, egui::vec2(760.0, 540.0), 0.0),
+                    (false, f32::NAN, egui::vec2(760.0, 540.0), 0.0),
+                    (true, f32::INFINITY, egui::vec2(760.0, 540.0), 0.0),
+                    (true, -1000.0, egui::vec2(760.0, 540.0), 0.0),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    chart.set_size(Some(size));
+                    chart.scroll_to_position(scroll, false);
+                    let primitive = chart.attach_primitive(id, Tags { tick, offset }).unwrap();
+                    for at in 0..2 {
+                        frame(&ctx, &mut chart, (step * 3 + at) as f64, vec![]);
+                    }
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                Pos2::ZERO,
+                                egui::vec2(800.0, 600.0),
+                            )),
+                            time: Some((step * 3 + 2) as f64),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            chart.show(ui);
+                        },
+                    );
+                    let mut painted = Vec::new();
+                    for shape in std::mem::take(&mut output.shapes) {
+                        flatten(shape.clip_rect, shape.shape, &mut painted);
+                    }
+                    output.drop_without_applying_deltas();
+                    let plot = match owner {
+                        "bars" => {
+                            chart
+                                .pane_layout
+                                .panes
+                                .iter()
+                                .find(|pane| Some(pane.id) == chart.series_pane(id))
+                                .unwrap()
+                                .rect
+                        }
+                        "study" => chart.last_rendered_indicator_panes[0].chart_rect,
+                        _ => chart.last_rendered_price_rect,
+                    };
+                    let axis = chart.time_axis_rect;
+                    let find = |label: &str| {
+                        painted
+                            .iter()
+                            .enumerate()
+                            .find_map(|(at, (clip, shape))| match shape {
+                                Shape::Text(text)
+                                    if text.galley.text() == label
+                                        && clip.intersects(
+                                            text.galley.rect.translate(text.pos.to_vec2()),
+                                        ) =>
+                                {
+                                    Some((at, *clip, text))
+                                }
+                                _ => None,
+                            })
+                    };
+                    for (fixed, automatic, origin, price) in [
+                        ("Fixed price", "Auto price", plot.top(), true),
+                        ("Fixed time", "Auto time", axis.left(), false),
+                    ] {
+                        let visible = offset.is_finite() && offset >= 0.0;
+                        assert_eq!(
+                            find(fixed).is_some(),
+                            visible,
+                            "{owner}, left={left}, step={step}, {fixed}"
+                        );
+                        if let Some((at, clip, text)) = find(fixed) {
+                            let centre = text.pos + text.galley.size() / 2.0;
+                            let coordinate = if price { centre.y } else { centre.x };
+                            assert!(
+                                (coordinate - origin - offset).abs() < 0.01,
+                                "{coordinate} != {origin} + {offset}"
+                            );
+                            let (top_at, _, top) =
+                                find(if price { "Top price" } else { "Top time" }).unwrap();
+                            assert!(at < top_at);
+                            let top_centre = top.pos + top.galley.size() / 2.0;
+                            let top_coordinate = if price { top_centre.y } else { top_centre.x };
+                            assert!((top_coordinate - coordinate).abs() < 0.01);
+                            assert_eq!(text.fallback_color, INK);
+                            assert!(
+                                text.galley
+                                    .job
+                                    .sections
+                                    .iter()
+                                    .all(|s| s.format.color == INK)
+                            );
+                            if let Some((auto_at, _, auto)) = find(automatic) {
+                                assert!(auto_at < at);
+                                assert_eq!(auto.fallback_color, Color32::BLACK);
+                                let auto_y = auto.pos.y + auto.galley.size().y / 2.0;
+                                assert!(painted.iter().any(|(_, shape)| matches!(shape,
+                                    Shape::LineSegment { points, stroke }
+                                        if stroke.color == Color32::BLACK
+                                            && (points[0].x == points[1].x) != price
+                                            && (points[0].y - if price { auto_y } else { axis.top() }).abs() < 0.01
+                                )));
+                            }
+                            if price {
+                                assert!(clip.top() >= plot.top() && clip.bottom() <= plot.bottom());
+                            } else {
+                                assert!(axis.contains_rect(clip));
+                            }
+                        }
+                        let ticks = painted
+                            .iter()
+                            .filter(|(clip, shape)| match shape {
+                                Shape::LineSegment { points, stroke }
+                                    if stroke.color == INK
+                                        && (points[0].x == points[1].x) != price =>
+                                {
+                                    if price {
+                                        assert!(if left {
+                                            clip.right() <= points[0].x
+                                        } else {
+                                            clip.left() >= points[0].x
+                                        });
+                                        assert!(
+                                            clip.top() >= plot.top()
+                                                && clip.bottom() <= plot.bottom()
+                                        );
+                                    } else {
+                                        assert!(axis.contains_rect(*clip));
+                                    }
+                                    true
+                                }
+                                _ => false,
+                            })
+                            .count();
+                        assert_eq!(
+                            ticks,
+                            usize::from(tick && visible),
+                            "{fixed}, {owner}, step={step}"
+                        );
+                    }
+                    chart.detach_primitive(primitive);
+                }
+                chart.set_series_visible(id, false);
+                chart.attach_primitive(
+                    id,
+                    Tags {
+                        tick: true,
+                        offset: 50.0,
+                    },
+                );
+                assert!(!shapes(&ctx, &mut chart, 30.0, vec![]).iter().any(|shape|
+                    matches!(shape, Shape::Text(text) if text.galley.text().starts_with("Fixed "))));
+            }
         }
     }
 

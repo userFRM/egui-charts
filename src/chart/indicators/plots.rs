@@ -2,6 +2,106 @@
 
 use crate::studies::{StudyCandle, StudyZone};
 
+/// Horizontal line at each enabled output's latest value, across the clip rect. A missing latest
+/// value, a hidden output or a bar-colouring plot draws none.
+pub(crate) fn paint_price_lines(
+    painter: &egui::Painter,
+    study: &dyn crate::studies::Indicator,
+    price: &crate::scales::PriceMap,
+) {
+    if !study.is_visible() {
+        return;
+    }
+    let Some(bar) = study.values().len().checked_sub(1) else {
+        return;
+    };
+    let rect = painter.clip_rect();
+    for line in 0..study.line_count() {
+        let style = study.plot_style(line);
+        if !style.visible
+            || !study.plot_price_line(line)
+            || matches!(
+                style.plot_type,
+                crate::studies::PlotType::BarColor | crate::studies::PlotType::BackgroundColor
+            )
+        {
+            continue;
+        }
+        let Some(value) = study.values().value(line, bar) else {
+            continue;
+        };
+        let y = price.price_to_y(value);
+        if !y.is_finite() || !rect.y_range().contains(y) {
+            continue;
+        }
+        let color = study.plot_color(line, bar).unwrap_or(style.color);
+        crate::painting::dashed_line::draw_dashed_line(
+            painter,
+            egui::pos2(rect.left(), y),
+            egui::pos2(rect.right(), y),
+            egui::Stroke::new(1.0, color),
+            1.0,
+            3.0,
+        );
+    }
+}
+
+/// Reference levels and the band between them for a study drawn over the main series, which
+/// has no pane of its own to show them.
+pub(crate) fn paint_overlay_levels(
+    painter: &egui::Painter,
+    study: &dyn crate::studies::Indicator,
+    price: &crate::scales::PriceMap,
+) {
+    let pane = study.pane();
+    let rect = painter.clip_rect();
+    if pane.fill_between_levels {
+        let lower = pane
+            .levels
+            .iter()
+            .map(|level| level.0)
+            .fold(f64::INFINITY, f64::min);
+        let upper = pane
+            .levels
+            .iter()
+            .map(|level| level.0)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let (a, b) = (price.price_to_y(lower), price.price_to_y(upper));
+        if lower < upper && a.is_finite() && b.is_finite() {
+            painter.rect_filled(
+                egui::Rect::from_two_pos(egui::pos2(rect.left(), a), egui::pos2(rect.right(), b)),
+                0.0,
+                study.level_fill_color(),
+            );
+        }
+    }
+    for (value, color, _) in pane.levels {
+        let y = price.price_to_y(value);
+        if !y.is_finite() || color == egui::Color32::TRANSPARENT || !rect.y_range().contains(y) {
+            continue;
+        }
+        let points = [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)];
+        let stroke = egui::Stroke::new(study.level_width(value), color);
+        let pattern = study.level_style(value);
+        let dashes = if pane.fill_between_levels
+            || matches!(
+                pattern,
+                crate::model::LineStyle::Dotted | crate::model::LineStyle::SparseDotted
+            ) {
+            pattern.hairline_pattern()
+        } else {
+            pattern.dash_pattern()
+        };
+        if let Some((dash, gap)) = dashes {
+            crate::painting::dashed_line::draw_dashed_line(
+                painter, points[0], points[1], stroke, dash, gap,
+            );
+        } else {
+            painter.line_segment(points, stroke);
+        }
+    }
+}
+
 pub(crate) fn zone_rect(
     zone: &StudyZone,
     whole_bars: bool,

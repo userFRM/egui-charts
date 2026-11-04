@@ -135,7 +135,10 @@ pub struct ChartMenus {
     /// Host rows in display order. Empty by default.
     pub host_entries: Vec<HostMenuEntry>,
     context: Option<HostMenuContext>,
+    context_pane: Option<crate::widget::PaneId>,
     just_opened: bool,
+    price_menu: bool,
+    price_button: Option<egui::Pos2>,
     pane_axes: Option<(crate::widget::PaneId, crate::model::PaneAxisOptions)>,
 }
 
@@ -172,8 +175,57 @@ impl ChartMenus {
         self.chart.watchlists = names.into_iter().map(Into::into).collect();
     }
 
+    /// While Alt and the command modifier are held, shows a button at the pointer and returns the
+    /// price target once it is clicked. The press position holds through the click.
+    fn show_price_button(&mut self, ctx: &Context, chart: &Chart) -> Option<RightClickTarget> {
+        if self.context.is_some()
+            || !chart.pointer_commands_enabled(ctx)
+            || !ctx.input(|input| {
+                input.modifiers.alt && input.modifiers.command && !input.modifiers.shift
+            })
+        {
+            self.price_button = None;
+            return None;
+        }
+        let previous = self.price_button.take();
+        let pos = ctx.input(|input| {
+            if input.pointer.primary_down() || input.pointer.primary_released() {
+                previous.or(input.pointer.hover_pos())
+            } else {
+                input.pointer.hover_pos()
+            }
+        })?;
+        let (_, price) = chart.pointer_price(pos)?;
+        self.price_button = Some(pos);
+        let chart_response = ctx.read_response(chart.keyboard.chart_id?)?;
+        if !chart_response.enabled() || ctx.layer_id_at(pos) != Some(chart_response.layer_id) {
+            self.price_button = None;
+            return None;
+        }
+        let mut ui = egui::Ui::new(
+            ctx.clone(),
+            chart_response.id.with("pointer_price"),
+            egui::UiBuilder::new()
+                .layer_id(chart_response.layer_id)
+                .max_rect(egui::Rect::from_center_size(pos, egui::vec2(20.0, 20.0))),
+        );
+        ui.spacing_mut().button_padding = egui::Vec2::ZERO;
+        let response = ui
+            .add_sized(
+                egui::vec2(20.0, 20.0),
+                egui::Button::new("+").corner_radius(10.0),
+            )
+            .on_hover_text(crate::localization::text(ctx, "Price actions"));
+        response
+            .clicked()
+            .then_some(RightClickTarget::Background { pos, price })
+    }
+
     /// Opens the menu for the chart's last right-click, shows the open one and returns the
-    /// chosen action. While a menu is open the chart draws no crosshair or tooltip under it.
+    /// chosen action. Alt plus the platform command modifier reveals a price button at the
+    /// pointer, including when the price-axis button is hidden. Clicking it offers line, alert
+    /// and order actions in the pointed pane. Editors and drawing drags retain their input.
+    /// While a menu is open the chart draws no crosshair or tooltip under it.
     pub fn show(&mut self, ctx: &Context, chart: &mut Chart) -> Option<ChartContextAction> {
         if self.chart.hidden.contains(&Control::ContextMenus) {
             self.chart.close();
@@ -182,6 +234,7 @@ impl ChartMenus {
             self.drawing.close();
             self.axes.close();
             self.context = None;
+            self.context_pane = None;
             chart.take_right_click();
             chart.menu_open = false;
             return None;
@@ -192,14 +245,18 @@ impl ChartMenus {
             self.study.close();
             self.drawing.close();
             self.context = None;
+            self.context_pane = None;
         }
-        if let Some(target) = chart.take_right_click() {
+        let quick_price = self.show_price_button(ctx, chart);
+        if let Some(target) = quick_price.or_else(|| chart.take_right_click()) {
+            self.price_menu = quick_price.is_some();
             self.axes.close();
             let pos = match target {
                 RightClickTarget::Element { pos, .. }
                 | RightClickTarget::Drawing { pos, .. }
                 | RightClickTarget::Background { pos, .. } => pos,
             };
+            self.context_pane = chart.pointer_price(pos).map(|(pane, _)| pane);
             let mapping = chart.get_chart_mapping();
             let index = mapping.x_to_idx_f64(pos.x).round();
             let time = (index >= 0.0)
@@ -228,7 +285,7 @@ impl ChartMenus {
                 | RightClickTarget::Element {
                     id: ChartElementId::Series(SeriesId::MAIN),
                     ..
-                } => TpoMenu::open(chart, pos),
+                } if !self.price_menu => TpoMenu::open(chart, pos),
                 _ => None,
             };
             self.trade_profile = match target {
@@ -236,7 +293,7 @@ impl ChartMenus {
                 | RightClickTarget::Element {
                     id: ChartElementId::Series(SeriesId::MAIN),
                     ..
-                } => TradeProfileMenu::open(chart, pos, time),
+                } if !self.price_menu => TradeProfileMenu::open(chart, pos, time),
                 _ => None,
             };
             self.pane_axes = chart
@@ -331,10 +388,22 @@ impl ChartMenus {
                     &picked
                     && let RightClickTarget::Background { pos, .. } = context.target
                 {
-                    chart.user_action(|chart| chart.draw_horizontal_line_at(pos, *price));
+                    let pane = self.context_pane;
+                    chart.user_action(|chart| {
+                        if pane.is_some_and(|pane| !chart.panes().contains(&pane)) {
+                            return;
+                        }
+                        if let Some(id) = chart.draw_horizontal_line_at(pos, *price)
+                            && let Some(pane) = pane
+                            && chart.drawing_pane(id) != Some(pane)
+                        {
+                            chart.move_drawing_to_pane(id, pane);
+                        }
+                    });
                 }
                 menu_action = picked;
                 self.context = None;
+                self.context_pane = None;
                 self.chart.close();
                 self.series.close();
                 self.study.close();
@@ -384,6 +453,16 @@ impl ChartMenus {
                 ChartContextAction::Drawing,
             ),
         };
+        if self.price_menu {
+            entries.retain(|entry| {
+                matches!(entry,
+                MenuEntry::Item(item) if matches!(item.action,
+                    ChartContextAction::Chart(ContextMenuAction::AddAlert { .. }
+                        | ContextMenuAction::DrawHorizontalLine(_)
+                        | ContextMenuAction::Order(_))))
+            });
+            return entries;
+        }
         if let Some((pane, options)) = self.pane_axes
             && matches!(context.target, RightClickTarget::Background { .. })
         {
