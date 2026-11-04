@@ -948,7 +948,7 @@ impl Chart {
             .pane_layout
             .panes
             .iter()
-            .filter(|pane| self.pane_shown(pane))
+            .filter(|pane| pane.id == PaneId::MAIN || self.pane_shown(pane))
             .map(|pane| self.pane_axis_keys(pane.id))
             .collect();
         let pane_left = pane_axes
