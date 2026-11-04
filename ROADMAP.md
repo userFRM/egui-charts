@@ -90,7 +90,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Selection uses rendered strokes, fills and text, with geometry and anchor fallbacks before painting. Ctrl/Command-drag on empty pane space adds drawings intersecting the selection area, including locked drawings for inspection; editing still honours locks. Escape cancels the area gesture.
 - [x] Anchor handles, dragging, OHLC/study/drawing magnet snapping, repeated placement, locking and visibility controls.
 - [x] Undoable drawing creation, edits, deletion, ordering, flat groups and moves between panes.
-- [x] Properties edit style, tool inputs, text, timeframe visibility and validated price/time coordinates.
+- [x] Properties edit style, tool inputs, text, timeframe visibility and validated price/time coordinates. Drawing menus and the selected toolbar offer current, higher, lower and all-interval visibility filters, with undo and saved templates. Time intervals compare by duration; trade intervals compare within their own unit.
 - [x] Public timestamp-based creation and anchor editing, drawing enumeration, per-tool defaults and custom drawing registration.
 - [x] Per-drawing selection, saving and object-list flags; drawing change notifications and registry availability controls.
 - [x] Versioned drawing documents retain timestamp anchors, settings and flat groups, with migration and skipped-record reporting.
