@@ -242,7 +242,11 @@ impl ObjectTreePanel {
             }
             ObjectTreeAction::RemoveAllDrawings => chart.drawings_mut().clear_all(),
             ObjectTreeAction::RemoveAllIndicators => {
-                let ids: Vec<SeriesId> = chart.indicators().map(|(id, _)| id).collect();
+                let ids: Vec<SeriesId> = chart
+                    .indicators()
+                    .filter(|(_, study)| study.user_edit_enabled())
+                    .map(|(id, _)| id)
+                    .collect();
                 for id in ids {
                     chart.remove_series(id);
                 }
@@ -273,7 +277,9 @@ fn set_visible(chart: &mut Chart, source: &SourceItem, visible: bool) -> bool {
 
 fn delete(chart: &mut Chart, source: &SourceItem) {
     if source.is_indicator() {
-        if let Some(id) = source.series_id {
+        if let Some(id) = source.series_id
+            && chart.indicator_user_edit_enabled(id)
+        {
             chart.remove_series(id);
         }
     } else if source.is_drawing() {

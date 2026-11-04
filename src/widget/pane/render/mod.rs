@@ -538,8 +538,7 @@ impl Chart {
                 let mut panel = IndicatorPane::with_config(config);
                 panel.legend_backdrop = self.config.indicator_backdrop_opacity;
                 panel.axis_options = crate::config::PriceAxisOptions {
-                    show_study_values: self.config.show_indicator_last_val
-                        && self.config.price_axis.show_study_values,
+                    show_study_values: self.config.price_axis.show_study_values,
                     ..self.config.price_axis
                 };
                 let assignment = id

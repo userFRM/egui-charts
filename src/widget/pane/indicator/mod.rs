@@ -601,7 +601,7 @@ impl IndicatorPane {
                 row,
                 controls,
                 response.id.with("study_controls"),
-                indicator.is_visible(),
+                indicator,
             )
         });
         let legend_rect = Rect::from_min_max(

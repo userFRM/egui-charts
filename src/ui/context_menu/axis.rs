@@ -189,7 +189,7 @@ impl AxisMenus {
                 row(
                     "Indicator values",
                     Action::Studies,
-                    config.show_indicator_last_val,
+                    config.price_axis.show_study_values,
                 ),
                 row(
                     "Countdown to bar close",
@@ -275,8 +275,8 @@ impl AxisMenus {
                         !chart.config().show_symbol_prev_close
                 }
                 Action::Studies => {
-                    chart.config_mut().show_indicator_last_val =
-                        !chart.config().show_indicator_last_val
+                    chart.config_mut().price_axis.show_study_values =
+                        !chart.config().price_axis.show_study_values
                 }
                 Action::Countdown => {
                     chart.config_mut().show_countdown = !chart.config().show_countdown

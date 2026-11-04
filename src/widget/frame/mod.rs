@@ -2184,8 +2184,7 @@ impl Chart {
         };
         let show_price_axis = self.config.show_right_axis || self.config.show_left_axis;
         let study_axis = crate::config::PriceAxisOptions {
-            show_study_values: self.config.show_indicator_last_val
-                && self.config.price_axis.show_study_values,
+            show_study_values: self.config.price_axis.show_study_values,
             ..self.config.price_axis
         };
         let currency = self

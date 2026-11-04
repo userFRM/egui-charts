@@ -690,6 +690,7 @@ mod tests {
             chart.config_mut().show_symbol_last_val = false;
             chart.config_mut().show_volume = false;
             chart.config_mut().show_indicator_last_val = false;
+            chart.config_mut().price_axis.show_study_values = false;
             chart.set_instrument(Some(
                 crate::model::Instrument::new("SAMPLE").with_price_decimals(5),
             ));
@@ -927,6 +928,7 @@ mod tests {
             let mut chart = chart(&[price], &[price]);
             chart.config_mut().show_volume = false;
             chart.config_mut().show_indicator_last_val = false;
+            chart.config_mut().price_axis.show_study_values = false;
             #[cfg(feature = "studies")]
             chart.add_indicator(Box::new(crate::studies::MACD::default()));
             let mut instrument = Instrument::new("SAMPLE").with_tick_size(tick);
@@ -1103,13 +1105,23 @@ mod tests {
     fn study_axis_tags_follow_visible_last_values_and_separate_collisions() {
         use crate::studies::{CustomIndicator, IndicatorValue};
         use egui::Color32;
-        for (overlay, shown) in [(true, true), (false, true), (true, false), (false, false)] {
+        for (overlay, shown, legend_shown) in [
+            (true, true, true),
+            (false, true, true),
+            (true, false, true),
+            (false, false, true),
+            (true, true, false),
+            (false, true, false),
+            (true, false, false),
+            (false, false, false),
+        ] {
             for side in [Some(false), Some(true), None] {
                 let ctx = Context::default();
                 let mut chart = chart(&[100.0], &[110.0]);
                 chart.config_mut().show_right_axis = side == Some(false);
                 chart.config_mut().show_left_axis = side == Some(true);
-                chart.config_mut().show_indicator_last_val = shown;
+                chart.config_mut().show_indicator_last_val = legend_shown;
+                chart.config_mut().price_axis.show_study_values = shown;
                 chart.config_mut().show_symbol_last_val = false;
                 chart.config_mut().show_volume = false;
                 let colors = [
