@@ -537,6 +537,7 @@ mod tests {
             .apply_settings(&[], serde_json::from_value(saved).unwrap())
             .unwrap();
         let before = chart.indicators().next().unwrap().1.snapshot_settings();
+        let order = chart.pane_series(PaneId::MAIN);
         for action in [
             StudyContextMenuAction::Settings,
             StudyContextMenuAction::Intervals(IntervalRange::Only),
@@ -551,6 +552,7 @@ mod tests {
                 "{action:?}"
             );
             assert_eq!(chart.series_pane(id), Some(PaneId::MAIN));
+            assert_eq!(chart.pane_series(PaneId::MAIN), order);
             assert!(
                 chart.indicators().next().unwrap().1.snapshot_settings() == before,
                 "{action:?}"

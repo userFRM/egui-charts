@@ -1110,10 +1110,10 @@ mod tests {
         use crate::studies::{IndicatorFactory, StudySettings};
         let custom = crate::studies::CustomIndicator::new("SMA", |_| Vec::new());
         assert!(
-            custom.help_url().is_none(),
+            serde_json::to_value(custom.settings()).unwrap()["help_url"].is_null(),
             "a shared name does not identify a built-in"
         );
-        assert!(SMA::new(1).help_url().is_some());
+        assert!(serde_json::to_value(SMA::new(1).settings()).unwrap()["help_url"].is_string());
 
         let mut chart = super::super::test_frames::chart(&[100.0], &[110.0]);
         let id = chart.add_indicator(Box::new(SMA::new(1)));
