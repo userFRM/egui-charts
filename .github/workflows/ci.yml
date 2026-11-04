@@ -47,9 +47,10 @@ jobs:
           HEAD_REF: ${{ github.event.pull_request.head.sha || github.sha }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
-          base=$(git merge-base "$BASE_REF" "$HEAD_REF")
-          echo "base=$base" >> "$GITHUB_OUTPUT"
-          git diff --name-only --no-renames -z "$base" "$HEAD_REF" > changed-paths
+          # The pull request run measures the merge of the head into the base branch, so the
+          # performance baseline is the base branch itself; the changed paths are the head's own.
+          echo "base=$(git rev-parse "$BASE_REF^{commit}")" >> "$GITHUB_OUTPUT"
+          git diff --name-only --no-renames -z "$(git merge-base "$BASE_REF" "$HEAD_REF")" "$HEAD_REF" > changed-paths
           rust=false terminal=false native=false fmt=false docs=false security=false counts=false
           while IFS= read -r -d '' path; do
             case "$path" in
