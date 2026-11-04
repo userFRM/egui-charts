@@ -341,6 +341,7 @@ mod tests {
             let ctx = Context::default();
             crate::theme::apply_to_egui(&ctx, &theme);
             let controls = Rect::from_min_size(Pos2::new(150.0, 10.0), Vec2::new(100.0, 20.0));
+            let row = row.union(controls);
             let frame = |events| {
                 let mut clicks = [false; 3];
                 let output = ctx.run_ui(
