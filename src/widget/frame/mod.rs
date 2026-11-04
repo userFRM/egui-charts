@@ -589,6 +589,10 @@ impl Chart {
         // own response goes back to the caller; the gesture handlers see a hover-only one.
         let mut shown =
             shared_plot.map_or_else(|| response.clone(), |plot| response.union(plot.clone()));
+        if self.pane_collapse_click(ui.ctx()) {
+            response.flags.remove(egui::response::Flags::CLICKED);
+            shown.flags.remove(egui::response::Flags::CLICKED);
+        }
         let axis_corner = Rect::from_min_max(
             Pos2::new(
                 if self.config.show_right_axis {
