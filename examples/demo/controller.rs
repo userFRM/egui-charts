@@ -3959,6 +3959,7 @@ mod tests {
         };
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        settle(&mut app, &ctx);
         let id = app
             .chart
             .add_indicator(Box::new(egui_charts::studies::SMA::new(7)));
@@ -4013,6 +4014,7 @@ mod tests {
         });
         assert!(!app.drawing_toolbar.state.hide_indicators);
         app.chart.set_indicator_visible(id, false);
+        settle(&mut app, &ctx);
         app.handle_top_toolbar(&ctx, TopToolbarAction::Save);
         app.poll_storage(&ctx);
         app.chart.set_indicator_visible(id, true);
@@ -4030,6 +4032,7 @@ mod tests {
     fn heatmap_menu_follows_settings_slots_history_and_symbol_depth() {
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        settle(&mut app, &ctx);
         let size = egui::vec2(1440.0, 900.0);
         let mut settings = ChartSettingsState::from_chart(&app.chart);
         settings.order_flow.show_heatmap = true;
@@ -4120,6 +4123,7 @@ mod tests {
         let mut view = app.chart.order_book_view();
         view.profile = BookProfile::LargestOrder;
         app.chart.set_order_book_view(view);
+        settle(&mut app, &ctx);
         app.handle_top_toolbar(&ctx, TopToolbarAction::Save);
         app.poll_storage(&ctx);
         app.chart.set_liquidity_heatmap(false);

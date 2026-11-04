@@ -968,6 +968,7 @@ mod tests {
             ComparePlacement::NewPriceScale,
         ));
         let id = app.comparisons[0].1;
+        super::super::tests::settle(&mut app, &ctx);
         let main = app.chart.snapshot().unwrap();
         let original = app
             .chart
@@ -1156,6 +1157,7 @@ mod tests {
         ));
         app.add_series_pane();
         app.add_spread("AAPL-MSFT");
+        super::super::tests::settle(&mut app, &ctx);
         let ids: Vec<_> = app.chart.series().map(|(id, _)| id).collect();
         assert_eq!(ids.len(), 3);
         let check = |app: &DemoApp| {
