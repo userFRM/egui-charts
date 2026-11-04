@@ -844,11 +844,11 @@ Studies,Strategy tester,Trade markers on the chart,done,library,src/model/strate
 Terminal,Alerts,"Alert editing, pause, resume and duplication",done,library,src/ui/widget_bar/panels/alerts_panel.rs;src/ui/dialogs/alert_dialog/dialog.rs;terminal/src/alerts.rs,
 Terminal,Alerts,Alert evaluation engine,done,library,src/services/alerts.rs;src/services/alert_engine.rs;src/services/alert_evaluator.rs;src/services/alert_feed.rs;terminal/src/alerts.rs,
 Terminal,Alerts,Alert expiration,done,library,src/ui/dialogs/alert_dialog/dialog.rs;src/services/alert_engine.rs;terminal/src/alerts.rs,
-Terminal,Alerts,Alert levels drawn on the chart,done,library,terminal/src/alerts.rs;src/chart/rendering/alert_levels.rs,
+Terminal,Alerts,Alert levels drawn on the chart,done,library,src/chart/rendering/alert_levels.rs;src/model/alert.rs;src/ui/widget_bar/panels/alerts_panel.rs;src/services/alert_engine.rs;examples/demo/controller.rs;terminal/src/alerts.rs,2065
 Terminal,Alerts,Alert log,done,library,src/ui/widget_bar/panels/alerts_panel.rs;src/services/alert_engine.rs;terminal/src/alerts.rs,
-Terminal,Alerts,Alert manager panel,done,library,src/ui/widget_bar/panels/alerts_panel.rs;src/services/alert_engine.rs;terminal/src/alerts.rs,
+Terminal,Alerts,Alert manager panel,done,library,src/ui/widget_bar/panels/alerts_panel.rs;src/model/alert.rs;src/services/alerts.rs;src/services/alert_engine.rs;examples/demo/controller.rs;terminal/src/alerts.rs,2065
 Terminal,Alerts,"Alert name, custom message and placeholders",partial,library,src/ui/dialogs/alert_dialog/dialog.rs;src/ui/widget_bar/panels/alerts_panel.rs;src/model/alert.rs,
-Terminal,Alerts,Alert presets and per-alert notification schedule,done,library,src/ui/dialogs/alert_dialog/dialog.rs;src/model/alert.rs;src/services/alert_engine.rs,
+Terminal,Alerts,Alert presets and per-alert notification schedule,done,library,src/ui/dialogs/alert_dialog/dialog.rs;src/model/alert.rs;src/services/alert_engine.rs;src/ui/widget_bar/panels/alerts_panel.rs,2065
 Terminal,Alerts,Alerts tab in series settings,done,library,src/model/series_style.rs;src/chart/series/settings.rs;src/ui/dialogs/series_settings/tabs/scales.rs;src/widget/mod.rs;src/widget/snapshot.rs;src/widget/history.rs;terminal/src/alerts.rs,
 Terminal,Alerts,"Channel operators: entering, exiting, inside, outside a channel",done,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs;src/services/alert_engine.rs;src/drawings/domain/alert_levels.rs;src/widget/alerts.rs,
 Terminal,Alerts,Create a price alert from the toolbar bell,done,library,src/ui/top_toolbar/toolbar.rs;src/ui/dialogs/alert_dialog/dialog.rs;src/services/alert_engine.rs;terminal/src/alerts.rs,
