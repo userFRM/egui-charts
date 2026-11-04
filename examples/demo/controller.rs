@@ -667,6 +667,10 @@ impl DemoApp {
             top_toolbar,
             drawing_toolbar: {
                 let mut toolbar = DrawingToolbar::default();
+                toolbar.state.preferences = cc
+                    .storage
+                    .and_then(|storage| eframe::get_value(storage, "drawing_toolbar_preferences"))
+                    .unwrap_or_default();
                 toolbar.state.cursor_favorites = cc
                     .storage
                     .and_then(|storage| eframe::get_value(storage, "cursor_favorites"))
@@ -846,7 +850,8 @@ impl DemoApp {
             .templates
             .set_storage(app.storage.clone());
         app.drawing_props.templates.set_storage(app.storage.clone());
-        let search: Arc<dyn egui_charts::services::SymbolSearch> = Arc::new(DemoSymbol::symbols());
+        let search: Arc<dyn egui_charts::services::SymbolSearch> =
+            Arc::new(feeds::search_catalog(&mut app.symbol_search));
         app.symbol_search.set_search_service(Some(search.clone()));
         app.compare_dialog.set_search_service(Some(search));
         app.symbol_search.set_storage(app.storage.clone());
@@ -1488,6 +1493,11 @@ impl eframe::App for DemoApp {
         );
         eframe::set_value(
             storage,
+            "drawing_toolbar_preferences",
+            &self.drawing_toolbar.state.preferences,
+        );
+        eframe::set_value(
+            storage,
             "cursor_favorites",
             &self.drawing_toolbar.state.cursor_favorites,
         );
@@ -1618,6 +1628,11 @@ impl eframe::App for DemoApp {
         self.refresh_layout_menu();
         self.show_top_toolbar(ui, panel_bg);
         self.layout.sync = self.top_toolbar.chart_grid_selector.sync.clone();
+        let removal = egui_charts::ui::drawing_toolbar::utilities::RemoveMenu::show_confirmation(
+            &ctx,
+            &mut self.drawing_toolbar.state,
+        );
+        self.handle_drawing_toolbar(removal);
         self.show_drawing_toolbar(ui, panel_bg);
         self.show_widget_bar(ui, panel_bg);
         self.trading.show_ticket(ui, &self.chart);
@@ -1733,6 +1748,14 @@ impl DemoApp {
                 let mut toolbar = std::mem::take(&mut self.top_toolbar);
                 let state = self.state.clone();
                 let action = toolbar.show_with_menu(ui, &state, |ui| {
+                    if let Some(action) =
+                        egui_charts::ui::drawing_toolbar::utilities::HideMenu::show_toolbar_toggle(
+                            ui,
+                            &self.drawing_toolbar.state,
+                        )
+                    {
+                        self.handle_drawing_toolbar(action);
+                    }
                     if ui.ctx().content_rect().width() < 600.0 {
                         let response = menu_item(
                             ui,
@@ -2120,13 +2143,23 @@ impl DemoApp {
                     )
                     .color,
             });
-        self.drawing_toolbar.state.hide_indicators = {
-            let mut indicators = self.chart.indicators().peekable();
-            indicators.peek().is_some() && indicators.all(|(_, study)| !study.is_visible())
-        };
+        if self.chart.indicators().next().is_some() {
+            self.drawing_toolbar.state.hide_indicators = self
+                .chart
+                .indicators()
+                .all(|(_, study)| !study.is_visible());
+        }
         let drawings = &self.chart.drawings().drawings;
+        if !drawings.is_empty() {
+            self.drawing_toolbar.state.hide_drawings = drawings.iter().all(|d| !d.visible);
+        }
         self.drawing_toolbar.state.lock_all =
             !drawings.is_empty() && drawings.iter().all(|d| d.locked);
+        if self.drawing_toolbar.state.preferences.hidden {
+            let action = self.drawing_toolbar.show_with_action(ui);
+            self.handle_drawing_toolbar(action);
+            return;
+        }
         egui::Panel::left("drawing_toolbar")
             .resizable(false)
             .exact_size(56.0)
@@ -2149,7 +2182,27 @@ impl DemoApp {
     }
 
     pub(crate) fn handle_drawing_toolbar(&mut self, action: DrawingToolbarAction) {
+        if action == DrawingToolbarAction::None {
+            return;
+        }
+        let action = egui_charts::ui::drawing_toolbar::utilities::RemoveMenu::request(
+            action,
+            self.chart
+                .drawings()
+                .drawings
+                .iter()
+                .any(|drawing| drawing.locked),
+            &mut self.drawing_toolbar.state,
+        );
         match action {
+            DrawingToolbarAction::SetToolbarVisible(visible) => {
+                self.drawing_toolbar.state.preferences.hidden = !visible;
+                return;
+            }
+            DrawingToolbarAction::SetLockedDrawingRemoval(include) => {
+                self.drawing_toolbar.state.preferences.remove_locked = Some(include);
+                return;
+            }
             DrawingToolbarAction::None => return,
             DrawingToolbarAction::ZoomIn => {
                 self.chart
@@ -2212,16 +2265,24 @@ impl DemoApp {
                 return;
             }
             DrawingToolbarAction::HideAll => {
-                self.chart.drawings_mut().set_visibility_all(false);
+                let visible = !self.drawing_toolbar.state.hide_drawings;
+                self.chart.drawings_mut().set_visibility_all(visible);
                 let ids: Vec<SeriesId> = self.chart.indicators().map(|(id, _)| id).collect();
                 for id in ids {
-                    self.chart.set_indicator_visible(id, false);
+                    self.chart.set_indicator_visible(id, visible);
                 }
                 return;
             }
-            DrawingToolbarAction::RemoveDrawingsAndIndicators => {
-                self.chart.drawings_mut().clear_all();
-                self.remove_all_indicators();
+            DrawingToolbarAction::RemoveDrawings {
+                include_locked,
+                include_indicators,
+            } => {
+                self.chart
+                    .drawings_mut()
+                    .clear_all_with_locked(include_locked);
+                if include_indicators {
+                    self.remove_all_indicators();
+                }
                 return;
             }
             _ => {}
@@ -2291,7 +2352,9 @@ impl DemoApp {
             DrawingToolbarAction::ClearAllDrawings | DrawingToolbarAction::RemoveAllDrawings => {
                 dm.clear_all()
             }
-            DrawingToolbarAction::HideAllDrawings => dm.toggle_visibility_all(),
+            DrawingToolbarAction::HideAllDrawings => {
+                dm.set_visibility_all(!self.drawing_toolbar.state.hide_drawings);
+            }
             DrawingToolbarAction::LockAllDrawings => dm.toggle_lock_all(),
             DrawingToolbarAction::InsertGlyph { icon_name, size } => {
                 dm.start_icon_insertion(icon_name.to_string());
@@ -3650,6 +3713,7 @@ impl DemoApp {
             || self.comparison_settings.is_some()
             || self.indicator_dialog.is_open()
             || self.settings_dialog.is_open
+            || self.drawing_toolbar.state.pending_removal.is_some()
             || self.drawing_props.is_open
             || self.export_dialog.is_open()
             || self.alert_dialog.is_open
@@ -4042,6 +4106,200 @@ mod tests {
         );
     }
 
+    /// Bulk removal waits for a lock decision, saves only remembered decisions, and restores
+    /// the exact drawings and study ids together in one undo step without removing price series.
+    #[test]
+    fn toolbar_bulk_removal_resolves_locks_before_editing_either_group() {
+        use eframe::App;
+        use egui_charts::drawings::{ChartPoint, Drawing, DrawingToolType};
+        use egui_charts::ui::drawing_toolbar::utilities::RemoveMenu;
+
+        for (combined, include, remember, cancel) in [
+            (false, false, false, false),
+            (false, true, true, false),
+            (true, false, true, false),
+            (true, true, false, false),
+            (true, false, true, true),
+        ] {
+            let ctx = egui::Context::default();
+            let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+            settle(&mut app, &ctx);
+            app.chart
+                .add_indicator(Box::new(egui_charts::studies::SMA::new(7)));
+            let protected = app
+                .chart
+                .add_indicator(Box::new(egui_charts::studies::SMA::new(9)));
+            app.chart.set_indicator_user_edit_enabled(protected, false);
+            let study_ids: Vec<_> = app.chart.indicators().map(|(id, _)| id).collect();
+            let added = app.chart.add_series(Default::default());
+            let main_bars = app.chart.bars(SeriesId::MAIN).to_vec();
+            for (id, locked) in [(41, false), (42, true)] {
+                let mut drawing = Drawing::new(id, DrawingToolType::HorizontalLine);
+                drawing.chart_points = vec![ChartPoint::new(20.0, 100.0)];
+                drawing.completed = true;
+                drawing.locked = locked;
+                app.chart.drawings_mut().drawings.push(drawing);
+            }
+            let originals = app.chart.drawings().drawings.clone();
+            let size = egui::vec2(1440.0, 900.0);
+            let draw_menu = |app: &mut DemoApp, ui: &mut egui::Ui| {
+                let action = RemoveMenu::show_submenu(ui, &app.drawing_toolbar.state);
+                if let Some(action) = action {
+                    app.handle_drawing_toolbar(action);
+                }
+            };
+            let texts = ui_frame(&ctx, size, vec![], |ui| draw_menu(&mut app, ui));
+            let row = if combined {
+                "Remove drawings and indicators"
+            } else {
+                "Remove all drawings"
+            };
+            let at = texts
+                .iter()
+                .find(|(text, _)| text == row)
+                .unwrap()
+                .1
+                .center();
+            ui_click(&ctx, size, at, |ui| draw_menu(&mut app, ui));
+            assert_eq!(app.chart.drawings().drawings.len(), 2);
+            assert_eq!(
+                app.chart.indicators().map(|(id, _)| id).collect::<Vec<_>>(),
+                study_ids
+            );
+            let draw_prompt = |app: &mut DemoApp, ui: &mut egui::Ui| {
+                let action =
+                    RemoveMenu::show_confirmation(ui.ctx(), &mut app.drawing_toolbar.state);
+                app.handle_drawing_toolbar(action);
+            };
+            for label in
+                remember
+                    .then_some("Remember my choice")
+                    .into_iter()
+                    .chain(std::iter::once(if cancel {
+                        "Cancel"
+                    } else if include {
+                        "Remove including locked"
+                    } else {
+                        "Keep locked"
+                    }))
+            {
+                let mut texts = Vec::new();
+                for _ in 0..3 {
+                    texts = ui_frame(&ctx, size, vec![], |ui| draw_prompt(&mut app, ui));
+                }
+                let at = texts
+                    .iter()
+                    .find(|(text, _)| text == label)
+                    .expect("removal dialog control")
+                    .1
+                    .center();
+                ui_click(&ctx, size, at, |ui| draw_prompt(&mut app, ui));
+            }
+            assert_eq!(
+                app.chart.drawings().drawings.len(),
+                if cancel { 2 } else { usize::from(!include) }
+            );
+            let expected_studies = if combined && !cancel {
+                vec![protected]
+            } else {
+                study_ids.clone()
+            };
+            assert_eq!(
+                app.chart.indicators().map(|(id, _)| id).collect::<Vec<_>>(),
+                expected_studies
+            );
+            assert!(app.chart.is_series_visible(SeriesId::MAIN));
+            assert_eq!(app.chart.bars(SeriesId::MAIN), main_bars);
+            assert!(app.chart.series().any(|(id, _)| id == added));
+            if !cancel {
+                assert!(app.chart.undo());
+                assert_eq!(
+                    app.chart.indicators().map(|(id, _)| id).collect::<Vec<_>>(),
+                    study_ids
+                );
+                let restored = &app.chart.drawings().drawings;
+                assert_eq!(
+                    serde_json::to_value(restored).unwrap(),
+                    serde_json::to_value(&originals).unwrap()
+                );
+                assert!(app.chart.redo());
+                assert_eq!(
+                    app.chart.indicators().map(|(id, _)| id).collect::<Vec<_>>(),
+                    expected_studies
+                );
+            }
+            let mut storage = AppStorage::default();
+            app.save(&mut storage);
+            let mut cc = eframe::CreationContext::_new_kittest(egui::Context::default());
+            cc.storage = Some(&storage);
+            let mut reopened = DemoApp::new(&cc);
+            reopened.chart.drawings_mut().drawings = originals;
+            reopened.handle_drawing_toolbar(DrawingToolbarAction::RemoveAllDrawings);
+            assert_eq!(
+                reopened.chart.drawings().drawings.len(),
+                if remember && !cancel {
+                    usize::from(!include)
+                } else {
+                    2
+                }
+            );
+        }
+    }
+
+    /// The menu remains reachable while the drawing side panel is hidden and after reopening.
+    #[test]
+    fn drawing_toolbar_visibility_survives_reopening() {
+        use eframe::App;
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        settle(&mut app, &ctx);
+        app.drawing_toolbar
+            .state
+            .favorites
+            .push(egui_charts::drawings::DrawingToolType::TrendLine);
+        let size = egui::vec2(1440.0, 900.0);
+        let toggle = |app: &mut DemoApp, ctx: &egui::Context| {
+            ui_click(ctx, size, egui::pos2(20.0, 20.0), |ui| {
+                app.show_top_toolbar(ui, app.theme.ui.panel_bg)
+            });
+            let mut texts = Vec::new();
+            for _ in 0..3 {
+                texts = ui_frame(ctx, size, vec![], |ui| {
+                    app.show_top_toolbar(ui, app.theme.ui.panel_bg)
+                });
+            }
+            let at = texts
+                .iter()
+                .find(|(text, _)| text == "Drawing tools")
+                .expect("toolbar toggle")
+                .1
+                .center();
+            ui_click(ctx, size, at, |ui| {
+                app.show_top_toolbar(ui, app.theme.ui.panel_bg)
+            });
+        };
+        toggle(&mut app, &ctx);
+        let mut storage = AppStorage::default();
+        app.save(&mut storage);
+        let restored_ctx = egui::Context::default();
+        let mut cc = eframe::CreationContext::_new_kittest(restored_ctx.clone());
+        cc.storage = Some(&storage);
+        let mut app = DemoApp::new(&cc);
+        for hidden in [true, false] {
+            let mut consumed = 0.0;
+            ui_frame(&restored_ctx, size, vec![], |ui| {
+                let width = ui.available_width();
+                app.show_drawing_toolbar(ui, app.theme.ui.panel_bg);
+                consumed = width - ui.available_width();
+            });
+            assert_eq!(consumed == 0.0, hidden);
+            assert!(app.drawing_toolbar.state.floating_pos.is_some());
+            if hidden {
+                toggle(&mut app, &restored_ctx);
+            }
+        }
+    }
+
     /// The toolbar's real flyout toggles studies in both directions, including after undo.
     #[test]
     fn hide_indicator_menu_restores_studies_and_follows_undo() {
@@ -4082,6 +4340,8 @@ mod tests {
         for label in [
             "Hide indicators",
             "Hide indicators",
+            "Hide all",
+            "Hide all",
             "Hide all",
             "Hide indicators",
         ] {

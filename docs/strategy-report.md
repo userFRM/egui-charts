@@ -6,6 +6,28 @@ without egui and its performance metrics work with `default-features = false`. T
 supplies the market data.
 `examples/backtesting.rs` demonstrates both a headless run and, with [`ui`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/ui/index.html), a report window.
 
+## Try a host-produced report
+
+On the published guide, select **Run example**. The host supplies two synthetic round trips
+of 10 units bought at 100, sold at 105 and 98, with a fee of 2 on each round trip.
+The net results are `(105 - 100) * 10 - 2 = 48` and `(98 - 100) * 10 - 2 = -22`.
+The library computes net profit 26, a 50% win rate and profit factor `48 / 22`, about 2.18.
+The supplied equity curve is 10,000, 10,048, 10,026, so maximum drawdown is 22.
+It is too short to annualize: Sharpe displays N/A.
+
+<!-- example -->
+
+Change **Fee per round trip**, then select **Deliver host report**. The displayed report
+changes only on delivery; repainting computes presentation metrics without running a
+strategy or submitting orders. `host_result` stands for the host's execution or analytics;
+`HostReport::show` renders the delivered `StrategyReport`. The small renderer uses the
+existing widget bundle and needs no strategy engine or application UI feature. Hosts
+wanting the complete report panel can use `StrategyReportPanel`, described below.
+[Host data services](host-data-services.md#try-a-report-handoff) shows the same handoff in
+the context of other host-owned services.
+
+## Execute a strategy in the host
+
 With the `strategies` feature, configure a run through [`Backtest::settings`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.Backtest.html#structfield.settings):
 
 ```rust

@@ -316,7 +316,7 @@ impl ChartState {
     /// lows and highs; `prices` are further prices to fit, such as those of markers;
     /// `series_values` are already in scale units. `main_bars` supplies transformed visible
     /// bars; `main_range` reuses a precomputed exact range before calling the autoscale provider.
-    /// Returns the transform and the fitted data bounds in scale units, before margins.
+    /// Returns the transform, fitted bounds in scale units and the main provider's pixel margins.
     pub(crate) fn fit_price_scale_with_series<'a>(
         &mut self,
         indicators: impl IntoIterator<Item = &'a dyn Indicator>,
@@ -326,7 +326,7 @@ impl ChartState {
         main_range: Option<(f64, f64)>,
         prices: impl IntoIterator<Item = f64>,
         series_values: impl IntoIterator<Item = f64>,
-    ) -> (PriceTransform, (f64, f64)) {
+    ) -> (PriceTransform, crate::model::AutoscaleInfo) {
         let mode = self.price_scale.options().mode;
         let (start, end) = self.visible_range();
         let visible = main_bars.unwrap_or(&self.shown()[start..end]);
@@ -442,14 +442,15 @@ impl ChartState {
                         })
                 });
                 match autoscale {
-                    Some(provider) => provider.range(visible, range),
-                    None => range,
+                    Some(provider) => provider.info(visible, range),
+                    None => range.map(Into::into),
                 }
             })
             .flatten();
+        let margins = main.map_or_else(Default::default, |info| info.margins);
         let (min, max) = main
             .into_iter()
-            .flat_map(|(min, max)| [min, max])
+            .flat_map(|info| [info.price_range.0, info.price_range.1])
             .chain(study_values)
             .chain(prices)
             .map(|value| transform.to_scale(value))
@@ -460,7 +461,13 @@ impl ChartState {
             });
         self.price_scale.rebase(transform);
         self.price_scale.autoscale(min, max);
-        (transform, (min, max))
+        (
+            transform,
+            crate::model::AutoscaleInfo {
+                price_range: (min, max),
+                margins,
+            },
+        )
     }
 
     /// Save current zoom state to history

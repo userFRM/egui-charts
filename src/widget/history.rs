@@ -35,6 +35,7 @@ struct Pending {
 
 #[derive(Default)]
 struct Action {
+    layout_sizes: Option<super::layout::SizeChange>,
     symbol: Option<String>,
     series: Option<SeriesSet>,
     config: Option<ChartConfig>,
@@ -62,7 +63,8 @@ impl Action {
         let drawings_changed = self.drawings.can_undo();
         #[cfg(not(feature = "drawings"))]
         let drawings_changed = false;
-        self.symbol.is_none()
+        self.layout_sizes.is_none()
+            && self.symbol.is_none()
             && self.series.is_none()
             && self.view.is_none()
             && self.config.is_none()
@@ -183,6 +185,13 @@ struct Study {
 }
 
 impl ChartHistory {
+    pub(super) fn record_sizes(&mut self, change: super::layout::SizeChange) {
+        self.push(Action {
+            layout_sizes: Some(change),
+            ..Action::default()
+        });
+    }
+
     #[cfg(feature = "drawings")]
     pub(super) fn visit_chart_points(
         &mut self,
@@ -453,6 +462,7 @@ impl Chart {
                         && a.height == b.height
                         && a.preserve == b.preserve
                         && a.collapsed == b.collapsed
+                        && a.axes == b.axes
                         && a.scale.options() == b.scale.options()
                         && a.scale.is_manual() == b.scale.is_manual()
                         && (!a.scale.is_manual() || a.scale.range() == b.scale.range())
@@ -787,6 +797,9 @@ impl Chart {
             return false;
         };
         let current_view = self.get_time_scale_state();
+        if let Some(sizes) = &mut action.layout_sizes {
+            sizes.swap();
+        }
         let mut current: Vec<_> = action
             .studies
             .iter()

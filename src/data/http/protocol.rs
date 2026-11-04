@@ -122,6 +122,12 @@ pub(super) struct Symbol {
     ticker: Option<String>,
     description: Option<String>,
     exchange: Option<String>,
+    country: Option<String>,
+    sector: Option<String>,
+    source: Option<String>,
+    root: Option<String>,
+    logo: Option<String>,
+    exchange_logo: Option<String>,
     #[serde(rename = "type")]
     kind: Option<String>,
     minmov: Option<f64>,
@@ -142,6 +148,12 @@ impl Symbol {
         }
         instrument.description = self.description;
         instrument.exchange = self.exchange;
+        instrument.country = self.country;
+        instrument.sector = self.sector;
+        instrument.source = self.source;
+        instrument.root = self.root;
+        instrument.logo = self.logo;
+        instrument.exchange_logo = self.exchange_logo;
         instrument.symbol_type = self.kind.as_deref().and_then(symbol_type);
         if let Some(scale) = self.pricescale {
             let movement = self.minmov.unwrap_or(1.0);

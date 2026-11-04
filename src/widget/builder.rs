@@ -528,15 +528,15 @@ impl Chart {
     /// Width in points of the main price axis on `side` at the last frame, 0 when that axis is
     /// hidden: the configured minimum width, or wider when the labels need more room.
     pub fn price_axis_width(&self, side: crate::scales::PriceScaleId) -> f32 {
-        let (shown, minimum) = match side {
+        let (axis_side, minimum) = match side {
             crate::scales::PriceScaleId::Right => {
-                (self.config.show_right_axis, self.config.right_axis_width)
+                (crate::model::AxisSide::Right, self.config.right_axis_width)
             }
             crate::scales::PriceScaleId::Left => {
-                (self.config.show_left_axis, self.config.left_axis_width)
+                (crate::model::AxisSide::Left, self.config.left_axis_width)
             }
         };
-        if shown {
+        if self.primary_axis_side() == Some(axis_side) {
             minimum.max(self.measured_axis_width)
         } else {
             0.0

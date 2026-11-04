@@ -132,6 +132,14 @@ impl Chart {
         if main.is_empty() {
             return;
         }
+        if self.host_events.annotation_target.borrow().is_some()
+            && plot.ctx().pointer_interact_pos().is_some_and(|pos| {
+                plot.clip_rect().contains(pos)
+                    && self.hit_price_series(item, pos, rect, map).is_some()
+            })
+        {
+            self.cover_annotation_hit();
+        }
         let range = self.series_range(item);
         // One neighbour at each edge keeps clipped segments continuous during scrolling.
         let start = range.start.saturating_sub(1);
@@ -241,8 +249,7 @@ impl Chart {
                 .with_axis_label(false)
             });
         let base_line = base_line(&map, style);
-        let lines = item.lines.iter().map(|(_, line)| line);
-        for line in base_line.iter().chain(&price_line).chain(lines) {
+        for line in base_line.iter().chain(&price_line) {
             crate::chart::rendering::render_price_line(
                 plot,
                 rect,
@@ -252,6 +259,9 @@ impl Chart {
                 false,
                 rect.right(),
             );
+        }
+        for (id, line) in &item.lines {
+            self.paint_annotation_line(plot, rect, &map, item.id, *id, line);
         }
         if let Some(marks) = &item.change_marks {
             marks.paint(plot, |time, close| {
@@ -263,7 +273,7 @@ impl Chart {
                 Some(Pos2::new(x, map.price_to_y(close)))
             });
         }
-        if item.marker_options.z_order == MarkerZOrder::Normal || self.in_pane(item.id) {
+        if item.marker_options.z_order == MarkerZOrder::Normal {
             self.paint_series_markers(plot, rect, item, map);
         }
     }
@@ -352,7 +362,7 @@ impl Chart {
                     &map,
                     &coords,
                 );
-                self.record_mark_hits(item.id, hits);
+                self.record_mark_hits(plot, item.id, hits);
             }
         }
     }
@@ -447,59 +457,13 @@ impl Chart {
         rect: Rect,
     ) -> Vec<(SeriesScale, Rect)> {
         let keys = self.series_axis_keys();
-        let left_count = keys
-            .iter()
-            .filter(|key| **key != SeriesScale::Right)
-            .count();
-        let primary_left = if self.config.show_left_axis {
-            self.config.left_axis_width.max(self.measured_axis_width)
-        } else {
-            0.0
-        };
-        let primary_right = if self.config.show_right_axis {
-            self.config.right_axis_width.max(self.measured_axis_width)
-        } else {
-            0.0
-        };
-        let study_count = self
-            .studies
-            .indicators()
-            .iter()
-            .filter(|study| {
-                (self.config.show_left_axis || self.config.show_right_axis)
-                    && study.is_visible()
-                    && study.is_overlay()
-                    && !study.is_volume()
-                    && study.scale() == crate::studies::StudyScale::Independent
-            })
-            .count();
-        let padding = self
-            .config
-            .padding
-            .max(0.0)
-            .min(widget.width().min(widget.height()).max(0.0) / 2.0);
-        let mut left = (rect.left() - primary_left).max(widget.left() + padding);
-        let slot_width =
-            (left - widget.left() - padding).max(0.0) / (left_count + study_count).max(1) as f32;
-        keys.into_iter()
-            .map(|key| {
-                let axis = if key == SeriesScale::Right {
-                    Rect::from_min_max(
-                        Pos2::new(
-                            (rect.right() + primary_right).min(widget.right()),
-                            rect.top(),
-                        ),
-                        Pos2::new(widget.right(), rect.bottom()),
-                    )
-                } else {
-                    let axis = Rect::from_min_max(
-                        Pos2::new(left - slot_width, rect.top()),
-                        Pos2::new(left, rect.bottom()),
-                    );
-                    left -= slot_width;
-                    axis
-                };
-                (key, axis)
+        if keys.is_empty() {
+            return Vec::new();
+        }
+        self.pane_scale_axes(self.main_series_pane(), widget, rect)
+            .filter_map(|(key, axis)| match key {
+                crate::widget::PaneScale::Named(key) if keys.contains(&key) => Some((key, axis)),
+                _ => None,
             })
             .collect()
     }
@@ -510,31 +474,22 @@ impl Chart {
         widget: Rect,
         rect: Rect,
     ) {
+        let interaction = self.chart_options.handle_scale;
         for (key, axis) in self.secondary_axes(widget, rect) {
             let response = ui.interact(
                 axis,
                 ui.scope_id().with(("series_axis", key)),
                 egui::Sense::drag(),
             );
-            let Some(scale) = self.series_scales.get_mut(&key) else {
-                continue;
-            };
+            let scale = self.pane_price_scale_mut(self.main_series_pane(), key);
             if response.double_clicked()
-                && self.chart_options.handle_scale.enabled
-                && self
-                    .chart_options
-                    .handle_scale
-                    .axis_double_click_reset
-                    .price
+                && interaction.enabled
+                && interaction.axis_double_click_reset.price
             {
                 scale.reset();
             } else if response.dragged()
-                && self.chart_options.handle_scale.enabled
-                && self
-                    .chart_options
-                    .handle_scale
-                    .axis_pressed_mouse_move
-                    .price
+                && interaction.enabled
+                && interaction.axis_pressed_mouse_move.price
             {
                 let delta = ui.input(|input| input.pointer.delta().y);
                 let range = scale.range();
@@ -561,7 +516,11 @@ impl Chart {
         };
         let mut measured = 0.0_f32;
         for (key, axis) in self.secondary_axes(widget, rect) {
-            let position = if key == SeriesScale::Right {
+            let position = if self.pane_scale_side(
+                self.main_series_pane(),
+                crate::widget::PaneScale::Named(key),
+            ) == Some(crate::model::AxisSide::Right)
+            {
                 crate::scales::PriceScaleId::Right
             } else {
                 crate::scales::PriceScaleId::Left
@@ -571,12 +530,13 @@ impl Chart {
                 .rendered_studies()
                 .indicators()
                 .iter()
-                .filter(|study| {
+                .zip(&self.study_ids)
+                .filter(|(study, id)| {
                     study.is_visible()
-                        && study.is_overlay()
+                        && self.series_pane(**id) == Some(self.main_series_pane())
                         && study.scale() == crate::studies::StudyScale::Shared(key)
                 })
-                .map(|study| study.as_ref())
+                .map(|(study, _)| study.as_ref())
                 .collect();
             let Some(item) = self
                 .main_pane_series()
@@ -600,11 +560,7 @@ impl Chart {
                 continue;
             };
             let map = self.series_map(item, rect);
-            let label_rect = if key == SeriesScale::Right {
-                Rect::from_min_max(rect.min, axis.left_bottom())
-            } else {
-                Rect::from_min_max(axis.right_top(), rect.max)
-            };
+            let label_rect = super::axis_label_rect(rect, axis);
             let ctx = RenderContext::new(&clipped, label_rect);
             let slot = clipped.add(egui::Shape::Noop);
             let mut tags = Vec::new();

@@ -18,6 +18,8 @@ pub(super) struct Recent {
     exchange_logo: Option<String>,
     country: Option<String>,
     root: Option<String>,
+    sector: Option<String>,
+    source: Option<String>,
 }
 
 impl Recent {
@@ -29,6 +31,8 @@ impl Recent {
         symbol.exchange_logo = self.exchange_logo.clone();
         symbol.country = self.country.clone();
         symbol.root = self.root.clone();
+        symbol.sector = self.sector.clone();
+        symbol.source = self.source.clone();
         symbol
     }
 }
@@ -43,6 +47,9 @@ pub(super) struct Search {
     offset: usize,
     error: Option<String>,
     pub(super) exchange: Option<String>,
+    pub(super) country: Option<String>,
+    pub(super) sector: Option<String>,
+    pub(super) data_source: Option<String>,
     pub(super) recents: TemplateStore<Vec<Recent>>,
     opened: Vec<Recent>,
     components: Components,
@@ -69,6 +76,9 @@ impl Default for Search {
             offset: 0,
             error: None,
             exchange: None,
+            country: None,
+            sector: None,
+            data_source: None,
             recents: TemplateStore::new(StoreKind::RecentSymbols),
             opened: Vec::new(),
             components: Components::default(),
@@ -99,8 +109,9 @@ impl Search {
 
     pub(super) fn record(&mut self, symbol: &Instrument) {
         let exchange = symbol.exchange.clone().unwrap_or_default();
-        self.opened
-            .retain(|row| row.name != symbol.symbol || row.exchange != exchange);
+        self.opened.retain(|row| {
+            row.name != symbol.symbol || row.exchange != exchange || row.source != symbol.source
+        });
         self.opened.push(Recent {
             name: symbol.symbol.clone(),
             description: symbol
@@ -113,6 +124,8 @@ impl Search {
             exchange_logo: symbol.exchange_logo.clone(),
             country: symbol.country.clone(),
             root: symbol.root.clone(),
+            sector: symbol.sector.clone(),
+            source: symbol.source.clone(),
         });
     }
 
@@ -126,7 +139,9 @@ impl Search {
                 .cloned()
                 .unwrap_or_default();
             for row in self.opened.drain(..) {
-                recent.retain(|old| old.name != row.name || old.exchange != row.exchange);
+                recent.retain(|old| {
+                    old.name != row.name || old.exchange != row.exchange || old.source != row.source
+                });
                 recent.insert(0, row);
             }
             recent.truncate(20);
@@ -150,7 +165,9 @@ impl Search {
                     self.offset += rows.len();
                     for instrument in rows.into_iter().take(limit) {
                         if self.rows.iter().any(|row| {
-                            row.symbol == instrument.symbol && row.exchange == instrument.exchange
+                            row.symbol == instrument.symbol
+                                && row.exchange == instrument.exchange
+                                && row.source == instrument.source
                         }) {
                             continue;
                         }
@@ -202,15 +219,8 @@ impl Search {
         if self.source.is_none() {
             return;
         }
-        let query = SymbolQuery {
-            text: text.into(),
-            symbol_type: kind,
-            exchange: self.exchange.clone(),
-            offset: 0,
-            limit,
-        };
-        let recent =
-            text.is_empty() && kind.is_none() && self.exchange.is_none() && self.has_recents();
+        let query = self.request(text, kind, limit);
+        let recent = query.unfiltered() && self.has_recents();
         if self.query.as_ref() != Some(&query) {
             self.reset();
             self.query = Some(query.clone());
@@ -226,6 +236,24 @@ impl Search {
             self.inbox = Arc::default();
         }
         self.poll(ctx);
+    }
+
+    pub(super) fn request(
+        &self,
+        text: &str,
+        kind: Option<SymbolType>,
+        limit: usize,
+    ) -> SymbolQuery {
+        SymbolQuery {
+            text: text.into(),
+            symbol_type: kind,
+            exchange: self.exchange.clone(),
+            country: self.country.clone(),
+            sector: self.sector.clone(),
+            source: self.data_source.clone(),
+            offset: 0,
+            limit,
+        }
     }
 
     pub(super) fn next_page(&mut self) {
@@ -262,14 +290,10 @@ impl Search {
                 None => Arc::new(fallback.to_vec()),
             };
             for (at, symbol) in symbols.iter().enumerate() {
-                let query = SymbolQuery {
-                    text: symbol.clone(),
-                    symbol_type: None,
-                    exchange: None,
-                    offset: 0,
-                    limit: 20,
-                };
-                source.search(query, self.components.inbox.reply(at as u64));
+                source.search(
+                    SymbolQuery::new(symbol),
+                    self.components.inbox.reply(at as u64),
+                );
             }
         }
         let repaint = ctx.clone();
@@ -284,9 +308,11 @@ impl Search {
                 .expect("symbol search");
             self.components.found[at] =
                 Some(rows.map_err(|error| error.to_string()).and_then(|rows| {
-                    rows.into_iter()
-                        .map(|row| row.symbol)
-                        .find(|name| name.to_lowercase() == symbols[at].to_lowercase())
+                    let query = SymbolQuery::new(&symbols[at]);
+                    rows.iter()
+                        .find(|row| row.symbol.eq_ignore_ascii_case(&symbols[at]))
+                        .or_else(|| rows.iter().find(|row| query.rank(row) == Some(0)))
+                        .map(|row| row.symbol.clone())
                         .ok_or_else(|| {
                             ExpressionError::UnknownSymbol(symbols[at].clone()).to_string()
                         })
@@ -347,7 +373,10 @@ mod tests {
         search.exchange = Some("Venue".into());
         search.query(&ctx, "old", None, 1);
         let (_, stale) = source.0.lock().unwrap().pop().unwrap();
-        search.query(&ctx, "new", Some(SymbolType::Fund), 1);
+        search.country = Some("US".into());
+        search.sector = Some("Technology".into());
+        search.data_source = Some("Provider".into());
+        search.query(&ctx, "CME:new", Some(SymbolType::Fund), 1);
         let (query, first) = source.0.lock().unwrap().pop().unwrap();
         assert_eq!(
             (
@@ -356,14 +385,23 @@ mod tests {
                 query.exchange.as_deref(),
                 query.offset
             ),
-            ("new", Some(SymbolType::Fund), Some("Venue"), 0)
+            ("CME:new", Some(SymbolType::Fund), Some("Venue"), 0)
+        );
+        assert_eq!(query.qualified(), Some(("CME", "new")));
+        assert_eq!(
+            (
+                query.country.as_deref(),
+                query.sector.as_deref(),
+                query.source.as_deref()
+            ),
+            (Some("US"), Some("Technology"), Some("Provider"))
         );
         stale.send(Ok(vec![Instrument::new("stale")]));
         search.poll(&ctx);
         assert!(search.rows.is_empty());
         first.send(Ok(vec![Instrument::new("first")]));
         search.poll(&ctx);
-        search.query(&ctx, "new", Some(SymbolType::Fund), 1);
+        search.query(&ctx, "CME:new", Some(SymbolType::Fund), 1);
         assert!(
             source.0.lock().unwrap().is_empty(),
             "same query does not refetch"
@@ -371,6 +409,9 @@ mod tests {
         search.next_page();
         let (query, second) = source.0.lock().unwrap().pop().unwrap();
         assert_eq!(query.offset, 1);
+        assert_eq!(query.country.as_deref(), Some("US"));
+        assert_eq!(query.sector.as_deref(), Some("Technology"));
+        assert_eq!(query.source.as_deref(), Some("Provider"));
         second.send(Ok(vec![Instrument::new("second")]));
         search.poll(&ctx);
         assert_eq!(
@@ -389,6 +430,29 @@ mod tests {
             source.0.lock().unwrap().is_empty(),
             "empty page ends pagination"
         );
+        for filter in 0..3 {
+            let text = format!("CME:pending{filter}");
+            search.query(&ctx, &text, Some(SymbolType::Fund), 1);
+            let (_, stale) = source.0.lock().unwrap().pop().unwrap();
+            match filter {
+                0 => search.country = Some("GB".into()),
+                1 => search.sector = None,
+                _ => search.data_source = None,
+            }
+            search.query(&ctx, &text, Some(SymbolType::Fund), 1);
+            let (query, answer) = source
+                .0
+                .lock()
+                .unwrap()
+                .pop()
+                .expect("filter change refetches from zero");
+            assert_eq!(query.offset, 0);
+            stale.send(Err(FeedError::Network("late failure".into())));
+            answer.send(Ok(vec![]));
+            search.poll(&ctx);
+            assert!(search.results().is_empty());
+            assert!(search.error.is_none());
+        }
     }
     #[test]
     fn spread_lookup_reports_service_errors_without_claiming_the_symbol_is_unknown() {
@@ -422,12 +486,16 @@ mod tests {
         let listings = vec![
             Instrument::new("ABC").with_exchange("X").with_root("ABC"),
             Instrument::new("ABC").with_exchange("Y").with_root("ABC"),
+            Instrument::new("ABC")
+                .with_exchange("X")
+                .with_root("ABC")
+                .with_source("Mirror"),
         ];
         let mut search = Search::default();
         search.set_service(Some(Arc::new(listings.clone())));
         search.query(&ctx, "ABC", None, 20);
         assert_eq!(search.results(), listings);
-        for listing in [&listings[0], &listings[1], &listings[0]] {
+        for listing in [&listings[2], &listings[1], &listings[0]] {
             search.record(listing);
         }
         search.poll(&ctx);
@@ -435,8 +503,9 @@ mod tests {
         for (actual, expected) in search.results().iter().zip(&listings) {
             assert_eq!(actual.exchange, expected.exchange);
             assert_eq!(actual.root, expected.root);
+            assert_eq!(actual.source, expected.source);
         }
-        assert_eq!(search.results().len(), 2);
+        assert_eq!(search.results().len(), 3);
     }
 
     #[derive(Default)]
@@ -472,7 +541,13 @@ mod tests {
         search.recents.set_storage(vault.clone());
         for symbol in ["A", "B", "A"] {
             let symbol = Instrument::new(symbol).with_description("Host name");
-            search.record(&symbol.with_logo("bytes://logo").with_country("US"));
+            search.record(
+                &symbol
+                    .with_logo("bytes://logo")
+                    .with_country("US")
+                    .with_sector("Technology")
+                    .with_source("Provider"),
+            );
         }
         for _ in 0..4 {
             search.poll(&ctx);
@@ -503,10 +578,21 @@ mod tests {
             ),
             (Some("Host name"), Some("bytes://logo"), Some("US"))
         );
+        assert_eq!(row.sector.as_deref(), Some("Technology"));
+        assert_eq!(row.source.as_deref(), Some("Provider"));
         let source = Arc::new(Source::default());
         restored.set_service(Some(source.clone()));
-        for (kind, exchange) in [(Some(SymbolType::Stock), None), (None, Some("Venue"))] {
+        for (kind, exchange, country, sector, provider) in [
+            (Some(SymbolType::Stock), None, None, None, None),
+            (None, Some("Venue"), None, None, None),
+            (None, None, Some("US"), None, None),
+            (None, None, None, Some("Technology"), None),
+            (None, None, None, None, Some("Provider")),
+        ] {
             restored.exchange = exchange.map(str::to_owned);
+            restored.country = country.map(str::to_owned);
+            restored.sector = sector.map(str::to_owned);
+            restored.data_source = provider.map(str::to_owned);
             restored.query(&ctx, "", kind, 20);
             let (query, _) = source
                 .0
@@ -515,8 +601,14 @@ mod tests {
                 .pop()
                 .expect("filters query the host catalog even when recents exist");
             assert_eq!(
-                (query.symbol_type, query.exchange.as_deref()),
-                (kind, exchange)
+                (
+                    query.symbol_type,
+                    query.exchange.as_deref(),
+                    query.country.as_deref(),
+                    query.sector.as_deref(),
+                    query.source.as_deref()
+                ),
+                (kind, exchange, country, sector, provider)
             );
         }
     }

@@ -40,7 +40,7 @@ pub use components::{PairButton, draw_icon_btn, draw_separator, draw_toggle_btn}
 pub use config::DrawingToolbarConfig;
 pub use glyph_picker::GlyphPicker;
 pub use shortcuts::DrawingToolShortcuts;
-pub use state::{MagnetType, ToolbarState};
+pub use state::{MagnetType, ToolbarPreferences, ToolbarState};
 pub use submenu_builder::{SubmenuBuilder, SubmenuItem, ToggleConfig};
 pub use toolbar::{DrawingToolbar, DrawingToolbarDomainState};
 
