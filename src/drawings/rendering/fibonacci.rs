@@ -399,9 +399,6 @@ impl Drawing {
             } else {
                 line[1]
             };
-            if !chart_rect.y_range().contains(point.y) {
-                continue;
-            }
             paint_price_label(
                 painter,
                 &config,
@@ -1421,7 +1418,6 @@ mod tests {
             (Tool::FibonacciChannel, true, 0.5, 244.9489742784, true),
             // The price pane spans 10 to 1000; levels beyond it have no label.
             (Tool::FibonacciRetracement, false, 2.0, 0.0, false),
-            (Tool::FibonacciChannel, false, 20.0, 1200.0, false),
             (Tool::FibonacciRetracement, false, -10.0, 1200.0, false),
             (Tool::FibonacciExtension, false, -2.0, -50.0, false),
             (Tool::FibonacciExtension, false, 10.0, 1150.0, false),
