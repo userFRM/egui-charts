@@ -215,26 +215,19 @@ pub(super) fn show(
             &["At the limit", "Cross by one increment"],
         );
         settings.require_limit_cross = crossing == 1;
-        let mut latency = usize::from(!settings.fill_on_close);
-        choice(
-            ui,
-            "Closing order latency",
-            &mut latency,
-            &["No delay", "Next price tick"],
-        );
-        settings.fill_on_close = latency == 0;
+        let label = ui.label(l10n::text(ui.ctx(), "Order execution delay (price ticks)"));
+        ui.add(egui::DragValue::new(&mut settings.order_delay))
+            .labelled_by(label.id);
+        ui.end_row();
         let label = ui.label(l10n::text(ui.ctx(), "Decision candles"));
         egui::ComboBox::from_id_salt("decision_candles")
-            .selected_text(settings.chart_type.to_string())
+            .selected_text(l10n::text(ui.ctx(), settings.chart_type.to_string()))
             .show_ui(ui, |ui| {
-                for (kind, label) in [
-                    (ChartType::Candles, "Regular"),
-                    (ChartType::Heikin, "Heikin Ashi"),
-                ] {
+                for kind in [ChartType::Candles, ChartType::Heikin] {
                     ui.selectable_value(
                         &mut settings.chart_type,
                         kind,
-                        l10n::text(ui.ctx(), label),
+                        l10n::text(ui.ctx(), kind.to_string()),
                     );
                 }
             })
@@ -252,6 +245,10 @@ pub(super) fn show(
         .labelled_by(label.id);
         ui.end_row();
     });
+    ui.checkbox(
+        &mut settings.fill_on_close,
+        l10n::text(ui.ctx(), "Fill on close"),
+    );
     ui.checkbox(
         &mut settings.recalculate_after_fills,
         l10n::text(ui.ctx(), "Recalculate after fills"),

@@ -111,6 +111,7 @@ pub struct StrategyTester {
     settings: BacktestSettings,
     undo_settings: Vec<BacktestSettings>,
     redo_settings: Vec<BacktestSettings>,
+    settings_edit: Option<BacktestSettings>,
     start: String,
     lower: bool,
     lower_timeframe: Timeframe,
@@ -152,6 +153,7 @@ impl StrategyTester {
             settings: BacktestSettings::default(),
             undo_settings: Vec::new(),
             redo_settings: Vec::new(),
+            settings_edit: None,
             start: String::new(),
             lower: false,
             lower_timeframe: Timeframe::Sec1,
@@ -628,7 +630,12 @@ impl StrategyTester {
                 self.error = Some(error.into());
             }
         }
-        if let Some(before) = previous_settings
+        if let Some(before) = previous_settings {
+            self.settings_edit.get_or_insert(before);
+        }
+        // A drag changes settings on every frame but is one undo step.
+        if !ui.input(|input| input.pointer.any_down())
+            && let Some(before) = self.settings_edit.take()
             && self.settings != before
         {
             self.undo_settings.push(before);

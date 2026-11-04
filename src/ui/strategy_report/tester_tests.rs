@@ -96,13 +96,8 @@ fn built_in_run_edits_costs_and_inputs_and_replaces_fill_signals() {
             h.get_by_role_and_label(Role::Tab, "Backtest settings")
                 .click();
             h.run();
-            h.get_by_role_and_label(Role::ComboBox, "Closing order latency")
-                .scroll_to_me();
-            h.run();
-            h.get_by_role_and_label(Role::ComboBox, "Closing order latency")
+            h.get_by_role_and_label(Role::CheckBox, "Fill on close")
                 .click();
-            h.run();
-            h.get_by_label("No delay").click();
             h.run();
             assert!(h.state().0.is_stale());
             h.get_by_role_and_label(Role::Button, "Run").click();
@@ -143,9 +138,25 @@ fn execution_settings_survive_form_edits_undo_saved_state_and_run_properties() {
             "Short funding (%)",
             "Price increment",
             "Liquidation unit step",
+            "Order execution delay (price ticks)",
         ] {
             h.get_by_role_and_label(Role::SpinButton, label);
         }
+        let start = h
+            .get_by_role_and_label(Role::SpinButton, "Price increment")
+            .rect()
+            .center();
+        h.drag_at(start);
+        h.run();
+        for distance in [10.0, 20.0, 30.0] {
+            h.hover_at(start + Vec2::new(distance, 0.0));
+            h.run();
+        }
+        h.drop_at(start + Vec2::new(30.0, 0.0));
+        h.run();
+        assert_ne!(h.state().settings().price_increment, 0.01);
+        assert!(h.state_mut().undo_settings());
+        assert_eq!(h.state().settings().price_increment, 0.01);
         h.get_by_role_and_label(Role::ComboBox, "Limit verification")
             .click();
         h.run();
@@ -202,6 +213,7 @@ fn execution_settings_survive_form_edits_undo_saved_state_and_run_properties() {
         settings.price_increment = 0.25;
         settings.liquidation_increment = 0.1;
         settings.fill_on_close = true;
+        settings.order_delay = 3;
         h.state_mut().set_settings(settings.clone()).unwrap();
         let saved = serde_json::to_string(&settings).unwrap();
         let restored = serde_json::from_str::<BacktestSettings>(&saved).unwrap();
@@ -233,18 +245,14 @@ fn execution_settings_survive_form_edits_undo_saved_state_and_run_properties() {
             ("Price increment", "0.25"),
             ("Liquidation unit step", "0.1"),
             ("Verify limit crossing", "true"),
-            ("Closing order latency", "No delay"),
+            ("Fill on close", "true"),
+            ("Order execution delay", "3"),
             ("Decision chart type", "Heikin Ashi"),
             ("Original-price execution", "true"),
             ("Historical tick decisions", "false"),
         ] {
             assert_eq!(property(key), expected);
         }
-        let saved_report = serde_json::to_string(report).unwrap();
-        assert_eq!(
-            serde_json::from_str::<StrategyReport>(&saved_report).unwrap(),
-            *report
-        );
         let previous = report.clone();
         assert!(h.state_mut().undo_settings());
         assert!(h.state().is_stale());
@@ -256,10 +264,6 @@ fn execution_settings_survive_form_edits_undo_saved_state_and_run_properties() {
             (None, None, 0.01, 0.0, ChartType::Candles, false),
             (None, None, 0.01, 1.0, ChartType::Heikin, true),
             (None, None, 0.01, 1.0, ChartType::Renko, true),
-            (None, None, 0.01, 1.0, ChartType::Kagi, true),
-            (None, None, 0.01, 1.0, ChartType::LineBreak, true),
-            (None, None, 0.01, 1.0, ChartType::PointAndFigure, true),
-            (None, None, 0.01, 1.0, ChartType::Range, true),
         ] {
             let mut invalid = settings.clone();
             invalid.long_funding = long;

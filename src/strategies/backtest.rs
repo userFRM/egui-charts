@@ -94,8 +94,12 @@ pub struct BacktestSettings {
     /// Unit step used to truncate the minimum liquidation before closing four times that size.
     /// Hosts derive this from the instrument's quantity precision. Defaults to one unit.
     pub liquidation_increment: f64,
-    /// Allow eligible orders to fill on their creation bar's closing tick, without a tick delay.
+    /// Try working orders again on the closing tick of the bar they were placed on: market orders
+    /// fill there and priced orders fill if the close satisfies them.
     pub fill_on_close: bool,
+    /// Further price points a new order waits before it can fill, modelling execution latency.
+    /// Zero fills at the next price point. Delayed orders cannot fill on the closing tick.
+    pub order_delay: u32,
     /// Decide again after every fill, at its execution price, without exposing future bars.
     pub recalculate_after_fills: bool,
     /// Decide on changes of the forming bar in [`Backtest::update`], retaining intrabar fills.
@@ -131,6 +135,7 @@ impl Default for BacktestSettings {
             price_increment: 0.01,
             liquidation_increment: 1.0,
             fill_on_close: false,
+            order_delay: 0,
             recalculate_after_fills: false,
             recalculate_on_every_update: false,
             recalculate_on_history: false,
@@ -150,13 +155,16 @@ fn nonnegative(value: f64) -> f64 {
 }
 
 impl BacktestSettings {
-    pub(crate) fn funding(&self, side: OrderSide) -> f64 {
-        let fraction = match side {
+    fn side_funding(&self, side: OrderSide) -> Option<f64> {
+        match side {
             OrderSide::Buy => self.long_funding,
             OrderSide::Sell => self.short_funding,
-        };
-        fraction
-            .filter(|value| value.is_finite() && *value >= 0.0)
+        }
+        .filter(|value| value.is_finite() && *value >= 0.0)
+    }
+
+    pub(crate) fn funding(&self, side: OrderSide) -> f64 {
+        self.side_funding(side)
             .unwrap_or_else(|| 1.0 / self.leverage())
     }
 
@@ -272,9 +280,9 @@ pub trait Strategy {
     }
 
     /// Refreshes calculations for appended bars, a changed forming bar or a masked historical
-    /// tick, preserving decision
-    /// state from `on_bar`. The default calls `prepare`; override it if `prepare` resets that
-    /// state. Like `prepare`, calculations must use only the prefix through each bar.
+    /// tick, preserving decision state from `on_bar`. The default calls `prepare`; override it if
+    /// `prepare` resets that state. Like `prepare`, calculations must use only the prefix through
+    /// each bar.
     fn prepare_update(&mut self, bars: &[Bar]) {
         self.prepare(bars);
     }
@@ -304,6 +312,7 @@ pub struct StrategyContext<'a> {
     forming: bool,
     trading: bool,
     tick: u64,
+    order_delay: u32,
 }
 
 impl StrategyContext<'_> {
@@ -426,6 +435,7 @@ impl StrategyContext<'_> {
             quantity,
             kind,
             deferred: (self.after_fill || self.forming).then_some(self.tick),
+            delay: self.order_delay,
         };
         match self
             .orders
@@ -447,6 +457,8 @@ struct Working {
     kind: Kind,
     /// Orders created after a fill or on a forming-bar decision wait for a subsequent price point.
     deferred: Option<u64>,
+    /// Price points still to pass before the order can fill.
+    delay: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -479,8 +491,9 @@ struct Lot {
 /// its limit or stop price, or at the open when the bar opened beyond it; a triggered stop-limit
 /// order works on as a limit order from its stop. Orders the path reaches at the same point fill
 /// in the order they were first placed. An exit with a take profit and a stop loss fills whichever
-/// the path reaches first. With `settings.fill_on_close`, market orders fill at the
-/// close of the bar they were placed on instead.
+/// the path reaches first. With `settings.fill_on_close`, orders are tried again at the close of
+/// the bar they were placed on, where market orders fill and priced orders fill if the close
+/// satisfies them. `settings.order_delay` holds new orders back for that many further price points.
 ///
 /// Each entry is a trade, closed by exits and opposite entries first in first out; each partial
 /// exit is its own trade with its share of the entry. A trade's label names its entry and exit
@@ -493,8 +506,8 @@ struct Lot {
 ///
 /// Bars are oldest first, in strictly increasing time order. A bar without finite prices, or
 /// whose high and low do not contain its open and close, fills no orders and has no equity value.
-/// Settings apply sizing, pyramiding, costs and margin at each execution; a margin deficit closes
-/// the position along the path. Optional finer bars determine fills within each chart bar.
+/// Settings apply sizing, pyramiding, costs and funding at each execution; a funding deficit
+/// liquidates along the path. Optional finer bars determine fills within each chart bar.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct Backtest {
@@ -539,8 +552,9 @@ impl Backtest {
     /// apply to regular candles and original-price execution; derived-price fills use their own
     /// candle path. Pass `&[]` to use chart bars alone.
     ///
-    /// With a start time, `prepare` still receives all bars, but chart bars opening before it
-    /// cannot trade. Equity starts at the requested time and subsequent points use chart-bar
+    /// With a start time, `prepare` still receives all bars, or none with historical tick
+    /// decisions, whose calculations refresh through `prepare_update`, but chart bars opening
+    /// before it cannot trade. Equity starts at the requested time and subsequent points use chart-bar
     /// closes, so the starting value and first close have distinct timestamps. A final execution
     /// bar without a known end labels its equity mark one nanosecond after its last source time.
     ///
@@ -673,13 +687,8 @@ impl Backtest {
                 settings.liquidation_increment.to_string(),
             ),
             (
-                "Closing order latency".into(),
-                if settings.fill_on_close {
-                    "No delay"
-                } else {
-                    "Next price tick"
-                }
-                .into(),
+                "Order execution delay".into(),
+                settings.order_delay.to_string(),
             ),
             (
                 "Historical tick decisions".into(),
@@ -1023,11 +1032,13 @@ impl<'a> Run<'a> {
             forming: self.forming,
             trading: self.trading,
             tick: self.tick,
+            order_delay: self.settings.order_delay,
         });
     }
 
     fn fill_bar(&mut self, bar: &Bar) {
         self.tick += 1;
+        self.pass_delays();
         let [open, near, far, close] = price_path(bar);
         for (start, end) in [(open, near), (near, far), (far, close)] {
             self.fill_along(start, end, bar.time);
@@ -1042,9 +1053,13 @@ impl<'a> Run<'a> {
             let price = complete.map_or(price, |bar| bar.close);
             if point == 0 {
                 self.tick += 1;
+                self.pass_delays();
             }
             if self.trading {
                 self.fill_segment(previous, price, bar.time, point != 0);
+                if point != 0 {
+                    self.pass_delays();
+                }
             }
             let candle = self.history.to_mut().last_mut().expect("current candle");
             candle.high = candle.high.max(price);
@@ -1059,6 +1074,19 @@ impl<'a> Run<'a> {
             self.strategy.prepare_update(&self.history);
             self.decide(price, false);
             previous = price;
+        }
+    }
+
+    /// Count a reached price point against delayed orders. An order whose delay ends here then
+    /// waits for the next point like a newly placed one.
+    fn pass_delays(&mut self) {
+        for order in &mut self.orders {
+            if order.delay > 0 {
+                order.delay -= 1;
+                if order.delay == 0 {
+                    order.deferred = Some(self.tick);
+                }
+            }
         }
     }
 
@@ -1094,20 +1122,39 @@ impl<'a> Run<'a> {
             .sum()
     }
 
-    /// Limit price of an order that has passed its verification threshold.
+    /// Limit price of an order that crossed its verification threshold, or the better market
+    /// price of a gap beyond that threshold.
     fn verified_price(&self, order: &Working, mark: f64) -> f64 {
         if !self.settings.require_limit_cross {
             return mark;
         }
-        match order.kind {
-            Kind::Entry(_, OrderType::Limit(limit)) | Kind::Exit(Some(limit), ..) => limit,
-            Kind::RelativeExit(profit, _, side) => self.average_price() + sign(side) * profit,
-            _ => mark,
+        let (side, limit) = match order.kind {
+            Kind::Entry(side, OrderType::Limit(limit)) => (side, limit),
+            Kind::Exit(Some(limit), _, Some(side)) => (side, limit),
+            Kind::RelativeExit(profit, _, side) => (
+                if side == OrderSide::Buy {
+                    OrderSide::Sell
+                } else {
+                    OrderSide::Buy
+                },
+                self.average_price() + sign(side) * profit,
+            ),
+            _ => return mark,
+        };
+        let trigger = limit - sign(side) * self.settings.price_increment;
+        let tolerance = rounding_tolerance(limit.abs().max(trigger.abs()), 4.0 * f64::EPSILON);
+        if sign(side) * (mark - trigger) < -tolerance {
+            mark
+        } else {
+            limit
         }
     }
 
     /// Trigger price and whether the execution slips. Stop-limit triggers are not executions.
     fn fill_price(&self, order: &Working, start: f64, end: f64) -> Option<(f64, bool)> {
+        if order.delay > 0 {
+            return None;
+        }
         let reached = match order.kind {
             Kind::RelativeExit(profit, loss, side) => {
                 let quantity = self.position();
@@ -1124,6 +1171,7 @@ impl<'a> Run<'a> {
                         exit_side(quantity),
                     ),
                     deferred: order.deferred,
+                    delay: 0,
                 };
                 return self.fill_price(&exit, start, end);
             }
@@ -1170,6 +1218,7 @@ impl<'a> Run<'a> {
                 quantity: order.quantity,
                 kind: order.kind,
                 deferred: None,
+                delay: 0,
             };
             self.fill_price(&next, end, end)
         } else {
@@ -1218,14 +1267,7 @@ impl<'a> Run<'a> {
 
     // Keep the original shared-leverage API's liquidation rule for existing leveraged runs.
     fn legacy_margin(&self) -> bool {
-        let funding = match self.lots[0].side {
-            OrderSide::Buy => self.settings.long_funding,
-            OrderSide::Sell => self.settings.short_funding,
-        };
-        funding
-            .filter(|value| value.is_finite() && *value >= 0.0)
-            .is_none()
-            && self.settings.leverage() != 1.0
+        self.settings.side_funding(self.lots[0].side).is_none() && self.settings.leverage() != 1.0
     }
 
     fn liquidation_size(&self, price: f64) -> f64 {
@@ -1252,6 +1294,7 @@ impl<'a> Run<'a> {
     /// Fills orders and margin calls in price order along a bar segment.
     fn fill_along(&mut self, start: f64, end: f64, time: DateTime<Utc>) {
         self.fill_segment(start, end, time, true);
+        self.pass_delays();
     }
 
     fn fill_segment(&mut self, mut start: f64, end: f64, time: DateTime<Utc>, advance: bool) {
@@ -1288,6 +1331,7 @@ impl<'a> Run<'a> {
                         quantity: Some(self.liquidation_size(price)),
                         kind: Kind::Exit(None, None, exit_side(self.position())),
                         deferred: None,
+                        delay: 0,
                     },
                     price,
                     true,
@@ -2641,6 +2685,61 @@ mod tests {
                 ],
                 vec![trade(Sell, 2.0, 2, 100.0, Some((4, 90.0, 20.0)), "A / X")],
                 vec![1000.0, 1000.0, 1000.0, 1002.0, 1018.0, 1020.0],
+                0,
+            ),
+            (
+                "verified limits keep the better price of a gap through them",
+                limits,
+                BacktestSettings {
+                    require_limit_cross: true,
+                    price_increment: 0.25,
+                    ..terms.clone()
+                },
+                vec![
+                    (100.0, 100.0, 100.0, 100.0),
+                    (95.0, 96.0, 94.0, 95.0),
+                    (115.0, 116.0, 114.0, 115.0),
+                ],
+                vec![trade(Buy, 2.0, 1, 95.0, Some((2, 115.0, 40.0)), "A / X")],
+                vec![1000.0, 1000.0, 1000.0, 1040.0],
+                0,
+            ),
+            (
+                "order delay waits for further price points",
+                hold,
+                BacktestSettings {
+                    order_delay: 2,
+                    ..terms.clone()
+                },
+                vec![(100.0, 100.0, 100.0, 100.0), (100.0, 110.0, 90.0, 105.0)],
+                vec![trade(Buy, 2.0, 1, 90.0, None, "A")],
+                vec![1000.0, 1000.0, 1030.0],
+                0,
+            ),
+            (
+                "order delay counts historical tick points",
+                hold,
+                BacktestSettings {
+                    order_delay: 2,
+                    recalculate_on_history: true,
+                    ..terms.clone()
+                },
+                vec![(100.0, 100.0, 100.0, 100.0), (100.0, 110.0, 90.0, 105.0)],
+                vec![trade(Buy, 2.0, 1, 90.0, None, "A")],
+                vec![1000.0, 1000.0, 1030.0],
+                0,
+            ),
+            (
+                "order delay holds an order back from its closing tick",
+                hold,
+                BacktestSettings {
+                    fill_on_close: true,
+                    order_delay: 1,
+                    ..terms.clone()
+                },
+                vec![(100.0, 100.0, 100.0, 100.0), (100.0, 110.0, 90.0, 105.0)],
+                vec![trade(Buy, 2.0, 1, 110.0, None, "A")],
+                vec![1000.0, 1000.0, 990.0],
                 0,
             ),
             (

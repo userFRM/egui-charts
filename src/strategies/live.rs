@@ -316,6 +316,7 @@ impl<'a> Run<'a> {
         if self.trading {
             if previous.is_none() {
                 self.tick += 1;
+                self.pass_delays();
             }
             self.fill_along(
                 previous.unwrap_or(execution.open),
