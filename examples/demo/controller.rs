@@ -2142,11 +2142,12 @@ impl DemoApp {
                     )
                     .color,
             });
-        self.drawing_toolbar.state.hide_indicators = {
-            self.chart
+        if self.chart.indicators().next().is_some() {
+            self.drawing_toolbar.state.hide_indicators = self
+                .chart
                 .indicators()
-                .all(|(_, study)| !study.is_visible())
-        };
+                .all(|(_, study)| !study.is_visible());
+        }
         let drawings = &self.chart.drawings().drawings;
         if !drawings.is_empty() {
             self.drawing_toolbar.state.hide_drawings = drawings.iter().all(|d| !d.visible);
@@ -4141,7 +4142,7 @@ mod tests {
             let originals = app.chart.drawings().drawings.clone();
             let size = egui::vec2(1440.0, 900.0);
             let draw_menu = |app: &mut DemoApp, ui: &mut egui::Ui| {
-                let action = RemoveMenu::show_submenu_with_state(ui, &app.drawing_toolbar.state);
+                let action = RemoveMenu::show_submenu(ui, &app.drawing_toolbar.state);
                 if let Some(action) = action {
                     app.handle_drawing_toolbar(action);
                 }

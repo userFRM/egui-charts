@@ -24,17 +24,8 @@ impl RemoveMenu {
         draw_tool_button(ui, &icons::TRASH, "Remove objects", false)
     }
 
-    /// Render removal scopes with default preferences. Use [`Self::show_submenu_with_state`]
-    /// to display the saved locked-drawing choice.
-    pub fn show_submenu(ui: &mut Ui) -> Option<DrawingToolbarAction> {
-        Self::show_submenu_with_state(ui, &ToolbarState::default())
-    }
-
     /// Render removal scopes and the saved locked-drawing choice.
-    pub fn show_submenu_with_state(
-        ui: &mut Ui,
-        state: &ToolbarState,
-    ) -> Option<DrawingToolbarAction> {
+    pub fn show_submenu(ui: &mut Ui, state: &ToolbarState) -> Option<DrawingToolbarAction> {
         let include = state.preferences.remove_locked == Some(true);
         SubmenuBuilder::new(ui)
             .add_text_item_with_action(

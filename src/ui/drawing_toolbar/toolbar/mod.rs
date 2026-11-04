@@ -661,7 +661,7 @@ impl DrawingToolbar {
                 state.snap_to_indicators,
             ),
             "Hide" => HideMenu::show_submenu(ui, trading, state),
-            "Remove" => RemoveMenu::show_submenu_with_state(ui, state),
+            "Remove" => RemoveMenu::show_submenu(ui, state),
             "Icons/Emojis" => state.glyph_picker.show(ui, registry),
             _ => {
                 let favorites = &mut state.favorites;
