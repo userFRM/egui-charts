@@ -2285,8 +2285,8 @@ impl Chart {
         }
 
         let style = &self.main_series_style;
-        if let Some(line) = super::series::base_line(&price_map)
-            .filter(|_| self.main_series_visible && style.base_line_visible)
+        if self.main_series_visible
+            && let Some(line) = super::series::base_line(&price_map, style)
         {
             rendering::render_price_line(
                 &painter,
