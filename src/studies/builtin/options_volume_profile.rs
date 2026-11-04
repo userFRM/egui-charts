@@ -69,6 +69,7 @@ pub struct OptionsVolumeProfile {
     expected_move: bool,
     move_iv: bool,
     as_of: Option<DateTime<Utc>>,
+    last_close: Option<f64>,
     symbol: String,
     matching_instrument: bool,
     config: VolumeProfileConfig,
@@ -128,6 +129,7 @@ impl OptionsVolumeProfile {
             expected_move: false,
             move_iv: false,
             as_of: None,
+            last_close: None,
             symbol,
             matching_instrument: true,
             config,
@@ -156,7 +158,9 @@ impl OptionsVolumeProfile {
     /// ATM is the nearest listed strike, lower on a tie. Both bid/ask pairs must be present
     /// and uncrossed. Implied volatility instead uses price × IV × sqrt(calendar days / 365),
     /// with the mean of available ATM call/put IVs. The centre is the newest supplied
-    /// underlying price for that expiry; neither method substitutes last trades or bar closes.
+    /// underlying price for that expiry, or the latest valid underlying bar close when absent.
+    /// Historical fallback closes must be at or before the query's `as_of`. Option last trades
+    /// never replace missing bid/ask mids.
     /// A date cutoff uses the last selected expiry. Dates end at the next UTC midnight;
     /// live bands age with UTC time, historical bands with the chain query's `as_of` instant.
     /// Missing inputs or an expired date remove both bounds and their expiry/method label.
@@ -177,6 +181,7 @@ impl OptionsVolumeProfile {
         config.display = ProfileDisplay::UpDown;
         Some(Self {
             as_of: chain.query().as_of,
+            last_close: None,
             through_date: *expiries.last()?,
             source: ProfileSource::Chain(chain, expiries),
             expiries: Expiries::Nearest,
@@ -255,7 +260,8 @@ impl OptionsVolumeProfile {
                             .find(|date| *date >= day && *date <= self.through_date),
                     };
                     cache.expected_move = expiry.and_then(|date| {
-                        expected_move(&rows, date, now, self.move_iv).map(|band| (date, band))
+                        expected_move(&rows, date, now, self.move_iv, self.last_close)
+                            .map(|band| (date, band))
                     });
                     cache.move_time = Some(now.timestamp());
                 }
@@ -450,6 +456,7 @@ fn expected_move(
     expiry: NaiveDate,
     now: DateTime<Utc>,
     implied: bool,
+    last_close: Option<f64>,
 ) -> Option<[f64; 2]> {
     let end = expiry.succ_opt()?.and_hms_opt(0, 0, 0)?.and_utc();
     if now >= end {
@@ -458,8 +465,9 @@ fn expected_move(
     let rows = || rows.iter().filter(|row| row.expiry == expiry);
     let price = rows()
         .filter(|row| row.underlying_price.is_some())
-        .max_by_key(|row| row.time)?
-        .underlying_price?;
+        .max_by_key(|row| row.time)
+        .and_then(|row| row.underlying_price)
+        .or(last_close)?;
     let strike = rows()
         .min_by(|a, b| {
             (a.strike - price)
@@ -600,14 +608,35 @@ impl Indicator for OptionsVolumeProfile {
         }
     }
     fn calculate(&mut self, data: &[Bar]) {
+        let close = if self.matching_instrument {
+            data.iter().rev().find_map(|bar| {
+                (!bar.is_whitespace()
+                    && bar.close.is_finite()
+                    && bar.close >= 0.0
+                    && self.as_of.is_none_or(|time| bar.time <= time))
+                .then_some(bar.close)
+            })
+        } else {
+            None
+        };
+        if self.last_close != close {
+            self.last_close = close;
+            self.cache.get_mut().move_time = None;
+        }
         self.values = IndicatorValues::missing(data.len());
     }
     fn values(&self) -> &IndicatorValues {
         &self.values
     }
     fn set_instrument(&mut self, instrument: Option<&Instrument>) -> bool {
-        self.matching_instrument = instrument.is_none_or(|i| i.symbol == self.symbol);
-        false
+        let matching = instrument.is_none_or(|i| i.symbol == self.symbol);
+        let changed = self.matching_instrument != matching;
+        self.matching_instrument = matching;
+        if changed {
+            self.last_close = None;
+            self.cache.get_mut().move_time = None;
+        }
+        changed && matches!(self.source, ProfileSource::Chain(..))
     }
     fn volume_profiles(&self, visible: Range<usize>) -> Vec<StudyProfile> {
         if !self.visible || !self.matching_instrument || visible.is_empty() {
@@ -1209,13 +1238,31 @@ mod tests {
                     .set_input("move_method", InputValue::Choice(usize::from(case == 6)))
                     .unwrap();
             }
-            let present = matches!(case, 0 | 7 | 9);
+            let present = matches!(case, 0 | 4 | 7 | 9);
             assert_eq!(study.plot_value(6, 0).is_some(), present, "case {case}");
             assert_eq!(study.plot_value(7, 1).is_some(), present, "case {case}");
             assert_eq!(study.plot_label().is_some(), present, "case {case}");
         }
         assert_eq!(study.plot_value(6, 0), Some(189.0));
         assert_eq!(study.plot_value(7, 1), Some(211.0));
+        let mut quotes = rows(expiry, Utc::now());
+        quotes
+            .iter_mut()
+            .for_each(|row| row.underlying_price = None);
+        sink.push(quotes).unwrap();
+        assert_eq!(study.plot_value(6, 0), Some(93.0));
+        let mut changed = bars.clone();
+        changed[1].close = 99.0;
+        study.calculate(&changed);
+        assert_eq!(study.plot_value(6, 0), Some(92.0));
+        assert_eq!(study.plot_value(7, 1), Some(106.0));
+        changed.iter_mut().for_each(|bar| bar.close = f64::NAN);
+        study.calculate(&changed);
+        assert_eq!(study.plot_value(6, 0), None);
+        assert!(study.plot_label().is_none());
+        study.calculate(&bars);
+        sink.push(rows(expiry, Utc::now())).unwrap();
+        assert_eq!(study.plot_value(6, 0), Some(93.0));
         study.set_visible(false);
         assert_eq!(study.plot_value(6, 0), None);
         assert!(study.plot_label().is_none());
