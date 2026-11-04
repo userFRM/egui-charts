@@ -154,6 +154,8 @@ pub(crate) struct StudyContextMenu {
     editable: bool,
     help_url: Option<String>,
     overlay: bool,
+    /// Whether the original price pane still exists as a destination.
+    main_pane: bool,
     volume: bool,
     scale: Option<StudyScale>,
     /// The side of the pane's price axis.
@@ -198,6 +200,7 @@ impl StudyContextMenu {
         self.editable = study.user_edit_enabled();
         self.help_url = study.help_url().map(str::to_owned);
         self.overlay = study.is_overlay();
+        self.main_pane = chart.panes().contains(&PaneId::MAIN);
         self.scale = Some(study.scale());
         self.shared_scales = chart
             .indicators()
@@ -317,7 +320,7 @@ impl StudyContextMenu {
         for (pane, title) in &self.panes {
             moves.push(item(title, A::MoveTo(PaneTarget::Pane(*pane))));
         }
-        if !self.overlay {
+        if !self.overlay && self.main_pane {
             moves.push(item("Main pane", A::MoveTo(PaneTarget::Main)));
         }
         items.push(MenuEntry::Submenu {

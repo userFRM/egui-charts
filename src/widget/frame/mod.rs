@@ -493,6 +493,13 @@ impl Chart {
             rect,
             self.config.show_time_labels && shared_time_axis.is_none(),
         );
+        if rect.height() == 0.0
+            && let Some(axis) = shared_time_axis
+        {
+            layout.price_rect = Rect::from_x_y_ranges(axis.x_range(), rect.y_range());
+            layout.volume_rect = Rect::NOTHING;
+            layout.legend_rect = Rect::NOTHING;
+        }
         let time_axis_top = shared_time_axis.map_or(layout.price_rect.bottom(), |axis| axis.top());
         let statistics_rows = if let Some((_, config)) = footprint {
             config.statistics.then(|| config.statistics_rows.clone())
@@ -811,6 +818,14 @@ impl Chart {
         }
 
         // Draw background (solid or gradient)
+        if rect.height() == 0.0
+            && let Some(axis) = shared_time_axis
+        {
+            self.draw_background(
+                ui.painter(),
+                Rect::from_min_max(rect.min, Pos2::new(rect.right(), axis.bottom())),
+            );
+        }
         self.draw_background(&painter, rect);
         if let Some(axis) = shared_time_axis {
             self.draw_background(
