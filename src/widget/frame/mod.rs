@@ -2989,7 +2989,14 @@ impl Chart {
                             Rect::from_min_max(
                                 price_rect.min,
                                 egui::pos2(
-                                    (price_rect.right() - 48.0).min(rect.right() - 100.0),
+                                    (price_rect.right() - 48.0).min(
+                                        rect.right()
+                                            - if self.layout_link_controls {
+                                                super::layout::LINK_CONTROLS_INSET
+                                            } else {
+                                                100.0
+                                            },
+                                    ),
                                     price_rect.bottom(),
                                 ),
                             ),

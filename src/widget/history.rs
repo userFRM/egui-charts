@@ -36,6 +36,7 @@ struct Pending {
 #[derive(Default)]
 struct Action {
     layout_sizes: Option<super::layout::SizeChange>,
+    layout_links: Option<super::layout::LinkChange>,
     symbol: Option<String>,
     series: Option<SeriesSet>,
     config: Option<ChartConfig>,
@@ -64,6 +65,7 @@ impl Action {
         #[cfg(not(feature = "drawings"))]
         let drawings_changed = false;
         self.layout_sizes.is_none()
+            && self.layout_links.is_none()
             && self.symbol.is_none()
             && self.series.is_none()
             && self.view.is_none()
@@ -185,6 +187,13 @@ struct Study {
 }
 
 impl ChartHistory {
+    pub(super) fn record_links(&mut self, change: super::layout::LinkChange) {
+        self.push(Action {
+            layout_links: Some(change),
+            ..Action::default()
+        });
+    }
+
     pub(super) fn record_sizes(&mut self, change: super::layout::SizeChange) {
         self.push(Action {
             layout_sizes: Some(change),
@@ -799,6 +808,9 @@ impl Chart {
         let current_view = self.get_time_scale_state();
         if let Some(sizes) = &mut action.layout_sizes {
             sizes.swap();
+        }
+        if let Some(links) = &mut action.layout_links {
+            links.swap();
         }
         let mut current: Vec<_> = action
             .studies

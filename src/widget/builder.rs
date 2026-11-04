@@ -224,6 +224,7 @@ impl Chart {
             last_rendered_indicator_panes: Vec::new(),
             // Multi-chart sync
             layout_inactive: false,
+            layout_link_controls: false,
             synced_crosshair_bar_idx: None,
             synced_crosshair_period: None,
             synced_crosshair_price: None,
