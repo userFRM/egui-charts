@@ -603,21 +603,26 @@ impl Chart {
         // Panes are counted as drawn, from the top; the price pane may sit below others.
         let pane_index = |id: super::PaneId| {
             (self.pane_layout.panes.iter())
-                .filter(|pane| pane.id == super::PaneId::MAIN || self.pane_shown(pane))
+                .filter(|pane| {
+                    pane.id == super::PaneId::MAIN
+                        || pane.id == self.main_series_pane()
+                        || self.pane_shown(pane)
+                })
                 .position(|pane| pane.id == id)
                 .unwrap_or_default()
         };
         let (series, price, pane) = if let Some(group) =
             self.pane_layout.panes.iter().find(|group| {
-                group.id != super::PaneId::MAIN
+                group.id != self.main_series_pane()
                     && group.rect.contains(pos)
                     && plot.x_range().contains(pos.x)
             }) {
-            let owner = *self.pane_series(group.id).first()?;
+            let members = self.pane_series(group.id);
+            let owner = *members.first()?;
             let map = self
                 .series_price_map(owner)
                 .unwrap_or_else(|| group.price_map());
-            let closes = group.members.iter().filter_map(|id| {
+            let closes = members.iter().filter_map(|id| {
                 let item =
                     (self.price_series.iter()).find(|item| item.id == *id && item.visible)?;
                 let at = item
@@ -634,8 +639,7 @@ impl Chart {
                     }
                 })
             });
-            let values = group
-                .members
+            let values = members
                 .iter()
                 .filter_map(|id| self.study_ids.iter().position(|study| study == id))
                 .map(|index| {
@@ -682,14 +686,14 @@ impl Chart {
             (
                 SeriesId::VOLUME,
                 magnet(map, values),
-                pane_index(super::PaneId::MAIN),
+                pane_index(self.main_series_pane()),
             )
         } else if plot.contains(pos) {
             let snapped = bar_at.map_or(pos, |index| {
                 self.snap_crosshair(pos, &self.last_price_map, index)
             });
             let price = self.last_price_map.y_to_price(snapped.y);
-            (SeriesId::MAIN, price, pane_index(super::PaneId::MAIN))
+            (SeriesId::MAIN, price, pane_index(self.main_series_pane()))
         } else {
             return None;
         };

@@ -16,11 +16,11 @@ impl Chart {
         }
         let axes = self.pane_axes(self.pane_layout.panes[idx].id, rect, plot);
         for (key, axis) in axes {
-            let pane = &mut self.pane_layout.panes[idx];
+            let pane_id = self.pane_layout.panes[idx].id;
             let response = ui
                 .interact(
                     axis,
-                    ui.scope_id().with((pane.id, key, "price_axis")),
+                    ui.scope_id().with((pane_id, key, "price_axis")),
                     Sense::click_and_drag(),
                 )
                 .on_hover_cursor(egui::CursorIcon::ResizeVertical);
@@ -35,7 +35,7 @@ impl Chart {
                 let anchor_y = ui
                     .input(|input| input.pointer.press_origin())
                     .map_or(rect.center().y, |pos| pos.y);
-                let scale = pane.assigned_scale_mut(key);
+                let scale = self.pane_price_scale_mut(pane_id, key);
                 let map = scale.map(scale.transform(), rect.top(), rect.bottom());
                 let anchor = map.transform().to_scale(map.y_to_price(anchor_y));
                 scale.zoom(
@@ -52,14 +52,12 @@ impl Chart {
                     .axis_double_click_reset
                     .price
             {
-                self.user_action(|chart| {
-                    chart.pane_layout.panes[idx].assigned_scale_mut(key).reset()
-                });
+                self.user_action(|chart| chart.pane_price_scale_mut(pane_id, key).reset());
                 ui.ctx().request_repaint();
             }
             response.context_menu(|ui| {
                 self.user_action(|chart| {
-                    let scale = chart.pane_layout.panes[idx].assigned_scale_mut(key);
+                    let scale = chart.pane_price_scale_mut(pane_id, key);
                     if ui
                         .selectable_label(!scale.is_manual(), l10n::text(ui.ctx(), "Auto scale"))
                         .clicked()
@@ -120,10 +118,10 @@ impl Chart {
         let hovered = self.pane_buttons_visible(ui, rect);
         let rect = Rect::from_min_max(rect.min + egui::vec2(0.0, 24.0), rect.max);
         if self.has_panes() {
-            self.pane_maximize_button(ui, PaneId::MAIN, rect, plot);
+            self.pane_maximize_button(ui, self.main_series_pane(), rect, plot);
         }
         let movable: Vec<_> = self
-            .pane_series(PaneId::MAIN)
+            .pane_series(self.main_series_pane())
             .into_iter()
             .filter(|id| *id != SeriesId::MAIN)
             .collect();
