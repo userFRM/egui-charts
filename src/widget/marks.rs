@@ -280,7 +280,7 @@ impl Chart {
         let Some(pos) = painter
             .ctx()
             .pointer_interact_pos()
-            .filter(|pos| clip.contains(*pos))
+            .filter(|pos| clip.is_positive() && clip.contains(*pos))
         else {
             return;
         };
@@ -763,6 +763,52 @@ mod tests {
                 probe(&ctx, &mut chart, candle, &mut tick).target,
                 Some(PointerTarget::Element(ChartElementId::Series(_)))
             ));
+
+            let whitespace: Vec<_> = chart
+                .bars(series)
+                .iter()
+                .map(|bar| Bar::whitespace(bar.time))
+                .collect();
+            chart.set_data(SeriesId::MAIN, whitespace.clone());
+            if series != SeriesId::MAIN {
+                chart.set_data(series, whitespace);
+            }
+            chart.chart_options.time_scale.ignore_whitespace_indices = true;
+            chart.chart_options.time_scale.ignore_hidden_indices = true;
+            chart
+                .series_price_scale_mut(series)
+                .unwrap()
+                .set_range(95.0, 105.0);
+            chart.set_markers(
+                series,
+                vec![
+                    Marker::new(time)
+                        .at_price(100.0, MarkerPos::AtPriceMiddle)
+                        .with_id("filtered"),
+                ],
+            );
+            let point = probe(&ctx, &mut chart, pos, &mut tick);
+            assert_eq!(point.target, target(Some("filtered")));
+            assert!(point.time.is_none() && point.bar.is_none());
+            assert!(point.series_bars.is_empty() && point.studies.is_empty());
+            chart.set_markers(series, vec![]);
+            let line = chart
+                .add_price_line(series, PriceLine::new(100.0, Color32::BLUE))
+                .unwrap();
+            let point = probe(&ctx, &mut chart, pos, &mut tick);
+            assert_eq!(
+                point.target,
+                Some(PointerTarget::PriceLine { series, id: line })
+            );
+            assert!(point.time.is_none() && point.bar.is_none());
+            assert!(chart.remove_price_line(line));
+            tick += 0.1;
+            test_frames::frame(&ctx, &mut chart, tick, vec![]);
+            assert!(
+                chart
+                    .drain_events()
+                    .any(|event| matches!(event, ChartEvent::CrosshairMoved(None)))
+            );
         }
     }
 

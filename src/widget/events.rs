@@ -23,7 +23,7 @@ pub enum CursorDataPolicy {
 #[non_exhaustive]
 pub struct ChartPointer {
     /// Stored timestamp of the nearest eligible main or added-series point, including whitespace.
-    /// `None` without data or when the selected position has no stored point.
+    /// `None` without eligible cursor data or when the selected position has no stored point.
     pub time: Option<DateTime<Utc>>,
     /// Price on the main pane, or the value on the scale of the hovered pane or volume.
     pub price: f64,
@@ -193,8 +193,8 @@ pub enum ChartEvent {
     TimeScaleResized(egui::Vec2),
     /// The local cursor moved or anything its pointer carries changed, such as the bar under a
     /// stationary cursor, held modifiers or touch details; `None` means it left the plots or
-    /// loaded data has no eligible crosshair index in view. Empty plots report a position
-    /// without a data time.
+    /// loaded data has no eligible crosshair index in view. Empty plots and visible annotation
+    /// targets without eligible cursor data report a position without a data time.
     /// Programmatically synchronized cursors do not emit this event.
     CrosshairMoved(Option<ChartPointer>),
     /// A primary or secondary click in a plot, including clicks selecting drawings or studies.
@@ -610,7 +610,13 @@ impl Chart {
     ) -> Option<ChartPointer> {
         let plot = self.last_rendered_price_rect;
         let shown = self.state.shown();
-        let (time, index) = self.pointer_time(pos)?;
+        let (time, index) = self.pointer_time(pos).or_else(|| {
+            self.host_events
+                .annotation_target
+                .borrow()
+                .as_ref()
+                .map(|_| (None, self.get_chart_mapping().x_to_idx_f64(pos.x)))
+        })?;
         let index = index.round();
         let bar_at = (index >= 0.0 && index < shown.len() as f64)
             .then_some(index as usize)
