@@ -502,17 +502,7 @@ impl Drawing {
                     | DrawingToolType::InsidePitchfork
                     | DrawingToolType::Pitchfan
             )
-            .then(|| {
-                let mut config = PitchforkConfig::default();
-                if tool_type == DrawingToolType::Pitchfan {
-                    for level in &mut config.levels {
-                        if level.value == 0.5 {
-                            level.color = CYAN;
-                        }
-                    }
-                }
-                config
-            }),
+            .then(|| PitchforkConfig::for_tool(tool_type)),
             elliott_degree: ElliottDegree::default(),
             channel_midline: tool_type == DrawingToolType::ParallelChannel,
             image: None,

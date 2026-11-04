@@ -90,7 +90,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Anchor handles, dragging, OHLC/study/drawing magnet snapping, repeated placement, locking and visibility controls.
 - [x] Undoable drawing creation, edits, deletion, ordering, flat groups and moves between panes.
 - [x] Properties edit style, tool inputs, text, timeframe visibility and validated price/time coordinates.
-- [x] Public timestamp-based creation and anchor editing, drawing enumeration, per-tool defaults and custom drawing registration. Creation uses each tool’s style before saved overrides: arcs and polylines start with a 20% tint, price ranges and quick measure with a 15% tint, anchored VWAP at 1 px, and pitchfans with individual level colours.
+- [x] Public timestamp-based creation and anchor editing, drawing enumeration, per-tool defaults and custom drawing registration. Creation uses each tool's style before saved overrides: arcs and polylines start with a 20% tint, price ranges and quick measure with a 15% tint, anchored VWAP at 1 px, and pitchfans with individual level colours.
 - [x] Per-drawing selection, saving and object-list flags; drawing change notifications and registry availability controls.
 - [x] Versioned drawing documents retain timestamp anchors, settings and flat groups, with migration and skipped-record reporting.
 - [x] `Chart::set_storage` loads and saves drawings per symbol and retains failed writes for retry.
