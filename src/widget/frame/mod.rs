@@ -211,6 +211,7 @@ impl Chart {
         self.host_events.volume_map = None;
         self.host_events.target = None;
         self.host_events.primitive_hit = None;
+        self.cover_annotation_hit();
         self.apply_config_scale_mode();
         #[cfg(feature = "studies")]
         self.sync_volume_study(ui.ctx());
@@ -1775,6 +1776,13 @@ impl Chart {
             else {
                 return;
             };
+            if self.host_events.annotation_target.borrow().is_some()
+                && pointer
+                    .and_then(element_at)
+                    .is_some_and(|(element, _)| element == super::ChartElementId::Indicator(*id))
+            {
+                self.cover_annotation_hit();
+            }
             if study.is_volume()
                 && !matches!(study.scale(), crate::studies::StudyScale::Shared(_))
                 && self.main_series_visible
@@ -1849,6 +1857,13 @@ impl Chart {
         };
         let paint_main_series = || {
             if self.main_series_visible {
+                if self.host_events.annotation_target.borrow().is_some()
+                    && pointer.and_then(element_at).is_some_and(|(element, _)| {
+                        element == super::ChartElementId::Series(super::SeriesId::MAIN)
+                    })
+                {
+                    self.cover_annotation_hit();
+                }
                 if time_based {
                     self.paint_liquidity(&clipped_painter, &self.get_chart_mapping());
                 }
@@ -2159,7 +2174,7 @@ impl Chart {
                     .as_ref()
                     .filter(|hit| {
                         element_at(pos).map(|(id, _)| super::PointerTarget::Element(id))
-                            == Some(hit.target)
+                            == Some(hit.target.clone())
                     })
                     .cloned(),
             );
@@ -2175,8 +2190,14 @@ impl Chart {
             }
             self.host_events.target = drawing
                 .map(super::PointerTarget::Drawing)
-                .or(hit.as_ref().map(|hit| hit.target))
+                .or(hit.as_ref().map(|hit| hit.target.clone()))
                 .or_else(|| element_at(pos).map(|(id, _)| super::PointerTarget::Element(id)));
+            if hit
+                .as_ref()
+                .is_some_and(|hit| hit.result.pass == PrimitivePass::Series)
+            {
+                self.cover_annotation_hit();
+            }
             self.host_events.primitive_hit =
                 hit.filter(|_| drawing.is_none()).map(|hit| hit.result);
         }
@@ -2226,15 +2247,14 @@ impl Chart {
             )));
         }
         let mut pending_values = Vec::new();
-        for (_, line) in self.price_lines.iter().filter(|_| self.main_series_visible) {
-            rendering::render_price_line(
+        for (id, line) in self.price_lines.iter().filter(|_| self.main_series_visible) {
+            self.paint_annotation_line(
                 &painter,
                 price_rect,
                 &price_map,
+                super::SeriesId::MAIN,
+                *id,
                 line,
-                price_rect.left(),
-                false,
-                axis_edge,
             );
             if line.axis_label {
                 pending_values.push((line.price, rendering::axes::axis_label_colors(line), false));
@@ -2718,9 +2738,26 @@ impl Chart {
             self.history
                 .finish_drawing_action(&mut self.drawings, drawing_history);
         }
+        #[cfg(feature = "drawings")]
+        if let Some(id) = pointer.and_then(|pos| self.drawings.hit_test(pos)) {
+            self.cover_annotation_hit();
+            self.host_events.target = Some(super::PointerTarget::Drawing(id));
+            self.host_events.primitive_hit = None;
+        }
         self.paint_marks(&clipped_price_ctx, &coords, MarkerZOrder::Top);
         if !self.hide_foreground {
             self.paint_primitives(&painter, &coords, PrimitivePass::Above);
+            if self.host_events.annotation_target.borrow().is_some()
+                && let Some(hit) = pointer
+                    .and_then(|pos| {
+                        primitives::primitive_at(self.main_pass_primitives(&coords), pos)
+                    })
+                    .filter(|hit| hit.result.pass == PrimitivePass::Above)
+            {
+                self.cover_annotation_hit();
+                self.host_events.target = Some(hit.target);
+                self.host_events.primitive_hit = Some(hit.result);
+            }
         }
 
         // Placed after the drawings handled this frame's input, so a dragged line's tags move

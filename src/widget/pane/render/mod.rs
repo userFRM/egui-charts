@@ -1038,6 +1038,13 @@ impl Chart {
                             pending_pane_selection = Some(hit);
                         }
                     }
+                    if !collapsed
+                        && self.host_events.annotation_target.borrow().is_some()
+                        && id.is_some_and(|id| self.study_ids.contains(&id))
+                        && pointer.and_then(study_at) == id.map(ChartElementId::Indicator)
+                    {
+                        self.cover_annotation_hit();
+                    }
                     // What the pointer is over, for host pointer events: drawings sit on top.
                     if !collapsed && let Some(pos) = pointer {
                         #[cfg(feature = "drawings")]
@@ -1048,7 +1055,7 @@ impl Chart {
                             .as_ref()
                             .filter(|hit| {
                                 study_at(pos).map(crate::widget::PointerTarget::Element)
-                                    == Some(hit.target)
+                                    == Some(hit.target.clone())
                             })
                             .cloned();
                         let hit = crate::widget::primitives::best_hit(primitive_hit, renderer);
@@ -1063,8 +1070,26 @@ impl Chart {
                         }
                         self.host_events.target = drawing
                             .map(crate::widget::PointerTarget::Drawing)
-                            .or(hit.as_ref().map(|hit| hit.target))
+                            .or(hit.as_ref().map(|hit| hit.target.clone()))
                             .or_else(|| study_at(pos).map(crate::widget::PointerTarget::Element));
+                        if series_backgrounds.is_empty()
+                            && hit.as_ref().is_some_and(|hit| {
+                                hit.result.pass == crate::widget::PrimitivePass::Series
+                                    && self.primitives.iter().any(|item| {
+                                        Some(item.series) == id
+                                            && hit.target
+                                                == if item.replaces {
+                                                    crate::widget::PointerTarget::Element(
+                                                        ChartElementId::Indicator(item.series),
+                                                    )
+                                                } else {
+                                                    crate::widget::PointerTarget::Primitive(item.id)
+                                                }
+                                    })
+                            })
+                        {
+                            self.cover_annotation_hit();
+                        }
                         self.host_events.primitive_hit =
                             hit.filter(|_| drawing.is_none()).map(|hit| hit.result);
                     }
@@ -1123,6 +1148,22 @@ impl Chart {
                             self.merge_groups.factor(),
                         );
                     }
+                    if self
+                        .host_events
+                        .primitive_hit
+                        .as_ref()
+                        .is_some_and(|hit| hit.pass == crate::widget::PrimitivePass::Series)
+                    {
+                        self.cover_annotation_hit();
+                    }
+                }
+                if !collapsed {
+                    self.paint_pane_marks(
+                        ui.painter(),
+                        chart_rect,
+                        &members,
+                        crate::model::MarkerZOrder::AboveSeries,
+                    );
                 }
                 let painter = ui
                     .painter()
@@ -1287,6 +1328,22 @@ impl Chart {
                 };
                 #[cfg(not(feature = "drawings"))]
                 let drawing_hit: Option<usize> = None;
+                #[cfg(feature = "drawings")]
+                if let Some(id) = ui
+                    .input(|input| input.pointer.interact_pos())
+                    .filter(|pos| chart_rect.contains(*pos))
+                    .and_then(|pos| self.drawings.hit_test(pos))
+                {
+                    self.cover_annotation_hit();
+                    self.host_events.target = Some(crate::widget::PointerTarget::Drawing(id));
+                    self.host_events.primitive_hit = None;
+                }
+                self.paint_pane_marks(
+                    ui.painter(),
+                    chart_rect,
+                    &members,
+                    crate::model::MarkerZOrder::Top,
+                );
                 // Study settings stay on the legend button and the context menu.
                 if pane_response.double_clicked() && drawing_hit.is_none() {
                     pending_pane_maximize = Some(pane_id);
@@ -1332,6 +1389,22 @@ impl Chart {
                         crate::widget::PrimitivePass::Above,
                         self.merge_groups.factor(),
                     );
+                    if self.host_events.annotation_target.borrow().is_some()
+                        && let Some(hit) = ui
+                            .input(|input| input.pointer.interact_pos())
+                            .filter(|pos| chart_rect.contains(*pos))
+                            .and_then(|pos| {
+                                crate::widget::primitives::primitive_at(
+                                    self.pane_primitives(&members, &pane_mapping),
+                                    pos,
+                                )
+                            })
+                            .filter(|hit| hit.result.pass == crate::widget::PrimitivePass::Above)
+                    {
+                        self.cover_annotation_hit();
+                        self.host_events.target = Some(hit.target);
+                        self.host_events.primitive_hit = Some(hit.result);
+                    }
                 }
             }
             if !collapsed {
