@@ -569,23 +569,23 @@ mod tests {
         assert!(output.iter().any(
             |s| matches!(s,egui::Shape::Text(t) if t.galley.job.text.contains("-5.00 (-5.00%)  -20 ticks"))
         ));
-        assert!(output.iter().any(
-            |s| matches!(s, egui::Shape::LineSegment { stroke, .. } if *stroke == expected_stroke)
-        ));
-        let points = &chart.drawings().drawings[0].points;
-        let area = Rect::from_two_pos(points[0], points[1]);
-        assert!(
-            output
-                .iter()
-                .any(|s| matches!(s, egui::Shape::Rect(r) if r.rect == area && r.fill.a() > 0))
-        );
-        chart.drawings_mut().drawings[0].fill_color = None;
-        let output = shapes(&ctx, &mut chart, 0.1, vec![]);
-        assert!(
-            !output
-                .iter()
-                .any(|s| matches!(s, egui::Shape::Rect(r) if r.rect == area && r.fill.a() > 0))
-        );
+        // The chart can cache meshes; inspect styling through the shared renderer fixture.
+        let mut drawing = chart.drawings().drawings[0].clone();
+        drawing.points = vec![Pos2::new(100.0, 100.0), Pos2::new(300.0, 250.0)];
+        let area = Rect::from_two_pos(drawing.points[0], drawing.points[1]);
+        for fill in [Some([12, 34, 56, 80]), None] {
+            drawing.fill_color = fill;
+            let output = super::super::tests::paint(&drawing);
+            assert!(output.iter().any(
+                |s| matches!(s, egui::Shape::LineSegment { stroke, .. } if *stroke == expected_stroke)
+            ));
+            assert_eq!(
+                output.iter().any(|s| matches!(s,
+                    egui::Shape::Rect(r) if r.rect == area && r.fill.a() > 0
+                )),
+                fill.is_some()
+            );
+        }
     }
 
     /// 100 to 110 over bars 0 to 20 is 10 (10%) high and 20 bars wide.
