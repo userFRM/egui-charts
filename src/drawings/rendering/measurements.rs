@@ -146,6 +146,155 @@ impl Drawing {
         self.render_line_text(painter, start + offset, end + offset, above);
     }
 
+    /// Plain readouts beside an extended line; the midpoint is independent of selection and
+    /// readout visibility. Its screen midpoint remains on the line on logarithmic scales.
+    pub(super) fn render_line_measurements(
+        &self,
+        painter: &egui::Painter,
+        view: &ChartView,
+        selected: bool,
+    ) {
+        use crate::drawings::LineMeasurementPosition as P;
+        let &[a, b, ..] = self.points.as_slice() else {
+            return;
+        };
+        if !(a.is_finite() && b.is_finite()) {
+            return;
+        }
+        let settings = self.line_measurements;
+        if settings.midpoint && !selected {
+            painter.circle_filled(a.lerp(b, 0.5), 3.0, self.color32());
+        }
+        if !(settings.persistent || selected || !self.completed) {
+            return;
+        }
+        let text = self.line_measurement_label(view);
+        if text.is_empty() {
+            return;
+        }
+        let clip = painter.clip_rect();
+        if self
+            .trend_line_ends(clip)
+            .is_none_or(|(a, b)| crate::painting::dashed_line::clip_segment(a, b, clip).is_none())
+        {
+            return;
+        }
+        let galley = painter.layout_no_wrap(text, self.annotation_font(), self.color32());
+        let (left, right) = if a.x <= b.x { (a, b) } else { (b, a) };
+        let gap = DESIGN_TOKENS.spacing.sm + self.stroke_width / 2.0;
+        // Side readouts sit away from the line's continuation, including horizontal lines.
+        let rising = right.y < left.y;
+        let left_label = (
+            left + egui::vec2(-gap, if rising { -gap } else { gap }),
+            if rising {
+                Align2::RIGHT_BOTTOM
+            } else {
+                Align2::RIGHT_TOP
+            },
+        );
+        let right_label = (
+            right + egui::vec2(gap, if rising { gap } else { -gap }),
+            if rising {
+                Align2::LEFT_TOP
+            } else {
+                Align2::LEFT_BOTTOM
+            },
+        );
+        let (pos, align) = match settings.position {
+            P::Auto if b.x < a.x => left_label,
+            P::Left => left_label,
+            P::Center => {
+                let direction = right - left;
+                let mut normal = if direction.length_sq() == 0.0 {
+                    egui::Vec2::UP
+                } else if direction.x == 0.0 {
+                    egui::Vec2::LEFT
+                } else {
+                    egui::vec2(direction.y, -direction.x).normalized()
+                };
+                // Custom line text already occupies the upper side.
+                if self
+                    .text
+                    .as_deref()
+                    .is_some_and(|text| !text.trim().is_empty())
+                {
+                    normal = -normal;
+                }
+                let clearance = gap + normal.abs().dot(galley.size()) / 2.0;
+                (a.lerp(b, 0.5) + normal * clearance, Align2::CENTER_CENTER)
+            }
+            P::Right | P::Auto => right_label,
+        };
+        let min = align
+            .anchor_size(pos, galley.size())
+            .min
+            .clamp(clip.min, clip.max - galley.size().min(clip.size()));
+        painter.galley(min, galley, self.color32());
+    }
+
+    /// Readouts use raw prices and timestamps. Only inclination and length depend on the
+    /// displayed geometry; length is measured in horizontal bar spacings, not price units.
+    fn line_measurement_label(&self, view: &ChartView) -> String {
+        let ([a, b, ..], [start, end, ..]) = (self.chart_points.as_slice(), self.points.as_slice())
+        else {
+            return String::new();
+        };
+        let settings = self.line_measurements;
+        let change = b.price - a.price;
+        let mut lines = Vec::new();
+        if settings.price_change && change.is_finite() {
+            lines.push(change_text(
+                a.price,
+                change,
+                view.instrument,
+                view.price_formatter,
+            ));
+        }
+        let percent = percent_change(a.price, b.price);
+        if settings.percent_change && a.price != 0.0 && percent.is_finite() {
+            lines.push(format!("{percent:+.2}%"));
+        }
+        if settings.pip_change
+            && let Some(text) = unit_change_text(change, view.instrument, false)
+        {
+            lines.push(text);
+        }
+        if settings.bar_count {
+            lines.push(format!(
+                "{} bars",
+                (b.bar_idx.round() - a.bar_idx.round()).abs() as i64
+            ));
+        }
+        if settings.elapsed_time && view.time_axis {
+            let exact_time = |point: &crate::drawings::ChartPoint| {
+                point
+                    .time_anchor
+                    .filter(|(_, index)| *index == point.bar_idx)
+                    .map(|(time, _)| time.timestamp_millis())
+            };
+            let elapsed = exact_time(a)
+                .zip(exact_time(b))
+                .map(|(a, b)| b.saturating_sub(a))
+                .or_else(|| elapsed_ms(view.bars, a.bar_idx, b.bar_idx));
+            if let Some(elapsed) = elapsed {
+                lines.push(format_duration(elapsed));
+            }
+        }
+        let delta = *end - *start;
+        if settings.length {
+            let spacing = ((view.bar_to_x)(a.bar_idx + 1.0) - (view.bar_to_x)(a.bar_idx)).abs();
+            let length = delta.length() / spacing;
+            if spacing > 0.0 && length.is_finite() {
+                lines.push(format!("{length:.2} periods"));
+            }
+        }
+        if settings.inclination && delta.is_finite() {
+            let angle = (-delta.y).atan2(delta.x).to_degrees();
+            lines.push(format!("{:.1}°", angle + 0.0));
+        }
+        lines.join("\n")
+    }
+
     // Note: render_bars_pattern is now in trading.rs with full projection features
 
     /// Label of the measuring tools: the price change from the first anchor to the second in
@@ -167,27 +316,12 @@ impl Drawing {
         };
         let change = b.price - a.price;
         let pct = percent_change(a.price, b.price);
-        let decimals = change_decimals(instrument, a.price, change);
-        let built_in = DefaultPriceFormatter::with_precision(decimals);
-        let text = price_formatter.unwrap_or(&built_in).format(change);
-        let sign = if text.starts_with(['-', '+']) || (price_formatter.is_some() && change < 0.0) {
-            ""
-        } else {
-            "+"
-        };
-        let mut change = format!("{sign}{text} ({pct:+.2}%)");
-        // Pips where the instrument quotes them, else ticks. Past 2^53 an f64 no longer holds
-        // every whole number, so such a count is left out.
-        if let Some((size, unit)) = instrument.and_then(|instrument| {
-            [(instrument.pip_size, "pip"), (instrument.tick_size, "tick")]
-                .into_iter()
-                .find_map(|(size, unit)| Some((size.filter(|s| s.is_finite() && *s > 0.0)?, unit)))
-        }) {
-            let count = ((b.price - a.price) / size).round() + 0.0;
-            if count.abs() <= 2f64.powi(53) {
-                let plural = if count.abs() == 1.0 { "" } else { "s" };
-                change.push_str(&format!("  {count:+.0} {unit}{plural}"));
-            }
+        let mut change = format!(
+            "{} ({pct:+.2}%)",
+            change_text(a.price, change, instrument, price_formatter)
+        );
+        if let Some(text) = unit_change_text(b.price - a.price, instrument, true) {
+            change.push_str(&format!("  {text}"));
         }
         if self.tool_type == DrawingToolType::PriceRange {
             return Some(change);
@@ -250,6 +384,62 @@ impl Drawing {
             _ => Vec::new(),
         }
     }
+}
+
+/// Signed price change, retaining the host formatter's own sign and precision.
+fn change_text(
+    price: f64,
+    change: f64,
+    instrument: Option<&crate::model::Instrument>,
+    formatter: Option<&dyn PriceFormatter>,
+) -> String {
+    let built_in =
+        DefaultPriceFormatter::with_precision(change_decimals(instrument, price, change));
+    let text = formatter.unwrap_or(&built_in).format(change);
+    let sign = if text.starts_with(['-', '+']) || (formatter.is_some() && change < 0.0) {
+        ""
+    } else {
+        "+"
+    };
+    format!("{sign}{text}")
+}
+
+/// Pips when supplied by the instrument, otherwise ticks; omit unavailable or inexact counts.
+fn unit_change_text(
+    change: f64,
+    instrument: Option<&crate::model::Instrument>,
+    whole: bool,
+) -> Option<String> {
+    let instrument = instrument?;
+    let (size, unit) = [(instrument.pip_size, "pip"), (instrument.tick_size, "tick")]
+        .into_iter()
+        .find_map(|(size, unit)| Some((size.filter(|s| s.is_finite() && *s > 0.0)?, unit)))?;
+    let precision = if whole || unit == "tick" {
+        0
+    } else {
+        instrument
+            .tick_size
+            .filter(|tick| tick.is_finite() && *tick > 0.0)
+            .map_or(6, |tick| crate::scales::decimals(tick / size).min(16))
+    };
+    let count = change / size;
+    if count.abs() > 2f64.powi(53) || !count.is_finite() {
+        return None;
+    }
+    let rounded = if precision == 0 {
+        count.round() + 0.0
+    } else {
+        count + 0.0
+    };
+    let text = format!("{rounded:+.precision$}");
+    let text = if precision > 0 {
+        text.trim_end_matches('0').trim_end_matches('.')
+    } else {
+        &text
+    };
+    let text = if text == "-0" { "+0" } else { text };
+    let plural = if matches!(text, "+1" | "-1") { "" } else { "s" };
+    Some(format!("{text} {unit}{plural}"))
 }
 
 /// Decimals of a price change from `price`, as the chart writes prices: the instrument's price
@@ -548,6 +738,242 @@ mod tests {
             "{label}"
         );
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// A 30-by-40 screen segment is 50 points, or five 10-point periods, at atan(4/3).
+    /// Raw 100 to 200 is +100 (+100%), 400 quarter-point ticks or 200 half-point pips.
+    /// A logarithmic midpoint is sqrt(100*200), not the arithmetic price midpoint.
+    #[test]
+    fn extended_line_readouts_follow_units_selection_and_scale() {
+        use crate::drawings::{LineMeasurementPosition as P, LineMeasurements};
+        let mut bars = sample_bars();
+        for (i, bar) in bars.iter_mut().enumerate() {
+            bar.time = chrono::DateTime::from_timestamp(i as i64 * 3600, 0).unwrap();
+        }
+        let mut instrument = crate::model::Instrument::new("TEST").with_tick_size(0.25);
+        let x = |bar| 100.0 + bar * 10.0;
+        let y = |price: f64| 300.0 - 40.0 * (price / 100.0).log2() as f32;
+        let inverse = |y: f32| 100.0 * 2_f64.powf(f64::from(300.0 - y) / 40.0);
+        let mut drawing = Drawing::new(1, DrawingToolType::ExtendedLine);
+        drawing.completed = true;
+        let options = LineMeasurements {
+            price_change: true,
+            percent_change: true,
+            pip_change: true,
+            bar_count: true,
+            elapsed_time: true,
+            length: true,
+            inclination: true,
+            midpoint: true,
+            ..Default::default()
+        };
+        for (reverse, pip, time_axis, want) in [
+            (
+                false,
+                None,
+                true,
+                "+100.00\n+100.00%\n+400 ticks\n3 bars\n3h\n5.00 periods\n53.1°",
+            ),
+            (
+                true,
+                Some(0.5),
+                true,
+                "-100.00\n-50.00%\n-200 pips\n3 bars\n3h\n5.00 periods\n-126.9°",
+            ),
+            (
+                false,
+                Some(0.5),
+                false,
+                "+100.00\n+100.00%\n+200 pips\n3 bars\n5.00 periods\n53.1°",
+            ),
+        ] {
+            instrument.pip_size = pip;
+            let view = ChartView {
+                instrument: Some(&instrument),
+                price_formatter: None,
+                time_formatter: None,
+                bar_seconds: 3600,
+                bars: &bars,
+                revision: 0,
+                bar_to_x: &x,
+                price_to_y: &y,
+                y_to_price: &inverse,
+                time_axis,
+                executions: None,
+                timeframe: None,
+                finer: &[],
+            };
+            drawing.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(3.0, 200.0)];
+            if reverse {
+                drawing.chart_points.reverse();
+            }
+            drawing.update_screen_coords(x, y);
+            assert!(drawing.line_measurement_label(&view).is_empty());
+            drawing.line_measurements = options;
+            assert_eq!(drawing.line_measurement_label(&view), want);
+            // Each switch independently removes exactly its own readout.
+            for (index, label) in want.lines().enumerate() {
+                let mut only = LineMeasurements::default();
+                match label {
+                    text if text.ends_with('%') => only.percent_change = true,
+                    text if text.ends_with("ticks") || text.ends_with("pips") => {
+                        only.pip_change = true
+                    }
+                    text if text.ends_with("bars") => only.bar_count = true,
+                    text if text.ends_with('h') => only.elapsed_time = true,
+                    text if text.ends_with("periods") => only.length = true,
+                    text if text.ends_with('°') => only.inclination = true,
+                    _ => only.price_change = true,
+                }
+                drawing.line_measurements = only;
+                assert_eq!(
+                    drawing.line_measurement_label(&view),
+                    label,
+                    "readout {index}"
+                );
+            }
+            let midpoint = drawing.points[0].lerp(drawing.points[1], 0.5);
+            assert!((inverse(midpoint.y) - 141.4213562373095).abs() < 1e-9);
+            for (selected, persistent, visible) in [
+                (false, false, false),
+                (true, false, true),
+                (false, true, true),
+            ] {
+                let mut previous_position = None;
+                let mut left_position = None;
+                let mut right_position = None;
+                for position in [P::Left, P::Center, P::Right, P::Auto] {
+                    drawing.line_measurements = LineMeasurements {
+                        persistent,
+                        position,
+                        ..options
+                    };
+                    let mut output = egui::Context::default().run_ui(Default::default(), |ui| {
+                        drawing.render_with_selection(
+                            ui.painter(),
+                            Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 400.0)),
+                            &view,
+                            selected,
+                        );
+                    });
+                    let shapes = std::mem::take(&mut output.shapes);
+                    output.drop_without_applying_deltas();
+                    let text = shapes.iter().find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.job.text == want => Some(text),
+                        _ => None,
+                    });
+                    assert_eq!(text.is_some(), visible, "{selected} {persistent}");
+                    if let Some(text) = text {
+                        match position {
+                            P::Left => left_position = Some(text.pos),
+                            P::Right => right_position = Some(text.pos),
+                            P::Auto => assert_eq!(
+                                Some(text.pos),
+                                if reverse {
+                                    left_position
+                                } else {
+                                    right_position
+                                }
+                            ),
+                            P::Center => {}
+                        }
+                        if position != P::Auto {
+                            assert_ne!(Some(text.pos), previous_position);
+                            previous_position = Some(text.pos);
+                        }
+                        assert!(
+                            Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 400.0))
+                                .contains_rect(Rect::from_min_size(text.pos, text.galley.size()))
+                        );
+                        let bounds = Rect::from_min_size(text.pos, text.galley.size());
+                        let side = if position == P::Right || position == P::Auto && !reverse {
+                            1.0
+                        } else {
+                            -1.0
+                        };
+                        for corner in [
+                            bounds.min,
+                            bounds.max,
+                            bounds.left_bottom(),
+                            bounds.right_top(),
+                        ] {
+                            assert!((corner - midpoint).dot(egui::vec2(0.8, 0.6)) * side >= 4.9);
+                        }
+                    }
+                    if !selected {
+                        assert!(shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Circle(c) if c.center == midpoint)));
+                    }
+                }
+            }
+            drawing.text = Some("note".into());
+            drawing.line_measurements = LineMeasurements {
+                persistent: true,
+                position: P::Center,
+                ..options
+            };
+            let mut output = egui::Context::default().run_ui(Default::default(), |ui| {
+                drawing.render_with_selection(
+                    ui.painter(),
+                    Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 400.0)),
+                    &view,
+                    false,
+                );
+            });
+            let shapes = std::mem::take(&mut output.shapes);
+            output.drop_without_applying_deltas();
+            let text = shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.job.text == want => Some(text),
+                    _ => None,
+                })
+                .unwrap();
+            let bounds = Rect::from_min_size(text.pos, text.galley.size());
+            // The entire readout clears the lower side; the custom label occupies the upper side.
+            for corner in [
+                bounds.min,
+                bounds.max,
+                bounds.left_bottom(),
+                bounds.right_top(),
+            ] {
+                assert!((corner - midpoint).dot(egui::vec2(0.8, 0.6)) >= 4.9);
+            }
+            drawing.text = None;
+            drawing.line_measurements = LineMeasurements {
+                pip_change: true,
+                ..Default::default()
+            };
+            drawing.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(3.0, 101.25)];
+            assert_eq!(
+                drawing.line_measurement_label(&view),
+                if pip.is_some() {
+                    "+2.5 pips"
+                } else {
+                    "+5 ticks"
+                }
+            );
+            if time_axis {
+                drawing.line_measurements = LineMeasurements {
+                    elapsed_time: true,
+                    ..Default::default()
+                };
+                drawing.chart_points = [0.5, 3.75]
+                    .map(|index| {
+                        let mut point = ChartPoint::new(index, 100.0);
+                        point.time_anchor = Some((
+                            chrono::DateTime::from_timestamp((index * 3600.0) as i64, 0).unwrap(),
+                            index,
+                        ));
+                        point
+                    })
+                    .to_vec();
+                if reverse {
+                    drawing.chart_points.reverse();
+                }
+                assert_eq!(drawing.line_measurement_label(&view), "3h 15m");
+            }
+            drawing.line_measurements = Default::default();
+        }
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! Style tab - color, line width, line style.
 
-use crate::drawings::ArrowStyle;
+use crate::drawings::{ArrowStyle, DrawingToolType, LineMeasurementPosition};
 use crate::localization as l10n;
 use crate::model::LineStyle;
 use egui::{Color32, Role, Sense, Stroke, StrokeKind, Ui, Vec2, WidgetInfo};
@@ -86,6 +86,51 @@ impl StyleTab {
                         l10n::text(ui.ctx(), "Show middle line"),
                     )
                     .labelled_by(label.id);
+                    ui.end_row();
+                }
+                if settings.tool_type == DrawingToolType::ExtendedLine {
+                    let measurements = &mut settings.line_measurements;
+                    for (label, value) in [
+                        ("Middle point", &mut measurements.midpoint),
+                        ("Keep statistics visible", &mut measurements.persistent),
+                        ("Price change", &mut measurements.price_change),
+                        ("Percentage change", &mut measurements.percent_change),
+                        ("Pip change", &mut measurements.pip_change),
+                        ("Bar count", &mut measurements.bar_count),
+                        ("Elapsed time", &mut measurements.elapsed_time),
+                        ("Length in periods", &mut measurements.length),
+                        ("Inclination", &mut measurements.inclination),
+                    ] {
+                        ui.label(l10n::text(ui.ctx(), label));
+                        ui.checkbox(value, l10n::text(ui.ctx(), "Show"))
+                            .accessible_name(l10n::text(ui.ctx(), label));
+                        ui.end_row();
+                    }
+                    let label = ui.label(l10n::text(ui.ctx(), "Statistics placement"));
+                    ui.label_inputs_by(label.id, |ui| {
+                        let ctx = ui.ctx().clone();
+                        ui.combo_select(
+                            "line_measurement_position",
+                            &mut measurements.position,
+                            [
+                                LineMeasurementPosition::Left,
+                                LineMeasurementPosition::Center,
+                                LineMeasurementPosition::Right,
+                                LineMeasurementPosition::Auto,
+                            ],
+                            |position| {
+                                l10n::text(
+                                    &ctx,
+                                    match position {
+                                        LineMeasurementPosition::Left => "Left",
+                                        LineMeasurementPosition::Center => "Center",
+                                        LineMeasurementPosition::Right => "Right",
+                                        LineMeasurementPosition::Auto => "Auto",
+                                    },
+                                )
+                            },
+                        );
+                    });
                     ui.end_row();
                 }
                 let (price, time) = crate::drawings::Drawing::axis_labels_of(settings.tool_type);
