@@ -1480,8 +1480,9 @@ fn series_style_draws_columns_and_lines_and_fits_provided_ranges() {
     );
 }
 
-/// At a 40-point pitch, columns span 16 points on either side of their centre. A linear
-/// -10..10 range over 200 points puts the zero base at 120 and closes of +/-5 at 70/170.
+/// A 40-point pitch with 60%/80% widths gives half-widths of 12/16 points. Mapping
+/// -10..10 onto y=20..220 puts zero at 120 and +/-5 at 70/170. Flat and tiny bodies
+/// retain the painter's one-point height, above the base when the close equals it.
 #[test]
 fn column_hits_expand_by_the_series_tolerance_and_stay_in_the_plot() {
     let ctx = egui::Context::default();
@@ -1500,46 +1501,111 @@ fn column_hits_expand_by_the_series_tolerance_and_stay_in_the_plot() {
         .state
         .time_scale()
         .idx_to_coord_precise(2.0, rect.left(), rect.width());
-    for inverted in [false, true] {
-        let map = PriceMap::new(
-            Default::default(),
-            crate::scales::PriceRange::new(-10.0, 10.0),
-            rect.top(),
-            rect.bottom(),
-            inverted,
-        );
-        for (base, close) in [(Some(0.0), 5.0), (Some(0.0), -5.0), (None, 5.0)] {
-            chart.set_data(id, vec![bars(&[close; 5])[2].clone()]);
-            chart.price_series[0].options.columns_base = base;
-            let tip: f32 = if (close > 0.0) != inverted {
-                70.0
-            } else {
-                170.0
-            };
-            let base = if base.is_some() { 120.0 } else { 220.0 };
-            let (top, bottom) = (tip.min(base), tip.max(base));
-            for tolerance in [0.0, 2.0, 5.0] {
+    for (width, half_width) in [(0.6, 12.0), (0.8, 16.0)] {
+        chart.config.candle_width = width;
+        for inverted in [false, true] {
+            let map = PriceMap::new(
+                Default::default(),
+                crate::scales::PriceRange::new(-10.0, 10.0),
+                rect.top(),
+                rect.bottom(),
+                inverted,
+            );
+            for (base, close, normal_tip, inverted_tip) in [
+                (Some(0.0), 5.0, 70.0, 170.0),
+                (Some(0.0), -5.0, 170.0, 70.0),
+                (Some(0.0), 0.0, 119.0, 119.0),
+                (Some(0.0), 0.01, 119.0, 121.0),
+                (Some(0.0), -0.01, 121.0, 119.0),
+                (None, 5.0, 70.0, 170.0),
+                (None, -10.0, 219.0, 20.0),
+            ] {
+                chart.set_data(id, vec![bars(&[close; 5])[2].clone()]);
+                chart.price_series[0].options.columns_base = base;
+                let tip: f32 = if inverted { inverted_tip } else { normal_tip };
+                let base = if base.is_some() { 120.0 } else { 220.0 };
+                let (top, bottom) = (tip.min(base), tip.max(base));
+                for tolerance in [0.0, 2.0, 5.0] {
+                    chart.series_style_mut(id).unwrap().hit_tolerance = tolerance;
+                    let item = &chart.price_series[0];
+                    for (edge, outward) in [
+                        (
+                            Pos2::new(x - half_width, (top + bottom) / 2.0),
+                            egui::vec2(-1.0, 0.0),
+                        ),
+                        (
+                            Pos2::new(x + half_width, (top + bottom) / 2.0),
+                            egui::vec2(1.0, 0.0),
+                        ),
+                        (Pos2::new(x, top), egui::vec2(0.0, -1.0)),
+                        (Pos2::new(x, bottom), egui::vec2(0.0, 1.0)),
+                    ] {
+                        for distance in [-0.25, 0.0, 0.25, 2.0, 2.25, 5.0, 5.25] {
+                            let pos = edge + outward * distance;
+                            let expected =
+                                (distance <= tolerance && rect.contains(pos)).then_some(2);
+                            assert_eq!(
+                                chart.hit_price_series(item, pos, rect, map),
+                                expected,
+                                "width={width}, close={close}, base={base}, inverted={inverted}, tolerance={tolerance}, pos={pos:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// At a six-point pitch, 80% columns have 2.4-point half-widths. Padding of 5 or 20
+/// can reach past adjacent times; the other columns stay 25 points away vertically.
+/// A one-point history must not need an extrapolated time to pick its visible body.
+#[test]
+fn column_padding_searches_past_neighbours_and_single_point_times() {
+    let rect = Rect::from_min_max(Pos2::new(20.0, 20.0), Pos2::new(420.0, 220.0));
+    let map = PriceMap::new(
+        Default::default(),
+        crate::scales::PriceRange::new(-10.0, 10.0),
+        rect.top(),
+        rect.bottom(),
+        false,
+    );
+    for (len, index) in [(25, 12), (1, 0)] {
+        let ctx = egui::Context::default();
+        let mut chart = Chart::new(BarData::from_bars(bars(&vec![100.0; len])));
+        chart.config.candle_width = 0.8;
+        let id = chart.add_series(SeriesOptions {
+            chart_type: ChartType::Columns,
+            columns_base: Some(0.0),
+            ..Default::default()
+        });
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        chart.state.time_scale_mut().set_width(rect.width());
+        chart.state.time_scale_mut().set_bar_spacing(6.0);
+        chart
+            .state
+            .time_scale_mut()
+            .set_right_offset(if len == 1 { 30.0 } else { 0.0 });
+        let x =
+            chart
+                .state
+                .time_scale()
+                .idx_to_coord_precise(index as f64, rect.left(), rect.width());
+        for close in [5.0, -5.0] {
+            let mut values = vec![-close; len];
+            values[index] = close;
+            chart.set_data(id, bars(&values));
+            let y = if close > 0.0 { 95.0 } else { 145.0 };
+            for tolerance in [5.0, 20.0] {
                 chart.series_style_mut(id).unwrap().hit_tolerance = tolerance;
-                let item = &chart.price_series[0];
-                for (edge, outward) in [
-                    (
-                        Pos2::new(x - 16.0, (top + bottom) / 2.0),
-                        egui::vec2(-1.0, 0.0),
-                    ),
-                    (
-                        Pos2::new(x + 16.0, (top + bottom) / 2.0),
-                        egui::vec2(1.0, 0.0),
-                    ),
-                    (Pos2::new(x, top), egui::vec2(0.0, -1.0)),
-                    (Pos2::new(x, bottom), egui::vec2(0.0, 1.0)),
-                ] {
-                    for distance in [-0.25, 0.0, 0.25, 2.0, 2.25, 5.0, 5.25] {
-                        let pos = edge + outward * distance;
-                        let expected = (distance <= tolerance && rect.contains(pos)).then_some(2);
+                for side in [-1.0, 1.0] {
+                    for distance in [tolerance - 0.25, tolerance + 0.25] {
+                        let pos = Pos2::new(x + side * (2.4 + distance), y);
+                        assert!(rect.contains(pos));
                         assert_eq!(
-                            chart.hit_price_series(item, pos, rect, map),
-                            expected,
-                            "close={close}, base={base}, inverted={inverted}, tolerance={tolerance}, pos={pos:?}"
+                            chart.hit_price_series(&chart.price_series[0], pos, rect, map),
+                            (distance <= tolerance).then_some(index),
+                            "len={len}, close={close}, tolerance={tolerance}, side={side}, distance={distance}"
                         );
                     }
                 }
