@@ -145,7 +145,9 @@ pub use snapshot::{
     ChartSnapshot, RestoreError, SavedAnnotations, SavedLayout, SavedPane, SavedSeries, SavedStudy,
 };
 mod volume;
-pub use layout::{ChartLayout, ChartLayoutMode, ChartLayoutSizing, ChartSyncOptions};
+pub use layout::{
+    ChartLayout, ChartLayoutMode, ChartLayoutSizing, ChartLink, ChartLinkGroups, ChartSyncOptions,
+};
 pub(crate) mod sync;
 mod time_scale;
 use feed::FeedLink;
@@ -414,6 +416,8 @@ pub struct Chart {
     // =========================================================================
     /// This chart is an inactive, attached slot in a multi-chart layout for the current frame.
     pub(crate) layout_inactive: bool,
+    /// The layout's field selectors occupy the right end of the status line this frame.
+    pub(crate) layout_link_controls: bool,
     /// External crosshair position from synced chart (bar index)
     pub(crate) synced_crosshair_bar_idx: Option<f64>,
     /// Source period retained by time-based setters and resolved against the current bars.
