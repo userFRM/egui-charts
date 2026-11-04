@@ -1431,6 +1431,7 @@ mod tests {
             true,
         );
         super::super::tests::settle(&mut app, &ctx);
+        app.live.set_paused(true);
         for _ in 0..4 {
             ctx.run_ui(
                 egui::RawInput {
