@@ -217,6 +217,11 @@ impl Chart {
     /// times and precision. During replay it holds the bars the replay cutoff has completed,
     /// and on price-based chart types still the source bars. Loads nothing: only loaded bars are listed.
     pub fn data_table(&self) -> DataTable {
+        self.data_table_with_columns().0
+    }
+
+    /// Build cells and their stable series/plot identities from the same calculated studies.
+    pub(crate) fn data_table_with_columns(&self) -> (DataTable, Vec<(usize, usize)>) {
         let bars = &self.state.data().bars;
         let price_precision = self
             .instrument()
@@ -302,10 +307,21 @@ impl Chart {
             }));
             rows.push(row);
         }
-        DataTable {
-            headers: header,
-            rows,
-        }
+        let column_ids = (0..6)
+            .map(|column| (super::SeriesId::MAIN.0, column))
+            .chain(
+                columns
+                    .iter()
+                    .map(|&(study, line, _)| (self.study_ids[study].0, line)),
+            )
+            .collect();
+        (
+            DataTable {
+                headers: header,
+                rows,
+            },
+            column_ids,
+        )
     }
 
     /// Renders an isolated image frame using the same chart, studies, primitives, drawings and
