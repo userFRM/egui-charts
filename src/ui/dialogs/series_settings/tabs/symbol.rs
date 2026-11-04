@@ -161,6 +161,9 @@ impl SymbolTab {
             FootprintMode::Delta => "Delta",
             FootprintMode::DeltaVolume => "Delta / volume",
             FootprintMode::DominantSide => "Dominant side",
+            FootprintMode::BidAskTrades => "Sell × buy trades",
+            FootprintMode::Trades => "Trades",
+            FootprintMode::AverageSize => "Average size",
         }
         .to_owned()
     }
@@ -191,6 +194,9 @@ impl SymbolTab {
                             FootprintMode::Delta,
                             FootprintMode::DeltaVolume,
                             FootprintMode::DominantSide,
+                            FootprintMode::BidAskTrades,
+                            FootprintMode::Trades,
+                            FootprintMode::AverageSize,
                         ],
                         Self::mode_name,
                     );
