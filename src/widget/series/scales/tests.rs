@@ -3208,20 +3208,23 @@ fn placed_axes_report_their_side_and_respect_hidden_chart_axes() {
     chart.config.show_right_axis = false;
     assert!(chart.pane_scales(PaneId::MAIN, AxisSide::Left).is_empty());
 
-    let mut chart = Chart::new(BarData::from_bars(bars(&[100.0; 30])));
-    chart.config.show_volume = false;
-    chart.add_indicator(Box::new(crate::studies::Volume::new(20)));
-    let other = chart.add_pane();
-    assert!(chart.move_series_to_pane(SeriesId::MAIN, other));
-    assert!(chart.pane_scales(PaneId::MAIN, AxisSide::Right).is_empty());
-    frame(&ctx, &mut chart, 0.1, vec![]);
-    let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 0.2, vec![]);
-    let rows = chart.pane_layout.panes[0].rect.y_range();
-    let plot = chart.get_rendered_price_rect();
-    assert!(
-        !painted.iter().any(|shape| matches!(shape,
-            egui::Shape::Text(text) if text.pos.x > plot.right() && rows.contains(text.pos.y)
-        )),
-        "own-scale volume paints no axis labels"
-    );
+    #[cfg(feature = "studies")]
+    {
+        let mut chart = Chart::new(BarData::from_bars(bars(&[100.0; 30])));
+        chart.config.show_volume = false;
+        chart.add_indicator(Box::new(crate::studies::Volume::new(20)));
+        let other = chart.add_pane();
+        assert!(chart.move_series_to_pane(SeriesId::MAIN, other));
+        assert!(chart.pane_scales(PaneId::MAIN, AxisSide::Right).is_empty());
+        frame(&ctx, &mut chart, 0.1, vec![]);
+        let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 0.2, vec![]);
+        let rows = chart.pane_layout.panes[0].rect.y_range();
+        let plot = chart.get_rendered_price_rect();
+        assert!(
+            !painted.iter().any(|shape| matches!(shape,
+                egui::Shape::Text(text) if text.pos.x > plot.right() && rows.contains(text.pos.y)
+            )),
+            "own-scale volume paints no axis labels"
+        );
+    }
 }
