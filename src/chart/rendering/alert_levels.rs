@@ -318,12 +318,13 @@ mod tests {
                                 );
                             },
                         );
-                        let lines = output.shapes.iter().filter(|shape| matches!(&shape.shape,
+                        let shapes = std::mem::take(&mut output.shapes);
+                        output.drop_without_applying_deltas();
+                        let lines = shapes.iter().filter(|shape| matches!(&shape.shape,
                             egui::Shape::LineSegment { points, .. } if points[0] == pos2(20.0, 120.0) && points[1] == pos2(420.0, 120.0)
                         )).count();
                         assert_eq!(lines, usize::from(line));
-                        let marker = output
-                            .shapes
+                        let marker = shapes
                             .iter()
                             .find_map(|shape| match &shape.shape {
                                 egui::Shape::Circle(circle) if circle.radius == 6.0 => Some(circle),
@@ -333,8 +334,6 @@ mod tests {
                         // Halfway through [90,110] maps to halfway down the 200-point pane.
                         assert_eq!(marker.center, pos2(408.0, 120.0));
                         colors.push(marker.fill);
-                        output.textures_delta.clear();
-                        output.drop_without_applying_deltas();
                     }
                     assert_eq!(colors[0] != colors[1], blink);
                 }
