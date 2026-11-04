@@ -525,7 +525,7 @@ impl Trading {
 }
 
 /// The open of the exchange session containing `time`, by the chart's trading hours and zone.
-fn session_open(
+pub(super) fn session_open(
     chart: &Chart,
     time: chrono::DateTime<chrono::Utc>,
 ) -> Option<chrono::DateTime<chrono::Utc>> {
