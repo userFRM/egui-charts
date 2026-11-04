@@ -224,7 +224,11 @@ impl Chart {
         self.show_elements();
         // A crosshair set by time follows its bar when bars are evicted or loaded in front.
         if let Some(period) = self.synced_crosshair_period {
-            self.set_synced_crosshair(Some(period), self.synced_crosshair_price);
+            self.set_synced_crosshair_for_series(
+                self.synced_crosshair_series,
+                Some(period),
+                self.synced_crosshair_price,
+            );
             if self.synced_crosshair_bar_idx.is_none() {
                 self.last_crosshair = None;
             }
@@ -439,6 +443,15 @@ impl Chart {
         shared_plot: Option<&Response>,
         footprint: Option<(&Footprint, &FootprintConfig)>,
     ) -> Response {
+        let main_pane = self.main_series_pane();
+        let order = self.main_series_order().to_vec();
+        let study_indices: Vec<_> = self
+            .study_ids
+            .iter()
+            .enumerate()
+            .filter(|(_, id)| self.series_pane(**id) == Some(main_pane))
+            .map(|(idx, _)| idx)
+            .collect();
         // Register the icon loader once per context, and the general SVG loader for UI images.
         #[cfg(feature = "icons")]
         {
@@ -599,7 +612,8 @@ impl Chart {
         let is_drawing_interaction = false;
         // The Magic cursor marks while the button is held, so a drag paints rather than pans.
         #[cfg(feature = "drawings")]
-        let is_drawing_interaction = self.drawings.active_tool.is_some()
+        let is_drawing_interaction = self.drawings.box_selection_input(ui)
+            || self.drawings.active_tool.is_some()
             || self.chart_options.crosshair.style == crate::config::CrosshairStyle::Magic
             || self.drawings.dragging_handle.is_some()
             || self.drawings.text_editor.is_some()
@@ -997,7 +1011,22 @@ impl Chart {
         let profile_prices = std::iter::empty();
         // Fit the price scale, then apply this frame's price zoom
         let series_values = self.fit_secondary_series();
-        let primitive_prices = self.main_primitive_prices();
+        let mut primitive_prices = self.main_primitive_prices();
+        for idx in &study_indices {
+            let study = &self.rendered_studies().indicators()[*idx];
+            if study.is_visible()
+                && !study.is_overlay()
+                && self.study_autoscale[*idx]
+                && !self.config.scale_price_chart_only
+                && study.scale() == crate::studies::StudyScale::Main
+            {
+                let range = super::IndicatorPane::with_config(
+                    super::IndicatorPaneConfig::from_study(study.as_ref()),
+                )
+                .calculate_y_range(study.as_ref(), &(start_idx..end_idx));
+                primitive_prices.extend([range.0, range.1]);
+            }
+        }
         let target_prices = self.target_prices();
         let source_marks = self
             .mark_source
@@ -1024,10 +1053,14 @@ impl Chart {
             .indicators()
             .iter()
             .zip(&self.study_autoscale)
-            .filter(|(study, autoscale)| {
-                !self.config.scale_price_chart_only && **autoscale && !study.is_volume()
+            .enumerate()
+            .filter(|(idx, (study, autoscale))| {
+                study_indices.contains(idx)
+                    && !self.config.scale_price_chart_only
+                    && **autoscale
+                    && !study.is_volume()
             })
-            .map(|(study, _)| study.as_ref()),
+            .map(|(_, (study, _))| study.as_ref()),
             heikin_ashi.as_ref().map(|bars| &bars[start_idx..end_idx]),
             self.main_series_visible,
             self.main_series_style.autoscale.as_ref(),
@@ -1574,13 +1607,11 @@ impl Chart {
         });
         self.host_events.volume_map = volume_map;
         // The main pane's visual order: overlays listed before the series are drawn under it.
-        let series_at = self
-            .pane_layout
-            .main
+        let series_at = order
             .iter()
             .position(|id| *id == super::SeriesId::MAIN)
             .unwrap_or(0);
-        let (behind, front) = self.pane_layout.main.split_at(series_at);
+        let (behind, front) = order.split_at(series_at);
         let main_visible_range = start_idx..(start_idx + visible_data.len());
         let volume_coords = show_volume.then(|| coords.with_rect(volume_rect));
         // Primitives are hit tested at the pointer, before the chart state is borrowed mutably.
@@ -1606,7 +1637,7 @@ impl Chart {
                     pos,
                 )
             } else {
-                self.pane_layout.main.iter().rev().fold(None, |best, id| {
+                order.iter().rev().fold(None, |best, id| {
                     primitives::best_hit(
                         best,
                         primitives::primitive_at(
@@ -1624,9 +1655,7 @@ impl Chart {
             .copied()
             .filter(|id| self.has_renderer(*id))
             .collect();
-        let hit_order: Vec<_> = self
-            .pane_layout
-            .main
+        let hit_order: Vec<_> = order
             .iter()
             .copied()
             .filter(|id| {
@@ -1695,7 +1724,7 @@ impl Chart {
                         super::ChartElementId::Indicator(id)
                         | super::ChartElementId::Series(id) => id,
                     };
-                    self.pane_layout.main.iter().position(|member| member == id)
+                    order.iter().position(|member| member == id)
                 })
         };
         // The element under the pointer goes last when hovered series are drawn on top.
@@ -1720,7 +1749,7 @@ impl Chart {
                 .iter()
                 .position(|study| study == id)
                 .map(|idx| &studies.indicators()[idx])
-                .filter(|study| study.is_visible() && study.is_overlay())
+                .filter(|study| study.is_visible())
             else {
                 return;
             };
@@ -1776,13 +1805,23 @@ impl Chart {
                         item.draw(&clipped_painter, &view, PrimitivePass::Series, factor);
                     }
                 }
-            } else {
+            } else if study.is_overlay() {
                 rendering::IndicatorRenderer::render(
                     &price_ctx,
                     std::slice::from_ref(study),
                     visible_data,
                     &price_map,
                     &coords,
+                );
+            } else {
+                let mapping = rendering::study_mapping(study.as_ref(), &coords);
+                rendering::IndicatorRenderer::render_study(
+                    &price_ctx,
+                    study.as_ref(),
+                    visible_data,
+                    start_idx,
+                    &mapping.price,
+                    &mapping,
                 );
             }
         };
@@ -2145,8 +2184,7 @@ impl Chart {
         };
         let show_price_axis = self.config.show_right_axis || self.config.show_left_axis;
         let study_axis = crate::config::PriceAxisOptions {
-            show_study_values: self.config.show_indicator_last_val
-                && self.config.price_axis.show_study_values,
+            show_study_values: self.config.price_axis.show_study_values,
             ..self.config.price_axis
         };
         let currency = self
@@ -2247,8 +2285,8 @@ impl Chart {
         }
 
         let style = &self.main_series_style;
-        if let Some(line) = super::series::base_line(&price_map)
-            .filter(|_| self.main_series_visible && style.base_line_visible)
+        if self.main_series_visible
+            && let Some(line) = super::series::base_line(&price_map, style)
         {
             rendering::render_price_line(
                 &painter,
@@ -2408,12 +2446,16 @@ impl Chart {
         let mut independent_axis_width =
             self.paint_series_axes(ui, &painter, rect, price_rect, &colors);
         if show_price_axis {
-            let axes = studies.indicators().iter().filter(|study| {
-                study.is_visible()
-                    && study.is_overlay()
-                    && !study.is_volume()
-                    && study.scale() == crate::studies::StudyScale::Independent
-            });
+            let axes = studies
+                .indicators()
+                .iter()
+                .enumerate()
+                .filter(|(idx, study)| {
+                    study_indices.contains(idx)
+                        && study.is_visible()
+                        && !study.is_volume()
+                        && study.scale() == crate::studies::StudyScale::Independent
+                });
             let mut edge = price_rect.left()
                 - if self.config.show_left_axis {
                     self.config.left_axis_width.max(self.measured_axis_width)
@@ -2433,7 +2475,7 @@ impl Chart {
             let slot_width = (edge - rect.left() - padding).max(0.0)
                 / (axes.clone().count() + series_left).max(1) as f32;
             edge -= series_left as f32 * slot_width;
-            for study in axes {
+            for (_, study) in axes {
                 let mapping = crate::chart::rendering::study_mapping(study.as_ref(), &coords);
                 let axis = Rect::from_min_max(
                     Pos2::new(edge - slot_width, price_rect.top()),
@@ -2455,7 +2497,9 @@ impl Chart {
             for study in studies
                 .indicators()
                 .iter()
-                .filter(|study| study.is_overlay())
+                .enumerate()
+                .filter(|(idx, _)| study_indices.contains(idx))
+                .map(|(_, study)| study)
             {
                 if study.is_volume()
                     && !matches!(study.scale(), crate::studies::StudyScale::Shared(_))
@@ -2788,7 +2832,7 @@ impl Chart {
             .study_ids
             .iter()
             .zip(self.rendered_studies().indicators())
-            .filter(|(_, study)| study.is_visible() && study.is_overlay())
+            .filter(|(id, study)| study.is_visible() && self.series_pane(**id) == Some(main_pane))
         {
             if let Some(table) = study.table() {
                 table_rect.max.y =
@@ -2920,6 +2964,7 @@ impl Chart {
                                 ),
                             ),
                             &colors,
+                            Some(&study_indices),
                         )
                     })
                     .inner;
@@ -3085,6 +3130,7 @@ impl Chart {
                         main.then(|| price_map.y_to_price(snapped.y)),
                     )
                 });
+                self.last_crosshair_series = None;
                 crosshair_options.mode = crate::config::CrosshairMode::Normal;
                 let mut main_options = crosshair_options;
                 if volume_rect.contains(hover_pos) {
@@ -3285,30 +3331,68 @@ impl Chart {
                     if coords.is_x_visible(x) {
                         // At the host's price, or a synthetic position at the centre of the
                         // price range for a time alone
+                        let target = self.synced_crosshair_series;
+                        let main_target = target.is_none_or(|id| {
+                            self.series_pane(id) == Some(main_pane) && self.is_series_visible(id)
+                        });
+                        let map = target
+                            .filter(|_| main_target)
+                            .and_then(|id| self.series_price_map(id))
+                            .unwrap_or(price_map);
                         let mut options = self.chart_options.crosshair;
+                        if !main_target {
+                            options.horz_line_visible = false;
+                            options.horz_label_visible = false;
+                            if options.style == crate::config::CrosshairStyle::Dot {
+                                options.style = crate::config::CrosshairStyle::Arrow;
+                            }
+                        }
                         let y = match self.synced_crosshair_price {
                             Some(price) => {
                                 options.mode = crate::config::CrosshairMode::Normal;
-                                price_map.price_to_y(price)
+                                map.price_to_y(price)
                             }
                             None => price_rect.center().y,
                         };
                         if let Some(bar) = self.state.shown().get(bar_idx.round() as usize) {
                             self.last_crosshair = Some((bar.time, self.synced_crosshair_price));
+                            self.last_crosshair_series = target;
+                        }
+                        let target_axis = target.and_then(|id| {
+                            let key = self.series_scale(id)?;
+                            if key == self.main_series_scale {
+                                show_price_axis.then_some(axis_edge)
+                            } else {
+                                self.secondary_axes(rect, price_rect)
+                                    .into_iter()
+                                    .find(|(scale, _)| *scale == key)
+                                    .map(|(_, axis)| axis.right())
+                            }
+                        });
+                        let formatter = target
+                            .and_then(|id| self.series_label_formatter(id, map.transform().mode));
+                        let mut main_options = options;
+                        // A scale without a visible axis still gets its line and time label.
+                        if target.is_some() && target_axis.is_none() {
+                            main_options.horz_label_visible = false;
                         }
                         crosshair_tags = rendering::render_crosshair_with_options(
                             &price_ctx,
                             Pos2::new(x, y),
                             visible_data,
-                            &price_map,
+                            &map,
                             &coords,
-                            &options,
+                            &main_options,
                             time_axis_top,
-                            axis_edge,
+                            target_axis.unwrap_or(axis_edge),
                             last_price_tag,
                             scale,
                             bar_seconds,
-                            price_formatter.as_deref(),
+                            if target.is_some() {
+                                formatter.as_deref()
+                            } else {
+                                price_formatter.as_deref()
+                            },
                         );
                     }
                 }

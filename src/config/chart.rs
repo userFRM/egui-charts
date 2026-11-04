@@ -81,7 +81,7 @@ fn pixel_conflation_threshold() -> Option<f32> {
 pub struct PriceAxisOptions {
     /// Allow value tags to overlap instead of moving them to free vertical slots.
     pub allow_label_overlap: bool,
-    /// Display study values on price axes when study values are enabled.
+    /// Display study value tags on price axes, independently of the status line values.
     pub show_study_values: bool,
     /// Study value tag colour; `None` follows each plot's colour.
     pub study_value_color: Option<Color32>,

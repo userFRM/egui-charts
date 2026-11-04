@@ -91,7 +91,7 @@ impl Chart {
                     return;
                 };
                 if !indicator.is_visible()
-                    || !indicator.is_overlay()
+                    || self.series_pane(id) != Some(self.main_series_pane())
                     || (indicator.is_volume() && !self.shows_volume())
                 {
                     return;

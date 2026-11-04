@@ -197,12 +197,18 @@ pub(super) fn tags(
 
 impl super::Chart {
     pub(super) fn shows_volume(&self) -> bool {
-        let visible = self.studies.indicators().iter().any(|study| {
-            study.is_volume()
-                && study.is_overlay()
-                && study.is_visible()
-                && (0..study.line_count()).any(|line| study.plot_style(line).visible)
-        }) || (!cfg!(feature = "studies") && self.config.show_volume);
+        let visible = self
+            .study_ids
+            .iter()
+            .zip(self.studies.indicators())
+            .any(|(id, study)| {
+                self.series_pane(*id) == Some(self.main_series_pane())
+                    && study.is_volume()
+                    && study.is_overlay()
+                    && study.is_visible()
+                    && (0..study.line_count()).any(|line| study.plot_style(line).visible)
+            })
+            || (!cfg!(feature = "studies") && self.config.show_volume);
         self.main_series_visible && self.chart_type.supports_volume() && visible
     }
 }

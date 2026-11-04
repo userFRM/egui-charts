@@ -43,7 +43,41 @@ pub struct RenderedIndicatorPane {
     pub mapping: crate::chart::coords::ChartMapping,
 }
 
+/// Whether the initial pane draws `study` on a scale of its own, apart from the pane's fitted range.
+fn study_has_own_scale(study: &dyn Indicator) -> bool {
+    study.scale() == crate::studies::StudyScale::Independent
+        || (study.is_volume() && !matches!(study.scale(), crate::studies::StudyScale::Shared(_)))
+}
+
 impl Chart {
+    /// The initial pane retains its overlay mappings when the main series leaves it.
+    pub(in crate::widget) fn pane_study_mapping(
+        &self,
+        pane: PaneId,
+        study: &dyn Indicator,
+        mapping: &crate::chart::rendering::ChartMapping,
+    ) -> crate::chart::rendering::ChartMapping {
+        if pane == PaneId::MAIN
+            && study.is_volume()
+            && !matches!(study.scale(), crate::studies::StudyScale::Shared(_))
+        {
+            let (start, end) = self.state.visible_range();
+            super::volume::mapping(
+                mapping,
+                super::volume::overlay_rect(mapping.rect, &self.config),
+                study,
+                &(start..end),
+                Some(&self.merge_groups),
+            )
+        } else if pane == PaneId::MAIN
+            || matches!(study.scale(), crate::studies::StudyScale::Shared(_))
+        {
+            crate::chart::rendering::study_mapping(study, mapping)
+        } else {
+            mapping.clone()
+        }
+    }
+
     /// Turns the heights requested for the `expanded` panes into stretch factors that give each
     /// its height out of `total`, leaving the others the space they had relative to each other.
     fn apply_pane_heights(&mut self, expanded: &[usize], total: f32) {
@@ -84,6 +118,7 @@ impl Chart {
 
         let available = ui.available_rect_before_wrap();
         let maximized = self.pane_layout.maximized;
+        let main_pane = self.main_series_pane();
         // The drawn panes from top to bottom, the price pane included, and whether each is
         // collapsed.
         let mut panes: Vec<_> = self
@@ -92,8 +127,9 @@ impl Chart {
             .iter()
             .enumerate()
             .filter(|(_, pane)| {
-                pane.id == PaneId::MAIN
-                    || self.pane_shown(pane) && maximized.is_none_or(|id| id == pane.id)
+                pane.id == main_pane
+                    || (pane.id == PaneId::MAIN || self.pane_shown(pane))
+                        && maximized.is_none_or(|id| id == pane.id)
             })
             .map(|(idx, pane)| (idx, pane.id, false))
             .collect();
@@ -114,7 +150,7 @@ impl Chart {
             / (40.0 - row_height))
             .max(0.0) as usize;
         for (idx, id, collapsed) in &mut panes {
-            if *id == PaneId::MAIN {
+            if *id == main_pane {
                 continue;
             }
             *collapsed = maximized.is_none()
@@ -140,13 +176,13 @@ impl Chart {
         let total: f32 = expanded.iter().map(stretch).sum();
         let pane_total: f32 = expanded
             .iter()
-            .filter(|idx| self.pane_layout.panes[**idx].id != PaneId::MAIN)
+            .filter(|idx| self.pane_layout.panes[**idx].id != main_pane)
             .map(stretch)
             .sum();
         let mut desired: Vec<_> = panes
             .iter()
             .map(|(idx, id, collapsed)| {
-                if *id == PaneId::MAIN || *collapsed {
+                if *id == main_pane || *collapsed {
                     0.0
                 } else {
                     // Fractions first, so that large stretch factors cannot overflow.
@@ -155,14 +191,14 @@ impl Chart {
                 }
             })
             .collect();
-        if maximized.is_some_and(|id| id != PaneId::MAIN) {
+        if maximized.is_some_and(|id| id != main_pane) {
             for (height, (_, id, _)) in desired.iter_mut().zip(&panes) {
-                if *id != PaneId::MAIN {
+                if *id != main_pane {
                     *height = usable_height;
                 }
             }
         }
-        let main_min = if maximized.is_some_and(|id| id != PaneId::MAIN) {
+        let main_min = if maximized.is_some_and(|id| id != main_pane) {
             0.0
         } else {
             40.0
@@ -177,7 +213,7 @@ impl Chart {
         let factor =
             ((pane_budget - minimum * expanded_count as f32).max(0.0) / excess.max(1.0)).min(1.0);
         for (height, (_, id, collapsed)) in desired.iter_mut().zip(&panes) {
-            if *id != PaneId::MAIN && !collapsed {
+            if *id != main_pane && !collapsed {
                 *height = minimum + (*height - minimum).max(0.0) * factor;
             }
         }
@@ -188,7 +224,7 @@ impl Chart {
             if at > 0 {
                 top += gap;
             }
-            let height = if *id == PaneId::MAIN {
+            let height = if *id == main_pane {
                 main_height
             } else if *collapsed {
                 row_height
@@ -205,7 +241,7 @@ impl Chart {
         }
         let main_at = panes
             .iter()
-            .position(|(_, id, _)| *id == PaneId::MAIN)
+            .position(|(_, id, _)| *id == main_pane)
             .expect("the price pane is always drawn");
         let main_rect = rects[main_at];
         let plot = self.pane_layout_rects(main_rect, false).price_rect;
@@ -213,7 +249,7 @@ impl Chart {
             Pos2::new(plot.left(), available.bottom() - axis_height),
             Pos2::new(plot.right(), available.bottom()),
         );
-        let maximized_plot = maximized.filter(|id| *id != PaneId::MAIN).map(|id| {
+        let maximized_plot = maximized.filter(|id| *id != main_pane).map(|id| {
             ui.interact(
                 Rect::from_min_max(
                     Pos2::new(plot.left(), available.top()),
@@ -237,7 +273,7 @@ impl Chart {
         let displayed =
             horizontal.x_to_idx(plot.left())..horizontal.x_to_idx(plot.right()).saturating_add(1);
         for (idx, id, _) in &panes {
-            if *id != PaneId::MAIN {
+            if *id != main_pane {
                 self.fit_pane_scales(*idx, ui.painter(), displayed.clone());
             }
         }
@@ -262,6 +298,27 @@ impl Chart {
             start_idx,
         );
         coords.numeric_positions = time_scale.numeric_positions().cloned();
+        if main_pane != PaneId::MAIN {
+            let mapping = self.get_chart_mapping();
+            for (idx, id) in self.study_ids.iter().enumerate() {
+                if self.series_pane(*id) == Some(main_pane) && self.is_series_visible(*id) {
+                    let study_mapping = crate::chart::rendering::study_mapping(
+                        studies.indicators()[idx].as_ref(),
+                        &mapping,
+                    );
+                    self.last_rendered_indicator_panes
+                        .push(RenderedIndicatorPane {
+                            indicator_idx: idx,
+                            panel_rect: main_rect,
+                            chart_rect: mapping.rect,
+                            y_min: study_mapping.price.range().min,
+                            y_max: study_mapping.price.range().max,
+                            coords: coords.clone(),
+                            mapping: study_mapping,
+                        });
+                }
+            }
+        }
 
         let horizontal = coords.to_mapping(plot, 0.0, 1.0);
         // The plot column of every pane, where the pointer drives their shared crosshair.
@@ -295,10 +352,10 @@ impl Chart {
             .with_overlay(false)
             .with_line_count(0);
 
-        for ((pane_idx, pane_id, collapsed), panel_rect) in
+        for ((_, pane_id, collapsed), panel_rect) in
             panes.iter().copied().zip(rects.iter().copied())
         {
-            if pane_id == PaneId::MAIN {
+            if pane_id == main_pane {
                 continue;
             }
             #[cfg(feature = "drawings")]
@@ -311,7 +368,7 @@ impl Chart {
             let drawing_tool_active = false;
 
             let height = panel_rect.height();
-            let members = self.pane_layout.panes[pane_idx].members.clone();
+            let members = self.pane_series(pane_id);
             let series: Vec<_> = members
                 .iter()
                 .filter_map(|id| {
@@ -322,8 +379,9 @@ impl Chart {
                 .collect();
             // Panes without a visible bar series (study panes) keep their own formats.
             let thousands_sep = self.config.thousands_sep.filter(|_| !series.is_empty());
-            let map = self.pane_layout.panes[pane_idx]
-                .price_map()
+            let scale = self.pane_price_scale(pane_id, crate::model::SeriesScale::Right);
+            let map = scale
+                .map(scale.transform(), panel_rect.top(), panel_rect.bottom())
                 .with_thousands_sep(thousands_sep);
             let drawing_map = members
                 .first()
@@ -396,17 +454,7 @@ impl Chart {
                                         item,
                                         self.primitive_view(
                                             *id,
-                                            if matches!(
-                                                study.scale(),
-                                                crate::studies::StudyScale::Shared(_)
-                                            ) {
-                                                crate::chart::rendering::study_mapping(
-                                                    study,
-                                                    &pane_mapping,
-                                                )
-                                            } else {
-                                                pane_mapping.clone()
-                                            },
+                                            self.pane_study_mapping(pane_id, study, &pane_mapping),
                                         ),
                                     )
                                 }),
@@ -420,7 +468,7 @@ impl Chart {
                                     idx,
                                     visible_range.clone(),
                                     pane_plot,
-                                    &pane_mapping,
+                                    &self.pane_study_mapping(pane_id, study, &pane_mapping),
                                 )
                                 .is_some()))
                             .then_some(*id)
@@ -490,8 +538,7 @@ impl Chart {
                 let mut panel = IndicatorPane::with_config(config);
                 panel.legend_backdrop = self.config.indicator_backdrop_opacity;
                 panel.axis_options = crate::config::PriceAxisOptions {
-                    show_study_values: self.config.show_indicator_last_val
-                        && self.config.price_axis.show_study_values,
+                    show_study_values: self.config.price_axis.show_study_values,
                     ..self.config.price_axis
                 };
                 let assignment = id
@@ -505,10 +552,9 @@ impl Chart {
                     id.and_then(|id| self.price_series.iter().find(|item| item.id == id))
                 {
                     self.series_map(item, panel_rect)
-                } else if matches!(indicator.scale(), crate::studies::StudyScale::Shared(_)) {
-                    crate::chart::rendering::study_mapping(indicator, &pane_mapping).price
                 } else {
-                    map
+                    self.pane_study_mapping(pane_id, indicator, &pane_mapping)
+                        .price
                 };
                 panel.price_map = Some(member_map);
                 if study.is_none() && id.is_some() {
@@ -555,12 +601,13 @@ impl Chart {
                     .find(|item| item.options.scale == assignment)
                     .map(|item| item.id);
                 panel.draw_axis = !drawn_axes.contains(&assignment)
-                    && axis_owner.is_none_or(|owner| Some(owner) == id);
+                    && axis_owner.is_none_or(|owner| Some(owner) == id)
+                    && !(pane_id == PaneId::MAIN && study_has_own_scale(indicator));
                 if panel.draw_axis {
                     drawn_axes.push(assignment);
                 }
                 let member_map = panel.price_map.expect("member mapping");
-                let hover = if touch_readout.touch_input
+                let pointer = if touch_readout.touch_input
                     && self.chart_options.tooltip.enabled
                     && self.chart_options.tooltip.on_long_press
                 {
@@ -572,7 +619,12 @@ impl Chart {
                         })
                     })
                 };
-                let mut hover = hover
+                let host_position = pointer.is_none() && self.synced_crosshair_price.is_some();
+                let target_pane = self
+                    .synced_crosshair_series
+                    .is_some_and(|target| members.contains(&target));
+                let target_panel = target_pane && id == self.synced_crosshair_series;
+                let mut hover = pointer
                     .or_else(|| {
                         self.synced_crosshair_bar_idx
                             .filter(|index| index.is_finite() && *index >= 0.0)
@@ -585,9 +637,17 @@ impl Chart {
                                     } else {
                                         index.round()
                                     };
-                                Pos2::new(pane_mapping.index_to_x(index), plot.center().y)
+                                Pos2::new(
+                                    pane_mapping.index_to_x(index),
+                                    if target_panel {
+                                        member_map
+                                            .price_to_y(self.synced_crosshair_price.unwrap_or(0.0))
+                                    } else {
+                                        plot.center().y
+                                    },
+                                )
                             })
-                            .filter(|pos| plot.contains(*pos))
+                            .filter(|pos| plot.x_range().contains(pos.x))
                     })
                     .filter(|_| !self.menu_open && !egui::Popup::is_any_open(ui.ctx()))
                     .and_then(|pos| self.crosshair_position(pos, &pane_mapping));
@@ -596,7 +656,19 @@ impl Chart {
                     crosshair_options.style = crate::config::CrosshairStyle::Arrow;
                 }
 
-                if crosshair_options.mode.snaps() {
+                if host_position {
+                    crosshair_options.mode = crate::config::CrosshairMode::Normal;
+                    if !target_panel {
+                        crosshair_options.horz_line_visible = false;
+                        crosshair_options.horz_label_visible = false;
+                        if crosshair_options.style == crate::config::CrosshairStyle::Dot {
+                            crosshair_options.style = crate::config::CrosshairStyle::Arrow;
+                        }
+                    }
+                }
+                if host_position && target_pane && !target_panel {
+                    hover = None;
+                } else if crosshair_options.mode.snaps() {
                     if let Some(pos) = &mut hover
                         && panel_rect.contains(*pos)
                         && let Some(bar) = panel.bar_index
@@ -668,7 +740,8 @@ impl Chart {
                     crosshair_options.vert_line_visible = false;
                     crosshair_options.horz_line_visible = false;
                 }
-                crosshair_options.horz_label_visible &= panel.draw_axis;
+                crosshair_options.horz_label_visible &=
+                    panel.draw_axis || host_position && target_panel;
 
                 // Use show_aligned_interactive to get pane info for hit testing
                 let mut child =
@@ -901,50 +974,49 @@ impl Chart {
                                 _ => None,
                             });
                         renderer.or_else(|| {
-                            self.pane_layout.panes[pane_idx]
-                                .members
-                                .iter()
-                                .rev()
-                                .find_map(|id| {
-                                    if self.has_renderer(*id) {
-                                        return renderer_hit.as_ref().and_then(|hit| {
-                                            (Some(pos) == pointer
-                                                && hit.target
-                                                    == crate::widget::PointerTarget::Element(
-                                                        ChartElementId::Indicator(*id),
-                                                    ))
-                                            .then_some(ChartElementId::Indicator(*id))
-                                        });
-                                    }
+                            members.iter().rev().find_map(|id| {
+                                if self.has_renderer(*id) {
+                                    return renderer_hit.as_ref().and_then(|hit| {
+                                        (Some(pos) == pointer
+                                            && hit.target
+                                                == crate::widget::PointerTarget::Element(
+                                                    ChartElementId::Indicator(*id),
+                                                ))
+                                        .then_some(ChartElementId::Indicator(*id))
+                                    });
+                                }
 
-                                    if let Some(item) = self
-                                        .price_series
-                                        .iter()
-                                        .find(|item| item.id == *id && item.visible)
-                                    {
-                                        return self
-                                            .hit_price_series(
-                                                item,
-                                                pos,
-                                                chart_rect,
-                                                self.series_map(item, chart_rect),
-                                            )
-                                            .map(|_| ChartElementId::Series(*id));
-                                    }
-                                    let idx =
-                                        self.study_ids.iter().position(|study| study == id)?;
-                                    hit_test_pane_indicator(
-                                        pos,
+                                if let Some(item) = self
+                                    .price_series
+                                    .iter()
+                                    .find(|item| item.id == *id && item.visible)
+                                {
+                                    return self
+                                        .hit_price_series(
+                                            item,
+                                            pos,
+                                            chart_rect,
+                                            self.series_map(item, chart_rect),
+                                        )
+                                        .map(|_| ChartElementId::Series(*id));
+                                }
+                                let idx = self.study_ids.iter().position(|study| study == id)?;
+                                hit_test_pane_indicator(
+                                    pos,
+                                    studies.indicators()[idx].as_ref(),
+                                    idx,
+                                    visible_range.clone(),
+                                    chart_rect,
+                                    &self.pane_study_mapping(
+                                        pane_id,
                                         studies.indicators()[idx].as_ref(),
-                                        idx,
-                                        visible_range.clone(),
-                                        chart_rect,
                                         &pane_coords,
-                                    )
-                                    .map(|hit| {
-                                        ChartElementId::Indicator(self.study_ids[hit.indicator_idx])
-                                    })
+                                    ),
+                                )
+                                .map(|hit| {
+                                    ChartElementId::Indicator(self.study_ids[hit.indicator_idx])
                                 })
+                            })
                         })
                     };
                     if !collapsed
@@ -1026,7 +1098,7 @@ impl Chart {
                                 y_min,
                                 y_max,
                                 coords: coords.clone(),
-                                mapping: pane_coords,
+                                mapping: self.pane_study_mapping(pane_id, indicator, &pane_coords),
                             });
                     }
                 }
@@ -1281,7 +1353,7 @@ impl Chart {
             .collect();
         self.pane_separators(ui, &drawn);
         for ((_, id, collapsed), rect) in panes.iter().copied().zip(rects) {
-            if id == PaneId::MAIN {
+            if id == main_pane {
                 continue;
             }
             if let Some(idx) = self.pane_layout.panes.iter().position(|pane| pane.id == id) {

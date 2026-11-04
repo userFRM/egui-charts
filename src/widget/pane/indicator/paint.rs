@@ -529,8 +529,9 @@ impl IndicatorPane {
         }
         let theme = painter.ctx().active_theme();
         let galley = self.legend_galley(painter, rect, indicator, theme.ui.text);
+        let width = crate::chart::rendering::controls_width(indicator);
         let x = (rect.left() + theme.spacing.sm + galley.size().x + theme.spacing.md)
-            .min(rect.right() - if self.pane_controls { 120.0 } else { 80.0 })
+            .min(rect.right() - width - if self.pane_controls { 40.0 } else { 0.0 })
             .max(rect.left());
         Some(
             Rect::from_min_size(
@@ -540,7 +541,7 @@ impl IndicatorPane {
                         + self.legend_offset
                         + (theme.text.ohlc + theme.spacing.md - 20.0).max(0.0) / 2.0,
                 ),
-                egui::vec2(80.0, 20.0),
+                egui::vec2(width, 20.0),
             )
             .intersect(rect),
         )
@@ -585,9 +586,12 @@ impl IndicatorPane {
     ) -> std::sync::Arc<egui::Galley> {
         let theme = painter.ctx().active_theme();
         let mut job = self.legend_job(indicator, text_color, theme.chart.bg, theme.text.ohlc);
-        job.wrap.max_width =
-            (rect.width() - if self.pane_controls { 120.0 } else { 80.0 } - 2.0 * theme.spacing.sm)
-                .max(1.0);
+        let controls_width = crate::chart::rendering::controls_width(indicator);
+        job.wrap.max_width = (rect.width()
+            - controls_width
+            - if self.pane_controls { 40.0 } else { 0.0 }
+            - 2.0 * theme.spacing.sm)
+            .max(1.0);
         painter.layout_job(job)
     }
 
@@ -772,6 +776,7 @@ mod tests {
                 "2.00M",
             ),
             (Box::new(shifted), "1.00M"),
+            (Box::new(crate::studies::Volume::new(9)), "1.00M"),
         ] {
             study.calculate(&bars);
             let mut pane = IndicatorPane::with_config(IndicatorPaneConfig::default());
@@ -785,44 +790,63 @@ mod tests {
             let ctx = egui::Context::default();
             let mut study = crate::studies::ConfiguredStudy::new(study);
             study.set_overlay(true);
-            let studies: Vec<Box<dyn Indicator>> = vec![Box::new(study)];
-            let instrument = crate::model::Instrument::new("SAMPLE").with_price_decimals(0);
-            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(400.0, 300.0));
-                pane.draw_y_axis_labels(
-                    ui.painter(),
-                    rect,
-                    Rect::from_min_max(Pos2::ZERO, Pos2::new(300.0, 300.0)),
-                    0.0,
-                    3_000_000.0,
+            let mut studies: Vec<Box<dyn Indicator>> = vec![Box::new(study)];
+            for show_values in [true, false] {
+                let mut settings = serde_json::to_value(studies[0].settings()).unwrap();
+                settings["show_legend_values"] = show_values.into();
+                studies[0]
+                    .apply_settings(&[], serde_json::from_value(settings).unwrap())
+                    .unwrap();
+                let pane_values = pane.legend_job(
                     studies[0].as_ref(),
-                    Some(crate::scales::PriceScaleId::Right),
-                    None,
+                    Color32::WHITE,
+                    Color32::BLACK,
+                    crate::theme::Theme::default().text.ohlc,
                 );
-                let mut legend = crate::chart::rendering::Legend::new("SAMPLE", "1h", &bars[2]);
-                legend.studies = &studies;
-                legend.bar_index = 2;
-                legend.instrument = Some(&instrument);
-                legend.show(ui, rect);
-            });
-            let labels: Vec<_> = output
-                .shapes
-                .iter()
-                .filter_map(|shape| match &shape.shape {
-                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
-                    _ => None,
-                })
-                .collect();
-            output.drop_without_applying_deltas();
-            // Both the last-value tag and overlay legend use displayed values and study units.
-            assert_eq!(
-                labels
+                assert_eq!(
+                    pane_values.text.contains(expected),
+                    show_values,
+                    "{}",
+                    pane_values.text
+                );
+                let instrument = crate::model::Instrument::new("SAMPLE").with_price_decimals(0);
+                let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(400.0, 300.0));
+                    pane.draw_y_axis_labels(
+                        ui.painter(),
+                        rect,
+                        Rect::from_min_max(Pos2::ZERO, Pos2::new(300.0, 300.0)),
+                        0.0,
+                        3_000_000.0,
+                        studies[0].as_ref(),
+                        Some(crate::scales::PriceScaleId::Right),
+                        None,
+                    );
+                    let mut legend = crate::chart::rendering::Legend::new("SAMPLE", "1h", &bars[2]);
+                    legend.studies = &studies;
+                    legend.bar_index = 2;
+                    legend.instrument = Some(&instrument);
+                    legend.show(ui, rect);
+                });
+                let labels: Vec<_> = output
+                    .shapes
                     .iter()
-                    .filter(|label| label.as_str() == expected)
-                    .count(),
-                2,
-                "{labels:?}"
-            );
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                        _ => None,
+                    })
+                    .collect();
+                output.drop_without_applying_deltas();
+                // Both the last-value tag and overlay legend use displayed values and study units.
+                assert_eq!(
+                    labels
+                        .iter()
+                        .filter(|label| label.as_str() == expected)
+                        .count(),
+                    if show_values { 2 } else { 1 },
+                    "{labels:?}"
+                );
+            }
         }
     }
 
