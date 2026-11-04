@@ -177,7 +177,7 @@ impl Chart {
     /// anchors' prices are read on the new pane's scale. Returns `false` for an unknown drawing
     /// or pane and for a locked drawing.
     pub fn move_drawing_to_pane(&mut self, id: usize, pane: PaneId) -> bool {
-        let owner = if pane == PaneId::MAIN {
+        let owner = if pane == PaneId::MAIN && self.panes().contains(&pane) {
             None
         } else if let Some(pane) = self
             .pane_layout

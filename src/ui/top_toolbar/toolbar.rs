@@ -670,7 +670,7 @@ impl TopToolbar {
                                 ui.label(
                                     egui::RichText::new(l10n::text(ui.ctx(), "SNAPSHOT"))
                                         .size(11.0)
-                                        .color(theme.ui.text_muted),
+                                        .color(crate::ui_kit::section::menu_heading_color(&theme)),
                                 );
                                 for (label, icon, value, available) in [
                                     (

@@ -25,6 +25,15 @@ use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use egui::emath::GuiRounding;
 
+/// Quiet menu headings retain the dark palette and use the light palette's grey ink.
+pub(crate) fn menu_heading_color(theme: &crate::theme::Theme) -> egui::Color32 {
+    if theme.dark {
+        theme.ui.text_muted
+    } else {
+        theme.ui.text_disabled
+    }
+}
+
 /// A collapsible section with header
 pub struct Section {
     id: Id,
