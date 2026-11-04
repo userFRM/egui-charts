@@ -49,6 +49,18 @@ pub fn draw_wicks(painter: &Painter, x: f32, y: &OhlcYCoords, wick_width: f32, c
     ));
 }
 
+/// The body of a candle, at least the design's minimum height.
+pub fn body_rect(x: f32, bar_width: f32, y: &OhlcYCoords) -> Rect {
+    Rect::from_min_max(
+        Pos2::new(x - bar_width / 2.0, y.body_top),
+        Pos2::new(
+            x + bar_width / 2.0,
+            y.body_bottom
+                .max(y.body_top + DESIGN_TOKENS.sizing.candle.min_body_height),
+        ),
+    )
+}
+
 /// Draw filled candle body
 pub fn draw_body_filled(
     painter: &Painter,
@@ -57,15 +69,7 @@ pub fn draw_body_filled(
     y: &OhlcYCoords,
     color: Color32,
 ) {
-    let body_rect = Rect::from_min_max(
-        Pos2::new(x - bar_width / 2.0, y.body_top),
-        Pos2::new(
-            x + bar_width / 2.0,
-            y.body_bottom
-                .max(y.body_top + DESIGN_TOKENS.sizing.candle.min_body_height),
-        ),
-    );
-    painter.add(Shape::rect_filled(body_rect, 0.0, color));
+    painter.add(Shape::rect_filled(body_rect(x, bar_width, y), 0.0, color));
 }
 
 /// Draw hollow candle body (stroke only)

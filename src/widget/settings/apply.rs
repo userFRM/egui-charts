@@ -920,6 +920,50 @@ mod tests {
         }
     }
 
+    /// A shape with both stops its fill at the middle of the stroke and shrinks it for a
+    /// transparent stroke, so a border that is not opaque must leave the body a shape of its own.
+    #[test]
+    #[cfg(feature = "drawings")]
+    fn heikin_border_that_is_not_opaque_keeps_the_whole_body_filled() {
+        use crate::model::ChartType;
+        use crate::widget::test_frames::{frame, shapes};
+        let body = Color32::from_rgb(1, 100, 2);
+        for border in [
+            Color32::from_rgba_unmultiplied(3, 4, 102, 128),
+            Color32::TRANSPARENT,
+        ] {
+            let ctx = Context::default();
+            let mut chart = Chart::new(BarData::from_bars(vec![Bar::new(
+                chrono::DateTime::UNIX_EPOCH,
+                10.0,
+                18.0,
+                8.0,
+                14.0,
+                0.0,
+            )]));
+            chart.set_chart_type(ChartType::Heikin);
+            chart.config_mut().show_volume = false;
+            let mut settings = ChartSettingsState::from_chart(&chart);
+            let c = &mut settings.candle_colors;
+            c.show_border = true;
+            c.body_up = body;
+            c.border_up = border;
+            settings.apply_to_chart(&mut chart).unwrap();
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+            let plot = chart.get_rendered_price_rect();
+            let bodies: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Rect(r) if plot.contains(r.rect.center()) && r.fill == body => Some(r),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(bodies.len(), 1, "{border:?}");
+            assert_eq!(bodies[0].stroke, egui::Stroke::NONE, "{border:?}");
+        }
+    }
+
     /// The default scale tags both closes; selecting original prices suppresses only the
     /// synthetic tag, and the choice survives layouts and undo.
     #[test]
