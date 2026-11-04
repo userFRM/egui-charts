@@ -395,6 +395,7 @@ impl Chart {
             let mut drawing_response = None;
             let mut scale_tags = std::collections::HashMap::<PaneScale, Vec<Option<Rect>>>::new();
             let mut drawn_axes = Vec::new();
+            let mut fixed_axis_labels = Vec::new();
             let hovered = self.last_hover_bar_idx.and_then(|index| {
                 let index = index.round() as usize;
                 (index < self.state.shown().len()).then_some(index)
@@ -831,6 +832,12 @@ impl Chart {
                     }
                     self.measured_axis_width =
                         self.measured_axis_width.max(panel.measured_axis_width);
+                    fixed_axis_labels.extend(
+                        panel
+                            .fixed_axis_labels
+                            .drain(..)
+                            .map(|label| (assignment, member_map, label)),
+                    );
                     scale_tags.insert(assignment, panel.axis_tags.clone());
                     let PaneInteraction {
                         panel_rect,
@@ -1290,6 +1297,27 @@ impl Chart {
                             self.config.price_axis.allow_label_overlap,
                         );
                         tags.push(tag);
+                    }
+                }
+            }
+            if !collapsed {
+                for (key, axis) in &axes {
+                    let labels = fixed_axis_labels
+                        .iter()
+                        .filter(|(assignment, _, _)| assignment == key)
+                        .map(|(_, map, label)| (label.clone(), *map))
+                        .collect();
+                    let tags = scale_tags.entry(*key).or_default();
+                    crate::chart::rendering::axes::render_primitive_price_labels(
+                        &ui.painter().with_clip_rect(axis.intersect(ui.clip_rect())),
+                        super::super::series::axis_label_rect(pane_plot, *axis),
+                        axis.right(),
+                        labels,
+                        tags,
+                        self.config.price_axis.allow_label_overlap,
+                    );
+                    for tag in tags.iter().flatten() {
+                        self.measured_axis_width = self.measured_axis_width.max(tag.width() + 11.0);
                     }
                 }
             }

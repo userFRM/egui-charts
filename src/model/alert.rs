@@ -25,6 +25,20 @@ pub struct Alert {
     /// `None` for an alert the user is creating; the host assigns the id.
     #[serde(default)]
     pub id: Option<AlertId>,
+    /// Creation time assigned by the host. `None` means an older record has no known time.
+    #[serde(default)]
+    pub created_at: Option<DateTime<Utc>>,
+    /// Most recent firing time, including firings while the application was closed.
+    /// Hosts retain it on every trigger, even for alerts that remain active.
+    #[serde(default)]
+    pub last_triggered_at: Option<DateTime<Utc>>,
+    /// Draw the threshold across the pane in addition to its marker. Enabled by default.
+    #[serde(default = "alert_display_enabled")]
+    pub extend_line: bool,
+    /// Blink the marker for a minute after a firing. Enabled by default; independent of the line
+    /// extension.
+    #[serde(default = "alert_display_enabled")]
+    pub blink_on_trigger: bool,
     /// The symbol whose bars supply the sources, unless `watchlist` names the subject.
     pub symbol: String,
     /// User-facing name, independent of the notification message.
@@ -73,6 +87,10 @@ pub struct Alert {
     /// Where the alert stands, as the host reports it.
     #[serde(default)]
     pub status: AlertStatus,
+}
+
+fn alert_display_enabled() -> bool {
+    true
 }
 
 /// The source view and study definitions captured when an alert is created. The alert's
@@ -163,6 +181,10 @@ impl Alert {
     pub fn new(symbol: impl Into<String>, condition: AlertCondition) -> Self {
         Self {
             id: None,
+            created_at: None,
+            last_triggered_at: None,
+            extend_line: true,
+            blink_on_trigger: true,
             symbol: symbol.into(),
             name: String::new(),
             watchlist: None,
@@ -186,6 +208,16 @@ impl Alert {
 }
 
 impl Alert {
+    #[cfg(any(feature = "ui", feature = "alert-engine"))]
+    pub(crate) fn same_monitoring(&self, other: &Self) -> bool {
+        let mut copy = self.clone();
+        copy.created_at = other.created_at;
+        copy.last_triggered_at = other.last_triggered_at;
+        copy.extend_line = other.extend_line;
+        copy.blink_on_trigger = other.blink_on_trigger;
+        copy == *other
+    }
+
     /// Distinct calculation intervals, shortest nominal duration first, preserving condition
     /// order for ties. An unset first interval uses one minute
     /// until the engine fixes it to its first input. Additional unset intervals follow it.
@@ -708,6 +740,8 @@ mod tests {
         let stored = serde_json::json!({
             "symbol": "AAPL", "name": "Momentum", "message": "Check momentum",
             "timeframe": "Hour1", "additional_timeframes": ["Min5"],
+            "created_at": "2026-10-01T10:00:00Z", "last_triggered_at": "2026-10-02T11:30:00Z",
+            "extend_line": true, "blink_on_trigger": false,
             "watchlist": "technology", "source": {"Study": {"id": "rsi", "output": 0}},
             "condition": {"Above": 70.0}, "frequency": "OncePerBarClose",
             "additional_conditions": [{"source": "Price", "condition": {"EnteringChannel": {"lower": 100.0, "upper": 110.0}}}]
@@ -1000,6 +1034,10 @@ mod tests {
             alert,
             Alert {
                 id: None,
+                created_at: None,
+                last_triggered_at: None,
+                extend_line: true,
+                blink_on_trigger: true,
                 name: String::new(),
                 source: AlertSource::Price,
                 watchlist: None,
