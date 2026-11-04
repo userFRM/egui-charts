@@ -15,14 +15,14 @@ use egui::{Color32, Rect, Vec2};
 /// A study's name and input values, which identify it across charts.
 type PaneStudy = (String, Vec<(String, serde_json::Value)>);
 
-/// Identifies a pane of a chart. [`PaneId::MAIN`] is the price pane; [`Chart::add_pane`] and
+/// Identifies a pane of a chart. [`PaneId::MAIN`] is the initial price pane; [`Chart::add_pane`] and
 /// [`Chart::panes`] return the others. An id stays valid until its pane is removed and is never
 /// reused by the chart.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PaneId(pub(super) usize);
 
 impl PaneId {
-    /// The price pane, which draws the main series and its overlays.
+    /// The initial price pane. The main series can move to another pane.
     pub const MAIN: PaneId = PaneId(0);
 }
 
@@ -55,7 +55,7 @@ pub(super) struct PaneLayout {
     /// Every pane from top to bottom, the price pane included.
     pub(super) panes: Vec<Pane>,
     pub(super) maximized: Option<PaneId>,
-    /// Overlay draw order from back to front, with the main series as the divider.
+    /// Draw order in the initial price pane, including the main series while placed there.
     pub(super) main: Vec<SeriesId>,
 }
 
@@ -86,7 +86,7 @@ pub enum VisualOrder {
 #[derive(Clone)]
 pub(super) struct Pane {
     pub(super) id: PaneId,
-    /// Studies and host series drawn in the pane, in legend order; empty for the price pane.
+    /// Series and studies in draw order; the initial price pane uses `PaneLayout::main`.
     pub(super) members: Vec<SeriesId>,
     /// Share of the expanded panes' height, relative to the factors of the others.
     pub(super) stretch: f32,
@@ -243,7 +243,8 @@ impl Chart {
     /// Whether `id` is drawn below the price pane when placed there: a host series or a study
     /// that is not an overlay.
     fn pane_member(&self, id: SeriesId) -> bool {
-        self.price_series.iter().any(|item| item.id == id)
+        (id == SeriesId::MAIN && self.main_series_present)
+            || self.price_series.iter().any(|item| item.id == id)
             || self
                 .study_ids
                 .iter()
@@ -310,7 +311,10 @@ impl Chart {
         self.pane_layout.panes.retain_mut(|pane| {
             let before = pane.members.len();
             pane.members.retain(|member| *member != id);
-            pane.members.len() == before || !pane.members.is_empty() || pane.preserve
+            pane.id == PaneId::MAIN
+                || pane.members.len() == before
+                || !pane.members.is_empty()
+                || pane.preserve
         });
     }
 
@@ -365,15 +369,17 @@ impl Chart {
             .filter(|item| !self.in_pane(item.id))
             .map(|item| item.id)
             .collect();
-        main.retain(|id| *id == SeriesId::MAIN || overlays.contains(id) || series.contains(id));
-        if !main.contains(&SeriesId::MAIN) {
+        let main_here = !self.in_pane(SeriesId::MAIN);
+        main.retain(|id| {
+            (*id == SeriesId::MAIN && main_here) || overlays.contains(id) || series.contains(id)
+        });
+        if main_here && !main.contains(&SeriesId::MAIN) {
             main.insert(0, SeriesId::MAIN);
         }
         let mut after = main
             .iter()
             .position(|id| *id == SeriesId::MAIN)
-            .unwrap_or(0)
-            + 1;
+            .map_or(0, |at| at + 1);
         for id in series {
             if !main.contains(&id) {
                 main.insert(after.min(main.len()), id);
@@ -447,11 +453,11 @@ impl Chart {
     }
 
     /// The bar series and studies drawn in `pane`, in legend order. For the price pane these
-    /// are the main series, the host series not moved to another pane and the overlay studies.
+    /// are the bar series not moved to another pane and the overlay studies.
     /// Empty for an unknown pane.
     pub fn pane_series(&self, pane: PaneId) -> Vec<SeriesId> {
         if pane == PaneId::MAIN {
-            self.main_series_present
+            (self.main_series_present && !self.in_pane(SeriesId::MAIN))
                 .then_some(SeriesId::MAIN)
                 .into_iter()
                 .chain(
@@ -571,10 +577,11 @@ impl Chart {
         main.then_some(PaneId::MAIN)
     }
 
-    /// Moves a host series or study into `pane`, after the series and studies already there.
+    /// Moves a bar series, including the main series, or study into `pane`, after its members.
     /// A study moved to the price pane becomes an overlay. Scale assignments join the
     /// destination pane's scales, retaining that pane's options and manual ranges.
-    /// Returns `false` for the main series, an unknown id or pane, or a custom study
+    /// The main series keeps its price scale and horizontal mapping.
+    /// Returns `false` for an unknown id or pane, or a custom study
     /// presentation that rejects placement edits.
     pub fn move_series_to_pane(&mut self, series: SeriesId, pane: PaneId) -> bool {
         self.sync_panes();
@@ -586,11 +593,14 @@ impl Chart {
             if !self.studies.indicators_mut()[idx].set_overlay(pane == PaneId::MAIN) {
                 return false;
             }
-        } else if !self.price_series.iter().any(|item| item.id == series) {
+        } else if self.series_scale(series).is_none() {
             return false;
         }
         if self.series_pane(series) != Some(pane) {
             self.leave_panes(series);
+            if series == SeriesId::MAIN && pane == PaneId::MAIN {
+                self.pane_layout.main.push(series);
+            }
             if let Some(target) = self
                 .pane_layout
                 .panes
@@ -604,6 +614,27 @@ impl Chart {
         // Create a destination assignment before hosts query or edit it between frames.
         self.series_price_scale_mut(series);
         true
+    }
+
+    /// The pane holding the main series, or the initial price pane when it is absent.
+    pub(super) fn main_series_pane(&self) -> PaneId {
+        self.series_pane(SeriesId::MAIN).unwrap_or(PaneId::MAIN)
+    }
+
+    /// The draw order of the pane holding the main series.
+    pub(super) fn main_series_order(&self) -> &[SeriesId] {
+        let pane = self.main_series_pane();
+        if pane == PaneId::MAIN {
+            &self.pane_layout.main
+        } else {
+            &self
+                .pane_layout
+                .panes
+                .iter()
+                .find(|item| item.id == pane)
+                .expect("main series belongs to pane")
+                .members
+        }
     }
 
     /// Moves a host series or study into a new pane at the bottom.
@@ -871,9 +902,10 @@ impl Chart {
             self.studies
                 .indicators()
                 .iter()
-                .filter(|study| {
+                .enumerate()
+                .filter(|(idx, study)| {
                     study.is_visible()
-                        && study.is_overlay()
+                        && self.series_pane(self.study_ids[*idx]) == Some(self.main_series_pane())
                         && !study.is_volume()
                         && study.scale() == crate::studies::StudyScale::Independent
                 })
