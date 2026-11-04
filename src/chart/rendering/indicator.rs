@@ -204,6 +204,9 @@ fn paint_fills(
             (fill.color, fill.inverted_color)
         };
         if let (FillBoundary::Level(a), FillBoundary::Level(b)) = (fill.first, fill.second) {
+            if !a.is_finite() || !b.is_finite() {
+                continue;
+            }
             let (a, b) = (map.price_to_y(a), map.price_to_y(b));
             if a.is_finite() && b.is_finite() {
                 paint_band(
