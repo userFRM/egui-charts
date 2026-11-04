@@ -159,6 +159,13 @@ impl DemoApp {
         }
         let mut report = sample_backtest(&self.state.symbol, self.state.timeframe, source);
         report.currency = self.chart.instrument().and_then(|i| i.currency.clone());
+        if let Some(tick) = self.chart.instrument().and_then(|i| i.tick_size) {
+            let mut settings = self.strategy_report.settings().clone();
+            settings.price_increment = tick;
+            if let Err(error) = self.strategy_report.set_settings(settings) {
+                log::warn!("Cannot use the instrument's price increment: {error}");
+            }
+        }
         self.strategy_report.set_report(Some(report), source);
         self.strategy_report
             .select_strategy("Consecutive Up/Down")
@@ -172,6 +179,16 @@ impl DemoApp {
         self.update_live_strategy();
         if self.strategy_report.report().is_none() {
             return;
+        }
+        let chart_type = self.chart.chart_type();
+        if self.live_strategy.is_none() && self.strategy_report.settings().chart_type != chart_type
+        {
+            let mut settings = self.strategy_report.settings().clone();
+            settings.chart_type = chart_type;
+            settings.recalculate_on_history &= !chart_type.transforms_data();
+            if let Err(error) = self.strategy_report.set_settings(settings) {
+                log::warn!("Cannot update strategy candles: {error}");
+            }
         }
         let mut clear = false;
         let action = egui::Panel::bottom("strategy_report")
@@ -205,6 +222,14 @@ impl DemoApp {
                 )
             })
             .inner;
+        if self.live_strategy.is_none() && self.strategy_report.settings().chart_type != chart_type
+        {
+            let kind = self.strategy_report.settings().chart_type;
+            self.state.chart_type = kind;
+            self.top_toolbar.chart_type_selector.current = kind;
+            self.chart.set_chart_type(kind);
+            self.size_price_based_charts();
+        }
         if clear {
             self.stop_live_strategy();
             self.strategy_report.set_report(None, &[]);

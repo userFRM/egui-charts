@@ -281,6 +281,9 @@ fn layout_icon(layout: ChartLayoutMode) -> &'static Icon {
         M::FourLargeRight => &icons::LAYOUT_FOUR_LARGE_RIGHT,
         M::FourLargeTop => &icons::LAYOUT_FOUR_LARGE_TOP,
         M::FourLargeBottom => &icons::LAYOUT_FOUR_LARGE_BOTTOM,
+        M::FourSplitLeft => &icons::LAYOUT_FOUR_SPLIT_LEFT,
+        M::FourSplitRight => &icons::LAYOUT_FOUR_SPLIT_RIGHT,
+        M::FourSplitBottom => &icons::LAYOUT_FOUR_SPLIT_BOTTOM,
         M::Five => &icons::LAYOUT_FIVE,
         M::FiveHorizontal => &icons::LAYOUT_FIVE_HORIZONTAL,
         M::FiveVertical => &icons::LAYOUT_FIVE_VERTICAL,
@@ -288,6 +291,9 @@ fn layout_icon(layout: ChartLayoutMode) -> &'static Icon {
         M::FiveLargeRight => &icons::LAYOUT_FIVE_LARGE_RIGHT,
         M::FiveLargeTop => &icons::LAYOUT_FIVE_LARGE_TOP,
         M::FiveLargeBottom => &icons::LAYOUT_FIVE_LARGE_BOTTOM,
+        M::FiveSplitLeft => &icons::LAYOUT_FIVE_SPLIT_LEFT,
+        M::FiveSplitRight => &icons::LAYOUT_FIVE_SPLIT_RIGHT,
+        M::FiveTwoTop => &icons::LAYOUT_FIVE_TWO_TOP,
         M::Six => &icons::LAYOUT_SIX,
         M::SixTwoColumns => &icons::LAYOUT_SIX_TWO_COLUMNS,
         M::SixHorizontal => &icons::LAYOUT_SIX_HORIZONTAL,
@@ -296,8 +302,11 @@ fn layout_icon(layout: ChartLayoutMode) -> &'static Icon {
         M::SixLargeRight => &icons::LAYOUT_SIX_LARGE_RIGHT,
         M::SixLargeTop => &icons::LAYOUT_SIX_LARGE_TOP,
         M::SixLargeBottom => &icons::LAYOUT_SIX_LARGE_BOTTOM,
+        M::SixTwoTop => &icons::LAYOUT_SIX_TWO_TOP,
+        M::SixFourTop => &icons::LAYOUT_SIX_FOUR_TOP,
         M::Seven => &icons::LAYOUT_SEVEN,
         M::SevenHorizontal => &icons::LAYOUT_SEVEN_HORIZONTAL,
+        M::SevenLargeLeft => &icons::LAYOUT_SEVEN_LARGE_LEFT,
         M::Eight => &icons::LAYOUT_EIGHT,
         M::EightVertical => &icons::LAYOUT_EIGHT_VERTICAL,
         M::EightTwoColumns => &icons::LAYOUT_EIGHT_TWO_COLUMNS,
@@ -305,6 +314,7 @@ fn layout_icon(layout: ChartLayoutMode) -> &'static Icon {
         M::Nine => &icons::LAYOUT_NINE,
         M::NineVertical => &icons::LAYOUT_NINE_VERTICAL,
         M::NineHorizontal => &icons::LAYOUT_NINE_HORIZONTAL,
+        M::NineFiveTop => &icons::LAYOUT_NINE_FIVE_TOP,
         M::Ten => &icons::LAYOUT_TEN,
         M::TenHorizontal => &icons::LAYOUT_TEN_HORIZONTAL,
         M::TenVertical => &icons::LAYOUT_TEN_VERTICAL,
@@ -333,9 +343,9 @@ mod tests {
         kittest::{NodeT, Queryable},
     };
 
-    /// Each regular arrangement is reachable by its own menu item and returns its saved preset.
+    /// Each arrangement is reachable by its own menu item and returns its saved preset.
     #[test]
-    fn regular_arrangements_select_their_saved_preset() {
+    fn arrangements_select_their_saved_preset() {
         for width in [320.0, 1440.0] {
             let mut harness = Harness::builder()
                 .with_size(egui::vec2(width, 900.0))
@@ -352,6 +362,16 @@ mod tests {
                     (ChartGridSelector::default(), None),
                 );
             for (label, name) in [
+                ("2 Columns Left, 2 Rows Right", "FourSplitLeft"),
+                ("2 Rows Left, 2 Columns Right", "FourSplitRight"),
+                ("2 Columns Top, 2 Rows Bottom", "FourSplitBottom"),
+                ("2 Columns Left, 3 Rows Right", "FiveSplitLeft"),
+                ("3 Rows Left, 2 Columns Right", "FiveSplitRight"),
+                ("2 Top, 3 Bottom", "FiveTwoTop"),
+                ("2 Top, 4 Bottom", "SixTwoTop"),
+                ("4 Top, 2 Bottom", "SixFourTop"),
+                ("1 Left, 6 Right", "SevenLargeLeft"),
+                ("5 Top, 4 Bottom", "NineFiveTop"),
                 ("2x3 Grid", "SixTwoColumns"),
                 ("7 Horizontal", "SevenHorizontal"),
                 ("8 Vertical", "EightVertical"),

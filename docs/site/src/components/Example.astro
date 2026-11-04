@@ -25,7 +25,12 @@ const src = `/egui-charts/docs/examples/widget/?scene=${encodeURIComponent(scene
       </div>
     </div>
   </figure>
-  <Code lang="rust" title={`${scene.replaceAll('-', '_')}.rs`} code={code} />
+  {run === 'manual' ? (
+    <details>
+      <summary>Compiled Rust source</summary>
+      <Code lang="rust" title={`${scene.replaceAll('-', '_')}.rs`} code={code} />
+    </details>
+  ) : <Code lang="rust" title={`${scene.replaceAll('-', '_')}.rs`} code={code} />}
 </div>
 
 <script>
