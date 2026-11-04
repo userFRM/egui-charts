@@ -322,7 +322,12 @@ impl Chart {
                                     && key != self.main_series_scale
                                     && !scales.iter().any(|(other, _)| *other == key)
                                 {
-                                    scales.push((key, self.pane_price_scale(*id, key).clone()));
+                                    // A study can change assignment before a frame creates the scale.
+                                    let scale =
+                                        self.series_scales.get(&key).cloned().unwrap_or_else(
+                                            || crate::scales::PriceScale::new(Default::default()),
+                                        );
+                                    scales.push((key, scale));
                                 }
                             }
                             scales

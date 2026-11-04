@@ -3135,7 +3135,20 @@ fn pane_axis_commands_enumerate_sources_and_restore_layout() {
         chart.set_series_scale(SeriesId::MAIN, SeriesScale::Overlay(40));
         let study = chart.add_indicator(Box::new(crate::studies::SMA::new(3)));
         let key = SeriesScale::Separate(9);
-        chart.set_indicator_scale(study, crate::studies::StudyScale::Shared(key));
+        assert!(
+            chart
+                .indicator_mut(study)
+                .unwrap()
+                .set_scale(crate::studies::StudyScale::Shared(key))
+        );
+        // Hosts can edit a study and save before a frame creates its named scale.
+        let pending = chart.snapshot().unwrap();
+        let mut restored = Chart::new(BarData::from_bars(bars(&[100.0; 30])));
+        restored.restore(&pending).unwrap();
+        assert_eq!(
+            restored.pane_scales(PaneId::MAIN, AxisSide::Left),
+            [PaneScale::Named(key)]
+        );
         let scale = chart.pane_price_scale_mut(PaneId::MAIN, key);
         scale.set_range(80.0, 120.0);
         scale.set_price_precision(Some(3));
