@@ -100,6 +100,7 @@ pub(super) struct Pane {
     pub(super) scales: Vec<(crate::model::SeriesScale, crate::scales::PriceScale)>,
     /// Panel rect in the last frame; [`Rect::NOTHING`] when the pane was not drawn.
     pub(super) rect: Rect,
+    /// Host watermark painted behind this pane's series; see [`Chart::set_pane_watermark`].
     pub(super) watermark: Option<Watermark>,
 }
 

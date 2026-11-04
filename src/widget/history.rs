@@ -901,6 +901,12 @@ impl Chart {
         }
         if let Some(panes) = &mut action.panes {
             std::mem::swap(&mut self.pane_layout, panes);
+            // Watermarks are host state, not an edit: a surviving pane keeps its current one.
+            for pane in &mut self.pane_layout.panes {
+                if let Some(current) = panes.panes.iter_mut().find(|other| other.id == pane.id) {
+                    std::mem::swap(&mut pane.watermark, &mut current.watermark);
+                }
+            }
         }
         self.sync_panes();
         if let Some(ChartElementId::Indicator(id)) = self.selection.selected_id()
@@ -1221,6 +1227,32 @@ mod tests {
             assert!(chart.redo());
             assert_eq!(chart.study_ids, [host]);
         }
+    }
+
+    /// A pane watermark is host state: undoing and redoing a pane edit leaves the watermarks
+    /// the host set since, and does not bring back or drop earlier ones.
+    #[test]
+    fn pane_edits_in_history_leave_host_watermarks_alone() {
+        use crate::widget::{Watermark, WatermarkLine};
+        let mut chart = chart(&[100.0], &[110.0]);
+        let pane = chart.add_pane();
+        let text = |chart: &Chart| {
+            chart.pane_layout.panes[1]
+                .watermark
+                .as_ref()
+                .map(|watermark| watermark.lines[0].text.clone())
+        };
+        let mark = |text: &str| {
+            Watermark::default().with_line(WatermarkLine::new(text, 10.0, Color32::RED))
+        };
+        assert!(chart.set_pane_watermark(pane, Some(mark("before"))));
+        chart.user_action(|chart| assert!(chart.set_pane_height(pane, 200.0)));
+        assert!(chart.set_pane_watermark(pane, Some(mark("after"))));
+        assert!(chart.undo());
+        assert_eq!(text(&chart).as_deref(), Some("after"));
+        assert!(chart.set_pane_watermark(pane, None));
+        assert!(chart.redo());
+        assert_eq!(text(&chart), None);
     }
 
     #[test]
