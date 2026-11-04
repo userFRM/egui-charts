@@ -846,7 +846,8 @@ impl DemoApp {
             .templates
             .set_storage(app.storage.clone());
         app.drawing_props.templates.set_storage(app.storage.clone());
-        let search: Arc<dyn egui_charts::services::SymbolSearch> = Arc::new(DemoSymbol::symbols());
+        let search: Arc<dyn egui_charts::services::SymbolSearch> =
+            Arc::new(feeds::search_catalog(&mut app.symbol_search));
         app.symbol_search.set_search_service(Some(search.clone()));
         app.compare_dialog.set_search_service(Some(search));
         app.symbol_search.set_storage(app.storage.clone());

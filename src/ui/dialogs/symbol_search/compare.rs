@@ -384,16 +384,9 @@ impl CompareSymbolsDialog {
             .max_height(ui.available_height())
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
-                let query = self.search_query.to_lowercase();
+                let query = crate::services::SymbolQuery::new(&self.search_query);
                 for symbol in symbols.iter().filter(|symbol| {
-                    self.search.connected()
-                        || symbol.symbol.to_lowercase().contains(&query)
-                        || symbol
-                            .description
-                            .as_deref()
-                            .unwrap_or(&symbol.symbol)
-                            .to_lowercase()
-                            .contains(&query)
+                    self.search.connected() || query.rank_in(symbol, symbols).is_some()
                 }) {
                     next_page |= ui.clip_rect().contains(ui.cursor().min)
                         && symbols
