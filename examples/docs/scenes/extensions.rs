@@ -168,10 +168,12 @@ pub fn primitives() -> egui_charts::Chart {
         fn time_axis_labels(&self, _view: &PrimitiveView<'_>) -> Vec<TimeAxisLabel> {
             self.sessions
                 .iter()
-                .map(|(open, _)| TimeAxisLabel {
-                    time: *open,
-                    text: format!("Open {}", open.format("%b %-d")),
-                    color: Color32::from_rgb(41, 98, 255),
+                .map(|(open, _)| {
+                    TimeAxisLabel::new(
+                        *open,
+                        format!("Open {}", open.format("%b %-d")),
+                        Color32::from_rgb(41, 98, 255),
+                    )
                 })
                 .collect()
         }
