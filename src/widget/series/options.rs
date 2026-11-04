@@ -209,6 +209,16 @@ impl SeriesOptions {
                 line_with_markers: line_style,
                 marker_radius: self.marker_radius.unwrap_or(3.0),
                 area,
+                heikin: crate::model::HeikinStyle {
+                    body_up: self.up_color,
+                    body_down: self.down_color,
+                    border_up: self.up_color,
+                    border_down: self.down_color,
+                    wick_up: self.up_color,
+                    wick_down: self.down_color,
+                    border_visible: self.candle_border_width > 0.0,
+                    ..Default::default()
+                },
                 bars: self.bars_style.clone(),
                 last_price_animation: self.last_price_animation,
                 baseline,

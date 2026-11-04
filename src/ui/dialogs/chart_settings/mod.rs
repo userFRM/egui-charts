@@ -741,6 +741,9 @@ impl SettingsDialog {
                 price_source: Some(Default::default()),
                 ..Default::default()
             };
+            if self.settings.chart_type == crate::model::ChartType::Heikin {
+                self.settings.candle_colors.show_border = true;
+            }
             self.template_name.clear();
             self.update_color_pickers_from_settings();
             self.template_menu_open = false;

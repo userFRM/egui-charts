@@ -52,8 +52,33 @@ impl SettingsDialog {
                     self.settings.candle_colors.body_up = series.bullish_color;
                     self.settings.candle_colors.body_down = series.bearish_color;
                 } else {
-                    let candles = kind == crate::model::ChartType::Candles;
-                    self.draw_section_header(ui, if candles { "CANDLES" } else { "COLORS" }, theme);
+                    let heikin = kind == crate::model::ChartType::Heikin;
+                    let candles = kind == crate::model::ChartType::Candles || heikin;
+                    self.draw_section_header(
+                        ui,
+                        if heikin {
+                            "HEIKIN ASHI"
+                        } else if candles {
+                            "CANDLES"
+                        } else {
+                            "COLORS"
+                        },
+                        theme,
+                    );
+                    if heikin {
+                        let style = &mut self
+                            .settings
+                            .chart_type_params
+                            .get_or_insert_with(Default::default)
+                            .styles
+                            .heikin;
+                        styled_checkbox(
+                            ui,
+                            &mut style.real_price_only,
+                            "Use original prices on scale",
+                            theme.ui.text,
+                        );
+                    }
                     if candles {
                         styled_checkbox(
                             ui,
@@ -309,5 +334,168 @@ impl SettingsDialog {
                 });
             });
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{Bar, BarData, ChartType};
+    use crate::ui::top_toolbar::components::settings_menu::actions::SettingsAction;
+    use crate::widget::{Chart, settings::ChartSettingsState};
+    use egui::{Context, Event, PointerButton, Pos2, RawInput, Rect, Shape, Vec2};
+
+    fn frame(
+        ctx: &Context,
+        chart: &mut Chart,
+        dialog: &mut SettingsDialog,
+        theme: &Theme,
+        events: Vec<Event>,
+        labels: &[&str],
+    ) -> Vec<Pos2> {
+        let output = ctx.run_ui(
+            RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1440.0, 900.0))),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                chart.show(ui);
+                if let SettingsAction::Apply(settings) = dialog.show(ui.ctx(), theme) {
+                    chart.begin_user_action();
+                    settings.apply_to_chart(chart).unwrap();
+                    chart.end_user_action();
+                }
+            },
+        );
+        let positions = labels
+            .iter()
+            .map(|label| {
+                output
+                    .shapes
+                    .iter()
+                    .find_map(|s| match &s.shape {
+                        Shape::Text(text) if text.galley.text() == *label => {
+                            Some(text.pos + text.galley.size() / 2.0)
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("missing control: {label}"))
+            })
+            .collect();
+        output.drop_without_applying_deltas();
+        positions
+    }
+
+    /// Real pointer edits reach the painter only after acceptance; Cancel keeps the original
+    /// component and scale settings in both themes.
+    #[test]
+    fn heikin_dialog_accepts_and_cancels_component_and_scale_edits() {
+        for theme in [Theme::light(), Theme::dark()] {
+            for label in [
+                "Body",
+                "Borders",
+                "Wick",
+                "Use original prices on scale",
+                "Reset to defaults",
+            ] {
+                for accept in [false, true] {
+                    let ctx = Context::default();
+                    crate::theme::apply_to_egui(&ctx, &theme);
+                    let mut chart = Chart::new(BarData::from_bars(vec![Bar::new(
+                        chrono::DateTime::UNIX_EPOCH,
+                        10.0,
+                        18.0,
+                        8.0,
+                        14.0,
+                        0.0,
+                    )]));
+                    chart.set_chart_type(ChartType::Heikin);
+                    chart.config_mut().show_volume = false;
+                    if label == "Reset to defaults" {
+                        let mut params = chart.chart_type_params().clone();
+                        params.styles.heikin.body_visible = false;
+                        params.styles.heikin.border_visible = false;
+                        params.styles.heikin.wick_visible = false;
+                        params.styles.heikin.real_price_only = true;
+                        chart.set_chart_type_params(params);
+                    }
+                    let before = ChartSettingsState::from_chart(&chart);
+                    let mut dialog = SettingsDialog::new();
+                    dialog.set_control_visible(crate::ui::Control::Templates, false);
+                    dialog.open(before.clone());
+                    for _ in 0..3 {
+                        frame(&ctx, &mut chart, &mut dialog, &theme, vec![], &[]);
+                    }
+                    for control in [label, if accept { "Ok" } else { "Cancel" }] {
+                        let pos =
+                            frame(&ctx, &mut chart, &mut dialog, &theme, vec![], &[control])[0];
+                        frame(
+                            &ctx,
+                            &mut chart,
+                            &mut dialog,
+                            &theme,
+                            vec![Event::PointerMoved(pos)],
+                            &[],
+                        );
+                        for pressed in [true, false] {
+                            frame(
+                                &ctx,
+                                &mut chart,
+                                &mut dialog,
+                                &theme,
+                                vec![Event::PointerButton {
+                                    pos,
+                                    button: PointerButton::Primary,
+                                    pressed,
+                                    modifiers: Default::default(),
+                                }],
+                                &[],
+                            );
+                        }
+                    }
+                    assert!(!dialog.is_open);
+                    let after = ChartSettingsState::from_chart(&chart);
+                    let style = chart.chart_type_params().styles.heikin.clone();
+                    let mut expected = before
+                        .chart_type_params
+                        .as_ref()
+                        .unwrap()
+                        .styles
+                        .heikin
+                        .clone();
+                    if accept {
+                        match label {
+                            "Body" => expected.body_visible = false,
+                            "Borders" => expected.border_visible = false,
+                            "Wick" => expected.wick_visible = false,
+                            "Use original prices on scale" => expected.real_price_only = true,
+                            "Reset to defaults" => expected = Default::default(),
+                            _ => unreachable!(),
+                        }
+                    }
+                    assert_eq!(style, expected);
+                    if !accept {
+                        assert_eq!(after, before);
+                    }
+                    // Paint the accepted state after the modal has closed.
+                    let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 1.0, vec![]);
+                    let plot = chart.get_rendered_price_rect();
+                    let body = painted.iter().any(|s| {
+                        matches!(s, Shape::Rect(r)
+                        if plot.contains(r.rect.center()) && r.fill == style.body_up)
+                    });
+                    assert_eq!(body, style.body_visible);
+                    let border = painted.iter().any(|s| {
+                        matches!(s, Shape::Rect(r)
+                        if plot.contains(r.rect.center()) && r.stroke.color == style.border_up)
+                    });
+                    let wick = painted.iter().any(|s| matches!(s, Shape::LineSegment { points, stroke }
+                        if plot.contains(points[0]) && points[0].x == points[1].x && stroke.color == style.wick_up));
+                    assert_eq!(border, style.border_visible);
+                    assert_eq!(wick, style.wick_visible);
+                }
+            }
+        }
     }
 }

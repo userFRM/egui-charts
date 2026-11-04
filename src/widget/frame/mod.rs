@@ -1285,8 +1285,16 @@ impl Chart {
             _ => (visible_data, coords.clone()),
         };
         let colors = StyleColors {
-            bullish: self.config.bullish_color,
-            bearish: self.config.bearish_color,
+            bullish: if self.chart_type == ChartType::Heikin {
+                self.chart_type_params.styles.heikin.body_up
+            } else {
+                self.config.bullish_color
+            },
+            bearish: if self.chart_type == ChartType::Heikin {
+                self.chart_type_params.styles.heikin.body_down
+            } else {
+                self.config.bearish_color
+            },
             text: self.config.text_color,
             bullish_border: self.config.bullish_border_color,
             bearish_border: self.config.bearish_border_color,
@@ -1467,7 +1475,7 @@ impl Chart {
                 max_volume,
             ),
             &self.chart_type_params,
-            rendering::TradingColors::new(self.config.bullish_color, self.config.bearish_color),
+            rendering::TradingColors::new(colors.bullish, colors.bearish),
             rendering::CoordMapping::new(chart_rect.min.x),
             self.config.price_source,
         );
@@ -1509,7 +1517,7 @@ impl Chart {
                 max_volume,
             ),
             &self.chart_type_params,
-            rendering::TradingColors::new(self.config.bullish_color, self.config.bearish_color),
+            rendering::TradingColors::new(colors.bullish, colors.bearish),
             rendering::CoordMapping::new(chart_rect.min.x),
             self.config.price_source,
         );
@@ -1560,19 +1568,58 @@ impl Chart {
                 crate::model::last_with_value(visible_data)
             }
         };
+        let heikin_style = self.chart_type_params.styles.heikin.clone();
+        let heikin_last = (self.chart_type == ChartType::Heikin)
+            .then(|| {
+                let bars = self
+                    .heikin_ashi
+                    .bars(&self.state.data().bars, self.state.revision());
+                let (from, to) = match style.price_line_source {
+                    crate::model::PriceLineSource::LastBar => (0, bars.len()),
+                    crate::model::PriceLineSource::LastVisible => (start_idx, end_idx),
+                };
+                let index = from
+                    + bars[from..to]
+                        .iter()
+                        .rposition(|bar| !bar.is_whitespace())?;
+                let by_previous_close = heikin_style.color_by_previous_close;
+                Some((
+                    bars[index].clone(),
+                    rendering::candles::heikin_rising(&bars, index, by_previous_close),
+                ))
+            })
+            .flatten();
+        let original_last = last;
+        let last = if heikin_style.real_price_only {
+            last
+        } else {
+            heikin_last.as_ref().map(|(bar, _)| bar).or(last)
+        };
         let last_price_line = last.filter(|_| self.main_series_visible).map(|last| {
-            PriceLine::new(last.close, self.main_value_color(last))
-                .with_width(if self.config.show_price_line && style.price_line_visible {
-                    style.price_line_width
+            PriceLine::new(
+                last.close,
+                if self.chart_type == ChartType::Heikin && !heikin_style.real_price_only {
+                    let rising = heikin_last.as_ref().is_none_or(|(_, rising)| *rising);
+                    style.price_line_color.unwrap_or(if rising {
+                        heikin_style.body_up
+                    } else {
+                        heikin_style.body_down
+                    })
                 } else {
-                    0.0
-                })
-                .with_style(style.price_line_style)
-                .with_axis_label(
-                    (show_right_axis || show_left_axis)
-                        && self.config.show_symbol_last_val
-                        && style.last_value_visible,
-                )
+                    self.main_value_color(last)
+                },
+            )
+            .with_width(if self.config.show_price_line && style.price_line_visible {
+                style.price_line_width
+            } else {
+                0.0
+            })
+            .with_style(style.price_line_style)
+            .with_axis_label(
+                (show_right_axis || show_left_axis)
+                    && self.config.show_symbol_last_val
+                    && style.last_value_visible,
+            )
         });
         // Footprint fills and glyphs must cover the current-price stroke.
         let price_line_below = !session_profiles
@@ -1821,8 +1868,8 @@ impl Chart {
                     &bar_clock,
                     idx_to_coord,
                     chart_rect.min.x,
-                    self.config.bullish_color,
-                    self.config.bearish_color,
+                    colors.bullish,
+                    colors.bearish,
                 );
             }
             if self.has_renderer(*id) {
@@ -2341,6 +2388,35 @@ impl Chart {
             );
         }
 
+        if self.main_series_visible
+            && self.chart_type == ChartType::Heikin
+            && !heikin_style.real_price_only
+            && let Some(raw) = original_last
+        {
+            let color = self.main_value_color(raw);
+            let line = PriceLine::new(raw.close, color)
+                .with_width(
+                    if self.config.show_price_line && self.main_series_style.price_line_visible {
+                        self.main_series_style.price_line_width
+                    } else {
+                        0.0
+                    },
+                )
+                .with_style(self.main_series_style.price_line_style);
+            rendering::render_price_line(
+                &painter,
+                price_rect,
+                &price_map,
+                &line,
+                price_rect.left(),
+                false,
+                axis_edge,
+            );
+            if self.config.show_symbol_last_val && self.main_series_style.last_value_visible {
+                pending_values.push((raw.close, rendering::axes::axis_label_colors(&line), false));
+            }
+        }
+
         let last_price_tag = if let Some((last, line)) = last.zip(last_price_line) {
             let line = if price_line_below {
                 line.with_width(0.0)
@@ -2370,10 +2446,10 @@ impl Chart {
                     .filter(|_| show_price_axis && self.config.show_extended_session_price)
                     .map(|quote| (quote, self.config.extended_session_price_color)),
                 (show_volume && show_price_axis && !cfg!(feature = "studies")).then_some((
-                    last.volume,
+                    original_last.unwrap_or(last).volume,
                     // The tag takes the colour of the bar's direction in the applied theme, as
                     // its volume bar does.
-                    if last.is_bullish() {
+                    if original_last.unwrap_or(last).is_bullish() {
                         ui.active_theme().chart.candle_up
                     } else {
                         ui.active_theme().chart.candle_down
@@ -2567,10 +2643,7 @@ impl Chart {
                     .iter()
                     .map(|bar| bar.low)
                     .fold(f64::INFINITY, f64::min);
-                values.extend([
-                    (high, "High", self.config.bullish_color),
-                    (low, "Low", self.config.bearish_color),
-                ]);
+                values.extend([(high, "High", colors.bullish), (low, "Low", colors.bearish)]);
             }
             let trading_bid_ask = {
                 #[cfg(feature = "ui")]

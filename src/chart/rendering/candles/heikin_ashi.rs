@@ -1,4 +1,4 @@
-//! Heikin-Ashi transform with full-series caching.
+//! Heikin-Ashi painting and transform with full-series caching.
 //!
 //! Heikin-Ashi is a cumulative recurrence:
 //!
@@ -17,7 +17,9 @@
 
 use std::cell::{Ref, RefCell};
 
-use crate::model::Bar;
+use super::helpers::{OhlcYCoords, draw_wicks};
+use crate::chart::rendering::{BarRenderParams, StyleColors};
+use crate::model::{Bar, CandlesStyle};
 
 /// A whitespace bar stays whitespace, and the bar after it continues from the last bar with a
 /// value.
@@ -100,6 +102,86 @@ impl HeikinAshiCache {
             entry.last = full_data.last().cloned();
         }
         Ref::map(self.entry.borrow(), |entry| entry.bars.as_slice())
+    }
+}
+
+/// Whether the transformed bar at `idx` rises: its close is above its open, or at or above the
+/// preceding transformed close when `by_previous_close`.
+pub(crate) fn rising(bars: &[Bar], idx: usize, by_previous_close: bool) -> bool {
+    if by_previous_close {
+        bars[idx].close >= super::helpers::prev_close(bars, idx)
+    } else {
+        bars[idx].is_bullish()
+    }
+}
+
+/// Paint the cached transformed prices with their own component style; volume keeps the
+/// source bars and the chart's volume colours.
+pub(super) fn render(
+    ctx: &super::CandleDataContext<'_>,
+    params: &super::ChartTypeParams<'_>,
+    idx_to_coord: impl Fn(usize, f32) -> f32,
+) {
+    let bars = ctx.heikin_ashi.bars(ctx.full_data, ctx.revision);
+    let start = ctx.start_idx.min(bars.len());
+    let end = start.saturating_add(ctx.visible_data.len()).min(bars.len());
+    let style = &params.type_params.styles.heikin;
+    let colors = StyleColors {
+        bullish: style.body_up,
+        bearish: style.body_down,
+        bullish_border: Some(style.border_up),
+        bearish_border: Some(style.border_down),
+        bullish_wick: Some(style.wick_up),
+        bearish_wick: Some(style.wick_down),
+        candle_border_width: if !style.border_visible {
+            0.0
+        } else if ctx.colors.candle_border_width.is_finite() && ctx.colors.has_border() {
+            ctx.colors.candle_border_width
+        } else {
+            1.0
+        },
+        ..*ctx.colors
+    };
+    let components = CandlesStyle {
+        body_visible: style.body_visible,
+        wick_visible: false,
+        color_by_previous_close: style.color_by_previous_close,
+    };
+    for (i, bar) in bars[start..end].iter().enumerate() {
+        if bar.is_whitespace() {
+            continue;
+        }
+        let x = idx_to_coord(start + i, params.chart_rect_min_x());
+        let rising = rising(&bars, start + i, style.color_by_previous_close);
+        if style.wick_visible {
+            draw_wicks(
+                ctx.price_ctx.painter,
+                x,
+                &OhlcYCoords::from_bar(bar, ctx.price_scale),
+                params.wick_width(),
+                colors.wick_color(rising),
+            );
+        }
+        super::render_candle(
+            ctx.price_ctx,
+            bar,
+            rising,
+            ctx.price_scale,
+            &colors,
+            &BarRenderParams::new(x, params.bar_width(), params.wick_width()),
+            &components,
+        );
+    }
+    if params.show_volume() {
+        super::volume::render_volume_bars(
+            ctx.volume_ctx,
+            ctx.visible_data,
+            ctx.start_idx,
+            params.max_volume(),
+            ctx.colors,
+            params.chart_rect_min_x(),
+            &idx_to_coord,
+        );
     }
 }
 

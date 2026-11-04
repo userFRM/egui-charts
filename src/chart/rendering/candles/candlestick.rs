@@ -1,8 +1,7 @@
 //! Candlestick-family chart renderers
 //!
-//! Includes: Candlestick, OHLC Bars, Hollow Candles, Heikin-Ashi, Volume Candles, Columns
+//! Includes: Candlestick, OHLC Bars, Hollow Candles, Volume Candles, Columns
 
-use super::HeikinAshiCache;
 use super::helpers::{
     OhlcYCoords, bar_color, draw_body_filled, draw_body_hollow, draw_wicks, prev_close,
 };
@@ -172,71 +171,6 @@ pub(super) fn render_columns(
             Pos2::new(x + bar_width / 2.0, bottom),
         );
         price_ctx.painter.rect_filled(rect, 0.0, color);
-    }
-
-    if show_volume {
-        render_volume_bars(
-            volume_ctx,
-            visible_data,
-            start_idx,
-            max_volume,
-            colors,
-            chart_rect_min_x,
-            &idx_to_coord,
-        );
-    }
-}
-
-/// Heikin-Ashi candles: smoothed candlesticks.
-///
-/// Heikin-Ashi is a cumulative recurrence, so the series is computed over the
-/// complete dataset (`full_data`) and cached; the visible window is sliced out
-/// of the cached series. This keeps every bar's Heikin-Ashi value invariant as
-/// the user pans and zooms, instead of reseeding from the first visible bar.
-pub(super) fn render_heikin_ashi(
-    price_ctx: &RenderContext,
-    volume_ctx: &RenderContext,
-    price_scale: &PriceMap,
-    colors: &StyleColors,
-    visible_data: &[Bar],
-    full_data: &[Bar],
-    revision: u64,
-    cache: &HeikinAshiCache,
-    start_idx: usize,
-    bar_width: f32,
-    wick_width: f32,
-    show_volume: bool,
-    max_volume: f64,
-    chart_rect_min_x: f32,
-    idx_to_coord: impl Fn(usize, f32) -> f32,
-    bullish_color: Color32,
-    bearish_color: Color32,
-) {
-    if visible_data.is_empty() {
-        return;
-    }
-
-    let ha_bars = cache.bars(full_data, revision);
-    let start = start_idx.min(ha_bars.len());
-    let end = start.saturating_add(visible_data.len()).min(ha_bars.len());
-    let ha_window = &ha_bars[start..end];
-    let painter = price_ctx.painter;
-    let coords = *price_scale;
-
-    for (i, bar) in ha_window.iter().enumerate() {
-        if bar.is_whitespace() {
-            continue;
-        }
-        let x = idx_to_coord(start_idx + i, chart_rect_min_x);
-        let color = if bar.close >= bar.open {
-            bullish_color
-        } else {
-            bearish_color
-        };
-        let y = OhlcYCoords::from_bar(bar, &coords);
-
-        draw_wicks(painter, x, &y, wick_width, color);
-        draw_body_filled(painter, x, bar_width, &y, color);
     }
 
     if show_volume {
