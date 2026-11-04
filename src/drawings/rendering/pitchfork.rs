@@ -225,10 +225,11 @@ impl Drawing {
             .unwrap_or_else(PitchforkConfig::legacy);
         config
             .levels
-            .retain(|l| l.visible && (0.0..=MAX_PITCHFORK_LEVEL).contains(&l.value));
+            .retain(|l| (0.0..=MAX_PITCHFORK_LEVEL).contains(&l.value));
         config.levels.sort_by(|a, b| a.value.total_cmp(&b.value));
+        let visible: Vec<_> = config.levels.iter().filter(|level| level.visible).collect();
         let mut bands = self.pitchfork_bands(rect).into_iter();
-        for pair in config.levels.windows(2) {
+        for pair in visible.windows(2) {
             let color = if self.pitchfork.is_some() {
                 pair[1].color
             } else {
@@ -516,10 +517,21 @@ mod tests {
             saved["pitchfork"]["levels"][3]["width"] = 3.0.into();
             let mut wide: Drawing = serde_json::from_value(saved.clone()).unwrap();
             wide.points = drawing.points.clone();
+            let median = &mut wide.pitchfork.as_mut().unwrap().levels[0];
+            median.visible = false;
+            median.color = [11, 22, 33, 255];
+            median.width = Some(7.0);
             let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
                 wide.draw_fork(ui.painter(), rect)
             });
             output.textures_delta.clear();
+            assert!(
+                output.shapes.iter().any(|s| matches!(&s.shape,
+                    egui::Shape::LineSegment { stroke, .. }
+                        if *stroke == Stroke::new(7.0, Color32::from_rgb(11, 22, 33))
+                )),
+                "{tool:?}: hidden median style on legs"
+            );
             for width in [3.0, 6.0] {
                 assert!(
                     output.shapes.iter().any(|s| matches!(&s.shape,
