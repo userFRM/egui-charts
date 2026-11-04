@@ -7,6 +7,7 @@ use crate::localization as l10n;
 use crate::model::Timeframe;
 use crate::theme::ThemeExt;
 use egui::{Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2};
+use std::sync::{Arc, Mutex};
 
 #[cfg(feature = "drawings")]
 mod drawings;
@@ -422,6 +423,262 @@ enum Tracks {
     },
 }
 
+/// Relative sizes of one preset's splits, in depth-first order. Each split contains one positive
+/// weight per child, from the top or left. Obtain the shape with [`ChartLayout::sizes`].
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ChartLayoutSizing {
+    /// The arrangement these weights belong to.
+    pub mode: ChartLayoutMode,
+    /// Weights of each split; their sum must be finite and need not be one.
+    pub weights: Vec<Vec<f32>>,
+}
+
+#[derive(Default)]
+struct SizingState {
+    sizes: Arc<Mutex<Vec<ChartLayoutSizing>>>,
+    pending: Vec<SizeChange>,
+    drag: Option<DividerDrag>,
+    selected: Option<(usize, usize)>,
+}
+
+impl Clone for SizingState {
+    fn clone(&self) -> Self {
+        Self {
+            sizes: Arc::new(Mutex::new(self.sizes.lock().unwrap().clone())),
+            ..Self::default()
+        }
+    }
+}
+
+pub(super) struct SizeChange {
+    sizes: Arc<Mutex<Vec<ChartLayoutSizing>>>,
+    other: Vec<(ChartLayoutMode, Option<ChartLayoutSizing>)>,
+}
+
+impl SizingState {
+    fn record(&mut self, before: Vec<ChartLayoutSizing>) {
+        let after = self.sizes.lock().unwrap();
+        let mut other = Vec::new();
+        for mode in before.iter().chain(after.iter()).map(|size| size.mode) {
+            let old = before.iter().find(|size| size.mode == mode);
+            let new = after.iter().find(|size| size.mode == mode);
+            if old != new && !other.iter().any(|(previous, _)| *previous == mode) {
+                other.push((mode, old.cloned()));
+            }
+        }
+        if !other.is_empty() {
+            self.pending.push(SizeChange {
+                sizes: Arc::clone(&self.sizes),
+                other,
+            });
+        }
+    }
+}
+
+impl SizeChange {
+    pub(super) fn swap(&mut self) {
+        let mut sizes = self.sizes.lock().unwrap();
+        for (mode, other) in &mut self.other {
+            let current = sizes
+                .iter()
+                .position(|size| size.mode == *mode)
+                .map(|at| sizes.remove(at));
+            if let Some(previous) = other.take() {
+                sizes.push(previous);
+            }
+            *other = current;
+        }
+    }
+}
+
+/// The recursive splits of a preset. Leaves hold one chart, including when a later slot is absent.
+struct Split {
+    rows: bool,
+    children: Vec<Split>,
+}
+
+#[derive(Clone)]
+struct Divider {
+    group: usize,
+    at: usize,
+    rows: bool,
+    rect: Rect,
+    lengths: Vec<f32>,
+    minimum: Vec<f32>,
+}
+
+impl Divider {
+    fn coordinate(&self) -> f32 {
+        self.rect.center()[usize::from(self.rows)]
+    }
+
+    fn limits(&self) -> (f32, f32) {
+        (
+            (self.minimum[self.at] - self.lengths[self.at]).min(0.0),
+            (self.lengths[self.at + 1] - self.minimum[self.at + 1]).max(0.0),
+        )
+    }
+}
+
+struct DividerDrag {
+    mode: ChartLayoutMode,
+    count: usize,
+    start: egui::Pos2,
+    before: Vec<ChartLayoutSizing>,
+    dividers: Vec<Divider>,
+    weights: Vec<Vec<f32>>,
+}
+
+impl Split {
+    fn leaf() -> Self {
+        Self {
+            rows: false,
+            children: Vec::new(),
+        }
+    }
+
+    fn weights(&self, weights: &mut Vec<Vec<f32>>) {
+        if self.children.is_empty() {
+            return;
+        }
+        weights.push(vec![1.0 / self.children.len() as f32; self.children.len()]);
+        for child in &self.children {
+            child.weights(weights);
+        }
+    }
+
+    fn chart_count(&self) -> usize {
+        if self.children.is_empty() {
+            1
+        } else {
+            self.children.iter().map(Self::chart_count).sum()
+        }
+    }
+
+    fn minimum(&self, count: usize) -> Vec2 {
+        if count == 0 {
+            return Vec2::ZERO;
+        }
+        if self.children.is_empty() {
+            return Vec2::new(80.0, 60.0);
+        }
+        let axis = usize::from(self.rows);
+        let mut minimum = Vec2::ZERO;
+        let mut left = count;
+        for child in &self.children {
+            let used = left.min(child.chart_count());
+            left -= used;
+            if used > 0 {
+                let size = child.minimum(used);
+                if minimum[axis] > 0.0 && self.rows {
+                    minimum[axis] += 2.0;
+                }
+                minimum[axis] += size[axis];
+                minimum[1 - axis] = minimum[1 - axis].max(size[1 - axis]);
+            }
+        }
+        minimum
+    }
+
+    fn rects(
+        &self,
+        rect: Rect,
+        count: usize,
+        weights: &[Vec<f32>],
+        group: &mut usize,
+        output: &mut (Vec<Rect>, Vec<Divider>),
+        scale: Vec2,
+    ) {
+        if self.children.is_empty() {
+            if count > 0 {
+                output.0.push(rect);
+            }
+            return;
+        }
+        let current = *group;
+        *group += 1;
+        let mut left = count;
+        let counts: Vec<_> = self
+            .children
+            .iter()
+            .map(|child| {
+                let used = left.min(child.chart_count());
+                left -= used;
+                used
+            })
+            .collect();
+        let used = counts.iter().take_while(|&&count| count > 0).count();
+        let axis = usize::from(self.rows);
+        let gap = if self.rows {
+            2.0_f32.min(rect.height() / used.max(1) as f32)
+        } else {
+            0.0
+        };
+        let available = (rect.size()[axis] - gap * used.saturating_sub(1) as f32).max(0.0);
+        let mut minimum: Vec<_> = self
+            .children
+            .iter()
+            .zip(&counts)
+            .take(used)
+            .map(|(child, &count)| child.minimum(count)[axis] * scale[axis])
+            .collect();
+        let required: f32 = minimum.iter().sum();
+        if required > available {
+            for size in &mut minimum {
+                *size *= available / required;
+            }
+        }
+        let mut lengths = vec![0.0; used];
+        let mut remaining = available;
+        let mut open: Vec<_> = (0..used).collect();
+        // Freeze children below their minimum, then divide the remainder among the others.
+        while !open.is_empty() {
+            let sum: f32 = open.iter().map(|&i| weights[current][i]).sum();
+            let frozen: Vec<_> = open
+                .iter()
+                .copied()
+                .filter(|&i| remaining * (weights[current][i] / sum) < minimum[i])
+                .collect();
+            if frozen.is_empty() {
+                for &i in &open {
+                    lengths[i] = remaining * (weights[current][i] / sum);
+                }
+                break;
+            }
+            for i in frozen {
+                lengths[i] = minimum[i];
+                remaining = (remaining - minimum[i]).max(0.0);
+                open.retain(|&j| j != i);
+            }
+        }
+        let mut position = rect.min[axis];
+        for (i, (child, &count)) in self.children.iter().zip(&counts).enumerate() {
+            let mut bounds = rect;
+            bounds.min[axis] = position;
+            bounds.max[axis] = if i + 1 == used {
+                rect.max[axis]
+            } else {
+                (position + lengths.get(i).copied().unwrap_or(0.0)).min(rect.max[axis])
+            };
+            child.rects(bounds, count, weights, group, output, scale);
+            if i + 1 < used {
+                let mut border = rect;
+                border.min[axis] = bounds.max[axis] + gap / 2.0;
+                border.max[axis] = border.min[axis];
+                output.1.push(Divider {
+                    group: current,
+                    at: i,
+                    rows: self.rows,
+                    rect: border,
+                    lengths: lengths.clone(),
+                    minimum: minimum.clone(),
+                });
+            }
+            position = bounds.max[axis] + gap;
+        }
+    }
+}
+
 impl Tracks {
     /// Charts the arrangement holds.
     fn chart_count(&self) -> usize {
@@ -447,56 +704,26 @@ impl Tracks {
         }
     }
 
-    /// Cells for the first `count` charts within `rect`. A half with no chart yields its space.
-    fn rects(&self, rect: Rect, count: usize) -> Vec<Rect> {
-        let (by_rows, tracks) = match self {
-            Tracks::Rows(tracks) => (true, tracks),
-            Tracks::Columns(tracks) => (false, tracks),
-            Tracks::Halves { by_rows, halves } => {
-                let first_count = halves[0].chart_count().min(count);
-                let outer = if *by_rows {
-                    Tracks::Rows(&[1, 1])
-                } else {
-                    Tracks::Columns(&[1, 1])
-                };
-                let bounds = outer.rects(
-                    rect,
-                    usize::from(first_count < count) + usize::from(count > 0),
-                );
-                let mut rects = Vec::with_capacity(count);
-                for (half, bounds) in halves.iter().zip(bounds) {
-                    let cells = half.chart_count().min(count - rects.len());
-                    rects.extend(half.rects(bounds, cells));
+    fn split(&self) -> Split {
+        match self {
+            Self::Rows(tracks) | Self::Columns(tracks) => {
+                let rows = matches!(self, Self::Rows(_));
+                Split {
+                    rows,
+                    children: tracks
+                        .iter()
+                        .map(|&count| Split {
+                            rows: !rows,
+                            children: (0..count).map(|_| Split::leaf()).collect(),
+                        })
+                        .collect(),
                 }
-                return rects;
             }
-        };
-        // Fewer charts than the preset holds fill its first rows or columns; empty ones go.
-        let tracks: Vec<usize> = tracks
-            .iter()
-            .scan(count, |left, &cells| {
-                let cells = cells.min(*left);
-                *left -= cells;
-                (cells > 0).then_some(cells)
-            })
-            .collect();
-        let mut rects = Vec::with_capacity(count);
-        for (track, &cells) in tracks.iter().enumerate() {
-            for cell in 0..cells {
-                let (column, columns, row, rows) = if by_rows {
-                    (cell, cells, track, tracks.len())
-                } else {
-                    (track, tracks.len(), cell, cells)
-                };
-                let width = rect.width() / columns as f32;
-                let height = ((rect.height() - 2.0 * (rows - 1) as f32) / rows as f32).max(0.0);
-                rects.push(Rect::from_min_size(
-                    rect.min + Vec2::new(column as f32 * width, row as f32 * (height + 2.0)),
-                    Vec2::new(width, height),
-                ));
-            }
+            Self::Halves { by_rows, halves } => Split {
+                rows: *by_rows,
+                children: halves.iter().map(|half| half.split()).collect(),
+            },
         }
-        rects
     }
 }
 
@@ -572,6 +799,7 @@ pub struct ChartLayout {
     #[cfg(feature = "drawings")]
     drawings: DrawingLinks,
     previous_preset: Option<(ChartLayoutMode, usize)>,
+    sizing: SizingState,
 }
 
 /// Identifies a chart's bars: it changes when they are replaced, not when they stream.
@@ -594,6 +822,110 @@ struct PendingRange {
 }
 
 impl ChartLayout {
+    /// Sizes retained for every edited preset, suitable for host serialization.
+    pub fn saved_sizes(&self) -> Vec<ChartLayoutSizing> {
+        self.sizing.sizes.lock().unwrap().clone()
+    }
+
+    /// Current relative sizes of a preset's splits, including its default weights when unedited.
+    /// Splits are visited depth first: the outer rows or columns, then each child's subdivisions.
+    pub fn sizes(&self, mode: ChartLayoutMode) -> ChartLayoutSizing {
+        self.saved_sizes()
+            .into_iter()
+            .find(|sizes| sizes.mode == mode)
+            .unwrap_or_else(|| {
+                let mut weights = Vec::new();
+                mode.tracks().split().weights(&mut weights);
+                ChartLayoutSizing { mode, weights }
+            })
+    }
+
+    /// Updates only the supplied presets. Each weight must be finite and positive, and the shape
+    /// must match [`Self::sizes`]. Invalid input leaves every preset unchanged.
+    /// Weights are stored as fractions of their split total.
+    /// Unless `disable_undo` is true, each call enters the active chart's history on the next
+    /// [`Self::show`]; the chart's regular undo, redo and toolbar controls then restore it.
+    pub fn set_sizes(
+        &mut self,
+        sizes: &[ChartLayoutSizing],
+        disable_undo: bool,
+    ) -> Result<(), &'static str> {
+        for (index, size) in sizes.iter().enumerate() {
+            let shape = self.sizes(size.mode);
+            if sizes[..index]
+                .iter()
+                .any(|previous| previous.mode == size.mode)
+                || size.weights.len() != shape.weights.len()
+                || size
+                    .weights
+                    .iter()
+                    .zip(&shape.weights)
+                    .any(|(weights, expected)| {
+                        weights.len() != expected.len()
+                            || weights
+                                .iter()
+                                .any(|weight| !weight.is_finite() || *weight <= 0.0)
+                            || !weights.iter().sum::<f32>().is_finite()
+                            || weights
+                                .iter()
+                                .any(|weight| *weight / weights.iter().sum::<f32>() <= 0.0)
+                    })
+            {
+                return Err("invalid chart split weights");
+            }
+        }
+        let before = self.saved_sizes();
+        let mut updated = before.clone();
+        for size in sizes {
+            if *size == self.sizes(size.mode) {
+                continue;
+            }
+            let mut size = size.clone();
+            for weights in &mut size.weights {
+                let sum: f64 = weights.iter().map(|&weight| f64::from(weight)).sum();
+                for weight in weights {
+                    *weight = (f64::from(*weight) / sum) as f32;
+                }
+            }
+            if size == self.sizes(size.mode) {
+                continue;
+            }
+            if let Some(previous) = updated
+                .iter_mut()
+                .find(|previous| previous.mode == size.mode)
+            {
+                *previous = size;
+            } else {
+                updated.push(size);
+            }
+        }
+        if updated != before {
+            *self.sizing.sizes.lock().unwrap() = updated;
+            if !disable_undo {
+                self.sizing.record(before);
+            }
+        }
+        Ok(())
+    }
+
+    /// Restores every preset's initial proportions. Undo is recorded on the next [`Self::show`]
+    /// unless `disable_undo` is true. Hidden presets are reset too.
+    pub fn reset_sizes(&mut self, disable_undo: bool) {
+        let before = self.saved_sizes();
+        if !before.is_empty() {
+            self.sizing.sizes.lock().unwrap().clear();
+            if !disable_undo {
+                self.sizing.record(before);
+            }
+        }
+    }
+
+    fn record_sizes(&mut self, chart: &mut Chart) {
+        for change in self.sizing.pending.drain(..) {
+            chart.history.record_sizes(change);
+        }
+    }
+
     /// Active chart slot, clamped to supplied charts by [`Self::show`].
     pub fn active(&self) -> usize {
         self.active
@@ -690,12 +1022,37 @@ impl ChartLayout {
             });
         }
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
-        let rects = self.rects(rect, count);
+        if self.previous_preset != Some((self.mode, count)) {
+            self.sizing.selected = None;
+        }
+        if self
+            .sizing
+            .drag
+            .as_ref()
+            .is_some_and(|drag| drag.mode != self.mode || drag.count != count)
+        {
+            self.finish_resize();
+            self.sizing.selected = None;
+        }
+        self.record_sizes(charts[self.active]);
+        let (mut rects, mut dividers) = self.geometry(rect, count);
+        if self.move_divider(ui) {
+            (rects, dividers) = self.geometry(rect, count);
+        }
+        let over_divider = self.sizing.drag.is_some()
+            || ui
+                .input(|input| input.pointer.interact_pos())
+                .is_some_and(|pos| {
+                    dividers
+                        .iter()
+                        .any(|divider| divider.rect.expand(4.0).contains(pos))
+                });
         ui.painter()
             .rect_filled(rect, 0.0, ui.active_theme().ui.border);
         // Select before drawing so keyboard and toolbar state follow pointer input this frame.
         let wheel = super::pan_zoom::raw_wheel_delta(ui) != Vec2::ZERO;
         if self.mode != ChartLayoutMode::Tabs
+            && !over_divider
             && let Some(index) = rects.iter().position(|r| {
                 ui.rect_contains_pointer(*r) && ui.input(|i| i.pointer.any_pressed() || wheel)
             })
@@ -847,6 +1204,12 @@ impl ChartLayout {
                 );
             }
         }
+        if self.show_dividers(ui, &dividers, count)
+            && let Some(id) = charts[self.active].keyboard.chart_id
+        {
+            ui.memory_mut(|memory| memory.request_focus(id));
+        }
+        self.record_sizes(charts[self.active]);
         self.focus_active = false;
         // Alt+Enter toggles the focused tile in a grid; a lone chart leaves it to the host.
         if self.mode != ChartLayoutMode::Tabs && count > 1 {
@@ -1001,6 +1364,171 @@ impl ChartLayout {
             .collect()
     }
 
+    fn geometry(&self, rect: Rect, count: usize) -> (Vec<Rect>, Vec<Divider>) {
+        if self.mode == ChartLayoutMode::Tabs || self.maximized.is_some() {
+            return (self.rects(rect, count), Vec::new());
+        }
+        let split = self.mode.tracks().split();
+        let minimum = split.minimum(count);
+        let scale = Vec2::new(
+            (rect.width() / minimum.x.max(1.0)).min(1.0),
+            (rect.height() / minimum.y.max(1.0)).min(1.0),
+        );
+        let mut output = (Vec::new(), Vec::new());
+        split.rects(
+            rect,
+            count,
+            &self.sizes(self.mode).weights,
+            &mut 0,
+            &mut output,
+            scale,
+        );
+        output
+    }
+
+    fn finish_resize(&mut self) {
+        if let Some(drag) = self.sizing.drag.take() {
+            let before = self.before_resize(&drag);
+            if drag.weights == self.sizes(drag.mode).weights {
+                *self.sizing.sizes.lock().unwrap() = before;
+            } else {
+                self.sizing.record(before);
+            }
+        }
+    }
+
+    fn before_resize(&self, drag: &DividerDrag) -> Vec<ChartLayoutSizing> {
+        let mut before = self.saved_sizes();
+        before.retain(|size| size.mode != drag.mode);
+        before.extend(
+            drag.before
+                .iter()
+                .filter(|size| size.mode == drag.mode)
+                .cloned(),
+        );
+        before
+    }
+
+    fn move_divider(&mut self, ui: &Ui) -> bool {
+        let Some(drag) = self.sizing.drag.as_ref() else {
+            return false;
+        };
+        let Some(pos) = ui.input(|input| input.pointer.interact_pos()) else {
+            self.finish_resize();
+            return false;
+        };
+        let axis = usize::from(drag.dividers[0].rows);
+        let mut delta = pos[axis] - drag.start[axis];
+        for divider in &drag.dividers {
+            let (min, max) = divider.limits();
+            delta = delta.clamp(min, max);
+        }
+        let mut weights = drag.weights.clone();
+        for divider in &drag.dividers {
+            let sum: f32 = divider.lengths.iter().sum();
+            if sum > 0.0 {
+                // Missing slots retain their weights; visible slots keep their share of the split.
+                let total: f32 = weights[divider.group][..divider.lengths.len()].iter().sum();
+                for (at, &length) in divider.lengths.iter().enumerate() {
+                    let movement = if at == divider.at {
+                        delta
+                    } else if at == divider.at + 1 {
+                        -delta
+                    } else {
+                        0.0
+                    };
+                    weights[divider.group][at] =
+                        (length + movement).max(f32::MIN_POSITIVE) / sum * total;
+                }
+            }
+        }
+        if delta == 0.0 {
+            let before = self.before_resize(drag);
+            *self.sizing.sizes.lock().unwrap() = before;
+        } else {
+            let sizes = ChartLayoutSizing {
+                mode: drag.mode,
+                weights,
+            };
+            let _ = self.set_sizes(&[sizes], true);
+        }
+        if !ui.input(|input| input.pointer.primary_down()) {
+            self.finish_resize();
+        }
+        ui.ctx().request_repaint();
+        true
+    }
+
+    fn show_dividers(&mut self, ui: &mut Ui, dividers: &[Divider], count: usize) -> bool {
+        let mut interacted = false;
+        let apply_input = !ui.ctx().will_discard();
+        for divider in dividers {
+            let key = (divider.group, divider.at);
+            let response = ui
+                .interact(
+                    divider.rect.expand(4.0).intersect(ui.clip_rect()),
+                    ui.scope_id().with(("chart_divider", self.mode, key)),
+                    Sense::click_and_drag(),
+                )
+                .on_hover_cursor(if divider.rows {
+                    egui::CursorIcon::ResizeVertical
+                } else {
+                    egui::CursorIcon::ResizeHorizontal
+                });
+            let name = l10n::text(ui.ctx(), "Resize chart");
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::Role::Splitter, response.enabled(), &name)
+            });
+            interacted |= apply_input && (response.clicked() || response.drag_stopped());
+            if apply_input && response.double_clicked() {
+                self.finish_resize();
+                self.reset_sizes(false);
+                ui.ctx().request_repaint();
+            } else if apply_input
+                && response.drag_started()
+                && let Some(start) = ui.input(|input| input.pointer.press_origin())
+            {
+                let shift = ui.input(|input| input.modifiers.shift);
+                self.sizing.drag = Some(DividerDrag {
+                    mode: self.mode,
+                    count,
+                    start,
+                    before: self.saved_sizes(),
+                    weights: self.sizes(self.mode).weights,
+                    dividers: dividers
+                        .iter()
+                        .filter(|other| {
+                            (other.group == divider.group && other.at == divider.at)
+                                || (shift
+                                    && other.rows == divider.rows
+                                    && (other.coordinate() - divider.coordinate()).abs() < 0.5)
+                        })
+                        .cloned()
+                        .collect(),
+                });
+                self.sizing.selected = Some(key);
+            } else if apply_input && response.clicked() {
+                self.sizing.selected = Some(key);
+            }
+            if response.hovered() || response.dragged() || self.sizing.selected == Some(key) {
+                let axis = usize::from(divider.rows);
+                let mut line = divider.rect;
+                line.min[axis] -= 1.0;
+                line.max[axis] += 1.0;
+                ui.painter()
+                    .rect_filled(line, 0.0, ui.active_theme().ui.accent);
+            }
+        }
+        if ui.input(|input| input.pointer.any_pressed())
+            && !dividers
+                .iter()
+                .any(|divider| ui.rect_contains_pointer(divider.rect.expand(4.0)))
+        {
+            self.sizing.selected = None;
+        }
+        interacted
+    }
+
     fn rects(&self, rect: Rect, count: usize) -> Vec<Rect> {
         if self.mode == ChartLayoutMode::Tabs {
             return vec![rect; count];
@@ -1010,7 +1538,7 @@ impl ChartLayout {
                 .map(|index| if index == slot { rect } else { Rect::NOTHING })
                 .collect();
         }
-        self.mode.tracks().rects(rect, count)
+        self.geometry(rect, count).0
     }
 }
 
@@ -1040,6 +1568,309 @@ mod tests {
         chart.set_symbol("SAMPLE");
         chart.set_timeframe(Timeframe::Min1);
         chart
+    }
+
+    /// A border drag affects its neighboring charts; Shift also moves aligned borders in other
+    /// tracks. Double-click restores the preset, including at phone widths.
+    #[test]
+    fn dividers_resize_neighbors_link_aligned_borders_and_reset() {
+        for width in [320.0, 1440.0] {
+            for shift in [false, true] {
+                let bounds = Rect::from_min_size(pos2(10.0, 10.0), vec2(width, 720.0));
+                let ctx = egui::Context::default();
+                let mut layout = ChartLayout {
+                    mode: ChartLayoutMode::Four,
+                    ..Default::default()
+                };
+                layout.sync.sync_time_axis = false;
+                let mut charts = [chart(60), chart(60), chart(60), chart(60)];
+                let mut time = 0.0;
+                let mut frame =
+                    |layout: &mut ChartLayout, charts: &mut [Chart], events, modifiers| {
+                        time += 0.1;
+                        ctx.run_ui(
+                            RawInput {
+                                screen_rect: Some(bounds.expand(10.0)),
+                                time: Some(time),
+                                events: std::iter::once(Event::ModifiersChanged(modifiers))
+                                    .chain(events)
+                                    .collect(),
+                                ..Default::default()
+                            },
+                            |ui| {
+                                ui.scope_builder(egui::UiBuilder::new().max_rect(bounds), |ui| {
+                                    layout.show(ui, &mut charts.iter_mut().collect::<Vec<_>>());
+                                });
+                            },
+                        )
+                        .drop_without_applying_deltas();
+                    };
+                let modifiers = if shift {
+                    egui::Modifiers::SHIFT
+                } else {
+                    egui::Modifiers::NONE
+                };
+                for _ in 0..2 {
+                    frame(&mut layout, &mut charts, vec![], modifiers);
+                }
+                let before = layout.rects(bounds, 4);
+                let scales: Vec<_> = charts.iter().map(Chart::get_time_scale_state).collect();
+                let start = pos2(before[0].right(), before[0].center().y);
+                let end = start + vec2(40.0, 0.0);
+                let button = |pos, pressed| Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers,
+                };
+                frame(
+                    &mut layout,
+                    &mut charts,
+                    vec![Event::PointerMoved(start)],
+                    modifiers,
+                );
+                frame(
+                    &mut layout,
+                    &mut charts,
+                    vec![button(start, true)],
+                    modifiers,
+                );
+                for fraction in [0.1, 0.5, 1.0] {
+                    frame(
+                        &mut layout,
+                        &mut charts,
+                        vec![Event::PointerMoved(start.lerp(end, fraction))],
+                        modifiers,
+                    );
+                }
+                let mut other = layout.sizes(ChartLayoutMode::TwoVertical);
+                other.weights[0] = vec![3.0, 1.0];
+                layout
+                    .set_sizes(std::slice::from_ref(&other), true)
+                    .unwrap();
+                let other = layout.sizes(other.mode);
+                for pos in [start, end] {
+                    frame(
+                        &mut layout,
+                        &mut charts,
+                        vec![Event::PointerMoved(pos)],
+                        modifiers,
+                    );
+                }
+                frame(
+                    &mut layout,
+                    &mut charts,
+                    vec![button(end, false)],
+                    modifiers,
+                );
+                frame(&mut layout, &mut charts, vec![], modifiers);
+                let resized = layout.rects(bounds, 4);
+                // Widths are W/2 + 40 and W/2 - 40; heights and the other row stay fixed.
+                assert!(
+                    (resized[0].width() - width / 2.0 - 40.0).abs() < 0.01,
+                    "{width}, shift {shift}"
+                );
+                assert!((resized[1].width() - width / 2.0 + 40.0).abs() < 0.01);
+                assert!(
+                    (resized[2].width() - width / 2.0 - if shift { 40.0 } else { 0.0 }).abs()
+                        < 0.01
+                );
+                assert_eq!(resized[0].height(), before[0].height());
+                assert_eq!(layout.active(), 0);
+                assert_eq!(
+                    charts
+                        .iter()
+                        .map(Chart::get_time_scale_state)
+                        .collect::<Vec<_>>(),
+                    scales,
+                    "a divider drag must not pan either chart"
+                );
+                let command = egui::Modifiers {
+                    ctrl: true,
+                    command: true,
+                    ..Default::default()
+                };
+                frame(
+                    &mut layout,
+                    &mut charts,
+                    vec![Event::Key {
+                        key: egui::Key::Z,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: command,
+                    }],
+                    command,
+                );
+                assert_eq!(
+                    layout.rects(bounds, 4),
+                    before,
+                    "keyboard undo after a divider drag"
+                );
+                assert_eq!(
+                    layout.sizes(other.mode),
+                    other,
+                    "a host update during dragging survives undo"
+                );
+                assert!(charts[0].redo());
+                assert_eq!(layout.rects(bounds, 4), resized);
+                // Wait out the drag's click before the two reset clicks.
+                for _ in 0..6 {
+                    frame(&mut layout, &mut charts, vec![], modifiers);
+                }
+                for _ in 0..2 {
+                    frame(
+                        &mut layout,
+                        &mut charts,
+                        vec![Event::PointerMoved(end), button(end, true)],
+                        modifiers,
+                    );
+                    frame(
+                        &mut layout,
+                        &mut charts,
+                        vec![button(end, false)],
+                        modifiers,
+                    );
+                }
+                frame(&mut layout, &mut charts, vec![], modifiers);
+                assert_eq!(layout.rects(bounds, 4), before);
+                assert!(charts[0].undo(), "reset must be one undoable action");
+                assert_eq!(layout.rects(bounds, 4), resized);
+            }
+        }
+    }
+
+    /// Programmatic weights validate atomically, survive serialization and cloning, respect minimum
+    /// sizes, and participate in the active chart's ordinary history only when requested.
+    #[test]
+    fn split_sizes_validate_restore_and_share_chart_history() {
+        let bounds = Rect::from_min_size(Pos2::ZERO, vec2(1200.0, 722.0));
+        let mut layout = ChartLayout {
+            mode: ChartLayoutMode::FourSplitLeft,
+            ..Default::default()
+        };
+        let default = layout.visible_chart_rects(bounds, 4);
+        let mut same = layout.sizes(layout.mode);
+        for weights in &mut same.weights {
+            for weight in weights {
+                *weight *= 100.0;
+            }
+        }
+        layout.set_sizes(&[same], false).unwrap();
+        assert!(
+            layout.saved_sizes().is_empty(),
+            "equivalent ratios leave defaults unchanged"
+        );
+        let mut sizes = layout.sizes(layout.mode);
+        // Outer halves: 3:1. The left half's columns: 2:1. Right rows stay equal.
+        sizes.weights[0] = vec![3.0, 1.0];
+        sizes.weights[2] = vec![2.0, 1.0];
+        layout.set_sizes(&[sizes], false).unwrap();
+        let resized = layout.visible_chart_rects(bounds, 4);
+        for (slot, x, y, width, height) in [
+            (0, 0.0, 0.0, 600.0, 722.0),
+            (1, 600.0, 0.0, 300.0, 722.0),
+            (2, 900.0, 0.0, 300.0, 360.0),
+            (3, 900.0, 362.0, 300.0, 360.0),
+        ] {
+            let expected = Rect::from_min_size(pos2(x, y), vec2(width, height));
+            assert!((resized[slot].1.min - expected.min).length() < 0.01);
+            assert!((resized[slot].1.size() - expected.size()).length() < 0.01);
+        }
+        let saved = serde_json::to_string(&layout.saved_sizes()).unwrap();
+        let mut copy = layout.clone();
+        copy.reset_sizes(true);
+        assert_eq!(
+            layout.visible_chart_rects(bounds, 4),
+            resized,
+            "layout copies own their sizes"
+        );
+        copy.set_sizes(
+            &serde_json::from_str::<Vec<ChartLayoutSizing>>(&saved).unwrap(),
+            true,
+        )
+        .unwrap();
+        assert_eq!(copy.visible_chart_rects(bounds, 4), resized);
+        for invalid in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            let mut other = layout.sizes(ChartLayoutMode::TwoVertical);
+            other.weights[0] = vec![3.0, 1.0];
+            let mut wrong = layout.sizes(layout.mode);
+            wrong.weights[0][0] = invalid;
+            let saved = layout.saved_sizes();
+            assert!(layout.set_sizes(&[other, wrong], false).is_err());
+            assert_eq!(
+                layout.saved_sizes(),
+                saved,
+                "invalid batches leave all presets unchanged"
+            );
+            assert_eq!(layout.visible_chart_rects(bounds, 4), resized);
+        }
+        let mut wrong = layout.sizes(layout.mode);
+        wrong.weights.pop();
+        assert!(layout.set_sizes(&[wrong], false).is_err());
+        let ctx = egui::Context::default();
+        let mut charts = [chart(60), chart(60), chart(60), chart(60)];
+        ctx.run_ui(RawInput::default(), |ui| {
+            layout.show(ui, &mut charts.iter_mut().collect::<Vec<_>>());
+        })
+        .drop_without_applying_deltas();
+        let mut hidden = layout.sizes(ChartLayoutMode::TwoVertical);
+        hidden.weights[0] = vec![3.0, 1.0];
+        layout.set_sizes(&[hidden], true).unwrap();
+        let hidden = layout.sizes(ChartLayoutMode::TwoVertical);
+        charts[0].user_action(|chart| chart.config_mut().show_grid = false);
+        assert!(charts[0].undo());
+        assert_eq!(layout.visible_chart_rects(bounds, 4), resized);
+        assert!(charts[0].undo());
+        assert_eq!(layout.visible_chart_rects(bounds, 4), default);
+        assert_eq!(
+            layout.sizes(ChartLayoutMode::TwoVertical),
+            hidden,
+            "undoing one preset must retain unrelated host size updates"
+        );
+        assert!(charts[0].redo());
+        assert_eq!(layout.visible_chart_rects(bounds, 4), resized);
+        layout.reset_sizes(true);
+        assert_eq!(layout.visible_chart_rects(bounds, 4), default);
+        let edits = charts[0].edit_count();
+        ctx.run_ui(RawInput::default(), |ui| {
+            layout.show(ui, &mut charts.iter_mut().collect::<Vec<_>>());
+        })
+        .drop_without_applying_deltas();
+        assert_eq!(
+            charts[0].edit_count(),
+            edits,
+            "the undo opt-out records no edit"
+        );
+        for &mode in ChartLayoutMode::all() {
+            let mut layout = ChartLayout {
+                mode,
+                ..Default::default()
+            };
+            let mut size = layout.sizes(mode);
+            for weights in &mut size.weights {
+                weights[0] = 1e6;
+            }
+            layout.set_sizes(&[size], true).unwrap();
+            for width in [32.0, 320.0, 1440.0] {
+                let rect = Rect::from_min_size(Pos2::ZERO, vec2(width, 720.0));
+                for count in 1..=mode.chart_count() {
+                    for (slot, cell) in layout.visible_chart_rects(rect, count) {
+                        assert!(
+                            cell.is_finite() && cell.is_positive(),
+                            "{mode:?}, {width}, {count}"
+                        );
+                        assert!(rect.expand(0.01).contains_rect(cell), "{mode:?}, {cell:?}");
+                        if mode == ChartLayoutMode::TwoHorizontal && count == 2 && slot == 1 {
+                            assert!((cell.width() - 80.0_f32.min(width / 2.0)).abs() < 0.01);
+                        }
+                        if mode == ChartLayoutMode::TwoVertical && count == 2 && slot == 1 {
+                            assert!((cell.height() - 60.0).abs() < 0.01);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Only the active and hovered charts expose their scale settings in a layout.

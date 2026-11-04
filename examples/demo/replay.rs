@@ -469,6 +469,8 @@ pub(super) struct LayoutGroups {
     sync: [bool; 6],
     #[serde(default)]
     cents: [bool; 16],
+    #[serde(default)]
+    pub(super) sizes: Vec<egui_charts::widget::ChartLayoutSizing>,
 }
 
 impl DemoApp {
@@ -511,6 +513,7 @@ impl DemoApp {
     pub(super) fn layout_groups(&self) -> LayoutGroups {
         let sync = &self.layout.sync;
         LayoutGroups {
+            sizes: self.layout.saved_sizes(),
             groups: std::array::from_fn(|slot| self.layout.sync_group(slot).map(str::to_owned)),
             detached: std::array::from_fn(|slot| self.layout.is_detached(slot)),
             cents: std::array::from_fn(|slot| {
@@ -539,6 +542,14 @@ impl DemoApp {
     }
 
     pub(super) fn restore_layout_groups(&mut self, groups: Option<LayoutGroups>) {
+        self.layout = self.layout.clone();
+        self.layout.reset_sizes(true);
+        if let Some(groups) = &groups
+            && let Err(error) = self.layout.set_sizes(&groups.sizes, true)
+        {
+            self.toasts
+                .error(format!("Could not open chart sizes: {error}"));
+        }
         let cents = groups.as_ref().map_or([false; 16], |groups| groups.cents);
         for (slot, cents) in cents.into_iter().enumerate() {
             let (chart, live) = if slot == self.layout_slot {
