@@ -2044,9 +2044,10 @@ impl DemoApp {
                     )
                     .color,
             });
-        let mut indicators = self.chart.indicators().peekable();
-        self.drawing_toolbar.state.hide_indicators =
-            indicators.peek().is_some() && indicators.all(|(_, study)| !study.is_visible());
+        self.drawing_toolbar.state.hide_indicators = {
+            let mut indicators = self.chart.indicators().peekable();
+            indicators.peek().is_some() && indicators.all(|(_, study)| !study.is_visible())
+        };
         let drawings = &self.chart.drawings().drawings;
         self.drawing_toolbar.state.lock_all =
             !drawings.is_empty() && drawings.iter().all(|d| d.locked);
