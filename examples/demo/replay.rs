@@ -469,6 +469,8 @@ pub(super) struct LayoutGroups {
     sync: [bool; 6],
     #[serde(default)]
     cents: [bool; 16],
+    #[serde(default)]
+    pub(super) sizes: Vec<egui_charts::widget::ChartLayoutSizing>,
 }
 
 impl DemoApp {
@@ -511,6 +513,7 @@ impl DemoApp {
     pub(super) fn layout_groups(&self) -> LayoutGroups {
         let sync = &self.layout.sync;
         LayoutGroups {
+            sizes: self.layout.saved_sizes(),
             groups: std::array::from_fn(|slot| self.layout.sync_group(slot).map(str::to_owned)),
             detached: std::array::from_fn(|slot| self.layout.is_detached(slot)),
             cents: std::array::from_fn(|slot| {
@@ -539,6 +542,15 @@ impl DemoApp {
     }
 
     pub(super) fn restore_layout_groups(&mut self, groups: Option<LayoutGroups>) {
+        // A copy owns its sizes, so undo steps left in chart histories cannot change the restored ones.
+        self.layout = self.layout.clone();
+        self.layout.reset_sizes(true);
+        if let Some(groups) = &groups
+            && let Err(error) = self.layout.set_sizes(&groups.sizes, true)
+        {
+            self.toasts
+                .error(format!("Could not open chart sizes: {error}"));
+        }
         let cents = groups.as_ref().map_or([false; 16], |groups| groups.cents);
         for (slot, cents) in cents.into_iter().enumerate() {
             let (chart, live) = if slot == self.layout_slot {
@@ -1413,7 +1425,11 @@ mod tests {
     #[test]
     fn paper_account_resets_on_replay_start_and_rewind_but_not_forward_steps() {
         let ctx = egui::Context::default();
-        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-10-27T12:05:14Z".parse().unwrap(),
+            true,
+        );
         super::super::tests::settle(&mut app, &ctx);
         app.live.set_paused(true);
         for _ in 0..4 {
@@ -1528,10 +1544,16 @@ mod tests {
             .drop_without_applying_deltas();
         }
         super::super::tests::finish_feed(&app.live);
-        app.live.set_paused(false);
-        app.live
-            .advance(app.live.now() + chrono::TimeDelta::seconds(2));
-        app.live.set_paused(true);
+        // Quiet periods can outlast two seconds; capture executions before selecting trade updates.
+        app.advance_sample_to(app.live.now() + chrono::TimeDelta::seconds(10));
+        let mut events = Vec::new();
+        app.live.read_recording(&mut events);
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event.event, MarketEvent::Trade(_))),
+            "trade replay requires captured executions"
+        );
         let bars = app.live.snapshot(
             app.state.timeframe,
             app.chart.bar_clock(),

@@ -90,20 +90,26 @@ impl DrawingManager {
     /// To unload drawings without deleting them, clear [`Self::drawings`], then call
     /// [`Self::cancel_curr_drawing`] and [`Self::deselect`]. A bulk removal is one undo step.
     pub fn clear_all(&mut self) {
+        self.clear_all_with_locked(false);
+    }
+
+    /// Bulk removal with explicit permission to include locked drawings. Preserves locks in
+    /// undo and queues deletion of stored records exactly as [`Self::clear_all`] does.
+    pub fn clear_all_with_locked(&mut self, include_locked: bool) {
         self.history.push_snapshot(
             self.drawings
                 .iter()
                 .enumerate()
-                .filter(|(_, drawing)| !drawing.locked)
+                .filter(|(_, drawing)| include_locked || !drawing.locked)
                 .map(|(index, drawing)| (index, drawing.clone()))
                 .collect(),
         );
-        for drawing in self.drawings.iter().filter(|d| !d.locked) {
+        for drawing in self.drawings.iter().filter(|d| include_locked || !d.locked) {
             if drawing.saveable {
                 self.queue(DrawingSyncAction::Delete(sync_id(drawing)));
             }
         }
-        self.drawings.retain(|d| d.locked);
+        self.drawings.retain(|d| d.locked && !include_locked);
         self.cancel_curr_drawing();
         self.selection.deselect_all();
     }

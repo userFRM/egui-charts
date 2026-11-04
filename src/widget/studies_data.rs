@@ -707,6 +707,36 @@ mod tests {
         (ALLOCATIONS.with(std::cell::Cell::get) - before, result)
     }
 
+    #[test]
+    fn primary_axis_layout_does_not_allocate() {
+        use crate::model::AxisSide;
+        use crate::widget::PaneId;
+        let mut chart = Chart::new(crate::model::BarData::from_bars(bars(&[100.0; 30], 1)));
+        chart.config.show_volume = false;
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        for side in [AxisSide::Left, AxisSide::Right] {
+            chart.place_pane_scales(PaneId::MAIN, side);
+            let (count, (primary, left, right, axes, layout)) = allocations(|| {
+                let layout = chart.calculate_layout_rects(rect);
+                (
+                    chart.primary_axis_side(),
+                    chart.pane_scale_count(PaneId::MAIN, AxisSide::Left),
+                    chart.pane_scale_count(PaneId::MAIN, AxisSide::Right),
+                    chart
+                        .pane_scale_axes(PaneId::MAIN, rect, layout.price_rect)
+                        .count(),
+                    layout,
+                )
+            });
+            assert_eq!(count, 0, "primary axis queries must not allocate");
+            assert_eq!(primary, Some(side));
+            assert_eq!(left, usize::from(side == AxisSide::Left));
+            assert_eq!(right, usize::from(side == AxisSide::Right));
+            assert_eq!(axes, 1);
+            assert!(layout.price_rect.width() < rect.width());
+        }
+    }
+
     #[derive(Default)]
     struct RetryFeed {
         resolves: Mutex<Vec<crate::data::Reply<Instrument>>>,

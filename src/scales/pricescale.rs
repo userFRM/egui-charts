@@ -417,8 +417,12 @@ impl PriceScale {
         };
         // The data fills the rest of the pane, so the whole range is that share's inverse.
         let total = span / (1.0 - top - bottom);
-        let range = PriceRange::new(min - total * bottom, max + total * top);
-        if range.min.is_finite() && range.max.is_finite() {
+        let mut range = PriceRange::new(min - total * bottom, max + total * top);
+        // Flat data still needs a drawable, saveable range when margins are zero.
+        if range.min == range.max {
+            range = PriceRange::new(min - span / 2.0, max + span / 2.0);
+        }
+        if range.min.is_finite() && range.max.is_finite() && range.min < range.max {
             self.range = range;
         }
     }
@@ -883,17 +887,21 @@ mod tests {
     /// leave no room for the data are ignored.
     #[test]
     fn autoscale_margins_are_shares_of_the_pane() {
-        for (top, bottom, expected) in [
-            (0.2, 0.1, (90.0, 190.0)),
-            (0.0, 0.0, (100.0, 170.0)),
-            (0.6, 0.4, (100.0, 170.0)),
-            (f64::NAN, 0.1, (100.0, 170.0)),
+        for ((low, high), top, bottom, expected) in [
+            ((100.0, 170.0), 0.2, 0.1, (90.0, 190.0)),
+            ((100.0, 170.0), 0.0, 0.0, (100.0, 170.0)),
+            ((100.0, 170.0), 0.6, 0.4, (100.0, 170.0)),
+            ((100.0, 170.0), f64::NAN, 0.1, (100.0, 170.0)),
+            // Flat prices use a 1% span (1 at zero), centred on the sole value.
+            ((1000.0, 1000.0), 0.0, 0.0, (995.0, 1005.0)),
+            ((-1000.0, -1000.0), 0.0, 0.0, (-1005.0, -995.0)),
+            ((0.0, 0.0), 0.0, 0.0, (-0.5, 0.5)),
         ] {
             let mut scale = PriceScale::new(PriceScaleOptions {
                 scale_margins: PriceScaleMargins { top, bottom },
                 ..Default::default()
             });
-            scale.autoscale(100.0, 170.0);
+            scale.autoscale(low, high);
             let PriceRange { min, max } = scale.range();
             assert!(
                 (min - expected.0).abs() < 1e-9 && (max - expected.1).abs() < 1e-9,

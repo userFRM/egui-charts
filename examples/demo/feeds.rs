@@ -20,6 +20,39 @@ use egui_charts::ui::widget_bar::{PeriodReturn, Seasonality, SeasonalityMonth};
 use super::live::LiveFeed;
 use crate::sampledata::DemoSymbol;
 
+/// Supplies search metadata and menu choices independently of historical price generation.
+pub(super) fn search_catalog(
+    dialog: &mut egui_charts::ui::top_toolbar::SymbolSearchDialog,
+) -> Vec<egui_charts::model::Instrument> {
+    let mut symbols = DemoSymbol::symbols();
+    for symbol in &mut symbols {
+        symbol.source = Some("Synthetic".into());
+        if matches!(symbol.exchange.as_deref(), Some("NASDAQ" | "CME" | "Index")) {
+            symbol.country = Some("US".into());
+        }
+        symbol.sector = match symbol.symbol.as_str() {
+            "AAPL" | "MSFT" | "NVDA" => Some("Technology".into()),
+            "TSLA" => Some("Consumer discretionary".into()),
+            _ => None,
+        };
+        if symbol.symbol == "AAPL" {
+            symbol.root = Some("AAPL".into());
+        }
+    }
+    // A second synthetic provider serves the same security and historical series.
+    let mut mirror = symbols
+        .iter()
+        .find(|symbol| symbol.symbol == "AAPL")
+        .unwrap()
+        .clone();
+    mirror.source = Some("Synthetic mirror".into());
+    symbols.push(mirror);
+    dialog.set_countries(vec!["US".into()]);
+    dialog.set_sectors(vec!["Technology".into(), "Consumer discretionary".into()]);
+    dialog.set_data_sources(vec!["Synthetic".into(), "Synthetic mirror".into()]);
+    symbols
+}
+
 /// The newest requested bars inside the inclusive start and exclusive end of a history range.
 pub(super) fn history_page(
     bars: &[Bar],

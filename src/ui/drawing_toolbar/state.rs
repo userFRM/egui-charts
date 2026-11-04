@@ -13,13 +13,30 @@ use std::collections::{HashMap, VecDeque};
 pub enum MagnetType {
     /// Snap only within the configured pixel threshold
     Weak,
-    /// Snap to the nearest OHLC value of the bar under the pointer
+    /// Snap to the nearest bar or enabled study value under the pointer, regardless of distance
     Strong,
+}
+
+/// Preferences a host saves between sessions, independently of chart history.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ToolbarPreferences {
+    /// Whether the left drawing tools are hidden. Defaults to showing them.
+    pub hidden: bool,
+    /// `None` asks on bulk removal when drawings are locked. `Some(false)` preserves them;
+    /// `Some(true)` includes them. Only an explicit user choice enables locked deletion.
+    pub remove_locked: Option<bool>,
 }
 
 /// Drawing toolbar state
 #[derive(Clone)]
 pub struct ToolbarState {
+    /// Saved toolbar visibility and bulk removal choices.
+    pub preferences: ToolbarPreferences,
+    /// Bulk removal awaiting the user's locked-drawing choice; never serialize this request.
+    pub pending_removal: Option<super::DrawingToolbarAction>,
+    /// Whether to save the next confirmed locked-drawing choice.
+    pub remember_removal: bool,
     /// Currently selected tool
     pub sel_tool: Option<DrawingToolType>,
     /// Whether the toolbar is expanded (shows names)
@@ -105,6 +122,9 @@ impl Default for ToolbarState {
         category_last_tool.insert("Text/Annotations".to_string(), DrawingToolType::TextLabel);
 
         Self {
+            preferences: ToolbarPreferences::default(),
+            pending_removal: None,
+            remember_removal: false,
             sel_tool: None,
             expanded: true,
             expanded_category: None,
@@ -142,6 +162,14 @@ impl Default for ToolbarState {
 }
 
 impl ToolbarState {
+    /// Whether every supported visibility group is hidden. Hosts refresh the group flags
+    /// from their active chart before drawing the menu.
+    pub fn all_hidden(&self, trading: bool) -> bool {
+        self.hide_drawings
+            && self.hide_indicators
+            && (!trading || self.hide_positions && self.hide_orders)
+    }
+
     /// Create new toolbar state with defaults
     pub fn new() -> Self {
         Self::default()
