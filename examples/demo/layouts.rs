@@ -808,9 +808,6 @@ impl DemoApp {
     /// Takes the answers of storage, restoring settings and layouts, reports failures and saves
     /// the open layout when autosave asks for it.
     pub(super) fn poll_storage(&mut self, ctx: &egui::Context) {
-        if self.top_toolbar.chart_grid_selector.take_size_reset() {
-            self.layout.reset_sizes(false);
-        }
         let current = self.user_settings();
         if let Some(settings) = self.settings.poll(ctx, &current) {
             self.apply_user_settings(ctx, settings);

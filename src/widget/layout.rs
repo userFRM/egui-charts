@@ -843,12 +843,12 @@ impl ChartLayout {
     /// Updates only the supplied presets. Each weight must be finite and positive, and the shape
     /// must match [`Self::sizes`]. Invalid input leaves every preset unchanged.
     /// Weights are stored as fractions of their split total.
-    /// Unless `disable_undo` is true, each call enters the active chart's history on the next
+    /// Unless `skip_history` is true, each call enters the active chart's history on the next
     /// [`Self::show`]; the chart's regular undo, redo and toolbar controls then restore it.
     pub fn set_sizes(
         &mut self,
         sizes: &[ChartLayoutSizing],
-        disable_undo: bool,
+        skip_history: bool,
     ) -> Result<(), &'static str> {
         for (index, size) in sizes.iter().enumerate() {
             let shape = self.sizes(size.mode);
@@ -901,7 +901,7 @@ impl ChartLayout {
         }
         if updated != before {
             *self.sizing.sizes.lock().unwrap() = updated;
-            if !disable_undo {
+            if !skip_history {
                 self.sizing.record(before);
             }
         }
@@ -909,12 +909,12 @@ impl ChartLayout {
     }
 
     /// Restores every preset's initial proportions. Undo is recorded on the next [`Self::show`]
-    /// unless `disable_undo` is true. Hidden presets are reset too.
-    pub fn reset_sizes(&mut self, disable_undo: bool) {
+    /// unless `skip_history` is true. Hidden presets are reset too.
+    pub fn reset_sizes(&mut self, skip_history: bool) {
         let before = self.saved_sizes();
         if !before.is_empty() {
             self.sizing.sizes.lock().unwrap().clear();
-            if !disable_undo {
+            if !skip_history {
                 self.sizing.record(before);
             }
         }
@@ -992,6 +992,8 @@ impl ChartLayout {
     /// Its corner menu offers detachment and named groups. The active border is painted
     /// inside the chart; stacked charts have a two-point gap and side-by-side charts meet at their
     /// edge.
+    /// Dragging a border resizes its neighbours and Shift also moves the borders aligned with it; a
+    /// touch must tap a border before moving it. Double-clicking a border restores the proportions.
     /// Extra charts remain owned by the host and are not painted by a grid preset.
     pub fn show(&mut self, ui: &mut Ui, charts: &mut [&mut Chart]) -> Response {
         let total = charts.len().min(16);
@@ -1032,7 +1034,6 @@ impl ChartLayout {
             .is_some_and(|drag| drag.mode != self.mode || drag.count != count)
         {
             self.finish_resize();
-            self.sizing.selected = None;
         }
         self.record_sizes(charts[self.active]);
         let (mut rects, mut dividers) = self.geometry(rect, count);
@@ -1470,7 +1471,7 @@ impl ChartLayout {
                     ui.scope_id().with(("chart_divider", self.mode, key)),
                     Sense::click_and_drag(),
                 )
-                .on_hover_cursor(if divider.rows {
+                .on_hover_and_drag_cursor(if divider.rows {
                     egui::CursorIcon::ResizeVertical
                 } else {
                     egui::CursorIcon::ResizeHorizontal
@@ -1486,6 +1487,7 @@ impl ChartLayout {
                 ui.ctx().request_repaint();
             } else if apply_input
                 && response.drag_started()
+                && (self.sizing.selected == Some(key) || !ui.input(|input| input.any_touches()))
                 && let Some(start) = ui.input(|input| input.pointer.press_origin())
             {
                 let shift = ui.input(|input| input.modifiers.shift);
@@ -1570,12 +1572,12 @@ mod tests {
         chart
     }
 
-    /// A border drag affects its neighboring charts; Shift also moves aligned borders in other
+    /// A border drag affects its neighbouring charts; Shift also moves aligned borders in other
     /// tracks. Double-click restores the preset, including at phone widths.
     #[test]
-    fn dividers_resize_neighbors_link_aligned_borders_and_reset() {
+    fn dividers_resize_neighbours_link_aligned_borders_and_reset() {
         for width in [320.0, 1440.0] {
-            for shift in [false, true] {
+            for (shift, touch) in [(false, false), (true, false), (false, true)] {
                 let bounds = Rect::from_min_size(pos2(10.0, 10.0), vec2(width, 720.0));
                 let ctx = egui::Context::default();
                 let mut layout = ChartLayout {
@@ -1623,23 +1625,72 @@ mod tests {
                     pressed,
                     modifiers,
                 };
+                let contact = |phase, pos| {
+                    touch.then_some(Event::Touch {
+                        device_id: egui::TouchDeviceId(1),
+                        id: egui::TouchId(1),
+                        phase,
+                        pos,
+                        force: None,
+                    })
+                };
+                let press = |pos| {
+                    let touch = contact(egui::TouchPhase::Start, pos);
+                    std::iter::once(button(pos, true)).chain(touch).collect()
+                };
+                let drag_to = |pos| {
+                    let touch = contact(egui::TouchPhase::Move, pos);
+                    std::iter::once(Event::PointerMoved(pos))
+                        .chain(touch)
+                        .collect()
+                };
+                let release = |pos| {
+                    let touch = contact(egui::TouchPhase::End, pos);
+                    std::iter::once(button(pos, false)).chain(touch).collect()
+                };
                 frame(
                     &mut layout,
                     &mut charts,
                     vec![Event::PointerMoved(start)],
                     modifiers,
                 );
-                frame(
-                    &mut layout,
-                    &mut charts,
-                    vec![button(start, true)],
-                    modifiers,
-                );
+                if touch {
+                    frame(&mut layout, &mut charts, press(start), modifiers);
+                    for fraction in [0.1, 0.5, 1.0] {
+                        frame(
+                            &mut layout,
+                            &mut charts,
+                            drag_to(start.lerp(end, fraction)),
+                            modifiers,
+                        );
+                    }
+                    frame(&mut layout, &mut charts, release(end), modifiers);
+                    assert_eq!(
+                        layout.rects(bounds, 4),
+                        before,
+                        "a touch moves only a border it selected"
+                    );
+                    frame(
+                        &mut layout,
+                        &mut charts,
+                        vec![Event::PointerMoved(start)],
+                        modifiers,
+                    );
+                    for _ in 0..6 {
+                        frame(&mut layout, &mut charts, vec![], modifiers);
+                    }
+                    frame(&mut layout, &mut charts, press(start), modifiers);
+                    frame(&mut layout, &mut charts, release(start), modifiers);
+                    for _ in 0..6 {
+                        frame(&mut layout, &mut charts, vec![], modifiers);
+                    }
+                }
+                frame(&mut layout, &mut charts, press(start), modifiers);
                 for fraction in [0.1, 0.5, 1.0] {
                     frame(
                         &mut layout,
                         &mut charts,
-                        vec![Event::PointerMoved(start.lerp(end, fraction))],
+                        drag_to(start.lerp(end, fraction)),
                         modifiers,
                     );
                 }
@@ -1650,19 +1701,9 @@ mod tests {
                     .unwrap();
                 let other = layout.sizes(other.mode);
                 for pos in [start, end] {
-                    frame(
-                        &mut layout,
-                        &mut charts,
-                        vec![Event::PointerMoved(pos)],
-                        modifiers,
-                    );
+                    frame(&mut layout, &mut charts, drag_to(pos), modifiers);
                 }
-                frame(
-                    &mut layout,
-                    &mut charts,
-                    vec![button(end, false)],
-                    modifiers,
-                );
+                frame(&mut layout, &mut charts, release(end), modifiers);
                 frame(&mut layout, &mut charts, vec![], modifiers);
                 let resized = layout.rects(bounds, 4);
                 // Widths are W/2 + 40 and W/2 - 40; heights and the other row stay fixed.
@@ -1719,18 +1760,8 @@ mod tests {
                     frame(&mut layout, &mut charts, vec![], modifiers);
                 }
                 for _ in 0..2 {
-                    frame(
-                        &mut layout,
-                        &mut charts,
-                        vec![Event::PointerMoved(end), button(end, true)],
-                        modifiers,
-                    );
-                    frame(
-                        &mut layout,
-                        &mut charts,
-                        vec![button(end, false)],
-                        modifiers,
-                    );
+                    frame(&mut layout, &mut charts, press(end), modifiers);
+                    frame(&mut layout, &mut charts, release(end), modifiers);
                 }
                 frame(&mut layout, &mut charts, vec![], modifiers);
                 assert_eq!(layout.rects(bounds, 4), before);

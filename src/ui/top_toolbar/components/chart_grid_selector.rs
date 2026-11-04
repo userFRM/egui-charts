@@ -21,7 +21,6 @@ pub struct ChartGridSelector {
     current: ChartLayoutMode,
     /// Synchronization options chosen by the user. Apply these to the layout each frame.
     pub sync: ChartSyncOptions,
-    reset_sizes: bool,
 }
 
 impl ChartGridSelector {
@@ -41,11 +40,6 @@ impl ChartGridSelector {
     /// Updates the selection from host state.
     pub fn set_layout(&mut self, layout: ChartLayoutMode) {
         self.current = layout;
-    }
-
-    /// Takes a request to restore the chart layout's initial proportions.
-    pub fn take_size_reset(&mut self) -> bool {
-        std::mem::take(&mut self.reset_sizes)
     }
 
     /// Shows the trigger and returns a changed grid or tab preset.
@@ -111,17 +105,6 @@ impl ChartGridSelector {
                             }
                         }
                     });
-                }
-                ui.separator();
-                if ui
-                    .add_enabled(
-                        self.current.chart_count() > 1 && self.current != ChartLayoutMode::Tabs,
-                        egui::Button::new(l10n::text(ui.ctx(), "Reset chart sizes")),
-                    )
-                    .clicked()
-                {
-                    self.reset_sizes = true;
-                    ui.close();
                 }
                 ui.add(egui::Separator::default().spacing(theme.spacing.lg));
                 ui.horizontal(|ui| {
@@ -419,17 +402,6 @@ mod tests {
                 assert_eq!(state.1, Some(state.0.current()), "{label}, width {width}");
                 assert!(harness.query_by_role(Role::MenuItemRadio).is_none());
             }
-            harness
-                .get_by_role_and_label(Role::Button, "Chart layout")
-                .click();
-            harness.run();
-            harness
-                .get_by_role_and_label(Role::Button, "Reset chart sizes")
-                .click();
-            harness.run();
-            assert!(harness.state_mut().0.take_size_reset());
-            assert!(!harness.state_mut().0.take_size_reset());
-            assert!(harness.query_by_role(Role::MenuItemRadio).is_none());
         }
     }
 
