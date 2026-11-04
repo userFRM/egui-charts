@@ -1114,6 +1114,50 @@ mod tests {
             "a shared name does not identify a built-in"
         );
         assert!(serde_json::to_value(SMA::new(1).settings()).unwrap()["help_url"].is_string());
+        let articles: [(Box<dyn Indicator>, &str); 10] = [
+            (
+                Box::new(crate::studies::SMIErgodicIndicator::default()),
+                "SMIErgodicIndicator",
+            ),
+            (
+                Box::new(crate::studies::SMIErgodicOscillator::default()),
+                "SMIErgodicOscillator",
+            ),
+            (
+                Box::new(crate::studies::RisingWedge::default()),
+                "RisingWedge",
+            ),
+            (
+                Box::new(crate::studies::FallingWedge::default()),
+                "FallingWedge",
+            ),
+            (Box::new(crate::studies::Ratio::default()), "Ratio"),
+            (Box::new(crate::studies::Spread::default()), "Spread"),
+            (
+                Box::new(crate::studies::Correlation::default()),
+                "Correlation",
+            ),
+            (
+                Box::new(crate::studies::AdvanceDeclineRatio::default()),
+                "AdvanceDeclineRatio",
+            ),
+            (
+                Box::new(crate::studies::AdvanceDeclineLine::default()),
+                "AdvanceDeclineLine",
+            ),
+            (
+                Box::new(crate::studies::CumulativeVolumeIndex::default()),
+                "CumulativeVolumeIndex",
+            ),
+        ];
+        for (study, article) in articles {
+            assert!(
+                study
+                    .help_url()
+                    .unwrap()
+                    .ends_with(&format!("/type.{article}.html"))
+            );
+        }
 
         let mut chart = super::super::test_frames::chart(&[100.0], &[110.0]);
         let id = chart.add_indicator(Box::new(SMA::new(1)));

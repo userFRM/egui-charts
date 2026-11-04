@@ -38,10 +38,10 @@ type IndicatorConstructor = Box<dyn Fn() -> Box<dyn Indicator> + Send + Sync>;
 /// the value the rendering layer and legends display, and a new indicator is
 /// reachable through the factory the moment it is added to this list.
 macro_rules! register_builtins {
-    (@help $factory:expr, $($ty:ty),+ $(,)?) => {
+    (@help $factory:expr, $kind:literal, $($ty:ty),+ $(,)?) => {
         $($factory.help_urls.insert(
             std::any::type_name::<$ty>(),
-            concat!("https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.", stringify!($ty), ".html"),
+            concat!("https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/", $kind, ".", stringify!($ty), ".html"),
         );)+
     };
     ($factory:expr, $($category:literal => [$($ty:ty),+ $(,)?]),+ $(,)?) => {
@@ -49,7 +49,7 @@ macro_rules! register_builtins {
             // Read the canonical name from a throwaway default instance so the
             // key is always exactly what the indicator reports at runtime.
             let key = <$ty as Default>::default().name().to_string();
-            register_builtins!(@help $factory, $ty);
+            register_builtins!(@help $factory, "struct", $ty);
             $factory.constructors.insert(
                 key,
                 (Some($category), Box::new(|| Box::new(<$ty as Default>::default()))),
@@ -111,9 +111,9 @@ impl IndicatorFactory {
     /// listed study of the same name would replace them.
     fn register_builtin(&mut self) {
         // Exported studies outside the catalogue, resolved by name so that saved copies load.
-        register_builtins!(@help self, CVD, CloseToCloseVol, HL2, HLC3, PriceChannel, EhlersFisher, MACombination, OrderFlowStudy, ChartPatterns);
+        register_builtins!(@help self, "struct", CVD, CloseToCloseVol, HL2, HLC3, PriceChannel, EhlersFisher, MACombination, OrderFlowStudy, ChartPatterns);
         #[cfg(feature = "drawings")]
-        register_builtins!(@help self, AutoDrawing);
+        register_builtins!(@help self, "struct", AutoDrawing);
         let unlisted: [fn() -> Box<dyn Indicator>; 7] = [
             || Box::new(CVD::default()),
             || Box::new(CloseToCloseVol::default()),
@@ -380,6 +380,7 @@ impl IndicatorFactory {
                 ),
             );
         }
+        register_builtins!(@help self, "type", SMIErgodicIndicator, SMIErgodicOscillator, RisingWedge, FallingWedge, Ratio, Spread, Correlation, AdvanceDeclineRatio, AdvanceDeclineLine, CumulativeVolumeIndex);
         for cumulative in [false, true] {
             let name = OrderFlowStudy::execution_delta(cumulative)
                 .name()
