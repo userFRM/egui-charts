@@ -209,8 +209,8 @@ impl SymbolSearchDialog {
                 for member in self
                     .filtered_symbols
                     .iter()
-                    .filter(|member| group_key(member) == group_key(symbol))
-                    .take(3)
+                    .filter(|member| member.search_group() == symbol.search_group())
+                    .take((((text_right - left - 12.0) / 14.0) as usize).min(3))
                 {
                     let mark = egui::Rect::from_center_size(
                         Pos2::new(text_right - 10.0, rect.center().y),

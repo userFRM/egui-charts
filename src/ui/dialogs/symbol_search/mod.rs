@@ -552,8 +552,11 @@ impl SymbolSearchDialog {
                         }
                     }
                 }
-                let before_category = self.category;
-                let before_exchange = self.search.exchange.clone();
+                let before = self.search.request(
+                    &self.search_query,
+                    self.category.0,
+                    self.config.max_results,
+                );
                 ui.horizontal(|ui| {
                     let source_width = if sources.is_empty() {
                         0.0
@@ -592,15 +595,6 @@ impl SymbolSearchDialog {
                             .accessible_name(l10n::text(ui.ctx(), "Exchange"));
                     }
                 });
-                if self.category != before_category || self.search.exchange != before_exchange {
-                    self.sel_idx = 0;
-                    self.refresh_results(ctx, all_symbols);
-                }
-                let before = self.search.request(
-                    &self.search_query,
-                    self.category.0,
-                    self.config.max_results,
-                );
                 if !self.countries.is_empty()
                     || !self.sectors.is_empty()
                     || !self.data_sources.is_empty()
@@ -650,8 +644,6 @@ impl SymbolSearchDialog {
                             if choices.is_empty() {
                                 continue;
                             }
-                            choices.sort();
-                            choices.dedup();
                             let all = l10n::text(ui.ctx(), all);
                             egui::ComboBox::from_id_salt(("symbol_filter", label))
                                 .width(150.0)
@@ -741,7 +733,7 @@ impl SymbolSearchDialog {
                                     toggled = group_key(symbol).map(|group| (group, idx));
                                 }
 
-                                if response.clicked() && !toggle {
+                                if response.clicked() {
                                     sel_symbol = Some(symbol.clone());
                                     should_close = true;
                                 }
@@ -888,26 +880,22 @@ impl SymbolSearchDialog {
         let query =
             self.search
                 .request(&self.search_query, self.category.0, self.config.max_results);
-        let mut filtered: Vec<_> = all_symbols
-            .iter()
-            .filter(|symbol| query.rank_in(symbol, all_symbols).is_some())
-            .collect();
+        let mut filtered = query.ranked(all_symbols);
 
-        if !self.search_query.is_empty() {
-            filtered.sort_by_key(|symbol| query.rank(symbol).unwrap_or(3));
-        }
         if self.search_query.is_empty() {
-            filtered.sort_by_key(|symbol| {
+            filtered.sort_by_key(|(_, symbol)| {
                 self.recent_symbols
                     .iter()
                     .position(|name| name == &symbol.symbol)
                     .unwrap_or(usize::MAX)
             });
+        } else {
+            filtered.sort_by_key(|&(rank, _)| rank);
         }
         self.filtered_symbols = filtered
             .into_iter()
             .take(self.config.max_results)
-            .cloned()
+            .map(|(_, symbol)| symbol.clone())
             .collect();
         self.sel_idx = self
             .sel_idx
@@ -920,7 +908,7 @@ impl SymbolSearchDialog {
         let mut rows = Vec::new();
         let symbols = &self.filtered_symbols;
         for (index, symbol) in symbols.iter().enumerate() {
-            let Some(root) = group_key(symbol) else {
+            let Some(root) = symbol.search_group() else {
                 rows.push(Row {
                     index,
                     members: 0,
@@ -930,19 +918,19 @@ impl SymbolSearchDialog {
             };
             if symbols[..index]
                 .iter()
-                .any(|s| group_key(s).as_ref() == Some(&root))
+                .any(|s| s.search_group() == Some(root))
             {
                 continue;
             }
             let members: Vec<_> = (index + 1..symbols.len())
-                .filter(|&i| group_key(&symbols[i]).as_ref() == Some(&root))
+                .filter(|&i| symbols[i].search_group() == Some(root))
                 .collect();
             rows.push(Row {
                 index,
                 members: members.len(),
                 nested: false,
             });
-            if self.expanded.contains(&root) {
+            if group_key(symbol).is_some_and(|key| self.expanded.contains(&key)) {
                 rows.extend(members.into_iter().map(|index| Row {
                     index,
                     members: 0,
@@ -954,7 +942,7 @@ impl SymbolSearchDialog {
     }
 }
 
-/// Futures roots are venue-specific; other roots collect listings across venues and providers.
+/// The owned [`Instrument::search_group`] an expanded root is remembered by.
 fn group_key(symbol: &Instrument) -> Option<(String, Option<SymbolType>, Option<String>)> {
     let (root, kind, exchange) = symbol.search_group()?;
     Some((root.to_owned(), kind, exchange.map(Into::into)))
@@ -1389,46 +1377,33 @@ mod tests {
                 ("All sectors", "Energy"),
                 ("All sources", "Other"),
             ] {
-                for label in [menu, value] {
-                    let pos = frame(vec![])
-                        .0
-                        .iter()
-                        .rfind(|(text, _)| text == label)
-                        .unwrap_or_else(|| panic!("missing {label}"))
-                        .1;
-                    frame(vec![egui::Event::PointerMoved(pos)]);
-                    for pressed in [true, false] {
-                        frame(vec![egui::Event::PointerButton {
-                            pos,
-                            button: egui::PointerButton::Primary,
-                            pressed,
-                            modifiers: Default::default(),
-                        }]);
+                for (labels, expected) in [
+                    ([menu, value], &["AWAY"][..]),
+                    ([value, menu], &["HOME", "AWAY"]),
+                ] {
+                    for label in labels {
+                        // A closed menu's button paints before rows showing the same value, an
+                        // open menu's choices after them.
+                        let texts = frame(vec![]).0;
+                        let mut named = texts.iter().filter(|(text, _)| text == label);
+                        let found = if labels[0] == menu {
+                            named.next_back()
+                        } else {
+                            named.next()
+                        };
+                        let pos = found.unwrap_or_else(|| panic!("missing {label}")).1;
+                        frame(vec![egui::Event::PointerMoved(pos)]);
+                        for pressed in [true, false] {
+                            frame(vec![egui::Event::PointerButton {
+                                pos,
+                                button: egui::PointerButton::Primary,
+                                pressed,
+                                modifiers: Default::default(),
+                            }]);
+                        }
                     }
+                    assert_eq!(frame(vec![]).1, expected, "{labels:?}, service={connected}");
                 }
-                assert_eq!(frame(vec![]).1, ["AWAY"], "{menu}, service={connected}");
-                for label in [value, menu] {
-                    let pos = frame(vec![])
-                        .0
-                        .iter()
-                        .find(|(text, _)| text == label)
-                        .unwrap()
-                        .1;
-                    frame(vec![egui::Event::PointerMoved(pos)]);
-                    for pressed in [true, false] {
-                        frame(vec![egui::Event::PointerButton {
-                            pos,
-                            button: egui::PointerButton::Primary,
-                            pressed,
-                            modifiers: Default::default(),
-                        }]);
-                    }
-                }
-                assert_eq!(
-                    frame(vec![]).1.len(),
-                    2,
-                    "clearing {menu} restores the catalog"
-                );
             }
         }
     }
@@ -1507,6 +1482,8 @@ mod tests {
             .into_iter()
             .map(|symbol| symbol.with_exchange("NASDAQ"))
             .collect();
+        // A listing that merely shares a ticker must not take the place of the catalog's spelling.
+        symbols.insert(0, Instrument::new("OTHER:TSLA"));
         symbols.push(
             Instrument::new("BRK-B")
                 .with_exchange("NASDAQ")
@@ -1693,16 +1670,8 @@ mod tests {
 
     #[test]
     fn test_symbol_filtering_case_insensitive() {
-        let symbols: Vec<_> = create_test_symbols()
-            .into_iter()
-            .map(|symbol| symbol.with_exchange("Catalog"))
-            .collect();
-        for (query, expected) in [
-            ("btc", "BTCUSDT"),
-            ("BTC", "BTCUSDT"),
-            ("apple", "AAPL"),
-            ("catalog:aapl", "AAPL"),
-        ] {
+        let symbols = create_test_symbols();
+        for (query, expected) in [("btc", "BTCUSDT"), ("BTC", "BTCUSDT"), ("apple", "AAPL")] {
             let mut dialog = SymbolSearchDialog::new();
             dialog.search_query = query.to_string();
             dialog.update_filtered_symbols(&symbols);

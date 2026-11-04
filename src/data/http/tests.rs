@@ -1,7 +1,6 @@
 use super::*;
 use crate::data::inbox::Inbox;
 use crate::model::{Bar, BarClock, SymbolType, Timeframe};
-#[cfg(test)]
 use crate::services::{SymbolQuery, SymbolSearch};
 use chrono::{DateTime, Utc};
 use serde_json::json;

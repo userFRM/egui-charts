@@ -6,6 +6,7 @@ pub use expression::{ExpressionError, SymbolExpression};
 
 use crate::data::{MaybeSend, Reply};
 use crate::model::{Instrument, SymbolType};
+use std::collections::HashSet;
 
 /// Finds instruments for the symbol search dialog, from a source that need not be the feed's.
 ///
@@ -82,15 +83,15 @@ impl SymbolQuery {
     }
 
     /// The venue and remaining text in a `VENUE:SYMBOL` query, including an empty symbol while
-    /// typing. The explicit exchange filter stays independent. Arithmetic expressions are
-    /// resolved separately by the chooser, rather than treated as one qualified symbol.
+    /// typing. The explicit exchange filter stays independent. Text naming a second venue, or
+    /// with an operator before the colon, is an arithmetic expression and is not qualified.
     pub fn qualified(&self) -> Option<(&str, &str)> {
         let (venue, symbol) = self.text.trim().split_once(':')?;
         let (venue, symbol) = (venue.trim(), symbol.trim());
         (!venue.is_empty()
             && !venue.contains(char::is_whitespace)
             && !venue.contains(['+', '-', '*', '/', '(', ')'])
-            && !symbol.contains([':', '+', '*', '/', '(', ')']))
+            && !symbol.contains(':'))
         .then_some((venue, symbol))
     }
 
@@ -142,21 +143,13 @@ impl SymbolQuery {
                 actual.is_some_and(|actual| actual.eq_ignore_ascii_case(wanted))
             })
         };
-        let qualified = self.qualified();
-        if self.symbol_type.is_some() && self.symbol_type != instrument.symbol_type
-            || !matches(self.exchange.as_deref(), exchange)
-            || !(matches(qualified.map(|(venue, _)| venue), exchange)
-                || matches(
-                    qualified.map(|(venue, _)| venue),
-                    listing.map(|(venue, _)| venue),
-                ))
-            || !matches(self.country.as_deref(), instrument.country.as_deref())
-            || !matches(self.sector.as_deref(), instrument.sector.as_deref())
-            || !matches(self.source.as_deref(), instrument.source.as_deref())
-        {
-            return false;
-        }
-        true
+        let venue = self.qualified().map(|(venue, _)| venue);
+        (self.symbol_type.is_none() || self.symbol_type == instrument.symbol_type)
+            && matches(self.exchange.as_deref(), exchange)
+            && (matches(venue, exchange) || matches(venue, listing.map(|(venue, _)| venue)))
+            && matches(self.country.as_deref(), instrument.country.as_deref())
+            && matches(self.sector.as_deref(), instrument.sector.as_deref())
+            && matches(self.source.as_deref(), instrument.source.as_deref())
     }
 
     /// Match and rank one listing before pagination.
@@ -165,18 +158,20 @@ impl SymbolQuery {
             return None;
         }
         let qualified = self.qualified();
-        let listing = instrument.symbol.split_once(':');
         let text = qualified
             .map_or(self.text.trim(), |(_, symbol)| symbol)
             .to_lowercase();
-        let symbol = listing
-            .map_or(instrument.symbol.as_str(), |(_, symbol)| symbol)
-            .to_lowercase();
-        if symbol == text {
+        let symbol = instrument.symbol.to_lowercase();
+        let ticker = symbol
+            .split_once(':')
+            .map_or(symbol.as_str(), |(_, ticker)| ticker);
+        // Without a typed venue, the text may also spell the venue of a prefixed feed key.
+        let whole = if qualified.is_some() { ticker } else { &symbol };
+        if ticker == text || whole == text {
             Some(0)
-        } else if symbol.starts_with(&text) {
+        } else if ticker.starts_with(&text) || whole.starts_with(&text) {
             Some(1)
-        } else if symbol.contains(&text)
+        } else if whole.contains(&text)
             || instrument
                 .description
                 .as_deref()
@@ -190,18 +185,30 @@ impl SymbolQuery {
         }
     }
 
-    /// Keep eligible members of a matching root available for expansion, even when their own
-    /// ticker or description does not contain the query. Direct matches remain ahead of them.
-    pub(crate) fn rank_in(&self, instrument: &Instrument, catalog: &[Instrument]) -> Option<u8> {
-        if let Some(rank) = self.rank(instrument) {
-            return Some(rank);
-        }
-        let group = instrument.search_group()?;
-        (self.matches_filters(instrument)
-            && catalog
-                .iter()
-                .any(|parent| parent.search_group() == Some(group) && self.rank(parent).is_some()))
-        .then_some(3)
+    /// The catalog's matches and their ranks, in catalog order. Eligible members of a matching
+    /// root follow direct matches, even when their own ticker or description lacks the query.
+    pub(crate) fn ranked<'a>(&self, catalog: &'a [Instrument]) -> Vec<(u8, &'a Instrument)> {
+        let ranks: Vec<_> = catalog.iter().map(|symbol| self.rank(symbol)).collect();
+        let groups: HashSet<_> = catalog
+            .iter()
+            .zip(&ranks)
+            .filter(|(_, rank)| rank.is_some())
+            .filter_map(|(symbol, _)| symbol.search_group())
+            .collect();
+        catalog
+            .iter()
+            .zip(ranks)
+            .filter_map(|(symbol, rank)| {
+                let related = || {
+                    (symbol
+                        .search_group()
+                        .is_some_and(|group| groups.contains(&group))
+                        && self.matches_filters(symbol))
+                    .then_some(3)
+                };
+                Some((rank.or_else(related)?, symbol))
+            })
+            .collect()
     }
 }
 
@@ -220,14 +227,7 @@ impl SymbolSearch for crate::data::http::HttpDatafeed {
 /// continuous-contract query still offers its dated contracts.
 impl SymbolSearch for Vec<Instrument> {
     fn search(&self, query: SymbolQuery, reply: Reply<Vec<Instrument>>) {
-        let mut found: Vec<_> = self
-            .iter()
-            .filter_map(|instrument| {
-                query
-                    .rank_in(instrument, self)
-                    .map(|rank| (rank, instrument))
-            })
-            .collect();
+        let mut found = query.ranked(self);
         found.sort_by_key(|&(rank, _)| rank);
         let found = found.into_iter().skip(query.offset).take(query.limit);
         reply.send(Ok(found
@@ -252,6 +252,7 @@ mod tests {
         let list = vec![
             Instrument::new("BTCUSD").with_symbol_type(SymbolType::Crypto),
             Instrument::new("X:DUAL").with_exchange("Venue X"),
+            Instrument::new("EUR/JPY").with_exchange("FX"),
             Instrument::new("SPYG")
                 .with_description("SPDR Portfolio S&P 500 Growth ETF")
                 .with_symbol_type(SymbolType::Fund)
@@ -288,6 +289,9 @@ mod tests {
             (query("NASDAQ:AAPL", None, Some("NYSE"), 0, 10), &[]),
             (query("x:dual", None, None, 0, 10), &["X:DUAL"]),
             (query("x:dual", None, Some("Venue X"), 0, 10), &["X:DUAL"]),
+            (query("fx:eur/jpy", None, None, 0, 10), &["EUR/JPY"]),
+            (query("y:eur/jpy", None, None, 0, 10), &[]),
+            (query("x", None, None, 0, 10), &["X:DUAL"]),
             (query(" :aapl", None, None, 0, 10), &[]),
             (query("APPLE", None, None, 0, 10), &["AAPL"]),
             (query("s&p 500", None, None, 0, 10), &["SPYG", "SPY"]),

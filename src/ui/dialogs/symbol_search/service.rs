@@ -290,17 +290,10 @@ impl Search {
                 None => Arc::new(fallback.to_vec()),
             };
             for (at, symbol) in symbols.iter().enumerate() {
-                let query = SymbolQuery {
-                    text: symbol.clone(),
-                    symbol_type: None,
-                    exchange: None,
-                    country: None,
-                    sector: None,
-                    source: None,
-                    offset: 0,
-                    limit: 20,
-                };
-                source.search(query, self.components.inbox.reply(at as u64));
+                source.search(
+                    SymbolQuery::new(symbol),
+                    self.components.inbox.reply(at as u64),
+                );
             }
         }
         let repaint = ctx.clone();
@@ -316,9 +309,10 @@ impl Search {
             self.components.found[at] =
                 Some(rows.map_err(|error| error.to_string()).and_then(|rows| {
                     let query = SymbolQuery::new(&symbols[at]);
-                    rows.into_iter()
-                        .find(|row| query.rank(row) == Some(0))
-                        .map(|row| row.symbol)
+                    rows.iter()
+                        .find(|row| row.symbol.eq_ignore_ascii_case(&symbols[at]))
+                        .or_else(|| rows.iter().find(|row| query.rank(row) == Some(0)))
+                        .map(|row| row.symbol.clone())
                         .ok_or_else(|| {
                             ExpressionError::UnknownSymbol(symbols[at].clone()).to_string()
                         })
