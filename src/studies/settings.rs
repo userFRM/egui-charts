@@ -99,6 +99,52 @@ pub struct PlotStyle {
     pub visible: bool,
 }
 
+/// Colour and thickness for an alternate state of a plot, such as decreasing bars.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct PlotVariant {
+    /// Caption in the style editor.
+    pub name: String,
+    /// Colour in this state.
+    pub color: Color32,
+    /// Stroke width in logical pixels, from 0.5 to 10.
+    pub width: f32,
+}
+
+impl PlotVariant {
+    /// An alternate state with a one-pixel stroke.
+    pub fn new(name: impl Into<String>, color: Color32) -> Self {
+        Self {
+            name: name.into(),
+            color,
+            width: 1.0,
+        }
+    }
+}
+
+/// Presentation of one declared band, independent of its boundary plots.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct FillStyle {
+    /// Colour when the first boundary is at least the second.
+    pub color: Color32,
+    /// Optional colour when the first boundary is below the second.
+    pub inverted_color: Option<Color32>,
+    /// Whether the band is drawn.
+    pub visible: bool,
+}
+
+impl FillStyle {
+    /// A visible band with the same colour on either side of a crossing.
+    pub fn new(color: Color32) -> Self {
+        Self {
+            color,
+            inverted_color: None,
+            visible: true,
+        }
+    }
+}
+
 /// Editable presentation of one reference level in a study's pane, such as 70 for RSI.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
@@ -110,8 +156,15 @@ pub struct LevelStyle {
     pub color: Color32,
     /// Stroke pattern.
     pub pattern: LineStyle,
+    /// Stroke width in logical pixels, from 0.5 to 10. Older settings use one pixel.
+    #[serde(default = "default_level_width")]
+    pub width: f32,
     /// Whether the line is drawn. A hidden level still bounds the fill between the outer levels.
     pub visible: bool,
+}
+
+fn default_level_width() -> f32 {
+    1.0
 }
 
 /// The levels and fill a study declares, as the defaults of its level settings.
@@ -126,19 +179,40 @@ pub(super) fn declared_levels<S: Indicator + ?Sized>(
             value: None,
             color,
             pattern: study.level_style(value),
+            width: study.level_width(value),
             visible: true,
         })
         .collect();
     (levels, pane.fill_between_levels, study.level_fill_color())
 }
 
-/// Settings without one style per declared level take the study's own levels and fill.
-fn match_declared_levels(study: &dyn Indicator, settings: &mut StudySettings) {
+/// Missing style lists inherit the study's declared presentation.
+fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
     let (levels, fill, color) = declared_levels(study);
     if settings.levels.len() != levels.len() {
         settings.levels = levels;
         settings.fill_between_levels = fill;
         settings.level_fill_color = color;
+    }
+    settings
+        .plot_variants
+        .resize_with(study.line_count(), Vec::new);
+    for (line, variants) in settings.plot_variants.iter_mut().enumerate() {
+        let declared = study.plot_variants(line);
+        if variants.len() != declared.len() {
+            *variants = declared;
+        }
+    }
+    let fills = study.fills();
+    if settings.fills.len() != fills.len() {
+        settings.fills = fills
+            .iter()
+            .map(|fill| FillStyle {
+                color: fill.color,
+                inverted_color: fill.inverted_color,
+                visible: true,
+            })
+            .collect();
     }
 }
 
@@ -224,6 +298,23 @@ pub struct StudySettings {
     /// Applying settings drops indices without a plot and sorts the rest.
     #[serde(default)]
     pub untagged_plots: Vec<usize>,
+    /// Outputs with a horizontal line at their latest value, independent of tags and displacement.
+    /// Missing latest values remove the line. Empty, including older settings, disables all.
+    #[serde(default)]
+    pub price_line_plots: Vec<usize>,
+    /// Alternate colour and width states per output. Missing states take declared defaults.
+    #[serde(default)]
+    pub plot_variants: Vec<Vec<PlotVariant>>,
+    /// Optional tint across the study's plot area, independent of its plots and bands.
+    #[serde(default)]
+    pub background: Option<Color32>,
+    /// Whether the optional pane tint is drawn. Hiding it retains its colour.
+    #[serde(default = "enabled_by_default")]
+    pub background_visible: bool,
+    /// One independent style per band returned by [`Indicator::fills`].
+    /// Missing styles take the study's declared colours and visibility.
+    #[serde(default)]
+    pub fills: Vec<FillStyle>,
 }
 
 fn enabled_by_default() -> bool {
@@ -368,7 +459,7 @@ impl ConfiguredStudy {
         {
             plot.visible = true;
         }
-        match_declared_levels(study.as_ref(), &mut settings);
+        match_declared_styles(study.as_ref(), &mut settings);
         Self {
             study,
             settings,
@@ -778,6 +869,11 @@ impl Indicator for ConfiguredStudy {
         for (plot, color) in self.settings.plots.iter_mut().zip(self.study.colors()) {
             plot.color = color;
         }
+        for (line, variants) in self.settings.plot_variants.iter_mut().enumerate() {
+            for (variant, declared) in variants.iter_mut().zip(self.study.plot_variants(line)) {
+                variant.color = declared.color;
+            }
+        }
     }
     fn set_color(&mut self, line: usize, color: Color32) {
         if let Some(plot) = self.settings.plots.get_mut(line) {
@@ -811,6 +907,34 @@ impl Indicator for ConfiguredStudy {
             self.study.plot_tagged(line)
         }
     }
+    fn plot_price_line(&self, line: usize) -> bool {
+        self.settings.price_line_plots.contains(&line)
+    }
+    fn plot_variants(&self, line: usize) -> Vec<PlotVariant> {
+        self.settings
+            .plot_variants
+            .get(line)
+            .cloned()
+            .unwrap_or_default()
+    }
+    fn plot_variant(&self, line: usize, bar: usize) -> Option<usize> {
+        let bar = if self.aligned.is_some() {
+            self.aligned_bars.get(bar).copied().flatten()?
+        } else {
+            bar
+        };
+        self.study.plot_variant(line, bar)
+    }
+    fn plot_width(&self, line: usize, bar: usize) -> f32 {
+        self.plot_variant(line, bar)
+            .and_then(|variant| self.settings.plot_variants.get(line)?.get(variant))
+            .map_or_else(|| self.plot_style(line).width, |variant| variant.width)
+    }
+    fn background(&self) -> Option<Color32> {
+        self.settings
+            .background
+            .filter(|_| self.settings.background_visible)
+    }
     fn plot_offset(&self, line: usize) -> isize {
         self.study
             .plot_offset(line)
@@ -830,6 +954,12 @@ impl Indicator for ConfiguredStudy {
         }
     }
     fn plot_color(&self, line: usize, bar: usize) -> Option<Color32> {
+        if let Some(variant) = self
+            .plot_variant(line, bar)
+            .and_then(|variant| self.settings.plot_variants.get(line)?.get(variant))
+        {
+            return Some(variant.color);
+        }
         let bar = if self.aligned.is_some() {
             self.aligned_bars.get(bar).copied().flatten()?
         } else {
@@ -846,7 +976,21 @@ impl Indicator for ConfiguredStudy {
         self.study.plot_text(line, bar)
     }
     fn fills(&self) -> Vec<super::StudyFill> {
-        self.study.fills()
+        self.study
+            .fills()
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, mut fill)| {
+                if let Some(style) = self.settings.fills.get(index) {
+                    if !style.visible {
+                        return None;
+                    }
+                    fill.color = style.color;
+                    fill.inverted_color = style.inverted_color;
+                }
+                Some(fill)
+            })
+            .collect()
     }
     fn snapshot_settings(&self) -> StudySettingsSnapshot {
         let mut snapshot =
@@ -919,14 +1063,32 @@ impl Indicator for ConfiguredStudy {
         if let Some(precision) = settings.precision.filter(|precision| *precision > 12) {
             return Err(super::StudyError::InvalidPrecision(precision));
         }
-        if let Some((plot, style)) = settings
+        if let Some((plot, width)) = settings
             .plots
             .iter()
             .enumerate()
-            .find(|(_, plot)| !plot.width.is_finite() || !(0.5..=10.0).contains(&plot.width))
+            .map(|(plot, style)| (plot, style.width))
+            .chain(
+                settings
+                    .plot_variants
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(plot, variants)| {
+                        variants.iter().map(move |variant| (plot, variant.width))
+                    }),
+            )
+            .find(|(_, width)| !width.is_finite() || !(0.5..=10.0).contains(width))
         {
-            return Err(super::StudyError::InvalidPlotWidth {
-                plot,
+            return Err(super::StudyError::InvalidPlotWidth { plot, width });
+        }
+        if let Some((level, style)) = settings
+            .levels
+            .iter()
+            .enumerate()
+            .find(|(_, style)| !style.width.is_finite() || !(0.5..=10.0).contains(&style.width))
+        {
+            return Err(super::StudyError::InvalidLevelWidth {
+                level,
                 width: style.width,
             });
         }
@@ -979,13 +1141,18 @@ impl Indicator for ConfiguredStudy {
             .retain(|&line| line < settings.plots.len());
         settings.untagged_plots.sort_unstable();
         settings.untagged_plots.dedup();
-        match_declared_levels(edited.study.as_ref(), &mut settings);
+        settings
+            .price_line_plots
+            .retain(|&line| line < settings.plots.len());
+        settings.price_line_plots.sort_unstable();
+        settings.price_line_plots.dedup();
         // Unchanged plot colours must retain any per-bar palette stored by the study.
         for (line, plot) in settings.plots.iter().enumerate() {
             if plot.color != edited.study.plot_style(line).color {
                 edited.study.set_color(line, plot.color);
             }
         }
+        match_declared_styles(edited.study.as_ref(), &mut settings);
         if self.study.value_format() != edited.study.value_format() {
             self.formatter = None;
         }
@@ -1152,6 +1319,17 @@ impl Indicator for ConfiguredStudy {
     }
     fn level_fill_color(&self) -> Color32 {
         self.settings.level_fill_color
+    }
+    fn level_width(&self, value: f64) -> f32 {
+        self.study
+            .pane()
+            .levels
+            .iter()
+            .zip(&self.settings.levels)
+            .find(|((declared, ..), style)| {
+                style.visible && style.value.unwrap_or(*declared) == value
+            })
+            .map_or_else(|| self.study.level_width(value), |(_, style)| style.width)
     }
     fn pane(&self) -> super::StudyPane {
         let mut pane = self.study.pane();
@@ -1673,6 +1851,7 @@ mod tests {
         let before = study.snapshot_settings();
         let mut edited = declared.clone();
         edited.levels[0].value = Some(80.0);
+        edited.levels[0].width = 3.0;
         edited.levels[1].visible = false;
         study.apply_settings(&[], edited.clone()).unwrap();
         assert_eq!(values(&study), [80.0, 30.0]);
@@ -1684,6 +1863,13 @@ mod tests {
             .unwrap();
         assert_eq!(loaded.settings(), edited);
         let mut older = saved;
+        for level in older["levels"].as_array_mut().unwrap() {
+            level.as_object_mut().unwrap().remove("width");
+        }
+        loaded
+            .apply_settings(&[], serde_json::from_value(older.clone()).unwrap())
+            .unwrap();
+        assert_eq!(loaded.settings().levels[0].width, 1.0);
         for key in ["levels", "fill_between_levels", "level_fill_color"] {
             older.as_object_mut().unwrap().remove(key);
         }
@@ -1700,6 +1886,15 @@ mod tests {
             Err(super::super::StudyError::InvalidLevelValue { level: 0, value }) if value == f64::INFINITY
         ));
         assert_eq!(study.settings(), declared);
+        for width in [f32::NAN, f32::INFINITY, 0.0, 11.0] {
+            let mut invalid = declared.clone();
+            invalid.levels[0].width = width;
+            assert!(matches!(
+                study.apply_settings(&[], invalid),
+                Err(super::super::StudyError::InvalidLevelWidth { level: 0, .. })
+            ));
+            assert_eq!(study.settings(), declared);
+        }
         let mut adx = ConfiguredStudy::new(Box::new(AdxBreakout::default()));
         let settings = adx.settings();
         adx.apply_settings(&[("threshold".into(), InputValue::Length(25))], settings)

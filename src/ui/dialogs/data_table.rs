@@ -4,12 +4,14 @@
 //! It follows the chart it is shown with, including its replay cutoff, and loads nothing: only
 //! bars already loaded appear. The host opens it from
 //! [`ContextMenuAction::OpenDataTable`](crate::ui::context_menu::ContextMenuAction::OpenDataTable)
-//! and saves the text of [`DataTableAction::Export`].
+//! and saves the text of [`DataTableAction::Export`]. Symbol search requests go to the host;
+//! the table stays open while a watchlist or search changes the chart's symbol.
 
 use crate::localization as l10n;
 use crate::model::{Bar, Timeframe};
+use crate::studies::StudySettingsSnapshot;
 use crate::ui_kit::buttons::Button;
-use crate::ui_kit::modal::Modal;
+use crate::ui_kit::dialog::{DialogFrame, dialog_header};
 use crate::widget::{Chart, DataTable, SeriesId};
 use chrono::{DateTime, Utc};
 use egui::{Align2, Context, FontId, Rect, ScrollArea, Sense, Ui, vec2};
@@ -31,25 +33,31 @@ pub enum DataTableAction {
     Close,
     /// CSV text of the displayed columns, for the host to save.
     Export(String),
+    /// Open symbol search. An empty query requests the current symbol selected for replacement.
+    /// Apply the chosen symbol to the chart passed to `show`, retaining its study ids.
+    SearchSymbol(String),
 }
 
-/// What the cached table was built from. A correction to a bar in the middle of the history
-/// that changes none of these shows after the next change of one of them.
+/// Inputs to the table, without copying historical bars or calculated study values.
 #[derive(PartialEq)]
 struct Source {
+    revision: (u64, u64),
     symbol: String,
     timeframe: Option<Timeframe>,
     len: usize,
     first: Option<Bar>,
     last: Option<Bar>,
     replay: Option<DateTime<Utc>>,
-    studies: Vec<(SeriesId, bool)>,
+    studies: Vec<(SeriesId, bool, StudySettingsSnapshot)>,
+    instrument: Option<crate::model::Instrument>,
+    timezone: crate::scales::TimezoneMode,
 }
 
 impl Source {
     fn of(chart: &Chart) -> Self {
         let bars = chart.bars(SeriesId::MAIN);
         Self {
+            revision: chart.data_table_revision(),
             symbol: chart.symbol().to_owned(),
             timeframe: chart.timeframe(),
             len: bars.len(),
@@ -58,8 +66,10 @@ impl Source {
             replay: chart.replay_time(),
             studies: chart
                 .indicators()
-                .map(|(id, study)| (id, study.is_visible()))
+                .map(|(id, study)| (id, study.is_visible(), study.snapshot_settings()))
                 .collect(),
+            instrument: chart.instrument().cloned(),
+            timezone: chart.chart_options().time_scale.timezone.clone(),
         }
     }
 }
@@ -68,9 +78,10 @@ impl Source {
 pub struct DataTableDialog {
     /// Whether the dialog is currently visible.
     pub is_open: bool,
-    /// Titles of the columns the user turned off, so they stay off when studies come and go.
-    hidden: BTreeSet<String>,
+    /// Stable series and plot identities keep choices through renames and symbol changes.
+    hidden: BTreeSet<(usize, usize)>,
     cached: Option<(Source, DataTable)>,
+    column_ids: Vec<(usize, usize)>,
 }
 
 impl Default for DataTableDialog {
@@ -86,6 +97,7 @@ impl DataTableDialog {
             is_open: false,
             hidden: BTreeSet::new(),
             cached: None,
+            column_ids: Vec::new(),
         }
     }
 
@@ -112,40 +124,99 @@ impl DataTableDialog {
             .as_ref()
             .is_none_or(|(cached, _)| *cached != source)
         {
-            self.cached = Some((source, chart.data_table()));
+            let (mut table, columns) = chart.data_table_with_columns();
+            self.column_ids = columns;
+            table.rows.reverse();
+            self.cached = Some((source, table));
         }
         let table = &self.cached.as_ref().expect("table was just built").1;
         let hidden = &mut self.hidden;
         let mut action = DataTableAction::None;
         let mut open = true;
-        Modal::new("chart_data_table", l10n::text(ctx, "Chart data"))
-            .width(860.0)
-            .height(520.0)
-            .show(ctx, &mut open, |ui| {
-                action = Self::contents(ui, table, hidden);
+        DialogFrame::new("Chart data", vec2(804.0, 472.0)).show(ctx, |ui| {
+            open = !dialog_header(ui, &l10n::text(ctx, "Chart data"));
+            ui.horizontal(|ui| {
+                let symbol = if chart.symbol().is_empty() {
+                    l10n::text(ctx, "Symbol")
+                } else {
+                    chart.symbol().to_owned()
+                };
+                if Button::new(symbol)
+                    .show(ui)
+                    .on_hover_text(l10n::text(ctx, "Change symbol"))
+                    .clicked()
+                {
+                    action = DataTableAction::SearchSymbol(String::new());
+                }
+                if let Some(feed) = chart.feed_state(SeriesId::MAIN) {
+                    if feed.loading_history {
+                        ui.spinner();
+                        ui.label(l10n::text(ctx, "Loading data"));
+                    }
+                    if let Some(error) = &feed.last_error {
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(error.to_string())
+                                    .color(ui.visuals().error_fg_color),
+                            )
+                            .truncate(),
+                        );
+                    }
+                }
             });
+            let contents = Self::contents(ui, table, hidden, &self.column_ids);
+            if contents != DataTableAction::None {
+                action = contents;
+            }
+        });
         if !open {
             self.close();
             return DataTableAction::Close;
         }
+        if !ctx.text_edit_focused()
+            && !egui::Popup::is_any_open(ctx)
+            && ctx.memory(|memory| memory.top_modal_layer().is_none())
+            && !ctx.input(|input| {
+                input.modifiers.command || input.modifiers.ctrl || input.modifiers.alt
+            })
+        {
+            let typed = ctx.input_mut(|input| {
+                let at = input.events.iter().position(|event| {
+                    matches!(event, egui::Event::Text(text)
+                        if text.starts_with(|c: char| !c.is_control() && !c.is_whitespace()))
+                })?;
+                match input.events.remove(at) {
+                    egui::Event::Text(text) => Some(text),
+                    _ => None,
+                }
+            });
+            if let Some(query) = typed {
+                action = DataTableAction::SearchSymbol(query);
+            }
+        }
         action
     }
 
-    fn contents(ui: &mut Ui, table: &DataTable, hidden: &mut BTreeSet<String>) -> DataTableAction {
+    fn contents(
+        ui: &mut Ui,
+        table: &DataTable,
+        hidden: &mut BTreeSet<(usize, usize)>,
+        columns: &[(usize, usize)],
+    ) -> DataTableAction {
         let mut action = DataTableAction::None;
         let shown: Vec<usize> = (0..table.headers.len())
-            .filter(|&column| !hidden.contains(&table.headers[column]))
+            .filter(|&column| !hidden.contains(&columns[column]))
             .collect();
         ui.horizontal(|ui| {
             ui.menu_button(l10n::text(ui.ctx(), "Columns"), |ui| {
                 // The time column keys the rows, so it stays.
-                for header in table.headers.iter().skip(1) {
-                    let mut visible = !hidden.contains(header);
+                for (header, column) in table.headers.iter().zip(columns).skip(1) {
+                    let mut visible = !hidden.contains(column);
                     if ui.checkbox(&mut visible, header).changed() {
                         if visible {
-                            hidden.remove(header);
+                            hidden.remove(column);
                         } else {
-                            hidden.insert(header.clone());
+                            hidden.insert(*column);
                         }
                     }
                 }
@@ -266,7 +337,7 @@ mod tests {
         let ctx = Context::default();
         let mut dialog = DataTableDialog::new();
         dialog.open();
-        let mut show = |chart: &Chart| {
+        let show = |dialog: &mut DataTableDialog, chart: &Chart| {
             let output = ctx.run_ui(Default::default(), |ui| {
                 dialog.show(ui.ctx(), chart);
             });
@@ -281,19 +352,245 @@ mod tests {
             output.drop_without_applying_deltas();
             texts
         };
-        show(&chart);
-        let live = show(&chart);
+        show(&mut dialog, &chart);
+        let live = show(&mut dialog, &chart);
         assert!(
             live.iter().any(|text| text == "5000 loaded bars"),
             "{live:?}"
         );
         assert!(live.len() < 400, "{} text shapes for 5000 rows", live.len());
+        let study = chart.add_indicator(Box::new(crate::studies::SMA::new(2)));
+        show(&mut dialog, &chart);
+        let mut corrected = chart.bars(crate::widget::SeriesId::MAIN).to_vec();
+        corrected[2500].high = 22.0;
+        corrected[2500].close = 21.0;
+        chart.set_data(crate::widget::SeriesId::MAIN, corrected);
+        show(&mut dialog, &chart);
+        let cached_value = |dialog: &DataTableDialog, index: usize, study: &str| {
+            let time = (start + chrono::Duration::days(index as i64)).to_rfc3339();
+            let table = &dialog.cached.as_ref().unwrap().1;
+            let column = table
+                .headers
+                .iter()
+                .position(|header| header.starts_with(&format!("{study}: ")))
+                .unwrap();
+            table.rows.iter().find(|row| row[0] == time).unwrap()[column].clone()
+        };
+        // The corrected close and its neighbour average to (21 + 11) / 2.
+        assert_eq!(cached_value(&dialog, 2501, "SMA"), "16.00");
+        chart
+            .indicator_mut(study)
+            .unwrap()
+            .set_input("period", crate::studies::InputValue::Length(3))
+            .unwrap();
+        show(&mut dialog, &chart);
+        // The same three-bar window is (11 + 21 + 11) / 3.
+        assert_eq!(cached_value(&dialog, 2501, "SMA"), "14.33");
+        chart.update(
+            SeriesId::MAIN,
+            Bar::new(
+                start + chrono::Duration::days(4999),
+                11.0,
+                32.0,
+                9.0,
+                31.0,
+                100.0,
+            ),
+        );
+        show(&mut dialog, &chart);
+        assert_eq!(cached_value(&dialog, 4999, "SMA"), "17.67"); // (11 + 11 + 31) / 3
+        chart.update(
+            SeriesId::MAIN,
+            Bar::new(
+                start + chrono::Duration::days(5000),
+                31.0,
+                42.0,
+                30.0,
+                41.0,
+                100.0,
+            ),
+        );
+        show(&mut dialog, &chart);
+        assert_eq!(cached_value(&dialog, 5000, "SMA"), "27.67"); // (11 + 31 + 41) / 3
+        assert_eq!(
+            dialog.cached.as_ref().unwrap().1.rows.first().unwrap()[0],
+            (start + chrono::Duration::days(5000)).to_rfc3339()
+        );
         chart.set_replay_time(Some(start + chrono::Duration::days(1000)));
-        show(&chart);
-        let replay = show(&chart);
+        show(&mut dialog, &chart);
+        let replay = show(&mut dialog, &chart);
         assert!(
             replay.iter().any(|text| text == "1000 loaded bars"),
             "{replay:?}"
         );
+
+        chart.set_replay_time(None);
+        let ratio = chart.add_indicator(Box::new(crate::studies::Ratio::default()));
+        chart
+            .indicator_mut(ratio)
+            .unwrap()
+            .set_input(
+                "symbol_1",
+                crate::studies::InputValue::Symbol("DENOM".into()),
+            )
+            .unwrap();
+        let request = chart
+            .study_data_requests()
+            .into_iter()
+            .find(|request| request.symbol == "DENOM")
+            .unwrap();
+        for (step, denominator, expected) in [(0, 41.0, "1.00"), (10, 82.0, "0.50")] {
+            let history = chart
+                .bars(SeriesId::MAIN)
+                .iter()
+                .map(|bar| Bar::from_value(bar.time, denominator))
+                .collect();
+            chart.set_study_data(request.clone(), history, None);
+            for frame in step..step + 4 {
+                crate::widget::test_frames::frame(&ctx, &mut chart, f64::from(frame), vec![]);
+            }
+            show(&mut dialog, &chart);
+            // A host-fed denominator changes with no edit to the chart bars or study settings.
+            assert_eq!(cached_value(&dialog, 5000, "Ratio"), expected);
+        }
+    }
+
+    /// Watchlist picks and symbol search remain usable while the table keeps column choices.
+    #[test]
+    fn symbol_navigation_keeps_columns_and_exposes_feed_status() {
+        use crate::data::FeedError;
+        use egui::{Event, Modifiers, PointerButton, Pos2};
+
+        let ctx = Context::default();
+        let mut chart = Chart::new(BarData::from_bars(vec![Bar::from_value(
+            DateTime::UNIX_EPOCH,
+            10.0,
+        )]));
+        chart.set_symbol("AAA");
+        let study = chart.add_indicator(Box::new(crate::studies::SMA::new(1)));
+        let duplicate = chart.add_indicator(Box::new(crate::studies::SMA::new(1)));
+        let header = chart.data_table().headers.last().unwrap().clone();
+        assert_eq!(
+            chart
+                .data_table()
+                .headers
+                .iter()
+                .filter(|name| **name == header)
+                .count(),
+            2
+        );
+        let mut dialog = DataTableDialog::new();
+        dialog.open();
+        let frame = |dialog: &mut DataTableDialog, chart: &mut Chart, events| {
+            let mut action = DataTableAction::None;
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    if ui.button("Watchlist BBB").clicked() {
+                        chart.set_symbol("BBB");
+                    }
+                    action = dialog.show(ui.ctx(), chart);
+                },
+            );
+            let texts: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some((
+                        text.galley.text().to_owned(),
+                        text.pos + text.galley.size() / 2.0,
+                    )),
+                    _ => None,
+                })
+                .collect();
+            let commands = output.platform_output.commands.clone();
+            output.drop_without_applying_deltas();
+            (action, texts, commands)
+        };
+        let click = |dialog: &mut DataTableDialog, chart: &mut Chart, at| {
+            frame(dialog, chart, vec![Event::PointerMoved(at)]);
+            frame(
+                dialog,
+                chart,
+                [true, false]
+                    .map(|pressed| Event::PointerButton {
+                        pos: at,
+                        button: PointerButton::Primary,
+                        pressed,
+                        modifiers: Modifiers::NONE,
+                    })
+                    .to_vec(),
+            )
+        };
+        let find = |texts: &[(String, Pos2)], label: &str| {
+            texts.iter().find(|(text, _)| text == label).unwrap().1
+        };
+        frame(&mut dialog, &mut chart, vec![]);
+        let (_, texts, _) = frame(&mut dialog, &mut chart, vec![]);
+        click(&mut dialog, &mut chart, find(&texts, "Columns"));
+        let (_, texts, _) = frame(&mut dialog, &mut chart, vec![]);
+        // The last two matching labels are the two independent study checkboxes.
+        let at = texts
+            .iter()
+            .filter(|(text, _)| *text == header)
+            .rev()
+            .nth(1)
+            .unwrap()
+            .1;
+        click(&mut dialog, &mut chart, at);
+        egui::Popup::close_all(&ctx);
+        let (_, texts, _) = frame(&mut dialog, &mut chart, vec![]);
+        let (_, _, commands) = click(&mut dialog, &mut chart, find(&texts, "Copy"));
+        let copied = |commands: Vec<egui::OutputCommand>| {
+            commands
+                .into_iter()
+                .find_map(|command| match command {
+                    egui::OutputCommand::CopyText(text) => Some(text),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let before = copied(commands);
+        assert_eq!(before.lines().next().unwrap().matches(&header).count(), 1);
+        click(&mut dialog, &mut chart, find(&texts, "Watchlist BBB"));
+        assert_eq!(chart.symbol(), "BBB");
+        assert!(dialog.is_open);
+        assert!(chart.indicators().any(|(id, _)| id == study));
+        assert!(chart.indicators().any(|(id, _)| id == duplicate));
+        let (_, texts, _) = frame(&mut dialog, &mut chart, vec![]);
+        let (_, _, commands) = click(&mut dialog, &mut chart, find(&texts, "Copy"));
+        assert_eq!(copied(commands), before);
+        chart.set_indicator_visible(study, false);
+        frame(&mut dialog, &mut chart, vec![]);
+        chart.set_indicator_visible(study, true);
+        chart
+            .indicator_mut(study)
+            .unwrap()
+            .set_input("period", crate::studies::InputValue::Length(3))
+            .unwrap();
+        dialog.close();
+        dialog.open();
+        let (_, texts, _) = frame(&mut dialog, &mut chart, vec![]);
+        let (_, _, commands) = click(&mut dialog, &mut chart, find(&texts, "Copy"));
+        assert_eq!(copied(commands), before);
+        let (action, _, _) = click(&mut dialog, &mut chart, find(&texts, "BBB"));
+        assert_eq!(format!("{action:?}"), "SearchSymbol(\"\")");
+        chart.feed.loading_history = true;
+        chart.feed.last_error = Some(FeedError::SymbolNotFound("BBB".into()));
+        let (_, texts, _) = frame(&mut dialog, &mut chart, vec![]);
+        assert!(texts.iter().any(|(text, _)| text == "Loading data"));
+        assert!(
+            texts
+                .iter()
+                .any(|(text, _)| text == "symbol not found: BBB")
+        );
+        chart.set_symbol("");
+        let (_, texts, _) = frame(&mut dialog, &mut chart, vec![]);
+        let (action, _, _) = click(&mut dialog, &mut chart, find(&texts, "Symbol"));
+        assert_eq!(format!("{action:?}"), "SearchSymbol(\"\")");
     }
 }

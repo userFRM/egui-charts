@@ -39,6 +39,13 @@ pub enum StudyError {
         /// The refused width.
         width: f32,
     },
+    /// A reference level width is not finite or not between 0.5 and 10.
+    InvalidLevelWidth {
+        /// The level, counted from 0.
+        level: usize,
+        /// The refused width.
+        width: f32,
+    },
     /// A horizontal level value is NaN or infinite.
     InvalidLevelValue {
         /// The level, counted from 0.
@@ -138,6 +145,10 @@ impl fmt::Display for StudyError {
             Self::InvalidLevelValue { level, value } => {
                 write!(f, "level {level} value must be finite, got {value:?}")
             }
+            Self::InvalidLevelWidth { level, width } => write!(
+                f,
+                "level {level} width must be between 0.5 and 10, got {width:?}"
+            ),
             Self::PlotCount { expected, found } => write!(
                 f,
                 "the study draws {expected} plots, got {found} plot styles"

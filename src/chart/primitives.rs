@@ -53,7 +53,7 @@
 
 use crate::chart::coords::ChartMapping;
 use crate::chart::selection::SeriesId;
-use crate::model::Bar;
+use crate::model::{AutoscaleInfo, Bar};
 use crate::studies::Indicator;
 use chrono::{DateTime, Utc};
 use egui::{Color32, CursorIcon, Painter, Pos2, Rect};
@@ -167,25 +167,76 @@ impl PrimitiveView<'_> {
 }
 
 /// A label a primitive puts on the price axis of its pane, on a tag in `color`.
+///
+/// Automatic tags avoid earlier tags and stay inside the pane. Fixed tags keep their centre,
+/// are clipped to the axis and paint above automatic tags without reserving an overlap slot.
+/// Later fixed tags paint above earlier ones. Hidden series and hidden axes omit their tags.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PriceAxisLabel {
     /// Price at the centre of the tag, on the scale of the primitive's series.
     pub price: f64,
     /// Text of the tag.
     pub text: String,
-    /// Fill of the tag; the text is white or black, whichever reads better on it.
+    /// Fill of the tag.
     pub color: Color32,
+    /// Text and tick colour; `None` chooses readable white or black from the fill.
+    pub text_color: Option<Color32>,
+    /// Centre in UI points from the top of this pane's price axis. `None` maps `price`.
+    /// A fixed tag ignores `price`, even when it is off scale. Non-finite offsets are omitted.
+    pub fixed_coordinate: Option<f32>,
+    /// Whether to draw the short tick at the plot edge, independently of the tag. Defaults to true.
+    pub tick_visible: bool,
+}
+
+impl PriceAxisLabel {
+    /// An automatically positioned tag with contrasting text and a visible tick.
+    pub fn new(price: f64, text: impl Into<String>, color: Color32) -> Self {
+        Self {
+            price,
+            text: text.into(),
+            color,
+            text_color: None,
+            fixed_coordinate: None,
+            tick_visible: true,
+        }
+    }
 }
 
 /// A label a primitive puts on the time axis, on a tag in `color`.
+///
+/// Automatic tags move horizontally to fit inside the axis. Fixed tags retain their centre
+/// and are clipped to the axis instead. Both cover ordinary time marks; fixed tags paint
+/// above automatic primitive tags, with later fixed tags on top. Hidden series omit their tags.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TimeAxisLabel {
     /// Time at the centre of the tag.
     pub time: DateTime<Utc>,
     /// Text of the tag.
     pub text: String,
-    /// Fill of the tag; the text is white or black, whichever reads better on it.
+    /// Fill of the tag.
     pub color: Color32,
+    /// Text and tick colour; `None` chooses readable white or black from the fill.
+    pub text_color: Option<Color32>,
+    /// Centre in UI points from the left of the shared time axis. `None` maps `time`.
+    /// A fixed tag ignores `time`. Non-finite offsets are omitted.
+    pub fixed_coordinate: Option<f32>,
+    /// Whether to draw the short tick at the top of the axis, independently of the tag.
+    /// Defaults to true.
+    pub tick_visible: bool,
+}
+
+impl TimeAxisLabel {
+    /// An automatically positioned tag with contrasting text and a visible tick.
+    pub fn new(time: DateTime<Utc>, text: impl Into<String>, color: Color32) -> Self {
+        Self {
+            time,
+            text: text.into(),
+            color,
+            text_color: None,
+            fixed_coordinate: None,
+            tick_visible: true,
+        }
+    }
 }
 
 /// Host drawing attached to a series, called by the chart while it draws each frame.
@@ -236,13 +287,15 @@ pub trait Primitive: Send {
     }
 
     /// Labels for the price axis of the pane, placed at their prices next to the chart's own
-    /// tags. A label off the scale or without room is left out.
+    /// tags. An automatic label off the scale or without room is left out; fixed labels follow
+    /// [`PriceAxisLabel`]'s clipping and overlap rules.
     fn price_axis_labels(&self, view: &PrimitiveView<'_>) -> Vec<PriceAxisLabel> {
         let _ = view;
         Vec::new()
     }
 
-    /// Labels for the time axis, centred at their times. Axis labels they cover are left out.
+    /// Labels for the time axis, positioned according to [`TimeAxisLabel`]. Axis marks they
+    /// cover are left out.
     ///
     /// The time axis is shared by every pane, so the view of a primitive in a study pane maps
     /// prices on the main pane here.
@@ -268,6 +321,14 @@ pub trait Primitive: Send {
     fn autoscale(&self, bars: &[Bar], visible: Range<usize>) -> Option<(f64, f64)> {
         let _ = (bars, visible);
         None
+    }
+
+    /// Prices and extra top/bottom logical pixels to fit on the attached series' pane and
+    /// scale. Shared scales take the largest request at each screen edge. Manual ranges
+    /// ignore this contribution. Independent overlay studies retain their own value-only fit.
+    /// The default preserves [`autoscale`](Self::autoscale) with zero extra margins.
+    fn autoscale_info(&self, bars: &[Bar], visible: Range<usize>) -> Option<AutoscaleInfo> {
+        self.autoscale(bars, visible).map(Into::into)
     }
 
     /// Whether the pointer at `pos` is over the primitive, and the cursor to show there.

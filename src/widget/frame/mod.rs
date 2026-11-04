@@ -12,7 +12,7 @@ use crate::chart::overlays::FootprintConfig;
 use crate::chart::rendering::{self, ChartMapping, RenderContext, StyleColors};
 use crate::data::Footprint;
 use crate::localization as l10n;
-use crate::model::{ChartType, MarkerZOrder, PriceLine};
+use crate::model::{AutoscaleMargins, ChartType, MarkerZOrder, PriceLine};
 use crate::theme::ThemeExt;
 use egui::{Pos2, Rect, Response, Sense, Ui, Vec2};
 
@@ -593,6 +593,10 @@ impl Chart {
         // own response goes back to the caller; the gesture handlers see a hover-only one.
         let mut shown =
             shared_plot.map_or_else(|| response.clone(), |plot| response.union(plot.clone()));
+        if self.pane_collapse_click(ui.ctx()) {
+            response.flags.remove(egui::response::Flags::CLICKED);
+            shown.flags.remove(egui::response::Flags::CLICKED);
+        }
         let axis_corner = Rect::from_min_max(
             Pos2::new(
                 if show_right_axis {
@@ -850,7 +854,13 @@ impl Chart {
 
         // Draw watermark overlay (if enabled)
         self.draw_watermark(ui, &painter, chart_rect);
-        if let Some(watermark) = &self.watermark {
+        if let Some(watermark) = self
+            .pane_layout
+            .panes
+            .iter()
+            .find(|pane| pane.id == main_pane)
+            .and_then(|pane| pane.watermark.as_ref())
+        {
             rendering::render_watermark(ui, &painter, chart_rect, watermark);
         }
 
@@ -1031,8 +1041,8 @@ impl Chart {
         #[cfg(not(feature = "studies"))]
         let profile_prices = std::iter::empty();
         // Fit the price scale, then apply this frame's price zoom
-        let series_values = self.fit_secondary_series();
-        let mut primitive_prices = self.main_primitive_prices();
+        let (series_values, mut margins) = self.fit_secondary_series();
+        let (mut primitive_prices, mut primitive_margins) = self.main_primitive_prices();
         for idx in &study_indices {
             let study = &self.rendered_studies().indicators()[*idx];
             if study.is_visible()
@@ -1067,7 +1077,7 @@ impl Chart {
             self.heikin_ashi
                 .bars(&self.state.data().bars, self.state.revision())
         });
-        let (transform, data_range) = self.state.fit_price_scale_with_series(
+        let (transform, fit) = self.state.fit_price_scale_with_series(
             (if self.chart_type.is_time_independent() {
                 &self.element_studies.studies
             } else {
@@ -1105,6 +1115,14 @@ impl Chart {
             series_values,
         );
         drop(heikin_ashi);
+        let data_range = fit.price_range;
+        primitive_margins.merge(fit.margins);
+        if primitive_margins != AutoscaleMargins::default() {
+            margins
+                .entry(self.main_series_scale)
+                .or_default()
+                .merge(primitive_margins);
+        }
         if self.main_series_visible
             && footprint.is_none()
             && self.chart_type == ChartType::TimePriceOpportunity
@@ -1190,7 +1208,7 @@ impl Chart {
                 }
             }
         }
-        self.fit_marker_scales(&painter, price_rect);
+        self.fit_marker_scales(&painter, price_rect, &margins);
         self.apply_price_zoom(pending_price_zoom, &response, price_rect, transform);
         let bar_spacing = self.state.time_scale().bar_spacing();
         if self.config.lock_price_to_bar_ratio != self.last_ratio_lock {
@@ -2461,29 +2479,27 @@ impl Chart {
                 ));
             }
         }
+        let mut fixed_price_labels = Vec::new();
         if show_price_axis {
-            let labels: Vec<_> = self
+            let (fixed, automatic): (Vec<_>, Vec<_>) = self
                 .main_primitives(&coords)
                 .flat_map(|(item, view)| {
                     let map = view.mapping.price;
-                    let labels = item.get().price_axis_labels(&view);
-                    labels.into_iter().map(move |label| (label, map))
+                    item.get()
+                        .price_axis_labels(&view)
+                        .into_iter()
+                        .map(move |label| (label, map))
                 })
-                .collect();
-            for (label, map) in labels {
-                if map.range().contains(map.transform().to_scale(label.price)) {
-                    tags.push(rendering::axes::render_axis_value(
-                        &painter,
-                        price_rect,
-                        axis_edge,
-                        map.price_to_y(label.price),
-                        label.text,
-                        (rendering::axes::tag_text_color(label.color), label.color),
-                        &tags,
-                        self.config.price_axis.allow_label_overlap,
-                    ));
-                }
-            }
+                .partition(|(label, _)| label.fixed_coordinate.is_some());
+            fixed_price_labels = fixed;
+            rendering::axes::render_primitive_price_labels(
+                &painter,
+                price_rect,
+                axis_edge,
+                automatic,
+                &mut tags,
+                self.config.price_axis.allow_label_overlap,
+            );
         }
         let mut independent_axis_width =
             self.paint_series_axes(ui, &painter, rect, price_rect, &colors);
@@ -2676,30 +2692,32 @@ impl Chart {
         let time_labels = painter.add(egui::Shape::Noop);
         // Kept apart from the price tags, which size the price axis.
         let mut time_tags = Vec::new();
+        let mut fixed_time_labels = Vec::new();
         if self.config.show_time_labels {
+            let axis = self.time_axis_rect;
             let labels: Vec<_> = self
                 .time_axis_primitives(&coords)
                 .flat_map(|(item, view)| {
-                    let labels = item.get().time_axis_labels(&view);
-                    labels
+                    item.get()
+                        .time_axis_labels(&view)
                         .into_iter()
-                        .filter_map(|label| Some((view.time_to_x(label.time)?, label)))
+                        .filter_map(move |label| {
+                            let x = label
+                                .fixed_coordinate
+                                .map(|offset| axis.left() + offset)
+                                .or_else(|| view.time_to_x(label.time))?;
+                            Some((x, label))
+                        })
                         .collect::<Vec<_>>()
                 })
                 .collect();
             for (x, label) in labels {
-                if chart_rect.x_range().contains(x) {
-                    time_tags.push(Some(rendering::axes::paint_crosshair_tag(
-                        &painter,
-                        Pos2::new(x, time_axis_top + 1.5),
-                        egui::Align2::CENTER_TOP,
-                        chart_rect.left()..=chart_rect.right(),
-                        label.text,
-                        (rendering::axes::tag_text_color(label.color), label.color),
-                        rendering::axes::axis_font(ui.ctx()),
-                        25.0,
-                        None,
-                    )));
+                if label.fixed_coordinate.is_some() {
+                    fixed_time_labels.push((x, label));
+                } else {
+                    time_tags.push(rendering::axes::render_primitive_time_label(
+                        &painter, axis, x, label,
+                    ));
                 }
             }
         }
@@ -3472,6 +3490,23 @@ impl Chart {
             }
         }
 
+        for (x, label) in fixed_time_labels {
+            time_tags.push(rendering::axes::render_primitive_time_label(
+                &painter,
+                self.time_axis_rect,
+                x,
+                label,
+            ));
+        }
+
+        rendering::axes::render_primitive_price_labels(
+            &painter,
+            price_rect,
+            axis_edge,
+            fixed_price_labels,
+            &mut tags,
+            self.config.price_axis.allow_label_overlap,
+        );
         let current_price = crate::model::last_with_value(&self.state.data().bars)
             .filter(|_| self.main_series_visible && self.config.show_symbol_last_val)
             .map(|bar| {

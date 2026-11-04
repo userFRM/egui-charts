@@ -334,7 +334,7 @@ impl AlertEngine {
             {
                 alert.timeframe = Some(timeframe);
                 if let Some(events) = events {
-                    events.push(AlertEvent::Upsert(alert.clone()));
+                    events.push(AlertEvent::Upsert(Box::new(alert.clone())));
                 }
             }
             let intervals = alert.timeframes();
@@ -359,6 +359,7 @@ impl AlertEngine {
                 continue;
             };
             let price = bar.close.is_finite().then_some(bar.close);
+            alert.last_triggered_at = Some(alert.last_triggered_at.map_or(now, |old| old.max(now)));
             if alert.frequency == AlertFrequency::Once {
                 run.done = true;
                 if alert.watchlist.is_none() {
@@ -369,7 +370,7 @@ impl AlertEngine {
             if let Some(events) = events
                 && alert.status != AlertStatus::Active
             {
-                events.push(AlertEvent::Upsert(alert.clone()));
+                events.push(AlertEvent::Upsert(Box::new(alert.clone())));
             }
             let event = AlertEvent::TriggeredForSymbol {
                 id,
@@ -440,7 +441,7 @@ impl AlertEngine {
             if alert.timeframe.is_none() {
                 alert.timeframe = Some(timeframe);
                 if let Some(events) = events {
-                    events.push(AlertEvent::Upsert(alert.clone()));
+                    events.push(AlertEvent::Upsert(Box::new(alert.clone())));
                 }
             }
             let seen = runs.entry((id.clone(), symbol.to_owned())).or_default();
@@ -462,13 +463,18 @@ impl AlertEngine {
                 {
                     continue;
                 }
+                alert.last_triggered_at = Some(
+                    alert
+                        .last_triggered_at
+                        .map_or(fill.time, |old| old.max(fill.time)),
+                );
                 if alert.frequency == AlertFrequency::Once {
                     seen.done = true;
                     if alert.watchlist.is_none() {
                         alert.status = AlertStatus::Triggered;
                     }
                     if let Some(events) = events {
-                        events.push(AlertEvent::Upsert(alert.clone()));
+                        events.push(AlertEvent::Upsert(Box::new(alert.clone())));
                     }
                 }
                 let side = match fill.side {
@@ -524,6 +530,8 @@ impl State {
     /// Adds `alert` or replaces the one with its id, giving it an id if it has none.
     fn insert(&mut self, mut alert: Alert) -> Alert {
         if alert.id.is_none() {
+            alert.created_at = Some(Utc::now());
+            alert.last_triggered_at = None;
             loop {
                 self.next_id += 1;
                 let id = AlertId(self.next_id.to_string());
@@ -533,13 +541,23 @@ impl State {
                 }
             }
         }
+        let existing = self.alerts.iter().find(|old| old.id == alert.id);
+        if let Some(old) = existing {
+            alert.created_at = old.created_at;
+            alert.last_triggered_at = old.last_triggered_at;
+        }
+        let same_monitoring = existing.is_some_and(|old| {
+            old.same_monitoring(&alert)
+                && (old.extend_line != alert.extend_line
+                    || old.blink_on_trigger != alert.blink_on_trigger)
+        });
         let same_strategy = matches!(alert.condition, AlertCondition::StrategyFills(_))
             && self
                 .alerts
                 .iter()
                 .any(|old| old.id == alert.id && old.condition == alert.condition);
         self.runs.retain(|(id, _), run| {
-            if Some(id) != alert.id.as_ref() {
+            if Some(id) != alert.id.as_ref() || same_monitoring {
                 return true;
             }
             if same_strategy {
@@ -573,7 +591,7 @@ impl State {
             if !matches!(alert.condition, AlertCondition::StrategyFills(_)) {
                 self.runs.retain(|(id, _), _| Some(id) != alert.id.as_ref());
             }
-            self.push(AlertEvent::Upsert(alert));
+            self.push(AlertEvent::Upsert(Box::new(alert)));
         }
     }
 }
@@ -586,7 +604,7 @@ impl Alerts for AlertEngine {
     fn watch(&self, events: Events<AlertEvent>) {
         let mut state = self.lock();
         for alert in &state.alerts {
-            events.push(AlertEvent::Upsert(alert.clone()));
+            events.push(AlertEvent::Upsert(Box::new(alert.clone())));
         }
         state.events = Some(events);
     }
@@ -600,7 +618,7 @@ impl Alerts for AlertEngine {
         }
         let mut state = self.lock();
         let alert = state.insert(alert);
-        state.push(AlertEvent::Upsert(alert));
+        state.push(AlertEvent::Upsert(Box::new(alert)));
         reply.send(Ok(()));
     }
 
@@ -1516,6 +1534,12 @@ mod tests {
             matches!(&events[1], AlertEvent::TriggeredForSymbol { price: Some(p), .. } if *p == 103.0)
         );
         assert_eq!(events.len(), 2);
+        let saved = serde_json::to_value(host.engine.alerts()[0].clone()).unwrap();
+        assert!(saved["created_at"].is_string());
+        assert_eq!(
+            saved["last_triggered_at"],
+            serde_json::to_value(time(1_000)).unwrap()
+        );
         // The message is filled in the event, and the host callback gets the same event.
         assert!(
             matches!(&events[1], AlertEvent::TriggeredForSymbol { message, .. } if message == "SYM closed at 103")
@@ -1524,6 +1548,21 @@ mod tests {
         assert_eq!(delivered.len(), 1);
         assert_eq!(delivered[0].1, events[1]);
         feed(&host, &bars, &[], 1_001);
+        for (line, blink) in [(true, false), (false, true)] {
+            let mut edited = saved.clone();
+            edited["extend_line"] = line.into();
+            edited["blink_on_trigger"] = blink.into();
+            let alert: Alert = serde_json::from_value(edited).unwrap();
+            assert_eq!(host.save(alert), Ok(()));
+            feed(&host, &bars, &[], 1_001);
+            assert!(
+                host.fired().is_empty(),
+                "display changes must preserve occurrences"
+            );
+            let kept = serde_json::to_value(host.engine.alerts()[0].clone()).unwrap();
+            assert_eq!(kept["created_at"], saved["created_at"]);
+            assert_eq!(kept["last_triggered_at"], saved["last_triggered_at"]);
+        }
         // History that grew at the front, a rewound replay and another timeframe: nothing fires.
         let mut reloaded = vec![bar(-1, 98.0, 1.0)];
         reloaded.extend(bars.clone());
