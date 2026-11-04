@@ -145,12 +145,14 @@ impl DemoApp {
         chart.set_data(SeriesId::MAIN, source.state().data().bars.clone());
         chart.set_event_visibility(source.event_visibility().clone());
         chart.set_mark_source(Some(Arc::new(super::marks::DemoMarks {
-            bars: chart.bars(SeriesId::MAIN).to_vec(),
+            live: live.clone(),
+            extended_hours: source.extended_hours(),
             samples: self.api_samples,
             notifications: source
                 .event_visibility()
                 .show_news_notifications
                 .then(|| self.notification_host.clone()),
+            times: Default::default(),
         })));
         if let Some(scale) = source.series_scale(SeriesId::MAIN) {
             chart.set_series_scale(SeriesId::MAIN, scale);
@@ -645,7 +647,6 @@ impl DemoApp {
                 return false;
             }
         }
-        self.restore_layout_groups(groups);
         self.layout_tabs[self.layout_tab].name = name;
         if self.layout_slot >= layout.charts.len() {
             self.activate_chart_slot(0);
@@ -690,6 +691,7 @@ impl DemoApp {
                 _ => {}
             }
         }
+        self.restore_layout_groups(groups);
         for (slot, saved) in comparisons.drain(..).enumerate() {
             if slot == self.layout_slot {
                 super::comparison::restore(
@@ -846,27 +848,12 @@ mod tests {
             let ctx = egui::Context::default();
             let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
             app.live.set_paused(true);
-            assert_eq!(
-                app.widget_bar
-                    .widgets
-                    .iter()
-                    .map(|widget| widget.id)
-                    .collect::<Vec<_>>(),
-                [5],
-                "order flow is available while sample panels start hidden"
-            );
+            assert!(app.widget_bar.widgets.is_empty());
             app.execute_search_command(&ctx, "samples");
-            assert_eq!(app.widget_bar.widgets.len(), 3);
+            assert_eq!(app.widget_bar.widgets.len(), 2);
             app.widget_bar.active_widget = Some(2);
             app.execute_search_command(&ctx, "samples");
-            assert_eq!(
-                app.widget_bar
-                    .widgets
-                    .iter()
-                    .map(|widget| widget.id)
-                    .collect::<Vec<_>>(),
-                [5]
-            );
+            assert!(app.widget_bar.widgets.is_empty());
             assert_eq!(app.widget_bar.active_widget, None);
             app.execute_search_command(&ctx, "samples");
 

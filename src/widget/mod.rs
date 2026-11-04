@@ -133,11 +133,12 @@ mod drawing_api;
 pub use drawing_api::DrawingError;
 mod studies_data;
 pub use crate::chart::primitives::{
-    PriceAxisLabel, Primitive, PrimitiveId, PrimitivePass, PrimitiveView, TimeAxisLabel,
+    PriceAxisLabel, Primitive, PrimitiveHit, PrimitiveId, PrimitivePass, PrimitiveView,
+    TimeAxisLabel,
 };
 pub use pane::VisualOrder;
 pub use series::SeriesOptions;
-pub use series::{BarsInRange, MismatchDirection, PriceLineId};
+pub use series::{BarsInRange, MismatchDirection, PriceLineId, SeriesLastValue};
 #[cfg(feature = "ui")]
 #[cfg_attr(docsrs, doc(cfg(feature = "ui")))]
 pub use snapshot::{
@@ -304,6 +305,8 @@ pub struct Chart {
     primitives: Vec<primitives::Attached>,
     /// Id of the next primitive attached.
     next_primitive: u64,
+    /// Omit the above-drawings primitive pass in an export snapshot.
+    hide_foreground: bool,
     /// The chart's drawings and the active drawing tool.
     #[cfg(feature = "drawings")]
     pub(crate) drawings: DrawingManager,

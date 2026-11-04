@@ -196,13 +196,14 @@ impl Chart {
 
     /// Formats price scale labels in the normal and logarithmic modes: the crosshair label and
     /// price tags with [`PriceFormatter::format`], and the axis ticks with
-    /// [`PriceFormatter::format_tick`]. The formatter receives prices and replaces the
-    /// instrument's decimals. It applies to every price scale and to the prices drawings print;
-    /// studies keep their own formats.
+    /// [`PriceFormatter::format_ticks`], which receives the complete ordered list for each
+    /// axis, separately for layout and painting. The formatter receives prices and replaces
+    /// the instrument's decimals. It applies to every price scale and to the prices drawings
+    /// print; studies keep their own formats.
     /// `None` restores the built-in labels.
     ///
     /// [`PriceFormatter::format`]: crate::scales::PriceFormatter::format
-    /// [`PriceFormatter::format_tick`]: crate::scales::PriceFormatter::format_tick
+    /// [`PriceFormatter::format_ticks`]: crate::scales::PriceFormatter::format_ticks
     pub fn set_price_formatter(
         &mut self,
         formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
@@ -212,8 +213,10 @@ impl Chart {
 
     /// Formats price scale labels in the percentage and indexed-to-100 modes, as
     /// [`set_price_formatter`](Self::set_price_formatter) does in the others. The formatter
-    /// receives the percentage or index value the axis shows. `None` restores signed
-    /// percentages and index values.
+    /// receives the percentage or index values the axis shows, its ticks as one list through
+    /// [`PriceFormatter::format_ticks`]. `None` restores signed percentages and index values.
+    ///
+    /// [`PriceFormatter::format_ticks`]: crate::scales::PriceFormatter::format_ticks
     pub fn set_percentage_formatter(
         &mut self,
         formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
@@ -302,25 +305,23 @@ impl Chart {
     pub(super) fn series_axis_owner(&self, id: super::SeriesId) -> super::SeriesId {
         let (pane, scale) = if id == super::SeriesId::MAIN {
             // Removing the main series leaves its axis in the price pane.
-            (Some(super::PaneId::MAIN), Some(self.main_series_scale))
+            (Some(self.main_series_pane()), Some(self.main_series_scale))
         } else {
             (self.series_pane(id), self.series_scale(id))
         };
-        if pane == Some(super::PaneId::MAIN)
+        if pane == Some(self.main_series_pane())
             && scale == Some(self.main_series_scale)
             && self.main_series_present
             && self.main_series_visible
         {
             return super::SeriesId::MAIN;
         }
-        self.price_series
-            .iter()
-            .find(|item| {
-                item.visible
-                    && self.series_pane(item.id) == pane
-                    && (pane != Some(super::PaneId::MAIN) || Some(item.options.scale) == scale)
-            })
-            .map_or(id, |item| item.id)
+        pane.and_then(|pane| {
+            self.pane_series(pane)
+                .into_iter()
+                .find(|item| self.is_series_visible(*item) && self.series_scale(*item) == scale)
+        })
+        .unwrap_or(id)
     }
 
     pub(super) fn series_display_map(

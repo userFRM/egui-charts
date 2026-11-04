@@ -157,6 +157,9 @@ price. [`nodes`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/stud
 rows count as zero, and endpoints and ties are not nodes. The renderer selects bid/ask stacks,
 total volume or signed delta through the first [`FootprintConfig::modes`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/overlays/struct.FootprintConfig.html#structfield.modes) entry. It draws the
 value area, POC, developing POC and volume nodes on the host's price mapping.
+[`developing_value_area`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.TradeProfile.html#method.developing_value_area) returns the inclusive value area rows after each
+contributing bar of the footprint the profile came from, by the final area's share and tie rules. The Profile section of the Symbol settings can trace that area and extend each
+completed session's POC, VAH and VAL to the first later bar that trades in their row; all are off by default, and sessions labelled "Partial executions" do not extend.
 
 ## Stream studies
 
@@ -220,8 +223,9 @@ let best_bid = books.bars.get(&open).and_then(|book| book.bids.first());
 
 The chart gives both its instrument's tick size (hosts without a feed call [`set_tick_size`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.OrderFlowInput.html#method.set_tick_size)),
 builds the footprint from the executions it receives and from the trades it still holds when the
-source is connected, and passes each synchronized book update before coalescing. Both keep only
-bars of an interval measured in time. [`OrderFlowBars`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.OrderFlowBars.html) says what a copy covers: [`complete_from`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.OrderFlowBars.html#structfield.complete_from) is
+source is connected, and passes each synchronized book update before coalescing. The footprint
+follows the chart's bars on every interval, and the book keeps only bars of an interval measured
+in time. [`OrderFlowBars`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.OrderFlowBars.html) says what a copy covers: [`complete_from`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.OrderFlowBars.html#structfield.complete_from) is
 the oldest bar held in full, since a bar cut by retention or data loss is left out rather than
 shown short, and a later bar that is absent had no executions or no book; [`cutoff`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.OrderFlowBars.html#structfield.cutoff) is the replay
 cutoff; [`revision`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.OrderFlowBars.html#structfield.revision) changes whenever the bars may have. A bar's book is the one after its last

@@ -12,6 +12,7 @@ use super::{
 use crate::data::inbox::Inbox;
 use crate::data::{
     Datafeed, FeedCapabilities, FeedError, MetricSeries, OptionChain, OptionChainQuery,
+    OptionExposureHandle, OptionExposureKind, OptionExposureQuery,
 };
 use crate::icons::icons;
 use crate::localization as l10n;
@@ -37,6 +38,11 @@ use std::sync::Arc;
 
 /// Width of the category sidebar.
 const SIDEBAR_WIDTH: f32 = 200.0;
+
+/// Whether `theme` is the stock light preset, the only one with chooser-specific inks.
+fn is_default_light(theme: &Theme) -> bool {
+    !theme.dark && theme.ui == Theme::light().ui
+}
 
 /// Indicator Dialog
 ///
@@ -158,7 +164,7 @@ impl IndicatorDialog {
             is_open: false,
             search: FilterWidget::new()
                 .placeholder("Search indicators")
-                .icon_size(DESIGN_TOKENS.sizing.icon_md),
+                .icon_size(DESIGN_TOKENS.sizing.icon_lg),
             focus_search: false,
             focus_first_row: false,
             active_tab: IndicatorTab::Indicators,
@@ -259,6 +265,21 @@ impl IndicatorDialog {
                     if self.factory.has("Options Volume Profile") {
                         continue;
                     }
+                    let exposure = capabilities
+                        .declares(FeedService::OptionExposure, instrument)
+                        .then(|| {
+                            let ctx = ctx.clone();
+                            OptionExposureHandle::new(
+                                &**feed,
+                                OptionExposureQuery::new(
+                                    symbol,
+                                    first..=last,
+                                    OptionExposureKind::Gamma,
+                                ),
+                                move || ctx.request_repaint(),
+                            )
+                            .expect("validated options exposure query")
+                        });
                     let ctx = ctx.clone();
                     let chain = OptionChain::new(
                         &**feed,
@@ -271,14 +292,18 @@ impl IndicatorDialog {
                         IndicatorFactory::PROFILES,
                         "Options Volume Profile",
                         move || {
-                            Box::new(
-                                OptionsVolumeProfile::from_chain(
-                                    chain.clone(),
-                                    &symbol,
-                                    dates.clone(),
-                                )
-                                .expect("validated options profile inputs"),
+                            let mut profile = OptionsVolumeProfile::from_chain(
+                                chain.clone(),
+                                &symbol,
+                                dates.clone(),
                             )
+                            .expect("validated options profile inputs");
+                            if let Some(exposure) = &exposure {
+                                profile = profile
+                                    .with_exposure(exposure.clone())
+                                    .expect("matching gamma subscription");
+                            }
+                            Box::new(profile)
                         },
                     );
                     self.option_profile_registered = true;
@@ -487,6 +512,9 @@ impl IndicatorDialog {
         let search = ui
             .scope(|ui| {
                 ui.spacing_mut().interact_size.y = 40.0;
+                if is_default_light(theme) {
+                    ui.visuals_mut().weak_text_color = Some(Color32::from_gray(112));
+                }
                 ui.style_mut().override_font_id = Some(FontId::proportional(theme.text.heading));
                 self.search.show(ui).response
             })
@@ -528,6 +556,11 @@ impl IndicatorDialog {
         }
         // The sidebar runs before the list, so the list shows a category clicked this frame.
         let category = Cell::new(self.sel_category);
+        let section_color = if is_default_light(theme) {
+            Color32::from_gray(116)
+        } else {
+            theme.ui.text_muted
+        };
         SidebarLayout::new(SIDEBAR_WIDTH).show(
             ui,
             |ui| {
@@ -551,7 +584,7 @@ impl IndicatorDialog {
                             ui.label(
                                 RichText::new(l10n::text(ui.ctx(), heading))
                                     .size(theme.text.small)
-                                    .color(theme.ui.text_muted),
+                                    .color(section_color),
                             )
                         });
                     ui.add_space(theme.spacing.lg);
@@ -617,6 +650,13 @@ impl IndicatorDialog {
             && tabs.len() > 1
             && self.search.is_empty()
         {
+            let mut pill_theme = theme.clone();
+            if is_default_light(theme) {
+                pill_theme.ui.text = Color32::from_gray(26);
+                // The tab bar blends this surface with white at 60%, giving #f2f2f2.
+                pill_theme.ui.panel_bg_secondary = Color32::from_gray(233);
+            }
+            let _palette = crate::theme::ThemeScope::new(ui.ctx(), &pill_theme);
             TabBar::new(&tabs, &mut self.active_tab).pills().show(ui);
             ui.add_space(theme.spacing.xl);
         }
@@ -680,20 +720,30 @@ impl IndicatorDialog {
             ui.available_width(),
             DESIGN_TOKENS.sizing.button_sm,
         ));
+        let header_color = if is_default_light(theme) {
+            Color32::from_gray(114)
+        } else {
+            theme.ui.text_muted
+        };
         let label = ui.painter().layout_no_wrap(
             l10n::text(ui.ctx(), "NAME"),
             FontId::proportional(theme.text.small),
-            theme.ui.text_muted,
+            header_color,
         );
         let label_pos = Pos2::new(
             header.min.x + DESIGN_TOKENS.sizing.button_md,
             header.center().y - label.size().y / 2.0,
         );
-        ui.painter().galley(label_pos, label, theme.ui.text_muted);
+        ui.painter().galley(label_pos, label, header_color);
 
         let mut action = IndicatorDialogAction::None;
         // The scroll bar takes its own column, so it never covers the badges.
         crate::styles::menu_scroll_bar(ui);
+        if is_default_light(theme) {
+            let scroll = &mut ui.spacing_mut().scroll;
+            scroll.dormant_handle_opacity = 99.0 / 255.0;
+            scroll.active_handle_opacity = 99.0 / 255.0;
+        }
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -1694,6 +1744,108 @@ mod tests {
             }
         }
         assert!(differ.is_empty(), "added with other parameters: {differ:?}");
+    }
+
+    /// The light chooser has distinct hint inks; other palettes keep their supplied roles.
+    #[test]
+    fn chooser_chrome_uses_light_inks_and_preserves_other_palettes() {
+        let mut custom = Theme::light();
+        custom.ui.text_muted = Color32::RED;
+        for (theme, section, header, hint, selected, pill) in [
+            (
+                Theme::light(),
+                Color32::from_gray(116),
+                Color32::from_gray(114),
+                Color32::from_gray(112),
+                Color32::from_gray(26),
+                Color32::from_gray(242),
+            ),
+            (
+                Theme::dark(),
+                Theme::dark().ui.text_muted,
+                Theme::dark().ui.text_muted,
+                Theme::dark().ui.text_muted,
+                Theme::dark().ui.text,
+                Theme::dark()
+                    .ui
+                    .panel_bg
+                    .lerp_to_gamma(Theme::dark().ui.panel_bg_secondary, 0.6),
+            ),
+            (
+                custom.clone(),
+                Color32::RED,
+                Color32::RED,
+                Color32::RED,
+                custom.ui.text,
+                custom
+                    .ui
+                    .panel_bg
+                    .lerp_to_gamma(custom.ui.panel_bg_secondary, 0.6),
+            ),
+        ] {
+            let ctx = egui::Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            ctx.all_styles_mut(|style| style.animation_time = 0.0);
+            egui_extras::install_image_loaders(&ctx);
+            let mut dialog = IndicatorDialog::new();
+            dialog.open();
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1440.0, 900.0))),
+                ..Default::default()
+            };
+            for _ in 0..2 {
+                ctx.run_ui(input.clone(), |ui| {
+                    dialog.show(ui.ctx(), &theme);
+                })
+                .drop_without_applying_deltas();
+            }
+            let output = ctx.run_ui(input, |ui| {
+                dialog.show(ui.ctx(), &theme);
+            });
+            for (label, color) in [
+                ("PERSONAL", section),
+                ("NAME", header),
+                ("Search indicators", hint),
+            ] {
+                let text = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.job.text == label => Some(text),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("missing {label}"));
+                assert_eq!(text.galley.job.sections[0].format.color, color, "{label}");
+            }
+            assert!(
+                output.shapes.iter().any(|shape| matches!(
+                    &shape.shape, egui::Shape::Rect(rect)
+                    if rect.brush.is_some() && rect.rect.size() == Vec2::splat(24.0)
+                        && rect.fill == hint
+                )),
+                "search glyph canvas"
+            );
+            for color in [selected, pill] {
+                assert!(
+                    output.shapes.iter().any(|shape| matches!(
+                        &shape.shape, egui::Shape::Rect(rect)
+                        if rect.brush.is_none() && rect.fill == color && rect.rect.height() == 28.0
+                    )),
+                    "pill {color:?}"
+                );
+            }
+            if theme.ui == Theme::light().ui {
+                assert!(
+                    output.shapes.iter().any(|shape| matches!(
+                        &shape.shape, egui::Shape::Rect(rect)
+                        if rect.rect.width() == 3.0 && rect.fill == Color32::from_black_alpha(99)
+                    )),
+                    "light scroll handle"
+                );
+            }
+            output.drop_without_applying_deltas();
+            assert_eq!(ctx.active_theme(), theme, "chooser palette stays local");
+        }
     }
 
     #[test]
