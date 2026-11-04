@@ -164,7 +164,6 @@ impl Chart {
             currency_choices: Vec::new(),
             currency_choice: None,
             legend_badge: None,
-            watermark: None,
             legend_statuses: Vec::new(),
             quote: None,
             quote_action: None,

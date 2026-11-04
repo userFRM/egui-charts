@@ -18,8 +18,9 @@ pub struct ImageExportOptions {
     pub include_title: bool,
     /// Include the export time in the chart's time zone above the chart.
     pub include_timestamp: bool,
-    /// Draw the symbol watermark and the one set with [`Chart::set_watermark`], as they show on
-    /// screen, independently of the title and timestamp.
+    /// Draw the symbol watermark and every host watermark set with [`Chart::set_watermark`]
+    /// or [`Chart::set_pane_watermark`], as they show on screen, independently of the title and
+    /// timestamp.
     pub include_watermark: bool,
     /// Omit the chart and header backgrounds, retaining plot and drawing colours.
     pub transparent_background: bool,
@@ -551,7 +552,9 @@ impl Chart {
         chart.config.show_symbol_labels &= options.include_title;
         if !options.include_watermark {
             chart.config.show_watermark = false;
-            chart.watermark = None;
+            for pane in &mut chart.pane_layout.panes {
+                pane.watermark = None;
+            }
         }
         let mut theme = self
             .theme_override
@@ -624,7 +627,6 @@ impl Chart {
         chart.feed_link = self.feed_link.as_ref().map(super::feed::FeedLink::frozen);
         chart.legend_instrument = self.instrument().cloned();
         chart.legend_badge = self.legend_badge.clone();
-        chart.watermark = self.watermark.clone();
         chart.legend_statuses = self.legend_statuses.clone();
         chart.quote = self.quote.clone();
         chart.session_quote = self.session_quote.clone();
