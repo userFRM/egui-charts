@@ -4,6 +4,12 @@ use super::{Chart, CursorDataPolicy, SeriesId};
 use crate::chart::rendering::StudyValue;
 
 impl Chart {
+    /// History identity and study changes, including host-fed study data and mutable edits.
+    #[cfg(feature = "ui")]
+    pub(crate) fn data_table_revision(&self) -> (u64, u64) {
+        (self.state.revision(), self.readout_revision)
+    }
+
     /// Takes the source preselection requested by a study menu's Add indicator action.
     /// Open the host indicator chooser with this source, then call `set_indicator_source`
     /// on the added study. The chart owns no chooser or account service.
