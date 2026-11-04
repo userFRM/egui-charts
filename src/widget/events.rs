@@ -23,7 +23,7 @@ pub enum CursorDataPolicy {
 #[non_exhaustive]
 pub struct ChartPointer {
     /// Stored timestamp of the nearest eligible main or added-series point, including whitespace.
-    /// `None` without data or when the selected position has no stored point.
+    /// `None` without eligible cursor data or when the selected position has no stored point.
     pub time: Option<DateTime<Utc>>,
     /// Price on the main pane, or the value on the scale of the hovered pane or volume.
     pub price: f64,
@@ -53,11 +53,11 @@ pub struct ChartPointer {
     /// returned by [`Chart::study_values_at`]; [`Chart::set_cursor_data_policy`] can include
     /// hidden studies and plots. Missing values remain `None`; empty between main-series points.
     pub studies: Vec<(SeriesId, StudyValue)>,
-    /// The drawing, primitive, series or study under the pointer. Custom hit priority is
+    /// The annotation, drawing, primitive, series or study under the pointer. Custom hit priority is
     /// documented by [`PrimitiveHit`](super::PrimitiveHit).
     pub target: Option<PointerTarget>,
     /// The winning primitive or custom renderer's object, including its cursor and host data.
-    /// `target` identifies its primitive or series; `None` for drawings and built-in plots.
+    /// `target` identifies its primitive or series; `None` for annotations, drawings and built-in plots.
     pub primitive_hit: Option<super::PrimitiveHit>,
     /// Modifier keys held during the event.
     pub modifiers: Modifiers,
@@ -113,7 +113,13 @@ fn same_bar(left: &Bar, right: &Bar) -> bool {
 }
 
 /// The object under the pointer of a [`ChartPointer`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Annotations follow paint order: normal markers and added-series price lines sit with
+/// their series; above-series markers precede main-series price lines and drawings; top
+/// markers follow drawings. Above-pass primitives follow top markers.
+/// Later annotations in the same layer win. Only the clipped parts painted this frame can be targeted.
+/// Existing drawing and custom-hit precedence applies when no annotation wins.
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PointerTarget {
     /// A series or study line, as a click there would select it.
@@ -122,6 +128,22 @@ pub enum PointerTarget {
     Drawing(usize),
     /// A primitive whose [`hit_test_result`](super::Primitive::hit_test_result) reports the pointer.
     Primitive(super::PrimitiveId),
+    /// A painted bar marker. The host ID remains stable when the marker list changes.
+    Marker {
+        /// The series that owns the marker.
+        series: SeriesId,
+        /// The identity supplied by the host, or `None` for an unnamed marker.
+        id: Option<String>,
+        /// Time of the marker, mapped to its displayed element on price-based charts.
+        time: DateTime<Utc>,
+    },
+    /// A painted custom price line with its live handle.
+    PriceLine {
+        /// The series that owns the line.
+        series: SeriesId,
+        /// The handle returned by [`Chart::add_price_line`].
+        id: super::PriceLineId,
+    },
 }
 
 /// The device behind a [`ChartPointer`].
@@ -171,8 +193,8 @@ pub enum ChartEvent {
     TimeScaleResized(egui::Vec2),
     /// The local cursor moved or anything its pointer carries changed, such as the bar under a
     /// stationary cursor, held modifiers or touch details; `None` means it left the plots or
-    /// loaded data has no eligible crosshair index in view. Empty plots report a position
-    /// without a data time.
+    /// loaded data has no eligible crosshair index in view. Empty plots and visible annotation
+    /// targets without eligible cursor data report a position without a data time.
     /// Programmatically synchronized cursors do not emit this event.
     CrosshairMoved(Option<ChartPointer>),
     /// A primary or secondary click in a plot, including clicks selecting drawings or studies.
@@ -306,6 +328,7 @@ pub(super) struct HostEvents {
     input_frame: Option<(u64, Modifiers)>,
     /// What the pointer is over this frame, resolved while the plots are drawn.
     pub target: Option<PointerTarget>,
+    pub annotation_target: std::cell::RefCell<Option<PointerTarget>>,
     pub primitive_hit: Option<super::PrimitiveHit>,
     pub volume_map: Option<crate::scales::PriceMap>,
     #[cfg(feature = "drawings")]
@@ -587,7 +610,13 @@ impl Chart {
     ) -> Option<ChartPointer> {
         let plot = self.last_rendered_price_rect;
         let shown = self.state.shown();
-        let (time, index) = self.pointer_time(pos)?;
+        let (time, index) = self.pointer_time(pos).or_else(|| {
+            self.host_events
+                .annotation_target
+                .borrow()
+                .as_ref()
+                .map(|_| (None, self.get_chart_mapping().x_to_idx_f64(pos.x)))
+        })?;
         let index = index.round();
         let bar_at = (index >= 0.0 && index < shown.len() as f64)
             .then_some(index as usize)
@@ -724,8 +753,19 @@ impl Chart {
             studies: bar_at.map_or_else(Vec::new, |index| {
                 self.study_rows_at_with_policy(index, self.host_events.cursor_data_policy)
             }),
-            target: self.host_events.target,
-            primitive_hit: self.host_events.primitive_hit.clone(),
+            target: self
+                .host_events
+                .annotation_target
+                .borrow()
+                .clone()
+                .or_else(|| self.host_events.target.clone()),
+            primitive_hit: self
+                .host_events
+                .annotation_target
+                .borrow()
+                .is_none()
+                .then(|| self.host_events.primitive_hit.clone())
+                .flatten(),
             modifiers: origin
                 .as_ref()
                 .map_or_else(|| ui.input(|input| input.modifiers), |(_, keys)| *keys),
