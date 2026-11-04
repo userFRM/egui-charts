@@ -1304,7 +1304,11 @@ mod tests {
     #[test]
     fn cents_prices_survive_streaming_replay_and_layout_restore() {
         let ctx = egui::Context::default();
-        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-03T16:00:00Z".parse().unwrap(),
+            true,
+        );
         super::super::tests::settle(&mut app, &ctx);
         app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
         super::super::tests::settle(&mut app, &ctx);
