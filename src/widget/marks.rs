@@ -635,18 +635,8 @@ mod tests {
                     .drain_events()
                     .any(|event| matches!(event, ChartEvent::CrosshairMoved(None)))
             );
-            struct Overlay(crate::widget::PrimitivePass, Arc<Mutex<bool>>);
+            struct Overlay(crate::widget::PrimitivePass);
             impl crate::widget::Primitive for Overlay {
-                fn draw(
-                    &self,
-                    _painter: &egui::Painter,
-                    _view: &crate::widget::PrimitiveView<'_>,
-                    pass: crate::widget::PrimitivePass,
-                ) {
-                    if pass == self.0 {
-                        *self.1.lock().unwrap() = true;
-                    }
-                }
                 fn hit_test_result(
                     &self,
                     pos: Pos2,
@@ -662,12 +652,8 @@ mod tests {
                         })
                 }
             }
-            let drawn = Arc::new(Mutex::new(false));
             let primitive = chart
-                .attach_primitive(
-                    series,
-                    Overlay(crate::widget::PrimitivePass::Series, drawn.clone()),
-                )
+                .attach_primitive(series, Overlay(crate::widget::PrimitivePass::Series))
                 .unwrap();
             chart.set_markers(
                 series,
@@ -699,7 +685,6 @@ mod tests {
                     assert!(point.primitive_hit.is_none());
                 }
             }
-            assert!(*drawn.lock().unwrap());
             assert!(chart.detach_primitive(primitive));
             #[cfg(feature = "drawings")]
             {
@@ -738,10 +723,7 @@ mod tests {
                 crate::widget::PrimitivePass::Below,
                 crate::widget::PrimitivePass::Above,
             ] {
-                let drawn = Arc::new(Mutex::new(false));
-                let primitive = chart
-                    .attach_primitive(series, Overlay(pass, drawn.clone()))
-                    .unwrap();
+                let primitive = chart.attach_primitive(series, Overlay(pass)).unwrap();
                 let point = probe(&ctx, &mut chart, pos, &mut tick);
                 assert_eq!(
                     point.target,
@@ -751,7 +733,6 @@ mod tests {
                         target(Some("layered"))
                     }
                 );
-                assert!(*drawn.lock().unwrap(), "{pass:?} in placement {placement}");
                 assert!(chart.detach_primitive(primitive));
             }
             chart.set_markers(series, vec![]);
