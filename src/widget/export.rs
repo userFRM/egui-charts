@@ -587,6 +587,7 @@ impl Chart {
                 fed: series.fed,
                 bars: series.bars.clone(),
                 revision: series.revision,
+                last_price_pulse: std::cell::Cell::new(None),
                 heikin_ashi: Default::default(),
                 feed: series.feed.clone(),
                 markers: series.markers.clone(),

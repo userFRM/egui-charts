@@ -203,7 +203,7 @@ impl<'a> Legend<'a> {
             bearish_wick: None,
             candle_border_width: 0.0,
         };
-        let (quote, study, ..) = self.show_with_colors(ui, plot, &colors);
+        let (quote, study, ..) = self.show_with_colors(ui, plot, &colors, None);
         (quote, study)
     }
 
@@ -213,6 +213,7 @@ impl<'a> Legend<'a> {
         ui: &mut Ui,
         plot: Rect,
         colors: &StyleColors,
+        study_indices: Option<&[usize]>,
     ) -> (
         Option<QuoteSide>,
         Option<StudyAction>,
@@ -615,13 +616,20 @@ impl<'a> Legend<'a> {
         let collapsed = ui
             .ctx()
             .data_mut(|data| data.get_temp::<bool>(id).unwrap_or(false));
-        let has_rows = self.show_volume || self.studies.iter().any(|study| study.is_overlay());
+        let on_pane = |index: usize| {
+            study_indices.map_or_else(
+                || self.studies[index].is_overlay(),
+                |indices| indices.contains(&index),
+            )
+        };
+        let has_rows = self.show_volume || (0..self.studies.len()).any(on_pane);
         if !collapsed {
             if self.show_volume
                 && !self
                     .studies
                     .iter()
-                    .any(|study| study.is_volume() && study.is_overlay())
+                    .enumerate()
+                    .any(|(idx, study)| study.is_volume() && on_pane(idx))
             {
                 layout.field(
                     &format!("{} ", l10n::text(ui.ctx(), "Vol")),
@@ -652,7 +660,7 @@ impl<'a> Legend<'a> {
                 .studies
                 .iter()
                 .enumerate()
-                .filter(|(_, study)| study.is_overlay())
+                .filter(|(idx, _)| on_pane(*idx))
             {
                 if study.is_volume() && !self.show_volume {
                     continue;
@@ -1338,7 +1346,7 @@ mod tests {
                         let mut legend = Legend::new("SAMPLE", "1h", &bar);
                         legend.series_visible = series_visible;
                         let plot = Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 400.0));
-                        action = legend.show_with_colors(ui, plot, &colors).4;
+                        action = legend.show_with_colors(ui, plot, &colors, None).4;
                     },
                 );
                 let title = output.shapes.iter().any(|shape| {

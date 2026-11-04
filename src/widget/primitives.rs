@@ -214,7 +214,7 @@ impl Chart {
     /// The view of a primitive drawn in the main pane, from the main pane's mapping. `None`
     /// when its series is hidden or a study in a pane of its own.
     fn main_view(&self, series: SeriesId, coords: &ChartMapping) -> Option<PrimitiveView<'_>> {
-        if self.in_pane(series) {
+        if self.series_pane(series) != Some(self.main_series_pane()) {
             return None;
         }
         let mapping = if series == SeriesId::MAIN {
@@ -228,7 +228,6 @@ impl Chart {
             let idx = self.study_ids.iter().position(|id| *id == series)?;
             let study = self.rendered_studies().indicators().get(idx)?;
             (study.is_visible()
-                && study.is_overlay()
                 && (!study.is_volume()
                     || matches!(study.scale(), crate::studies::StudyScale::Shared(_))))
             .then(|| crate::chart::rendering::study_mapping(study.as_ref(), coords))?
@@ -288,11 +287,11 @@ impl Chart {
             prices.extend(self.primitive_prices(SeriesId::MAIN));
         }
         for (idx, id) in self.study_ids.iter().enumerate() {
-            if studies.get(idx).is_some_and(|study| {
-                study.is_visible()
-                    && study.is_overlay()
-                    && study.scale() == crate::studies::StudyScale::Main
-            }) && self.study_autoscale[idx]
+            if self.series_pane(*id) == Some(self.main_series_pane())
+                && studies.get(idx).is_some_and(|study| {
+                    study.is_visible() && study.scale() == crate::studies::StudyScale::Main
+                })
+                && self.study_autoscale[idx]
                 && !self.config.scale_price_chart_only
             {
                 prices.extend(self.primitive_prices(*id));
@@ -340,12 +339,13 @@ impl Chart {
     ) -> impl DoubleEndedIterator<Item = (&'a Attached, PrimitiveView<'a>)> + Clone {
         self.primitives.iter().filter_map(move |item| {
             let view = self.main_view(item.series, coords).or_else(|| {
-                if !item.replaces || self.in_pane(item.series) {
+                if !item.replaces || self.series_pane(item.series) != Some(self.main_series_pane())
+                {
                     return None;
                 }
                 let mut view = self.primitive_view(item.series, coords.clone());
                 let study = view.study?;
-                if !study.is_visible() || !study.is_overlay() {
+                if !study.is_visible() {
                     return None;
                 }
                 view.mapping = crate::chart::rendering::study_mapping(study, coords);
@@ -366,10 +366,15 @@ impl Chart {
                 return None;
             }
             let mut view = self.primitive_view(item.series, coords.clone());
-            if let Some(study) = view.study
-                && matches!(study.scale(), crate::studies::StudyScale::Shared(_))
+            let pane = self.series_pane(item.series)?;
+            if let Some(study) = view.study {
+                view.mapping = self.pane_study_mapping(pane, study, coords);
+            } else if let Some(series) = self
+                .price_series
+                .iter()
+                .find(|series| series.id == item.series)
             {
-                view.mapping = crate::chart::rendering::study_mapping(study, coords);
+                view.mapping.price = self.series_map(series, coords.rect);
             }
             Some((item, view))
         })
@@ -619,11 +624,11 @@ mod tests {
                 }
             }
         }
-        for pane in [false, true] {
+        for (pane, move_main) in [(false, false), (true, false), (false, true), (true, true)] {
             for kind in ["main", "bars", "study", "custom", "custom_volume"] {
                 for merged in [false, true] {
-                    if (pane && kind == "main")
-                        || (kind == "custom_volume" && !cfg!(feature = "studies"))
+                    if (kind == "custom_volume" && !cfg!(feature = "studies"))
+                        || (move_main && kind == "main")
                     {
                         continue;
                     }
@@ -658,7 +663,13 @@ mod tests {
                         )
                     };
                     let id = match kind {
-                        "main" => SeriesId::MAIN,
+                        "main" => {
+                            if pane {
+                                let destination = chart.add_pane();
+                                assert!(chart.move_series_to_pane(SeriesId::MAIN, destination));
+                            }
+                            SeriesId::MAIN
+                        }
                         "bars" => {
                             let id = chart.add_series(SeriesOptions::default());
                             chart.set_data(id, chart.bars(SeriesId::MAIN).to_vec());
@@ -680,6 +691,14 @@ mod tests {
                         assert!(chart.move_series_to_pane(other, destination));
                     }
                     chart.attach_primitive(other, probe(2));
+                    if move_main {
+                        let destination = if pane {
+                            chart.series_pane(id).unwrap()
+                        } else {
+                            chart.add_pane()
+                        };
+                        assert!(chart.move_series_to_pane(SeriesId::MAIN, destination));
+                    }
                     if merged {
                         let mut options = chart.chart_options().clone();
                         options.time_scale.min_bar_spacing = 0.0;
@@ -706,7 +725,7 @@ mod tests {
                     assert_eq!(
                         *log.lock().unwrap(),
                         expected,
-                        "{kind}, pane={pane}, merged={merged}"
+                        "{kind}, pane={pane}, move_main={move_main}, merged={merged}"
                     );
                     let actual: Vec<_> = painted
                         .iter()
@@ -715,7 +734,10 @@ mod tests {
                             _ => None,
                         })
                         .collect();
-                    assert_eq!(actual, colors, "paint order: {kind}, pane={pane}");
+                    assert_eq!(
+                        actual, colors,
+                        "paint order: {kind}, pane={pane}, move_main={move_main}"
+                    );
                     chart.set_series_visible(id, false);
                     chart.set_series_visible(other, false);
                     log.lock().unwrap().clear();
@@ -971,9 +993,12 @@ mod tests {
                 },
             )
         };
-        for (secondary, backgrounds) in [false, true]
-            .into_iter()
-            .flat_map(|secondary| [false, true].map(|backgrounds| (secondary, backgrounds)))
+        for (secondary, move_main, backgrounds) in
+            [(false, false), (true, false), (false, true), (true, true)]
+                .into_iter()
+                .flat_map(|(secondary, move_main)| {
+                    [false, true].map(|backgrounds| (secondary, move_main, backgrounds))
+                })
         {
             let ctx = egui::Context::default();
             let mut chart = chart(&[10.0], &[20.0]);
@@ -991,6 +1016,32 @@ mod tests {
                 ),
                 Objects(objects.clone(), backgrounds),
             );
+            let rival = chart.add_custom_series(
+                Box::new(CustomIndicator::new("Rival", |bars| {
+                    vec![IndicatorValue::Single(15.0); bars.len()]
+                })),
+                Objects(
+                    Arc::new(Mutex::new(vec![object(
+                        "rival",
+                        CursorIcon::Wait,
+                        egui::vec2(0.0, -18.0),
+                    )])),
+                    backgrounds,
+                ),
+            );
+            assert!(chart.move_series_to_pane(rival, chart.series_pane(series).unwrap()));
+            if move_main {
+                let destination = if secondary {
+                    chart.series_pane(series).unwrap()
+                } else {
+                    chart.add_pane()
+                };
+                assert!(chart.move_series_to_pane(SeriesId::MAIN, destination));
+                // Keep the main series behind the renderers, as in the original layout.
+                for id in [series, rival] {
+                    assert!(chart.reorder_indicator(id, super::super::VisualOrder::BringToFront));
+                }
+            }
             let first = Arc::new(Mutex::new(vec![object(
                 "first",
                 CursorIcon::Crosshair,
@@ -1010,10 +1061,10 @@ mod tests {
             for time in [0.0, 0.1, 0.2] {
                 frame(&ctx, &mut chart, time, vec![]);
             }
-            let plot = if secondary {
-                chart.last_rendered_indicator_panes[0].chart_rect
-            } else {
+            let plot = if chart.series_pane(series) == Some(chart.main_series_pane()) {
                 chart.last_rendered_price_rect
+            } else {
+                chart.last_rendered_indicator_panes[0].chart_rect
             };
             let renderer = PointerTarget::Element(ChartElementId::Indicator(series));
             let mut pos = plot.center();
@@ -1083,7 +1134,7 @@ mod tests {
                 assert_eq!(
                     pointer.target,
                     Some(target),
-                    "secondary={secondary}, step={step}"
+                    "secondary={secondary}, move_main={move_main}, backgrounds={backgrounds}, step={step}"
                 );
                 let hit = pointer.primitive_hit.as_ref().unwrap();
                 assert_eq!(hit.object_id.as_deref(), Some(id));
@@ -1125,6 +1176,7 @@ mod tests {
                 ChartEvent::CrosshairMoved(Some(pointer))
                     if pointer.primitive_hit.as_ref().unwrap().data.as_deref() == Some(&serde_json::json!({ "updated": true }))
             )));
+            chart.set_series_visible(rival, false);
             // Legacy hits retain their cursor and the latest attachment wins a tie.
             chart.attach_primitive(series, Dots);
             let latest = chart.attach_primitive(series, Dots).unwrap();

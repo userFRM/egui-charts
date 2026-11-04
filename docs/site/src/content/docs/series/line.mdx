@@ -43,9 +43,12 @@ positive and by default takes the point's line colour with a chart-background ri
 
 For an added series, use
 [`SeriesOptions::color`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.SeriesOptions.html#structfield.color)
-and `width`. Added lines use solid straight segments, or steps for `StepLine`;
-they do not expose the main line's dash/curve options. The four `crosshair_marker_*`
-fields of `SeriesOptions` style the hover marker of an added series, on its own scale and pane. Per-point
+and `width`, or set `line_style` to a
+[`LinePlotStyle`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.LinePlotStyle.html)
+for dashes and curves. Without it, added lines use solid straight segments, or
+steps for `StepLine`. `last_price_animation` pulses at the series' own last
+price on its pane and scale. The four `crosshair_marker_*` fields of
+`SeriesOptions` style its hover marker on that same scale and pane. Per-point
 [`BarColors::color`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.BarColors.html#structfield.color)
 colours the outgoing segment or marker. All three line types can be
 [added series](../chart-types.mdx#added-series-restrictions).
