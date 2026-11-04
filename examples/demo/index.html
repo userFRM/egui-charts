@@ -91,7 +91,7 @@
             const asset = event.target;
             if (asset !== window && ['SCRIPT', 'LINK'].includes(asset.tagName)) {
                 failStartup('A chart asset could not load. Check your connection and retry.');
-            } else if (event.message) {
+            } else if (event.error) {
                 failStartup('The chart stopped: ' + event.message);
             }
         }, true);
