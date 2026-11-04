@@ -48,22 +48,44 @@ their unallocated entry fees, already deducted from equity. Market and stop orde
 against their side once per fill, by ticks times tick size or an absolute-price fraction.
 Limits, including the limit execution of a stop-limit order, never slip.
 
-Margin is absolute position market value divided by leverage, as on the paper account.
-An entry is rejected if its resulting margin plus commission exceeds equity after slippage.
-The report counts rejected entries. Along every segment of the price path, equity below
-margin closes the whole position at the crossing, labelled `Margin call`, with exit fees
-and market slippage. An order at the boundary can avert the deficit; a gap already below
-margin closes at its open. For example, capital
-1,000 and 15 long units entered at 100 with leverage 2 give equity `15p - 500` and margin
-`7.5p` at positive price `p`; a decline crosses at `p = 200/3`, leaving equity 500 before
-exit costs, even if the bar later recovers.
+Long and short exposure fund separately. [`long_funding`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.long_funding) and [`short_funding`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.short_funding)
+are the fractions of absolute position market value that equity must cover, one over leverage
+when unset. Zero disables that side's checks and values above one are accepted. An entry is
+rejected if the funding of its resulting position plus commission exceeds equity after slippage,
+using the funding of its own side, including on a reversal. The report counts rejected entries.
+
+At each observed price point, equity below the required funding closes four times the shortfall
+in units, truncated to [`liquidation_increment`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.liquidation_increment), oldest lots first. The fill is labelled `Margin call`,
+with exit fees and market slippage. For example, capital 1,000 and 40 long units entered at 100
+with 20% funding have equity 600 and require 720 at a price of 90; the shortfall of 120 buys 6.67
+units of funding, truncated to 6, so 24 units close and 16 stay open.
+
+Runs with leverage above one and no fraction for the position's side keep whole-position
+liquidation. Along every segment of the price path, equity below margin closes the whole position
+at the crossing. An order at the boundary can avert the deficit; a gap already below margin closes
+at its open. For example, capital 1,000 and 15 long units entered at 100 with leverage 2 give
+equity `15p - 500` and margin `7.5p` at positive price `p`; a decline crosses at `p = 200/3`,
+leaving equity 500 before exit costs, even if the bar later recovers.
+
+[`require_limit_cross`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.require_limit_cross) makes limit entries, triggered stop-limits and profit-taking exits wait until
+the price trades through the limit by one [`price_increment`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.price_increment). They then fill at the limit, or at
+the better price of a gap beyond that threshold. [`order_delay`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.order_delay) holds a new order back for that
+many further price points, so market orders placed at a close fill at the next bar's open with
+zero, its first extreme with one and its second extreme with two.
+
+[`recalculate_on_history`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.recalculate_on_history) replays each bar as its open, two extremes and close, or as those four
+points of each finer bar, and decides at each with a candle holding only the prices reached so far.
+`prepare` then receives no bars and `prepare_update` refreshes calculations before each decision.
+It is unavailable on transformed chart types. [`chart_type`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.chart_type) set to Heikin Ashi derives decision candles
+from the original bars you supply; these candles also set fills and equity unless
+[`original_price_fills`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.original_price_fills) keeps those on the original prices.
 
 [`recalculate_after_fills`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.recalculate_after_fills) calls the strategy again after every fill, with [`price()`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.StrategyContext.html#method.price) equal
 to the execution price and [`equity()`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.StrategyContext.html#method.equity) marked there after commission. [`is_after_fill()`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.StrategyContext.html#method.is_after_fill)
 distinguishes it from a closed-bar decision. During this call, [`bars()`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.StrategyContext.html#method.bars) contains only
 previously closed chart bars, excluding the unfinished bar. Newly created orders wait for
 a subsequent price point; they cannot repeatedly fill on the same tick. [`fill_on_close`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.fill_on_close)
-fills market orders on the closing tick. All settings and [`Strategy::inputs()`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/trait.Strategy.html#method.inputs) appear in
+tries working orders again on the closing tick: market orders fill and priced orders fill if the close satisfies them. All settings and [`Strategy::inputs()`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/trait.Strategy.html#method.inputs) appear in
 the report's Properties tab and summary CSV. Capital, currency and risk-free rate use the
 report's existing metadata fields, so each appears once.
 
