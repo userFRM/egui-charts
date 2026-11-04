@@ -1480,6 +1480,327 @@ fn series_style_draws_columns_and_lines_and_fits_provided_ranges() {
     );
 }
 
+/// A 100..200 range in a 500-pixel plot with 10% scale margins and 49/63 extra
+/// pixels uses 100 / (0.8 - 112/500) = 173.611111 scale units. Its upper price is
+/// 50 + 49 pixels below the top, and its lower price is 50 + 63 above the bottom.
+#[test]
+fn autoscale_contributions_reserve_pixels_per_pane_and_scale() {
+    use crate::chart::primitives::{Primitive, PrimitivePass, PrimitiveView};
+    use crate::model::{AutoscaleInfo, AutoscaleMargins, AutoscaleProvider};
+
+    struct FixedGraphics;
+    impl Primitive for FixedGraphics {
+        fn autoscale_info(
+            &self,
+            bars: &[Bar],
+            visible: std::ops::Range<usize>,
+        ) -> Option<AutoscaleInfo> {
+            let values = &bars[visible];
+            Some(AutoscaleInfo {
+                price_range: (values.first()?.close, values.last()?.close),
+                margins: AutoscaleMargins {
+                    top: 13.0,
+                    bottom: 63.0,
+                },
+            })
+        }
+
+        fn draw(&self, painter: &Painter, view: &PrimitiveView<'_>, pass: PrimitivePass) {
+            if pass != PrimitivePass::Above || view.visible.is_empty() {
+                return;
+            }
+            let low = view
+                .mapping
+                .price
+                .price_to_y(view.bars[view.visible.start].close);
+            let high = view
+                .mapping
+                .price
+                .price_to_y(view.bars[view.visible.end - 1].close);
+            let x = view.mapping.rect.center().x;
+            for (y, height) in [(low.min(high) - 13.0, 13.0), (low.max(high), 63.0)] {
+                painter.rect_filled(
+                    Rect::from_min_size(Pos2::new(x, y), egui::vec2(18.0, height)),
+                    0.0,
+                    Color32::MAGENTA,
+                );
+            }
+        }
+    }
+
+    for placement in ["main", "moved main", "added"] {
+        for mode in [
+            PriceScaleMode::Normal,
+            PriceScaleMode::Logarithmic,
+            PriceScaleMode::Percentage,
+            PriceScaleMode::IndexedTo100,
+        ] {
+            for inverted in [false, true] {
+                let ctx = egui::Context::default();
+                let mut chart = Chart::new(BarData::from_bars(bars(&[100.0, 200.0])));
+                chart.config.show_volume = false;
+                let target = if placement == "added" {
+                    let id = chart.add_series(SeriesOptions::default());
+                    chart.set_data(id, bars(&[100.0, 200.0]));
+                    id
+                } else {
+                    SeriesId::MAIN
+                };
+                let pane = if placement == "main" {
+                    PaneId::MAIN
+                } else {
+                    chart.add_pane()
+                };
+                assert!(chart.move_series_to_pane(target, pane));
+                chart.series_style_mut(target).unwrap().autoscale =
+                    Some(AutoscaleProvider::with_margins(|_, default| {
+                        Some(AutoscaleInfo {
+                            price_range: default?,
+                            margins: AutoscaleMargins {
+                                top: 37.0,
+                                bottom: 11.0,
+                            },
+                        })
+                    }));
+                let sibling = chart.add_series(SeriesOptions::default());
+                chart.set_data(sibling, bars(&[100.0, 200.0]));
+                assert!(chart.move_series_to_pane(sibling, pane));
+                chart.series_style_mut(sibling).unwrap().autoscale =
+                    Some(AutoscaleProvider::with_margins(|_, default| {
+                        Some(AutoscaleInfo {
+                            price_range: default?,
+                            margins: AutoscaleMargins {
+                                top: 49.0,
+                                bottom: 17.0,
+                            },
+                        })
+                    }));
+                let independent = chart.add_series(SeriesOptions {
+                    scale: SeriesScale::Separate(7),
+                    ..Default::default()
+                });
+                chart.set_data(independent, bars(&[100.0, 200.0]));
+                assert!(chart.move_series_to_pane(independent, pane));
+                chart.series_style_mut(independent).unwrap().autoscale =
+                    Some(AutoscaleProvider::with_margins(|_, default| {
+                        Some(AutoscaleInfo {
+                            price_range: default?,
+                            margins: AutoscaleMargins {
+                                top: 7.0,
+                                bottom: 19.0,
+                            },
+                        })
+                    }));
+                let primitive = chart.attach_primitive(target, FixedGraphics).unwrap();
+                for id in [target, independent] {
+                    let options = chart.series_price_scale_mut(id).unwrap().options_mut();
+                    options.mode = mode;
+                    options.invert_scale = inverted;
+                    options.scale_margins = crate::scales::PriceScaleMargins {
+                        top: 0.1,
+                        bottom: 0.1,
+                    };
+                }
+                for (step, (height, last)) in [(900.0, 200.0), (650.0, 400.0), (900.0, 200.0)]
+                    .into_iter()
+                    .enumerate()
+                {
+                    chart.set_data(SeriesId::MAIN, bars(&[100.0, last]));
+                    for id in [target, sibling, independent] {
+                        chart.set_data(id, bars(&[100.0, last]));
+                    }
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                Pos2::ZERO,
+                                egui::vec2(1440.0, height),
+                            )),
+                            time: Some(step as f64),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            chart.show(ui);
+                        },
+                    );
+                    let painted: Vec<_> = output
+                        .shapes
+                        .iter()
+                        .map(|shape| shape.shape.clone())
+                        .collect();
+                    output.drop_without_applying_deltas();
+                    let map = chart.series_price_map(target).unwrap();
+                    let (top, bottom) = map.extent();
+                    let plot_height = bottom - top;
+                    let transform = map.transform();
+                    let (low, high) = (transform.to_scale(100.0), transform.to_scale(last));
+                    // Secondary bar panes already pad their raw span by 10% on each side.
+                    let padding = if placement == "added" && mode != PriceScaleMode::Logarithmic {
+                        (high - low) * 0.1
+                    } else {
+                        0.0
+                    };
+                    let total =
+                        (high - low + 2.0 * padding) / (0.8 - 112.0 / f64::from(plot_height));
+                    let (lower, upper) = if inverted { (49.0, 63.0) } else { (63.0, 49.0) };
+                    let expected = (
+                        low - padding - total * (0.1 + lower / f64::from(plot_height)),
+                        high + padding + total * (0.1 + upper / f64::from(plot_height)),
+                    );
+                    assert!(
+                        (map.range().min - expected.0).abs() < 1e-8
+                            && (map.range().max - expected.1).abs() < 1e-8,
+                        "{placement}, {mode:?}, inverted={inverted}: {:?}, expected {expected:?}",
+                        map.range()
+                    );
+                    let ys = crate::widget::test_frames::candle_ys(&painted, Color32::MAGENTA);
+                    assert_eq!(ys.len(), 4, "both fixed-size graphics are rendered");
+                    assert!(ys.iter().all(|y| *y >= top && *y <= bottom));
+                    let isolated = chart.series_price_map(independent).unwrap();
+                    let span = (high - low + 2.0 * padding) / (0.8 - 26.0 / f64::from(plot_height));
+                    let (lower, upper) = if inverted { (7.0, 19.0) } else { (19.0, 7.0) };
+                    assert!(
+                        (isolated.range().min
+                            - (low - padding - span * (0.1 + lower / f64::from(plot_height))))
+                        .abs()
+                            < 1e-8
+                    );
+                    assert!(
+                        (isolated.range().max
+                            - (high + padding + span * (0.1 + upper / f64::from(plot_height))))
+                        .abs()
+                            < 1e-8
+                    );
+                    if placement == "added" {
+                        let main = chart.series_price_map(SeriesId::MAIN).unwrap().range();
+                        let span = (last - 100.0) / 0.8;
+                        assert!((main.min - (100.0 - span * 0.1)).abs() < 1e-8);
+                        assert!((main.max - (last + span * 0.1)).abs() < 1e-8);
+                    }
+                }
+                if placement == "main" {
+                    chart.set_markers(
+                        target,
+                        vec![
+                            Marker::new(chart.bars(target)[0].time)
+                                .at_price(
+                                    if inverted { 200.0 } else { 100.0 },
+                                    MarkerPos::AtPriceBottom,
+                                )
+                                .with_shape(crate::model::MarkerShape::Circle)
+                                .with_size(8.0),
+                        ],
+                    );
+                    frame(&ctx, &mut chart, 3.0, vec![]);
+                    let map = chart.series_price_map(target).unwrap();
+                    let (top, bottom) = map.extent();
+                    let a = map.price_to_y(100.0);
+                    let b = map.price_to_y(200.0);
+                    assert!(
+                        a.min(b) - top >= (bottom - top) * 0.1 + 49.0 - 0.001,
+                        "marker fitting retains the provider's top clearance"
+                    );
+                    assert!(
+                        bottom - a.max(b) >= (bottom - top) * 0.1 + 63.0 - 0.001,
+                        "marker fitting retains the primitive's bottom clearance"
+                    );
+                    chart.set_markers(target, vec![]);
+                }
+                let range = chart.series_price_scale(target).unwrap().range();
+                chart
+                    .series_price_scale_mut(target)
+                    .unwrap()
+                    .set_range(range.min, range.max);
+                chart.series_style_mut(target).unwrap().autoscale =
+                    Some(AutoscaleProvider::with_margins(|_, _| {
+                        Some(AutoscaleInfo {
+                            price_range: (-1e6, 1e6),
+                            margins: AutoscaleMargins {
+                                top: 300.0,
+                                bottom: 300.0,
+                            },
+                        })
+                    }));
+                frame(&ctx, &mut chart, 4.0, vec![]);
+                assert_eq!(
+                    chart.series_price_scale(target).unwrap().range(),
+                    range,
+                    "manual ranges ignore all contributions"
+                );
+                chart.series_price_scale_mut(target).unwrap().reset();
+                chart.series_style_mut(target).unwrap().autoscale = None;
+                chart.detach_primitive(primitive);
+                chart.set_series_visible(sibling, false);
+                frame(&ctx, &mut chart, 5.0, vec![]);
+                let ordinary = chart.series_price_scale(target).unwrap().range();
+                assert!(!chart.series_price_scale(target).unwrap().is_manual());
+                assert_ne!(
+                    ordinary, range,
+                    "hidden and detached contributors release their space"
+                );
+                for (step, margins) in [
+                    AutoscaleMargins {
+                        top: f32::NAN,
+                        bottom: -5.0,
+                    },
+                    AutoscaleMargins {
+                        top: f32::INFINITY,
+                        bottom: f32::NEG_INFINITY,
+                    },
+                    AutoscaleMargins {
+                        top: 1e6,
+                        bottom: 1e6,
+                    },
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    chart.series_style_mut(target).unwrap().autoscale =
+                        Some(AutoscaleProvider::with_margins(move |_, default| {
+                            Some(AutoscaleInfo {
+                                price_range: default?,
+                                margins,
+                            })
+                        }));
+                    frame(&ctx, &mut chart, 6.0 + step as f64, vec![]);
+                    assert_eq!(chart.series_price_scale(target).unwrap().range(), ordinary);
+                }
+                chart.set_data(target, bars(&[100.0, 100.0]));
+                chart
+                    .series_price_scale_mut(target)
+                    .unwrap()
+                    .options_mut()
+                    .scale_margins = crate::scales::PriceScaleMargins {
+                    top: 0.0,
+                    bottom: 0.0,
+                };
+                chart.series_style_mut(target).unwrap().autoscale =
+                    Some(AutoscaleProvider::with_margins(|_, default| {
+                        Some(AutoscaleInfo {
+                            price_range: default?,
+                            margins: AutoscaleMargins {
+                                top: 50.0,
+                                bottom: 20.0,
+                            },
+                        })
+                    }));
+                frame(&ctx, &mut chart, 10.0, vec![]);
+                let map = chart.series_price_map(target).unwrap();
+                assert!(
+                    map.range().max > map.range().min,
+                    "flat data still has usable pixel space"
+                );
+                let (top, bottom) = map.extent();
+                let y = map.price_to_y(100.0);
+                assert!(y >= top + 50.0 - 0.001 && y <= bottom - 20.0 + 0.001);
+                assert!(
+                    (y - (top + 50.0 + bottom - 20.0) * 0.5).abs() < 0.001,
+                    "a flat value stays centred in the remaining screen space"
+                );
+            }
+        }
+    }
+}
+
 /// Each added series writes its last value with its own scale's decimals, led by its own
 /// name once the axis shows names, and a host formatter still replaces the decimals.
 #[test]

@@ -1010,8 +1010,12 @@ impl Chart {
         #[cfg(not(feature = "studies"))]
         let profile_prices = std::iter::empty();
         // Fit the price scale, then apply this frame's price zoom
-        let series_values = self.fit_secondary_series();
-        let mut primitive_prices = self.main_primitive_prices();
+        let (series_values, mut margins) = self.fit_secondary_series();
+        let (mut primitive_prices, primitive_margins) = self.main_primitive_prices();
+        margins
+            .entry(self.main_series_scale)
+            .or_default()
+            .merge(primitive_margins);
         for idx in &study_indices {
             let study = &self.rendered_studies().indicators()[*idx];
             if study.is_visible()
@@ -1044,7 +1048,7 @@ impl Chart {
             self.heikin_ashi
                 .bars(&self.state.data().bars, self.state.revision())
         });
-        let (transform, data_range) = self.state.fit_price_scale_with_series(
+        let (transform, fit) = self.state.fit_price_scale_with_series(
             (if self.chart_type.is_time_independent() {
                 &self.element_studies.studies
             } else {
@@ -1082,6 +1086,11 @@ impl Chart {
             series_values,
         );
         drop(heikin_ashi);
+        let data_range = fit.price_range;
+        margins
+            .entry(self.main_series_scale)
+            .or_default()
+            .merge(fit.margins);
         if self.main_series_visible
             && footprint.is_none()
             && self.chart_type == ChartType::TimePriceOpportunity
@@ -1167,7 +1176,7 @@ impl Chart {
                 }
             }
         }
-        self.fit_marker_scales(&painter, price_rect);
+        self.fit_marker_scales(&painter, price_rect, &margins);
         self.apply_price_zoom(pending_price_zoom, &response, price_rect, transform);
         let bar_spacing = self.state.time_scale().bar_spacing();
         if self.config.lock_price_to_bar_ratio != self.last_ratio_lock {

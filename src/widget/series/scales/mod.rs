@@ -2,7 +2,8 @@
 
 use super::{PriceSeries, SeriesLastValue};
 use crate::model::{
-    Bar, ChartType, Marker, MarkerOptions, MarkerPos, PriceLineSource, SeriesScale,
+    AutoscaleInfo, AutoscaleMargins, Bar, ChartType, Marker, MarkerOptions, MarkerPos,
+    PriceLineSource, SeriesScale,
 };
 use crate::scales::{PriceMap, PriceScale, PriceScaleMode, PriceScaleOptions, PriceTransform};
 use crate::studies::{Indicator, PlotType};
@@ -332,15 +333,60 @@ impl Chart {
         }
     }
 
-    /// Adds screen-space room to an automatically fitted range. The data span occupies the
-    /// height left after the largest marker extents at each edge, so padding cannot compound
-    /// across frames. Manual ranges and panes too short for the extents keep their range.
+    /// Fits provider margins and marker extents together in screen space. Without provider
+    /// margins, retains the ordinary marker fit. Manual ranges and panes too short for the
+    /// requested space keep their range.
     pub(in crate::widget) fn fit_marker_bounds(
         scale: &mut PriceScale,
         rect: Rect,
         bounds: impl IntoIterator<Item = (f64, f32, f32)>,
+        margins: AutoscaleMargins,
     ) {
         if scale.is_manual() || rect.height() <= 0.0 {
+            return;
+        }
+        if margins != AutoscaleMargins::default() {
+            let options = scale.options().scale_margins;
+            let (mut top, mut bottom) =
+                (options.top.clamp(0.0, 1.0), options.bottom.clamp(0.0, 1.0));
+            if top + bottom >= 1.0 {
+                (top, bottom) = (0.0, 0.0);
+            }
+            let range = scale.range();
+            let span = range.max - range.min;
+            let (mut low, mut high) = (range.min + span * bottom, range.max - span * top);
+            if scale.options().invert_scale {
+                std::mem::swap(&mut top, &mut bottom);
+            }
+            let height = f64::from(rect.height());
+            let (mut top, mut bottom) = (
+                top * height + f64::from(margins.top),
+                bottom * height + f64::from(margins.bottom),
+            );
+            for (anchor, above, below) in bounds {
+                low = low.min(anchor);
+                high = high.max(anchor);
+                top = top.max(f64::from(above));
+                bottom = bottom.max(f64::from(below));
+            }
+            if top + bottom >= height {
+                return;
+            }
+            if low == high {
+                let half = scale.min_span() * 0.5;
+                low -= half;
+                high += half;
+            }
+            // Fit once with both requests, so fitting one edge cannot consume the other's space.
+            if scale.options().invert_scale {
+                std::mem::swap(&mut top, &mut bottom);
+            }
+            scale.options_mut().scale_margins = crate::scales::PriceScaleMargins {
+                top: top / height,
+                bottom: bottom / height,
+            };
+            scale.autoscale(low, high);
+            scale.options_mut().scale_margins = options;
             return;
         }
         let map = scale.map(scale.transform(), rect.top(), rect.bottom());
@@ -384,8 +430,13 @@ impl Chart {
         scale.options_mut().scale_margins = margins;
     }
 
-    /// Fits the main pane's markers after every series has fitted its own price scale.
-    pub(in crate::widget) fn fit_marker_scales(&mut self, painter: &Painter, rect: Rect) {
+    /// Fits pixel contributions after every series in the main pane has fitted its prices.
+    pub(in crate::widget) fn fit_marker_scales(
+        &mut self,
+        painter: &Painter,
+        rect: Rect,
+        margins: &std::collections::HashMap<SeriesScale, AutoscaleMargins>,
+    ) {
         let map = self.state.price_scale().map(
             self.state.price_scale().transform(),
             rect.top(),
@@ -401,10 +452,22 @@ impl Chart {
                 other.entry(item.options.scale).or_default().extend(bounds);
             }
         }
-        Self::fit_marker_bounds(self.state.price_scale_mut(), rect, main);
+        for key in margins.keys().filter(|key| **key != self.main_series_scale) {
+            other.entry(*key).or_default();
+        }
+        let main_margins = margins
+            .get(&self.main_series_scale)
+            .copied()
+            .unwrap_or_default();
+        Self::fit_marker_bounds(self.state.price_scale_mut(), rect, main, main_margins);
         for (key, bounds) in other {
             let scale = self.pane_price_scale_mut(self.main_series_pane(), key);
-            Self::fit_marker_bounds(scale, rect, bounds);
+            Self::fit_marker_bounds(
+                scale,
+                rect,
+                bounds,
+                margins.get(&key).copied().unwrap_or_default(),
+            );
         }
     }
 
@@ -442,9 +505,9 @@ impl Chart {
             .map(|bar| bar.close)
     }
 
-    /// The range the bars of `item` in view contribute to the fit of its scale: the prices its
-    /// chart type draws and the columns' base, or what its autoscale provider makes of them.
-    pub(in crate::widget) fn series_fit(&self, item: &PriceSeries) -> Option<(f64, f64)> {
+    /// The contribution of `item` in view: its rendered prices and columns' base, or the
+    /// range and pixel margins its autoscale provider supplies.
+    pub(in crate::widget) fn series_fit(&self, item: &PriceSeries) -> Option<AutoscaleInfo> {
         let heikin_ashi = (item.options.chart_type == ChartType::Heikin)
             .then(|| item.heikin_ashi.bars(&item.bars, item.revision));
         let bars = &heikin_ashi.as_deref().unwrap_or(&item.bars)[self.series_range(item)];
@@ -471,8 +534,8 @@ impl Chart {
                 }))
             });
         match &item.options.style.autoscale {
-            Some(provider) => provider.range(bars, default),
-            None => default,
+            Some(provider) => provider.info(bars, default),
+            None => default.map(Into::into),
         }
     }
 
@@ -525,6 +588,7 @@ impl Chart {
         for key in keys {
             self.pane_price_scale_mut(pane, key);
             let mut bounds = (f64::INFINITY, f64::NEG_INFINITY);
+            let mut margins = AutoscaleMargins::default();
             let mut reference = None;
             let mode = self.pane_price_scale(pane, key).options().mode;
             let mut include = |bounds: &mut (f64, f64), value: f64, transform: PriceTransform| {
@@ -545,9 +609,12 @@ impl Chart {
                 for value in self
                     .series_fit(item)
                     .into_iter()
-                    .flat_map(|(low, high)| [low, high])
+                    .chain(self.primitive_autoscale(item.id))
+                    .flat_map(|info| {
+                        margins.merge(info.margins);
+                        [info.price_range.0, info.price_range.1]
+                    })
                     .chain(self.marker_prices(&item.markers, &[], item.marker_options))
-                    .chain(self.primitive_prices(item.id))
                 {
                     include(&mut bounds, value, transform);
                 }
@@ -591,8 +658,11 @@ impl Chart {
                         include(&mut bounds, value, transform);
                     }
                 }
-                for value in self.primitive_prices(id) {
-                    include(&mut bounds, value, transform);
+                for info in self.primitive_autoscale(id) {
+                    margins.merge(info.margins);
+                    for value in [info.price_range.0, info.price_range.1] {
+                        include(&mut bounds, value, transform);
+                    }
                 }
             }
             let Some(mut transform) = reference else {
@@ -621,12 +691,17 @@ impl Chart {
                     self.series_marker_bounds(painter, item.id, self.series_map(item, rect))
                 })
                 .collect();
-            Self::fit_marker_bounds(self.pane_price_scale_mut(pane, key), rect, markers);
+            Self::fit_marker_bounds(self.pane_price_scale_mut(pane, key), rect, markers, margins);
         }
     }
 
     /// Fits independent ranges in the main series' pane and returns its primary values.
-    pub(in crate::widget) fn fit_secondary_series(&mut self) -> Vec<f64> {
+    pub(in crate::widget) fn fit_secondary_series(
+        &mut self,
+    ) -> (
+        Vec<f64>,
+        std::collections::HashMap<SeriesScale, AutoscaleMargins>,
+    ) {
         let pane = self.main_series_pane();
         let keys: Vec<_> = self
             .studies
@@ -640,21 +715,29 @@ impl Chart {
         for key in keys {
             self.ensure_series_scale(key);
         }
-        let mut values =
-            std::collections::HashMap::<SeriesScale, (PriceTransform, f64, f64)>::new();
+        let mut values = std::collections::HashMap::<
+            SeriesScale,
+            (PriceTransform, f64, f64, AutoscaleMargins),
+        >::new();
         for item in self.main_pane_series() {
             let transform = self.series_transform(item);
             let key = item.options.scale;
-            let entry = values
-                .entry(key)
-                .or_insert((transform, f64::INFINITY, f64::NEG_INFINITY));
+            let entry = values.entry(key).or_insert((
+                transform,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                AutoscaleMargins::default(),
+            ));
             let markers = self.marker_prices(&item.markers, &[], item.marker_options);
             for value in self
                 .series_fit(item)
                 .into_iter()
-                .flat_map(|(min, max)| [min, max])
+                .chain(self.primitive_autoscale(item.id))
+                .flat_map(|info| {
+                    entry.3.merge(info.margins);
+                    [info.price_range.0, info.price_range.1]
+                })
                 .chain(markers)
-                .chain(self.primitive_prices(item.id))
             {
                 let value = transform.to_scale(value);
                 if value.is_finite() {
@@ -684,11 +767,17 @@ impl Chart {
                 continue;
             }
             let transform = self.shared_study_transform(id, study.as_ref(), key);
-            let entry = values
-                .entry(key)
-                .or_insert((transform, f64::INFINITY, f64::NEG_INFINITY));
-            for value in shared_prices(study.as_ref(), start..end).chain(self.primitive_prices(id))
-            {
+            let entry = values.entry(key).or_insert((
+                transform,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                AutoscaleMargins::default(),
+            ));
+            let primitive_prices = self.primitive_autoscale(id).flat_map(|info| {
+                entry.3.merge(info.margins);
+                [info.price_range.0, info.price_range.1]
+            });
+            for value in shared_prices(study.as_ref(), start..end).chain(primitive_prices) {
                 if transform.mode == PriceScaleMode::Logarithmic && value <= 0.0 {
                     continue;
                 }
@@ -700,10 +789,12 @@ impl Chart {
             }
         }
         let mut main = Vec::new();
-        for (key, (transform, min, max)) in values {
+        let mut pixel_margins = std::collections::HashMap::new();
+        for (key, (transform, min, max, margins)) in values {
             if !min.is_finite() {
                 continue;
             }
+            pixel_margins.insert(key, margins);
             if key == self.main_series_scale {
                 main.extend([min, max]);
             } else {
@@ -718,7 +809,7 @@ impl Chart {
                 scale.autoscale(min, max);
             }
         }
-        main
+        (main, pixel_margins)
     }
 
     pub(in crate::widget) fn update_shared_study_maps(&mut self, rect: Rect) {

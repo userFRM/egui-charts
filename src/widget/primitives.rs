@@ -5,7 +5,7 @@ use crate::chart::coords::ChartMapping;
 use crate::chart::primitives::{
     Primitive, PrimitiveHit, PrimitiveId, PrimitivePass, PrimitiveView,
 };
-use crate::model::Bar;
+use crate::model::{AutoscaleInfo, AutoscaleMargins, Bar};
 use crate::studies::Indicator;
 use egui::{Painter, Pos2};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -270,21 +270,29 @@ impl Chart {
             .filter(move |item| item.series == series)
     }
 
-    /// The prices the primitives of `series` add to the fit of its scale.
-    pub(super) fn primitive_prices(&self, series: SeriesId) -> impl Iterator<Item = f64> + '_ {
+    /// Prices and screen space the primitives of `series` add to its scale's fit.
+    pub(super) fn primitive_autoscale(
+        &self,
+        series: SeriesId,
+    ) -> impl Iterator<Item = AutoscaleInfo> + '_ {
         let (start, end) = self.state.visible_range();
         self.primitives_of(series)
-            .filter_map(move |item| item.get().autoscale(self.state.shown(), start..end))
-            .flat_map(|(min, max)| [min, max])
+            .filter_map(move |item| item.get().autoscale_info(self.state.shown(), start..end))
     }
 
     /// The prices the primitives of the main series and of the overlay studies on the main
     /// scale add to its fit.
-    pub(super) fn main_primitive_prices(&self) -> Vec<f64> {
+    pub(super) fn main_primitive_prices(&self) -> (Vec<f64>, AutoscaleMargins) {
         let studies = self.rendered_studies().indicators();
         let mut prices = Vec::new();
+        let mut margins = AutoscaleMargins::default();
+        let mut include = |info: AutoscaleInfo| {
+            prices.extend([info.price_range.0, info.price_range.1]);
+            margins.merge(info.margins);
+        };
         if self.main_series_visible {
-            prices.extend(self.primitive_prices(SeriesId::MAIN));
+            self.primitive_autoscale(SeriesId::MAIN)
+                .for_each(&mut include);
         }
         for (idx, id) in self.study_ids.iter().enumerate() {
             if self.series_pane(*id) == Some(self.main_series_pane())
@@ -294,10 +302,10 @@ impl Chart {
                 && self.study_autoscale[idx]
                 && !self.config.scale_price_chart_only
             {
-                prices.extend(self.primitive_prices(*id));
+                self.primitive_autoscale(*id).for_each(&mut include);
             }
         }
-        prices
+        (prices, margins)
     }
 
     /// Whether a renderer draws the study `series` in place of its plots.
