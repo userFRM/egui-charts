@@ -26,7 +26,7 @@ pub(crate) fn move_targets(
 ) -> Vec<(PaneId, String)> {
     let current = chart.drawing_pane(drawing_id);
     let mut panes = super::study::other_panes(ctx, chart, current);
-    if current.is_some_and(|pane| pane != PaneId::MAIN) {
+    if current.is_some_and(|pane| pane != PaneId::MAIN) && chart.panes().contains(&PaneId::MAIN) {
         panes.push((
             PaneId::MAIN,
             ctx.map_or_else(
