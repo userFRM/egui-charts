@@ -224,7 +224,11 @@ impl Chart {
         self.show_elements();
         // A crosshair set by time follows its bar when bars are evicted or loaded in front.
         if let Some(period) = self.synced_crosshair_period {
-            self.set_synced_crosshair(Some(period), self.synced_crosshair_price);
+            self.set_synced_crosshair_for_series(
+                self.synced_crosshair_series,
+                Some(period),
+                self.synced_crosshair_price,
+            );
             if self.synced_crosshair_bar_idx.is_none() {
                 self.last_crosshair = None;
             }
@@ -489,6 +493,13 @@ impl Chart {
             rect,
             self.config.show_time_labels && shared_time_axis.is_none(),
         );
+        if rect.height() == 0.0
+            && let Some(axis) = shared_time_axis
+        {
+            layout.price_rect = Rect::from_x_y_ranges(axis.x_range(), rect.y_range());
+            layout.volume_rect = Rect::NOTHING;
+            layout.legend_rect = Rect::NOTHING;
+        }
         let time_axis_top = shared_time_axis.map_or(layout.price_rect.bottom(), |axis| axis.top());
         let statistics_rows = if let Some((_, config)) = footprint {
             config.statistics.then(|| config.statistics_rows.clone())
@@ -608,7 +619,8 @@ impl Chart {
         let is_drawing_interaction = false;
         // The Magic cursor marks while the button is held, so a drag paints rather than pans.
         #[cfg(feature = "drawings")]
-        let is_drawing_interaction = self.drawings.active_tool.is_some()
+        let is_drawing_interaction = self.drawings.box_selection_input(ui)
+            || self.drawings.active_tool.is_some()
             || self.chart_options.crosshair.style == crate::config::CrosshairStyle::Magic
             || self.drawings.dragging_handle.is_some()
             || self.drawings.text_editor.is_some()
@@ -806,6 +818,14 @@ impl Chart {
         }
 
         // Draw background (solid or gradient)
+        if rect.height() == 0.0
+            && let Some(axis) = shared_time_axis
+        {
+            self.draw_background(
+                ui.painter(),
+                Rect::from_min_max(rect.min, Pos2::new(rect.right(), axis.bottom())),
+            );
+        }
         self.draw_background(&painter, rect);
         if let Some(axis) = shared_time_axis {
             self.draw_background(
@@ -828,7 +848,7 @@ impl Chart {
             rendering::render_watermark(ui, &painter, chart_rect, watermark);
         }
 
-        if self.state.data().is_empty() {
+        if self.state.data().is_empty() && self.state.shown().is_empty() {
             self.last_hover_bar_idx = None;
             self.last_crosshair = None;
             self.last_rendered_price_rect = layout.price_rect;
@@ -1035,7 +1055,9 @@ impl Chart {
             )
             .filter(|_| self.main_series_visible && time_based)
             .collect::<Vec<_>>();
-        let heikin_ashi = (self.chart_type == crate::model::ChartType::Heikin).then(|| {
+        let heikin_ashi = (self.chart_type == crate::model::ChartType::Heikin
+            && !self.state.data().is_empty())
+        .then(|| {
             self.heikin_ashi
                 .bars(&self.state.data().bars, self.state.revision())
         });
@@ -2179,8 +2201,7 @@ impl Chart {
         };
         let show_price_axis = self.config.show_right_axis || self.config.show_left_axis;
         let study_axis = crate::config::PriceAxisOptions {
-            show_study_values: self.config.show_indicator_last_val
-                && self.config.price_axis.show_study_values,
+            show_study_values: self.config.price_axis.show_study_values,
             ..self.config.price_axis
         };
         let currency = self
@@ -2281,8 +2302,8 @@ impl Chart {
         }
 
         let style = &self.main_series_style;
-        if let Some(line) = super::series::base_line(&price_map)
-            .filter(|_| self.main_series_visible && style.base_line_visible)
+        if self.main_series_visible
+            && let Some(line) = super::series::base_line(&price_map, style)
         {
             rendering::render_price_line(
                 &painter,
@@ -3126,6 +3147,7 @@ impl Chart {
                         main.then(|| price_map.y_to_price(snapped.y)),
                     )
                 });
+                self.last_crosshair_series = None;
                 crosshair_options.mode = crate::config::CrosshairMode::Normal;
                 let mut main_options = crosshair_options;
                 if volume_rect.contains(hover_pos) {
@@ -3326,30 +3348,68 @@ impl Chart {
                     if coords.is_x_visible(x) {
                         // At the host's price, or a synthetic position at the centre of the
                         // price range for a time alone
+                        let target = self.synced_crosshair_series;
+                        let main_target = target.is_none_or(|id| {
+                            self.series_pane(id) == Some(main_pane) && self.is_series_visible(id)
+                        });
+                        let map = target
+                            .filter(|_| main_target)
+                            .and_then(|id| self.series_price_map(id))
+                            .unwrap_or(price_map);
                         let mut options = self.chart_options.crosshair;
+                        if !main_target {
+                            options.horz_line_visible = false;
+                            options.horz_label_visible = false;
+                            if options.style == crate::config::CrosshairStyle::Dot {
+                                options.style = crate::config::CrosshairStyle::Arrow;
+                            }
+                        }
                         let y = match self.synced_crosshair_price {
                             Some(price) => {
                                 options.mode = crate::config::CrosshairMode::Normal;
-                                price_map.price_to_y(price)
+                                map.price_to_y(price)
                             }
                             None => price_rect.center().y,
                         };
                         if let Some(bar) = self.state.shown().get(bar_idx.round() as usize) {
                             self.last_crosshair = Some((bar.time, self.synced_crosshair_price));
+                            self.last_crosshair_series = target;
+                        }
+                        let target_axis = target.and_then(|id| {
+                            let key = self.series_scale(id)?;
+                            if key == self.main_series_scale {
+                                show_price_axis.then_some(axis_edge)
+                            } else {
+                                self.secondary_axes(rect, price_rect)
+                                    .into_iter()
+                                    .find(|(scale, _)| *scale == key)
+                                    .map(|(_, axis)| axis.right())
+                            }
+                        });
+                        let formatter = target
+                            .and_then(|id| self.series_label_formatter(id, map.transform().mode));
+                        let mut main_options = options;
+                        // A scale without a visible axis still gets its line and time label.
+                        if target.is_some() && target_axis.is_none() {
+                            main_options.horz_label_visible = false;
                         }
                         crosshair_tags = rendering::render_crosshair_with_options(
                             &price_ctx,
                             Pos2::new(x, y),
                             visible_data,
-                            &price_map,
+                            &map,
                             &coords,
-                            &options,
+                            &main_options,
                             time_axis_top,
-                            axis_edge,
+                            target_axis.unwrap_or(axis_edge),
                             last_price_tag,
                             scale,
                             bar_seconds,
-                            price_formatter.as_deref(),
+                            if target.is_some() {
+                                formatter.as_deref()
+                            } else {
+                                price_formatter.as_deref()
+                            },
                         );
                     }
                 }

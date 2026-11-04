@@ -440,6 +440,7 @@ impl LiveFeed {
             .with_currency("USD")
             .with_price_decimals(if sim.tick_size < 0.01 { 4 } else { 2 })
             .with_tick_size(sim.tick_size)
+            .with_services([egui_charts::model::FeedService::Depth])
             .with_native_timeframes([Timeframe::Min1, Timeframe::Day1]);
         if sim.cents {
             instrument.currency = None;

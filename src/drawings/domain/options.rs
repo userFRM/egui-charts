@@ -7,7 +7,7 @@
 //! the volume profile, regression trend and position drawings
 //! ([`VolumeProfileConfig`](crate::data::VolumeProfileConfig), [`RegressionTrendConfig`], [`PositionSize`], [`PositionSizing`]).
 
-use crate::model::TimeframeUnit;
+use crate::model::{Timeframe, TimeframeUnit};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::ops::RangeInclusive;
@@ -163,6 +163,66 @@ impl TimeframeVisibility {
             visible_timeframes: timeframes.iter().map(|s| (*s).to_string()).collect(),
             ranges: BTreeMap::new(),
         }
+    }
+
+    /// Show only on `current`, matched by its canonical interval label.
+    pub fn current_interval(current: Timeframe) -> Self {
+        Self::specific(&[&current.as_str()])
+    }
+
+    /// Show on `current` and longer time intervals. Calendar months compare as 30 days,
+    /// as in [`Timeframe::duration_ms`]. Trade intervals compare only within their own unit.
+    pub fn higher_intervals(current: Timeframe) -> Self {
+        Self::relative_intervals(current, true)
+    }
+
+    /// Show on `current` and shorter time intervals, using the same units and calendar
+    /// approximation as [`Self::higher_intervals`].
+    pub fn lower_intervals(current: Timeframe) -> Self {
+        Self::relative_intervals(current, false)
+    }
+
+    fn relative_intervals(current: Timeframe, higher: bool) -> Self {
+        use TimeframeUnit as U;
+        let (value, unit) = interval_parts(&current.as_str()).expect("canonical interval label");
+        let mut visibility = Self::default();
+        if current.is_trade_based() {
+            visibility.set_range(
+                unit,
+                Some(if higher { value..=u64::MAX } else { 1..=value }),
+            );
+            return visibility;
+        }
+        // Milliseconds in u128 keep the largest custom seconds and converted bounds exact.
+        let units = [
+            (U::Millisecond, 1_u128),
+            (U::Second, 1_000),
+            (U::Minute, 60_000),
+            (U::Hour, 3_600_000),
+            (U::Day, 86_400_000),
+            (U::Week, 604_800_000),
+            (U::Month, 2_592_000_000),
+        ];
+        let duration = u128::from(value) * units.iter().find(|(u, _)| *u == unit).unwrap().1;
+        for (unit, scale) in units {
+            let bound = if higher {
+                duration.div_ceil(scale)
+            } else {
+                duration / scale
+            };
+            // Subsecond intervals are presets; custom time intervals use whole seconds.
+            let max = if unit == U::Millisecond {
+                999
+            } else {
+                u64::MAX
+            };
+            if higher && bound > u128::from(max) || !higher && bound == 0 {
+                continue;
+            }
+            let bound = bound.min(u128::from(max)) as u64;
+            visibility.set_range(unit, Some(if higher { bound..=max } else { 1..=bound }));
+        }
+        visibility
     }
 
     /// Check if visible on the interval labelled `timeframe`
@@ -959,6 +1019,131 @@ mod tests {
         assert!(!saved.is_visible_on("1D") && saved.is_visible_on("3h"));
         saved.set_range(TimeframeUnit::Hour, None);
         assert_eq!(saved.range(TimeframeUnit::Hour), None);
+
+        // One hour = 3,600 seconds; 90 minutes = 5,400 seconds. Both bounds include equality.
+        for (current, probes) in [
+            (
+                Timeframe::Hour1,
+                vec![
+                    ("30s", false, true),
+                    ("59min", false, true),
+                    ("1h", true, true),
+                    ("90min", true, false),
+                    ("1D", true, false),
+                    ("1W", true, false),
+                    ("1M", true, false),
+                    ("100t", false, false),
+                ],
+            ),
+            (
+                Timeframe::Custom(n(5400)),
+                vec![
+                    ("1h", false, true),
+                    ("89min", false, true),
+                    ("90min", true, true),
+                    ("91min", true, false),
+                    ("2h", true, false),
+                ],
+            ),
+            (
+                Timeframe::Ms250,
+                vec![
+                    ("100ms", false, true),
+                    ("250ms", true, true),
+                    ("500ms", true, false),
+                    ("1s", true, false),
+                ],
+            ),
+            (
+                Timeframe::Week1,
+                vec![
+                    ("6D", false, true),
+                    ("7D", true, true),
+                    ("1W", true, true),
+                    ("1M", true, false),
+                ],
+            ),
+            (
+                Timeframe::Month1,
+                vec![
+                    ("4W", false, true),
+                    ("30D", true, true),
+                    ("1M", true, true),
+                    ("5W", true, false),
+                ],
+            ),
+            (
+                Timeframe::Ticks(n(100)),
+                vec![
+                    ("99t", false, true),
+                    ("100t", true, true),
+                    ("101t", true, false),
+                    ("100v", false, false),
+                    ("1D", false, false),
+                ],
+            ),
+            (
+                Timeframe::Volume(n(100)),
+                vec![
+                    ("99v", false, true),
+                    ("100v", true, true),
+                    ("101v", true, false),
+                    ("100t", false, false),
+                ],
+            ),
+            (
+                Timeframe::Range(n(100)),
+                vec![
+                    ("99r", false, true),
+                    ("100r", true, true),
+                    ("101r", true, false),
+                    ("100delta", false, false),
+                ],
+            ),
+            (
+                Timeframe::Delta(n(100)),
+                vec![
+                    ("99delta", false, true),
+                    ("100delta", true, true),
+                    ("101delta", true, false),
+                    ("100r", false, false),
+                ],
+            ),
+        ] {
+            let above = TimeframeVisibility::higher_intervals(current);
+            let below = TimeframeVisibility::lower_intervals(current);
+            let only = TimeframeVisibility::current_interval(current);
+            for (label, higher, lower) in probes {
+                assert_eq!(
+                    above.is_visible_on(label),
+                    higher,
+                    "above {current}: {label}"
+                );
+                assert_eq!(
+                    below.is_visible_on(label),
+                    lower,
+                    "below {current}: {label}"
+                );
+                assert_eq!(
+                    only.is_visible_on(label),
+                    label == current.as_str(),
+                    "only {current}: {label}"
+                );
+            }
+        }
+        assert_eq!(
+            TimeframeVisibility::higher_intervals(Timeframe::Hour1)
+                .range(TimeframeUnit::Millisecond),
+            None
+        );
+        // Values above i64::MAX milliseconds must not collapse to equal saturated durations.
+        let largest = TimeframeVisibility::higher_intervals(Timeframe::Custom(n(u64::MAX)));
+        assert!(largest.is_visible_on(&format!("{}s", u64::MAX)));
+        assert!(!largest.is_visible_on(&format!("{}s", u64::MAX - 1)));
+        assert!(
+            TimeframeVisibility::lower_intervals(Timeframe::Custom(n(u64::MAX)))
+                .is_visible_on(&format!("{}s", u64::MAX - 1))
+        );
 
         let legacy = r#"{"show_on_all":false,"visible_timeframes":["4h"]}"#;
         let loaded: TimeframeVisibility = serde_json::from_str(legacy).unwrap();

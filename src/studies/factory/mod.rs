@@ -38,11 +38,18 @@ type IndicatorConstructor = Box<dyn Fn() -> Box<dyn Indicator> + Send + Sync>;
 /// the value the rendering layer and legends display, and a new indicator is
 /// reachable through the factory the moment it is added to this list.
 macro_rules! register_builtins {
+    (@help $factory:expr, $kind:literal, $($ty:ty),+ $(,)?) => {
+        $($factory.help_urls.insert(
+            std::any::type_name::<$ty>(),
+            concat!("https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/", $kind, ".", stringify!($ty), ".html"),
+        );)+
+    };
     ($factory:expr, $($category:literal => [$($ty:ty),+ $(,)?]),+ $(,)?) => {
         $($(
             // Read the canonical name from a throwaway default instance so the
             // key is always exactly what the indicator reports at runtime.
             let key = <$ty as Default>::default().name().to_string();
+            register_builtins!(@help $factory, "struct", $ty);
             $factory.constructors.insert(
                 key,
                 (Some($category), Box::new(|| Box::new(<$ty as Default>::default()))),
@@ -67,6 +74,7 @@ macro_rules! register_builtins {
 pub struct IndicatorFactory {
     /// The category of each name, `None` for a built-in outside the catalogue, and its constructor.
     constructors: HashMap<String, (Option<&'static str>, IndicatorConstructor)>,
+    help_urls: HashMap<&'static str, &'static str>,
 }
 
 impl IndicatorFactory {
@@ -88,6 +96,7 @@ impl IndicatorFactory {
     pub fn new() -> Self {
         let mut factory = Self {
             constructors: HashMap::new(),
+            help_urls: HashMap::new(),
         };
 
         factory.register_builtin();
@@ -102,6 +111,9 @@ impl IndicatorFactory {
     /// listed study of the same name would replace them.
     fn register_builtin(&mut self) {
         // Exported studies outside the catalogue, resolved by name so that saved copies load.
+        register_builtins!(@help self, "struct", CVD, CloseToCloseVol, HL2, HLC3, PriceChannel, EhlersFisher, MACombination, OrderFlowStudy, ChartPatterns);
+        #[cfg(feature = "drawings")]
+        register_builtins!(@help self, "struct", AutoDrawing);
         let unlisted: [fn() -> Box<dyn Indicator>; 7] = [
             || Box::new(CVD::default()),
             || Box::new(CloseToCloseVol::default()),
@@ -368,6 +380,7 @@ impl IndicatorFactory {
                 ),
             );
         }
+        register_builtins!(@help self, "type", SMIErgodicIndicator, SMIErgodicOscillator, RisingWedge, FallingWedge, Ratio, Spread, Correlation, AdvanceDeclineRatio, AdvanceDeclineLine, CumulativeVolumeIndex);
         for cumulative in [false, true] {
             let name = OrderFlowStudy::execution_delta(cumulative)
                 .name()
@@ -497,6 +510,16 @@ impl Default for IndicatorFactory {
     fn default() -> Self {
         Self::new()
     }
+}
+
+// Resolve the built-in articles once so direct constructors retain the same help as the chooser.
+pub(crate) fn builtin_help_url(study_type: &str) -> Option<&'static str> {
+    static CATALOGUE: std::sync::OnceLock<HashMap<&'static str, &'static str>> =
+        std::sync::OnceLock::new();
+    CATALOGUE
+        .get_or_init(|| IndicatorFactory::new().help_urls)
+        .get(study_type)
+        .copied()
 }
 
 #[cfg(test)]

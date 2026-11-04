@@ -28,6 +28,8 @@ pub struct ToolbarState {
     pub expanded_category: Option<String>,
     /// Favorite tools, in the order they were starred
     pub favorites: Vec<DrawingToolType>,
+    /// Favourite cursor modes, in the order they were starred. Hosts can serialize this list.
+    pub cursor_favorites: Vec<CursorType>,
     /// Whether the floating strip of favorite tools is shown while there are favorites
     pub floating_visible: bool,
     /// Top-left corner of the floating strip, which the user can drag; `None` until it has been
@@ -107,6 +109,7 @@ impl Default for ToolbarState {
             expanded: true,
             expanded_category: None,
             favorites: Vec::new(),
+            cursor_favorites: Vec::new(),
             floating_visible: true,
             floating_pos: None,
             recent: VecDeque::with_capacity(5),
