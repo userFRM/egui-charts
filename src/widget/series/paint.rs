@@ -446,7 +446,7 @@ impl Chart {
                 );
                 plot.galley(label.min, galley, item.options.color);
                 let control = Rect::from_min_size(
-                    Pos2::new(label.right() + 8.0, label.top()),
+                    Pos2::new(label.right() + 8.0, label.center().y - 10.0),
                     egui::Vec2::splat(20.0),
                 )
                 .intersect(rect);
