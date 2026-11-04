@@ -11,6 +11,7 @@ use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::widget::{
     Chart, IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneId, PaneInteraction,
+    PaneScale,
 };
 use egui::{Pos2, Rect, Response, Sense, Ui};
 
@@ -41,12 +42,6 @@ pub struct RenderedIndicatorPane {
     pub coords: IndicatorCoordParams,
     /// Full mapping, including manual ranges, scale modes and inversion.
     pub mapping: crate::chart::coords::ChartMapping,
-}
-
-/// Whether the initial pane draws `study` on a scale of its own, apart from the pane's fitted range.
-fn study_has_own_scale(study: &dyn Indicator) -> bool {
-    study.scale() == crate::studies::StudyScale::Independent
-        || (study.is_volume() && !matches!(study.scale(), crate::studies::StudyScale::Shared(_)))
 }
 
 impl Chart {
@@ -387,10 +382,9 @@ impl Chart {
                 .first()
                 .and_then(|id| self.series_price_map(*id))
                 .unwrap_or(map);
-            let axes = self.pane_axes(pane_id, panel_rect, plot);
+            let axes = self.pane_scale_axes(pane_id, panel_rect, plot);
             let mut drawing_response = None;
-            let mut scale_tags =
-                std::collections::HashMap::<crate::model::SeriesScale, Vec<Option<Rect>>>::new();
+            let mut scale_tags = std::collections::HashMap::<PaneScale, Vec<Option<Rect>>>::new();
             let mut drawn_axes = Vec::new();
             let hovered = self.last_hover_bar_idx.and_then(|index| {
                 let index = index.round() as usize;
@@ -543,12 +537,8 @@ impl Chart {
                     ..self.config.price_axis
                 };
                 let assignment = id
-                    .and_then(|id| self.series_scale(id))
-                    .or_else(|| match indicator.scale() {
-                        crate::studies::StudyScale::Shared(key) => Some(key),
-                        _ => None,
-                    })
-                    .unwrap_or(crate::model::SeriesScale::Right);
+                    .and_then(|id| self.source_axis_key(pane_id, id))
+                    .unwrap_or(PaneScale::Named(crate::model::SeriesScale::Right));
                 let member_map = if let Some(item) =
                     id.and_then(|id| self.price_series.iter().find(|item| item.id == id))
                 {
@@ -599,11 +589,10 @@ impl Chart {
                 let axis_owner = series
                     .iter()
                     .map(|at| &self.price_series[*at])
-                    .find(|item| item.options.scale == assignment)
+                    .find(|item| PaneScale::Named(item.options.scale) == assignment)
                     .map(|item| item.id);
                 panel.draw_axis = !drawn_axes.contains(&assignment)
-                    && axis_owner.is_none_or(|owner| Some(owner) == id)
-                    && !(pane_id == PaneId::MAIN && study_has_own_scale(indicator));
+                    && axis_owner.is_none_or(|owner| Some(owner) == id);
                 if panel.draw_axis {
                     drawn_axes.push(assignment);
                 }
@@ -729,7 +718,9 @@ impl Chart {
                     Some(plot.x_range()),
                     collapsed,
                     panel.axis_rect.map(|_| {
-                        if !self.pane_axis_on_left(assignment) {
+                        if self.pane_scale_side(pane_id, assignment)
+                            == Some(crate::model::AxisSide::Right)
+                        {
                             crate::scales::PriceScaleId::Right
                         } else {
                             crate::scales::PriceScaleId::Left
@@ -1134,14 +1125,17 @@ impl Chart {
                             }
                         })
                     })
-                    .unwrap_or(crate::model::SeriesScale::Right);
+                    .map(PaneScale::Named)
+                    .unwrap_or(PaneScale::Named(crate::model::SeriesScale::Right));
                 #[cfg(feature = "drawings")]
-                let axis_edge = axes
+                let drawing_axis = axes
                     .iter()
                     .find(|(key, _)| *key == drawing_key)
-                    .map(|(_, axis)| axis.right());
+                    .map(|(_, axis)| *axis);
                 #[cfg(feature = "drawings")]
-                if !collapsed && let Some(axis_edge) = axis_edge {
+                if !collapsed && let Some(axis) = drawing_axis {
+                    let axis_edge = axis.right();
+                    let label_rect = super::super::series::axis_label_rect(chart_rect, axis);
                     let map = drawing_map;
                     let axis_tags = scale_tags.entry(drawing_key).or_default();
                     for (value, fill) in self
@@ -1168,7 +1162,7 @@ impl Chart {
                         );
                         axis_tags.push(crate::chart::rendering::axes::render_axis_value(
                             &painter,
-                            chart_rect,
+                            label_rect,
                             axis_edge,
                             map.price_to_y(value),
                             label,
@@ -1185,12 +1179,16 @@ impl Chart {
                     .with_clip_rect(panel_rect.intersect(ui.clip_rect()));
                 for at in &series {
                     let item = &self.price_series[*at];
-                    let Some((_, axis)) = axes.iter().find(|(key, _)| *key == item.options.scale)
+                    let Some((_, axis)) = axes
+                        .iter()
+                        .find(|(key, _)| *key == PaneScale::Named(item.options.scale))
                     else {
                         continue;
                     };
                     let map = self.series_map(item, panel_rect);
-                    let tags = scale_tags.entry(item.options.scale).or_default();
+                    let tags = scale_tags
+                        .entry(PaneScale::Named(item.options.scale))
+                        .or_default();
                     for (value, colors, last) in
                         self.series_axis_values(item).filter(|(value, ..)| {
                             map.range().contains(map.transform().to_scale(*value))
@@ -1198,7 +1196,7 @@ impl Chart {
                     {
                         let tag = crate::chart::rendering::axes::render_axis_value(
                             &painter,
-                            pane_plot,
+                            super::super::series::axis_label_rect(pane_plot, *axis),
                             axis.right(),
                             map.price_to_y(value),
                             self.series_tag_label(item, &map, value, last),

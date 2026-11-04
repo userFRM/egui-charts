@@ -494,6 +494,9 @@ impl IndicatorPane {
                 draw_primitives(plot_painter, PrimitivePass::Series);
             }
 
+            let label_rect = self.axis_rect.map_or(chart_rect, |axis| {
+                crate::widget::series::axis_label_rect(chart_rect, axis)
+            });
             if let (Some(view), Some(side)) = (&view, axis)
                 && indicator.scale() != crate::studies::StudyScale::None
             {
@@ -519,7 +522,7 @@ impl IndicatorPane {
                         if map.range().contains(map.transform().to_scale(label.price)) {
                             let tag = crate::chart::rendering::axes::render_axis_value(
                                 painter,
-                                chart_rect,
+                                label_rect,
                                 axis_edge,
                                 map.price_to_y(label.price),
                                 label.text,
@@ -548,7 +551,7 @@ impl IndicatorPane {
                     return None;
                 }
                 crate::chart::rendering::render_crosshair_price_tag(
-                    &context,
+                    &crate::chart::rendering::RenderContext::new(painter, label_rect),
                     pos,
                     &mapping.price.with_price_precision(Some(
                         indicator.precision().unwrap_or(2).min(255) as u8,

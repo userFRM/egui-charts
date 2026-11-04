@@ -95,6 +95,7 @@ pub(super) struct Pane {
     /// Keep the pane when its last member leaves it.
     pub(super) preserve: bool,
     pub(super) collapsed: Option<bool>,
+    pub(super) axes: crate::model::PaneAxisOptions,
     pub(super) scale: crate::scales::PriceScale,
     /// Named assignments other than the pane's default right scale, in creation order.
     pub(super) scales: Vec<(crate::model::SeriesScale, crate::scales::PriceScale)>,
@@ -111,6 +112,7 @@ impl Pane {
             height: None,
             preserve: false,
             collapsed: None,
+            axes: Default::default(),
             scale: Self::new_scale(),
             scales: Vec::new(),
             rect: Rect::NOTHING,
@@ -172,70 +174,17 @@ impl Pane {
 }
 
 impl Chart {
-    /// The pane's own scale follows the price axis settings; other assignments sit on the left.
-    fn pane_axis_on_left(&self, key: crate::model::SeriesScale) -> bool {
-        key != crate::model::SeriesScale::Right || !self.config.show_right_axis
-    }
-
-    /// The visible named axes in a secondary pane, in member order.
-    fn pane_axis_keys(&self, id: PaneId) -> Vec<crate::model::SeriesScale> {
-        use crate::model::SeriesScale;
-        let members = self.pane_series(id);
-        let shown = self.config.show_right_axis || self.config.show_left_axis;
-        if members.is_empty() && shown {
-            return vec![SeriesScale::Right];
-        }
-        let mut keys = Vec::new();
-        for member in members {
-            if !self.is_series_visible(member) {
-                continue;
-            }
-            let key = self.series_scale(member).or_else(|| {
-                let study = self.indicators().find(|(id, _)| *id == member)?.1;
-                match study.scale() {
-                    crate::studies::StudyScale::Shared(key) => Some(key),
-                    crate::studies::StudyScale::None => None,
-                    _ => Some(SeriesScale::Right),
-                }
-            });
-            if let Some(key) = key
-                && !matches!(key, SeriesScale::Overlay(_))
-                && (key != SeriesScale::Right || shown)
-                && !keys.contains(&key)
-            {
-                keys.push(key);
-            }
-        }
-        keys
-    }
-
-    /// Axis slots use the same plot column in every pane.
     fn pane_axes(
         &self,
         id: PaneId,
         rect: Rect,
         plot: Rect,
     ) -> Vec<(crate::model::SeriesScale, Rect)> {
-        let keys = self.pane_axis_keys(id);
-        let count = keys
-            .iter()
-            .filter(|key| self.pane_axis_on_left(**key))
-            .count();
-        let width = self
-            .measured_axis_width
-            .max(self.config.left_axis_width)
-            .min((plot.left() - rect.left()).max(0.0) / count.max(1) as f32);
-        let mut left = plot.left();
-        keys.into_iter()
-            .map(|key| {
-                let axis = if !self.pane_axis_on_left(key) {
-                    Rect::from_x_y_ranges(plot.right()..=rect.right(), rect.y_range())
-                } else {
-                    let axis = Rect::from_x_y_ranges((left - width)..=left, rect.y_range());
-                    left -= width;
-                    axis
-                };
-                (key, axis)
+        self.pane_scale_axes(id, rect, plot)
+            .into_iter()
+            .filter_map(|(key, rect)| match key {
+                super::PaneScale::Named(key) => Some((key, rect)),
+                super::PaneScale::Study(_) => None,
             })
             .collect()
     }
@@ -898,82 +847,53 @@ impl Chart {
             .padding
             .max(0.0)
             .min(widget_rect.width().min(widget_rect.height()).max(0.0) / 2.0);
-        let study_axes = if self.config.show_left_axis || self.config.show_right_axis {
-            self.studies
-                .indicators()
+        use crate::model::AxisSide;
+        let available = (widget_rect.width() - 2.0 * padding).max(0.0);
+        let columns = |side| {
+            self.pane_layout
+                .panes
                 .iter()
-                .enumerate()
-                .filter(|(idx, study)| {
-                    study.is_visible()
-                        && self.series_pane(self.study_ids[*idx]) == Some(self.main_series_pane())
-                        && !study.is_volume()
-                        && study.scale() == crate::studies::StudyScale::Independent
+                .filter(|pane| {
+                    pane.id == PaneId::MAIN
+                        || pane.id == self.main_series_pane()
+                        || self.pane_shown(pane)
                 })
-                .count() as f32
-                * self
-                    .measured_axis_width
-                    .max(self.config.right_axis_width)
-                    .max(self.config.left_axis_width)
+                .map(|pane| self.pane_scales(pane.id, side).len())
+                .max()
+                .unwrap_or(0) as f32
+        };
+        let right_axis =
+            columns(AxisSide::Right) * self.measured_axis_width.max(self.config.right_axis_width);
+        let primary_left = self.primary_axis_side() == Some(AxisSide::Left);
+        let primary_width = if primary_left {
+            self.measured_axis_width.max(self.config.left_axis_width)
         } else {
             0.0
         };
-        let series_axes = self.series_axis_keys();
-        let series_left = series_axes
-            .iter()
-            .filter(|key| **key != crate::model::SeriesScale::Right)
-            .count() as f32
-            * self
-                .measured_axis_width
-                .max(self.config.right_axis_width)
-                .max(self.config.left_axis_width);
-        let series_right = if series_axes.contains(&crate::model::SeriesScale::Right) {
-            self.measured_axis_width.max(self.config.right_axis_width)
-        } else {
-            0.0
-        };
-        let study_axes = study_axes + series_left;
-        let left_axis = if self.config.show_left_axis {
-            self.config.left_axis_width.max(self.measured_axis_width)
-        } else {
-            0.0
-        };
-        let right_axis = if self.config.show_right_axis {
-            self.config.right_axis_width.max(self.measured_axis_width)
-        } else {
-            0.0
-        } + series_right;
-        let study_axes = study_axes
-            .min((widget_rect.width() - 2.0 * padding - left_axis - right_axis).max(0.0) * 0.5);
-        let pane_axes: Vec<_> = self
+        let extra_columns = self
+            .pane_scales(self.main_series_pane(), AxisSide::Left)
+            .len()
+            .saturating_sub(usize::from(primary_left)) as f32;
+        let extra_width = self
+            .measured_axis_width
+            .max(self.config.left_axis_width)
+            .max(self.config.right_axis_width);
+        let main_left = primary_width
+            + (extra_columns * extra_width)
+                .min((available - primary_width - right_axis).max(0.0) * 0.5);
+        let other_left = self
             .pane_layout
             .panes
             .iter()
-            .filter(|pane| self.pane_shown(pane))
-            .map(|pane| self.pane_axis_keys(pane.id))
-            .collect();
-        let pane_left = pane_axes
-            .iter()
-            .map(|keys| {
-                keys.iter()
-                    .filter(|key| self.pane_axis_on_left(**key))
-                    .count()
+            .filter(|pane| {
+                pane.id != self.main_series_pane()
+                    && (pane.id == PaneId::MAIN || self.pane_shown(pane))
             })
+            .map(|pane| self.pane_scales(pane.id, AxisSide::Left).len())
             .max()
             .unwrap_or(0) as f32
             * self.measured_axis_width.max(self.config.left_axis_width);
-        let left_axis = (left_axis + study_axes)
-            .max(pane_left)
-            .min((widget_rect.width() - 2.0 * padding).max(0.0) * 0.5);
-        let right_axis = right_axis.max(
-            if pane_axes
-                .iter()
-                .any(|keys| keys.iter().any(|key| !self.pane_axis_on_left(*key)))
-            {
-                self.measured_axis_width.max(self.config.right_axis_width)
-            } else {
-                0.0
-            },
-        );
+        let left_axis = main_left.max(other_left).min(available * 0.5);
         let bottom_padding = if show_time_labels {
             self.time_axis_height()
         } else {

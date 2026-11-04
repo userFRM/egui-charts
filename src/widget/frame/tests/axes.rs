@@ -1101,13 +1101,13 @@ fn initial_axis_passes_keep_zoom_and_later_measurements_keep_range() {
 
 #[test]
 fn plot_uses_the_interior_and_configured_axis_widths() {
-    for (width, height, padding, left, right, studies, gutter) in [
+    for (width, height, padding, left, right, studies, left_gutter) in [
         (800.0, 600.0, 0.0, 0.0, 70.0, 0, 0.0),
         (640.0, 450.0, 2.0, 50.0, 80.0, 0, 0.0),
         (45.0, 20.0, 0.0, 0.0, 70.0, 0, 0.0),
         (800.0, 600.0, 8.0, 0.0, 0.0, 0, 0.0),
         (240.0, 450.0, 0.0, 0.0, 70.0, 3, 85.0),
-        (320.0, 450.0, 0.0, 50.0, 70.0, 3, 100.0),
+        (320.0, 450.0, 0.0, 50.0, 70.0, 3, 125.0),
         (800.0, 600.0, 0.0, 0.0, 70.0, 1, 70.0),
     ] {
         let mut chart = chart(&[100.0], &[110.0]);
@@ -1128,11 +1128,11 @@ fn plot_uses_the_interior_and_configured_axis_widths() {
         assert_eq!(layout.price_rect.top(), widget.top() + padding);
         assert_eq!(
             layout.price_rect.left(),
-            widget.left() + (padding + left + gutter).min(width)
+            widget.left() + (padding + left_gutter).min(width)
         );
         assert_eq!(
             layout.price_rect.width(),
-            (width - 2.0 * padding - left - right - gutter).max(0.0)
+            (width - 2.0 * padding - right - left_gutter).max(0.0)
         );
         assert_eq!(
             layout.price_rect.height(),

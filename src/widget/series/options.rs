@@ -35,6 +35,16 @@ fn fed_symbols(name: &str) -> Vec<String> {
     }
 }
 
+/// Identifies a price axis within a pane, as returned by [`Chart::pane_scales`].
+/// Shared assignments identify one scale; independently mapped studies identify their own axes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PaneScale {
+    /// A shared bar-series or study assignment.
+    Named(SeriesScale),
+    /// An independently mapped study.
+    Study(SeriesId),
+}
+
 /// Display settings of a host-fed bar series.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SeriesOptions {
