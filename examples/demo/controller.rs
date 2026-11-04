@@ -1249,6 +1249,21 @@ impl DemoApp {
         self.sync_comparisons();
         let action = self.compare_dialog.show(ctx, &symbols);
         self.handle_comparison(action);
+        match self.data_table.show(ctx, &self.chart) {
+            egui_charts::ui::dialogs::DataTableAction::Export(csv) => {
+                self.save_text("chart_data.csv", &csv);
+            }
+            egui_charts::ui::dialogs::DataTableAction::SearchSymbol(query) => {
+                self.watchlist_search = false;
+                if query.is_empty() {
+                    self.symbol_search
+                        .open_with_selected_query(self.chart.symbol().to_owned());
+                } else {
+                    self.symbol_search.open_with_query(query);
+                }
+            }
+            _ => {}
+        }
         if let Some(picked) = self.symbol_search.show(ctx, &symbols) {
             if self.watchlist_search {
                 self.watchlist.add_symbol(&picked.symbol);
@@ -1288,12 +1303,6 @@ impl DemoApp {
             .show_with_shortcuts(ctx, self.chart.shortcuts());
         self.show_interval_entry(ctx);
         self.show_open_layout(ctx);
-
-        if let egui_charts::ui::dialogs::DataTableAction::Export(csv) =
-            self.data_table.show(ctx, &self.chart)
-        {
-            self.save_text("chart_data.csv", &csv);
-        }
 
         // Export dialog (screenshot / CSV).
         match self.export_dialog.show_with(ctx, |ui, format| {
@@ -6042,10 +6051,16 @@ mod tests {
             ("SAMX", "PLE", "SAMPLE"),
             ("ESZ202X", "6", "ESZ2026"),
             ("ESH202X", "7", "ESH2027"),
+            ("AAPLX", "", "AAPL"),
         ] {
             let ctx = egui::Context::default();
             let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
             app.live.set_paused(true);
+            let table_study = (expected == "AAPL").then(|| {
+                app.data_table.open();
+                app.chart
+                    .add_indicator(Box::new(egui_charts::studies::SMA::new(7)))
+            });
             app.chart
                 .drawings_mut()
                 .drawings
@@ -6091,6 +6106,10 @@ mod tests {
                 "Enter selects the edited {expected} query"
             );
             assert_eq!(app.chart.symbol(), expected);
+            if let Some(study) = table_study {
+                assert!(app.chart.indicators().any(|(id, _)| id == study));
+            }
+            assert_eq!(app.data_table.is_open, expected == "AAPL");
             if expected.starts_with("ES") {
                 assert_eq!(
                     app.chart.instrument().unwrap().exchange.as_deref(),

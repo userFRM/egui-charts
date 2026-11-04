@@ -118,6 +118,7 @@ impl Chart {
             from_ticks: BTreeMap::new(),
             bar_limits: Default::default(),
             studies: IndicatorRegistry::new(),
+            readout_revision: crate::model::next_revision(),
             study_data: Default::default(),
             element_studies: Default::default(),
             execution_ranges: Default::default(),
