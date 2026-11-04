@@ -1207,6 +1207,11 @@ mod tests {
             }
             assert!(chart.user_action(|chart| chart.remove_pane(PaneId::MAIN)));
             assert!(!chart.remove_pane(PaneId::MAIN));
+            assert!(
+                chart
+                    .shared_price_scale(crate::model::SeriesScale::Right)
+                    .is_none()
+            );
             assert_eq!(chart.panes(), [second, first]);
             assert_eq!(chart.pane_series(first), [series, study]);
             assert!(chart.pane_series(PaneId::MAIN).is_empty());

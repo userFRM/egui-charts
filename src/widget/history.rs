@@ -43,6 +43,7 @@ struct Action {
     main_series_visible: Option<bool>,
     price_targets_visible: Option<bool>,
     options: Option<ChartOptions>,
+    order_flow: Option<FeedDisplay>,
     view: Option<(f32, f32)>,
     scale: Option<PriceScale>,
     /// Scales that differ from the chart's, by assignment; `None` where the chart has none.
@@ -69,6 +70,7 @@ impl Action {
             && self.main_series_visible.is_none()
             && self.price_targets_visible.is_none()
             && self.options.is_none()
+            && self.order_flow.is_none()
             && self.scale.is_none()
             && self.series_scales.is_empty()
             && self.panes.is_none()
@@ -76,6 +78,41 @@ impl Action {
             && self.interval.is_none()
             && self.studies.is_empty()
             && !drawings_changed
+    }
+}
+
+#[derive(PartialEq)]
+struct FeedDisplay {
+    settings: super::settings::OrderFlowSettings,
+    // Preserve whether the book follows the heatmap or has an explicit visibility setting.
+    book_visible: Option<bool>,
+}
+
+impl FeedDisplay {
+    fn capture(chart: &Chart) -> Option<Self> {
+        Some(Self {
+            book_visible: chart.feed_link.as_ref()?.book_visible,
+            settings: super::settings::ChartSettingsState::from_chart(chart).order_flow,
+        })
+    }
+
+    fn swap(&mut self, chart: &mut Chart) {
+        let Some(current) = Self::capture(chart) else {
+            return;
+        };
+        chart.set_liquidity_heatmap_config(self.settings.heatmap);
+        chart.set_liquidity_heatmap(self.settings.show_heatmap);
+        chart.set_order_book_view(self.settings.order_book.clone());
+        chart.set_volume_bubbles(
+            self.settings
+                .show_volume_bubbles
+                .then(|| self.settings.volume_bubbles.clone()),
+        );
+        if let Some(link) = &mut chart.feed_link {
+            link.book_visible = self.book_visible;
+            link.bubbles_config = self.settings.volume_bubbles.clone();
+        }
+        *self = current;
     }
 }
 
@@ -295,6 +332,7 @@ impl Chart {
                 main_series_visible: Some(self.main_series_visible),
                 price_targets_visible: Some(self.show_price_targets),
                 options: Some(self.chart_options.clone()),
+                order_flow: FeedDisplay::capture(self),
                 view: Some(self.get_time_scale_state()),
                 scale: Some(self.state.price_scale().clone()),
                 series_scales: self
@@ -369,6 +407,9 @@ impl Chart {
         }
         if action.options.as_ref() == Some(&self.chart_options) {
             action.options = None;
+        }
+        if action.order_flow == FeedDisplay::capture(self) {
+            action.order_flow = None;
         }
         if action.chart_type.as_ref() == Some(&(self.chart_type, self.chart_type_params.clone())) {
             action.chart_type = None;
@@ -787,6 +828,9 @@ impl Chart {
             let current = self.main_series_visible;
             self.set_main_series_visible(*visible);
             *visible = current;
+        }
+        if let Some(order_flow) = &mut action.order_flow {
+            order_flow.swap(self);
         }
         if let Some(options) = &mut action.options {
             std::mem::swap(&mut self.chart_options, options);
@@ -1680,6 +1724,51 @@ mod tests {
         assert!(chart.redo());
         assert_eq!(chart.series_settings().alerts, main_alerts);
         assert_eq!(chart.series_style(other).unwrap().alerts, other_alerts);
+    }
+
+    /// Feed display edits undo without turning inherited book visibility into an override.
+    #[test]
+    fn feed_display_changes_preserve_inherited_book_visibility_through_history() {
+        use crate::chart::overlays::BookProfile;
+        use crate::widget::settings::ChartSettingsState;
+        struct Feed;
+        impl crate::data::Datafeed for Feed {
+            fn history(
+                &self,
+                _: crate::data::HistoryRequest,
+                _: crate::data::Reply<crate::data::HistoryPage>,
+            ) {
+            }
+        }
+        for visible in [None, Some(false), Some(true)] {
+            let mut chart = chart(&[10.0], &[20.0]);
+            chart.attach_feed(std::sync::Arc::new(Feed), 1);
+            chart.feed_link.as_mut().unwrap().book_visible = visible;
+            chart.user_action(|chart| {
+                chart.set_liquidity_heatmap(true);
+                let mut view = chart.order_book_view();
+                view.profile = BookProfile::LargestOrder;
+                chart.set_order_book_view(view);
+                chart.set_volume_bubbles(Some(Default::default()));
+            });
+            assert!(chart.undo());
+            let settings = ChartSettingsState::from_chart(&chart).order_flow;
+            assert!(!settings.show_heatmap);
+            assert!(!settings.show_volume_bubbles);
+            assert_eq!(settings.order_book.profile, BookProfile::Total);
+            assert_eq!(chart.feed_link.as_ref().unwrap().book_visible, visible);
+            assert!(chart.redo());
+            let settings = ChartSettingsState::from_chart(&chart).order_flow;
+            assert!(settings.show_heatmap && settings.show_volume_bubbles);
+            assert_eq!(settings.order_book.profile, BookProfile::LargestOrder);
+            chart.set_liquidity_heatmap(false);
+            assert_eq!(
+                ChartSettingsState::from_chart(&chart)
+                    .order_flow
+                    .show_order_book,
+                visible.unwrap_or(false)
+            );
+        }
     }
 
     /// Undo of the main series' removal, as its legend row's Remove control records it, brings

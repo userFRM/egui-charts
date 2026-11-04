@@ -741,6 +741,17 @@ impl Chart {
         }
     }
 
+    /// The scale at `assignment` in the original price pane, including scales shared only by studies.
+    /// Returns `None` for an absent pane or secondary scale.
+    /// For a series in another pane, use [`series_price_scale`](Self::series_price_scale).
+    pub fn shared_price_scale(&self, assignment: SeriesScale) -> Option<&PriceScale> {
+        if !self.panes().contains(&PaneId::MAIN) {
+            return None;
+        }
+        (assignment == self.main_series_scale || self.series_scales.contains_key(&assignment))
+            .then(|| self.pane_price_scale(PaneId::MAIN, assignment))
+    }
+
     /// The scale shared by this present bar series, including its options and fitted range.
     pub fn series_price_scale(&self, id: SeriesId) -> Option<&PriceScale> {
         Some(self.pane_price_scale(self.series_pane(id)?, self.series_scale(id)?))
