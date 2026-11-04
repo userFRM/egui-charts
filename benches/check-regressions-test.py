@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import textwrap
 
 
 with tempfile.TemporaryDirectory() as directory:
@@ -72,3 +73,44 @@ print(f'I refs: {1000 + delta:,}', file=sys.stderr)
         assert "::error::Invalid instruction delta for frame-1000" in compared.stderr
 
 print("instruction comparison: PASS")
+
+# Cache identity must distinguish processor models and flags, but not the core count.
+workflow = script.parents[1] / ".github/workflows/ci.yml"
+measurement_job = workflow.read_text().split("\n  performance-measure:\n", 1)[1].split("\n  performance:\n", 1)[0]
+cache_step = measurement_job.split("      - name: Identify measurement cache\n", 1)[1].split("\n      - ", 1)[0]
+cache_script = textwrap.dedent(cache_step.split("        run: |\n", 1)[1])
+with tempfile.TemporaryDirectory() as directory:
+    work = Path(directory)
+    cpuinfo = work / "cpuinfo"
+    output = work / "output"
+    keys = []
+    for model, flags, cores in [
+        ("Processor A", "sse2 avx", 1),
+        ("Processor A", "sse2 avx", 4),
+        ("Processor B", "sse2 avx", 1),
+        ("Processor A", "sse2", 1),
+    ]:
+        cpuinfo.write_text("".join(
+            f"processor\t: {core}\nmodel name\t: {model}\nflags\t\t: {flags}\n\n"
+            for core in range(cores)
+        ))
+        output.write_text("")
+        subprocess.run(
+            ["bash", "-euo", "pipefail", "-c", cache_script.replace("/proc/cpuinfo", str(cpuinfo))],
+            env=dict(os.environ, GITHUB_OUTPUT=str(output), ImageVersion="image", WORKLOAD_HASH="workload", MEASURED_SHA="commit"),
+            check=True,
+        )
+        fields = dict(line.split("=", 1) for line in output.read_text().splitlines())
+        assert fields["processor"] == model
+        keys.append(fields["key"])
+    assert keys[0] == keys[1]
+    assert len(set(keys)) == 3
+
+# Both revisions and the baseline lookup must share this job's processor identity.
+assert "matrix.revision" not in measurement_job
+assert "key: ${{ steps.measurement.outputs.key }}-${{ github.sha }}" in measurement_job
+assert "key: ${{ steps.measurement.outputs.key }}-${{ needs.changes.outputs.base }}" in measurement_job
+assert "restore-keys:" not in measurement_job
+assert "      - name: Measure head instructions\n" in measurement_job
+assert "      - name: Measure base instructions\n" in measurement_job
+print("processor measurement cache: PASS")
