@@ -922,15 +922,23 @@ mod tests {
 
     /// A shape with both stops its fill at the middle of the stroke and shrinks it for a
     /// transparent stroke, so a border that is not opaque must leave the body a shape of its own.
+    /// A distinct opaque border is painted; one in the colour of an opaque body is not.
     #[test]
     #[cfg(feature = "drawings")]
-    fn heikin_border_that_is_not_opaque_keeps_the_whole_body_filled() {
+    fn heikin_border_is_shared_separate_or_skipped_by_its_colour() {
         use crate::model::ChartType;
         use crate::widget::test_frames::{frame, shapes};
-        let body = Color32::from_rgb(1, 100, 2);
-        for border in [
-            Color32::from_rgba_unmultiplied(3, 4, 102, 128),
-            Color32::TRANSPARENT,
+        let opaque = Color32::from_rgb(1, 100, 2);
+        let translucent = Color32::from_rgba_unmultiplied(3, 4, 102, 128);
+        let distinct = Color32::from_rgb(3, 4, 102);
+        // The stroke on the body's shape, and how many shapes of its own the border gets.
+        let shared = egui::Stroke::new(1.0, distinct);
+        for (body, border, body_stroke, border_shapes) in [
+            (opaque, translucent, egui::Stroke::NONE, 1),
+            (opaque, Color32::TRANSPARENT, egui::Stroke::NONE, 1),
+            (opaque, distinct, shared, 0),
+            (opaque, opaque, egui::Stroke::NONE, 0),
+            (translucent, translucent, egui::Stroke::NONE, 1),
         ] {
             let ctx = Context::default();
             let mut chart = Chart::new(BarData::from_bars(vec![Bar::new(
@@ -952,15 +960,25 @@ mod tests {
             frame(&ctx, &mut chart, 0.0, vec![]);
             let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
             let plot = chart.get_rendered_price_rect();
-            let bodies: Vec<_> = painted
+            let rects: Vec<_> = painted
                 .iter()
                 .filter_map(|shape| match shape {
-                    Shape::Rect(r) if plot.contains(r.rect.center()) && r.fill == body => Some(r),
+                    Shape::Rect(r) if plot.contains(r.rect.center()) => Some(r),
                     _ => None,
                 })
                 .collect();
-            assert_eq!(bodies.len(), 1, "{border:?}");
-            assert_eq!(bodies[0].stroke, egui::Stroke::NONE, "{border:?}");
+            let bodies: Vec<_> = rects.iter().filter(|r| r.fill == body).collect();
+            assert_eq!(bodies.len(), 1, "{body:?} {border:?}");
+            assert_eq!(bodies[0].stroke, body_stroke, "{body:?} {border:?}");
+            let own = rects
+                .iter()
+                .filter(|r| {
+                    r.fill == Color32::TRANSPARENT
+                        && r.stroke.width > 0.0
+                        && r.stroke.color == border
+                })
+                .count();
+            assert_eq!(own, border_shapes, "{body:?} {border:?}");
         }
     }
 

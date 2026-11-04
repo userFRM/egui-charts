@@ -412,14 +412,16 @@ mod tests {
                     )]));
                     chart.set_chart_type(ChartType::Heikin);
                     chart.config_mut().show_volume = false;
+                    let mut params = chart.chart_type_params().clone();
+                    // A border in the colour of an opaque body paints nothing.
+                    params.styles.heikin.border_up = egui::Color32::from_rgb(3, 4, 102);
                     if label == "Reset to defaults" {
-                        let mut params = chart.chart_type_params().clone();
                         params.styles.heikin.body_visible = false;
                         params.styles.heikin.border_visible = false;
                         params.styles.heikin.wick_visible = false;
                         params.styles.heikin.real_price_only = true;
-                        chart.set_chart_type_params(params);
                     }
+                    chart.set_chart_type_params(params);
                     let before = ChartSettingsState::from_chart(&chart);
                     let mut dialog = SettingsDialog::new();
                     dialog.set_control_visible(crate::ui::Control::Templates, false);
@@ -494,7 +496,11 @@ mod tests {
                     });
                     let wick = painted.iter().any(|s| matches!(s, Shape::LineSegment { points, stroke }
                         if plot.contains(points[0]) && points[0].x == points[1].x && stroke.color == style.wick_up));
-                    assert_eq!(border, style.border_visible);
+                    // Only the defaults restored by the reset share the body's colour.
+                    assert_eq!(
+                        border,
+                        style.border_visible && style.border_up != style.body_up
+                    );
                     assert_eq!(wick, style.wick_visible);
                 }
             }

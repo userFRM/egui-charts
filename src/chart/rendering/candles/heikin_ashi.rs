@@ -162,6 +162,12 @@ pub(super) fn render(
             }
         }
         let rect = body_rect(x, params.bar_width(), &y);
+        // A border in the colour of an opaque body changes no pixel.
+        let border_width = if style.body_visible && border == body && body.is_opaque() {
+            0.0
+        } else {
+            border_width
+        };
         if style.body_visible && border_width > 0.0 && !border.is_opaque() {
             // The tessellator stops a shared fill at the middle of the stroke, so only an opaque
             // border may share the body's shape.
