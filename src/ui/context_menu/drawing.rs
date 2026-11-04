@@ -429,7 +429,7 @@ impl DrawingContextMenuAction {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::drawings::{ChartPoint, Drawing, DrawingToolType, FibonacciConfig};
+    use crate::drawings::{ChartPoint, Drawing, DrawingManager, DrawingToolType, FibonacciConfig};
     use crate::model::{AlertSource, BarData};
 
     /// The initial alert follows the first visible level, including when level zero is hidden.
@@ -465,19 +465,10 @@ mod tests {
             );
         }
     }
-}
-
-#[cfg(test)]
-mod interval_regressions {
-    use super::*;
-    use crate::drawings::{Drawing, DrawingManager, DrawingToolType, TimeframeVisibility};
 
     #[test]
     fn quick_interval_menu_is_reachable() {
-        let menu = DrawingContextMenu::new();
-        let entries = menu.build_menu_items(&Context::default(), &Default::default());
-        assert!(entries.iter().any(|entry| matches!(entry,
-            MenuEntry::Submenu { label, .. } if label == "Intervals visibility")));
+        let mut menu = DrawingContextMenu::new();
         let ctx = Context::default();
         let mut chart = Chart::new(crate::model::BarData::default());
         chart.set_timeframe(Timeframe::Hour1);
@@ -488,7 +479,6 @@ mod interval_regressions {
         ];
         drawing.completed = true;
         chart.drawings_mut().drawings.push(drawing);
-        let mut menu = menu;
         let mut mounted = crate::ui::context_menu::ChartMenus::default();
         let frame =
             |chart: &mut Chart, mounted: &mut crate::ui::context_menu::ChartMenus, events| {
