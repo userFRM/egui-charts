@@ -792,17 +792,14 @@ mod tests {
             }
             assert_eq!(minute.bars().len(), 1);
             let rebuilt = &minute.bars()[&start];
-            assert_eq!(
-                (rebuilt.volume(), rebuilt.min_delta, rebuilt.max_delta),
-                (profile.volume(), profile.min_delta, profile.max_delta)
-            );
-            for (&level, row) in &rebuilt.levels {
-                let allocated = &profile.levels[&level];
-                assert_eq!(
-                    (row.bid, row.ask, row.unknown),
-                    (allocated.bid, allocated.ask, allocated.unknown)
-                );
-            }
+            let uncounted = |bar: &FootprintBar| {
+                let mut bar = bar.clone();
+                for row in bar.levels.values_mut() {
+                    (row.bid_trades, row.ask_trades, row.unknown_trades) = (0, 0, 0);
+                }
+                bar
+            };
+            assert_eq!(uncounted(rebuilt), uncounted(&profile));
             assert_eq!(rebuilt.trades(), trades.len() as u64);
             // A split execution contributes once to each of the two bars it reaches.
             assert_eq!(
@@ -860,8 +857,8 @@ mod tests {
         }
     }
 
-    /// 2 + 6 + 4 + 8 = 20 from four executions, so the mean is 5. The inclusive
-    /// size filter 5..=8 retains 6 and 8: volume 14, two executions, mean 7.
+    /// 2 + 6 + 4 + 8 = 20 from four executions, so the mean is 5. A size filter from 5
+    /// upward retains 6 and 8: volume 14, two executions, mean 7.
     #[test]
     fn execution_counts_follow_sides_filters_and_grouping() {
         let start = "2026-01-05T10:00:00Z".parse().unwrap();
@@ -874,7 +871,7 @@ mod tests {
         ];
         for (min, max, sides, volume, average) in [
             (0.0, f64::MAX, (1, 2, 1), 20.0, Some(5.0)),
-            (5.0, 8.0, (0, 1, 1), 14.0, Some(7.0)),
+            (5.0, f64::MAX, (0, 1, 1), 14.0, Some(7.0)),
             (2.0, 4.0, (1, 1, 0), 6.0, Some(3.0)),
             (9.0, f64::MAX, (0, 0, 0), 0.0, None),
         ] {

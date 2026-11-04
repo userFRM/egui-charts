@@ -802,22 +802,20 @@ pub fn render_footprint_statistics_rows(
         {
             continue;
         }
-        let values: Vec<_> = rows
-            .iter()
-            .map(|statistic| match statistic {
-                FootprintStatistic::Volume => Some(row.volume()),
-                FootprintStatistic::Bid => Some(row.bid),
-                FootprintStatistic::Ask => Some(row.ask),
-                FootprintStatistic::Delta => Some(row.delta()),
-                FootprintStatistic::MinDelta => Some(row.min_delta),
-                FootprintStatistic::MaxDelta => Some(row.max_delta),
-                FootprintStatistic::CumulativeDelta => Some(cumulative),
-                FootprintStatistic::DeltaPercent => row.delta_percent(),
-                FootprintStatistic::AskBidRatio => (row.bid > 0.0).then(|| row.ask / row.bid),
-                FootprintStatistic::Trades => Some(row.trades() as f64),
-                FootprintStatistic::AverageSize => row.average_size(),
-            })
-            .collect();
+        let values = [
+            Some(row.volume()),
+            Some(row.bid),
+            Some(row.ask),
+            Some(row.delta()),
+            Some(row.min_delta),
+            Some(row.max_delta),
+            Some(cumulative),
+            row.delta_percent(),
+            (row.bid > 0.0).then(|| row.ask / row.bid),
+            Some(row.trades() as f64),
+            row.average_size(),
+        ];
+        let values: Vec<_> = rows.iter().map(|row| values[*row as usize]).collect();
         columns.push((x, values));
     }
     let mut size = 10.0;
@@ -1697,7 +1695,10 @@ mod tests {
             (60.0, false, false, 136.0),
             (40.0, true, true, 136.0),
             (60.0, true, false, 90.0),
+            (60.0, true, false, 112.0),
         ] {
+            // The default renderer keeps its nine rows, which fit the panes hosts already reserve.
+            let count = if height == 112.0 { 9 } else { 11 };
             let rect = Rect::from_min_size(rect.min, vec2(rect.width(), height));
             let mut shown = flow.clone();
             let mut bars = bars.clone();
@@ -1732,14 +1733,19 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| {
-                    render_footprint_statistics_rows(
-                        ui.painter(),
-                        &map,
-                        &bars,
-                        if available { &shown } else { &empty },
-                        Color32::WHITE,
-                        &FootprintStatistic::ALL,
-                    )
+                    let flow = if available { &shown } else { &empty };
+                    if count == 9 {
+                        render_footprint_statistics(ui.painter(), &map, &bars, flow, Color32::WHITE)
+                    } else {
+                        render_footprint_statistics_rows(
+                            ui.painter(),
+                            &map,
+                            &bars,
+                            flow,
+                            Color32::WHITE,
+                            &FootprintStatistic::ALL,
+                        )
+                    }
                 },
             );
             output.textures_delta.clear();
@@ -1775,8 +1781,8 @@ mod tests {
             }
             assert_eq!(
                 texts.len(),
-                33,
-                "eleven labels and two complete columns at {spacing}"
+                count * 3,
+                "{count} labels and two complete columns at {spacing}"
             );
             assert_eq!(
                 texts
@@ -1804,8 +1810,8 @@ mod tests {
             .into_iter()
             .enumerate()
             {
-                for (line, expected) in expected.into_iter().enumerate() {
-                    let text = texts[11 + column * 11 + line];
+                for (line, expected) in expected.into_iter().take(count).enumerate() {
+                    let text = texts[count + column * count + line];
                     assert_eq!(text.galley.text(), expected);
                     assert!(
                         (text.pos.x + text.galley.size().x * 0.5 - map.idx_to_x(column)).abs()
