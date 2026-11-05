@@ -46,7 +46,7 @@ Builder API,Datafeed API,Datafeed configuration handshake,unverified,host,src/da
 Builder API,Datafeed API,Depth of market feed,unverified,host,src/ui/trading/dom.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/widget/feed/mod.rs,
 Builder API,Datafeed API,End of history and gap signalling,unverified,host,src/data/mod.rs;src/widget/feed/mod.rs;src/widget/studies_data.rs,
 Builder API,Datafeed API,Error and retry signalling,unverified,host,src/widget/series/mod.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/widget/feed/mod.rs,
-Builder API,Datafeed API,Extended hours,incomplete,host,src/model/instrument.rs;src/data/mod.rs;examples/demo/sampledata.rs;examples/demo/live.rs;src/widget/feed/mod.rs;examples/demo/controller.rs;src/widget/frame/mod.rs;src/widget/frame/sessions.rs,
+Builder API,Datafeed API,Extended hours,incomplete,host,src/model/instrument.rs;src/data/mod.rs;examples/demo/sampledata.rs;examples/demo/live.rs;src/widget/feed/mod.rs;examples/demo/controller.rs;src/widget/frame/mod.rs;src/widget/frame/sessions.rs;src/data/replay.rs,
 Builder API,Datafeed API,HTTP history and streaming adapter,unverified,host,src/data/http/mod.rs;src/data/http/protocol.rs;src/services/search.rs;examples/network_feed.rs,
 Builder API,Datafeed API,History paging when scrolling back,unverified,host,src/widget/feed/mod.rs;src/widget/studies_data.rs;src/data/merge.rs;src/widget/feed/pump.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/widget/frame/mod.rs;examples/demo/sampledata.rs;examples/demo/live.rs,1926
 Builder API,Datafeed API,History request parameters,unverified,host,src/data/mod.rs;src/widget/feed/mod.rs;examples/demo/feeds.rs;examples/demo/live.rs;examples/demo/sampledata.rs,1926
