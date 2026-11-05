@@ -39,8 +39,9 @@ pub use domain::{
     DrawingOptions, DrawingTemplate, DrawingToolType, ElliottDegree, FibonacciConfig,
     FibonacciLevel, FolderSync, FontWeight, GannConfig, GannFanDirection, GannLevel, GhostCandle,
     GhostFeedConfig, HandlePos, ImageConfig, LineMeasurementPosition, LineMeasurements,
-    ParseToolTypeError, PitchforkConfig, PitchforkLevel, PositionSize, PositionSizing,
-    RegressionTrendConfig, TimeframeVisibility, VwapBand, VwapConfig,
+    LineTextHorizontalAlign, LineTextVerticalAlign, ParseToolTypeError, PitchforkConfig,
+    PitchforkLevel, PositionSize, PositionSizing, RegressionTrendConfig, TimeframeVisibility,
+    VwapBand, VwapConfig,
 };
 
 // Re-export manager types
