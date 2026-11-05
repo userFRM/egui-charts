@@ -9,8 +9,8 @@ const tables = areas.map((area) => {
   const groups = [...new Set(rows.map((row) => row.group))].map((name) => {
     const members = rows.filter((row) => row.group === name);
     const summary = counts(members);
-    return { name, ...summary, share: Math.round(summary.done / members.length * 100),
-      incomplete: members.filter((feature) => feature.status !== 'done') };
+    return { name, ...summary, share: Math.round(summary.verified / members.length * 100),
+      pending: members.filter((feature) => feature.status !== 'verified') };
   });
   return { area, groups, ...counts(rows), share: percentage(rows) };
 });
@@ -21,21 +21,21 @@ const tables = areas.map((area) => {
 >
 <div class="feature-map" set:html={progressSvg()} />
 <p>Generated from <a href={`${repo}/docs/progress/features.csv`}>docs/progress/features.csv</a> by <a href={`${repo}/docs/site/src/lib/progress-svg.ts`}>docs/site/src/lib/progress-svg.ts</a> on every push to <code>main</code>.</p>
-<p>In the map, green features are done, yellow ones partial and grey ones missing. A feature is done when its whole behaviour works; partial and missing features count as not done. A host feature is done when the library provides its interface and UI; the application supplies the data, account or storage behind it. <a href={`${repo}/CONTRIBUTING.md#feature-status`}>Counting rules</a>.</p>
+<p>In the map, green means verified by an independent check of every option, default and interaction; blue means implemented but unverified; yellow means incomplete; grey means missing. Percentages and badges count only verified features. For host features, verification covers the library interface and UI; the application supplies data, accounts and storage. <a href={`${repo}/CONTRIBUTING.md#feature-status`}>Counting rules</a>.</p>
 {tables.map((table) => (
   <section aria-labelledby={slug(table.area)}>
     <h2 id={slug(table.area)}>{table.area}</h2>
     <div class="table">
       <table aria-labelledby={slug(table.area)}>
-        <thead><tr><th scope="col">Group</th><th scope="col">Done</th><th scope="col">Partial</th><th scope="col">Missing</th><th scope="col">Total</th><th scope="col">%</th></tr></thead>
-        <tbody>{table.groups.map((group) => <tr><th scope="row">{group.name}</th><td>{group.done}</td><td>{group.partial}</td><td>{group.missing}</td><td>{group.total}</td><td>{group.share}%</td></tr>)}</tbody>
-        <tfoot><tr><th scope="row">Total</th><td>{table.done}</td><td>{table.partial}</td><td>{table.missing}</td><td>{table.total}</td><td>{table.share}%</td></tr></tfoot>
+        <thead><tr><th scope="col">Group</th><th scope="col">Verified</th><th scope="col">Unverified</th><th scope="col">Incomplete</th><th scope="col">Missing</th><th scope="col">Total</th><th scope="col">Verified %</th></tr></thead>
+        <tbody>{table.groups.map((group) => <tr><th scope="row">{group.name}</th><td>{group.verified}</td><td>{group.unverified}</td><td>{group.incomplete}</td><td>{group.missing}</td><td>{group.total}</td><td>{group.share}%</td></tr>)}</tbody>
+        <tfoot><tr><th scope="row">Total</th><td>{table.verified}</td><td>{table.unverified}</td><td>{table.incomplete}</td><td>{table.missing}</td><td>{table.total}</td><td>{table.share}%</td></tr></tfoot>
       </table>
     </div>
-    {table.groups.filter((group) => group.incomplete.length).map((group) => (
+    {table.groups.filter((group) => group.pending.length).map((group) => (
       <details>
-        <summary>{group.name}: {group.partial} partial, {group.missing} missing</summary>
-        <ul>{group.incomplete.map((feature) => <li>{feature.feature} ({feature.status}){feature.issues && <>: {feature.issues.split(';').map((issue, index) => <>{index > 0 && ', '}<a href={`https://github.com/userFRM/egui-charts/issues/${issue}`}>#{issue}</a></>)}</>}</li>)}</ul>
+        <summary>{group.name}: {group.unverified} unverified, {group.incomplete} incomplete, {group.missing} missing</summary>
+        <ul>{group.pending.map((feature) => <li>{feature.feature} ({feature.status}){feature.issues && <>: {feature.issues.split(';').map((issue, index) => <>{index > 0 && ', '}<a href={`https://github.com/userFRM/egui-charts/issues/${issue}`}>#{issue}</a></>)}</>}</li>)}</ul>
       </details>
     ))}
   </section>

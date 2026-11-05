@@ -1,6 +1,6 @@
 # egui-charts Roadmap
 
-[Feature status and progress](https://userfrm.github.io/egui-charts/docs/progress/)
+[Feature status and progress](https://userfrm.github.io/egui-charts/docs/progress/) distinguishes independently verified, unverified, incomplete and missing behaviour. Checked items below describe implementation; the status page records independent verification.
 
 The crate provides an engine without egui, an egui 0.37 chart widget, and terminal UI components. Checked items describe working capabilities, including public APIs that applications can compose. Unchecked items describe remaining library work. `ui::terminal::Terminal` assembles the components on the host's feed and services and lets the application intercept their actions; it returns those it does not perform yet, and the demo still routes the components by hand.
 

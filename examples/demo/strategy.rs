@@ -594,7 +594,10 @@ mod tests {
                 matches!(&shape.shape, Shape::Path(marker)
                     if marker.closed && marker.points.len() == 3
                         && marker.stroke.width == 1.0
-                        && (marker.points[0].x - point.x).abs() < 0.1)
+                        && (marker.points[0].x - point.x).abs() < 0.1
+                        // Sample bar marks are triangles of the same stroke at the same bars;
+                        // a fill marker is the narrower one.
+                        && (marker.points[2].x - marker.points[1].x - 10.0).abs() < 0.01)
                     && bounds.width() <= 16.0
                     && bounds.height() <= 16.0
                     && bounds.expand(0.1).contains(point)
