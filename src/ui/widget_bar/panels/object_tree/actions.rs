@@ -71,10 +71,21 @@ pub enum ObjectTreeAction {
     MoveToPane(usize, crate::widget::PaneId),
 
     // === Folders ===
-    /// Create a named folder under a parent path and move selected drawings into it.
+    /// Select every drawing in a folder and its descendants (clears other selections).
+    SelectFolder(Vec<String>),
+    /// Add a folder's drawings to the selection, or remove them if all are selected.
+    AddFolderToSelection(Vec<String>),
+    /// Create a named folder under a parent path and move selected drawings into it. Folders
+    /// whose drawings are all selected move whole, keeping their structure.
     CreateFolder(Vec<String>, String),
     /// Move drawing ids into an existing folder, or an empty path for the root.
     MoveToFolder(Vec<usize>, Vec<String>),
+    /// Move a folder with its contents under a new parent, or an empty path for the root.
+    MoveFolder(Vec<String>, Vec<String>),
+    /// Delete a folder and its descendants as one undo step, keeping any locked drawings.
+    DeleteFolder(Vec<String>),
+    /// Set the synchronization of a top-level folder, which its descendants follow.
+    SetFolderSync(Vec<String>, Option<crate::drawings::FolderSync>),
     /// Set visibility of every drawing in a folder and its descendants.
     SetFolderVisible(Vec<String>, bool),
     /// Set locking of every drawing in a folder and its descendants.
@@ -112,6 +123,8 @@ impl ObjectTreeAction {
                 | Self::RangeSelect(_)
                 | Self::ClearSelection
                 | Self::SelectAll
+                | Self::SelectFolder(_)
+                | Self::AddFolderToSelection(_)
         )
     }
 
@@ -132,6 +145,9 @@ impl ObjectTreeAction {
                 | Self::MoveToPane(_, _)
                 | Self::CreateFolder(_, _)
                 | Self::MoveToFolder(_, _)
+                | Self::MoveFolder(_, _)
+                | Self::DeleteFolder(_)
+                | Self::SetFolderSync(_, _)
                 | Self::SetFolderVisible(_, _)
                 | Self::SetFolderLocked(_, _)
                 | Self::RemoveIndicator(_)
