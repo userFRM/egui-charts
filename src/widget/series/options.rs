@@ -227,6 +227,7 @@ impl SeriesOptions {
                     wick_down: self.down_color,
                     ..Default::default()
                 },
+                hlc_area: crate::model::HlcAreaStyle::with_colors(self.up_color, self.down_color),
                 heikin: crate::model::HeikinStyle {
                     body_up: self.up_color,
                     body_down: self.down_color,

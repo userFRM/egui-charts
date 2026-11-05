@@ -22,7 +22,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [ ] Expose the standalone point-and-figure close-only source in chart parameters and settings.
 - [x] Range charts build their bars from the supplied executions, falling back to the OHLC approximation while the chart holds none; `Chart::range_bar_source` reports which one is shown.
 - [ ] Offer proportional volume-candle widths without the current minimum width.
-- [ ] Expose HLC fill opacity and close-line width, and Kagi stroke widths.
+- [x] HLC area charts draw high, low and close lines with their own colour, width and style, and two fills with their own colour and opacity; high line, low line and each fill can be hidden. The settings persist in layouts and undo. Kagi stroke widths are exposed in the settings.
 - [ ] Render the TPO single-print highlights already calculated by the engine.
 
 ### Pan, Zoom and Cursor
