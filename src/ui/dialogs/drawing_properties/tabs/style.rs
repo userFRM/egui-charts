@@ -157,6 +157,7 @@ impl StyleTab {
                 let measurements = &mut template.settings.line_measurements;
                 for (label, value) in [
                     ("Middle point", &mut measurements.midpoint),
+                    ("Price labels", &mut measurements.price_labels),
                     ("Keep statistics visible", &mut measurements.persistent),
                     ("Price change", &mut measurements.price_change),
                     ("Percentage change", &mut measurements.percent_change),

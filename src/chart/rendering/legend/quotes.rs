@@ -311,15 +311,28 @@ mod tests {
             ] {
                 assert!(values.iter().any(|value| value == text), "{text}");
             }
-            for text in [
-                "BB",
-                "2 2",
-                "BB Upper(2, 2): 110.00",
-                "BB Middle(2, 2): 100.00",
-                "BB Lower(2, 2): 90.00",
-            ] {
-                assert!(b.iter().any(|value| value == text), "{text}");
-            }
+            // The title, the inputs, then the basis and the upper and lower band, without names.
+            let row = |shapes: &[egui::epaint::ClippedShape]| {
+                let text = |shape: &egui::epaint::ClippedShape| match &shape.shape {
+                    Shape::Text(text) if text.pos.x < 600.0 => Some(text.clone()),
+                    _ => None,
+                };
+                let title = shapes
+                    .iter()
+                    .filter_map(text)
+                    .find(|text| text.galley.text() == "BB")
+                    .unwrap();
+                let mut row: Vec<_> = shapes
+                    .iter()
+                    .filter_map(text)
+                    .filter(|text| text.pos.y == title.pos.y)
+                    .collect();
+                row.sort_by(|a, b| a.pos.x.total_cmp(&b.pos.x));
+                row.iter()
+                    .map(|text| text.galley.text().to_owned())
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(row(&second), ["BB", "2 2", "100.00", "110.00", "90.00"]);
             for text in ["104.00", "106.00", "2.00", "SELL", "BUY"] {
                 assert!(a.iter().any(|value| value == text) && b.iter().any(|value| value == text));
             }

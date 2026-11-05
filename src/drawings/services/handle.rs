@@ -900,6 +900,7 @@ mod tests {
             DrawingToolType::TrendLine,
             DrawingToolType::ExtendedLine,
             DrawingToolType::Ray,
+            DrawingToolType::InfoLine,
         ] {
             let mut line = create_test_drawing(tool, vec![pos2(100.0, 100.0), pos2(300.0, 200.0)]);
             assert!(

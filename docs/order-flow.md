@@ -23,7 +23,7 @@ anywhere inside a bar; the bars it does not rebuild stay candles, without cells 
 
 The source beside the running example supplies candles independently, pushes chronological
 fills through `Footprint` and `OrderFlowInput`, and reads `complete_from` and the last book.
-It uses the default footprint presentation. This is a finite integration sample; a production
+It uses the default footprint presentation with the theme's text colour. This is a finite integration sample; a production
 host owns retrieval, stream sequencing, retention and recovery. See
 [recording and replay](order-flow-replay.md#try-a-recording) for the same live sink driven by recorded events.
 
@@ -33,8 +33,11 @@ new executions with [`push`](https://userfrm.github.io/egui-charts/docs/api/egui
 volume and remain outside bid/ask delta. [`Chart::show_footprint`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.show_footprint) draws volume, delta, trade count and
 average size columns, profiles, grouped rows, imbalances, POC and value area in place of the price series. Its
 [`FootprintConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/overlays/struct.FootprintConfig.html) controls the presentation: cell colour, number abbreviation and zero display,
-value-sized fonts, extreme ask/bid ratios and the pullback range. Automatic grouping affects
-display only.
+value-sized fonts, extreme ask/bid ratios, the pullback range and the summary below each bar. Automatic grouping affects
+display only. By default a bar is a ladder: sell volume left and buy volume right of a narrow candle body, each
+side shaded in four strengths by where its volume falls in that side's range. The POC row is filled, a side that
+dominates under the imbalance settings gets a strip along its outer edge, and two dotted lines mark the value area.
+`text_color` defaults to white, so set the theme's text colour on a light chart.
 
 ## Liquidity
 
@@ -46,11 +49,16 @@ lost. A merged historical column averages size over its span and uses its best r
 the inside-market path; it cannot restore individual quotes from before merging.
 
 The renderer stores one texel per time column and grouped price level in texture atlases. New
-or corrected columns upload only their column. Each column uses `ln(1 + size) / ln(1 + max_size)`
-contrast; bid and ask size at a crossed price are summed and their colours blended. Linear
-scales draw a quad per tile and column. Logarithmic scales map each row edge individually to
-preserve price geometry. Expired history releases texture slots. No tile side exceeds the
-backend limit. The current book appears as a size profile at the right of the pane.
+or corrected columns upload only their column. One colour scale encodes size, the same for bids
+and asks, at `ln(1 + size) / ln(1 + cut_off)`; its contrast against the chart background grows
+with size and sizes near zero fade away. The cut-off is by default the size that 96% of the held
+rows do not exceed, shared by every column; the held columns redraw only when it moves by more
+than 10%. Bid and ask size at a crossed price are summed. Best bid and ask are 2 point lines in
+the chart's bullish and bearish colours. Linear scales draw a quad per tile and column.
+Logarithmic scales map each row edge individually to preserve price geometry. Expired history
+releases texture slots. No tile side exceeds the backend limit. The current book appears as a size
+profile at the right of the pane; a key and the row's exact price, side and size appear while the
+pointer is over it.
 
 [`set_volume_bubbles(Some(Default::default()))`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_volume_bubbles) overlays executed volume using the same feed's
 trades. Disabling the heatmap releases its textures and retains configured depth history.

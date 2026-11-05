@@ -1,6 +1,7 @@
 //! Footprint cells painted through the chart's existing price and time mapping.
 
 use crate::chart::coords::ChartMapping;
+use crate::chart::rendering::draw_dashed_line;
 use crate::data::{Footprint, FootprintBar, FootprintLevel, NodeSensitivity};
 use crate::model::{Bar, ChartTypeParams, FootprintStatistic};
 use crate::theme::ThemeExt;
@@ -12,6 +13,11 @@ use std::sync::Arc;
 
 /// The smallest and largest font size a footprint number is drawn at, in points.
 const FONT_LIMITS: [f32; 2] = [8.0, 24.0];
+/// The share of a ladder column each of its side cells takes.
+const LADDER_CELL_SHARE: f32 = 0.39;
+/// The height of a ladder bar's totals and box, three rows of the 10 point font and their margins.
+#[cfg(feature = "studies")]
+const INFO_BOX_HEIGHT: f32 = 46.0;
 
 pub use crate::model::{FootprintColor, FootprintMode};
 
@@ -30,7 +36,9 @@ pub struct FootprintConfig {
     pub ask_color: Color32,
     /// Sell colour.
     pub bid_color: Color32,
-    /// Text colour and POC outline.
+    /// Text colour and POC outline, or POC fill under [`FootprintColor::VolumeSteps`], which
+    /// picks black or white numbers for each cell instead. The default suits a dark chart; set the
+    /// theme's text colour on a light one, or the fill, lines and labels vanish.
     pub text_color: Color32,
     /// Cell fill for balanced or unclassified executions.
     pub neutral_color: Color32,
@@ -51,9 +59,14 @@ pub struct FootprintConfig {
     pub imbalance_min_volume: f64,
     /// Compare to the opposite side one price away instead of at the same price.
     pub diagonal: bool,
-    /// Outline the highest-volume row when its cells are large enough for the stroke.
+    /// Put a strip along the outer edge of a side that dominates under the imbalance settings,
+    /// under [`FootprintColor::VolumeSteps`].
+    pub show_imbalance: bool,
+    /// Outline the highest-volume row when its cells are large enough for the stroke, or fill it
+    /// under [`FootprintColor::VolumeSteps`].
     pub show_poc: bool,
-    /// Shade the contiguous value area containing this share of the bar volume.
+    /// Mark the contiguous value area containing this share of the bar volume: dotted lines
+    /// along its edges under [`FootprintColor::VolumeSteps`], otherwise a faint fill.
     pub value_area: Option<f64>,
     /// Trade profiles: the guide along the top edge of the value area (VAH); `None` hides it.
     pub value_area_high: Option<Stroke>,
@@ -77,6 +90,9 @@ pub struct FootprintConfig {
     pub extreme_ratio: bool,
     /// Outline the rows of the bar's pullback range, see [`pullback_range`].
     pub pullback: bool,
+    /// Write the sell and buy totals and a delta and total volume box below each bar of a
+    /// [`FootprintMode::Ladder`] column, while its numbers fit.
+    pub info_box: bool,
     /// Reserve a per-bar statistics table below the chart's price pane.
     /// Used by the footprint chart type and [`crate::widget::Chart::show_footprint`].
     pub statistics: bool,
@@ -91,9 +107,9 @@ pub struct FootprintConfig {
 impl Default for FootprintConfig {
     fn default() -> Self {
         Self {
-            modes: vec![FootprintMode::BidAsk],
-            profile: true,
-            color_by: FootprintColor::Delta,
+            modes: vec![FootprintMode::Ladder],
+            profile: false,
+            color_by: FootprintColor::VolumeSteps,
             ask_color: crate::tokens::DESIGN_TOKENS.semantic.chart.bullish,
             bid_color: crate::tokens::DESIGN_TOKENS.semantic.chart.bearish,
             text_color: Color32::WHITE,
@@ -104,16 +120,18 @@ impl Default for FootprintConfig {
             imbalance_ratio: 3.0,
             imbalance_min_volume: 0.0,
             diagonal: true,
+            show_imbalance: true,
             show_poc: true,
             value_area: Some(0.7),
             value_area_high: Some(Stroke::new(1.0, Color32::GRAY)),
             value_area_low: Some(Stroke::new(1.0, Color32::GRAY)),
             node_sensitivity: NodeSensitivity::default(),
-            abbreviate: false,
+            abbreviate: true,
             show_zero: true,
             font_size: [10.0, 10.0],
             extreme_ratio: false,
             pullback: false,
+            info_box: true,
             statistics: false,
             // Keep the existing volume statistics selected; execution metrics are opt-in.
             statistics_rows: FootprintStatistic::ALL[..9].to_vec(),
@@ -140,6 +158,7 @@ impl FootprintConfig {
             imbalance_ratio: params.footprint_imbalance_ratio,
             imbalance_min_volume: params.footprint_imbalance_min_volume,
             diagonal: params.footprint_diagonal,
+            show_imbalance: params.footprint_imbalance,
             show_poc: params.footprint_poc,
             value_area: params.footprint_value_area,
             abbreviate: params.footprint_abbreviate,
@@ -147,6 +166,7 @@ impl FootprintConfig {
             font_size: params.footprint_font_size,
             extreme_ratio: params.footprint_extreme_ratio,
             pullback: params.footprint_pullback,
+            info_box: params.footprint_info_box,
             statistics: params.footprint_statistics,
             statistics_rows: params.footprint_statistics_rows.clone(),
             #[cfg(feature = "studies")]
@@ -203,7 +223,12 @@ pub fn pullback_range(bar: &Bar, flow: &Footprint) -> Option<(i64, i64)> {
 pub(crate) fn footprint_column_width(bar_spacing: f32, config: &FootprintConfig) -> Option<f32> {
     let columns = config.modes.len().min(4);
     let width = bar_spacing * 0.92 / columns as f32;
-    (columns > 0 && bar_spacing.is_finite() && width - 0.5 >= 1.0).then_some(width)
+    let cell = if has_ladder(config) {
+        (width - 0.5) * LADDER_CELL_SHARE
+    } else {
+        width - 0.5
+    };
+    (columns > 0 && bar_spacing.is_finite() && cell >= 1.0).then_some(width)
 }
 
 /// Draws visible footprint bars, bounded by the visible bar range and clipped to `mapping.rect`.
@@ -216,8 +241,9 @@ pub(crate) fn footprint_column_width(bar_spacing: f32, config: &FootprintConfig)
 /// including grouped rows. Fractional volumes below 100 retain
 /// up to three decimals; nonzero magnitudes below 0.001 use scientific notation. Only display
 /// grouping runs during painting. Cells under a point wide are too narrow to read and are skipped
-/// before looking up executions. A price spine occupies a separate gutter to the left of each
-/// bar: the opening tick points left, the closing tick right, and the colour follows price direction.
+/// before looking up executions. Unless a [`FootprintMode::Ladder`] column draws its candle, a
+/// price spine occupies a separate gutter to the left of each bar: the opening tick points left,
+/// the closing tick right, and the colour follows price direction.
 pub fn render_footprint(
     painter: &Painter,
     mapping: &ChartMapping,
@@ -245,6 +271,8 @@ pub fn render_footprint(
     let mut mesh = Mesh::default();
     let columns = config.modes.len().min(4);
     let text_background = painter.ctx().active_theme().chart.bg.to_opaque();
+    let steps = config.color_by == FootprintColor::VolumeSteps;
+    let spine_drawn = !has_ladder(config);
     // Use the existing half-gap so price markers do not shrink execution columns.
     let gutter = (mapping.bar_spacing * 0.04).min(2.5);
     // Bars cut by dropped executions are drawn as candles, not as complete footprint bars.
@@ -271,7 +299,10 @@ pub fn render_footprint(
         let stroke = Stroke::new((gutter * 0.2).clamp(0.25, 1.0), color);
         let [high, low, open, close] =
             [bar.high, bar.low, bar.open, bar.close].map(|price| mapping.price_to_y(price));
-        if price_right > price_left && [high, low, open, close].iter().all(|y| y.is_finite()) {
+        if spine_drawn
+            && price_right > price_left
+            && [high, low, open, close].iter().all(|y| y.is_finite())
+        {
             painter.line_segment([pos2(spine, high), pos2(spine, low)], stroke);
             painter.line_segment(
                 [pos2(spine, open), pos2(spine, close)],
@@ -299,6 +330,16 @@ pub fn render_footprint(
             .values()
             .map(|row| row.delta().abs())
             .fold(0.0, f64::max);
+        let side_range = |side: fn(&FootprintLevel) -> f64| {
+            shown
+                .levels
+                .values()
+                .map(side)
+                .fold([f64::INFINITY, 0.0], |[min, max], value| {
+                    [min.min(value), max.max(value)]
+                })
+        };
+        let side_ranges = [side_range(|row| row.bid), side_range(|row| row.ask)];
         let area = config.value_area.and_then(|share| shown.value_area(share));
         let poc = config.show_poc.then(|| shown.poc()).flatten();
         let pullback = config
@@ -332,7 +373,27 @@ pub fn render_footprint(
             .iter()
             .take(columns)
             .map(|mode| {
-                column_galleys(&painter, &text_rows, max_volume, *mode, config, width - 2.5)
+                let fit = |width, text: &dyn Fn(&FootprintLevel, bool) -> String| {
+                    column_galleys(&painter, &text_rows, max_volume, text, config, width)
+                };
+                if *mode == FootprintMode::Ladder {
+                    let width = (width - 0.5) * LADDER_CELL_SHARE - 2.5;
+                    let sides = [
+                        fit(width, &|row, compact| ladder_text(row.bid, config, compact)),
+                        fit(width, &|row, compact| ladder_text(row.ask, config, compact)),
+                    ];
+                    // One side must not lose its numbers alone, see `column_galleys`.
+                    if sides.iter().all(Option::is_some) {
+                        sides
+                    } else {
+                        [None, None]
+                    }
+                } else {
+                    let text = |row: &FootprintLevel, compact| {
+                        cell_text(*mode, row, config.abbreviate || compact, config.show_zero)
+                    };
+                    [fit(width - 2.5, &text), None]
+                }
             })
             .collect();
         for row in shown.levels.values() {
@@ -352,104 +413,287 @@ pub fn render_footprint(
                 if !rect.intersects(mapping.rect) {
                     continue;
                 }
-                let color = cell_color(shown, row, max_volume, max_delta, config);
-                let share = if config.profile && max_volume > 0.0 {
-                    (row.volume() / max_volume) as f32
-                } else {
-                    1.0
-                };
-                let fill = Rect::from_min_size(
-                    rect.min,
-                    vec2(rect.width() * share, rect.height().max(1.0)),
-                );
-                let mut fills = [
-                    area.is_some_and(|(low, high)| (low..=high).contains(&row.level))
-                        .then_some((rect, config.neutral_color.gamma_multiply(0.12))),
-                    Some((fill, color.gamma_multiply(0.5))),
-                    None,
-                ];
-                if config.color_by == FootprintColor::Imbalance
-                    && shown.imbalance(
+                let ladder = *mode == FootprintMode::Ladder;
+                let poc_row = poc == Some(row.level);
+                let imbalances = if steps && config.show_imbalance {
+                    shown.imbalance(
                         row.level,
                         config.imbalance_ratio,
                         config.diagonal,
                         config.imbalance_min_volume,
-                    ) == (true, true)
-                {
-                    let (bid, ask) = fill.split_left_right_at_x(fill.center().x);
-                    fills[1] = Some((bid, config.bid_color.gamma_multiply(0.5)));
-                    fills[2] = Some((ask, config.ask_color.gamma_multiply(0.5)));
-                }
-                for &(fill, color) in fills.iter().flatten() {
-                    mesh.add_colored_rect(fill.intersect(mapping.rect), color);
-                }
-                if pullback.is_some_and(|(low, high)| (low..=high).contains(&row.level)) {
-                    painter.rect_stroke(
-                        rect,
-                        0,
-                        Stroke::new(1.0, config.neutral_color),
-                        StrokeKind::Inside,
-                    );
-                }
-                if poc == Some(row.level) && rect.width() >= 12.0 && rect.height() >= 4.0 {
-                    painter.rect_stroke(
-                        rect,
-                        0,
-                        Stroke::new(1.0, config.text_color),
-                        StrokeKind::Inside,
-                    );
-                }
-                if rect.height() >= config.min_text_height.max(10.0)
-                    && let Some(galley) = text[column]
-                        .as_ref()
-                        .and_then(|galleys| galleys.get(&row.level))
-                {
-                    let mut galley = galley.clone();
-                    if !galley.is_empty() && galley.size().y > rect.height() {
-                        let size = galley.job.sections[0].format.font_id.size;
-                        for size in [
-                            (size * rect.height() / galley.size().y).max(FONT_LIMITS[0]),
-                            FONT_LIMITS[0],
-                        ] {
-                            galley = painter.layout_no_wrap(
-                                galley.text().to_owned(),
-                                FontId::monospace(size),
-                                config.text_color,
+                    )
+                } else {
+                    (false, false)
+                };
+                let shades = [
+                    (row.bid, config.bid_color, 0),
+                    (row.ask, config.ask_color, 1),
+                ]
+                .map(|(volume, color, side)| {
+                    if poc_row {
+                        config.text_color
+                    } else if row.bid + row.ask == 0.0 && row.unknown > 0.0 {
+                        config.neutral_color
+                    } else {
+                        step_color(
+                            color,
+                            volume_step(volume, side_ranges[side]),
+                            text_background,
+                        )
+                    }
+                });
+                if steps {
+                    // Only on the bar's outer edges, within its half of the gap to the next bar:
+                    // three points wide and one clear of the cell while that gap has room.
+                    let half_gap = mapping.bar_spacing * 0.04;
+                    let clear = (half_gap - 3.0).clamp(0.0, 1.0);
+                    let strip_width = half_gap.clamp(1.0, 3.0);
+                    for (imbalanced, edge, side) in [
+                        (imbalances.0 && column == 0, rect.left(), -1.0),
+                        (imbalances.1 && column + 1 == columns, rect.right(), 1.0),
+                    ] {
+                        if imbalanced {
+                            let strip = Rect::from_two_pos(
+                                pos2(edge + side * clear, rect.top()),
+                                pos2(edge + side * (clear + strip_width), rect.bottom()),
                             );
-                            if galley.size().y <= rect.height() {
-                                break;
+                            let color = if side < 0.0 {
+                                config.bid_color
+                            } else {
+                                config.ask_color
+                            };
+                            mesh.add_colored_rect(strip.intersect(mapping.rect), color);
+                        }
+                    }
+                }
+                let sides = if ladder {
+                    ladder_sides(rect)
+                } else {
+                    [rect, rect]
+                };
+                for (side, rect) in sides.into_iter().enumerate().take(1 + usize::from(ladder)) {
+                    let color = cell_color(shown, row, max_volume, max_delta, config);
+                    let (value, largest) = if ladder {
+                        (
+                            if side == 0 { row.bid } else { row.ask },
+                            side_ranges[0][1].max(side_ranges[1][1]),
+                        )
+                    } else {
+                        (row.volume(), max_volume)
+                    };
+                    // The POC row stays a full band, so both of its numbers lie on its fill.
+                    let share = if config.profile && !(steps && poc_row) && largest > 0.0 {
+                        (value / largest) as f32
+                    } else {
+                        1.0
+                    };
+                    let cell = if steps && rect.height() >= 3.0 {
+                        rect.shrink2(vec2(0.0, 0.5))
+                    } else {
+                        rect
+                    };
+                    let size = vec2(cell.width() * share, cell.height().max(1.0));
+                    // The sell side of a ladder grows away from the candle, mirroring the buy side.
+                    let fill = if ladder && side == 0 {
+                        Rect::from_min_size(pos2(cell.right() - size.x, cell.top()), size)
+                    } else {
+                        Rect::from_min_size(cell.min, size)
+                    };
+                    let mut fills = [
+                        area.filter(|_| !steps)
+                            .is_some_and(|(low, high)| (low..=high).contains(&row.level))
+                            .then_some((rect, config.neutral_color.gamma_multiply(0.12))),
+                        Some((fill, color.gamma_multiply(0.5))),
+                        None,
+                    ];
+                    if steps && ladder {
+                        fills[1] = Some((fill, shades[side]));
+                    } else if steps {
+                        let (bid, ask) = fill.split_left_right_at_x(fill.center().x);
+                        fills[1] = Some((bid, shades[0]));
+                        fills[2] = Some((ask, shades[1]));
+                    } else if config.color_by == FootprintColor::Imbalance
+                        && shown.imbalance(
+                            row.level,
+                            config.imbalance_ratio,
+                            config.diagonal,
+                            config.imbalance_min_volume,
+                        ) == (true, true)
+                    {
+                        if ladder {
+                            let color = [config.bid_color, config.ask_color][side];
+                            fills[1] = Some((fill, color.gamma_multiply(0.5)));
+                        } else {
+                            let (bid, ask) = fill.split_left_right_at_x(fill.center().x);
+                            fills[1] = Some((bid, config.bid_color.gamma_multiply(0.5)));
+                            fills[2] = Some((ask, config.ask_color.gamma_multiply(0.5)));
+                        }
+                    }
+                    let ink = if !steps {
+                        config.text_color
+                    } else if ladder {
+                        contrasting_text(shades[side])
+                    } else {
+                        contrasting_text(shades[0].lerp_to_gamma(shades[1], 0.5))
+                    };
+                    for &(fill, color) in fills.iter().flatten() {
+                        mesh.add_colored_rect(fill.intersect(mapping.rect), color);
+                    }
+                    if pullback.is_some_and(|(low, high)| (low..=high).contains(&row.level)) {
+                        painter.rect_stroke(
+                            rect,
+                            0,
+                            Stroke::new(1.0, config.neutral_color),
+                            StrokeKind::Inside,
+                        );
+                    }
+                    if !steps && poc_row && rect.width() >= 12.0 && rect.height() >= 4.0 {
+                        painter.rect_stroke(
+                            rect,
+                            0,
+                            Stroke::new(1.0, config.text_color),
+                            StrokeKind::Inside,
+                        );
+                    }
+                    if rect.height() >= config.min_text_height.max(10.0)
+                        && let Some(galley) = text[column][side]
+                            .as_ref()
+                            .and_then(|galleys| galleys.get(&row.level))
+                    {
+                        let mut galley = galley.clone();
+                        if !galley.is_empty() && galley.size().y > rect.height() {
+                            let size = galley.job.sections[0].format.font_id.size;
+                            for size in [
+                                (size * rect.height() / galley.size().y).max(FONT_LIMITS[0]),
+                                FONT_LIMITS[0],
+                            ] {
+                                galley = painter.layout_no_wrap(
+                                    galley.text().to_owned(),
+                                    FontId::monospace(size),
+                                    config.text_color,
+                                );
+                                if galley.size().y <= rect.height() {
+                                    break;
+                                }
+                            }
+                        }
+                        if !galley.is_empty() && galley.size().y <= rect.height() {
+                            let center = rect.center().x;
+                            let x = match mode {
+                                FootprintMode::DominantSide if row.bid > row.ask => {
+                                    rect.left() + 1.0
+                                }
+                                FootprintMode::DominantSide if row.ask > row.bid => {
+                                    rect.right() - 1.0 - galley.size().x
+                                }
+                                _ => center - galley.size().x / 2.0,
+                            };
+                            let at = pos2(x, rect.center().y - galley.size().y / 2.0);
+                            // Text is whole or absent: a cell cut by the plot edge shows no number.
+                            if mapping
+                                .rect
+                                .contains_rect(Rect::from_min_size(at, galley.size()))
+                            {
+                                // Replay the cell fills over an opaque patch so underlays cannot
+                                // show through the numbers, keeping their existing cell colours.
+                                let backing = Rect::from_min_size(at, galley.size())
+                                    .expand2(vec2(2.0, 1.0))
+                                    .intersect(rect)
+                                    .intersect(mapping.rect);
+                                mesh.add_colored_rect(backing, text_background);
+                                for &(fill, color) in fills.iter().flatten() {
+                                    if fill.intersects(backing) {
+                                        mesh.add_colored_rect(fill.intersect(backing), color);
+                                    }
+                                }
+                                // A number overhanging its profile bar lies partly on the
+                                // background, where a colour picked for the fill can vanish.
+                                let ink = if fill.left() <= at.x
+                                    && at.x + galley.size().x <= fill.right()
+                                {
+                                    ink
+                                } else {
+                                    config.text_color
+                                };
+                                painter.galley_with_override_text_color(at, galley, ink);
                             }
                         }
                     }
-                    if !galley.is_empty() && galley.size().y <= rect.height() {
-                        let center = rect.center().x;
-                        let x = match mode {
-                            FootprintMode::DominantSide if row.bid > row.ask => rect.left() + 1.0,
-                            FootprintMode::DominantSide if row.ask > row.bid => {
-                                rect.right() - 1.0 - galley.size().x
-                            }
-                            _ => center - galley.size().x / 2.0,
-                        };
-                        let at = pos2(x, rect.center().y - galley.size().y / 2.0);
-                        // Text is whole or absent: a cell cut by the plot edge shows no number.
-                        if mapping
-                            .rect
-                            .contains_rect(Rect::from_min_size(at, galley.size()))
-                        {
-                            // Replay the cell fills over an opaque patch so underlays cannot
-                            // show through the numbers, keeping their existing cell colours.
-                            let backing = Rect::from_min_size(at, galley.size())
-                                .expand2(vec2(2.0, 1.0))
-                                .intersect(rect)
-                                .intersect(mapping.rect);
-                            mesh.add_colored_rect(backing, text_background);
-                            for &(fill, color) in fills.iter().flatten() {
-                                if fill.intersects(backing) {
-                                    mesh.add_colored_rect(fill.intersect(backing), color);
-                                }
-                            }
-                            painter.galley(at, galley, config.text_color);
-                        }
+                }
+            }
+        }
+        for (column, _) in config
+            .modes
+            .iter()
+            .take(columns)
+            .enumerate()
+            .filter(|(_, mode)| **mode == FootprintMode::Ladder)
+        {
+            let block = Rect::from_x_y_ranges(
+                left + column as f32 * width..=left + (column + 1) as f32 * width - 0.5,
+                0.0..=0.0,
+            );
+            if [high, low, open, close].iter().all(|y| y.is_finite()) {
+                let center = block.center().x;
+                let half_body = (width * 0.087).max(0.5);
+                let mid = (open + close) * 0.5;
+                let half_height = ((open - close).abs() * 0.5).max(1.0);
+                mesh.add_colored_rect(
+                    Rect::from_two_pos(pos2(center - 0.5, high), pos2(center + 0.5, low))
+                        .intersect(mapping.rect),
+                    color,
+                );
+                mesh.add_colored_rect(
+                    Rect::from_two_pos(
+                        pos2(center - half_body, mid - half_height),
+                        pos2(center + half_body, mid + half_height),
+                    )
+                    .intersect(mapping.rect),
+                    color,
+                );
+            }
+            if config.info_box && text[column][0].is_some() {
+                render_info_box(&painter, mapping, flow, shown, group, block, config);
+            }
+        }
+        if steps && let Some((low, high)) = area {
+            let block_right = left + columns as f32 * width - 0.5;
+            let step = flow.price_step() * group as f64;
+            for (level, label) in [(high + 1, "VAH"), (low, "VAL")] {
+                let y = mapping.price_to_y(level as f64 * step - flow.tick_size() * 0.5);
+                if !y.is_finite() {
+                    continue;
+                }
+                let y = painter.round_to_pixel_center(y);
+                draw_dashed_line(
+                    &painter,
+                    pos2(left, y),
+                    pos2(block_right, y),
+                    Stroke::new(1.0, config.text_color),
+                    2.0,
+                    2.0,
+                );
+                // The marker needs the gap to the previous bar, or it covers that bar's cell.
+                if mapping.bar_spacing * 0.08 >= 6.0 {
+                    painter.add(Shape::convex_polygon(
+                        vec![
+                            pos2(left - 6.0, y - 3.0),
+                            pos2(left - 3.0, y),
+                            pos2(left - 6.0, y + 3.0),
+                        ],
+                        config.text_color,
+                        Stroke::NONE,
+                    ));
+                    let galley = painter.layout_no_wrap(
+                        label.to_owned(),
+                        FontId::monospace(FONT_LIMITS[0]),
+                        config.text_color,
+                    );
+                    // Beside the marker only where the gap to the previous bar has room.
+                    if galley.size().x + 7.0 <= mapping.bar_spacing * 0.08 {
+                        let at =
+                            Align2::RIGHT_CENTER.anchor_size(pos2(left - 7.0, y), galley.size());
+                        painter.galley(at.min, galley, config.text_color);
                     }
                 }
             }
@@ -515,7 +759,7 @@ fn column_galleys(
     painter: &Painter,
     rows: &[&FootprintLevel],
     max_volume: f64,
-    mode: FootprintMode,
+    cell: &dyn Fn(&FootprintLevel, bool) -> String,
     config: &FootprintConfig,
     width: f32,
 ) -> Option<BTreeMap<i64, Arc<Galley>>> {
@@ -528,7 +772,7 @@ fn column_galleys(
         let galleys = rows
             .iter()
             .map(|row| {
-                let mut text = cell_text(mode, row, config.abbreviate || compact, config.show_zero);
+                let mut text = cell(row, compact);
                 if compact {
                     text = text.replace(" × ", "×").replace(" / ", "/");
                 }
@@ -586,8 +830,12 @@ fn cell_text(
         text => format!("+{text}"),
     };
     match mode {
-        FootprintMode::BidAsk if hidden(row.bid) && hidden(row.ask) => String::new(),
-        FootprintMode::BidAsk => format!("{} × {}", number(row.bid), number(row.ask)),
+        FootprintMode::BidAsk | FootprintMode::Ladder if hidden(row.bid) && hidden(row.ask) => {
+            String::new()
+        }
+        FootprintMode::BidAsk | FootprintMode::Ladder => {
+            format!("{} × {}", number(row.bid), number(row.ask))
+        }
         FootprintMode::Volume => number(row.volume()),
         FootprintMode::Delta => signed(row.delta()),
         FootprintMode::DeltaVolume if hidden(row.delta()) && hidden(row.volume()) => String::new(),
@@ -608,6 +856,26 @@ fn cell_text(
         FootprintMode::Trades => number(row.trades() as f64),
         FootprintMode::AverageSize => row.average_size().map_or_else(String::new, number),
     }
+}
+
+/// The number of a ladder cell: two decimals when abbreviated, one when the column is too narrow.
+fn ladder_text(value: f64, config: &FootprintConfig, compact: bool) -> String {
+    if value == 0.0 && !config.show_zero {
+        return String::new();
+    }
+    if config.abbreviate && !compact && value.abs() >= 1000.0 {
+        // 999,995 and above round to 1000.00K, so they take the next unit.
+        let (scaled, unit) = if value.abs() >= 999_995.0 {
+            (value / 1e6, 'M')
+        } else {
+            (value / 1e3, 'K')
+        };
+        return format!(
+            "{}{unit}",
+            egui::emath::format_with_decimals_in_range(scaled, 0..=2)
+        );
+    }
+    volume_text(value, config.abbreviate || compact)
 }
 
 fn volume_text(value: f64, abbreviate: bool) -> String {
@@ -673,6 +941,156 @@ fn group_bar(source: &FootprintBar, group: i64) -> FootprintBar {
     shown
 }
 
+fn has_ladder(config: &FootprintConfig) -> bool {
+    config
+        .modes
+        .iter()
+        .take(4)
+        .any(|mode| *mode == FootprintMode::Ladder)
+}
+
+/// How far below a bar's lowest row its summary starts: past the extreme ratio and threshold
+/// marker rows, which sit directly below the bar, when they are on.
+fn info_box_offset(config: &FootprintConfig) -> f32 {
+    #[cfg(feature = "studies")]
+    let studies = config.studies.is_some();
+    #[cfg(not(feature = "studies"))]
+    let studies = false;
+    if config.extreme_ratio || studies {
+        20.0
+    } else {
+        2.0
+    }
+}
+
+/// The sell and buy cells of a ladder column; the candle body takes the gap between them.
+fn ladder_sides(column: Rect) -> [Rect; 2] {
+    let width = column.width() * LADDER_CELL_SHARE;
+    [
+        Rect::from_x_y_ranges(column.left()..=column.left() + width, column.y_range()),
+        Rect::from_x_y_ranges(column.right() - width..=column.right(), column.y_range()),
+    ]
+}
+
+/// The quarter of the `[smallest, largest]` range of its side that `volume` falls in, 0 to 3. A
+/// side that traded one volume throughout takes the strongest shade, or the weakest at zero.
+fn volume_step(volume: f64, [smallest, largest]: [f64; 2]) -> usize {
+    if largest > smallest {
+        (((volume - smallest) / (largest - smallest) * 4.0) as usize).min(3)
+    } else if volume > 0.0 {
+        3
+    } else {
+        0
+    }
+}
+
+/// One of the four opaque shades of a side's colour, from the one that recedes into the chart
+/// background to the one that stands out most: on a light background the colour itself is
+/// second and the strongest two darken it, on a dark one it is never reached so numbers stay
+/// readable.
+fn step_color(color: Color32, step: usize, background: Color32) -> Color32 {
+    if background.intensity() > 0.5 {
+        match step {
+            0 => background.lerp_to_gamma(color, 0.5),
+            1 => color,
+            2 => Color32::BLACK.lerp_to_gamma(color, 0.84),
+            _ => Color32::BLACK.lerp_to_gamma(color, 0.53),
+        }
+    } else {
+        background.lerp_to_gamma(color, (step + 1) as f32 * 0.2)
+    }
+}
+
+/// Black or white, whichever reads on `fill`.
+fn contrasting_text(fill: Color32) -> Color32 {
+    if fill.intensity() > 0.6 {
+        Color32::BLACK
+    } else {
+        Color32::WHITE
+    }
+}
+
+/// Writes a bar's sell and buy totals below their ladder cells, and its delta and total volume in
+/// a box below them. Each part is drawn whole or not at all.
+fn render_info_box(
+    painter: &Painter,
+    mapping: &ChartMapping,
+    flow: &Footprint,
+    shown: &FootprintBar,
+    group: i64,
+    block: Rect,
+    config: &FootprintConfig,
+) {
+    let (Some((&lowest, _)), Some((&highest, _))) = (
+        shown.levels.first_key_value(),
+        shown.levels.last_key_value(),
+    ) else {
+        return;
+    };
+    let step = flow.price_step() * group as f64;
+    let edge = |level: i64| mapping.price_to_y(level as f64 * step - flow.tick_size() * 0.5);
+    // An inverted scale puts the highest row at the bottom.
+    let (low_edge, high_edge) = (edge(lowest), edge(highest + 1));
+    if !low_edge.is_finite() || !high_edge.is_finite() {
+        return;
+    }
+    let bottom = low_edge.max(high_edge);
+    let font = FontId::monospace(10.0);
+    let text = |value, color| {
+        painter.layout_no_wrap(ladder_text(value, config, false), font.clone(), color)
+    };
+    let top = bottom + info_box_offset(config);
+    let sides = ladder_sides(block);
+    let totals = [(shown.bid, config.bid_color), (shown.ask, config.ask_color)];
+    for (side, (value, color)) in sides.iter().zip(totals) {
+        let mut galley = text(value, color);
+        if galley.size().x > side.width() {
+            galley = painter.layout_no_wrap(ladder_text(value, config, true), font.clone(), color);
+        }
+        let bounds = Align2::CENTER_TOP.anchor_size(pos2(side.center().x, top), galley.size());
+        if galley.size().x <= side.width() && mapping.rect.contains_rect(bounds) {
+            painter.galley(bounds.min, galley, color);
+        }
+    }
+    let delta = shown.delta();
+    let delta_color = if delta > 0.0 {
+        config.ask_color
+    } else if delta < 0.0 {
+        config.bid_color
+    } else {
+        config.text_color
+    };
+    let lines = [
+        ("Delta", text(delta, delta_color)),
+        ("Total", text(shown.volume(), config.text_color)),
+    ]
+    .map(|(label, value)| {
+        let label = painter.layout_no_wrap(label.to_owned(), font.clone(), config.text_color);
+        (label, value)
+    });
+    let line = lines[0].0.size().y;
+    let labels = lines[0].0.size().x.max(lines[1].0.size().x) + 6.0;
+    let values = lines[0].1.size().x.max(lines[1].1.size().x);
+    let bounds = Rect::from_x_y_ranges(block.x_range(), top + line + 3.0..=top + line * 3.0 + 9.0);
+    if labels + values + 8.0 > bounds.width() || !mapping.rect.contains_rect(bounds) {
+        return;
+    }
+    let background = painter.ctx().active_theme().chart.bg.to_opaque();
+    painter.rect_filled(bounds, 4, background);
+    painter.rect_stroke(
+        bounds,
+        4,
+        Stroke::new(1.0, config.neutral_color.gamma_multiply(0.25)),
+        StrokeKind::Inside,
+    );
+    let x = bounds.center().x - (labels + values) * 0.5;
+    for (i, (label, value)) in lines.into_iter().enumerate() {
+        let y = bounds.top() + 3.0 + i as f32 * line;
+        painter.galley(pos2(x, y), label, config.text_color);
+        painter.galley(pos2(x + labels, y), value, config.text_color);
+    }
+}
+
 fn cell_color(
     bar: &FootprintBar,
     row: &FootprintLevel,
@@ -681,7 +1099,7 @@ fn cell_color(
     config: &FootprintConfig,
 ) -> Color32 {
     match config.color_by {
-        FootprintColor::Fixed => config.neutral_color,
+        FootprintColor::Fixed | FootprintColor::VolumeSteps => config.neutral_color,
         FootprintColor::DeltaOpacity if row.delta() == 0.0 => config.neutral_color,
         FootprintColor::DeltaOpacity => {
             let side = if row.delta() > 0.0 {
@@ -1013,9 +1431,13 @@ pub fn render_footprint_studies(
                 pos2(x - mapping.bar_spacing * 0.46, y1.min(y2)),
                 pos2(x + mapping.bar_spacing * 0.46, y1.max(y2)),
             );
-            // The two threshold-marker rows extend up to 18 points beyond either extreme.
-            rect.intersects(mapping.rect)
-                .then_some((index, rect.expand2(vec2(0.0, 18.0))))
+            // The two threshold-marker rows extend up to 18 points beyond either extreme, and a
+            // ladder's summary below the bar takes the same space or more.
+            let mut reserved = rect.expand2(vec2(0.0, 18.0));
+            if config.info_box && has_ladder(config) {
+                reserved.max.y = rect.max.y + info_box_offset(config) + INFO_BOX_HEIGHT;
+            }
+            rect.intersects(mapping.rect).then_some((index, reserved))
         })
         .collect();
     let mut labels: Vec<Rect> = Vec::new();
@@ -1221,6 +1643,404 @@ mod tests {
     use crate::model::{BarClock, OrderSide, Tick, Timeframe};
     use crate::scales::{PriceMap, PriceRange, PriceTransform};
 
+    /// The settings of a chart saved before the ladder became the default.
+    fn bid_ask_config() -> FootprintConfig {
+        FootprintConfig {
+            modes: vec![FootprintMode::BidAsk],
+            profile: true,
+            color_by: FootprintColor::Delta,
+            abbreviate: false,
+            ..Default::default()
+        }
+    }
+
+    /// Volumes fall into equal quarters of their side's range, whatever the other side traded, and
+    /// each shade is the hand-worked mix of the side's colour with the background or black.
+    #[test]
+    fn volume_steps_follow_their_side_range_and_theme() {
+        #[rustfmt::skip]
+        let steps = [
+            (10.0, [10.0, 50.0], 0),
+            (19.9, [10.0, 50.0], 0),
+            (20.0, [10.0, 50.0], 1),
+            (30.0, [10.0, 50.0], 2),
+            (40.0, [10.0, 50.0], 3),
+            (50.0, [10.0, 50.0], 3),
+            (50.0, [50.0, 50.0], 3),
+            (0.0, [0.0, 0.0], 0),
+        ];
+        for (volume, range, step) in steps {
+            assert_eq!(volume_step(volume, range), step, "{volume} in {range:?}");
+        }
+        let sell = Color32::from_rgb(242, 54, 69);
+        #[rustfmt::skip]
+        let shades = [
+            (Color32::WHITE, 0, [248, 154, 162]),
+            (Color32::WHITE, 1, [242, 54, 69]),
+            (Color32::WHITE, 2, [203, 45, 58]),
+            (Color32::WHITE, 3, [128, 29, 37]),
+            (Color32::BLACK, 0, [48, 11, 14]),
+            (Color32::BLACK, 1, [97, 22, 28]),
+            (Color32::BLACK, 2, [145, 32, 41]),
+            (Color32::BLACK, 3, [194, 43, 55]),
+        ];
+        for (background, step, [r, g, b]) in shades {
+            let shade = step_color(sell, step, background);
+            for (channel, expected) in [(shade.r(), r), (shade.g(), g), (shade.b(), b)] {
+                assert!(
+                    channel.abs_diff(expected) <= 1,
+                    "{background:?} {step}: {shade:?}"
+                );
+            }
+        }
+        assert_eq!(
+            contrasting_text(step_color(sell, 0, Color32::WHITE)),
+            Color32::BLACK
+        );
+        assert_eq!(
+            contrasting_text(step_color(sell, 1, Color32::WHITE)),
+            Color32::WHITE
+        );
+        assert_eq!(contrasting_text(Color32::WHITE), Color32::BLACK);
+    }
+
+    /// With the default settings each row has a sell cell left and a buy cell right of a candle
+    /// body. The bar holds (sell, buy) rows 104: 10, 50; 103: 10, 20; 102: 50, 50; 101: 20, 10;
+    /// 100: 30, 10. 50 bought at 104 is five times the 10 sold one row below; 30 sold at 100 is
+    /// exactly three times the 10 bought one row above; no other diagonal pair reaches three.
+    /// Value area of 182 out of 260: POC 102 (100), a tie adds 103 and 101 (160), then 104 (220),
+    /// so its edges are at 104.5 and 100.5.
+    #[test]
+    fn the_default_ladder_shades_sides_and_marks_imbalances_and_the_value_area() {
+        let time = "2026-01-05T10:00:00Z".parse().unwrap();
+        let bars = [Bar::new(time, 101.0, 104.0, 100.0, 103.0, 260.0)];
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(240.0, 160.0));
+        let map = ChartMapping::new(
+            rect,
+            120.0,
+            0,
+            0,
+            0.0,
+            PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(98.0, 110.0),
+                0.0,
+                160.0,
+                false,
+            ),
+        );
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        for (price, sell, buy) in [
+            (104.0, 10.0, 50.0),
+            (103.0, 10.0, 20.0),
+            (102.0, 50.0, 50.0),
+            (101.0, 20.0, 10.0),
+            (100.0, 30.0, 10.0),
+        ] {
+            for (size, side) in [(sell, OrderSide::Sell), (buy, OrderSide::Buy)] {
+                flow.push(&Tick::new(time, price, size, Some(side)))
+                    .unwrap();
+            }
+        }
+        let config = FootprintConfig {
+            auto_row_height: None,
+            min_text_height: 100.0,
+            text_color: Color32::from_rgb(1, 2, 3),
+            neutral_color: Color32::from_rgb(4, 5, 6),
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(rect),
+                ..Default::default()
+            },
+            |ui| render_footprint(ui.painter(), &map, &bars, &flow, &config),
+        );
+        output.textures_delta.clear();
+        let quads: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                Shape::Mesh(mesh) => Some(mesh.vertices.clone()),
+                _ => None,
+            })
+            .flatten()
+            .collect::<Vec<_>>()
+            .chunks(4)
+            .map(|q| (Rect::from_two_pos(q[0].pos, q[3].pos), q[0].color))
+            .collect();
+        let at = |x: f32, price: f64| {
+            let point = pos2(x, map.price_to_y(price));
+            quads
+                .iter()
+                .rev()
+                .find(|(r, _)| r.contains(point))
+                .map(|(_, c)| *c)
+        };
+        let background = ctx.active_theme().chart.bg.to_opaque();
+        let center = map.idx_to_x(0);
+        let edge = 120.0 * 0.46;
+        let [sell_x, buy_x] = [center - edge + 20.0, center + edge - 20.0];
+        let sell = |step| Some(step_color(config.bid_color, step, background));
+        let buy = |step| Some(step_color(config.ask_color, step, background));
+        let poc = Some(config.text_color);
+        for (price, sell_shade, buy_shade) in [
+            (104.0, sell(0), buy(3)),
+            (103.0, sell(0), buy(1)),
+            (102.0, poc, poc),
+            (101.0, sell(1), buy(0)),
+            (100.0, sell(2), buy(0)),
+        ] {
+            assert_eq!(at(sell_x, price), sell_shade, "sell at {price}");
+            assert_eq!(at(buy_x, price), buy_shade, "buy at {price}");
+        }
+        let [sell_strip, buy_strip] = [center - edge - 2.5, center + edge - 0.5 + 2.5];
+        for price in [104.0, 103.0, 102.0, 101.0, 100.0] {
+            assert_eq!(
+                at(buy_strip, price),
+                (price == 104.0).then_some(config.ask_color),
+                "buy strip at {price}"
+            );
+            assert_eq!(
+                at(sell_strip, price),
+                (price == 100.0).then_some(config.bid_color),
+                "sell strip at {price}"
+            );
+        }
+        // The body spans the open and close, the wick the high; neither reaches the side cells.
+        let middle = center - 0.25;
+        assert_eq!(at(middle + 5.0, 102.0), Some(config.ask_color));
+        assert_eq!(at(middle + 5.0, 103.75), None);
+        assert_eq!(at(middle, 103.75), Some(config.ask_color));
+        assert_eq!(at(middle + 10.5, 102.0), None);
+        // Two dotted lines and no fill mark the value area.
+        assert!(
+            quads
+                .iter()
+                .all(|(_, c)| *c != config.neutral_color.gamma_multiply(0.12))
+        );
+        let mut dotted: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                Shape::LineSegment { points, stroke } if stroke.color == config.text_color => {
+                    Some(points[0].y)
+                }
+                _ => None,
+            })
+            .collect();
+        dotted.sort_by(f32::total_cmp);
+        dotted.dedup();
+        assert_eq!(dotted.len(), 2);
+        for (y, price) in dotted.iter().zip([104.5, 100.5]) {
+            assert!((y - map.price_to_y(price)).abs() <= 1.0, "{y} at {price}");
+        }
+        // In the profile display a number wider than its bar takes the text colour, because a
+        // colour picked for the fill can vanish on the background; 50 fills its cell.
+        let profile = FootprintConfig {
+            profile: true,
+            min_text_height: 10.0,
+            ..config.clone()
+        };
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(rect),
+                ..Default::default()
+            },
+            |ui| render_footprint(ui.painter(), &map, &bars, &flow, &profile),
+        );
+        output.textures_delta.clear();
+        let inks = |number: &str| -> Vec<_> {
+            output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    Shape::Text(t) if t.galley.text() == number => t.override_text_color,
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(inks("10"), [profile.text_color; 4]);
+        assert_eq!(inks("50"), [Color32::WHITE; 3]);
+    }
+
+    /// One bar of (price, sell, buy) rows at a spacing, painted with `config` over the 98 to 110
+    /// range, inverted or not. Returns the shapes and the centre of the bar.
+    fn paint_ladder(
+        rows: &[(f64, f64, f64)],
+        spacing: f32,
+        inverted: bool,
+        config: &FootprintConfig,
+    ) -> (Vec<Shape>, f32) {
+        let time = "2026-01-05T10:00:00Z".parse().unwrap();
+        // Open and close match so the candle takes the text colour, not a side's.
+        let bars = [Bar::new(time, 102.0, 104.0, 100.0, 102.0, 1.0)];
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(480.0, 160.0));
+        let map = ChartMapping::new(
+            rect,
+            spacing,
+            0,
+            0,
+            0.0,
+            PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(98.0, 110.0),
+                0.0,
+                160.0,
+                inverted,
+            ),
+        );
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        for &(price, sell, buy) in rows {
+            for (size, side) in [(sell, OrderSide::Sell), (buy, OrderSide::Buy)] {
+                flow.push(&Tick::new(time, price, size, Some(side)))
+                    .unwrap();
+            }
+        }
+        let mut output = egui::Context::default().run_ui(
+            egui::RawInput {
+                screen_rect: Some(rect),
+                ..Default::default()
+            },
+            |ui| render_footprint(ui.painter(), &map, &bars, &flow, config),
+        );
+        output.textures_delta.clear();
+        let shapes = output.shapes.into_iter().map(|s| s.shape).collect();
+        (shapes, map.idx_to_x(0))
+    }
+
+    fn painted_text(shapes: &[Shape]) -> Vec<(String, Rect)> {
+        shapes
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::Text(t) => Some((
+                    t.galley.text().to_owned(),
+                    Rect::from_min_size(t.pos, t.galley.size()),
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Imbalance strips belong to the outer edges of their bar and to its half of the gap, and
+    /// value-area markers to the gap before it, so neither covers a neighbouring cell or column.
+    #[test]
+    fn ladder_marks_stay_on_the_outer_edges_of_their_bar() {
+        // 50 bought at 104 and 30 sold at 100 are imbalanced; see the default ladder test.
+        let rows = [
+            (104.0, 10.0, 50.0),
+            (103.0, 10.0, 20.0),
+            (102.0, 50.0, 50.0),
+            (101.0, 20.0, 10.0),
+            (100.0, 30.0, 10.0),
+        ];
+        for (spacing, modes, show_imbalance) in [
+            (120.0, vec![FootprintMode::Ladder], true),
+            (120.0, vec![FootprintMode::Ladder], false),
+            (40.0, vec![FootprintMode::Ladder], true),
+            (
+                240.0,
+                vec![FootprintMode::Ladder, FootprintMode::Volume],
+                true,
+            ),
+        ] {
+            let config = FootprintConfig {
+                modes,
+                auto_row_height: None,
+                show_imbalance,
+                ..Default::default()
+            };
+            let (shapes, center) = paint_ladder(&rows, spacing, false, &config);
+            let [left, right] = [center - spacing * 0.46, center + spacing * 0.46 - 0.5];
+            let slot = (center - spacing * 0.5)..=(center + spacing * 0.5);
+            let mut strips = [0, 0];
+            for shape in &shapes {
+                let Shape::Mesh(mesh) = shape else { continue };
+                for quad in mesh.vertices.chunks(4) {
+                    let rect = Rect::from_two_pos(quad[0].pos, quad[3].pos);
+                    let side = [config.bid_color, config.ask_color]
+                        .iter()
+                        .position(|color| *color == quad[0].color);
+                    if let Some(side) = side.filter(|_| rect.width() <= 3.01) {
+                        strips[side] += 1;
+                        assert!(
+                            if side == 0 {
+                                rect.right() <= left && slot.contains(&rect.left())
+                            } else {
+                                rect.left() >= right && slot.contains(&rect.right())
+                            },
+                            "strip {rect:?} at spacing {spacing}"
+                        );
+                    }
+                }
+            }
+            assert_eq!(
+                strips,
+                [usize::from(show_imbalance); 2],
+                "strips at spacing {spacing}"
+            );
+            for shape in &shapes {
+                if let Shape::Path(path) = shape {
+                    assert!(
+                        path.points.iter().all(|p| p.x >= left - spacing * 0.08),
+                        "marker {:?} at spacing {spacing}",
+                        path.points
+                    );
+                }
+            }
+        }
+    }
+
+    /// Both sides of a ladder keep their numbers or lose them together, and the summary below the
+    /// bar leaves room for the extreme ratio written in the same place.
+    #[test]
+    fn ladder_numbers_and_summary_do_not_vanish_alone_or_collide() {
+        let config = FootprintConfig {
+            auto_row_height: None,
+            ..Default::default()
+        };
+        // A buy cell of 22 points cannot hold 123.5K even at 8 points; the sell number 1 fits.
+        let one_sided = [(103.0, 1.0, 123_456.0), (102.0, 1.0, 123_456.0)];
+        let (shapes, _) = paint_ladder(&one_sided, 70.0, false, &config);
+        let numbers = painted_text(&shapes);
+        assert!(numbers.is_empty(), "one side kept its numbers: {numbers:?}");
+        // Totals of 543.5K and 370.1K are wide enough to reach the centred ratio below the bar.
+        let rows = [(106.0, 223_400.0, 250_100.0), (105.0, 320_100.0, 120_000.0)];
+        // On an inverted scale the lowest price is on top, and the rows end at 106.5, y 113.33.
+        let (shapes, _) = paint_ladder(&rows, 120.0, true, &config);
+        let text = painted_text(&shapes);
+        for total in ["543.5K", "370.1K"] {
+            let (_, rect) = text
+                .iter()
+                .find(|(label, _)| label == total)
+                .unwrap_or_else(|| panic!("{total} missing from {text:?}"));
+            assert!(rect.top() >= 113.0, "{total} over the rows at {rect:?}");
+        }
+        let ratio = FootprintConfig {
+            extreme_ratio: true,
+            ..config.clone()
+        };
+        let (shapes, _) = paint_ladder(&rows, 120.0, false, &ratio);
+        let text = painted_text(&shapes);
+        let below = text
+            .iter()
+            .filter(|(label, _)| label.starts_with("A/B"))
+            .max_by(|a, b| a.1.top().total_cmp(&b.1.top()))
+            .expect("the lower extreme ratio is written")
+            .1;
+        for total in ["543.5K", "370.1K", "Delta", "Total"] {
+            let (_, rect) = text
+                .iter()
+                .find(|(label, _)| label == total)
+                .unwrap_or_else(|| panic!("{total} missing from {text:?}"));
+            assert!(!rect.intersects(below), "{total} over the extreme ratio");
+        }
+        // A side cell needs a point: 3.3 points per bar leave it 0.99, 3.4 leave it 1.02.
+        assert!(paint_ladder(&rows, 3.3, false, &config).0.is_empty());
+        assert!(!paint_ladder(&rows, 3.4, false, &config).0.is_empty());
+    }
+
     /// Rows cover the nearest-tick band; spacing that leaves cells under a point wide produces no
     /// geometry.
     #[test]
@@ -1264,7 +2084,7 @@ mod tests {
                 row_ticks: manual,
                 show_poc: false,
                 value_area: None,
-                ..Default::default()
+                ..bid_ask_config()
             };
             let mut output = egui::Context::default().run_ui(
                 egui::RawInput {
@@ -1851,7 +2671,7 @@ mod tests {
                         ),
                     );
                     let bars = [Bar::new(time, open, 101.0, 100.0, close, 15.0)];
-                    let config = FootprintConfig::default();
+                    let config = bid_ask_config();
                     let mut output = egui::Context::default().run_ui(
                         egui::RawInput {
                             screen_rect: Some(rect),
@@ -1955,7 +2775,7 @@ mod tests {
                 let config = FootprintConfig {
                     modes: vec![mode],
                     auto_row_height: None,
-                    ..Default::default()
+                    ..bid_ask_config()
                 };
                 let mut output = egui::Context::default().run_ui(
                     egui::RawInput {
@@ -2169,7 +2989,7 @@ mod tests {
                 400,
             ),
         ];
-        let config = FootprintConfig::default();
+        let config = bid_ask_config();
         let ctx = egui::Context::default();
         let mut output = ctx.run_ui(
             egui::RawInput {
@@ -2214,10 +3034,17 @@ mod tests {
             kind: FootprintStudyKind::SinglePrint,
             state: FootprintStudyState::Local,
         };
-        for spacing in [60.0, 3.0] {
+        // At 120 a default ladder bar has room for its summary below, and captions avoid that too.
+        let ladder = FootprintConfig::default();
+        for (spacing, height, config) in [
+            (120.0, 260.0, &ladder),
+            (60.0, 160.0, &config),
+            (3.0, 160.0, &config),
+        ] {
             let map = ChartMapping {
                 bar_spacing: spacing,
                 base_idx: 1,
+                rect: rect.with_max_y(height),
                 ..map.clone()
             };
             let mut output = ctx.run_ui(
@@ -2226,7 +3053,7 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| {
-                    render_footprint(ui.painter(), &map, &bars, &flow, &config);
+                    render_footprint(ui.painter(), &map, &bars, &flow, config);
                     render_footprint_studies(
                         ui.painter(),
                         &map,
@@ -2254,7 +3081,7 @@ mod tests {
                             },
                             studies[3].clone(),
                         ],
-                        &config,
+                        config,
                     );
                 },
             );

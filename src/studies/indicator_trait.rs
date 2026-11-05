@@ -233,6 +233,12 @@ pub trait Indicator: Send {
         self.plot_style(line).visible
     }
 
+    /// The output lines the legend lists, in the order it lists them: all of them in plot order
+    /// by default. A study whose leading reading is not its first output lists that one first.
+    fn legend_lines(&self) -> Vec<usize> {
+        (0..self.line_count()).collect()
+    }
+
     /// Whether plot `line` shows its last value in a tag on the price scale while the chart
     /// shows study values. By default every plot of a study with up to four plots does and no
     /// plot of a study with more, whose values stay in the legend, so that the tags leave the

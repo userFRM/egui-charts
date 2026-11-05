@@ -40,8 +40,10 @@ fn footprint_stays_below_legend_at_wide_and_narrow_sizes() {
                 }
             }
             let config = FootprintConfig {
+                modes: vec![crate::model::FootprintMode::BidAsk],
                 auto_row_height: None,
                 color_by: FootprintColor::Volume,
+                abbreviate: false,
                 text_color: theme.chart.axis_text,
                 neutral_color: egui::Color32::from_rgb(21, 45, 78),
                 ..Default::default()
