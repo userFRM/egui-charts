@@ -104,7 +104,8 @@ impl Chart {
         Ok(())
     }
 
-    /// Replaces a ray's or extended line's readouts and midpoint as one undoable edit.
+    /// Replaces a trend line's, ray's or extended line's readouts and midpoint as one undoable
+    /// edit.
     /// Unknown, locked and other drawing types leave drawings and history untouched.
     pub fn set_line_measurements(
         &mut self,
@@ -122,7 +123,7 @@ impl Chart {
         }
         if !drawing.tool_type.supports_line_measurements() {
             return Err(DrawingError::Invalid(
-                "Drawing is not a ray or an extended line",
+                "Drawing is not a trend line, ray or extended line",
             ));
         }
         self.user_action(|chart| {
@@ -421,18 +422,22 @@ mod tests {
             Err(DrawingError::UnknownDrawing(999))
         );
         chart.drawings_mut().drawings[0].locked = false;
-        chart.drawings_mut().drawings[0].tool_type = T::TrendLine;
+        chart.drawings_mut().drawings[0].tool_type = T::InfoLine;
         assert!(matches!(
             chart.set_line_measurements(1, measurements),
             Err(DrawingError::Invalid(_))
         ));
         assert_eq!(chart.drawings().drawings[0].line_measurements, measurements);
-        chart.drawings_mut().drawings[0].tool_type = T::Ray;
-        chart.set_line_measurements(1, Default::default()).unwrap();
-        assert_eq!(
-            chart.drawings().drawings[0].line_measurements,
-            Default::default()
-        );
+        for tool in [T::TrendLine, T::Ray] {
+            chart.drawings_mut().drawings[0].tool_type = tool;
+            chart.drawings_mut().drawings[0].line_measurements = measurements;
+            chart.set_line_measurements(1, Default::default()).unwrap();
+            assert_eq!(
+                chart.drawings().drawings[0].line_measurements,
+                Default::default(),
+                "{tool:?}"
+            );
+        }
     }
 
     /// Guards #977: a drawing moves between the price pane and a study pane as one undoable

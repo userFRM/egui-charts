@@ -896,7 +896,11 @@ mod tests {
             }
             assert_eq!(HandleService::get_handles(&drawing), expected, "{tool:?}");
         }
-        for tool in [DrawingToolType::ExtendedLine, DrawingToolType::Ray] {
+        for tool in [
+            DrawingToolType::TrendLine,
+            DrawingToolType::ExtendedLine,
+            DrawingToolType::Ray,
+        ] {
             let mut line = create_test_drawing(tool, vec![pos2(100.0, 100.0), pos2(300.0, 200.0)]);
             assert!(
                 !HandleService::get_handles(&line)
