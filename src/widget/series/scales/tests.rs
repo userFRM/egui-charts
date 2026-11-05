@@ -2973,7 +2973,8 @@ fn secondary_pane_scale_follows_price_axis_visibility() {
 }
 
 /// The main series can sit before, between or after added series; paint and selection use
-/// that order on every frame, including after restoring a serialized chart.
+/// that order on every frame, in the price pane and in another pane, including after restoring a
+/// serialized chart.
 #[test]
 fn main_series_order_controls_paint_and_selection() {
     use crate::widget::ChartElementId;
