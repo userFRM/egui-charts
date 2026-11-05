@@ -461,7 +461,8 @@ pub fn render_footprint(
                     } else {
                         (row.volume(), max_volume)
                     };
-                    let share = if config.profile && largest > 0.0 {
+                    // The POC row stays a full band, so both of its numbers lie on its fill.
+                    let share = if config.profile && !(steps && poc_row) && largest > 0.0 {
                         (value / largest) as f32
                     } else {
                         1.0
@@ -580,6 +581,15 @@ pub fn render_footprint(
                                         mesh.add_colored_rect(fill.intersect(backing), color);
                                     }
                                 }
+                                // A number overhanging its profile bar lies partly on the
+                                // background, where a colour picked for the fill can vanish.
+                                let ink = if fill.left() <= at.x
+                                    && at.x + galley.size().x <= fill.right()
+                                {
+                                    ink
+                                } else {
+                                    config.text_color
+                                };
                                 painter.galley_with_override_text_color(at, galley, ink);
                             }
                         }
@@ -1765,6 +1775,33 @@ mod tests {
         for (y, price) in dotted.iter().zip([104.5, 100.5]) {
             assert!((y - map.price_to_y(price)).abs() <= 1.0, "{y} at {price}");
         }
+        // In the profile display a number wider than its bar takes the text colour, because a
+        // colour picked for the fill can vanish on the background; 50 fills its cell.
+        let profile = FootprintConfig {
+            profile: true,
+            min_text_height: 10.0,
+            ..config.clone()
+        };
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(rect),
+                ..Default::default()
+            },
+            |ui| render_footprint(ui.painter(), &map, &bars, &flow, &profile),
+        );
+        output.textures_delta.clear();
+        let inks = |number: &str| -> Vec<_> {
+            output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    Shape::Text(t) if t.galley.text() == number => t.override_text_color,
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(inks("10"), [profile.text_color; 4]);
+        assert_eq!(inks("50"), [Color32::WHITE; 3]);
     }
 
     /// Rows cover the nearest-tick band; spacing that leaves cells under a point wide produces no
