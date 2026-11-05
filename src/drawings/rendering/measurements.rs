@@ -146,8 +146,9 @@ impl Drawing {
         self.render_line_text(painter, start + offset, end + offset, above);
     }
 
-    /// Readout card beside a trend line, ray or extended line; the midpoint is independent of selection and
-    /// readout visibility. Its screen midpoint remains on the line on logarithmic scales.
+    /// Readout card beside a trend line, ray or extended line; the midpoint is independent of
+    /// selection and readout visibility. Its screen midpoint remains on the line on logarithmic
+    /// scales.
     pub(super) fn render_line_measurements(
         &self,
         painter: &egui::Painter,
