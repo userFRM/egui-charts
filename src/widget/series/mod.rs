@@ -359,7 +359,15 @@ impl Chart {
                 if let Some(marks) = &mut self.change_marks {
                     marks.clear();
                 }
-                self.pending_from.fill(Some(0));
+                // A study that keeps the values of the remaining bars draws them until its turn.
+                for (at, study) in self.studies.indicators_mut().iter_mut().enumerate() {
+                    if self.pending_from[at] != Some(0) && study.remove_oldest_bars(removed.len()) {
+                        self.pending_from[at] = None;
+                        self.stale[at] = true;
+                    } else {
+                        self.pending_from[at] = Some(0);
+                    }
+                }
                 if let Some(start) = &mut self.pending_start_idx {
                     *start = start.saturating_sub(removed.len());
                 }

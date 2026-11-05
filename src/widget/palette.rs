@@ -13,11 +13,24 @@ impl Chart {
         if old.is_empty() {
             old.push(self.followed_palette());
         }
-        follow_palette(
-            &mut self.config,
-            &old,
-            &ChartConfig::default().with_theme(theme),
-        );
+        let new = ChartConfig::default().with_theme(theme);
+        follow_palette(&mut self.config, &old, &new);
+        // Volume candles paint from their own style, which follows like the chart's candle colours.
+        let style = &mut self.chart_type_params.styles.volume_candles;
+        for color in [&mut style.body_up, &mut style.border_up, &mut style.wick_up] {
+            if old.iter().any(|old| *color == old.bullish_color) {
+                *color = new.bullish_color;
+            }
+        }
+        for color in [
+            &mut style.body_down,
+            &mut style.border_down,
+            &mut style.wick_down,
+        ] {
+            if old.iter().any(|old| *color == old.bearish_color) {
+                *color = new.bearish_color;
+            }
+        }
         self.inherited_theme = Some(theme.clone());
     }
 
@@ -148,6 +161,7 @@ mod tests {
         let mut built = crate::widget::ChartBuilder::new().build();
         let mut local = chart(&[100.0], &[110.0]);
         shared.config_mut().bearish_color = egui::Color32::RED;
+        shared.chart_type_params.styles.volume_candles.wick_down = egui::Color32::RED;
         local.set_theme_override(Some(Theme::high_contrast()));
         for (step, (theme, watermark)) in [
             (Theme::light(), egui::Color32::from_rgb(211, 212, 215)),
@@ -170,6 +184,10 @@ mod tests {
             );
             assert_eq!(shared.config().watermark_color, watermark);
             assert_eq!(shared.config().bearish_color, egui::Color32::RED);
+            let volume_candles = &shared.chart_type_params.styles.volume_candles;
+            assert_eq!(volume_candles.border_up, theme.chart.candle_up);
+            assert_eq!(volume_candles.body_down, theme.chart.candle_down);
+            assert_eq!(volume_candles.wick_down, egui::Color32::RED);
             assert_eq!(
                 local.config().background_color,
                 Theme::high_contrast().chart.bg

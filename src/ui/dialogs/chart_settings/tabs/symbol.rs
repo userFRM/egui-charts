@@ -54,13 +54,17 @@ impl SettingsDialog {
                 } else {
                     let heikin = kind == crate::model::ChartType::Heikin;
                     let hollow = kind == crate::model::ChartType::HollowCandles;
-                    let candles = kind == crate::model::ChartType::Candles || heikin || hollow;
+                    let volume = kind == crate::model::ChartType::VolumeCandles;
+                    let candles =
+                        kind == crate::model::ChartType::Candles || heikin || hollow || volume;
                     self.draw_section_header(
                         ui,
                         if heikin {
                             "HEIKIN ASHI"
                         } else if hollow {
                             "HOLLOW CANDLES"
+                        } else if volume {
+                            "VOLUME CANDLES"
                         } else if candles {
                             "CANDLES"
                         } else {
@@ -392,16 +396,24 @@ mod tests {
     }
 
     /// Real pointer edits reach the painter only after acceptance; Cancel keeps the original
-    /// component and scale settings in both themes.
+    /// component and scale settings of Heikin-Ashi and volume candles in both themes.
     #[test]
-    fn heikin_dialog_accepts_and_cancels_component_and_scale_edits() {
+    fn candle_dialogs_accept_and_cancel_component_and_scale_edits() {
         for theme in [Theme::light(), Theme::dark()] {
-            for label in [
-                "Body",
-                "Borders",
-                "Wick",
-                "Use original prices on scale",
-                "Reset to defaults",
+            for (kind, label) in [
+                (ChartType::Heikin, "Body"),
+                (ChartType::Heikin, "Borders"),
+                (ChartType::Heikin, "Wick"),
+                (ChartType::Heikin, "Use original prices on scale"),
+                (ChartType::Heikin, "Reset to defaults"),
+                (ChartType::VolumeCandles, "Body"),
+                (ChartType::VolumeCandles, "Borders"),
+                (ChartType::VolumeCandles, "Wick"),
+                (
+                    ChartType::VolumeCandles,
+                    "Color bars based on previous close",
+                ),
+                (ChartType::VolumeCandles, "Reset to defaults"),
             ] {
                 for accept in [false, true] {
                     let ctx = Context::default();
@@ -414,16 +426,20 @@ mod tests {
                         14.0,
                         0.0,
                     )]));
-                    chart.set_chart_type(ChartType::Heikin);
+                    chart.set_chart_type(kind);
                     chart.config_mut().show_volume = false;
                     let mut params = chart.chart_type_params().clone();
                     // A border in the colour of an opaque body paints nothing.
                     params.styles.heikin.border_up = egui::Color32::from_rgb(3, 4, 102);
+                    params.styles.volume_candles.border_up = egui::Color32::from_rgb(3, 4, 102);
                     if label == "Reset to defaults" {
                         params.styles.heikin.body_visible = false;
                         params.styles.heikin.border_visible = false;
                         params.styles.heikin.wick_visible = false;
                         params.styles.heikin.real_price_only = true;
+                        params.styles.volume_candles.body_visible = false;
+                        params.styles.volume_candles.border_visible = false;
+                        params.styles.volume_candles.wick_visible = false;
                     }
                     chart.set_chart_type_params(params);
                     let before = ChartSettingsState::from_chart(&chart);
@@ -462,30 +478,37 @@ mod tests {
                     }
                     assert!(!dialog.is_open);
                     let after = ChartSettingsState::from_chart(&chart);
-                    let style = chart.chart_type_params().styles.heikin.clone();
-                    let mut expected = before
-                        .chart_type_params
-                        .as_ref()
-                        .unwrap()
-                        .styles
-                        .heikin
-                        .clone();
+                    // Theme colours only apply once a frame has run, so compare the candle
+                    // settings rather than the whole state.
+                    let style = after.candle_colors.clone();
+                    let mut expected = before.candle_colors.clone();
                     if accept {
                         match label {
-                            "Body" => expected.body_visible = false,
-                            "Borders" => expected.border_visible = false,
-                            "Wick" => expected.wick_visible = false,
-                            "Use original prices on scale" => expected.real_price_only = true,
-                            "Reset to defaults" => expected = Default::default(),
+                            "Body" => expected.show_body = false,
+                            "Borders" => expected.show_border = false,
+                            "Wick" => expected.show_wick = false,
+                            "Color bars based on previous close" => {
+                                expected.color_by_previous_close = true
+                            }
+                            "Use original prices on scale" => {}
+                            "Reset to defaults" => {
+                                expected = crate::widget::settings::CandleColorConfig {
+                                    show_border: true,
+                                    ..Default::default()
+                                }
+                            }
                             _ => unreachable!(),
                         }
                     }
                     assert_eq!(style, expected);
-                    if !accept {
-                        // Theme colours only apply once a frame has run, so compare the
-                        // candle settings rather than the whole state.
-                        assert_eq!(after.candle_colors, before.candle_colors);
-                    }
+                    assert_eq!(
+                        chart.chart_type_params().styles.heikin.real_price_only,
+                        match label {
+                            "Use original prices on scale" => accept,
+                            "Reset to defaults" => !accept,
+                            _ => false,
+                        }
+                    );
                     // Paint the accepted state after the modal has closed.
                     let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 1.0, vec![]);
                     let plot = chart.get_rendered_price_rect();
@@ -493,7 +516,7 @@ mod tests {
                         matches!(s, Shape::Rect(r)
                         if plot.contains(r.rect.center()) && r.fill == style.body_up)
                     });
-                    assert_eq!(body, style.body_visible);
+                    assert_eq!(body, style.show_body);
                     let border = painted.iter().any(|s| {
                         matches!(s, Shape::Rect(r)
                         if plot.contains(r.rect.center()) && r.stroke.color == style.border_up)
@@ -503,9 +526,9 @@ mod tests {
                     // Only the defaults restored by the reset share the body's colour.
                     assert_eq!(
                         border,
-                        style.border_visible && style.border_up != style.body_up
+                        style.show_border && style.border_up != style.body_up
                     );
-                    assert_eq!(wick, style.wick_visible);
+                    assert_eq!(wick, style.show_wick);
                 }
             }
         }

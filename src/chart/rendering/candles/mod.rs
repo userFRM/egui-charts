@@ -175,14 +175,14 @@ pub fn render_chart_type(
                 ctx.price_scale,
                 ctx.colors,
                 ctx.visible_data,
+                ctx.full_data,
                 ctx.start_idx,
                 params.bar_width(),
                 params.wick_width(),
                 params.max_volume(),
                 params.chart_rect_min_x(),
                 &idx_to_coord,
-                params.bullish_color(),
-                params.bearish_color(),
+                &params.type_params.styles.volume_candles,
             );
         }
 
