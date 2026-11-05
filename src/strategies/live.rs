@@ -199,6 +199,7 @@ impl Backtest {
             prices: bars,
             trading: false,
             tick: live.tick,
+            open_tick: 0,
             fills: Some(&mut fills),
             forming: false,
         };
@@ -323,8 +324,7 @@ impl<'a> Run<'a> {
         };
         if self.trading {
             if previous.is_none() {
-                self.tick += 1;
-                self.pass_delays();
+                self.open_bar();
             }
             self.fill_along(
                 previous.unwrap_or(execution.open),

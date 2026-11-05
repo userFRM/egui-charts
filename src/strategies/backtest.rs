@@ -86,7 +86,8 @@ pub struct BacktestSettings {
     /// Fraction of short exposure funded by equity, independently of longs.
     /// `None` or an invalid fraction uses `1 / leverage`; zero disables short funding checks.
     pub short_funding: Option<f64>,
-    /// Require a limit to trade through by one `price_increment` before filling at its limit.
+    /// Require a limit to trade through by one `price_increment` before filling at its limit, or
+    /// at the open of a bar that opens at or beyond that threshold.
     /// Applies to entries, triggered stop-limits and profit-taking exits, without slippage.
     pub require_limit_cross: bool,
     /// Smallest price increment for limit verification. Must be positive and finite.
@@ -628,6 +629,7 @@ impl Backtest {
             prices,
             trading: false,
             tick: 0,
+            open_tick: 0,
             fills: None,
             forming: false,
         };
@@ -842,6 +844,8 @@ struct Run<'a> {
     prices: &'a [Bar],
     trading: bool,
     tick: u64,
+    /// The tick of the last bar open, which tells a gap from a price reached during the bar.
+    open_tick: u64,
     fills: Option<&'a mut Vec<StrategyFill>>,
     forming: bool,
 }
@@ -1048,8 +1052,7 @@ impl<'a> Run<'a> {
     }
 
     fn fill_bar(&mut self, bar: &Bar) {
-        self.tick += 1;
-        self.pass_delays();
+        self.open_bar();
         let [open, near, far, close] = price_path(bar);
         for (start, end) in [(open, near), (near, far), (far, close)] {
             self.fill_along(start, end, bar.time);
@@ -1063,8 +1066,7 @@ impl<'a> Run<'a> {
             let complete = final_candle.filter(|_| point == 3);
             let price = complete.map_or(price, |bar| bar.close);
             if point == 0 {
-                self.tick += 1;
-                self.pass_delays();
+                self.open_bar();
             }
             if self.trading {
                 self.fill_segment(previous, price, bar.time, point != 0);
@@ -1086,6 +1088,13 @@ impl<'a> Run<'a> {
             self.decide(price, false);
             previous = price;
         }
+    }
+
+    /// Reach the first price point of a bar.
+    fn open_bar(&mut self) {
+        self.tick += 1;
+        self.open_tick = self.tick;
+        self.pass_delays();
     }
 
     /// Count a reached price point against delayed orders. An order whose delay ends here then
@@ -1134,7 +1143,7 @@ impl<'a> Run<'a> {
     }
 
     /// Limit price of an order that crossed its verification threshold, or the better market
-    /// price of a gap beyond that threshold.
+    /// price of a gap: a bar's open at or beyond that threshold, or a later point beyond it.
     fn verified_price(&self, order: &Working, mark: f64) -> f64 {
         if !self.settings.require_limit_cross {
             return mark;
@@ -1154,7 +1163,7 @@ impl<'a> Run<'a> {
         };
         let trigger = limit - sign(side) * self.settings.price_increment;
         let tolerance = rounding_tolerance(limit.abs().max(trigger.abs()), 4.0 * f64::EPSILON);
-        if sign(side) * (mark - trigger) < -tolerance {
+        if self.tick == self.open_tick || sign(side) * (mark - trigger) < -tolerance {
             mark
         } else {
             limit
@@ -2914,6 +2923,25 @@ mod tests {
                 0,
             ),
             (
+                "verified limit gap to the threshold fills at the open",
+                limits,
+                BacktestSettings {
+                    require_limit_cross: true,
+                    price_increment: 0.25,
+                    ..terms.clone()
+                },
+                vec![
+                    (100.0, 100.0, 100.0, 100.0),
+                    // Opens one increment through the buy limit and never trades above 99.75.
+                    (99.75, 99.75, 99.5, 99.75),
+                    // Opens one increment through the take profit and never trades below 110.25.
+                    (110.25, 110.5, 110.25, 110.25),
+                ],
+                vec![trade(Buy, 2.0, 1, 99.75, Some((2, 110.25, 21.0)), "A / X")],
+                vec![1000.0, 1000.0, 1000.0, 1021.0],
+                0,
+            ),
+            (
                 "order delay waits for further price points",
                 hold,
                 BacktestSettings {
@@ -3113,7 +3141,7 @@ mod tests {
                     ..terms.clone()
                 },
                 flat(&[1.2, 1.2, 1.2f64.next_down()]),
-                vec![trade(Buy, 2.0, 2, 1.2, None, "A")],
+                vec![trade(Buy, 2.0, 2, 1.2f64.next_down(), None, "A")],
                 vec![1000.0; 4],
                 0,
             ),
