@@ -559,15 +559,21 @@ impl Chart {
         }
     }
 
+    /// The rising and falling body colours of the main series: Heikin-Ashi and hollow candles
+    /// keep their own, other chart types use the chart configuration.
+    pub(in crate::widget) fn main_body_colors(&self) -> (Color32, Color32) {
+        let styles = &self.chart_type_params.styles;
+        match self.chart_type {
+            ChartType::Heikin => (styles.heikin.body_up, styles.heikin.body_down),
+            ChartType::HollowCandles => (styles.hollow.body_up, styles.hollow.body_down),
+            _ => (self.config.bullish_color, self.config.bearish_color),
+        }
+    }
+
     /// The main series' last-value colour for `bar`: the price line colour, the bar's own
     /// colour, or its direction.
     pub(in crate::widget) fn main_value_color(&self, bar: &Bar) -> Color32 {
-        let (up, down) = if self.chart_type == ChartType::Heikin {
-            let style = &self.chart_type_params.styles.heikin;
-            (style.body_up, style.body_down)
-        } else {
-            (self.config.bullish_color, self.config.bearish_color)
-        };
+        let (up, down) = self.main_body_colors();
         self.main_series_style
             .price_line_color
             .or_else(|| bar.colors.as_ref().and_then(|own| own.color))
