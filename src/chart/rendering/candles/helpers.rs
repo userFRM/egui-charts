@@ -36,20 +36,6 @@ impl OhlcYCoords {
     }
 }
 
-/// Draw candle wicks (upper and lower)
-pub fn draw_wicks(painter: &Painter, x: f32, y: &OhlcYCoords, wick_width: f32, color: Color32) {
-    // Upper wick
-    painter.add(Shape::line_segment(
-        [Pos2::new(x, y.wick_top), Pos2::new(x, y.body_top)],
-        Stroke::new(wick_width, color),
-    ));
-    // Lower wick
-    painter.add(Shape::line_segment(
-        [Pos2::new(x, y.body_bottom), Pos2::new(x, y.wick_bottom)],
-        Stroke::new(wick_width, color),
-    ));
-}
-
 /// Queue the wicks of a candle; a trending bar has no wick on one side, and a segment without
 /// length paints nothing.
 pub(super) fn push_wicks(shapes: &mut Vec<Shape>, x: f32, y: &OhlcYCoords, stroke: Stroke) {
@@ -104,17 +90,6 @@ pub fn body_rect(x: f32, bar_width: f32, y: &OhlcYCoords) -> Rect {
                 .max(y.body_top + DESIGN_TOKENS.sizing.candle.min_body_height),
         ),
     )
-}
-
-/// Draw filled candle body
-pub fn draw_body_filled(
-    painter: &Painter,
-    x: f32,
-    bar_width: f32,
-    y: &OhlcYCoords,
-    color: Color32,
-) {
-    painter.add(Shape::rect_filled(body_rect(x, bar_width, y), 0.0, color));
 }
 
 /// Draw a brick/block with border (for Renko, Line Break)
@@ -174,14 +149,4 @@ pub fn prev_close(full: &[Bar], idx: usize) -> f64 {
         .rev()
         .find(|bar| !bar.is_whitespace())
         .map_or(full[idx].open, |bar| bar.close)
-}
-
-/// Select bullish or bearish color based on bar direction
-#[inline]
-pub fn bar_color(bar: &crate::model::Bar, bullish: Color32, bearish: Color32) -> Color32 {
-    if bar.close > bar.open {
-        bullish
-    } else {
-        bearish
-    }
 }

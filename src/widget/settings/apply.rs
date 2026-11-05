@@ -172,6 +172,21 @@ impl ChartSettingsState {
                 wick_down: style.wick_down,
             };
         }
+        if chart.chart_type() == crate::model::ChartType::VolumeCandles {
+            let style = &chart.chart_type_params().styles.volume_candles;
+            settings.candle_colors = super::CandleColorConfig {
+                color_by_previous_close: style.color_by_previous_close,
+                show_body: style.body_visible,
+                show_border: style.border_visible,
+                show_wick: style.wick_visible,
+                body_up: style.body_up,
+                body_down: style.body_down,
+                border_up: style.border_up,
+                border_down: style.border_down,
+                wick_up: style.wick_up,
+                wick_down: style.wick_down,
+            };
+        }
         if chart.chart_type() == crate::model::ChartType::Heikin {
             let style = &chart.chart_type_params().styles.heikin;
             settings.candle_colors = super::CandleColorConfig {
@@ -435,7 +450,9 @@ impl ChartSettingsState {
         let config = chart.config_mut();
         if !matches!(
             self.chart_type,
-            crate::model::ChartType::Heikin | crate::model::ChartType::HollowCandles
+            crate::model::ChartType::Heikin
+                | crate::model::ChartType::HollowCandles
+                | crate::model::ChartType::VolumeCandles
         ) {
             config.bullish_color = self.candle_colors.body_up;
             config.bearish_color = self.candle_colors.body_down;
@@ -625,6 +642,23 @@ impl ChartSettingsState {
             style.body_visible = colors.show_body;
             style.border_visible = colors.show_border;
             style.wick_visible = colors.show_wick;
+            style.body_up = colors.body_up;
+            style.body_down = colors.body_down;
+            style.border_up = colors.border_up;
+            style.border_down = colors.border_down;
+            style.wick_up = colors.wick_up;
+            style.wick_down = colors.wick_down;
+            if chart.chart_type_params() != &params {
+                chart.set_chart_type_params(params);
+            }
+        } else if self.chart_type == crate::model::ChartType::VolumeCandles {
+            let mut params = chart.chart_type_params().clone();
+            let style = &mut params.styles.volume_candles;
+            let colors = &self.candle_colors;
+            style.body_visible = colors.show_body;
+            style.border_visible = colors.show_border;
+            style.wick_visible = colors.show_wick;
+            style.color_by_previous_close = colors.color_by_previous_close;
             style.body_up = colors.body_up;
             style.body_down = colors.body_down;
             style.border_up = colors.border_up;
@@ -955,11 +989,12 @@ mod tests {
     }
 
     /// Hollow candles colour by the close against the previous close, and are hollow when the
-    /// close is above the open; each component has its own switch and colours, and saved
-    /// styles and undo keep them apart from the plain candle settings.
+    /// close is above the open; volume candles colour by their open or the previous close and are
+    /// always filled. Each component has its own switch and colours, and saved styles and undo
+    /// keep them apart from the plain candle settings.
     #[test]
     #[cfg(feature = "drawings")]
-    fn hollow_components_paint_and_keep_independent_saved_values() {
+    fn hollow_and_volume_components_paint_and_keep_independent_saved_values() {
         use crate::model::ChartType;
         use crate::widget::ChartSnapshot;
         use crate::widget::test_frames::{frame, shapes};
@@ -971,23 +1006,31 @@ mod tests {
             Color32::from_rgb(105, 106, 6),
             Color32::from_rgb(7, 107, 108),
         ];
-        // Open, high, low, close; the colour index (rising 0, falling 1) and whether the body
-        // is filled. The last two bars close against the previous close, not their open.
+        // Open, high, low, close; the colour index (rising 0, falling 1) against the previous close
+        // and against the open, and whether a hollow candle's body is filled. The last two bars
+        // differ between the two comparisons.
         let bars = [
-            ((10.0, 18.0, 8.0, 14.0), 0, false),
-            ((13.0, 17.0, 8.5, 11.0), 1, true),
-            ((11.0, 14.0, 6.0, 12.0), 0, false),
-            ((13.0, 15.0, 10.0, 12.5), 0, true),
-            ((9.0, 13.0, 8.0, 10.0), 1, false),
+            ((10.0, 18.0, 8.0, 14.0), 0, 0, false),
+            ((13.0, 17.0, 8.5, 11.0), 1, 1, true),
+            ((11.0, 14.0, 6.0, 12.0), 0, 0, false),
+            ((13.0, 15.0, 10.0, 12.5), 0, 1, true),
+            ((9.0, 13.0, 8.0, 10.0), 1, 0, false),
         ];
         for theme in [Theme::light(), Theme::dark()] {
-            for flags in 0..8 {
+            for (kind, by_previous, flags) in [
+                (ChartType::HollowCandles, true),
+                (ChartType::VolumeCandles, false),
+                (ChartType::VolumeCandles, true),
+            ]
+            .into_iter()
+            .flat_map(|(kind, by_previous)| (0..8).map(move |flags| (kind, by_previous, flags)))
+            {
                 let ctx = Context::default();
                 crate::theme::apply_to_egui(&ctx, &theme);
                 let mut chart = Chart::new(BarData::from_bars(
                     bars.iter()
                         .enumerate()
-                        .map(|(i, ((o, h, l, c), _, _))| {
+                        .map(|(i, ((o, h, l, c), _, _, _))| {
                             Bar::new(
                                 chrono::DateTime::UNIX_EPOCH + chrono::Duration::days(i as i64),
                                 *o,
@@ -999,7 +1042,7 @@ mod tests {
                         })
                         .collect(),
                 ));
-                chart.set_chart_type(ChartType::HollowCandles);
+                chart.set_chart_type(kind);
                 chart.config_mut().show_volume = false;
                 let before = ChartSettingsState::from_chart(&chart);
                 let mut settings = before.clone();
@@ -1007,6 +1050,7 @@ mod tests {
                 c.show_body = flags & 1 != 0;
                 c.show_border = flags & 2 != 0;
                 c.show_wick = flags & 4 != 0;
+                c.color_by_previous_close = by_previous;
                 [
                     c.body_up,
                     c.body_down,
@@ -1044,7 +1088,9 @@ mod tests {
                 }
                 let mut expected_bodies = Vec::new();
                 let mut expected_wicks = Vec::new();
-                for (_, dir, filled) in bars {
+                for (_, previous, own, filled) in bars {
+                    let dir = if by_previous { previous } else { own };
+                    let filled = filled || kind == ChartType::VolumeCandles;
                     let fill = (c.show_body && filled).then_some(palette[dir]);
                     let stroke = c.show_border.then_some(palette[2 + dir]);
                     if fill.is_some() || stroke.is_some() {
@@ -1077,7 +1123,7 @@ mod tests {
                     chart.chart_type_params().styles.candles,
                     before.chart_type_params.as_ref().unwrap().styles.candles
                 );
-                chart.set_chart_type(ChartType::HollowCandles);
+                chart.set_chart_type(kind);
                 assert_eq!(ChartSettingsState::from_chart(&chart).candle_colors, c);
             }
         }

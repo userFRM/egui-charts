@@ -69,7 +69,7 @@ pub(crate) use bar::{last_with_value, percent_change};
 pub use box_size::{BoxSizeMethod, PriceBasedSource};
 pub use chart_style::{
     AreaStyle, BarsStyle, BaselineStyle, CandlesStyle, ChartTypeStyles, HeikinStyle, HlcAreaStyle,
-    HollowStyle, KagiStyle, LastPriceAnimation, LinePlotStyle, LineType,
+    HollowStyle, KagiStyle, LastPriceAnimation, LinePlotStyle, LineType, VolumeCandlesStyle,
 };
 pub use chart_type::{
     BaselineLevel, ChartType, ChartTypeCategory, ChartTypeParams, CustomProfileSession,
