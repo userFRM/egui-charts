@@ -43,6 +43,7 @@ function parseFeatures(csv: string): Feature[] {
     if (values.length !== columns.length || !areas.includes(feature.area) ||
         !statuses.includes(feature.status) || !['library', 'host'].includes(feature.provided_by) ||
         !feature.group || !feature.feature || identities.has(identity) ||
+        (feature.status === 'missing' && feature.source) ||
         (feature.issues && !/^[1-9]\d*(;[1-9]\d*)*$/.test(feature.issues))) {
       throw new Error(`Invalid or duplicate feature: ${identity}`);
     }
