@@ -1,9 +1,8 @@
 //! # Volume Bubbles Overlay
 //!
 //! Draws the trades of the chart's series as bubbles, grouped as [`BubbleGrouping`] says, by
-//! default one per bar and price level, merging nearby screen cells when crowded. The diameter
-//! grows with volume within the available space, and the colour shows the aggressor side or
-//! the delta, as [`BubbleColor`] says.
+//! default marking only the large trades, one bubble each, with an area proportional to the size.
+//! The colour shows the aggressor side or the delta, as [`BubbleColor`] says.
 //! Turn them on with [`Chart::set_volume_bubbles`](crate::widget::Chart::set_volume_bubbles).
 
 use crate::model::{Bar, BarClock, OrderSide, Tick};
@@ -19,7 +18,8 @@ use std::sync::{Arc, Mutex};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct VolumeBubblesConfig {
-    /// Minimum bubble diameter, reduced in crowded automatic views.
+    /// Minimum bubble diameter, the size of every smaller bubble, reduced in crowded automatic
+    /// views.
     pub min_diameter: f32,
     /// Maximum bubble diameter, limited by screen density with automatic grouping.
     pub max_diameter: f32,
@@ -44,7 +44,10 @@ pub struct VolumeBubblesConfig {
     pub show_border: bool,
     /// Border color
     pub border_color: Color32,
-    /// Bubbles with less volume are neither drawn nor scaled over
+    /// Bubbles with less volume are neither drawn nor scaled over. Without one,
+    /// [`Ungrouped`](BubbleGrouping::Ungrouped) draws the trades of at least the mean plus two
+    /// standard deviations of the visible trades' sizes, and the other groupings draw every
+    /// bubble. `Some(0.0)` draws every trade.
     pub min_size_filter: Option<f64>,
     /// Which trades share a bubble.
     pub grouping: BubbleGrouping,
@@ -60,17 +63,17 @@ impl Default for VolumeBubblesConfig {
         Self {
             min_diameter: DESIGN_TOKENS.spacing.sm,
             max_diameter: DESIGN_TOKENS.sizing.charts_ext.volume_bubbles_max_diameter,
-            opacity: 180,
+            opacity: 128,
             buy_color: DESIGN_TOKENS.semantic.chart.bullish,
             sell_color: DESIGN_TOKENS.semantic.chart.bearish,
             neutral_color: DESIGN_TOKENS.semantic.ui.text_muted_dark,
             color_by: BubbleColor::Side,
-            scaling_mode: BubbleScalingMode::Logarithmic,
-            clamp_std_devs: 3.0,
-            show_border: true,
+            scaling_mode: BubbleScalingMode::Area,
+            clamp_std_devs: f64::INFINITY,
+            show_border: false,
             border_color: Color32::from_rgba_unmultiplied(255, 255, 255, 100),
             min_size_filter: None,
-            grouping: BubbleGrouping::Automatic,
+            grouping: BubbleGrouping::Ungrouped,
         }
     }
 }
@@ -85,8 +88,9 @@ pub enum BubbleGrouping {
     /// cells and crowded bubbles use fainter borders; spacious views keep the configured sizes.
     Automatic,
     /// One bubble per execution, at its own time and price, so fills of one price and instant
-    /// stay separate bubbles even when they land on one pixel. Draws every visible execution,
-    /// at most the chart's bounded trade store.
+    /// stay separate bubbles even when they land on one pixel. Considers every visible execution,
+    /// at most the chart's bounded trade store, and draws those that
+    /// [`min_size_filter`](VolumeBubblesConfig::min_size_filter) leaves.
     Ungrouped,
     /// One bubble per price level and time window. Windows start on multiples of their length
     /// counted from the Unix epoch, and a bubble sits in the middle of its window. A length
@@ -110,6 +114,9 @@ pub enum BubbleScalingMode {
     Logarithmic,
     /// Square root scaling
     SquareRoot,
+    /// The diameter is proportional to the square root of the volume counted from zero, so the
+    /// area is proportional to the volume, and the largest bubble takes the maximum diameter.
+    Area,
 }
 
 /// What the colour of a bubble shows.
@@ -416,7 +423,6 @@ impl VolumeBubbles {
             None => slot,
         };
         let end = opens[opens.len() - 1] + TimeDelta::milliseconds(slot_of(bars.len() - 1));
-        let min_size = self.config.min_size_filter.unwrap_or(f64::NEG_INFINITY);
         let mut shown: Vec<(f32, f32, Bubble)> = Vec::new();
         for bubble in self.between(opens[0], end) {
             let i = opens.partition_point(|open| *open <= bubble.at);
@@ -447,6 +453,13 @@ impl VolumeBubbles {
             group_on_screen(&mut shown, spacing).min(self.config.max_diameter)
         } else {
             self.config.max_diameter
+        };
+        let min_size = match self.config.min_size_filter {
+            Some(size) => size,
+            None if self.config.grouping == BubbleGrouping::Ungrouped => {
+                std_devs_above_mean(shown.iter().map(|(_, _, b)| b.volume), 2.0)
+            }
+            None => f64::NEG_INFINITY,
         };
         shown.retain(|(_, _, bubble)| bubble.volume >= min_size);
         let mut scale = Scale::new(
@@ -646,6 +659,19 @@ fn add_disc(
     }
 }
 
+/// The mean of `volumes` plus `std_devs` of their population standard deviations, kept as a
+/// running mean so that equal volumes reach it exactly instead of missing it by a rounding error.
+fn std_devs_above_mean(volumes: impl Iterator<Item = f64>, std_devs: f64) -> f64 {
+    let (mut count, mut mean, mut squares) = (0.0, 0.0, 0.0);
+    for volume in volumes {
+        count += 1.0;
+        let before = volume - mean;
+        mean += before / count;
+        squares += before * (volume - mean);
+    }
+    mean + std_devs * (squares / f64::max(count, 1.0)).sqrt()
+}
+
 /// Diameters for the volumes of the bubbles drawn together.
 struct Scale {
     low: f64,
@@ -659,10 +685,7 @@ impl Scale {
     /// Spans the diameters over `volumes`, the largest clamped to the configured number of
     /// standard deviations above their mean.
     fn new(config: &VolumeBubblesConfig, volumes: impl Iterator<Item = f64> + Clone) -> Self {
-        let count = volumes.clone().count().max(1) as f64;
-        let mean = volumes.clone().sum::<f64>() / count;
-        let variance = volumes.clone().map(|v| (v - mean).powi(2)).sum::<f64>() / count;
-        let cap = mean + config.clamp_std_devs * variance.sqrt();
+        let cap = std_devs_above_mean(volumes.clone(), config.clamp_std_devs);
         let low = volumes.clone().fold(f64::INFINITY, f64::min);
         let high = volumes.fold(f64::NEG_INFINITY, f64::max).min(cap);
         Self {
@@ -678,9 +701,13 @@ impl Scale {
         let scaled = |volume: f64| match self.mode {
             BubbleScalingMode::Linear => volume,
             BubbleScalingMode::Logarithmic => volume.max(0.0).ln_1p(),
-            BubbleScalingMode::SquareRoot => volume.max(0.0).sqrt(),
+            BubbleScalingMode::SquareRoot | BubbleScalingMode::Area => volume.max(0.0).sqrt(),
         };
         let (low, high) = (scaled(self.low), scaled(self.high));
+        if self.mode == BubbleScalingMode::Area {
+            let share = scaled(volume.min(self.high)) / high.max(f64::MIN_POSITIVE);
+            return (share as f32 * self.max_diameter).max(self.min_diameter);
+        }
         if high <= low {
             return (self.min_diameter + self.max_diameter) / 2.0;
         }
@@ -700,6 +727,68 @@ mod tests {
     fn trade(second: i64, price: f64, size: f64, side: Option<OrderSide>) -> Tick {
         let ts = "2024-03-15T10:00:00Z".parse::<DateTime<Utc>>().unwrap();
         Tick::new(ts + TimeDelta::seconds(second), price, size, side)
+    }
+
+    /// Asserts the discs of five one-minute bars from 10:00, `spacing` apart from x = 100, y being
+    /// 200 less the price. Each disc is `(x, y, diameter, fill, border)`.
+    fn assert_draws(
+        name: &str,
+        config: VolumeBubblesConfig,
+        spacing: f32,
+        trades: &[Tick],
+        expected: Vec<(f32, f32, f32, Color32, Option<Color32>)>,
+    ) {
+        let bars: Vec<_> = (0..5)
+            .map(|i| {
+                Bar::new(
+                    trade(i * 60, 0.0, 0.0, None).ts,
+                    100.0,
+                    101.0,
+                    20.0,
+                    80.0,
+                    1.0,
+                )
+            })
+            .collect();
+        let bubbles = VolumeBubbles::new(config, BarClock::new(Timeframe::Min1), Some(1.0), trades);
+        let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+            bubbles.render(
+                ui.painter(),
+                &bars,
+                spacing,
+                |i| 100.0 + spacing * i as f32,
+                |p| 200.0 - p as f32,
+            );
+        });
+        output.textures_delta.clear();
+        let mesh = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                Shape::Mesh(mesh) => Some(mesh),
+                _ => None,
+            })
+            .unwrap();
+        let mut wanted = Mesh::default();
+        for (x, y, diameter, color, border) in expected {
+            add_disc(
+                &mut wanted,
+                Pos2::new(x, y),
+                diameter / 2.0,
+                color,
+                border,
+                1.0,
+            );
+        }
+        assert_eq!(mesh.vertices.len(), wanted.vertices.len(), "{name}");
+        assert_eq!(mesh.indices, wanted.indices, "{name}");
+        for (got, expected) in mesh.vertices.iter().zip(&wanted.vertices) {
+            assert!(
+                (got.pos - expected.pos).length() < 1e-4,
+                "{name}: {got:?} vs {expected:?}"
+            );
+            assert_eq!(got.color, expected.color, "{name}");
+        }
     }
 
     /// Guards the aggregation in data space and its bound: trades of one one-minute bar at one
@@ -961,6 +1050,7 @@ mod tests {
         let config = VolumeBubblesConfig {
             scaling_mode: BubbleScalingMode::Linear,
             clamp_std_devs: f64::INFINITY,
+            show_border: true,
             ..VolumeBubblesConfig::default()
         };
         let (green, red) = (
@@ -998,68 +1088,73 @@ mod tests {
                      (112.0, 140.0, 4.0 + 288.0 / 11.0, red, border)]),
         ];
         for (name, grouping, spacing, min_size_filter, trades, expected) in cases {
-            let clock = BarClock::new(Timeframe::Min1);
-            let bars: Vec<_> = (0..5)
-                .map(|i| {
-                    Bar::new(
-                        trade(i * 60, 0.0, 0.0, None).ts,
-                        100.0,
-                        101.0,
-                        20.0,
-                        80.0,
-                        1.0,
-                    )
-                })
-                .collect();
-            let bubbles = VolumeBubbles::new(
-                VolumeBubblesConfig {
-                    grouping,
-                    min_size_filter,
-                    ..config.clone()
-                },
-                clock,
-                Some(1.0),
-                &trades,
-            );
-            let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
-                bubbles.render(
-                    ui.painter(),
-                    &bars,
-                    spacing,
-                    |i| 100.0 + spacing * i as f32,
-                    |p| 200.0 - p as f32,
-                );
-            });
-            output.textures_delta.clear();
-            let mesh = output
-                .shapes
-                .iter()
-                .find_map(|shape| match &shape.shape {
-                    Shape::Mesh(mesh) => Some(mesh),
-                    _ => None,
-                })
-                .unwrap();
-            let mut wanted = Mesh::default();
-            for (x, y, diameter, color, border) in expected {
-                add_disc(
-                    &mut wanted,
-                    Pos2::new(x, y),
-                    diameter / 2.0,
-                    color,
-                    border,
-                    1.0,
-                );
-            }
-            assert_eq!(mesh.vertices.len(), wanted.vertices.len(), "{name}");
-            assert_eq!(mesh.indices, wanted.indices, "{name}");
-            for (got, expected) in mesh.vertices.iter().zip(&wanted.vertices) {
-                assert!(
-                    (got.pos - expected.pos).length() < 1e-4,
-                    "{name}: {got:?} vs {expected:?}"
-                );
-                assert_eq!(got.color, expected.color, "{name}");
-            }
+            let config = VolumeBubblesConfig {
+                grouping,
+                min_size_filter,
+                ..config.clone()
+            };
+            assert_draws(name, config, spacing, &trades, expected);
         }
+    }
+
+    /// Guards the default look: only trades of at least the mean plus two standard deviations of
+    /// the visible sizes draw, at half opacity without a border, the diameter proportional to the
+    /// square root of the size counted from zero and held at the minimum, an absolute size
+    /// replaces the threshold, explicit scaling keeps its stretch, and saved values load back.
+    /// Expected values by hand: the session has 202 trades, sum 1,100, squares 172,200, so a mean
+    /// of 5.446, a deviation of 28.685 and a threshold of 62.82.
+    #[test]
+    fn default_bubbles_mark_the_large_trades_by_area() {
+        let (buy, sell) = (Some(OrderSide::Buy), Some(OrderSide::Sell));
+        let config = VolumeBubblesConfig::default();
+        let (green, red) = (
+            with_opacity(config.buy_color, 128),
+            with_opacity(config.sell_color, 128),
+        );
+        let mut session = Vec::from_iter((0..200).map(|i| trade(i, 90.0, (i % 5 + 1) as f64, buy)));
+        session.extend([trade(30, 100.0, 100.0, buy), trade(150, 60.0, 400.0, sell)]);
+        let sized = |sizes: [f64; 3]| {
+            Vec::from_iter(
+                [30, 90, 150]
+                    .into_iter()
+                    .zip(sizes)
+                    .map(|(second, size)| trade(second, 100.0, size, buy)),
+            )
+        };
+        let spots = [100.0, 180.0, 260.0].map(|x| (x, 100.0));
+        #[rustfmt::skip]
+        let cases = [
+            ("only the large prints draw, a quarter of the size at half the diameter",
+                VolumeBubblesConfig::default(), session,
+                vec![(100.0, 100.0, 20.0, green, None), (260.0, 140.0, 40.0, red, None)]),
+            ("equal sizes all reach the threshold",
+                VolumeBubblesConfig::default(), sized([0.1; 3]),
+                spots.map(|(x, y)| (x, y, 40.0, green, None)).to_vec()),
+            ("an absolute size replaces the threshold",
+                VolumeBubblesConfig { min_size_filter: Some(5.0), ..config.clone() }, sized([4.0, 5.0, 100.0]),
+                vec![(180.0, 100.0, 8.944_272, green, None), (260.0, 100.0, 40.0, green, None)]),
+            ("no bubble is smaller than the minimum diameter",
+                VolumeBubblesConfig { min_size_filter: Some(0.0), ..config.clone() }, sized([0.01, 1.0, 400.0]),
+                vec![(100.0, 100.0, 4.0, green, None), (180.0, 100.0, 4.0, green, None), (260.0, 100.0, 40.0, green, None)]),
+            ("explicit square root scaling keeps its stretch",
+                VolumeBubblesConfig { min_size_filter: Some(0.0), scaling_mode: BubbleScalingMode::SquareRoot, ..config.clone() },
+                sized([1.0, 4.0, 16.0]),
+                vec![(100.0, 100.0, 4.0, green, None), (180.0, 100.0, 16.0, green, None), (260.0, 100.0, 40.0, green, None)]),
+        ];
+        for (name, config, trades, expected) in cases {
+            assert_draws(name, config, 80.0, &trades, expected);
+        }
+        let saved: VolumeBubblesConfig = serde_json::from_value(serde_json::json!({
+            "grouping": { "PriceStep": 0.5 },
+            "scaling_mode": "Logarithmic",
+            "opacity": 180,
+            "min_size_filter": 5.0,
+        }))
+        .unwrap();
+        assert_eq!(saved.grouping, PriceStep(0.5));
+        assert_eq!(saved.scaling_mode, BubbleScalingMode::Logarithmic);
+        assert_eq!(saved.opacity, 180);
+        assert_eq!(saved.min_size_filter, Some(5.0));
     }
 
     /// Guards the exact position of ungrouped bubbles: a fill sits in its bar's slot at the

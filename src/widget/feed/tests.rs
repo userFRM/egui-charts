@@ -2079,7 +2079,10 @@ fn feed_lifecycle() {
         1,
         "c: catalog notification coalesces"
     );
-    chart.set_volume_bubbles(Some(VolumeBubblesConfig::default()));
+    chart.set_volume_bubbles(Some(VolumeBubblesConfig {
+        grouping: crate::chart::overlays::BubbleGrouping::Automatic,
+        ..VolumeBubblesConfig::default()
+    }));
     chart.set_chart_type(ChartType::VolumeFootprint);
     frames.run(&mut chart);
     let woken = Arc::new(Mutex::new(Vec::new()));
