@@ -217,6 +217,7 @@ impl Backtest {
         if live.report.equity.is_empty() {
             run.start_equity(self.timeframe, &bars[..closed], &mut live.report);
         }
+        let bar_closed = live.processed < closed;
         for index in live.processed..closed {
             let bar = &bars[index];
             let observed = live.forming.is_some_and(|(time, _)| time == bar.time);
@@ -253,6 +254,13 @@ impl Backtest {
                 .forming
                 .filter(|(time, _)| *time == bar.time)
                 .map(|(_, price)| price);
+            // Closing a bar left the calculations at that bar, one short of this decision's bars.
+            if bar_closed
+                && self.settings.recalculate_on_history
+                && !self.settings.chart_type.transforms_data()
+            {
+                run.strategy.prepare_update(decision_bars);
+            }
             if run.forming_bar(decision_bars, closed, previous_price, true) {
                 let execution = if self.settings.chart_type == ChartType::Heikin
                     && !self.settings.original_price_fills
@@ -773,5 +781,34 @@ mod tests {
             };
             assert_eq!(message, expected);
         }
+    }
+
+    #[test]
+    fn forming_decision_after_a_close_sees_refreshed_calculations() {
+        /// Records decisions whose bars differ from the bars of the last calculation.
+        #[derive(Default)]
+        struct Prefix {
+            prepared: usize,
+            stale: Vec<(usize, usize)>,
+        }
+        impl Strategy for Prefix {
+            fn prepare(&mut self, bars: &[Bar]) {
+                self.prepared = bars.len();
+            }
+            fn on_bar(&mut self, context: &mut StrategyContext<'_>) {
+                if context.bars().len() != self.prepared {
+                    self.stale.push((context.bars().len(), self.prepared));
+                }
+            }
+        }
+        let bars: Vec<_> = (0..3).map(|i| bar(i, 100.0 + i as f64)).collect();
+        let mut engine = Backtest::new("Live", "SYM", Timeframe::Min1, 1000.0);
+        engine.settings.recalculate_on_every_update = true;
+        engine.settings.recalculate_on_history = true;
+        let mut strategy = Prefix::default();
+        for count in 1..=bars.len() {
+            engine.update(&mut strategy, &bars[..count], &[]);
+        }
+        assert_eq!(strategy.stale, Vec::<(usize, usize)>::new());
     }
 }
