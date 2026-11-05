@@ -20,17 +20,17 @@ hero:
 import { LinkCard, CardGrid } from '@astrojs/starlight/components';
 import FirstChart from '../../components/FirstChart.astro';
 
-<figure id="product-tour" className="live-chart" style="scroll-margin-top:calc(var(--sl-nav-height) + 1rem)">
+<figure id="product-tour" className="live-chart">
   <figcaption>
     <span>Explore the demo <span className="sample-label">Generated sample data</span></span>
-    <a href="/egui-charts/demo/">Open the demo →</a>
+    <a href="/egui-charts/demo/">Open the demo <span aria-hidden="true">→</span></a>
   </figcaption>
-  <video id="tour-video" autoplay muted loop playsinline controls preload="metadata" poster="/egui-charts/docs/media/tour-poster.webp" width="2560" height="1440" aria-label="Chart layouts, studies, drawing tools, watchlist and bar replay in the demo" style="display:block;width:100%;height:auto">
+  <video id="tour-video" autoplay muted loop playsinline controls preload="metadata" poster="/egui-charts/docs/media/tour-poster.webp" width="2560" height="1440" aria-label="Chart layouts, studies, drawing tools, watchlist and bar replay in the demo">
     <source data-src="/egui-charts/docs/media/tour-1080p.webm" type="video/webm; codecs=av01.0.09M.08" />
     <source data-src="/egui-charts/docs/media/tour-1080p.mp4" type="video/mp4" />
     <a href="/egui-charts/docs/media/tour-1080p.mp4">Watch the demo tour</a>
   </video>
-  <p><button id="tour-play" type="button" className="sl-link-button secondary" style="background:var(--sl-color-bg);font:inherit;padding:0.5rem 0.75rem;border-width:1px;cursor:pointer" hidden>Play the demo tour</button> Four charts, studies, drawing tools and replay. All prices come from the sample feed.</p>
+  <p><button id="tour-play" type="button" hidden>Play the demo tour</button> Four charts, studies, drawing tools and replay. All prices come from the sample feed.</p>
   <noscript><p><a href="/egui-charts/docs/media/tour-1080p.mp4">Play the demo tour</a></p></noscript>
 </figure>
 
@@ -46,6 +46,7 @@ import FirstChart from '../../components/FirstChart.astro';
     const update = () => {
       video.autoplay = !motion.matches;
       play.hidden = !motion.matches;
+      video.controls = !motion.matches;
       if (motion.matches) {
         video.pause();
         for (const source of video.querySelectorAll('source')) source.removeAttribute('src');
@@ -56,6 +57,7 @@ import FirstChart from '../../components/FirstChart.astro';
       }
     };
     play.addEventListener('click', () => {
+      video.controls = true;
       load();
       video.play().then(() => { play.hidden = true; }).catch(() => { play.hidden = false; });
     });
