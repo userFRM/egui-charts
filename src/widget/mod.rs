@@ -99,6 +99,7 @@ mod navigation;
 mod palette;
 pub(crate) mod pan_zoom;
 mod pane;
+#[doc(inline)]
 pub use pane::{ChartLayoutRects, PaneId, PaneOptions, RenderedIndicatorPane};
 #[cfg(feature = "drawings")]
 #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
@@ -133,8 +134,8 @@ mod drawing_api;
 pub use drawing_api::DrawingError;
 mod studies_data;
 pub use crate::chart::primitives::{
-    PriceAxisLabel, Primitive, PrimitiveHit, PrimitiveId, PrimitivePass, PrimitiveView,
-    TimeAxisLabel,
+    PanePrimitive, PanePrimitiveView, PriceAxisLabel, Primitive, PrimitiveHit, PrimitiveId,
+    PrimitivePass, PrimitiveView, TimeAxisLabel,
 };
 pub use pane::VisualOrder;
 pub use series::{BarsInRange, MismatchDirection, PriceLineId, SeriesLastValue};
@@ -145,7 +146,9 @@ pub use snapshot::{
     ChartSnapshot, RestoreError, SavedAnnotations, SavedLayout, SavedPane, SavedSeries, SavedStudy,
 };
 mod volume;
-pub use layout::{ChartLayout, ChartLayoutMode, ChartLayoutSizing, ChartSyncOptions};
+pub use layout::{
+    ChartLayout, ChartLayoutMode, ChartLayoutSizing, ChartLink, ChartLinkGroups, ChartSyncOptions,
+};
 pub(crate) mod sync;
 mod time_scale;
 use feed::FeedLink;
@@ -279,6 +282,8 @@ pub struct Chart {
     bar_limits: std::collections::HashMap<SeriesId, std::num::NonZeroUsize>,
     /// The chart's studies, in the order they were added.
     pub(crate) studies: IndicatorRegistry,
+    /// Changes when study edits or completed calculations can affect table cells.
+    readout_revision: u64,
     study_data: studies_data::StudyDataCache,
     pub(crate) element_studies: crate::chart::rendering::candles::price_based::ElementStudies,
     /// Range bars built from the held trades, while the chart type is Range.
@@ -336,7 +341,6 @@ pub struct Chart {
     currency_choices: Vec<String>,
     currency_choice: Option<String>,
     legend_badge: Option<egui::ImageSource<'static>>,
-    watermark: Option<Watermark>,
     legend_statuses: Vec<(String, egui::Color32, egui::Color32)>,
     /// Current quote, independent of the historical readout.
     quote: Option<crate::model::Level1Quote>,
@@ -413,6 +417,8 @@ pub struct Chart {
     // =========================================================================
     /// This chart is an inactive, attached slot in a multi-chart layout for the current frame.
     pub(crate) layout_inactive: bool,
+    /// The layout's field selectors occupy the right end of the status line this frame.
+    pub(crate) layout_link_controls: bool,
     /// External crosshair position from synced chart (bar index)
     pub(crate) synced_crosshair_bar_idx: Option<f64>,
     /// Source period retained by time-based setters and resolved against the current bars.
@@ -557,9 +563,11 @@ impl Chart {
 
     /// Paints `watermark` behind the series of the price pane, in addition to the symbol
     /// watermark of [`ChartConfig::show_watermark`](crate::config::ChartConfig::show_watermark).
-    /// `None` removes it.
+    /// `None` removes it. This assigns the pane currently holding the main series; use
+    /// [`Self::set_pane_watermark`] to address another pane. It stays with that pane when
+    /// series move.
     pub fn set_watermark(&mut self, watermark: Option<Watermark>) {
-        self.watermark = watermark;
+        self.set_pane_watermark(self.main_series_pane(), watermark);
     }
 
     /// Supplies status marks and their host-defined meaning and colours.

@@ -25,9 +25,24 @@ pub struct Alert {
     /// `None` for an alert the user is creating; the host assigns the id.
     #[serde(default)]
     pub id: Option<AlertId>,
+    /// Creation time assigned by the host. `None` means an older record has no known time.
+    #[serde(default)]
+    pub created_at: Option<DateTime<Utc>>,
+    /// Most recent firing time, including firings while the application was closed.
+    /// Hosts retain it on every trigger, even for alerts that remain active.
+    #[serde(default)]
+    pub last_triggered_at: Option<DateTime<Utc>>,
+    /// Draw the threshold across the pane in addition to its marker. Enabled by default.
+    #[serde(default = "alert_display_enabled")]
+    pub extend_line: bool,
+    /// Blink the marker for a minute after a firing. Enabled by default; independent of the line
+    /// extension.
+    #[serde(default = "alert_display_enabled")]
+    pub blink_on_trigger: bool,
     /// The symbol whose bars supply the sources, unless `watchlist` names the subject.
     pub symbol: String,
-    /// User-facing name, independent of the notification message.
+    /// User-facing name, independent of the notification message, at most
+    /// [`Alert::MAX_NAME_CHARS`] characters.
     #[serde(default)]
     pub name: String,
     /// Host watchlist identifier. When present, evaluate independently on each member symbol.
@@ -66,13 +81,18 @@ pub struct Alert {
     /// observing values for crossings without firing or consuming an occurrence.
     #[serde(default)]
     pub schedule: Option<Box<NotificationSchedule>>,
-    /// Text the host shows or sends when the alert fires. [`Alert::expand_message`] fills in the
-    /// placeholders `{{symbol}}`, `{{close}}` and so on when it fires.
+    /// Text the host shows or sends when the alert fires, at most [`Alert::MAX_MESSAGE_CHARS`]
+    /// characters. [`Alert::expand_message`] fills in the placeholders `{{symbol}}`, `{{close}}`
+    /// and so on when it fires.
     #[serde(default)]
     pub message: String,
     /// Where the alert stands, as the host reports it.
     #[serde(default)]
     pub status: AlertStatus,
+}
+
+fn alert_display_enabled() -> bool {
+    true
 }
 
 /// The source view and study definitions captured when an alert is created. The alert's
@@ -163,6 +183,10 @@ impl Alert {
     pub fn new(symbol: impl Into<String>, condition: AlertCondition) -> Self {
         Self {
             id: None,
+            created_at: None,
+            last_triggered_at: None,
+            extend_line: true,
+            blink_on_trigger: true,
             symbol: symbol.into(),
             name: String::new(),
             watchlist: None,
@@ -186,6 +210,16 @@ impl Alert {
 }
 
 impl Alert {
+    #[cfg(any(feature = "ui", feature = "alert-engine"))]
+    pub(crate) fn same_monitoring(&self, other: &Self) -> bool {
+        let mut copy = self.clone();
+        copy.created_at = other.created_at;
+        copy.last_triggered_at = other.last_triggered_at;
+        copy.extend_line = other.extend_line;
+        copy.blink_on_trigger = other.blink_on_trigger;
+        copy == *other
+    }
+
     /// Distinct calculation intervals, shortest nominal duration first, preserving condition
     /// order for ties. An unset first interval uses one minute
     /// until the engine fixes it to its first input. Additional unset intervals follow it.
@@ -231,24 +265,34 @@ impl Alert {
             })
     }
 
+    /// The most characters, counted as Unicode scalar values, a name may have.
+    pub const MAX_NAME_CHARS: usize = 300;
+    /// The most characters, counted as Unicode scalar values, a message may have.
+    pub const MAX_MESSAGE_CHARS: usize = 4000;
+
     /// The message with its placeholders filled in from the trigger: `{{symbol}}` and
-    /// `{{timeframe}}` as given, `{{time}}` the open time of `bar` in RFC 3339, `{{open}}`,
-    /// `{{high}}`, `{{low}}`, `{{close}}` and `{{volume}}` of `bar`, `{{value}}` the value of the
-    /// alert's source and `{{output_N}}` the value of output `N` of the study the source names,
-    /// empty if the source is not a study. `value` gives the value of a source at the bar. A value
-    /// that is missing or not finite becomes empty text, a number is written in the shortest form
-    /// that reads back the same, and a placeholder the alert does not know stays as written.
+    /// `{{timeframe}}` (also `{{interval}}`) as given, `{{exchange}}` the text before the first
+    /// `:` of the symbol and `{{ticker}}` the text after it (the whole symbol without a `:`),
+    /// `{{time}}` the open time of `bar` and `{{trigger_time}}` the instant `trigger` the alert
+    /// fired, both in RFC 3339, `{{open}}`, `{{high}}`, `{{low}}`, `{{close}}` and `{{volume}}` of
+    /// `bar`, `{{value}}` the value of the alert's source, `{{output_N}}` the value of output `N`
+    /// of the study the source names (empty if the source is not a study), `{{plot_ID_N}}` the
+    /// value of output `N` of the study `ID` whatever the source is, and `{{level}}` the label
+    /// that [`AlertInputs::sources`] gives a drawing source, empty for any other source. `value`
+    /// gives the value of a source at the bar. A value that is missing or not finite becomes
+    /// `NaN`, a number is written in the shortest form that reads back the same, and a
+    /// placeholder the alert does not know stays as written.
     ///
     /// ```
     /// use egui_charts::model::{Alert, AlertCondition, Bar, Timeframe};
     ///
-    /// let mut alert = Alert::new("AAPL", AlertCondition::Above(100.0));
-    /// alert.message = "{{symbol}} closed at {{close}} on {{timeframe}}".into();
+    /// let mut alert = Alert::new("NYSE:IBM", AlertCondition::Above(100.0));
+    /// alert.message = "{{ticker}} on {{exchange}} closed at {{close}} on {{interval}}".into();
     /// let time = chrono::DateTime::from_timestamp(0, 0).unwrap();
     /// let bar = Bar::new(time, 99.0, 102.0, 98.0, 101.5, 1000.0);
     /// assert_eq!(
-    ///     alert.expand_message("AAPL", Timeframe::Min5, &bar, |_| None),
-    ///     "AAPL closed at 101.5 on 5min"
+    ///     alert.expand_message("NYSE:IBM", Timeframe::Min5, &bar, time, |_| None),
+    ///     "IBM on NYSE closed at 101.5 on 5min"
     /// );
     /// ```
     pub fn expand_message(
@@ -256,32 +300,52 @@ impl Alert {
         symbol: &str,
         timeframe: Timeframe,
         bar: &Bar,
+        trigger: DateTime<Utc>,
         value: impl Fn(&AlertSource) -> Option<f64>,
     ) -> String {
         let number = |number: Option<f64>| {
             number
                 .filter(|number| number.is_finite())
-                .map(|number| number.to_string())
-                .unwrap_or_default()
+                .map_or_else(|| "NaN".to_owned(), |number| number.to_string())
+        };
+        let (exchange, ticker) = symbol.split_once(':').unwrap_or(("", symbol));
+        let study = |id: &str, output| {
+            number(value(&AlertSource::Study {
+                id: id.to_owned(),
+                output,
+            }))
         };
         let field = |name: &str| -> Option<String> {
             Some(match name {
                 "symbol" => symbol.to_owned(),
-                "timeframe" => timeframe.to_string(),
+                "exchange" => exchange.to_owned(),
+                "ticker" => ticker.to_owned(),
+                "timeframe" | "interval" => timeframe.to_string(),
                 "time" => bar.time.to_rfc3339(),
+                "trigger_time" => trigger.to_rfc3339(),
                 "open" => number(Some(bar.open)),
                 "high" => number(Some(bar.high)),
                 "low" => number(Some(bar.low)),
                 "close" => number(Some(bar.close)),
                 "volume" => number(Some(bar.volume)),
                 "value" => number(value(&self.source)),
+                "level" => match &self.source {
+                    AlertSource::Drawing(_) => self
+                        .inputs
+                        .as_ref()
+                        .and_then(|inputs| inputs.sources.iter().find(|(s, _)| *s == self.source))
+                        .map(|(_, label)| label.clone())
+                        .unwrap_or_default(),
+                    _ => String::new(),
+                },
                 _ => {
+                    if let Some(rest) = name.strip_prefix("plot_") {
+                        let (id, output) = rest.rsplit_once('_')?;
+                        return Some(study(id, output.parse().ok()?));
+                    }
                     let output = name.strip_prefix("output_")?.parse().ok()?;
                     match &self.source {
-                        AlertSource::Study { id, .. } => number(value(&AlertSource::Study {
-                            id: id.clone(),
-                            output,
-                        })),
+                        AlertSource::Study { id, .. } => study(id, output),
                         _ => String::new(),
                     }
                 }
@@ -556,11 +620,13 @@ impl std::fmt::Display for AlertCondition {
 impl Alert {
     /// Validate user input before handing it to host storage or evaluation.
     pub fn is_valid(&self) -> bool {
-        (!self.symbol.trim().is_empty()
-            || self
-                .watchlist
-                .as_ref()
-                .is_some_and(|id| !id.trim().is_empty()))
+        self.name.chars().count() <= Self::MAX_NAME_CHARS
+            && self.message.chars().count() <= Self::MAX_MESSAGE_CHARS
+            && (!self.symbol.trim().is_empty()
+                || self
+                    .watchlist
+                    .as_ref()
+                    .is_some_and(|id| !id.trim().is_empty()))
             && self
                 .watchlist
                 .as_ref()
@@ -708,6 +774,8 @@ mod tests {
         let stored = serde_json::json!({
             "symbol": "AAPL", "name": "Momentum", "message": "Check momentum",
             "timeframe": "Hour1", "additional_timeframes": ["Min5"],
+            "created_at": "2026-10-01T10:00:00Z", "last_triggered_at": "2026-10-02T11:30:00Z",
+            "extend_line": true, "blink_on_trigger": false,
             "watchlist": "technology", "source": {"Study": {"id": "rsi", "output": 0}},
             "condition": {"Above": 70.0}, "frequency": "OncePerBarClose",
             "additional_conditions": [{"source": "Price", "condition": {"EnteringChannel": {"lower": 100.0, "upper": 110.0}}}]
@@ -734,20 +802,34 @@ mod tests {
             AlertSource::Price => Some(101.5),
             _ => None,
         };
+        let drawing = AlertSource::Drawing("d#1".into());
+        let trigger = DateTime::from_timestamp(1_704_067_260, 0).unwrap();
         for (message, source, expected) in [
             (
                 "{{symbol}} closed at {{close}}",
                 AlertSource::Price,
-                "AAPL closed at 101.5",
+                "NASDAQ:AAPL closed at 101.5",
             ),
             (
-                "{{timeframe}} {{time}} {{open}} {{high}} [{{low}}] {{volume}}",
+                "{{timeframe}}={{interval}} {{time}} {{open}} {{high}} [{{low}}] {{volume}}",
                 AlertSource::Price,
-                "5min 2024-01-01T00:00:00+00:00 99 102.5 [] 1000",
+                "5min=5min 2024-01-01T00:00:00+00:00 99 102.5 [NaN] 1000",
+            ),
+            (
+                "{{ticker}} on {{exchange}} at {{trigger_time}}",
+                AlertSource::Price,
+                "AAPL on NASDAQ at 2024-01-01T00:01:00+00:00",
             ),
             ("{{value}}/{{output_1}}", study.clone(), "70.25/3"),
-            ("{{output_2}}.", study.clone(), "."),
+            ("{{output_2}}.", study.clone(), "NaN."),
             ("{{value}}{{output_1}}", AlertSource::Price, "101.5"),
+            (
+                "{{plot_3_1}} {{plot_3_0}} {{plot_3_2}} {{plot_9_0}} {{plot_3}}",
+                AlertSource::Price,
+                "3 70.25 NaN NaN {{plot_3}}",
+            ),
+            ("{{level}} at {{value}}", drawing, "Upper at NaN"),
+            ("[{{level}}]", AlertSource::Price, "[]"),
             (
                 "{{ close }} {{nope}} {{output_x}} {{close",
                 AlertSource::Price,
@@ -755,11 +837,15 @@ mod tests {
             ),
             ("{{{{close}}}}", AlertSource::Price, "{{{{close}}}}"),
         ] {
-            let mut alert = Alert::new("AAPL", AlertCondition::Above(100.0));
+            let mut alert = Alert::new("NASDAQ:AAPL", AlertCondition::Above(100.0));
             alert.source = source;
             alert.message = message.into();
+            alert.inputs = Some(Box::new(AlertInputs {
+                sources: vec![(AlertSource::Drawing("d#1".into()), "Upper".into())],
+                ..AlertInputs::default()
+            }));
             assert_eq!(
-                alert.expand_message("AAPL", Timeframe::Min5, &bar, value),
+                alert.expand_message("NASDAQ:AAPL", Timeframe::Min5, &bar, trigger, value),
                 expected,
                 "{message}"
             );
@@ -769,7 +855,7 @@ mod tests {
     #[test]
     fn saved_alerts_require_finite_levels_ordered_channels_and_positive_lookbacks() {
         type Edit = fn(&mut Alert);
-        let rows: [(Edit, bool); 28] = [
+        let rows: [(Edit, bool); 32] = [
             (
                 |a| a.condition = AlertCondition::StrategyFills("run".into()),
                 true,
@@ -975,6 +1061,14 @@ mod tests {
                 true,
             ),
             (|a| a.watchlist = Some(" ".into()), false),
+            // Limits count characters, not bytes.
+            (|a| a.name = "é".repeat(Alert::MAX_NAME_CHARS), true),
+            (|a| a.name = "é".repeat(Alert::MAX_NAME_CHARS + 1), false),
+            (|a| a.message = "€".repeat(Alert::MAX_MESSAGE_CHARS), true),
+            (
+                |a| a.message = "€".repeat(Alert::MAX_MESSAGE_CHARS + 1),
+                false,
+            ),
             (
                 |a| {
                     a.additional_conditions.push(AlertRule {
@@ -1000,6 +1094,10 @@ mod tests {
             alert,
             Alert {
                 id: None,
+                created_at: None,
+                last_triggered_at: None,
+                extend_line: true,
+                blink_on_trigger: true,
                 name: String::new(),
                 source: AlertSource::Price,
                 watchlist: None,

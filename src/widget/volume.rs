@@ -90,6 +90,9 @@ pub(super) fn paint(
     groups: Option<&super::merge::Groups>,
 ) {
     let painter = painter.with_clip_rect(rect.intersect(painter.clip_rect()));
+    if let Some(color) = study.background() {
+        painter.rect_filled(rect, 0.0, color);
+    }
     let y = |value: f64| rect.bottom() - ((value - min) / (max - min)) as f32 * rect.height();
     let groups = groups.filter(|groups| groups.factor() > 1);
     let factor = groups.map_or(1, super::merge::Groups::factor);
@@ -141,6 +144,14 @@ pub(super) fn paint(
             paint_study_plot(&painter, &points, plot, y(0.0));
         }
     }
+    let map = crate::scales::PriceMap::new(
+        crate::scales::PriceTransform::default(),
+        crate::scales::PriceRange::new(min, max),
+        rect.top(),
+        rect.bottom(),
+        false,
+    );
+    crate::chart::indicators::plots::paint_price_lines(&painter, study, &map);
 }
 
 pub(super) fn tags(

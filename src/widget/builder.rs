@@ -118,6 +118,7 @@ impl Chart {
             from_ticks: BTreeMap::new(),
             bar_limits: Default::default(),
             studies: IndicatorRegistry::new(),
+            readout_revision: crate::model::next_revision(),
             study_data: Default::default(),
             element_studies: Default::default(),
             execution_ranges: Default::default(),
@@ -163,7 +164,6 @@ impl Chart {
             currency_choices: Vec::new(),
             currency_choice: None,
             legend_badge: None,
-            watermark: None,
             legend_statuses: Vec::new(),
             quote: None,
             quote_action: None,
@@ -224,6 +224,7 @@ impl Chart {
             last_rendered_indicator_panes: Vec::new(),
             // Multi-chart sync
             layout_inactive: false,
+            layout_link_controls: false,
             synced_crosshair_bar_idx: None,
             synced_crosshair_period: None,
             synced_crosshair_price: None,

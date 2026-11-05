@@ -727,7 +727,16 @@ impl DemoApp {
                 .flatten()
                 .filter(|panel| *panel != SidePanel::TimeAndSales),
             data_window_expanded: true,
-            alerts: AlertsPanel::default(),
+            alerts: {
+                let mut panel = AlertsPanel::default();
+                if let Some(options) = cc
+                    .storage
+                    .and_then(|storage| eframe::get_value(storage, "alert_list_options"))
+                {
+                    panel.set_options(options);
+                }
+                panel
+            },
             alert_host: {
                 let alerts = cc
                     .storage
@@ -873,6 +882,7 @@ impl DemoApp {
             app.symbol_search.record_symbol(&row);
         }
         app.alerts.set_service(app.alert_host.clone());
+        app.alerts.set_mark("SAMPLE", SAMPLE_LOGO.into());
         app.top_toolbar.state.can_trade = true;
         app.watchlist.set_selected(symbol);
         app.watchlist.set_service(app.quotes.clone());
@@ -1249,6 +1259,21 @@ impl DemoApp {
         self.sync_comparisons();
         let action = self.compare_dialog.show(ctx, &symbols);
         self.handle_comparison(action);
+        match self.data_table.show(ctx, &self.chart) {
+            egui_charts::ui::dialogs::DataTableAction::Export(csv) => {
+                self.save_text("chart_data.csv", &csv);
+            }
+            egui_charts::ui::dialogs::DataTableAction::SearchSymbol(query) => {
+                self.watchlist_search = false;
+                if query.is_empty() {
+                    self.symbol_search
+                        .open_with_selected_query(self.chart.symbol().to_owned());
+                } else {
+                    self.symbol_search.open_with_query(query);
+                }
+            }
+            _ => {}
+        }
         if let Some(picked) = self.symbol_search.show(ctx, &symbols) {
             if self.watchlist_search {
                 self.watchlist.add_symbol(&picked.symbol);
@@ -1288,12 +1313,6 @@ impl DemoApp {
             .show_with_shortcuts(ctx, self.chart.shortcuts());
         self.show_interval_entry(ctx);
         self.show_open_layout(ctx);
-
-        if let egui_charts::ui::dialogs::DataTableAction::Export(csv) =
-            self.data_table.show(ctx, &self.chart)
-        {
-            self.save_text("chart_data.csv", &csv);
-        }
 
         // Export dialog (screenshot / CSV).
         match self.export_dialog.show_with(ctx, |ui, format| {
@@ -1482,6 +1501,7 @@ impl eframe::App for DemoApp {
         );
         eframe::set_value(storage, "watchlists", &self.watchlist.lists());
         eframe::set_value(storage, "alerts", &self.alert_host.engine().alerts());
+        eframe::set_value(storage, "alert_list_options", self.alerts.options());
         self.checkpoint_replay();
         eframe::set_value(storage, "replay_session", &self.replay_session);
         self.checkpoint_workspace();
@@ -6042,10 +6062,16 @@ mod tests {
             ("SAMX", "PLE", "SAMPLE"),
             ("ESZ202X", "6", "ESZ2026"),
             ("ESH202X", "7", "ESH2027"),
+            ("AAPLX", "", "AAPL"),
         ] {
             let ctx = egui::Context::default();
             let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
             app.live.set_paused(true);
+            let table_study = (expected == "AAPL").then(|| {
+                app.data_table.open();
+                app.chart
+                    .add_indicator(Box::new(egui_charts::studies::SMA::new(7)))
+            });
             app.chart
                 .drawings_mut()
                 .drawings
@@ -6091,6 +6117,10 @@ mod tests {
                 "Enter selects the edited {expected} query"
             );
             assert_eq!(app.chart.symbol(), expected);
+            if let Some(study) = table_study {
+                assert!(app.chart.indicators().any(|(id, _)| id == study));
+            }
+            assert_eq!(app.data_table.is_open, expected == "AAPL");
             if expected.starts_with("ES") {
                 assert_eq!(
                     app.chart.instrument().unwrap().exchange.as_deref(),
@@ -6802,6 +6832,12 @@ mod tests {
         assert_eq!(app.top_toolbar.layout_menu.layouts, ["Unnamed"]);
         assert_eq!(app.layout_tabs.len(), 1);
         // Opening a layout keeps the host's alert preferences and applied toast lifetime.
+        let mut list_options = app.alerts.options().clone();
+        list_options.name = false;
+        list_options.source_icon = false;
+        list_options.descending = false;
+        list_options.sort = egui_charts::ui::widget_bar::AlertSortKey::Fired;
+        app.alerts.set_options(list_options.clone());
         let mut settings = app.settings_state.clone();
         settings.alerts.notification_seconds = 12;
         settings.alerts.show_active_only = false;
@@ -6813,6 +6849,7 @@ mod tests {
         app.poll_storage(&ctx);
         assert_eq!(app.settings_state.alerts, settings.alerts);
         let saved = |app: &DemoApp| {
+            assert_eq!(app.alerts.options(), &list_options);
             assert_eq!(app.layout.sync_group(0), Some("A"));
             assert_eq!(app.layout.sync_group(1), Some("B"));
             assert!(app.layout.is_detached(1));

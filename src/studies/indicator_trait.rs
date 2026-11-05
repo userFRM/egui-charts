@@ -196,6 +196,16 @@ pub trait Indicator: Send {
         crate::model::LineStyle::Dashed
     }
 
+    /// Stroke width of a pane reference level in logical pixels.
+    fn level_width(&self, _value: f64) -> f32 {
+        1.0
+    }
+
+    /// Optional tint beneath the study's geometry over its plot area.
+    fn background(&self) -> Option<Color32> {
+        None
+    }
+
     /// Colour of the band between the outer pane levels.
     fn level_fill_color(&self) -> Color32 {
         let color = self.plot_style(0).color;
@@ -231,6 +241,27 @@ pub trait Indicator: Send {
     fn plot_tagged(&self, line: usize) -> bool {
         let _ = line;
         self.line_count() <= 4
+    }
+
+    /// Whether a horizontal latest-value line is drawn for this output. Off by default,
+    /// independent of scale tags and displacement. A missing latest output draws no line.
+    fn plot_price_line(&self, _line: usize) -> bool {
+        false
+    }
+
+    /// Editable alternate colour and width states, separate from the output's main style.
+    fn plot_variants(&self, _line: usize) -> Vec<super::PlotVariant> {
+        Vec::new()
+    }
+
+    /// Alternate state at a source bar, or `None` for the main style.
+    fn plot_variant(&self, _line: usize, _bar: usize) -> Option<usize> {
+        None
+    }
+
+    /// Stroke width at a source bar. Column and background plots use bar pitch instead.
+    fn plot_width(&self, line: usize, _bar: usize) -> f32 {
+        self.plot_style(line).width
     }
 
     /// The output whose visibility in the style tab also applies to plot `line`, for a plot past
@@ -298,6 +329,23 @@ pub trait Indicator: Send {
             level_fill_color,
             untagged_plots: (0..self.line_count())
                 .filter(|&line| !self.plot_tagged(line))
+                .collect(),
+            price_line_plots: (0..self.line_count())
+                .filter(|&line| self.plot_price_line(line))
+                .collect(),
+            plot_variants: (0..self.line_count())
+                .map(|line| self.plot_variants(line))
+                .collect(),
+            background: self.background(),
+            background_visible: true,
+            fills: self
+                .fills()
+                .iter()
+                .map(|fill| super::FillStyle {
+                    color: fill.color,
+                    inverted_color: fill.inverted_color,
+                    visible: true,
+                })
                 .collect(),
         }
     }

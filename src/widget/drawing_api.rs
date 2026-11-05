@@ -104,6 +104,33 @@ impl Chart {
         Ok(())
     }
 
+    /// Replaces an extended line's readouts and midpoint as one undoable edit.
+    /// Unknown, locked and other drawing types leave drawings and history untouched.
+    pub fn set_line_measurements(
+        &mut self,
+        id: usize,
+        measurements: crate::drawings::LineMeasurements,
+    ) -> Result<(), DrawingError> {
+        let drawing = self
+            .drawings()
+            .drawings
+            .iter()
+            .find(|d| d.id == id)
+            .ok_or(DrawingError::UnknownDrawing(id))?;
+        if drawing.locked {
+            return Err(DrawingError::Locked(id));
+        }
+        if drawing.tool_type != crate::drawings::DrawingToolType::ExtendedLine {
+            return Err(DrawingError::Invalid("Drawing is not an extended line"));
+        }
+        self.user_action(|chart| {
+            chart.drawings_mut().edit_drawing(id, |drawing| {
+                drawing.line_measurements = measurements;
+            });
+        });
+        Ok(())
+    }
+
     /// Sets an image drawing's picture as one undoable edit. `uri` is the address the host's
     /// image loaders resolve, and `size` is its pixel size, which gives the frame its
     /// proportions, scaled down to fit 240 x 180 points. Closes this drawing's text editor.
@@ -326,6 +353,79 @@ mod tests {
     use crate::drawings::manager::DrawingSyncAction;
     use crate::model::{Bar, BarData};
     use crate::studies::{CustomIndicator, IndicatorValue};
+
+    /// Host edits retain measurements in saved records and templates and undo in one step;
+    /// old records keep every readout hidden. Rejected edits do not add history.
+    #[test]
+    fn line_measurements_survive_host_edits_templates_and_saved_records() {
+        use crate::drawings::persistence::{StoredDrawing, drawing_to_stored, stored_to_drawing};
+        use crate::drawings::{
+            DrawingTemplate, DrawingToolType as T, LineMeasurementPosition, LineMeasurements,
+        };
+        let mut chart = Chart::new(crate::model::BarData::default());
+        let mut line = Drawing::new(1, T::ExtendedLine);
+        line.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(3.0, 200.0)];
+        line.completed = true;
+        chart.drawings_mut().drawings.push(line);
+        let measurements = LineMeasurements {
+            persistent: true,
+            price_change: true,
+            percent_change: true,
+            pip_change: true,
+            bar_count: true,
+            elapsed_time: true,
+            length: true,
+            inclination: true,
+            midpoint: true,
+            position: LineMeasurementPosition::Center,
+        };
+        chart.set_line_measurements(1, measurements).unwrap();
+        assert_eq!(chart.drawings().drawings[0].line_measurements, measurements);
+        assert!(chart.undo());
+        assert_eq!(
+            chart.drawings().drawings[0].line_measurements,
+            Default::default()
+        );
+        assert!(!chart.undo());
+        assert!(chart.redo());
+        let line = &chart.drawings().drawings[0];
+        let stored = drawing_to_stored(line, |bar| bar as i64 * 3_600_000);
+        let json = serde_json::to_string(&stored).unwrap();
+        let loaded: StoredDrawing = serde_json::from_str(&json).unwrap();
+        let restored = stored_to_drawing(&loaded, |ms| ms as f32 / 3_600_000.0, 2);
+        assert_eq!(restored.line_measurements, measurements);
+        assert_eq!(restored.chart_points, line.chart_points);
+        let mut old = serde_json::to_value(&stored).unwrap();
+        old["drawing"]
+            .as_object_mut()
+            .unwrap()
+            .remove("line_measurements");
+        let old: StoredDrawing = serde_json::from_value(old).unwrap();
+        assert_eq!(old.drawing.line_measurements, Default::default());
+        let template: DrawingTemplate = serde_json::from_str(
+            &serde_json::to_string(&DrawingTemplate::from_drawing(line)).unwrap(),
+        )
+        .unwrap();
+        let mut other = Drawing::new(2, T::ExtendedLine);
+        template.apply_to(&mut other).unwrap();
+        assert_eq!(other.line_measurements, measurements);
+        chart.drawings_mut().drawings[0].locked = true;
+        assert_eq!(
+            chart.set_line_measurements(1, Default::default()),
+            Err(DrawingError::Locked(1))
+        );
+        assert_eq!(
+            chart.set_line_measurements(999, measurements),
+            Err(DrawingError::UnknownDrawing(999))
+        );
+        chart.drawings_mut().drawings[0].locked = false;
+        chart.drawings_mut().drawings[0].tool_type = T::TrendLine;
+        assert!(matches!(
+            chart.set_line_measurements(1, measurements),
+            Err(DrawingError::Invalid(_))
+        ));
+        assert_eq!(chart.drawings().drawings[0].line_measurements, measurements);
+    }
 
     /// Guards #977: a drawing moves between the price pane and a study pane as one undoable
     /// edit with its anchors and style, and joins the pane the chart draws it in.

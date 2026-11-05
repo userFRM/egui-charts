@@ -177,7 +177,7 @@ jobs:
     if: "!cancelled() && github.event.pull_request.draft != true"
     name: Test (${{ matrix.os }}, ${{ matrix.rust }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ matrix.os == 'windows-latest' && 30 || 20 }}
+    timeout-minutes: ${{ matrix.os == 'macos-latest' && 20 || 30 }}
     env:
       CARGO_INCREMENTAL: 0
     strategy:
@@ -196,14 +196,14 @@ jobs:
           CHANGES_RESULT: ${{ needs.changes.result }}
         run: test "$CHANGES_RESULT" = success
       - uses: actions/checkout@v7
-        if: needs.changes.outputs.docs == 'true' || (matrix.os == 'windows-latest' && needs.changes.outputs.native == 'true')
+        if: needs.changes.outputs.docs == 'true' || (matrix.os != 'macos-latest' && needs.changes.outputs.native == 'true')
       - uses: dtolnay/rust-toolchain@master
-        if: needs.changes.outputs.docs == 'true' || (matrix.os == 'windows-latest' && needs.changes.outputs.native == 'true')
+        if: needs.changes.outputs.docs == 'true' || (matrix.os != 'macos-latest' && needs.changes.outputs.native == 'true')
         id: toolchain
         with:
           toolchain: ${{ matrix.rust }}
       - uses: Swatinem/rust-cache@v2
-        if: needs.changes.outputs.docs == 'true' && matrix.os != 'windows-latest'
+        if: needs.changes.outputs.docs == 'true' && matrix.os == 'macos-latest'
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # Keep both dependency graphs; per-workspace cleanup would prune the other's artifacts. Exact
@@ -218,22 +218,40 @@ jobs:
             ~/.cargo/git
             target
           key: windows-native-v1-${{ runner.arch }}-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'examples/demo/Cargo.toml', 'examples/demo/Cargo.lock', '.github/workflows/ci.yml') }}
+      - uses: actions/cache/restore@v5
+        if: matrix.os == 'ubuntu-latest' && (needs.changes.outputs.docs == 'true' || needs.changes.outputs.native == 'true')
+        id: linux-cache
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: linux-native-v1-${{ runner.arch }}-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'examples/demo/Cargo.toml', 'examples/demo/Cargo.lock', '.github/workflows/ci.yml') }}
       - name: Run library tests (all features)
         if: needs.changes.outputs.rust == 'true'
         run: cargo test --all-features --lib
       - name: Run doc tests (no default features)
         if: needs.changes.outputs.docs == 'true'
         run: cargo test --doc --no-default-features
+      - name: Install Linux graphics and window tools
+        if: matrix.os == 'ubuntu-latest' && needs.changes.outputs.native == 'true'
+        run: sudo apt-get update && sudo apt-get install -y xvfb xdotool mesa-vulkan-drivers libxkbcommon-x11-0
       - name: Build native demo
-        if: matrix.os == 'windows-latest' && needs.changes.outputs.native == 'true'
+        if: matrix.os != 'macos-latest' && needs.changes.outputs.native == 'true'
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/target
         run: cargo build --locked --manifest-path examples/demo/Cargo.toml
       - name: Test demo controller
-        if: matrix.os == 'windows-latest' && needs.changes.outputs.native == 'true'
+        if: matrix.os != 'macos-latest' && needs.changes.outputs.native == 'true'
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/target
         run: cargo test --locked --manifest-path examples/demo/Cargo.toml
+      - name: Start native demo on Linux
+        if: matrix.os == 'ubuntu-latest' && needs.changes.outputs.native == 'true'
+        env:
+          WGPU_BACKEND: vulkan
+        # The readiness probe disconnects before the demo connects; do not reset the server then.
+        run: xvfb-run -a -e /dev/stderr -s '-screen 0 1280x1024x24 -noreset' examples/demo/smoke-native.sh target/debug/egui-charts-demo
       - uses: actions/cache/save@v5
         if: matrix.os == 'windows-latest' && github.ref == 'refs/heads/main' && steps.windows-cache.outputs.cache-primary-key != '' && steps.windows-cache.outputs.cache-hit != 'true'
         with:
@@ -242,6 +260,14 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ steps.windows-cache.outputs.cache-primary-key }}
+      - uses: actions/cache/save@v5
+        if: matrix.os == 'ubuntu-latest' && github.ref == 'refs/heads/main' && steps.linux-cache.outputs.cache-primary-key != '' && steps.linux-cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ steps.linux-cache.outputs.cache-primary-key }}
 
   test-features:
     needs: changes
@@ -572,45 +598,6 @@ jobs:
           printf 'Processor: %s\n\n' "$PROCESSOR" >> "$GITHUB_STEP_SUMMARY"
           set -o pipefail
           bash benches/check-regressions.sh --compare performance-base.txt performance-head.txt 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
-
-  native-demo:
-    needs: changes
-    if: "!cancelled() && github.event.pull_request.draft != true"
-    name: Native demo (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest]
-    steps:
-      - name: Check input classification
-        shell: bash
-        env:
-          CHANGES_RESULT: ${{ needs.changes.result }}
-        run: test "$CHANGES_RESULT" = success
-      - uses: actions/checkout@v7
-        if: needs.changes.outputs.native == 'true'
-      - uses: dtolnay/rust-toolchain@stable
-        if: needs.changes.outputs.native == 'true'
-      - uses: Swatinem/rust-cache@v2
-        if: needs.changes.outputs.native == 'true'
-        with:
-          workspaces: examples/demo
-      - name: Install Linux graphics and window tools
-        if: needs.changes.outputs.native == 'true' && runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y xvfb xdotool mesa-vulkan-drivers libxkbcommon-x11-0
-      - name: Build native demo
-        if: needs.changes.outputs.native == 'true'
-        run: cargo build --locked --manifest-path examples/demo/Cargo.toml
-      - name: Test demo controller
-        if: needs.changes.outputs.native == 'true'
-        run: cargo test --locked --manifest-path examples/demo/Cargo.toml
-      - name: Start native demo on Linux
-        if: needs.changes.outputs.native == 'true' && runner.os == 'Linux'
-        env:
-          WGPU_BACKEND: vulkan
-        run: xvfb-run -a -e /dev/stderr examples/demo/smoke-native.sh examples/demo/target/debug/egui-charts-demo
 
   terminal:
     needs: changes

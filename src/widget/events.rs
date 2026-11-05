@@ -27,8 +27,8 @@ pub struct ChartPointer {
     pub time: Option<DateTime<Utc>>,
     /// Price on the main pane, or the value on the scale of the hovered pane or volume.
     pub price: f64,
-    /// `MAIN`, `VOLUME`, or the first series or study of another hovered pane. An empty pane
-    /// reports no position.
+    /// `MAIN`, `VOLUME`, or the first series or study of another hovered pane. A primitive hit
+    /// in an empty pane uses `MAIN`; `target` identifies the primitive independently.
     pub series: SeriesId,
     /// Nearest slot in the rendered series, counting elements on price-based chart types.
     /// Added points between main-series slots round to the nearest slot. Negative or past
@@ -610,12 +610,13 @@ impl Chart {
     ) -> Option<ChartPointer> {
         let plot = self.last_rendered_price_rect;
         let shown = self.state.shown();
+        let pane_primitive = matches!(self.host_events.target.as_ref(),
+            Some(PointerTarget::Primitive(id))
+                if self.primitives.iter().any(|item| item.id == *id && item.pane.is_some())
+        );
         let (time, index) = self.pointer_time(pos).or_else(|| {
-            self.host_events
-                .annotation_target
-                .borrow()
-                .as_ref()
-                .map(|_| (None, self.get_chart_mapping().x_to_idx_f64(pos.x)))
+            (self.host_events.annotation_target.borrow().is_some() || pane_primitive)
+                .then(|| (None, self.get_chart_mapping().x_to_idx_f64(pos.x)))
         })?;
         let index = index.round();
         let bar_at = (index >= 0.0 && index < shown.len() as f64)
@@ -647,9 +648,13 @@ impl Chart {
                     && plot.x_range().contains(pos.x)
             }) {
             let members = self.pane_series(group.id);
-            let owner = *members.first()?;
-            let map = self
-                .series_price_map(owner)
+            let owner = members
+                .first()
+                .copied()
+                .or(pane_primitive.then_some(SeriesId::MAIN))?;
+            let map = members
+                .first()
+                .and_then(|id| self.series_price_map(*id))
                 .unwrap_or_else(|| group.price_map());
             let closes = members.iter().filter_map(|id| {
                 let item =

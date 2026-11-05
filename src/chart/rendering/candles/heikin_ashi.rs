@@ -1,4 +1,4 @@
-//! Heikin-Ashi transform with full-series caching.
+//! Heikin-Ashi painting and transform with full-series caching.
 //!
 //! Heikin-Ashi is a cumulative recurrence:
 //!
@@ -17,6 +17,10 @@
 
 use std::cell::{Ref, RefCell};
 
+use egui::epaint::RectShape;
+use egui::{Color32, Pos2, Shape, Stroke, StrokeKind};
+
+use super::helpers::{OhlcYCoords, body_rect};
 use crate::model::Bar;
 
 /// A whitespace bar stays whitespace, and the bar after it continues from the last bar with a
@@ -100,6 +104,105 @@ impl HeikinAshiCache {
             entry.last = full_data.last().cloned();
         }
         Ref::map(self.entry.borrow(), |entry| entry.bars.as_slice())
+    }
+}
+
+/// Whether the transformed bar at `idx` rises: its close is above its open, or at or above the
+/// preceding transformed close when `by_previous_close`.
+pub(crate) fn rising(bars: &[Bar], idx: usize, by_previous_close: bool) -> bool {
+    if by_previous_close {
+        bars[idx].close >= super::helpers::prev_close(bars, idx)
+    } else {
+        bars[idx].is_bullish()
+    }
+}
+
+/// Paint the cached transformed prices with their own component style; volume keeps the
+/// source bars and the chart's volume colours.
+pub(super) fn render(
+    ctx: &super::CandleDataContext<'_>,
+    params: &super::ChartTypeParams<'_>,
+    idx_to_coord: impl Fn(usize, f32) -> f32,
+) {
+    let bars = ctx.heikin_ashi.bars(ctx.full_data, ctx.revision);
+    let start = ctx.start_idx.min(bars.len());
+    let end = start.saturating_add(ctx.visible_data.len()).min(bars.len());
+    let style = &params.type_params.styles.heikin;
+    let border_width = if !style.border_visible {
+        0.0
+    } else if ctx.colors.candle_border_width.is_finite() && ctx.colors.has_border() {
+        ctx.colors.candle_border_width
+    } else {
+        1.0
+    };
+    // At most two wicks, a fill and a border per bar, under one paint list lock.
+    let mut shapes = Vec::with_capacity(4 * (end - start));
+    for (i, bar) in bars[start..end].iter().enumerate() {
+        if bar.is_whitespace() {
+            continue;
+        }
+        let x = idx_to_coord(start + i, params.chart_rect_min_x());
+        let rising = rising(&bars, start + i, style.color_by_previous_close);
+        let (body, border, wick) = if rising {
+            (style.body_up, style.border_up, style.wick_up)
+        } else {
+            (style.body_down, style.border_down, style.wick_down)
+        };
+        let y = OhlcYCoords::from_bar(bar, ctx.price_scale);
+        if style.wick_visible {
+            let stroke = Stroke::new(params.wick_width(), wick);
+            // A trending bar has no wick on one side; a segment without length paints nothing.
+            for (from, to) in [(y.wick_top, y.body_top), (y.body_bottom, y.wick_bottom)] {
+                if from != to {
+                    shapes.push(Shape::line_segment(
+                        [Pos2::new(x, from), Pos2::new(x, to)],
+                        stroke,
+                    ));
+                }
+            }
+        }
+        let rect = body_rect(x, params.bar_width(), &y);
+        // A border in the colour of an opaque body changes no pixel.
+        let border_width = if style.body_visible && border == body && body.is_opaque() {
+            0.0
+        } else {
+            border_width
+        };
+        if style.body_visible && border_width > 0.0 && !border.is_opaque() {
+            // The tessellator stops a shared fill at the middle of the stroke, so only an opaque
+            // border may share the body's shape.
+            shapes.push(Shape::rect_filled(rect, 0.0, body));
+            shapes.push(Shape::rect_stroke(
+                rect,
+                0.0,
+                Stroke::new(border_width, border),
+                StrokeKind::Inside,
+            ));
+        } else if style.body_visible || border_width > 0.0 {
+            let fill = if style.body_visible {
+                body
+            } else {
+                Color32::TRANSPARENT
+            };
+            let stroke = if border_width > 0.0 {
+                Stroke::new(border_width, border)
+            } else {
+                Stroke::NONE
+            };
+            shapes.push(RectShape::new(rect, 0.0, fill, stroke, StrokeKind::Inside).into());
+        }
+    }
+    ctx.price_ctx.painter.extend(shapes);
+    if params.show_volume() {
+        super::volume::render_volume_bars(
+            ctx.volume_ctx,
+            ctx.visible_data,
+            ctx.start_idx,
+            params.max_volume(),
+            ctx.colors,
+            params.chart_rect_min_x(),
+            &idx_to_coord,
+        );
     }
 }
 

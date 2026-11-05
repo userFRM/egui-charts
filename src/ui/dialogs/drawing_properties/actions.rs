@@ -267,6 +267,7 @@ impl DrawingProps {
                     regression_trend,
                     vwap,
                     channel_midline,
+                    line_measurements,
                     price_axis_label,
                     time_axis_label,
                     elliott_degree,
@@ -524,6 +525,24 @@ mod tests {
             );
             assert_eq!(labels.contains(&"Price"), price, "{tool:?}");
             assert_eq!(labels.contains(&"Time"), time, "{tool:?}");
+            for label in [
+                "Middle point",
+                "Keep statistics visible",
+                "Price change",
+                "Percentage change",
+                "Pip change",
+                "Bar count",
+                "Elapsed time",
+                "Length in periods",
+                "Inclination",
+                "Statistics placement",
+            ] {
+                assert_eq!(
+                    labels.contains(&label),
+                    tool == T::ExtendedLine,
+                    "{tool:?}: {label}"
+                );
+            }
             output.drop_without_applying_deltas();
             let settings = &mut props.tool_settings.as_mut().unwrap().settings;
             settings.fib_config = Some(FibonacciConfig {
@@ -559,6 +578,19 @@ mod tests {
             settings.volume_profile = VolumeProfileConfig::new(48, 0.8);
             settings.regression_trend = RegressionTrendConfig::new(3.0);
             settings.channel_midline = true;
+            let measurements = crate::drawings::LineMeasurements {
+                persistent: true,
+                price_change: true,
+                percent_change: true,
+                pip_change: true,
+                bar_count: true,
+                elapsed_time: true,
+                length: true,
+                inclination: true,
+                midpoint: true,
+                position: crate::drawings::LineMeasurementPosition::Left,
+            };
+            settings.line_measurements = measurements;
             settings.bars_pattern = Some(crate::drawings::BarsPatternConfig {
                 mirrored: true,
                 ..Default::default()
@@ -602,6 +634,7 @@ mod tests {
             assert_eq!(saved.position_stop_color, Some([220, 140, 40, 255]));
             assert_eq!(saved.regression_trend.unwrap().deviations(), 3.0);
             assert!(saved.channel_midline);
+            assert_eq!(saved.line_measurements, measurements);
             assert!(saved.bars_pattern.unwrap().mirrored);
             assert!(
                 !saved.price_axis_label && !saved.time_axis_label,
@@ -621,6 +654,10 @@ mod tests {
             assert_eq!((peer.text_color, peer.border_color), (None, None));
             assert_eq!(chart.drawings().drawings[1].chart_points[0].price, 75.0);
             assert!(chart.undo());
+            assert_eq!(
+                chart.drawings().drawings[0].line_measurements,
+                Default::default()
+            );
             assert_eq!(
                 format!("{:?}", chart.drawings().drawings[0].fib_config),
                 format!("{:?}", Drawing::new(7, tool).fib_config)
