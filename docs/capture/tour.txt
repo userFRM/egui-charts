@@ -1,0 +1,54 @@
+# Durations are milliseconds; coordinates are logical points in the real 1280x720 demo.
+# click <duration> <accessible label>, row selects a symbol, study checks that a study was added.
+# move/drag <duration> <x> <y>; line places and checks a magnet-snapped line and moves its handle.
+hold 500
+move 900 440 245
+scroll -500
+drag 650 490 245
+move 900 800 530
+click 350 Chart layout
+hold 400
+click 400 1 Left, 3 Right
+hold 300
+click 400 Indicators
+hold 300
+search Bollinger
+hold 400
+study 300 Bollinger Bands
+escape
+escape
+hold 500
+click 300 Chart layout
+click 350 Single
+hold 200
+click 250 Volume footprint
+click 250 Candles
+move 250 850 330
+scroll 3000
+hold 400
+line
+escape
+click 400 Watchlist and details
+hold 300
+# Accessible row bounds can be outside the list's clip; reveal the last symbol first.
+move 250 1120 260
+scroll -500
+row 300 SAMPLE
+hold 500
+click 400 Replay
+hold 400
+click 300 Select a bar on the chart
+bar 500 10
+hold 300
+click 200 Next bar (Right arrow)
+hold 150
+click 200 Next bar (Right arrow)
+hold 150
+click 200 Next bar (Right arrow)
+hold 150
+play 3000
+click 350 Exit replay
+click 350 Watchlist and details
+click 350 Chart layout
+click 350 2x2 Grid
+home 700

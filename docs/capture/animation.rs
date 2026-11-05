@@ -1,0 +1,475 @@
+//! Forward-only pointer scripts over the demo's own controls.
+
+use super::*;
+use egui::{Event, Key, Modifiers, PointerButton, Pos2, pos2};
+use pointer::CaptureApp;
+
+pub(super) fn scenes() -> Vec<Scene> {
+    use Step::*;
+    vec![
+        Scene {
+            name: "tour",
+            steps: vec![
+                ClearStudies,
+                Study(study::<studies::BollingerBands>),
+                Study(|| {
+                    Box::new(
+                        studies::VolumeWeightedAvgPrice::new()
+                            .with_anchor(studies::VwapAnchor::Events)
+                            .with_event_anchors(["2026-10-27T18:30:00Z".parse().unwrap()])
+                            .with_std_dev_bands([1.0, 2.0]),
+                    )
+                }),
+                Study(study::<studies::MARibbon>),
+                Visible(90),
+                Grid(ChartLayoutMode::Four),
+                UnsyncTime,
+                Slot(0),
+                ClearStudies,
+                ChartType(ModelChartType::VolumeFootprint),
+                Visible(12),
+                Study(study::<studies::VolProfileSession>),
+                Slot(1),
+                Study(study::<studies::VolProfileVisible>),
+                Visible(50),
+                Slot(2),
+                ClearStudies,
+                ChartType(ModelChartType::TimePriceOpportunity),
+                Visible(390),
+                Slot(3),
+                Heatmap,
+                Visible(45),
+                Slot(0),
+            ],
+            pointer: Some(vec2(0.3, 0.4)),
+        },
+        Scene {
+            name: "liquidity",
+            steps: vec![ClearStudies, Visible(45), Heatmap],
+            pointer: Some(vec2(0.3, 0.4)),
+        },
+        Scene {
+            name: "drawings",
+            steps: vec![ClearStudies, Study(study::<studies::EMA>), Visible(65)],
+            pointer: Some(vec2(0.3, 0.4)),
+        },
+        Scene {
+            name: "replay",
+            steps: vec![
+                ClearStudies,
+                Study(study::<studies::EMA>),
+                Replay(30),
+                Visible(80),
+            ],
+            pointer: Some(vec2(0.3, 0.4)),
+        },
+    ]
+}
+
+struct Timeline {
+    h: Harness<'static, CaptureApp>,
+    out: std::path::PathBuf,
+    frame: usize,
+    pointer: Pos2,
+    live: bool,
+    start: chrono::DateTime<chrono::Utc>,
+}
+
+impl Timeline {
+    fn frame(&mut self) {
+        let elapsed = self.frame as i64 * 1_000_000_000 / 60;
+        let now = self.start + chrono::Duration::nanoseconds(elapsed);
+        wall_time(now, Some(1_000_000_000_000 + elapsed));
+        self.h.input_mut().time = Some(1_000.0 + self.frame as f64 / 60.0);
+        if self.live && self.frame.is_multiple_of(6) {
+            self.h.state_mut().advance_sample_to(
+                self.start + chrono::Duration::milliseconds(self.frame as i64 * 1000 / 60),
+            );
+        }
+        self.h.hover_at(self.pointer);
+        let pointing_at_row = [
+            egui::accesskit::Role::MenuItem,
+            egui::accesskit::Role::MenuItemRadio,
+            egui::accesskit::Role::ListBoxOption,
+            egui::accesskit::Role::RadioButton,
+        ]
+        .into_iter()
+        .any(|role| {
+            self.h
+                .query_all_by_role(role)
+                .any(|node| node.rect().contains(self.pointer))
+        });
+        self.h.state_mut().pointing_at_row = pointing_at_row;
+        self.h.step();
+        wall_time(now, None);
+        save_frame(
+            &mut self.h,
+            &self.out.join(format!("{:04}.png", self.frame)),
+        );
+        self.frame += 1;
+        if self.frame.is_multiple_of(120) {
+            eprintln!("{}: {} frames", self.out.display(), self.frame);
+        }
+    }
+
+    fn hold(&mut self, ms: usize) {
+        for _ in 0..(ms * 60).div_ceil(1000) {
+            self.frame();
+        }
+    }
+
+    fn move_to(&mut self, to: Pos2, ms: usize) {
+        let from = self.pointer;
+        let count = (ms * 60).div_ceil(1000).max(1);
+        for i in 1..=count {
+            let t = i as f32 / count as f32;
+            let eased = t * t * (3.0 - 2.0 * t);
+            let arc = vec2(0.0, (std::f32::consts::PI * eased).sin() * 9.0);
+            self.pointer = from.lerp(to, eased) + arc;
+            self.frame();
+        }
+    }
+
+    fn button(&mut self, pressed: bool) {
+        self.h.event(Event::PointerButton {
+            pos: self.pointer,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        });
+        self.frame();
+    }
+
+    fn click(&mut self) {
+        self.button(true);
+        self.button(false);
+        self.hold(100);
+    }
+
+    fn label(&mut self, label: &str, ms: usize) {
+        let to = self.h.get_by_label(label).rect().center();
+        self.move_to(to, ms);
+        self.click();
+    }
+
+    fn key(&mut self, key: Key, modifiers: Modifiers) {
+        for pressed in [true, false] {
+            self.h.event(Event::Key {
+                key,
+                physical_key: None,
+                pressed,
+                repeat: false,
+                modifiers,
+            });
+            self.frame();
+        }
+    }
+
+    fn type_text(&mut self, text: &str) {
+        for ch in text.chars() {
+            self.h.event(Event::Text(ch.to_string()));
+            self.hold(83);
+        }
+    }
+
+    fn scroll(&mut self, delta: f32) {
+        for _ in 0..30 {
+            self.h.event(Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Unknown,
+                delta: vec2(0.0, delta / 30.0),
+                modifiers: Modifiers::NONE,
+            });
+            self.frame();
+        }
+    }
+
+    fn drag(&mut self, to: Pos2, ms: usize) {
+        self.button(true);
+        self.move_to(to, ms);
+        self.button(false);
+    }
+
+    fn finish(&mut self, seconds: usize) {
+        assert!(
+            self.frame <= seconds * 60,
+            "script exceeds its duration: {}",
+            self.frame
+        );
+        while self.frame < seconds * 60 {
+            self.frame();
+        }
+    }
+}
+
+fn draw_line(t: &mut Timeline) {
+    let chart = &t.h.state().chart;
+    let bars = chart.bars(SeriesId::MAIN);
+    let n = bars.len();
+    let mapping = chart.get_chart_mapping();
+    // Keep gestures clear of the legend and the volume overlay's own scale.
+    let mut clear = chart.get_rendered_price_rect();
+    let height = clear.height();
+    clear.min.y += if chart.config().show_quote_boxes {
+        110.0
+    } else {
+        65.0
+    };
+    if chart.config().show_volume {
+        clear.max.y -= height * chart.config().volume_height_fraction;
+    }
+    let choose = |from: usize, to: usize, high: bool| {
+        let points = (from..to)
+            .map(|i| (i, if high { bars[i].high } else { bars[i].low }))
+            .filter(|&(i, price)| clear.contains(mapping.to_screen(i, price)));
+        if high {
+            points.max_by(|a, b| a.1.total_cmp(&b.1))
+        } else {
+            points.min_by(|a, b| a.1.total_cmp(&b.1))
+        }
+        .expect("a visible swing point away from chart controls")
+    };
+    let low = choose(n - 54, n - 35, false);
+    let high = choose(n - 34, n - 18, true);
+    let moved = choose(n - 17, n - 6, true);
+    let a = mapping.to_screen(low.0, low.1);
+    let b = mapping.to_screen(high.0, high.1);
+    let c = mapping.to_screen(moved.0, moved.1);
+    t.label("Magnet mode", 300);
+    if t.h.query_by_label("Got it").is_some() {
+        t.label("Got it", 250);
+    }
+    t.label("Trend Line", 300);
+    let row =
+        t.h.get_by_role_and_label(egui::accesskit::Role::MenuItem, "Trend Line")
+            .rect()
+            .center();
+    t.move_to(row, 250);
+    t.click();
+    t.move_to(a + vec2(1.0, 2.0), 600);
+    t.click();
+    t.move_to(b, 900);
+    t.click();
+    let d =
+        t.h.state()
+            .chart
+            .drawings()
+            .drawings
+            .last()
+            .expect("pointer placed a line");
+    assert_eq!(d.tool_type, DrawingToolType::TrendLine);
+    assert!(d.completed);
+    for (point, expected) in d.chart_points.iter().zip([low, high]) {
+        assert!((point.bar_idx - expected.0 as f32).abs() < 0.01);
+        assert!(
+            (point.price - expected.1).abs() < 0.0001,
+            "magnet must snap to OHLC"
+        );
+    }
+    t.hold(300);
+    t.drag(c, 800);
+    let d = t.h.state().chart.drawings().drawings.last().unwrap();
+    assert!(
+        (d.chart_points[1].bar_idx - moved.0 as f32).abs() < 0.01,
+        "handle must move"
+    );
+}
+
+fn wall_time(now: chrono::DateTime<chrono::Utc>, monotonic: Option<i64>) {
+    let path = std::env::var("CAPTURE_CLOCK").expect("motion capture needs regenerate.sh's clock");
+    std::fs::write(
+        path,
+        format!(
+            "{} {} {}",
+            now.timestamp(),
+            now.timestamp_subsec_nanos(),
+            monotonic.unwrap_or(-1)
+        ),
+    )
+    .unwrap();
+}
+
+pub(super) fn shoot(scene: &Scene, light: bool, out: &Path) {
+    wall_time("2026-10-27T19:29:50Z".parse().unwrap(), None);
+    let mut h = prepare(scene, light, 2.0, true);
+    let start = if matches!(scene.name, "tour" | "liquidity") {
+        "2026-10-27T19:54:50Z"
+    } else {
+        "2026-10-27T19:29:50Z"
+    }
+    .parse()
+    .unwrap();
+    wall_time(start, None);
+    let theme = if light { "light" } else { "dark" };
+    let out = out.join(format!("{}-{theme}", scene.name));
+    std::fs::create_dir_all(&out).unwrap();
+    let rect = h.state().chart.get_rendered_price_rect();
+    let pointer = rect.min + rect.size() * vec2(0.3, 0.4);
+    // Initialization work can take a variable number of passes; settle the UI on a fixed clock.
+    for i in 0..60 {
+        h.input_mut().time = Some(999.0 + i as f64 / 60.0);
+        h.hover_at(pointer);
+        h.step();
+    }
+    let mut t = Timeline {
+        h,
+        out,
+        frame: 0,
+        pointer,
+        live: matches!(scene.name, "tour" | "liquidity"),
+        start,
+    };
+    match scene.name {
+        "tour" => {
+            let script =
+                std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tour.txt"))
+                    .expect("read the tour timeline");
+            for (index, line) in script.lines().enumerate() {
+                let line = line.split('#').next().unwrap().trim();
+                if line.is_empty() {
+                    continue;
+                }
+                eprintln!("tour step {}: {line}", index + 1);
+                let (verb, args) = line.split_once(' ').unwrap_or((line, ""));
+                let numbers = || {
+                    args.split_whitespace()
+                        .map(|v| v.parse::<f32>().expect("timeline number"))
+                        .collect::<Vec<_>>()
+                };
+                let label = || {
+                    let (ms, label) = args.split_once(' ').expect("duration and label");
+                    (ms.parse::<usize>().expect("timeline duration"), label)
+                };
+                match verb {
+                    "hold" => t.hold(args.parse().unwrap()),
+                    "move" | "drag" => {
+                        let n = numbers();
+                        assert_eq!(n.len(), 3);
+                        if verb == "move" {
+                            t.move_to(pos2(n[1], n[2]), n[0] as usize);
+                        } else {
+                            t.drag(pos2(n[1], n[2]), n[0] as usize);
+                        }
+                    }
+                    "click" => {
+                        let (ms, text) = label();
+                        t.label(text, ms);
+                    }
+                    "bar" => {
+                        let (ms, back) = label();
+                        let chart = &t.h.state().chart;
+                        let bars = chart.bars(SeriesId::MAIN);
+                        let index = bars
+                            .len()
+                            .checked_sub(back.parse::<usize>().unwrap() + 1)
+                            .expect("replay bar exists");
+                        let bar = &bars[index];
+                        let to = chart
+                            .get_chart_mapping()
+                            .to_screen(index, (bar.open + bar.close) * 0.5);
+                        assert!(
+                            chart.get_rendered_price_rect().contains(to),
+                            "replay candle must be visible"
+                        );
+                        t.move_to(to, ms);
+                        t.click();
+                        assert!(
+                            t.h.state().chart.replay_time().is_some(),
+                            "clicking the candle must start replay"
+                        );
+                    }
+                    "row" => {
+                        let (ms, text) = label();
+                        let to =
+                            t.h.get_by_role_and_label(egui::accesskit::Role::ListBoxOption, text)
+                                .rect()
+                                .center();
+                        assert!(
+                            (110.0..380.0).contains(&to.y),
+                            "scroll the symbol into the visible watchlist before selecting it"
+                        );
+                        t.move_to(to, ms);
+                        t.click();
+                    }
+                    "study" => {
+                        let (ms, text) = label();
+                        let count = t.h.state().chart.indicators().count();
+                        t.label(text, ms);
+                        assert_eq!(
+                            t.h.state().chart.indicators().count(),
+                            count + 1,
+                            "study row must add the study"
+                        );
+                    }
+                    "search" => {
+                        let input =
+                            t.h.get_by_role(egui::accesskit::Role::TextInput)
+                                .rect()
+                                .center();
+                        t.move_to(input, 300);
+                        t.click();
+                        t.type_text(args);
+                    }
+                    "play" => {
+                        let before = t.h.state().chart.replay_time().expect("replay is active");
+                        t.label("Play (Space)", 250);
+                        t.hold(args.parse().unwrap());
+                        t.label("Pause (Space)", 250);
+                        assert!(
+                            t.h.state().chart.replay_time().unwrap() > before,
+                            "automatic playback must advance the historical bars"
+                        );
+                    }
+                    "escape" => t.key(Key::Escape, Modifiers::NONE),
+                    "scroll" => t.scroll(args.parse().unwrap()),
+                    "line" => {
+                        t.live = false;
+                        draw_line(&mut t);
+                    }
+                    "home" => t.move_to(pointer, args.parse().unwrap()),
+                    other => panic!("unknown tour command {other} at line {}", index + 1),
+                }
+            }
+            t.finish(30);
+        }
+        "drawings" => {
+            t.hold(500);
+            draw_line(&mut t);
+            t.hold(800);
+            t.key(Key::Z, Modifiers::COMMAND);
+            t.hold(200);
+            t.key(Key::Z, Modifiers::COMMAND);
+            t.move_to(pointer, 600);
+            t.finish(7);
+        }
+        "liquidity" => {
+            let bars = t.h.state().chart.bars(SeriesId::MAIN).to_vec();
+            t.hold(500);
+            t.move_to(rect.min + rect.size() * vec2(0.8, 0.5), 3000);
+            t.move_to(pointer, 3000);
+            t.finish(7);
+            assert_ne!(
+                t.h.state().chart.bars(SeriesId::MAIN),
+                bars,
+                "feed must advance"
+            );
+        }
+        "replay" => {
+            let count = t.h.state().chart.bars(SeriesId::MAIN).len();
+            t.hold(500);
+            for _ in 0..6 {
+                t.label("Next bar (Right arrow)", 300);
+                t.hold(450);
+            }
+            t.move_to(pointer, 600);
+            t.finish(7);
+            assert!(
+                t.h.state().chart.bars(SeriesId::MAIN).len() > count,
+                "replay must advance"
+            );
+        }
+        _ => unreachable!(),
+    }
+    eprintln!("captured {} {theme}: {} frames", scene.name, t.frame);
+}

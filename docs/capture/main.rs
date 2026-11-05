@@ -1,12 +1,13 @@
 //! Captures the README images from the demo app in `examples/demo`, rendered offscreen by egui_kittest's wgpu
 //! renderer. The demo starts at a fixed timestamp with its sample feed paused. Each scene sets its state through the
-//! controller's own action handlers and the public chart API, so no step depends on where a control is drawn.
+//! controller's own action handlers and the public chart API before recording pointer input.
 //!
-//! Run from this directory: `cargo run --release -- <out-dir> [scene-filter]`
-//! Output: `<scene>-<theme>.png` for the dark and light themes, from a 1600x1000 window at 1.5 pixels per point.
-//! Each capture sets its theme on the app and with `Chart::set_theme` before the first step. `docs/images` holds
-//! them converted unchanged to lossless WebP: `for f in <out-dir>/*.png; do cwebp -quiet -lossless -z 9 "$f" -o
-//! docs/images/$(basename "${f%.png}").webp; done`.
+//! Regenerate the motion media with `docs/capture/regenerate.sh <absolute-temporary-directory>`.
+//! See README.md beside this file for the renderer, clock, encoder versions and exact encoding commands.
+//! Stills: `cargo run --release -- <out-dir> [scene-filter]`; motion: append `--animated`.
+//! PNG frames live outside the repository. The tour uses 1280x720 points and galleries 1280x800,
+//! at 2 pixels per point and 60 deterministic UI frames per second. Every frame is rendered.
+//! Set LP_NUM_THREADS=3 for repeat runs.
 
 #[path = "../../examples/demo/controller.rs"]
 #[expect(dead_code, reason = "only the captured scenes are exercised")]
@@ -16,6 +17,9 @@ mod panel_alerts;
 #[path = "../../examples/demo/sampledata.rs"]
 #[expect(dead_code, reason = "only the captured scenes are exercised")]
 mod sampledata;
+
+mod animation;
+mod pointer;
 
 use controller::DemoApp;
 use egui::containers::panel::PanelState;
@@ -395,11 +399,25 @@ fn chart_rect(ctx: &Context) -> Rect {
     r
 }
 
-fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
+fn prepare(
+    scene: &Scene,
+    light: bool,
+    scale: f32,
+    animated: bool,
+) -> Harness<'static, pointer::CaptureApp> {
     let mut h = Harness::builder()
-        .with_size(SIZE)
+        .with_size(if animated {
+            if scene.name == "tour" {
+                vec2(1280.0, 720.0)
+            } else {
+                vec2(1280.0, 800.0)
+            }
+        } else {
+            SIZE
+        })
+        .with_step_dt(if animated { 1.0 / 60.0 } else { 0.25 })
         .with_pixels_per_point(scale)
-        // The chart draws its own crosshair; kittest would paint a pointer arrow over it.
+        // The capture app paints the motion pointer; stills keep the chart's crosshair.
         .with_render_cursor(false)
         // Glyphs no bundled font has (arrows, small triangles in the toolbars) stay boxes, as the demo shows them.
         .allow_missing_glyphs()
@@ -409,14 +427,47 @@ fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
         .wgpu()
         .build_eframe(|cc| {
             let now = "2026-10-27T19:29:50Z".parse().unwrap();
-            *DemoApp::new_at(cc, now, true)
+            let mut app = DemoApp::new_at(cc, now, true);
+            if animated {
+                app.theme = if light { Theme::light() } else { Theme::dark() };
+                app.chart.set_theme(&cc.egui_ctx, &app.theme);
+            }
+            pointer::CaptureApp {
+                demo: *app,
+                show_pointer: animated,
+                pointing_at_row: false,
+            }
         });
     h.run_steps(3);
+    if animated {
+        // Replay and drawings must start from the completed history, including retained executions.
+        let ready = |h: &Harness<'_, pointer::CaptureApp>| {
+            h.state()
+                .chart
+                .feed_state(SeriesId::MAIN)
+                .is_some_and(|state| {
+                    state.status == Some(egui_charts::data::FeedStatus::Live)
+                        && !state.loading_history
+                })
+        };
+        for _ in 0..2_000 {
+            if ready(&h) {
+                break;
+            }
+            h.step();
+        }
+        assert!(
+            ready(&h),
+            "sample history must finish before scripting a scene"
+        );
+    }
     let ctx = h.ctx.clone();
-    h.state_mut().toggle_panel(RightBarIcon::Notifications);
-    h.run_steps(3);
-    h.state_mut().toggle_panel(RightBarIcon::Notifications);
-    let app = h.state_mut();
+    if !animated {
+        h.state_mut().toggle_panel(RightBarIcon::Notifications);
+        h.run_steps(3);
+        h.state_mut().toggle_panel(RightBarIcon::Notifications);
+    }
+    let app = &mut h.state_mut().demo;
     app.theme = if light { Theme::light() } else { Theme::dark() };
     app.chart.set_theme(&ctx, &app.theme);
     // The demo's call to action belongs to the host application, not to the library.
@@ -424,6 +475,19 @@ fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
     app.paper
         .set_replay_time(Some("2026-10-27T19:29:50Z".parse().unwrap()));
     app.chart.config_mut().show_countdown = false;
+    if animated && scene.name == "tour" {
+        app.chart.config_mut().title_as_description = false;
+        app.chart.config_mut().show_quote_boxes = false;
+        app.chart.config_mut().show_indicator_inputs = false;
+        app.chart.config_mut().show_indicator_last_val = false;
+    }
+    if animated {
+        app.chart.config_mut().axis_font_size =
+            Some(if scene.name == "tour" { 12.0 } else { 28.0 });
+        if scene.name != "tour" {
+            app.chart.config_mut().right_axis_width = 140.0;
+        }
+    }
     app.trading.display.notifications = egui_charts::widget::settings::TradingNotifications::Off;
     app.timeframe_toolbar
         .set_control_visible(egui_charts::ui::Control::TimeZone, false);
@@ -506,7 +570,41 @@ fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
         }
         h.run_steps(5);
     }
-    if !matches!(scene.name, "layouts" | "chart-types") {
+    if scene.name == "tour" {
+        // The heatmap has 25 minutes of book history; align the other feeds with it.
+        let start: chrono::DateTime<chrono::Utc> = "2026-10-27T19:29:50Z".parse().unwrap();
+        let end = "2026-10-27T19:54:00Z"
+            .parse::<chrono::DateTime<chrono::Utc>>()
+            .unwrap();
+        for slot in 0..3 {
+            h.state_mut().activate_chart_slot(slot);
+            for minute in 1..=25 {
+                h.state_mut()
+                    .advance_sample_to(start + chrono::Duration::minutes(minute));
+                h.run_steps(2);
+            }
+            for _ in 0..2_000 {
+                if h.state()
+                    .chart
+                    .bars(SeriesId::MAIN)
+                    .last()
+                    .is_some_and(|bar| bar.time == end)
+                {
+                    break;
+                }
+                h.step();
+            }
+            assert_eq!(
+                h.state().chart.bars(SeriesId::MAIN).last().unwrap().time,
+                end,
+                "every tour feed must reach the same sample minute"
+            );
+            h.state_mut().chart.scroll_to_position(0.5, false);
+        }
+        h.state_mut().activate_chart_slot(0);
+        h.run_steps(5);
+    }
+    if !matches!(scene.name, "layouts" | "chart-types" | "tour") {
         let count = scene.steps.iter().rev().find_map(|s| {
             if let Step::Visible(n) = s {
                 Some(*n)
@@ -526,10 +624,10 @@ fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
             .scale_margins
             .top = 0.28;
     }
-    if scene.name == "footprint" {
+    if matches!(scene.name, "footprint" | "tour") {
         h.state_mut().chart.scroll_to_position(0.5, false);
     }
-    if scene.name == "hero" {
+    if scene.name == "hero" && !animated {
         h.run_steps(3);
         h.get_by_role(egui::accesskit::Role::MultilineTextInput)
             .focus();
@@ -556,18 +654,27 @@ fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
         h.hover_at(area.min + area.size() * f);
         h.run_steps(2);
     }
+    h
+}
+
+fn save_frame(h: &mut Harness<'_, pointer::CaptureApp>, path: &Path) {
     let img = h
         .render()
-        .unwrap_or_else(|e| panic!("render {}: {e}", scene.name));
-    let theme = if light { "light" } else { "dark" };
-    let path = out.join(format!("{}-{theme}.png", scene.name));
-    let file = std::io::BufWriter::new(std::fs::File::create(&path).unwrap());
+        .unwrap_or_else(|e| panic!("render {}: {e}", path.display()));
+    let file = std::io::BufWriter::new(std::fs::File::create(path).unwrap());
     img.write_with_encoder(PngEncoder::new_with_quality(
         file,
-        CompressionType::Best,
-        FilterType::Adaptive,
+        CompressionType::Fast,
+        FilterType::NoFilter,
     ))
     .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+}
+
+fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
+    let mut h = prepare(scene, light, scale, false);
+    let theme = if light { "light" } else { "dark" };
+    let path = out.join(format!("{}-{theme}.png", scene.name));
+    save_frame(&mut h, &path);
     let bytes = std::fs::metadata(&path).unwrap().len();
     if bytes > MAX_BYTES {
         eprintln!(
@@ -580,15 +687,43 @@ fn shoot(scene: &Scene, light: bool, scale: f32, out: &Path) {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let Some(out) = args.get(1) else {
-        eprintln!("usage: capture <out-dir> [scene-filter]");
+        eprintln!("usage: capture <out-dir> [scene-filter] [--animated]");
         std::process::exit(2);
     };
-    let filter = args.get(2).map(String::as_str).unwrap_or("");
+    let animated = args.iter().skip(2).any(|arg| arg == "--animated");
+    let filter = args
+        .iter()
+        .skip(2)
+        .find(|arg| arg.as_str() != "--animated")
+        .map(String::as_str)
+        .unwrap_or("");
     let out = Path::new(out);
     std::fs::create_dir_all(out).unwrap();
-    for scene in scenes().iter().filter(|s| s.name.contains(filter)) {
+    if animated {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .unwrap();
+        if out.canonicalize().unwrap().starts_with(root) {
+            eprintln!(
+                "motion frames must live outside the repository: {}",
+                out.display()
+            );
+            std::process::exit(2);
+        }
+    }
+    let scenes = if animated {
+        animation::scenes()
+    } else {
+        scenes()
+    };
+    for scene in scenes.iter().filter(|s| s.name.contains(filter)) {
         for light in [false, true] {
-            shoot(scene, light, 1.5, out);
+            if animated {
+                animation::shoot(scene, light, out);
+            } else {
+                shoot(scene, light, 1.5, out);
+            }
         }
         eprintln!("captured {}", scene.name);
     }
