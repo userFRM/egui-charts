@@ -1310,6 +1310,40 @@ fn restored_order_flow_studies_count_executions_traded_while_they_were_removed()
     }
 }
 
+/// Without bars to match, a page groups from its oldest execution, which may lie inside a bar: that
+/// bar stays incomplete until a page reports the start of trade history.
+#[test]
+fn paged_trades_without_history_leave_their_first_bar_incomplete() {
+    use crate::model::OrderSide::Buy;
+    let feed = Arc::new(Script::default());
+    let mut chart = fed(&feed, Some("A"));
+    chart.set_timeframe("2t".parse().unwrap());
+    chart.set_chart_type(ChartType::VolumeFootprint);
+    let mut frames = Frames::new();
+    frames.run(&mut chart);
+    feed.resolve()
+        .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+    feed.page().send(page(Vec::new(), true));
+    frames.run(&mut chart);
+    frames.run(&mut chart);
+    let start = bars(1)[0].time;
+    let trades = (0..4)
+        .map(|second| {
+            let at = start + TimeDelta::seconds(second);
+            Tick::new(at, 100.0, 1.0, Some(Buy))
+        })
+        .collect();
+    feed.trades
+        .lock()
+        .unwrap()
+        .remove(0)
+        .send(Ok(TradePage::new(trades, false)));
+    frames.run(&mut chart);
+    let link = chart.feed_link.as_ref().unwrap();
+    let flow = link.footprint.as_ref().unwrap();
+    assert_eq!(flow.complete_from(), Some(start + TimeDelta::seconds(2)));
+}
+
 /// The page answering an interval change holds what traded between the two subscriptions, and
 /// repeating the retained executions does not end the scroll-back for older ones.
 #[test]

@@ -226,7 +226,9 @@ impl FeedLink {
             flow.drop_through(lost, trades());
         }
         let first = self.unconfirmed_start().or_else(|| {
-            if trade_based && self.trades.lost_until().is_some() {
+            // Without bars to match, paged trades group from the oldest held one.
+            let unmatched = history.is_empty() && !self.trades_from_start;
+            if trade_based && (unmatched || self.trades.lost_until().is_some()) {
                 self.trades.iter().next().map(|trade| trade.ts)
             } else {
                 None
