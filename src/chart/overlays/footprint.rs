@@ -16,6 +16,7 @@ const FONT_LIMITS: [f32; 2] = [8.0, 24.0];
 /// The share of a ladder column each of its side cells takes.
 const LADDER_CELL_SHARE: f32 = 0.39;
 /// The height of a ladder bar's totals and box, three rows of the 10 point font and their margins.
+#[cfg(feature = "studies")]
 const INFO_BOX_HEIGHT: f32 = 46.0;
 
 pub use crate::model::{FootprintColor, FootprintMode};
