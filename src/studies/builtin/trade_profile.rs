@@ -3,6 +3,7 @@
 use crate::data::{FeedError, Footprint, FootprintBar, FootprintLevel, NodeSensitivity};
 use crate::model::ProfileRows;
 use chrono::{DateTime, Utc};
+use std::borrow::Cow;
 use std::ops::Range;
 
 /// Half-open session ranges. Adjacent sessions can be merged and split again by the user.
@@ -217,9 +218,9 @@ pub fn trade_profiles_with_rows(
 }
 
 /// `bar` with every `group` neighbouring rows summed into the row keyed by their quotient.
-fn grouped(bar: &FootprintBar, group: i64) -> FootprintBar {
+fn grouped(bar: &FootprintBar, group: i64) -> Cow<'_, FootprintBar> {
     if group == 1 {
-        return bar.clone();
+        return Cow::Borrowed(bar);
     }
     let mut shown = FootprintBar {
         time: bar.time,
@@ -241,7 +242,7 @@ fn grouped(bar: &FootprintBar, group: i64) -> FootprintBar {
             })
             .absorb(row);
     }
-    shown
+    Cow::Owned(shown)
 }
 
 #[cfg(test)]

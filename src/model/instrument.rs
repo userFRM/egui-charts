@@ -458,17 +458,6 @@ impl Session {
         }
     }
 
-    /// Trading hours of one window every day of the week, from `open` to `close` in the exchange
-    /// zone. A `close` at or before `open` spans midnight.
-    pub fn daily(open: NaiveTime, close: NaiveTime) -> Self {
-        use Weekday::*;
-        Self::new([SessionWindow::new(
-            [Mon, Tue, Wed, Thu, Fri, Sat, Sun],
-            open,
-            close,
-        )])
-    }
-
     /// Adds the extended windows beside the regular windows.
     pub fn with_extended_windows(
         mut self,

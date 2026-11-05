@@ -534,11 +534,18 @@ impl SymbolTab {
                 "UTC",
                 "America/New_York",
                 "America/Chicago",
+                "America/Los_Angeles",
                 "Europe/London",
+                "Europe/Paris",
                 "Asia/Tokyo",
+                "Asia/Hong_Kong",
+                "Asia/Singapore",
+                "Australia/Sydney",
             ]
         } else {
-            &["UTC", "-05:00", "+01:00", "+09:00"]
+            &[
+                "UTC", "-08:00", "-06:00", "-05:00", "+01:00", "+08:00", "+09:00", "+10:00",
+            ]
         };
         ui.label_inputs_by(label.id, |ui| {
             let options = std::iter::once(None)
