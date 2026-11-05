@@ -261,17 +261,19 @@ impl Chart {
             Pos2::new(plot.left(), available.bottom() - axis_height),
             Pos2::new(plot.right(), available.bottom()),
         );
+        // The price frame has no height for time navigation in these layouts.
         let shared_plot =
-            (main_at.is_none() || maximized.is_some_and(|id| id != main_pane)).then(|| {
-                ui.interact(
-                    Rect::from_min_max(
-                        Pos2::new(plot.left(), available.top()),
-                        Pos2::new(plot.right(), time_axis.top()),
-                    ),
-                    ui.scope_id().with((maximized, "plot")),
-                    Sense::click_and_drag(),
-                )
-            });
+            (main_at.is_none() || main_collapsed || maximized.is_some_and(|id| id != main_pane))
+                .then(|| {
+                    ui.interact(
+                        Rect::from_min_max(
+                            Pos2::new(plot.left(), available.top()),
+                            Pos2::new(plot.right(), time_axis.top()),
+                        ),
+                        ui.scope_id().with((maximized, "plot")),
+                        Sense::click_and_drag(),
+                    )
+                });
         let price_frame = if main_collapsed {
             Rect::from_min_size(main_rect.min, egui::vec2(main_rect.width(), 0.0))
         } else {
