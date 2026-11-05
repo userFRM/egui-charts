@@ -741,7 +741,10 @@ impl SettingsDialog {
                 price_source: Some(Default::default()),
                 ..Default::default()
             };
-            if self.settings.chart_type == crate::model::ChartType::Heikin {
+            if matches!(
+                self.settings.chart_type,
+                crate::model::ChartType::Heikin | crate::model::ChartType::HollowCandles
+            ) {
                 self.settings.candle_colors.show_border = true;
             }
             self.template_name.clear();
@@ -830,6 +833,7 @@ mod tests {
         };
         for (kind, label) in [
             (ChartType::Heikin, "Body"),
+            (ChartType::HollowCandles, "Body"),
             (ChartType::Bars, "Body"),
             (ChartType::Line, "Line width"),
             (ChartType::Baseline, "Base level"),

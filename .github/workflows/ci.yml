@@ -195,6 +195,13 @@ jobs:
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}
         run: test "$CHANGES_RESULT" = success
+      # The library compiles twice here (test harness, then as the demo dependency). Debug info is
+      # a large share of each Windows compile and link, and the tests never read it; panics still
+      # report their source line without it. Set through the file because Cargo rejects an empty value.
+      - name: Skip debug info on Windows
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: echo CARGO_PROFILE_DEV_DEBUG=0 >> "$GITHUB_ENV"
       - uses: actions/checkout@v7
         if: needs.changes.outputs.docs == 'true' || (matrix.os != 'macos-latest' && needs.changes.outputs.native == 'true')
       - uses: dtolnay/rust-toolchain@master
