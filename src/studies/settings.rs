@@ -447,6 +447,17 @@ pub struct ConfiguredStudy {
     /// The study's markers and zones on chart bars while it runs on another interval or symbol.
     aligned_markers: Vec<super::IndicatorMarker>,
     aligned_zones: Vec<super::StudyZone>,
+    /// The values kept on the bars that remain after the chart evicted the oldest bars, until
+    /// the study is calculated again.
+    kept: Option<Kept>,
+}
+
+/// The values a study keeps on the bars that remain after the chart evicted the oldest `shift`
+/// bars since its last calculation.
+#[derive(Clone)]
+struct Kept {
+    values: IndicatorValues,
+    shift: usize,
 }
 
 impl ConfiguredStudy {
@@ -480,6 +491,7 @@ impl ConfiguredStudy {
             spans: Vec::new(),
             aligned_markers: Vec::new(),
             aligned_zones: Vec::new(),
+            kept: None,
         }
     }
     /// Attach a host-chosen help article to this study, retained in saved presentation.
@@ -494,8 +506,14 @@ impl ConfiguredStudy {
         self.study.source().is_some()
             || (self.study.data_requests().is_empty() && !self.study.needs_order_flow())
     }
+    /// The bars evicted since the study was last calculated, by which the bars of its kept values
+    /// trail those of the study.
+    fn shift(&self) -> usize {
+        self.kept.as_ref().map_or(0, |kept| kept.shift)
+    }
     fn update_price(&mut self, data: &[Bar], from: usize) {
         self.aligned = None;
+        self.kept = None;
         match self.source() {
             Some(super::StudySource::Price(source)) if self.source() != self.study.source() => {
                 let values: Vec<_> = data
@@ -614,6 +632,7 @@ impl Indicator for ConfiguredStudy {
             };
             self.offset = offset;
             self.aligned = None;
+            self.kept = None;
             self.study.calculate(&[]);
             return Ok(());
         }
@@ -648,6 +667,7 @@ impl Indicator for ConfiguredStudy {
                 _ => unreachable!(),
             }
             self.aligned = None;
+            self.kept = None;
             self.study.calculate(&[]);
             return Ok(());
         }
@@ -656,6 +676,7 @@ impl Indicator for ConfiguredStudy {
                 self.study.set_input(id, value)?;
                 self.source = None;
                 self.aligned = None;
+                self.kept = None;
                 return Ok(());
             }
             let InputValue::Source(source) = value else {
@@ -671,6 +692,7 @@ impl Indicator for ConfiguredStudy {
             }
             self.source = Some(source);
             self.aligned = None;
+            self.kept = None;
             self.study.calculate(&[]);
             Ok(())
         } else {
@@ -680,6 +702,7 @@ impl Indicator for ConfiguredStudy {
                 self.formatter = None;
             }
             self.aligned = None;
+            self.kept = None;
             Ok(())
         }
     }
@@ -705,6 +728,7 @@ impl Indicator for ConfiguredStudy {
         }
     }
     fn update_data(&mut self, data: &[Bar], from: usize, sources: &[super::StudyData<'_>]) {
+        self.kept = None;
         if self.calculation_symbol.is_empty() && self.calculation_timeframe.is_none() {
             if self.study.data_requests().is_empty() {
                 self.update(data, from);
@@ -805,12 +829,31 @@ impl Indicator for ConfiguredStudy {
         }
     }
     fn update_source(&mut self, data: &[Bar], from: usize, source: &[f64]) {
+        self.kept = None;
         self.study.update_source(data, from, source);
     }
     fn is_incremental(&self) -> bool {
         self.data_requests().is_empty()
             && self.source() == self.study.source()
             && self.study.is_incremental()
+    }
+    fn remove_oldest_bars(&mut self, count: usize) -> bool {
+        // These outputs index the evicted bars too.
+        let indexed = !self.candles().is_empty()
+            || !self.zones().is_empty()
+            || !self.markers().is_empty()
+            || !self.labels().is_empty()
+            || !self.projections().is_empty()
+            || (0..self.line_count()).any(|line| self.provisional_after(line).is_some());
+        #[cfg(feature = "drawings")]
+        let indexed = indexed || !self.drawings().is_empty();
+        if indexed || self.values().len() <= count {
+            return false;
+        }
+        let shift = self.shift() + count;
+        let values = self.values().without_first(count);
+        self.kept = Some(Kept { values, shift });
+        true
     }
     fn set_instrument(&mut self, instrument: Option<&Instrument>) -> bool {
         if self.calculation_symbol.is_empty() && self.calculation_timeframe.is_none() {
@@ -859,7 +902,11 @@ impl Indicator for ConfiguredStudy {
         self.study.tpo()
     }
     fn values(&self) -> &IndicatorValues {
-        self.aligned.as_ref().unwrap_or_else(|| self.study.values())
+        self.kept
+            .as_ref()
+            .map(|kept| &kept.values)
+            .or(self.aligned.as_ref())
+            .unwrap_or_else(|| self.study.values())
     }
     fn colors(&self) -> Vec<Color32> {
         self.settings.plots.iter().map(|plot| plot.color).collect()
@@ -918,6 +965,7 @@ impl Indicator for ConfiguredStudy {
             .unwrap_or_default()
     }
     fn plot_variant(&self, line: usize, bar: usize) -> Option<usize> {
+        let bar = bar.checked_add(self.shift())?;
         let bar = if self.aligned.is_some() {
             self.aligned_bars.get(bar).copied().flatten()?
         } else {
@@ -941,7 +989,8 @@ impl Indicator for ConfiguredStudy {
             .saturating_add(self.offset as isize)
     }
     fn plot_value(&self, line: usize, bar: usize) -> Option<f64> {
-        if let Some(values) = &self.aligned {
+        let kept = self.kept.as_ref().map(|kept| &kept.values);
+        if let Some(values) = kept.or(self.aligned.as_ref()) {
             values.value(
                 line,
                 bar.checked_add_signed(self.plot_offset(line).checked_neg()?)?,
@@ -960,6 +1009,7 @@ impl Indicator for ConfiguredStudy {
         {
             return Some(variant.color);
         }
+        let bar = bar.checked_add(self.shift())?;
         let bar = if self.aligned.is_some() {
             self.aligned_bars.get(bar).copied().flatten()?
         } else {
@@ -968,6 +1018,7 @@ impl Indicator for ConfiguredStudy {
         self.study.plot_color(line, bar)
     }
     fn plot_text(&self, line: usize, bar: usize) -> Option<String> {
+        let bar = bar.checked_add(self.shift())?;
         let bar = if self.aligned.is_some() {
             self.aligned_bars.get(bar).copied().flatten()?
         } else {
@@ -1049,6 +1100,7 @@ impl Indicator for ConfiguredStudy {
         self.wait_for_close = snapshot.wait_for_close;
         self.offset = snapshot.offset;
         self.aligned = None;
+        self.kept = None;
         self.aligned_bars.clear();
         Ok(())
     }
@@ -1164,6 +1216,7 @@ impl Indicator for ConfiguredStudy {
         self.wait_for_close = edited.wait_for_close;
         self.offset = edited.offset;
         self.aligned = None;
+        self.kept = None;
         self.settings = settings;
         Ok(())
     }
@@ -1253,6 +1306,10 @@ impl Indicator for ConfiguredStudy {
         }
     }
     fn volume_profiles(&self, visible: std::ops::Range<usize>) -> Vec<crate::data::StudyProfile> {
+        // Kept profiles would index the evicted bars too.
+        if self.kept.is_some() {
+            return Vec::new();
+        }
         if self.aligned.is_none() {
             return self.study.volume_profiles(visible);
         }

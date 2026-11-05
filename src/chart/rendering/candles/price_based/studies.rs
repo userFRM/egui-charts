@@ -7,6 +7,9 @@ use std::sync::Arc;
 pub(crate) struct ElementStudies {
     pub(crate) studies: IndicatorRegistry,
     pub(crate) pending_from: Vec<Option<usize>>,
+    /// Whether each study keeps its values until its next full recompute, after a live bar of a
+    /// history it reads. An eviction does not set it: the elements are rebuilt rather than evicted.
+    pub(crate) stale: Vec<bool>,
     pub(crate) next_refresh: Vec<f64>,
     pub(crate) dirty: bool,
     pub(crate) bars: Arc<[Bar]>,
@@ -18,6 +21,7 @@ impl Default for ElementStudies {
         Self {
             studies: IndicatorRegistry::new(),
             pending_from: Vec::new(),
+            stale: Vec::new(),
             next_refresh: Vec::new(),
             dirty: true,
             bars: Arc::from([]),
@@ -43,6 +47,7 @@ impl ElementStudies {
                 self.studies.add(study);
             }
             self.pending_from = vec![Some(0); source.indicators().len()];
+            self.stale = vec![false; source.indicators().len()];
             self.next_refresh = vec![f64::NEG_INFINITY; source.indicators().len()];
         }
         if !Arc::ptr_eq(&self.bars, &bars) {

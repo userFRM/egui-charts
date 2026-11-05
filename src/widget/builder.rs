@@ -137,6 +137,7 @@ impl Chart {
             study_inputs: Vec::new(),
             study_autoscale: Vec::new(),
             pending_from: Vec::new(),
+            stale: Vec::new(),
             next_refresh: Vec::new(),
             // 0 and 1 are the main and volume series.
             next_series: 2,

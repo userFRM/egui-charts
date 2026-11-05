@@ -756,7 +756,7 @@ impl PositionSizing {
     }
 }
 
-/// Placement of a ray's or extended line's measurement text relative to its anchors.
+/// Placement of a trend line's, ray's or extended line's measurement text relative to its anchors.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LineMeasurementPosition {
     /// Before the left anchor.
@@ -768,7 +768,8 @@ pub enum LineMeasurementPosition {
     Right,
 }
 
-/// Independent readouts for a ray or extended line. All start hidden, including on older saves.
+/// Independent readouts for a trend line, ray or extended line. All start hidden, including on
+/// older saves.
 /// Price changes follow anchor order; lengths and elapsed time are unsigned.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]

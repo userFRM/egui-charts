@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use egui::{Event, Pos2, RawInput, Rect, Shape, Vec2};
 
 /// Frames run before the measured ones.
-const WARMUP: usize = 60;
+pub const WARMUP: usize = 60;
 
 /// One measured frame.
 pub struct Sample {

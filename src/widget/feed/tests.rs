@@ -700,7 +700,8 @@ fn bar_limits_bound_feed_history_and_ticks() {
 }
 
 /// A full limit of 16 bars evicts down to 16 - 16 / 8 = 14 when a new bar overflows it, so a
-/// stream restarts the studies on one new bar in three instead of on every one. Between those
+/// stream restarts the studies on one new bar in three instead of on every one. An eviction
+/// leaves every study drawing its values on the bars that remain until its recompute, between
 /// evictions every study follows a new bar in the bar's frame, and after them scroll-back stays
 /// paused although the series holds fewer bars than the limit.
 #[cfg(feature = "studies")]
@@ -734,17 +735,19 @@ fn a_full_bar_limit_evicts_in_chunks_and_keeps_paging_paused() {
         frames.run(&mut chart);
         let len = chart.bars(SeriesId::MAIN).len();
         // Only an eviction, which shrinks the series, restarts the studies.
-        if len >= previous {
-            assert!(
-                chart
-                    .indicators()
-                    .all(|(_, study)| study.values().len() == len),
-                "minute {minute}: a study without values"
-            );
-        }
+        assert!(
+            chart.indicators().all(|(_, study)| if len >= previous {
+                study.values().len() == len
+            } else {
+                !study.values().is_empty()
+            }),
+            "minute {minute}: a study blank or behind the bars"
+        );
         held.push(len);
         previous = len;
-        for _ in 0..3 {
+        // Each study waits a quarter second from its last recompute, and they recompute one per
+        // frame.
+        for _ in 0..20 {
             frames.run(&mut chart);
         }
     }
@@ -2791,12 +2794,14 @@ fn stream_studies_keep_every_quote_and_book_loss_between_frames() {
 }
 
 /// A new bar that crosses no input drop updates order-flow studies from that bar: closed bars
-/// keep their values and no order-flow study blanks for a frame.
+/// keep their values and no order-flow study blanks for a frame, nor while it waits for its full
+/// recalculation after a drop.
 /// Hand values: one buy of 1 in each of 11,000 one-minute bars. Each input holds all 11,000,
 /// so the CVD of bar 10,999 is 11,000 and a 10-bar flow sum is 10. Bar 11,000 is the 11,001st:
 /// the input drops its oldest 1,001 and the CVD starts again at bar 1,001, 9,999 at bar 10,999.
-/// Bar 11,001 crosses no boundary, so both studies update on its first frame and bar 10,999
-/// keeps 9,999 and 10.
+/// On the first frame after the drop one study recalculates and the other keeps its 11,000
+/// earlier values, 11,000 or 10 at bar 10,999, until the next frame. Bar 11,001 crosses no
+/// boundary, so both studies update on its first frame and bar 10,999 keeps 9,999 and 10.
 #[cfg(feature = "studies")]
 #[test]
 fn order_flow_studies_update_incrementally_between_input_drops() {
@@ -2833,10 +2838,22 @@ fn order_flow_studies_update_incrementally_between_input_drops() {
     }
     let before = record(&chart);
     feed.sink().push_tick(buy(&all[11_000]));
-    for _ in 0..10 {
+    frames.run(&mut chart);
+    let waiting = record(&chart);
+    for _ in 0..9 {
         frames.run(&mut chart);
     }
     let dropped = record(&chart);
+    // One study recalculates in full on the first frame after the drop; the other keeps its
+    // values, without one for the new bar, until its turn.
+    assert!(
+        [
+            [(11_001, Some(9_999.0)), (11_000, Some(10.0))],
+            [(11_000, Some(11_000.0)), (11_001, Some(10.0))],
+        ]
+        .contains(&waiting),
+        "{waiting:?}"
+    );
     feed.sink().push_tick(buy(&all[11_001]));
     frames.run(&mut chart);
     let first = record(&chart);
