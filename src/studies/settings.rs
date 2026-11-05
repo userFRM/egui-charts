@@ -647,6 +647,15 @@ impl Indicator for ConfiguredStudy {
                 InputValue::Toggle(value) => self.wait_for_close = value,
                 _ => unreachable!(),
             }
+            // The study missed the chart's interval and clock while it ran on other bars.
+            if id != "wait_for_close"
+                && self.calculation_symbol.is_empty()
+                && self.calculation_timeframe.is_none()
+                && let Some(timeframe) = self.timeframe
+            {
+                self.study.set_timeframe(timeframe);
+                self.study.set_bar_clock(&self.clock);
+            }
             self.aligned = None;
             self.study.calculate(&[]);
             return Ok(());
@@ -1430,6 +1439,51 @@ fn source_bars(
 mod tests {
     use super::*;
     use crate::studies::BollingerBands;
+
+    /// Guards #2112: clearing the calculation interval hands the study the chart's interval,
+    /// whether the chart passed it before the input was set, as a template does, or moved on
+    /// while it was set, and whether the edit comes directly or from the settings dialog.
+    #[test]
+    fn clearing_the_calculation_interval_restores_the_chart_interval() {
+        let daily = super::super::StudyDataRequest {
+            symbol: String::new(),
+            timeframe: Some(Timeframe::Day1),
+            metric: None,
+        };
+        for (added_on, dialog) in [
+            (None, false),
+            (None, true),
+            (Some(Timeframe::Day1), false),
+            (Some(Timeframe::Day1), true),
+        ] {
+            let mut study = ConfiguredStudy::new(Box::new(super::super::Performance::new()));
+            if let Some(timeframe) = added_on {
+                study.set_timeframe(timeframe);
+            }
+            study
+                .set_input(
+                    "calculation_timeframe",
+                    InputValue::Timeframe(Some(Timeframe::Day1)),
+                )
+                .unwrap();
+            study.set_timeframe(Timeframe::Min1);
+            let cleared = (
+                "calculation_timeframe".to_owned(),
+                InputValue::Timeframe(None),
+            );
+            if dialog {
+                let settings = study.settings();
+                study.apply_settings(&[cleared], settings).unwrap();
+            } else {
+                study.set_input(&cleared.0, cleared.1).unwrap();
+            }
+            assert_eq!(
+                study.data_requests(),
+                std::slice::from_ref(&daily),
+                "added on {added_on:?}, dialog {dialog}"
+            );
+        }
+    }
 
     #[test]
     fn value_tags_default_by_plot_count_and_persist() {
