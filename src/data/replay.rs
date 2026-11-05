@@ -393,8 +393,9 @@ impl ReplayDriver {
     }
 
     /// Advances once by wall-clock elapsed time and routes due events by symbol. Publishes the
-    /// resulting time to every sink, including quiet symbols and paused frames. Clock errors
-    /// leave the position and subscriptions unchanged.
+    /// resulting time to every sink, including quiet symbols and paused frames, and opens the
+    /// flat candles of the quiet slots it passed, so the candles do not depend on the speed.
+    /// Clock errors leave the position and subscriptions unchanged.
     pub fn advance(&self, elapsed: Duration) -> Result<(), FeedError> {
         let _dispatch = self.dispatch.lock().unwrap_or_else(PoisonError::into_inner);
         let (events, start, end, time, routes) = {
@@ -468,6 +469,7 @@ impl Route {
             .as_ref()
             .is_none_or(|hours| hours.is_open(event.time, self.extended_hours))
         {
+            self.sink.open_quiet_slots(event.time);
             event.push_to(&self.sink);
         } else if let MarketEvent::Order {
             sequence,
@@ -484,9 +486,10 @@ impl Route {
         }
     }
 
-    /// Hands `time` to the sink.
+    /// Hands `time` to the sink, with the flat candles of the quiet slots up to it.
     fn publish(&self, time: DateTime<Utc>) {
         self.sink.set_server_time(time);
+        self.sink.open_quiet_slots(time);
         self.sink.advance_time(time);
     }
 
@@ -675,7 +678,9 @@ fn valid_order(order: &RestingOrder) -> bool {
 mod tests {
     use super::super::inbox::Inbox;
     use super::*;
-    use crate::model::{BarClock, OrderBookLevel, OrderSide, Session, SessionWindow, Timeframe};
+    use crate::model::{
+        Bar, BarClock, OrderBookLevel, OrderSide, Session, SessionWindow, Timeframe,
+    };
     use chrono::{NaiveTime, Weekday};
     use std::sync::Arc;
 
@@ -1167,6 +1172,12 @@ mod tests {
         inbox
     }
 
+    fn drained_bars(inbox: &Inbox) -> (Vec<Bar>, Option<FeedError>) {
+        let (_, update) = inbox.drain().updates.pop().unwrap();
+        let bars = update.bars.into_values().map(|(bar, _)| bar).collect();
+        (bars, update.error)
+    }
+
     /// A January day of 2024 in UTC, five hours after the time in New York.
     fn utc(day: u32, hour: u32, minute: u32, second: u32) -> DateTime<Utc> {
         chrono::NaiveDate::from_ymd_opt(2024, 1, day)
@@ -1266,6 +1277,68 @@ mod tests {
             );
             let book = update.depth.expect("the order book");
             assert_eq!(book.bids[0].size, 3.0, "extended hours {extended}");
+        }
+    }
+
+    /// The candles shown must not depend on how the position was reached.
+    #[test]
+    fn a_seek_and_playback_at_any_speed_build_the_same_flat_candles() {
+        let flat = |at_time, close| Bar::new(at_time, close, close, close, close, 0.0);
+        let traded = |at_time, close| Bar::new(at_time, close, close, close, close, 1.0);
+        let (instrument, zone, session) = new_york(Instrument::new("A"));
+        let clock = BarClock::new(Timeframe::Min1);
+        let session_clock = clock.clone().with_session(zone, session, false);
+        for (events, instrument, clock, position, frames, expected) in [
+            // Around the clock: minutes 1 and 2 have no execution.
+            (
+                vec![trade("A", 10, 0, 10.0), trade("A", 190, 1, 12.0)],
+                Instrument::new("A").with_tick_size(1.0),
+                clock,
+                at(210),
+                &[1, 7, 65, 200][..],
+                vec![
+                    traded(at(0), 10.0),
+                    flat(at(60), 10.0),
+                    flat(at(120), 10.0),
+                    traded(at(180), 12.0),
+                ],
+            ),
+            // Friday 15:58 and Monday 09:31 in New York: the slots of the closed market have none.
+            (
+                vec![
+                    fill(utc(5, 20, 58, 10), 0, 10.0),
+                    fill(utc(8, 14, 31, 10), 1, 12.0),
+                ],
+                instrument,
+                session_clock,
+                utc(8, 14, 32, 30),
+                &[60, 3 * 86_400][..],
+                vec![
+                    traded(utc(5, 20, 58, 0), 10.0),
+                    flat(utc(5, 20, 59, 0), 10.0),
+                    flat(utc(8, 14, 30, 0), 10.0),
+                    traded(utc(8, 14, 31, 0), 12.0),
+                    flat(utc(8, 14, 32, 0), 12.0),
+                ],
+            ),
+        ] {
+            let driver = || ReplayDriver::new(events.clone(), vec![instrument.clone()]).unwrap();
+            for &seconds in frames {
+                let played = driver();
+                let inbox = connect(&played, clock.clone(), false);
+                played.advance(Duration::ZERO).unwrap();
+                while played.time() < position {
+                    let left = (position - played.time()).to_std().unwrap();
+                    let frame = Duration::from_secs(seconds).min(left);
+                    played.advance(frame).unwrap();
+                }
+                let (bars, _) = drained_bars(&inbox);
+                assert_eq!(bars, expected, "{seconds} seconds per frame");
+            }
+            let sought = driver();
+            let inbox = connect(&sought, clock.clone(), false);
+            sought.seek(position);
+            assert_eq!(drained_bars(&inbox).0, expected, "sought");
         }
     }
 }

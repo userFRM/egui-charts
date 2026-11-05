@@ -216,6 +216,18 @@ impl Sink {
         });
     }
 
+    /// Opens the flat candles a live feed's regular heartbeats would have opened in the slots
+    /// after the newest one and before that of `now`. A replay calls this as its clock jumps,
+    /// so its candles do not depend on where its frames land; a live heartbeat opens only its
+    /// own slot, since a stream that was away cannot tell a quiet market from a lost connection.
+    pub(crate) fn open_quiet_slots(&self, now: DateTime<Utc>) {
+        self.inbox
+            .push(|state| match state.subscriptions.get_mut(&self.id) {
+                Some(live) => live.open_quiet_slots(now),
+                None => false,
+            });
+    }
+
     /// A bar of the subscribed timeframe, stamped with its open or any instant inside it:
     /// replaces the bar it shares a slot with, appends a newer one, corrects an older one. A bar
     /// of a day or longer is stamped inside its calendar period, as [`HistoryPage::bars`] describes. A
@@ -312,15 +324,7 @@ impl Sink {
             if !live.clock.is_open(now) || live.forming.is_none_or(|last| open <= last) {
                 return sampled || !live.study_inputs.is_empty();
             }
-            live.updates.bars.insert(
-                open,
-                (
-                    Bar::new(open, close, close, close, close, 0.0),
-                    Origin::Ticks(0),
-                ),
-            );
-            live.forming = Some(open);
-            live.empty = true;
+            live.open_empty(open, close);
             live.bound_bars();
             true
         });
@@ -632,6 +636,49 @@ impl Live {
             self.updates.bars.pop_first();
             self.updates.dropped_bars += 1;
         }
+    }
+
+    /// The empty forming candle of the slot opening at `open`, carrying the last `close`.
+    fn open_empty(&mut self, open: DateTime<Utc>, close: f64) {
+        self.updates.bars.insert(
+            open,
+            (
+                Bar::new(open, close, close, close, close, 0.0),
+                Origin::Ticks(0),
+            ),
+        );
+        self.forming = Some(open);
+        self.empty = true;
+    }
+
+    /// See [`Sink::open_quiet_slots`]. Reports whether it opened any. Stops short of the bars
+    /// that may wait undrained, so that no slot is dropped and no loss is reported for one.
+    fn open_quiet_slots(&mut self, now: DateTime<Utc>) -> bool {
+        let (Some(close), Some(mut newest)) = (self.last_close, self.forming) else {
+            return false;
+        };
+        if self
+            .clock
+            .timeframe()
+            .is_none_or(|tf| tf.duration_ms() <= 0 || tf.is_trade_based())
+        {
+            return false;
+        }
+        let target = self.clock.bar_open(now);
+        let mut opened = false;
+        while newest < target && self.updates.bars.len() + 1 < MAX_PENDING_BARS {
+            let Some(slot) = (self.clock.next_open(newest))
+                .and_then(|next| self.clock.open_at_or_after(next))
+                .map(|open| self.clock.bar_open(open))
+                .filter(|slot| *slot > newest && *slot < target)
+            else {
+                break;
+            };
+            self.open_empty(slot, close);
+            newest = slot;
+            opened = true;
+        }
+        opened
     }
 
     /// Whether the slot opening at `open` is too far ahead of the feed's current time, `system`
