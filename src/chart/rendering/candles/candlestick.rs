@@ -2,14 +2,16 @@
 //!
 //! Includes: Candlestick, OHLC Bars, Hollow Candles, Volume Candles, Columns
 
-use super::helpers::{OhlcYCoords, bar_color, body_rect, draw_body_filled, draw_wicks, prev_close};
+use super::helpers::{
+    OhlcYCoords, bar_color, body_rect, draw_body_filled, draw_wicks, prev_close, push_body,
+    push_wicks,
+};
 use super::volume::render_volume_bars;
 use crate::chart::rendering::{self, BarRenderParams, RenderContext, StyleColors};
 use crate::model::{Bar, BarsStyle, CandlesStyle, HollowStyle};
 use crate::scales::PriceMap;
 use crate::tokens::DESIGN_TOKENS;
-use egui::epaint::RectShape;
-use egui::{Color32, Pos2, Rect, Shape, Stroke, StrokeKind};
+use egui::{Color32, Pos2, Rect, Stroke};
 
 pub(super) fn render_candles(
     price_ctx: &RenderContext,
@@ -112,42 +114,13 @@ pub(super) fn render_hollow_candles(
         let y = OhlcYCoords::from_bar(bar, &coords);
 
         if style.wick_visible {
-            let stroke = Stroke::new(wick_width, wick);
-            // A trending bar has no wick on one side; a segment without length paints nothing.
-            for (from, to) in [(y.wick_top, y.body_top), (y.body_bottom, y.wick_bottom)] {
-                if from != to {
-                    shapes.push(Shape::line_segment(
-                        [Pos2::new(x, from), Pos2::new(x, to)],
-                        stroke,
-                    ));
-                }
-            }
+            push_wicks(&mut shapes, x, &y, Stroke::new(wick_width, wick));
         }
-
-        let rect = body_rect(x, bar_width, &y);
         let fill = (style.body_visible && bar.close <= bar.open).then_some(body);
-        // A border in the colour of an opaque body changes no pixel.
-        let stroke = (style.border_visible && !(fill == Some(border) && border.is_opaque()))
+        let border = style
+            .border_visible
             .then(|| Stroke::new(border_width, border));
-        match (fill, stroke) {
-            // The tessellator stops a shared fill at the middle of the stroke, so only an opaque
-            // border may share the body's shape.
-            (Some(fill), Some(stroke)) if !border.is_opaque() => {
-                shapes.push(Shape::rect_filled(rect, 0.0, fill));
-                shapes.push(Shape::rect_stroke(rect, 0.0, stroke, StrokeKind::Inside));
-            }
-            (None, None) => {}
-            (fill, stroke) => shapes.push(
-                RectShape::new(
-                    rect,
-                    0.0,
-                    fill.unwrap_or(Color32::TRANSPARENT),
-                    stroke.unwrap_or(Stroke::NONE),
-                    StrokeKind::Inside,
-                )
-                .into(),
-            ),
-        }
+        push_body(&mut shapes, body_rect(x, bar_width, &y), fill, border);
     }
     price_ctx.painter.extend(shapes);
 

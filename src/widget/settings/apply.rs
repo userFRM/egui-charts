@@ -1055,6 +1055,8 @@ mod tests {
                     }
                 }
                 assert_eq!(bodies, expected_bodies, "flags={flags}");
+                // The last-price label and the volume bars follow the body colours.
+                assert_eq!(chart.main_body_colors(), (palette[0], palette[1]));
                 assert_eq!(wicks, expected_wicks, "flags={flags}");
                 assert_eq!(ChartSettingsState::from_chart(&chart).candle_colors, c);
                 let saved: ChartSnapshot = serde_json::from_str(

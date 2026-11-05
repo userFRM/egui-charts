@@ -1303,17 +1303,10 @@ impl Chart {
             ),
             _ => (visible_data, coords.clone()),
         };
+        let (bullish, bearish) = self.main_body_colors();
         let colors = StyleColors {
-            bullish: if self.chart_type == ChartType::Heikin {
-                self.chart_type_params.styles.heikin.body_up
-            } else {
-                self.config.bullish_color
-            },
-            bearish: if self.chart_type == ChartType::Heikin {
-                self.chart_type_params.styles.heikin.body_down
-            } else {
-                self.config.bearish_color
-            },
+            bullish,
+            bearish,
             text: self.config.text_color,
             bullish_border: self.config.bullish_border_color,
             bearish_border: self.config.bearish_border_color,
