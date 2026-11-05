@@ -12,7 +12,8 @@ pub enum StoreKind {
     Settings,
     /// The drawings of one symbol, one document per symbol, named by the symbol.
     Drawings,
-    /// Named alert presets in a versioned JSON document.
+    /// The user's alert presets, at most five named sets of selected settings, in one versioned
+    /// JSON document named `presets`.
     AlertPresets,
     /// Named chart display settings templates.
     ChartTemplates,

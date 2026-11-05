@@ -970,9 +970,13 @@ impl ChartLayout {
     /// Current relative sizes of a preset's splits, including its default weights when unedited.
     /// Splits are visited depth first: the outer rows or columns, then each child's subdivisions.
     pub fn sizes(&self, mode: ChartLayoutMode) -> ChartLayoutSizing {
-        self.saved_sizes()
-            .into_iter()
+        self.sizing
+            .sizes
+            .lock()
+            .unwrap()
+            .iter()
             .find(|sizes| sizes.mode == mode)
+            .cloned()
             .unwrap_or_else(|| {
                 let mut weights = Vec::new();
                 mode.tracks().split().weights(&mut weights);
@@ -1824,21 +1828,21 @@ impl ChartLayout {
         }
         let mut weights = drag.weights.clone();
         for divider in &drag.dividers {
-            let sum: f32 = divider.lengths.iter().sum();
-            if sum > 0.0 {
-                // Missing slots retain their weights; visible slots keep their share of the split.
-                let total: f32 = weights[divider.group][..divider.lengths.len()].iter().sum();
-                for (at, &length) in divider.lengths.iter().enumerate() {
-                    let movement = if at == divider.at {
-                        delta
-                    } else if at == divider.at + 1 {
-                        -delta
-                    } else {
-                        0.0
-                    };
-                    weights[divider.group][at] =
-                        (length + movement).max(f32::MIN_POSITIVE) / sum * total;
-                }
+            let (at, next) = (divider.at, divider.at + 1);
+            let group = &mut weights[divider.group];
+            // Charts sharing the split by weight have the most weight per point: a chart held at
+            // its minimum is longer than its weight asks. Pricing both sides at that rate keeps
+            // their sum when both share the split, and lets a held chart follow the pointer.
+            let per_point = divider
+                .lengths
+                .iter()
+                .zip(group.iter())
+                .map(|(length, weight)| weight / length)
+                .filter(|rate| rate.is_finite())
+                .fold(0.0, f32::max);
+            if per_point > 0.0 {
+                group[at] = ((divider.lengths[at] + delta) * per_point).max(f32::MIN_POSITIVE);
+                group[next] = ((divider.lengths[next] - delta) * per_point).max(f32::MIN_POSITIVE);
             }
         }
         if delta == 0.0 {
@@ -3318,5 +3322,128 @@ mod tests {
         assert_eq!((layout.maximized, layout.active()), (None, 2));
         assert_eq!(charts[2].get_rendered_price_rect(), tile);
         assert_eq!(charts[2].get_time_scale_state(), viewport);
+    }
+
+    /// A border drag changes only the charts beside it and leaves the dragged border under the
+    /// pointer. Hand values: weights 1:4:4 give 160, 640 and 640 points of a 1440-point row. At 540
+    /// points the first chart is held at its 80-point minimum and the others share 460 as 230 each.
+    /// Widened again, a drag between the last two leaves the first its 160 points and divides the
+    /// other 1280 by 250:210. A drag of the held chart's own border lets it follow the pointer, so
+    /// all three then divide the row by their dragged lengths, 100:210:230.
+    #[test]
+    fn border_drag_keeps_the_other_charts_of_its_row_after_a_resize() {
+        let narrow = Rect::from_min_size(pos2(10.0, 10.0), vec2(540.0, 720.0));
+        let wide = Rect::from_min_size(pos2(10.0, 10.0), vec2(1440.0, 720.0));
+        let last_two = ([80.0, 250.0, 210.0], [160.0, 695.652, 584.348]);
+        let held_chart = ([100.0, 210.0, 230.0], [266.667, 560.0, 613.333]);
+        for (mode, border, shift, (dragged, widened)) in [
+            (ChartLayoutMode::ThreeHorizontal, 310.0, false, last_two),
+            (ChartLayoutMode::ThreeHorizontal, 80.0, false, held_chart),
+            (ChartLayoutMode::Six, 310.0, true, last_two),
+            (ChartLayoutMode::Six, 80.0, true, held_chart),
+        ] {
+            let rows = usize::from(mode == ChartLayoutMode::Six) + 1;
+            let mut layout = ChartLayout {
+                mode,
+                ..Default::default()
+            };
+            layout.sync.sync_time_axis = false;
+            let mut sizes = layout.sizes(mode);
+            for row in &mut sizes.weights[1..] {
+                *row = vec![1.0, 4.0, 4.0];
+            }
+            layout.set_sizes(&[sizes], true).unwrap();
+            let assert_widths = |layout: &ChartLayout, rect: Rect, expected: [f32; 3]| {
+                let cells = layout.visible_chart_rects(rect, 3 * rows);
+                let widths: Vec<_> = cells.iter().map(|(_, cell)| cell.width()).collect();
+                assert_eq!(widths.len(), 3 * rows, "{mode:?}");
+                for (width, expected) in widths.iter().zip(expected.iter().cycle()) {
+                    assert!(
+                        (width - expected).abs() < 0.01,
+                        "{mode:?} border {border}: {widths:?}, expected {expected:?} in each row"
+                    );
+                }
+            };
+            let ctx = egui::Context::default();
+            let mut charts: Vec<_> = (0..3 * rows).map(|_| chart(60)).collect();
+            let mut time = 0.0;
+            let mut frame = |layout: &mut ChartLayout, charts: &mut [Chart], events: Vec<Event>| {
+                time += 0.1;
+                ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(narrow.expand(10.0)),
+                        time: Some(time),
+                        events: std::iter::once(Event::ModifiersChanged(if shift {
+                            egui::Modifiers::SHIFT
+                        } else {
+                            egui::Modifiers::NONE
+                        }))
+                        .chain(events)
+                        .collect(),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        ui.scope_builder(egui::UiBuilder::new().max_rect(narrow), |ui| {
+                            layout.show(ui, &mut charts.iter_mut().collect::<Vec<_>>());
+                        });
+                    },
+                )
+                .drop_without_applying_deltas();
+            };
+            let button = |pos, pressed| Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            };
+            let start = pos2(narrow.left() + border, narrow.top() + 100.0);
+            let end = start + vec2(20.0, 0.0);
+            for _ in 0..2 {
+                frame(&mut layout, &mut charts, vec![]);
+            }
+            frame(&mut layout, &mut charts, vec![Event::PointerMoved(start)]);
+            frame(&mut layout, &mut charts, vec![button(start, true)]);
+            for fraction in [0.1, 0.5, 1.0, 1.0] {
+                frame(
+                    &mut layout,
+                    &mut charts,
+                    vec![Event::PointerMoved(start.lerp(end, fraction))],
+                );
+            }
+            frame(&mut layout, &mut charts, vec![button(end, false)]);
+            frame(&mut layout, &mut charts, vec![]);
+            assert_widths(&layout, narrow, dragged);
+            assert_widths(&layout, wide, widened);
+        }
+    }
+
+    /// Placing the charts of one preset, which the layout does on every frame, costs the same
+    /// however many other presets have stored sizes.
+    #[cfg(feature = "studies")]
+    #[test]
+    fn chart_placement_does_not_copy_other_presets_sizes() {
+        use super::super::studies_data::tests::allocations;
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 720.0));
+        let mut layout = ChartLayout {
+            mode: ChartLayoutMode::Four,
+            ..Default::default()
+        };
+        let cells = layout.visible_chart_rects(rect, 4);
+        let (unedited, same) = allocations(|| layout.visible_chart_rects(rect, 4));
+        assert_eq!(same, cells);
+        let others: Vec<_> = ChartLayoutMode::all()
+            .iter()
+            .filter(|&&mode| mode != layout.mode)
+            .filter_map(|&mode| {
+                let mut sizes = layout.sizes(mode);
+                sizes.weights.iter_mut().find(|split| split.len() > 1)?[0] *= 3.0;
+                Some(sizes)
+            })
+            .collect();
+        layout.set_sizes(&others, true).unwrap();
+        assert_eq!(layout.saved_sizes().len(), others.len());
+        let (edited, same) = allocations(|| layout.visible_chart_rects(rect, 4));
+        assert_eq!(same, cells);
+        assert_eq!(edited, unedited, "with {} other presets", others.len());
     }
 }

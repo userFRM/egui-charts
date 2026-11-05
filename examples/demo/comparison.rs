@@ -2,7 +2,7 @@
 //! candles in a pane of its own.
 
 use super::{DemoApp, DemoSymbol, LiveFeed};
-use egui_charts::model::{ChartType, SeriesScale, Timeframe};
+use egui_charts::model::{ChartType, LinePlotStyle, SeriesScale, Timeframe};
 use egui_charts::services::SymbolExpression;
 use egui_charts::ui::top_toolbar::{CompareAction, ComparePlacement, CompareSymbol};
 use egui_charts::widget::{Chart, PaneId, SeriesId, SeriesOptions};
@@ -19,6 +19,102 @@ pub(super) struct ComparisonSettings {
 }
 
 impl ComparisonSettings {
+    /// The line, bar, area and last-price settings of the chosen chart type. Taking over a
+    /// style starts from what the series draws without it, so the series looks the same until
+    /// a setting changes.
+    fn style_section(&mut self, ui: &mut egui::Ui) {
+        use egui_charts::model::{AreaStyle, LastPriceAnimation};
+        use egui_charts::ui_kit::{FormGrid, ext::UiExt};
+        let options = &mut self.options;
+        let kind = options.chart_type;
+        let line_only = matches!(
+            kind,
+            ChartType::Line | ChartType::StepLine | ChartType::LineWithMarkers
+        );
+        let pulses = line_only || matches!(kind, ChartType::Area | ChartType::Baseline);
+        if !pulses && kind != ChartType::Bars {
+            return;
+        }
+        let own_line = LinePlotStyle {
+            color: options.color,
+            width: options.width,
+            ..Default::default()
+        };
+        ui.collapsing("Line, bars and area", |ui| {
+            if line_only {
+                let mut custom = options.line_style.is_some();
+                if ui.checkbox(&mut custom, "Independent line style").changed() {
+                    options.line_style = custom.then(|| own_line.clone());
+                }
+            }
+            if kind == ChartType::Area {
+                let mut custom = options.area_style.is_some();
+                if ui.checkbox(&mut custom, "Independent area style").changed() {
+                    let color = options.color;
+                    options.area_style = custom.then(|| AreaStyle {
+                        line: options.line_style.clone().unwrap_or(own_line),
+                        top_fill: egui::Color32::from_rgba_unmultiplied(
+                            color.r(),
+                            color.g(),
+                            color.b(),
+                            115,
+                        ),
+                        bottom_fill: egui::Color32::TRANSPARENT,
+                        ..Default::default()
+                    });
+                }
+            }
+            if kind == ChartType::Bars {
+                ui.checkbox(&mut options.bars_style.open_visible, "Show open");
+                ui.checkbox(&mut options.bars_style.thin_bars, "Thin bars");
+            }
+            FormGrid::new("comparison_type_style").show(ui, |ui| {
+                if let Some(style) = options.line_style.as_mut().filter(|_| line_only) {
+                    line_style_rows(ui, style, kind != ChartType::StepLine);
+                }
+                if let Some(style) = options
+                    .area_style
+                    .as_mut()
+                    .filter(|_| kind == ChartType::Area)
+                {
+                    line_style_rows(ui, &mut style.line, true);
+                    for (label, fill) in [
+                        ("Top fill", &mut style.top_fill),
+                        ("Bottom fill", &mut style.bottom_fill),
+                    ] {
+                        let label = ui.label(label);
+                        ui.color_edit_button_srgba(fill).labelled_by(label.id);
+                        ui.end_row();
+                    }
+                    ui.checkbox(&mut style.relative_gradient, "Relative gradient");
+                    ui.end_row();
+                    ui.checkbox(&mut style.invert_filled_area, "Invert fill");
+                    ui.end_row();
+                }
+                if pulses {
+                    let label = ui.label("Last price animation");
+                    ui.label_inputs_by(label.id, |ui| {
+                        ui.combo_select(
+                            "last_price_animation",
+                            &mut options.last_price_animation,
+                            [
+                                LastPriceAnimation::Disabled,
+                                LastPriceAnimation::Continuous,
+                                LastPriceAnimation::OnDataUpdate,
+                            ],
+                            |animation| match animation {
+                                LastPriceAnimation::Disabled => "Off".into(),
+                                LastPriceAnimation::Continuous => "Continuous".into(),
+                                LastPriceAnimation::OnDataUpdate => "On each update".into(),
+                            },
+                        );
+                    });
+                    ui.end_row();
+                }
+            });
+        });
+    }
+
     fn show(&mut self, ctx: &egui::Context, chart: &Chart, open: &mut bool) -> bool {
         use egui_charts::model::{LineStyle, PriceLineSource, SeriesDisplayFormat, SeriesFormat};
         use egui_charts::scales::PriceScaleMode;
@@ -182,6 +278,7 @@ impl ComparisonSettings {
                             }
                         }
                     });
+                    self.style_section(ui);
                     ui.separator();
                     ui.checkbox(
                         &mut self.options.style.last_value_visible,
@@ -334,6 +431,45 @@ impl ComparisonSettings {
             *open = false;
         }
         apply
+    }
+}
+
+/// The colour, width, pattern and, where the chart type draws one, the curve of a series line.
+fn line_style_rows(ui: &mut egui::Ui, style: &mut LinePlotStyle, curves: bool) {
+    use egui_charts::model::{LineStyle, LineType};
+    use egui_charts::ui_kit::ext::UiExt;
+    let label = ui.label("Line colour");
+    ui.color_edit_button_srgba(&mut style.color)
+        .labelled_by(label.id);
+    ui.end_row();
+    let label = ui.label("Line thickness");
+    ui.add(egui::DragValue::new(&mut style.width).range(0.1..=10.0))
+        .labelled_by(label.id);
+    ui.end_row();
+    let label = ui.label("Line pattern");
+    ui.label_inputs_by(label.id, |ui| {
+        ui.combo_select(
+            "line_pattern",
+            &mut style.style,
+            LineStyle::all().iter().copied(),
+            |pattern| pattern.name().to_owned(),
+        );
+    });
+    ui.end_row();
+    if curves {
+        let label = ui.label("Line shape");
+        ui.label_inputs_by(label.id, |ui| {
+            ui.combo_select(
+                "line_shape",
+                &mut style.line_type,
+                [LineType::Simple, LineType::Curved],
+                |shape| match shape {
+                    LineType::Simple => "Straight".into(),
+                    LineType::Curved => "Curved".into(),
+                },
+            );
+        });
+        ui.end_row();
     }
 }
 
@@ -988,6 +1124,96 @@ impl DemoApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each style control of the editor reaches the chosen series through the accepted draft,
+    /// and taking over a style starts from what the series already draws.
+    #[test]
+    fn comparison_settings_style_controls_edit_the_series() {
+        use super::super::tests::{ui_click, ui_frame};
+        use egui_charts::model::{AreaStyle, BarsStyle};
+        let color = egui::Color32::from_rgb(10, 20, 30);
+        let own_line = LinePlotStyle {
+            color,
+            width: 3.0,
+            ..Default::default()
+        };
+        let own_area = AreaStyle {
+            line: own_line.clone(),
+            top_fill: egui::Color32::from_rgba_unmultiplied(10, 20, 30, 115),
+            bottom_fill: egui::Color32::TRANSPARENT,
+            relative_gradient: false,
+            invert_filled_area: true,
+            ..Default::default()
+        };
+        for (chart_type, clicks, expected_line, expected_bars, expected_area) in [
+            (
+                ChartType::Line,
+                vec!["Independent line style"],
+                Some(own_line.clone()),
+                BarsStyle::default(),
+                None,
+            ),
+            (
+                ChartType::Bars,
+                vec!["Show open", "Thin bars"],
+                None,
+                BarsStyle {
+                    open_visible: false,
+                    thin_bars: false,
+                },
+                None,
+            ),
+            (
+                ChartType::Area,
+                vec!["Independent area style", "Relative gradient", "Invert fill"],
+                None,
+                BarsStyle::default(),
+                Some(own_area.clone()),
+            ),
+        ] {
+            let ctx = egui::Context::default();
+            let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+            app.handle_comparison(CompareAction::AddSymbol(
+                "MSFT".into(),
+                ComparePlacement::NewPriceScale,
+            ));
+            let id = app.comparisons[0].1;
+            super::super::tests::settle(&mut app, &ctx);
+            app.open_indicator_settings(id);
+            let draft = app.comparison_settings.as_mut().unwrap();
+            draft.options.chart_type = chart_type;
+            draft.options.color = color;
+            draft.options.width = 3.0;
+            let size = egui::vec2(1440.0, 900.0);
+            let press = |app: &mut DemoApp, label: &str| {
+                let mut texts = Vec::new();
+                for _ in 0..3 {
+                    texts = ui_frame(&ctx, size, vec![], |ui| app.show_dialogs(ui.ctx()));
+                }
+                let point = texts
+                    .iter()
+                    .find(|(text, _)| text == label)
+                    .unwrap_or_else(|| panic!("{chart_type:?}: no control {label}"))
+                    .1
+                    .center();
+                ui_click(&ctx, size, point, |ui| app.show_dialogs(ui.ctx()));
+            };
+            press(&mut app, "Line, bars and area");
+            for label in clicks {
+                press(&mut app, label);
+            }
+            press(&mut app, "Ok");
+            let options = app
+                .chart
+                .series()
+                .find(|(series, _)| *series == id)
+                .unwrap()
+                .1;
+            assert_eq!(options.line_style, expected_line, "{chart_type:?}");
+            assert_eq!(options.bars_style, expected_bars, "{chart_type:?}");
+            assert_eq!(options.area_style, expected_area, "{chart_type:?}");
+        }
+    }
 
     /// Both settings routes retain the selected bar series; cancel, accept and undo stay local.
     #[test]

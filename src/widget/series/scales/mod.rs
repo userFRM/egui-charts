@@ -559,13 +559,17 @@ impl Chart {
         }
     }
 
-    /// The rising and falling body colours of the main series: Heikin-Ashi and hollow candles
-    /// keep their own, other chart types use the chart configuration.
+    /// The rising and falling body colours of the main series: Heikin-Ashi, hollow and volume
+    /// candles keep their own, other chart types use the chart configuration.
     pub(in crate::widget) fn main_body_colors(&self) -> (Color32, Color32) {
         let styles = &self.chart_type_params.styles;
         match self.chart_type {
             ChartType::Heikin => (styles.heikin.body_up, styles.heikin.body_down),
             ChartType::HollowCandles => (styles.hollow.body_up, styles.hollow.body_down),
+            ChartType::VolumeCandles => (
+                styles.volume_candles.body_up,
+                styles.volume_candles.body_down,
+            ),
             _ => (self.config.bullish_color, self.config.bearish_color),
         }
     }
