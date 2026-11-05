@@ -17,6 +17,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Maximum undrained bar slots per live subscription, independent of raw trade retention.
 const MAX_PENDING_BARS: usize = 100_000;
 
+/// Undrained bars past which a replay opens no more flat candles: a recording with a wrong
+/// timestamp must not fill the memory with quiet slots. Its executions still arrive.
+const MAX_QUIET_BARS: usize = 2_000_000;
+
 /// Rebuilds bars from chronological executions using the live sink's aggregation rules.
 /// Count intervals start at the first accepted trade in `trades`; retain that grouping anchor
 /// when joining history to live data. Duplicate ids are ignored. Invalid or late trades and
@@ -132,6 +136,7 @@ impl Inbox {
                 ids: HashSet::new(),
                 capacity: trade_capacity,
             },
+            rebuilt_bars: 0,
             updates: Updates::new(Trades::new(trade_capacity)),
         };
         self.state().subscriptions.insert(id, live);
@@ -214,6 +219,19 @@ impl Sink {
                 input.clear();
             }
         });
+    }
+
+    /// Starts a replay position that is rebuilt before the chart can drain: a rebuild is finite,
+    /// so its bars do not count against the pending limit. Ended by [`Self::finish_rebuild`].
+    pub(crate) fn start_rebuild(&self, time: DateTime<Utc>) {
+        self.reset_replay(time);
+        self.update(|live| live.rebuilt_bars = usize::MAX);
+    }
+
+    /// Keeps the rebuilt bars out of the pending limit until the chart drains them, and puts
+    /// pushes after them back under it: frames may run before that drain.
+    pub(crate) fn finish_rebuild(&self) {
+        self.update(|live| live.rebuilt_bars = live.updates.bars.len());
     }
 
     /// Opens the flat candles a live feed's regular heartbeats would have opened in the slots
@@ -632,7 +650,7 @@ impl Live {
     }
 
     fn bound_bars(&mut self) {
-        while self.updates.bars.len() > MAX_PENDING_BARS {
+        while self.updates.bars.len() > MAX_PENDING_BARS.saturating_add(self.rebuilt_bars) {
             self.updates.bars.pop_first();
             self.updates.dropped_bars += 1;
         }
@@ -665,8 +683,11 @@ impl Live {
             return false;
         }
         let target = self.clock.bar_open(now);
+        let limit = MAX_PENDING_BARS
+            .saturating_add(self.rebuilt_bars)
+            .min(MAX_QUIET_BARS);
         let mut opened = false;
-        while newest < target && self.updates.bars.len() + 1 < MAX_PENDING_BARS {
+        while newest < target && self.updates.bars.len() + 1 < limit {
             let Some(slot) = (self.clock.next_open(newest))
                 .and_then(|next| self.clock.open_at_or_after(next))
                 .map(|open| self.clock.bar_open(open))

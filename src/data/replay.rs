@@ -424,7 +424,9 @@ impl ReplayDriver {
     /// Reconstructs every active subscription through `time`, clearing all later state first.
     /// Replays book history from the beginning as well as trades: starting at the latest book
     /// snapshot would lose earlier heatmap columns. No later snapshot or execution is exposed.
-    /// Call outside egui context locks, as with live pushes.
+    /// The bars equal those of playback through `time` at any speed, and none is dropped for
+    /// the pending bar limit however long the recording. Call outside egui context locks, as
+    /// with live pushes.
     pub fn seek(&self, time: DateTime<Utc>) {
         let _dispatch = self.dispatch.lock().unwrap_or_else(PoisonError::into_inner);
         let (events, end, routes) = {
@@ -495,11 +497,12 @@ impl Route {
 
     /// Reconstructs this subscription through `events`, which end at `time`.
     fn rebuild(&self, events: &[ReplayEvent], time: DateTime<Utc>) {
-        self.sink.reset_replay(time);
+        self.sink.start_rebuild(time);
         for event in events.iter().filter(|event| event.symbol == self.symbol) {
             self.deliver(event);
         }
         self.publish(time);
+        self.sink.finish_rebuild();
     }
 }
 
@@ -1339,6 +1342,27 @@ mod tests {
             let inbox = connect(&sought, clock.clone(), false);
             sought.seek(position);
             assert_eq!(drained_bars(&inbox).0, expected, "sought");
+        }
+    }
+
+    /// A rebuild is finite and its bars are drained whole, also after a frame that runs first.
+    #[test]
+    fn a_seek_rebuilds_more_bars_than_the_pending_limit() {
+        let count = 100_001;
+        for timeframe in [Timeframe::Sec1, Timeframe::Ticks(std::num::NonZeroU64::MIN)] {
+            let events = (0..=count).map(|s| trade("A", s, s as u64, 10.0)).collect();
+            let driver =
+                ReplayDriver::new(events, vec![Instrument::new("A").with_tick_size(1.0)]).unwrap();
+            let inbox = connect(&driver, timeframe.into(), true);
+            inbox.drain();
+            driver.seek(at(count - 1));
+            driver.advance(Duration::from_secs(1)).unwrap();
+            let (bars, error) = drained_bars(&inbox);
+            assert_eq!(
+                (bars.len(), bars.first().map(|bar| bar.time), error),
+                (count as usize + 1, Some(at(0)), None),
+                "{timeframe:?}"
+            );
         }
     }
 }
