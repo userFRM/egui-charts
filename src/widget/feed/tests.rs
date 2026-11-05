@@ -1069,7 +1069,9 @@ fn footprint_trade_intervals_follow_pages_streams_and_interval_changes() {
 /// (12, 4); sell 6 and buy 7 (13, 1). 5delta: buy 2 and 7 of the sell of 8 (9, -5); its last unit
 /// and two buys of 3 (7, 5); the sell of 1 (1, -1). Each trade page leaves the tape's older
 /// executions out, as a page of the newest trades does, so a bar shows its own executions or none.
-/// The second 2t row starts at a bar's first execution; the last has history answer after trades.
+/// The second 2t row starts at a bar's first execution; the next has history answer after trades;
+/// the last turns the footprint on during a replay that hides the bars the page rebuilds, then
+/// steps forward to them.
 #[test]
 fn paged_trade_bar_cells_match_the_history_bar_they_draw_on() {
     use crate::model::OrderSide::{Buy, Sell};
@@ -1082,7 +1084,7 @@ fn paged_trade_bar_cells_match_the_history_bar_they_draw_on() {
         (3, 104.0, 5.0, Buy),
         (4, 105.0, 6.0, Sell),
     ];
-    let rows: [(&str, &[_], usize, bool, [Cells; 3]); 6] = [
+    let rows: [(&str, &[_], usize, bool, bool, [Cells; 3]); 7] = [
         (
             "5v",
             &[
@@ -1093,6 +1095,7 @@ fn paged_trade_bar_cells_match_the_history_bar_they_draw_on() {
             ],
             1,
             true,
+            false,
             [None, None, Some((3.0, -3.0))],
         ),
         (
@@ -1100,6 +1103,7 @@ fn paged_trade_bar_cells_match_the_history_bar_they_draw_on() {
             &tape_2t,
             1,
             true,
+            false,
             [None, Some((7.0, -1.0)), Some((11.0, -1.0))],
         ),
         (
@@ -1107,6 +1111,7 @@ fn paged_trade_bar_cells_match_the_history_bar_they_draw_on() {
             &tape_2t,
             2,
             true,
+            false,
             [None, Some((7.0, -1.0)), Some((11.0, -1.0))],
         ),
         (
@@ -1122,6 +1127,7 @@ fn paged_trade_bar_cells_match_the_history_bar_they_draw_on() {
             ],
             1,
             true,
+            false,
             [None, Some((12.0, 4.0)), Some((13.0, 1.0))],
         ),
         (
@@ -1135,6 +1141,7 @@ fn paged_trade_bar_cells_match_the_history_bar_they_draw_on() {
             ],
             1,
             true,
+            false,
             [None, None, Some((1.0, -1.0))],
         ),
         (
@@ -1142,10 +1149,19 @@ fn paged_trade_bar_cells_match_the_history_bar_they_draw_on() {
             &tape_2t,
             1,
             false,
+            false,
+            [None, Some((7.0, -1.0)), Some((11.0, -1.0))],
+        ),
+        (
+            "2t",
+            &tape_2t,
+            1,
+            true,
+            true,
             [None, Some((7.0, -1.0)), Some((11.0, -1.0))],
         ),
     ];
-    for (interval, fills, from, history_first, want) in rows {
+    for (interval, fills, from, history_first, in_replay, want) in rows {
         let start = bars(1)[0].time;
         let trades: Vec<_> = fills
             .iter()
@@ -1159,7 +1175,9 @@ fn paged_trade_bar_cells_match_the_history_bar_they_draw_on() {
         let feed = Arc::new(Script::default());
         let mut chart = fed(&feed, Some("A"));
         chart.set_timeframe(timeframe);
-        chart.set_chart_type(ChartType::VolumeFootprint);
+        if !in_replay {
+            chart.set_chart_type(ChartType::VolumeFootprint);
+        }
         let mut frames = Frames::new();
         frames.run(&mut chart);
         feed.resolve()
@@ -1178,6 +1196,13 @@ fn paged_trade_bar_cells_match_the_history_bar_they_draw_on() {
         frames.run(&mut chart);
         if let Some(reply) = history {
             reply.send(page(candles.clone(), true));
+            frames.run(&mut chart);
+        }
+        if in_replay {
+            chart.set_replay_time(Some(start + TimeDelta::seconds(1)));
+            chart.set_chart_type(ChartType::VolumeFootprint);
+            frames.run(&mut chart);
+            chart.set_replay_time(Some(start + TimeDelta::seconds(5)));
             frames.run(&mut chart);
         }
         assert_eq!(chart.bars(SeriesId::MAIN), candles, "{interval}");

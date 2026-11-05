@@ -45,13 +45,17 @@ impl Chart {
         let executions = self.chart_type == ChartType::VolumeFootprint
             || (self.chart_type == ChartType::SessionVolumeProfile && cfg!(feature = "studies"))
             || (self.feed_link.is_some() && self.profile_drawings());
+        // Replay keeps the bars after its cutoff aside; paged trades are matched to all of them.
+        let history = (self.replay.as_ref())
+            .and_then(|replay| replay.bars.get(&SeriesId::MAIN))
+            .map_or(self.state.data().bars.as_slice(), Vec::as_slice);
         if let Some(link) = self
             .feed_link
             .as_mut()
             .filter(|link| executions != link.footprint.is_some())
         {
             link.footprint = if executions {
-                link.footprint(None, &self.state.data().bars)
+                link.footprint(None, history)
             } else {
                 None
             };
@@ -63,8 +67,7 @@ impl Chart {
             .as_mut()
             .filter(|link| link.replay_footprint.as_ref().map(|(time, _)| *time) != cutoff)
         {
-            link.replay_footprint =
-                cutoff.map(|time| (time, link.footprint(Some(time), &self.state.data().bars)));
+            link.replay_footprint = cutoff.map(|time| (time, link.footprint(Some(time), history)));
         }
         if self.feed_link.as_ref().is_some_and(|link| link.paused) {
             return;
