@@ -3566,6 +3566,70 @@ fn profile_drawings_read_executions_on_every_time_based_chart_type() {
     assert!(chart.feed_link.as_ref().unwrap().footprint.is_none());
 }
 
+/// A market replay's profile sums what the driver delivered, whether it played there or sought.
+#[cfg(feature = "drawings")]
+#[test]
+fn market_replay_profile_drawings_follow_the_cursor() {
+    use crate::data::{MarketEvent, ReplayDriver, ReplayEvent};
+    use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+    let start = DateTime::UNIX_EPOCH;
+    let second = |seconds| start + TimeDelta::seconds(seconds);
+    // The minute after the first has 100 at 00:01:10 and 101 at 00:01:20, the next 101 at 00:02:10.
+    let events = [(0, 90.0), (70, 100.0), (80, 101.0), (130, 101.0)]
+        .into_iter()
+        .enumerate()
+        .map(|(at, (seconds, price))| {
+            let fill = Tick::new(second(seconds), price, 1.0, None).with_id(at as u64);
+            ReplayEvent::new("A", second(seconds), at as u64, MarketEvent::Trade(fill))
+        })
+        .collect();
+    let instruments = vec![Instrument::new("A").with_tick_size(1.0)];
+    let driver = Arc::new(ReplayDriver::new(events, instruments).unwrap());
+    driver.set_speed(0.0).unwrap();
+    driver.seek(second(75));
+    let mut chart = Chart::new(BarData::new());
+    chart.set_symbol("A");
+    chart.set_timeframe(Timeframe::Min1);
+    chart.set_market_replay(Some(driver.clone()));
+    let mut drawing = Drawing::new(1, DrawingToolType::FixedRangeVolumeProfile);
+    drawing.chart_points = vec![ChartPoint::new(1.0, 100.0), ChartPoint::new(2.0, 100.0)];
+    let color = drawing.color;
+    chart.drawings_mut().drawings.push(drawing);
+    let mut frames = Frames::new();
+    frames.run(&mut chart);
+    frames.run(&mut chart);
+    // The top of the profile's tint, one price row above the highest execution held.
+    let mut top = |chart: &mut Chart| {
+        let tint = egui::Color32::from_rgba_unmultiplied(color[0], color[1], color[2], 15);
+        frames.time += 1.0 / 60.0;
+        let painted = shapes(&frames.ctx, chart, frames.time, Vec::new());
+        let points = painted.iter().flat_map(|shape| match shape {
+            egui::Shape::Rect(rect) if rect.fill == tint => vec![rect.rect.min, rect.rect.max],
+            egui::Shape::Mesh(mesh) => (mesh.vertices.iter())
+                .filter(|vertex| vertex.color == tint)
+                .map(|vertex| vertex.pos)
+                .collect(),
+            _ => Vec::new(),
+        });
+        let top = points.map(|point| point.y).reduce(f32::min).expect("tint");
+        chart.get_chart_mapping().y_to_price(top)
+    };
+    let row = |top: f64| (top * 2.0).round() / 2.0;
+    assert_eq!(
+        row(top(&mut chart)),
+        100.5,
+        "sought before the 101 executions"
+    );
+    driver.set_speed(1.0).unwrap();
+    driver.advance(std::time::Duration::from_secs(60)).unwrap();
+    driver.set_speed(0.0).unwrap();
+    assert_eq!(row(top(&mut chart)), 101.5, "played past them");
+    driver.seek(second(75));
+    assert_eq!(row(top(&mut chart)), 100.5, "sought back");
+    driver.seek(second(135));
+    assert_eq!(row(top(&mut chart)), 101.5, "sought to where it played");
+}
+
 /// Answers every request at once with bars closing at the symbol's base plus their index:
 /// AAPL from 100, MSFT from 40. It records the history requests.
 #[derive(Default)]

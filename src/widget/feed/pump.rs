@@ -61,8 +61,12 @@ impl Chart {
                 None
             };
         }
-        // Replay can stop inside a bar, so profile drawings sum only executions before the cutoff.
-        let cutoff = self.replay_time().filter(|_| self.profile_drawings());
+        // Candle replay can stop inside a bar while the feed holds later trades, so profile
+        // drawings sum only executions before its cutoff. A market replay's feed delivers none
+        // past its cursor, so they read the footprint it extends.
+        let cutoff = (self.replay.as_ref())
+            .map(|replay| replay.time)
+            .filter(|_| self.profile_drawings());
         if let Some(link) = self
             .feed_link
             .as_mut()
