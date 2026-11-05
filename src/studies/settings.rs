@@ -666,6 +666,15 @@ impl Indicator for ConfiguredStudy {
                 InputValue::Toggle(value) => self.wait_for_close = value,
                 _ => unreachable!(),
             }
+            // The study missed the chart's interval and clock while it ran on other bars.
+            if id != "wait_for_close"
+                && self.calculation_symbol.is_empty()
+                && self.calculation_timeframe.is_none()
+                && let Some(timeframe) = self.timeframe
+            {
+                self.study.set_timeframe(timeframe);
+                self.study.set_bar_clock(&self.clock);
+            }
             self.aligned = None;
             self.kept = None;
             self.study.calculate(&[]);
@@ -1255,6 +1264,9 @@ impl Indicator for ConfiguredStudy {
             self.study.format_plot_value(line, value)
         }
     }
+    fn legend_lines(&self) -> Vec<usize> {
+        self.study.legend_lines()
+    }
     fn legend_visible(&self, line: usize) -> bool {
         let (shown, own) = (
             self.study.legend_visible(line),
@@ -1487,6 +1499,51 @@ fn source_bars(
 mod tests {
     use super::*;
     use crate::studies::BollingerBands;
+
+    /// Guards #2112: clearing the calculation interval hands the study the chart's interval,
+    /// whether the chart passed it before the input was set, as a template does, or moved on
+    /// while it was set, and whether the edit comes directly or from the settings dialog.
+    #[test]
+    fn clearing_the_calculation_interval_restores_the_chart_interval() {
+        let daily = super::super::StudyDataRequest {
+            symbol: String::new(),
+            timeframe: Some(Timeframe::Day1),
+            metric: None,
+        };
+        for (added_on, dialog) in [
+            (None, false),
+            (None, true),
+            (Some(Timeframe::Day1), false),
+            (Some(Timeframe::Day1), true),
+        ] {
+            let mut study = ConfiguredStudy::new(Box::new(super::super::Performance::new()));
+            if let Some(timeframe) = added_on {
+                study.set_timeframe(timeframe);
+            }
+            study
+                .set_input(
+                    "calculation_timeframe",
+                    InputValue::Timeframe(Some(Timeframe::Day1)),
+                )
+                .unwrap();
+            study.set_timeframe(Timeframe::Min1);
+            let cleared = (
+                "calculation_timeframe".to_owned(),
+                InputValue::Timeframe(None),
+            );
+            if dialog {
+                let settings = study.settings();
+                study.apply_settings(&[cleared], settings).unwrap();
+            } else {
+                study.set_input(&cleared.0, cleared.1).unwrap();
+            }
+            assert_eq!(
+                study.data_requests(),
+                std::slice::from_ref(&daily),
+                "added on {added_on:?}, dialog {dialog}"
+            );
+        }
+    }
 
     #[test]
     fn value_tags_default_by_plot_count_and_persist() {
@@ -1898,7 +1955,7 @@ mod tests {
                 .iter()
                 .map(|l| (l.value, l.color, l.pattern, l.visible))
                 .collect::<Vec<_>>(),
-            [(None, palette::MUTED, LineStyle::Dashed, true); 2]
+            [(None, palette::MUTED, LineStyle::Dashed, true); 3]
         );
         assert!(declared.fill_between_levels);
         assert_eq!(
@@ -1911,7 +1968,7 @@ mod tests {
         edited.levels[0].width = 3.0;
         edited.levels[1].visible = false;
         study.apply_settings(&[], edited.clone()).unwrap();
-        assert_eq!(values(&study), [80.0, 30.0]);
+        assert_eq!(values(&study), [80.0, 30.0, 50.0]);
         // Templates, copies and layouts rebuild a fresh study from the saved JSON.
         let saved = serde_json::to_value(&edited).unwrap();
         let mut loaded = ConfiguredStudy::new(Box::new(RSI::default()));
@@ -1935,7 +1992,7 @@ mod tests {
             .unwrap();
         assert_eq!(loaded.settings(), declared);
         study.restore_settings(&before).unwrap();
-        assert_eq!(values(&study), [70.0, 30.0]);
+        assert_eq!(values(&study), [70.0, 30.0, 50.0]);
         let mut invalid = declared.clone();
         invalid.levels[0].value = Some(f64::INFINITY);
         assert!(matches!(

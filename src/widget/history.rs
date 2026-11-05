@@ -37,6 +37,8 @@ struct Pending {
 struct Action {
     layout_sizes: Option<super::layout::SizeChange>,
     layout_links: Option<super::layout::LinkChange>,
+    /// The cross-chart edit this action is one chart's part of.
+    layout_edit: Option<super::layout::LayoutEditLink>,
     symbol: Option<String>,
     series: Option<SeriesSet>,
     config: Option<ChartConfig>,
@@ -66,6 +68,7 @@ impl Action {
         let drawings_changed = false;
         self.layout_sizes.is_none()
             && self.layout_links.is_none()
+            && self.layout_edit.is_none()
             && self.symbol.is_none()
             && self.series.is_none()
             && self.view.is_none()
@@ -194,6 +197,14 @@ impl ChartHistory {
         });
     }
 
+    /// Makes the action in progress this chart's part of a cross-chart edit.
+    #[cfg(feature = "studies")]
+    pub(super) fn join_layout_edit(&mut self, edit: super::layout::LayoutEditLink) {
+        if let Some(pending) = &mut self.pending {
+            pending.before.layout_edit = Some(edit);
+        }
+    }
+
     pub(super) fn record_sizes(&mut self, change: super::layout::SizeChange) {
         self.push(Action {
             layout_sizes: Some(change),
@@ -308,6 +319,15 @@ impl Study {
             && self.autoscale == other.autoscale
             && self.settings == other.settings
     }
+}
+
+/// Whether a scale keeps the options, manual range and ratio lock it was captured with. A fitted
+/// range follows the data rather than the action, so it does not count.
+fn same_scale(a: &crate::scales::PriceScale, b: &crate::scales::PriceScale) -> bool {
+    a.options() == b.options()
+        && a.bar_ratio() == b.bar_ratio()
+        && a.is_manual() == b.is_manual()
+        && (!a.is_manual() || a.range() == b.range())
 }
 
 impl Chart {
@@ -435,23 +455,17 @@ impl Chart {
         if action.interval == Some(self.timeframe) {
             action.interval = None;
         }
-        if let Some(scale) = &action.scale {
-            let current = self.state.price_scale();
-            if scale.options() == current.options()
-                && scale.is_manual() == current.is_manual()
-                && (!scale.is_manual() || scale.range() == current.range())
-            {
-                action.scale = None;
-            }
+        if let Some(scale) = &action.scale
+            && same_scale(scale, self.state.price_scale())
+        {
+            action.scale = None;
         }
         let known: Vec<_> = action.series_scales.keys().copied().collect();
         action.series_scales.retain(|id, scale| {
             let (Some(scale), Some(current)) = (scale, self.series_scales.get(id)) else {
                 return true;
             };
-            scale.options() != current.options()
-                || scale.is_manual() != current.is_manual()
-                || (scale.is_manual() && scale.range() != current.range())
+            !same_scale(scale, current)
         });
         for id in self.series_scales.keys().filter(|id| !known.contains(id)) {
             action.series_scales.insert(*id, None);
@@ -472,9 +486,12 @@ impl Chart {
                         && a.preserve == b.preserve
                         && a.collapsed == b.collapsed
                         && a.axes == b.axes
-                        && a.scale.options() == b.scale.options()
-                        && a.scale.is_manual() == b.scale.is_manual()
-                        && (!a.scale.is_manual() || a.scale.range() == b.scale.range())
+                        && same_scale(&a.scale, &b.scale)
+                        && a.scales.len() == b.scales.len()
+                        && a.scales
+                            .iter()
+                            .zip(&b.scales)
+                            .all(|(a, b)| a.0 == b.0 && same_scale(&a.1, &b.1))
                 })
         {
             action.panes = None;
@@ -752,6 +769,27 @@ impl Chart {
         self.history.edits
     }
 
+    /// Takes this chart's part of cross-chart edit `id` through the same step, with any later
+    /// edit of this chart first, as the action cannot leave its stack out of order.
+    pub(super) fn step_layout_edit(&mut self, id: u64, redo: bool) {
+        loop {
+            let stack = if redo {
+                &self.history.redo
+            } else {
+                &self.history.undo
+            };
+            let holds = stack.iter().any(|action| {
+                action
+                    .layout_edit
+                    .as_ref()
+                    .is_some_and(|edit| edit.id == id)
+            });
+            if !holds || !self.step_chart_history(redo) {
+                return;
+            }
+        }
+    }
+
     fn step_chart_history(&mut self, redo: bool) -> bool {
         if self.history.pending.is_some() {
             return false;
@@ -954,6 +992,9 @@ impl Chart {
         #[cfg(feature = "drawings")]
         if action.drawings.can_undo() || action.drawings.can_redo() {
             self.history.drawing_edits += 1;
+        }
+        if let Some(edit) = &action.layout_edit {
+            edit.request(redo);
         }
         if redo {
             self.history.undo.push(action);
@@ -1901,6 +1942,74 @@ mod tests {
             assert_eq!(state(&chart), removed, "{case}: redone");
             assert!(chart.undo());
             assert_eq!(state(&chart), restored, "{case}: undone again");
+        }
+    }
+
+    /// A user action that changes any scale of a pane is one undo step that restores its options,
+    /// manual range and lock, whichever axis shows the scale and whichever pane holds it.
+    #[test]
+    fn secondary_pane_named_scale_edits_are_undoable() {
+        use crate::model::SeriesScale::{self, Left, Right, Separate};
+        use crate::scales::{PriceScale, PriceScaleMode};
+        use crate::widget::{PaneId, PaneScale, SeriesOptions};
+        type Edit = fn(&mut PriceScale);
+        let edits: [(&str, Edit); 5] = [
+            ("mode", |scale| {
+                scale.reset();
+                scale.options_mut().mode = PriceScaleMode::Logarithmic;
+            }),
+            ("invert", |scale| scale.options_mut().invert_scale = true),
+            ("range", |scale| scale.set_range(3.0, 4.0)),
+            ("auto", |scale| scale.reset()),
+            ("lock", |scale| {
+                scale.set_bar_ratio_locked(true, 10.0, 500.0)
+            }),
+        ];
+        let axes: [(bool, SeriesScale); 5] = [
+            (true, Left),
+            (true, Separate(1)),
+            (true, Right),
+            (false, Left),
+            (false, Right),
+        ];
+        for (secondary, key) in axes {
+            for (edit, apply) in edits {
+                let case = format!("secondary {secondary}, {key:?}, {edit}");
+                let mut chart = chart(&[100.0], &[110.0]);
+                chart.config.show_volume = false;
+                let pane = if secondary {
+                    chart.add_pane()
+                } else {
+                    PaneId::MAIN
+                };
+                let id = chart.add_series(SeriesOptions {
+                    scale: key,
+                    ..Default::default()
+                });
+                assert!(chart.move_series_to_pane(id, pane), "{case}");
+                let axis = PaneScale::Named(key);
+                chart
+                    .pane_scale_mut(pane, axis)
+                    .unwrap()
+                    .set_range(1.0, 2.0);
+                let state = |chart: &Chart| {
+                    let scale = chart.pane_scale(pane, axis).unwrap();
+                    (
+                        *scale.options(),
+                        scale.is_manual(),
+                        scale.range(),
+                        scale.bar_ratio(),
+                    )
+                };
+                let before = state(&chart);
+                chart.user_action(|chart| apply(chart.pane_scale_mut(pane, axis).unwrap()));
+                let after = state(&chart);
+                assert_ne!(before, after, "{case}");
+                assert!(chart.undo(), "{case}: undo");
+                assert_eq!(state(&chart), before, "{case}: undone");
+                assert!(chart.redo(), "{case}: redo");
+                assert_eq!(state(&chart), after, "{case}: redone");
+            }
         }
     }
 }

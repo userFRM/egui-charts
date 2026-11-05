@@ -26,6 +26,7 @@ impl DrawingTemplate {
         settings.pane = None;
         settings.group = None;
         settings.folder.clear();
+        settings.folder_sync.clear();
         settings.selectable = true;
         settings.saveable = true;
         settings.listed = true;
@@ -63,6 +64,7 @@ impl DrawingTemplate {
             pane: drawing.pane,
             group: drawing.group.clone(),
             folder: drawing.folder.clone(),
+            folder_sync: drawing.folder_sync.clone(),
             selectable: drawing.selectable,
             saveable: drawing.saveable,
             listed: drawing.listed,

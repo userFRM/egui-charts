@@ -4,7 +4,7 @@ use super::{
     Datafeed, DepthHistory, DepthPage, DepthRequest, FeedError, HistoryPage, HistoryRequest,
     OrderEvent, RecordingReader, Reply, RestingOrder, Sink, Subscription, SubscriptionId,
 };
-use crate::model::{Instrument, Level1Quote, OrderBook, Tick};
+use crate::model::{ExchangeSessionProvider, Instrument, Level1Quote, OrderBook, Tick, TimezoneId};
 use chrono::{DateTime, TimeDelta, Utc};
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Read};
@@ -277,6 +277,9 @@ impl ReplayClock {
 /// capture, storage and scheduling. Bar aggregation, book gaps and trade deduplication use the
 /// live sink's rules. A new subscription reconstructs the current position, including when its
 /// interval changes. No history request can return events beyond the playback position.
+/// A subscription receives the executions inside the instrument's session windows that
+/// [`Subscription::extended_hours`] selects; book events and quotes apply at every hour, so the
+/// book stays continuous.
 ///
 /// ```
 /// use egui_charts::data::{MarketEvent, RecordingWriter, ReplayDriver, ReplayEvent};
@@ -302,7 +305,19 @@ pub struct ReplayDriver {
 struct Playback {
     clock: ReplayClock,
     instruments: HashMap<String, Instrument>,
-    subscriptions: HashMap<SubscriptionId, (String, Sink)>,
+    /// Replaced when a subscription starts or ends, so a frame shares them without copying.
+    routes: Arc<[Route]>,
+}
+
+/// Where one subscription's events go.
+#[derive(Clone)]
+struct Route {
+    id: SubscriptionId,
+    symbol: String,
+    sink: Sink,
+    /// The instrument's trading hours; `None` trades around the clock.
+    hours: Option<ExchangeSessionProvider>,
+    extended_hours: bool,
 }
 
 impl ReplayDriver {
@@ -328,7 +343,7 @@ impl ReplayDriver {
             state: Mutex::new(Playback {
                 clock: ReplayClock::new(events)?,
                 instruments,
-                subscriptions: HashMap::new(),
+                routes: Arc::new([]),
             }),
             dispatch: Mutex::new(()),
         })
@@ -380,75 +395,128 @@ impl ReplayDriver {
     }
 
     /// Advances once by wall-clock elapsed time and routes due events by symbol. Publishes the
-    /// resulting time to every sink, including quiet symbols and paused frames. Clock errors
-    /// leave the position and subscriptions unchanged.
+    /// resulting time to every sink, including quiet symbols and paused frames, and opens the
+    /// flat candles of the quiet slots it passed, so the candles do not depend on the speed. A
+    /// frame that moves nothing allocates nothing. Clock errors leave the position and
+    /// subscriptions unchanged.
     pub fn advance(&self, elapsed: Duration) -> Result<(), FeedError> {
         let _dispatch = self.dispatch.lock().unwrap_or_else(PoisonError::into_inner);
-        let (events, start, end, time, sinks) = {
+        let (events, start, end, time, moved, routes) = {
             let mut state = self.state();
+            let before = state.clock.time();
             let count = state.clock.advance(elapsed)?.len();
             let end = state.clock.cursor;
+            let time = state.clock.time();
             (
                 Arc::clone(&state.clock.events),
                 end - count,
                 end,
-                state.clock.time(),
-                state.sinks(),
+                time,
+                count > 0 || time != before,
+                state.routes(),
             )
         };
         for event in &events[start..end] {
-            for (symbol, sink) in &sinks {
-                if *symbol == event.symbol {
-                    event.push_to(sink);
-                }
+            for route in routes.iter().filter(|route| route.symbol == event.symbol) {
+                route.deliver(event);
             }
         }
-        publish_time(time, &sinks);
+        for route in routes.iter() {
+            if moved {
+                route.publish(time);
+            } else {
+                route.sink.set_server_time(time);
+                route.sink.hold_time(time);
+            }
+        }
         Ok(())
     }
 
     /// Reconstructs every active subscription through `time`, clearing all later state first.
     /// Replays book history from the beginning as well as trades: starting at the latest book
     /// snapshot would lose earlier heatmap columns. No later snapshot or execution is exposed.
-    /// Call outside egui context locks, as with live pushes.
+    /// The bars equal those of playback through `time` at any speed, and none is dropped for
+    /// the pending bar limit however long the recording. Call outside egui context locks, as
+    /// with live pushes.
     pub fn seek(&self, time: DateTime<Utc>) {
         let _dispatch = self.dispatch.lock().unwrap_or_else(PoisonError::into_inner);
-        let (events, end, sinks) = {
+        let (events, end, routes) = {
             let mut state = self.state();
             state.clock.position(time);
             (
                 Arc::clone(&state.clock.events),
                 state.clock.cursor,
-                state.sinks(),
+                state.routes(),
             )
         };
-        for (symbol, sink) in &sinks {
-            rebuild(&events[..end], symbol, sink, time);
+        for route in routes.iter() {
+            route.rebuild(&events[..end], time);
         }
-        publish_time(time, &sinks);
     }
 }
 
 impl Playback {
-    fn sinks(&mut self) -> Vec<(String, Sink)> {
-        self.subscriptions.retain(|_, (_, sink)| sink.is_active());
-        self.subscriptions.values().cloned().collect()
+    /// The active routes, dropping those of ended subscriptions.
+    fn routes(&mut self) -> Arc<[Route]> {
+        if self.routes.iter().any(|route| !route.sink.is_active()) {
+            let active = self.routes.iter().filter(|route| route.sink.is_active());
+            self.routes = active.cloned().collect();
+        }
+        Arc::clone(&self.routes)
     }
 }
 
-fn rebuild(events: &[ReplayEvent], symbol: &str, sink: &Sink, time: DateTime<Utc>) {
-    sink.reset_replay(time);
-    for event in events {
-        if event.symbol == symbol {
-            event.push_to(sink);
+impl Route {
+    /// Pushes `event`, as a live feed of the selected hours would: an execution outside them
+    /// reaches neither bars nor the trade store, and an order execution still fills the book.
+    fn deliver(&self, event: &ReplayEvent) {
+        let execution = match &event.event {
+            MarketEvent::Trade(_) => true,
+            MarketEvent::Order {
+                event: OrderEvent::Execute { trade, .. },
+                ..
+            } => trade.is_some(),
+            _ => false,
+        };
+        if !execution {
+            event.push_to(&self.sink);
+        } else if self
+            .hours
+            .as_ref()
+            .is_none_or(|hours| hours.is_open(event.time, self.extended_hours))
+        {
+            self.sink.open_quiet_slots(event.time);
+            event.push_to(&self.sink);
+        } else if let MarketEvent::Order {
+            sequence,
+            event: OrderEvent::Execute { id, size, .. },
+        } = &event.event
+        {
+            let stripped = OrderEvent::Execute {
+                id: *id,
+                size: *size,
+                trade: None,
+            };
+            self.sink.set_server_time(event.time);
+            self.sink.push_order_event(*sequence, event.time, stripped);
         }
     }
-}
 
-fn publish_time(time: DateTime<Utc>, sinks: &[(String, Sink)]) {
-    for (_, sink) in sinks {
-        sink.set_server_time(time);
-        sink.advance_time(time);
+    /// Hands `time` to the sink, with the flat candles of the quiet slots up to it.
+    fn publish(&self, time: DateTime<Utc>) {
+        self.sink.set_server_time(time);
+        self.sink.open_quiet_slots(time);
+        self.sink.advance_time(time);
+    }
+
+    /// Reconstructs this subscription through `events`, which end at `time`.
+    fn rebuild(&self, events: &[ReplayEvent], time: DateTime<Utc>) {
+        self.sink.start_rebuild(time);
+        for event in events.iter().filter(|event| event.symbol == self.symbol) {
+            self.deliver(event);
+        }
+        self.publish(time);
+        self.sink.finish_rebuild();
     }
 }
 
@@ -472,37 +540,46 @@ impl Datafeed for ReplayDriver {
         let _dispatch = self.dispatch.lock().unwrap_or_else(PoisonError::into_inner);
         let position = {
             let mut state = self.state();
-            if !state.instruments.contains_key(&subscription.symbol)
-                || subscription.conversion.is_some()
-            {
-                None
-            } else {
-                state.subscriptions.insert(
-                    subscription.id,
-                    (subscription.symbol.clone(), subscription.sink.clone()),
-                );
-                Some((
+            let hours = state
+                .instruments
+                .get(&subscription.symbol)
+                .filter(|_| subscription.conversion.is_none())
+                .map(|instrument| {
+                    let zone = (instrument.time_zone.clone()).unwrap_or_else(TimezoneId::utc);
+                    (instrument.session.clone())
+                        .map(|session| ExchangeSessionProvider::new(zone, Some(session)))
+                });
+            hours.map(|hours| {
+                let route = Route {
+                    id: subscription.id,
+                    symbol: subscription.symbol.clone(),
+                    sink: subscription.sink.clone(),
+                    hours,
+                    extended_hours: subscription.extended_hours,
+                };
+                let others = state.routes.iter().cloned();
+                state.routes = others.chain([route.clone()]).collect();
+                (
+                    route,
                     Arc::clone(&state.clock.events),
                     state.clock.cursor,
                     state.clock.time(),
-                ))
-            }
+                )
+            })
         };
-        let Some((events, end, time)) = position else {
+        let Some((route, events, end, time)) = position else {
             subscription.sink.report_error(FeedError::NotSupported);
             return;
         };
-        rebuild(
-            &events[..end],
-            &subscription.symbol,
-            &subscription.sink,
-            time,
-        );
-        publish_time(time, &[(subscription.symbol, subscription.sink)]);
+        route.rebuild(&events[..end], time);
     }
 
     fn unsubscribe(&self, id: SubscriptionId) {
-        self.state().subscriptions.remove(&id);
+        let mut state = self.state();
+        if state.routes.iter().any(|route| route.id == id) {
+            let others = state.routes.iter().filter(|route| route.id != id);
+            state.routes = others.cloned().collect();
+        }
     }
 
     fn depth_history(&self, request: DepthRequest, reply: Reply<DepthPage>) {
@@ -624,7 +701,10 @@ fn valid_order(order: &RestingOrder) -> bool {
 mod tests {
     use super::super::inbox::Inbox;
     use super::*;
-    use crate::model::{OrderBookLevel, OrderSide, Timeframe};
+    use crate::model::{
+        Bar, BarClock, OrderBookLevel, OrderSide, Session, SessionWindow, Timeframe,
+    };
+    use chrono::{NaiveTime, Weekday};
     use std::sync::Arc;
 
     fn at(s: i64) -> DateTime<Utc> {
@@ -1098,5 +1178,211 @@ mod tests {
             at(0),
             "a UI readout or drop must not wait on its own waker"
         );
+    }
+
+    fn connect(driver: &ReplayDriver, clock: BarClock, extended: bool) -> Arc<Inbox> {
+        let inbox = Arc::new(Inbox::default());
+        let sink = inbox.subscribe("A".into(), clock.clone(), 100, Some(1.0));
+        driver.subscribe(Subscription {
+            id: sink.id,
+            symbol: "A".into(),
+            timeframe: clock.timeframe().unwrap(),
+            clock,
+            extended_hours: extended,
+            conversion: None,
+            sink,
+        });
+        inbox
+    }
+
+    fn drained_bars(inbox: &Inbox) -> (Vec<Bar>, Option<FeedError>) {
+        let (_, update) = inbox.drain().updates.pop().unwrap();
+        let bars = update.bars.into_values().map(|(bar, _)| bar).collect();
+        (bars, update.error)
+    }
+
+    /// A January day of 2024 in UTC, five hours after the time in New York.
+    fn utc(day: u32, hour: u32, minute: u32, second: u32) -> DateTime<Utc> {
+        chrono::NaiveDate::from_ymd_opt(2024, 1, day)
+            .and_then(|date| date.and_hms_opt(hour, minute, second))
+            .unwrap()
+            .and_utc()
+    }
+
+    /// January weekdays in New York: regular hours from 09:30 to 16:00, extended hours around them.
+    fn new_york(instrument: Instrument) -> (Instrument, TimezoneId, Session) {
+        let zone = TimezoneId::fixed_offset(-5 * 3600).unwrap();
+        let days = [
+            Weekday::Mon,
+            Weekday::Tue,
+            Weekday::Wed,
+            Weekday::Thu,
+            Weekday::Fri,
+        ];
+        let hm = |h, m| NaiveTime::from_hms_opt(h, m, 0).unwrap();
+        let session = Session::new([SessionWindow::new(days, hm(9, 30), hm(16, 0))])
+            .with_extended_windows([
+                SessionWindow::new(days, hm(4, 0), hm(9, 30)),
+                SessionWindow::new(days, hm(16, 0), hm(20, 0)),
+            ]);
+        let mut instrument = instrument.with_tick_size(1.0);
+        instrument.time_zone = Some(zone.clone());
+        instrument.session = Some(session.clone());
+        (instrument, zone, session)
+    }
+
+    fn fill(time: DateTime<Utc>, sequence: u64, price: f64) -> ReplayEvent {
+        ReplayEvent::new(
+            "A",
+            time,
+            sequence,
+            MarketEvent::Trade(Tick::new(time, price, 1.0, None).with_id(sequence)),
+        )
+    }
+
+    /// `Subscription::extended_hours` selects the executions; the book follows every event.
+    #[test]
+    fn a_subscription_receives_the_executions_of_the_hours_it_selected() {
+        let (instrument, zone, session) = new_york(Instrument::new("A"));
+        // Tuesday 2024-01-02: a pre-market order and fills from 08:00, a regular fill at 09:31.
+        let execution = utc(2, 13, 0, 30);
+        let events = vec![
+            ReplayEvent::new(
+                "A",
+                utc(2, 12, 59, 0),
+                0,
+                MarketEvent::OrderSnapshot {
+                    sequence: 0,
+                    orders: vec![RestingOrder::new(7, OrderSide::Buy, 40.0, 5.0)],
+                },
+            ),
+            fill(utc(2, 13, 0, 0), 1, 50.0),
+            ReplayEvent::new(
+                "A",
+                execution,
+                2,
+                MarketEvent::Order {
+                    sequence: 1,
+                    event: OrderEvent::Execute {
+                        id: 7,
+                        size: 2.0,
+                        trade: Some(
+                            Tick::new(execution, 40.0, 2.0, Some(OrderSide::Sell)).with_id(2),
+                        ),
+                    },
+                },
+            ),
+            fill(utc(2, 14, 31, 0), 3, 100.0),
+        ];
+        let regular = (utc(2, 14, 31, 0), 100.0, 1.0);
+        for (extended, expected) in [
+            (false, vec![regular]),
+            (true, vec![(utc(2, 13, 0, 0), 40.0, 3.0), regular]),
+        ] {
+            let driver = ReplayDriver::new(events.clone(), vec![instrument.clone()]).unwrap();
+            let clock = BarClock::new(Timeframe::Min1).with_session(
+                zone.clone(),
+                session.clone(),
+                extended,
+            );
+            let inbox = connect(&driver, clock, extended);
+            driver.seek(utc(2, 14, 31, 30));
+            let (_, update) = inbox.drain().updates.pop().unwrap();
+            let executed: Vec<_> = (update.bars.values())
+                .filter(|(bar, _)| bar.volume > 0.0)
+                .map(|(bar, _)| (bar.time, bar.close, bar.volume))
+                .collect();
+            assert_eq!(executed, expected, "extended hours {extended}");
+            assert_eq!(
+                update.trades.iter().count(),
+                expected.len() + usize::from(extended),
+                "held executions, extended hours {extended}"
+            );
+            let book = update.depth.expect("the order book");
+            assert_eq!(book.bids[0].size, 3.0, "extended hours {extended}");
+        }
+    }
+
+    /// The candles shown must not depend on how the position was reached.
+    #[test]
+    fn a_seek_and_playback_at_any_speed_build_the_same_flat_candles() {
+        let flat = |at_time, close| Bar::new(at_time, close, close, close, close, 0.0);
+        let traded = |at_time, close| Bar::new(at_time, close, close, close, close, 1.0);
+        let (instrument, zone, session) = new_york(Instrument::new("A"));
+        let clock = BarClock::new(Timeframe::Min1);
+        let session_clock = clock.clone().with_session(zone, session, false);
+        for (events, instrument, clock, position, frames, expected) in [
+            // Around the clock: minutes 1 and 2 have no execution.
+            (
+                vec![trade("A", 10, 0, 10.0), trade("A", 190, 1, 12.0)],
+                Instrument::new("A").with_tick_size(1.0),
+                clock,
+                at(210),
+                &[1, 7, 65, 200][..],
+                vec![
+                    traded(at(0), 10.0),
+                    flat(at(60), 10.0),
+                    flat(at(120), 10.0),
+                    traded(at(180), 12.0),
+                ],
+            ),
+            // Friday 15:58 and Monday 09:31 in New York: the slots of the closed market have none.
+            (
+                vec![
+                    fill(utc(5, 20, 58, 10), 0, 10.0),
+                    fill(utc(8, 14, 31, 10), 1, 12.0),
+                ],
+                instrument,
+                session_clock,
+                utc(8, 14, 32, 30),
+                &[60, 3 * 86_400][..],
+                vec![
+                    traded(utc(5, 20, 58, 0), 10.0),
+                    flat(utc(5, 20, 59, 0), 10.0),
+                    flat(utc(8, 14, 30, 0), 10.0),
+                    traded(utc(8, 14, 31, 0), 12.0),
+                    flat(utc(8, 14, 32, 0), 12.0),
+                ],
+            ),
+        ] {
+            let driver = || ReplayDriver::new(events.clone(), vec![instrument.clone()]).unwrap();
+            for &seconds in frames {
+                let played = driver();
+                let inbox = connect(&played, clock.clone(), false);
+                played.advance(Duration::ZERO).unwrap();
+                while played.time() < position {
+                    let left = (position - played.time()).to_std().unwrap();
+                    let frame = Duration::from_secs(seconds).min(left);
+                    played.advance(frame).unwrap();
+                }
+                let (bars, _) = drained_bars(&inbox);
+                assert_eq!(bars, expected, "{seconds} seconds per frame");
+            }
+            let sought = driver();
+            let inbox = connect(&sought, clock.clone(), false);
+            sought.seek(position);
+            assert_eq!(drained_bars(&inbox).0, expected, "sought");
+        }
+    }
+
+    /// A rebuild is finite and its bars are drained whole, also after a frame that runs first.
+    #[test]
+    fn a_seek_rebuilds_more_bars_than_the_pending_limit() {
+        let count = 100_001;
+        for timeframe in [Timeframe::Sec1, Timeframe::Ticks(std::num::NonZeroU64::MIN)] {
+            let events = (0..=count).map(|s| trade("A", s, s as u64, 10.0)).collect();
+            let driver =
+                ReplayDriver::new(events, vec![Instrument::new("A").with_tick_size(1.0)]).unwrap();
+            let inbox = connect(&driver, timeframe.into(), true);
+            inbox.drain();
+            driver.seek(at(count - 1));
+            driver.advance(Duration::from_secs(1)).unwrap();
+            let (bars, error) = drained_bars(&inbox);
+            assert_eq!(
+                (bars.len(), bars.first().map(|bar| bar.time), error),
+                (count as usize + 1, Some(at(0)), None),
+                "{timeframe:?}"
+            );
+        }
     }
 }

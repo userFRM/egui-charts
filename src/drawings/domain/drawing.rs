@@ -20,6 +20,19 @@ use crate::model::{AlertSource, LineStyle, PostLink};
 use crate::scales::PriceScaleMode;
 use serde::{Deserialize, Serialize};
 
+/// How a top-level object-tree folder shares its drawings with the other charts of a layout.
+///
+/// Leaving it unset follows [`ChartSyncOptions::sync_drawings`](crate::widget::ChartSyncOptions).
+/// Charts on one drawing storage read each other's saved drawings whichever is set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum FolderSync {
+    /// Keep the drawings on this chart, even with layout-wide drawing sync on.
+    Chart,
+    /// Mirror the drawings across the layout, even with layout-wide drawing sync off.
+    Layout,
+}
+
 /// A drawing on the chart
 ///
 /// Drawings use a dual coordinate system:
@@ -81,6 +94,13 @@ pub struct Drawing {
     /// Independent of host-defined groups. Older saved drawings start at the root.
     #[serde(default)]
     pub folder: Vec<String>,
+    /// Synchronization set on each folder of [`Self::folder`], by position; a missing entry or
+    /// `None` is unset. The outermost folder decides, as [`Self::folder_sync_mode`] reads; inner
+    /// entries wait for their folder to reach the root. Use
+    /// [`DrawingManager::move_to_folder`](crate::drawings::DrawingManager::move_to_folder) to keep
+    /// this aligned with the path.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub folder_sync: Vec<Option<FolderSync>>,
     /// Stable id of a host-registered tool; `None` uses the built-in renderer.
     #[serde(default)]
     pub custom_tool: Option<String>,
@@ -178,9 +198,9 @@ pub struct Drawing {
     pub time_axis_label: bool,
 
     // === Tool-specific configuration (None uses the defaults) ===
-    /// Readouts and midpoint of a trend line, ray or extended line. Other tools ignore these
-    /// settings.
-    #[serde(default)]
+    /// Readouts, midpoint, price labels and text placement of a trend line, ray, extended line or
+    /// info line. Other tools ignore these settings.
+    #[serde(default = "LineMeasurements::left_out")]
     pub line_measurements: LineMeasurements,
     /// Quantity of the long and short position tools
     pub position_size: Option<PositionSize>,
@@ -411,6 +431,15 @@ fn default_style(tool: DrawingToolType) -> DefaultStyle {
 }
 
 impl Drawing {
+    /// The synchronization this drawing follows: that of its top-level folder, or `None` when
+    /// unset or at the root.
+    pub fn folder_sync_mode(&self) -> Option<FolderSync> {
+        if self.folder.is_empty() {
+            return None;
+        }
+        self.folder_sync.first().copied().flatten()
+    }
+
     /// Create a new drawing with default properties
     pub fn new(id: usize, tool_type: DrawingToolType) -> Self {
         let style = default_style(tool_type);
@@ -430,6 +459,7 @@ impl Drawing {
             listed: true,
             group: None,
             folder: Vec::new(),
+            folder_sync: Vec::new(),
             tool_type,
             custom_tool: None,
             custom_settings: serde_json::Value::Null,
@@ -455,8 +485,12 @@ impl Drawing {
                 FontWeight::Normal
             },
             italic: false,
-            text_color: matches!(tool_type, DrawingToolType::Note | DrawingToolType::Callout)
-                .then_some(WHITE),
+            text_color: match tool_type {
+                DrawingToolType::Note | DrawingToolType::Callout => Some(WHITE),
+                // Independent of the line, which can change colour without its readouts.
+                DrawingToolType::InfoLine => Some(BLUE),
+                _ => None,
+            },
             background: !plain_text,
             border: !plain_text,
             border_color: plain_text.then_some([112, 112, 112, 255]),
@@ -475,7 +509,7 @@ impl Drawing {
             timeframe_visibility: TimeframeVisibility::all(),
             price_axis_label: true,
             time_axis_label: true,
-            line_measurements: LineMeasurements::default(),
+            line_measurements: LineMeasurements::for_tool(tool_type),
             position_size: None,
             position_sizing: PositionSizing::default(),
             position_target_color: None,
@@ -972,7 +1006,9 @@ impl<'de> Deserialize<'de> for Drawing {
     /// drawing's tool, which a drawing without one draws.
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         GannConfig::forget_left_out();
+        LineMeasurements::forget_left_out();
         let mut drawing = Self::deserialize(deserializer)?;
+        drawing.line_measurements.fill_left_out(drawing.tool_type);
         if let Some(gann) = &mut drawing.gann {
             gann.fill_left_out(drawing.tool_type);
         }

@@ -29,7 +29,8 @@ impl SettingsDialog {
                     || !kind.uses_ohlc()
                     || matches!(
                         kind,
-                        crate::model::ChartType::TimePriceOpportunity
+                        crate::model::ChartType::HlcArea
+                            | crate::model::ChartType::TimePriceOpportunity
                             | crate::model::ChartType::VolumeFootprint
                             | crate::model::ChartType::SessionVolumeProfile
                     )
@@ -51,16 +52,21 @@ impl SettingsDialog {
                     self.settings.price_source = Some(series.price_source);
                     self.settings.candle_colors.body_up = series.bullish_color;
                     self.settings.candle_colors.body_down = series.bearish_color;
+                    ui.add_space(ui.active_theme().spacing.xxl);
                 } else {
                     let heikin = kind == crate::model::ChartType::Heikin;
                     let hollow = kind == crate::model::ChartType::HollowCandles;
-                    let candles = kind == crate::model::ChartType::Candles || heikin || hollow;
+                    let volume = kind == crate::model::ChartType::VolumeCandles;
+                    let candles =
+                        kind == crate::model::ChartType::Candles || heikin || hollow || volume;
                     self.draw_section_header(
                         ui,
                         if heikin {
                             "HEIKIN ASHI"
                         } else if hollow {
                             "HOLLOW CANDLES"
+                        } else if volume {
+                            "VOLUME CANDLES"
                         } else if candles {
                             "CANDLES"
                         } else {
@@ -391,17 +397,58 @@ mod tests {
         positions
     }
 
+    fn click(
+        ctx: &Context,
+        chart: &mut Chart,
+        dialog: &mut SettingsDialog,
+        theme: &Theme,
+        label: &str,
+    ) {
+        let pos = frame(ctx, chart, dialog, theme, vec![], &[label])[0];
+        frame(
+            ctx,
+            chart,
+            dialog,
+            theme,
+            vec![Event::PointerMoved(pos)],
+            &[],
+        );
+        for pressed in [true, false] {
+            frame(
+                ctx,
+                chart,
+                dialog,
+                theme,
+                vec![Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                }],
+                &[],
+            );
+        }
+    }
+
     /// Real pointer edits reach the painter only after acceptance; Cancel keeps the original
-    /// component and scale settings in both themes.
+    /// component and scale settings of Heikin-Ashi and volume candles in both themes.
     #[test]
-    fn heikin_dialog_accepts_and_cancels_component_and_scale_edits() {
+    fn candle_dialogs_accept_and_cancel_component_and_scale_edits() {
         for theme in [Theme::light(), Theme::dark()] {
-            for label in [
-                "Body",
-                "Borders",
-                "Wick",
-                "Use original prices on scale",
-                "Reset to defaults",
+            for (kind, label) in [
+                (ChartType::Heikin, "Body"),
+                (ChartType::Heikin, "Borders"),
+                (ChartType::Heikin, "Wick"),
+                (ChartType::Heikin, "Use original prices on scale"),
+                (ChartType::Heikin, "Reset to defaults"),
+                (ChartType::VolumeCandles, "Body"),
+                (ChartType::VolumeCandles, "Borders"),
+                (ChartType::VolumeCandles, "Wick"),
+                (
+                    ChartType::VolumeCandles,
+                    "Color bars based on previous close",
+                ),
+                (ChartType::VolumeCandles, "Reset to defaults"),
             ] {
                 for accept in [false, true] {
                     let ctx = Context::default();
@@ -414,16 +461,20 @@ mod tests {
                         14.0,
                         0.0,
                     )]));
-                    chart.set_chart_type(ChartType::Heikin);
+                    chart.set_chart_type(kind);
                     chart.config_mut().show_volume = false;
                     let mut params = chart.chart_type_params().clone();
                     // A border in the colour of an opaque body paints nothing.
                     params.styles.heikin.border_up = egui::Color32::from_rgb(3, 4, 102);
+                    params.styles.volume_candles.border_up = egui::Color32::from_rgb(3, 4, 102);
                     if label == "Reset to defaults" {
                         params.styles.heikin.body_visible = false;
                         params.styles.heikin.border_visible = false;
                         params.styles.heikin.wick_visible = false;
                         params.styles.heikin.real_price_only = true;
+                        params.styles.volume_candles.body_visible = false;
+                        params.styles.volume_candles.border_visible = false;
+                        params.styles.volume_candles.wick_visible = false;
                     }
                     chart.set_chart_type_params(params);
                     let before = ChartSettingsState::from_chart(&chart);
@@ -434,58 +485,41 @@ mod tests {
                         frame(&ctx, &mut chart, &mut dialog, &theme, vec![], &[]);
                     }
                     for control in [label, if accept { "Ok" } else { "Cancel" }] {
-                        let pos =
-                            frame(&ctx, &mut chart, &mut dialog, &theme, vec![], &[control])[0];
-                        frame(
-                            &ctx,
-                            &mut chart,
-                            &mut dialog,
-                            &theme,
-                            vec![Event::PointerMoved(pos)],
-                            &[],
-                        );
-                        for pressed in [true, false] {
-                            frame(
-                                &ctx,
-                                &mut chart,
-                                &mut dialog,
-                                &theme,
-                                vec![Event::PointerButton {
-                                    pos,
-                                    button: PointerButton::Primary,
-                                    pressed,
-                                    modifiers: Default::default(),
-                                }],
-                                &[],
-                            );
-                        }
+                        click(&ctx, &mut chart, &mut dialog, &theme, control);
                     }
                     assert!(!dialog.is_open);
                     let after = ChartSettingsState::from_chart(&chart);
-                    let style = chart.chart_type_params().styles.heikin.clone();
-                    let mut expected = before
-                        .chart_type_params
-                        .as_ref()
-                        .unwrap()
-                        .styles
-                        .heikin
-                        .clone();
+                    // Theme colours only apply once a frame has run, so compare the candle
+                    // settings rather than the whole state.
+                    let style = after.candle_colors.clone();
+                    let mut expected = before.candle_colors.clone();
                     if accept {
                         match label {
-                            "Body" => expected.body_visible = false,
-                            "Borders" => expected.border_visible = false,
-                            "Wick" => expected.wick_visible = false,
-                            "Use original prices on scale" => expected.real_price_only = true,
-                            "Reset to defaults" => expected = Default::default(),
+                            "Body" => expected.show_body = false,
+                            "Borders" => expected.show_border = false,
+                            "Wick" => expected.show_wick = false,
+                            "Color bars based on previous close" => {
+                                expected.color_by_previous_close = true
+                            }
+                            "Use original prices on scale" => {}
+                            "Reset to defaults" => {
+                                expected = crate::widget::settings::CandleColorConfig {
+                                    show_border: true,
+                                    ..Default::default()
+                                }
+                            }
                             _ => unreachable!(),
                         }
                     }
                     assert_eq!(style, expected);
-                    if !accept {
-                        // Theme colours only apply once a frame has run, so compare the
-                        // candle settings rather than the whole state.
-                        assert_eq!(after.candle_colors, before.candle_colors);
-                    }
+                    assert_eq!(
+                        chart.chart_type_params().styles.heikin.real_price_only,
+                        match label {
+                            "Use original prices on scale" => accept,
+                            "Reset to defaults" => !accept,
+                            _ => false,
+                        }
+                    );
                     // Paint the accepted state after the modal has closed.
                     let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 1.0, vec![]);
                     let plot = chart.get_rendered_price_rect();
@@ -493,7 +527,7 @@ mod tests {
                         matches!(s, Shape::Rect(r)
                         if plot.contains(r.rect.center()) && r.fill == style.body_up)
                     });
-                    assert_eq!(body, style.body_visible);
+                    assert_eq!(body, style.show_body);
                     let border = painted.iter().any(|s| {
                         matches!(s, Shape::Rect(r)
                         if plot.contains(r.rect.center()) && r.stroke.color == style.border_up)
@@ -503,9 +537,124 @@ mod tests {
                     // Only the defaults restored by the reset share the body's colour.
                     assert_eq!(
                         border,
-                        style.border_visible && style.border_up != style.body_up
+                        style.show_border && style.border_up != style.body_up
                     );
-                    assert_eq!(wick, style.wick_visible);
+                    assert_eq!(wick, style.show_wick);
+                }
+            }
+        }
+    }
+
+    /// Each switch of the HLC area hides its own line or fill through the dialog and the painter
+    /// after acceptance only, in both themes, while undo and saved charts keep every value apart.
+    #[test]
+    fn hlc_area_dialog_edits_reach_the_painter_and_keep_independent_saved_values() {
+        use crate::model::{HlcAreaStyle, LinePlotStyle};
+        use crate::widget::ChartSnapshot;
+        use egui::Color32;
+        use egui::epaint::ColorMode;
+
+        let line = |r, width| LinePlotStyle {
+            color: Color32::from_rgb(r, 2, 3),
+            width,
+            ..Default::default()
+        };
+        let edited = HlcAreaStyle {
+            high_line: line(101, 1.0),
+            low_line: line(102, 2.5),
+            close_line: line(103, 4.0),
+            high_to_close_fill: Color32::from_rgba_unmultiplied(104, 5, 6, 77),
+            close_to_low_fill: Color32::from_rgba_unmultiplied(7, 105, 8, 128),
+            ..Default::default()
+        };
+        type Edit = fn(&mut HlcAreaStyle);
+        let cases: [(&str, Edit); 5] = [
+            ("High line", |s| s.high_line_visible = false),
+            ("Low line", |s| s.low_line_visible = false),
+            ("High to close fill", |s| {
+                s.high_to_close_fill_visible = false
+            }),
+            ("Close to low fill", |s| s.close_to_low_fill_visible = false),
+            ("Reset to defaults", |s| *s = HlcAreaStyle::default()),
+        ];
+        for theme in [Theme::light(), Theme::dark()] {
+            for (label, edit) in cases {
+                for accept in [false, true] {
+                    let ctx = Context::default();
+                    crate::theme::apply_to_egui(&ctx, &theme);
+                    // High, close and low sit at unequal distances.
+                    let mut chart = Chart::new(BarData::from_bars(
+                        (0..3)
+                            .map(|i| {
+                                Bar::new(
+                                    chrono::DateTime::UNIX_EPOCH + chrono::Duration::days(i),
+                                    10.0,
+                                    18.0,
+                                    8.0,
+                                    16.0,
+                                    0.0,
+                                )
+                            })
+                            .collect(),
+                    ));
+                    chart.set_chart_type(ChartType::HlcArea);
+                    chart.config_mut().show_volume = false;
+                    let mut params = chart.chart_type_params().clone();
+                    params.styles.hlc_area = edited.clone();
+                    chart.set_chart_type_params(params);
+                    let mut dialog = SettingsDialog::new();
+                    dialog.set_control_visible(crate::ui::Control::Templates, false);
+                    dialog.open(ChartSettingsState::from_chart(&chart));
+                    for _ in 0..3 {
+                        frame(&ctx, &mut chart, &mut dialog, &theme, vec![], &[]);
+                    }
+                    for control in [label, if accept { "Ok" } else { "Cancel" }] {
+                        click(&ctx, &mut chart, &mut dialog, &theme, control);
+                    }
+                    assert!(!dialog.is_open);
+                    let mut expected = edited.clone();
+                    if accept {
+                        edit(&mut expected);
+                    }
+                    let style = || chart.chart_type_params().styles.hlc_area.clone();
+                    assert_eq!(style(), expected, "{label}");
+                    let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 1.0, vec![]);
+                    let stroked = |color| {
+                        painted.iter().any(|s| {
+                            matches!(s, Shape::Path(p)
+                                if p.stroke.width > 0.0 && p.stroke.color == ColorMode::Solid(color))
+                        })
+                    };
+                    let filled = |color| {
+                        painted
+                            .iter()
+                            .any(|s| matches!(s, Shape::Path(p) if p.fill == color))
+                    };
+                    assert_eq!(
+                        stroked(expected.high_line.color),
+                        expected.high_line_visible
+                    );
+                    assert_eq!(stroked(expected.low_line.color), expected.low_line_visible);
+                    assert!(stroked(expected.close_line.color));
+                    assert_eq!(
+                        filled(expected.high_to_close_fill),
+                        expected.high_to_close_fill_visible
+                    );
+                    assert_eq!(
+                        filled(expected.close_to_low_fill),
+                        expected.close_to_low_fill_visible
+                    );
+                    if accept {
+                        let saved: ChartSnapshot = serde_json::from_str(
+                            &serde_json::to_string(&chart.snapshot().unwrap()).unwrap(),
+                        )
+                        .unwrap();
+                        assert!(chart.undo());
+                        assert_eq!(chart.chart_type_params().styles.hlc_area, edited);
+                        assert!(chart.redo());
+                        chart.restore(&saved).unwrap();
+                        assert_eq!(chart.chart_type_params().styles.hlc_area, expected);
+                    }
                 }
             }
         }

@@ -103,7 +103,7 @@ use egui_charts::ui::widget_bar::{
 use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBar, WidgetBarAction};
 use egui_charts::ui_kit::notifications::{NotificationPanel, Toasts};
 use egui_charts::widget::settings::ChartSettingsState;
-use egui_charts::widget::{ChartLayoutMode, SeriesId};
+use egui_charts::widget::{ChartLayoutMode, LayoutCopy, SeriesId};
 use live::LiveFeed;
 use std::sync::Arc;
 
@@ -415,6 +415,8 @@ pub struct DemoApp {
     copied_drawing: Option<String>,
     // A study copied in this session, kept across symbols and intervals.
     copied_study: Option<String>,
+    /// A copy across the layout waiting for the user to accept what its charts lack.
+    layout_copy_prompt: Option<(LayoutCopy, String)>,
     export_dialog: ExportDialog,
     export_arrangement: bool,
     date_picker: DatePicker,
@@ -713,6 +715,7 @@ impl DemoApp {
             open_layout: false,
             copied_drawing: None,
             copied_study: None,
+            layout_copy_prompt: None,
             export_dialog: ExportDialog::new().with_formats(EXPORT_FORMATS),
             export_arrangement: false,
             date_picker: DatePicker::new(),
@@ -1183,6 +1186,8 @@ impl DemoApp {
         self.settings_state.trading = trading;
         self.settings_state.adjust_for_dividends =
             self.timeframe_toolbar.state.adjust_for_dividends;
+        self.settings_dialog
+            .offer_apply_to_all(self.layout_has_other_charts());
         self.settings_dialog.open(self.settings_state.clone());
     }
 
@@ -1251,12 +1256,16 @@ impl DemoApp {
         // Chart settings.
         match self.settings_dialog.show(ctx, &self.theme) {
             SettingsAction::Apply(state) => self.apply_chart_settings(*state),
+            SettingsAction::ApplyToAll(state) => {
+                self.request_layout_copy(LayoutCopy::Settings(state))
+            }
             SettingsAction::PreviewSound { name, volume } => {
                 self.play_sound(ctx, &name, volume, true)
             }
             SettingsAction::Cancel => {}
             _ => {}
         }
+        self.show_layout_copy_prompt(ctx);
 
         let symbols = DemoSymbol::symbols();
         self.sync_comparisons();
@@ -1357,6 +1366,94 @@ impl DemoApp {
             self.timeframe_toolbar.state.adjust_for_dividends = state.adjust_for_dividends;
             self.stop_replay();
             self.apply_session();
+        }
+    }
+
+    /// Whether the current preset shows other charts to copy to.
+    fn layout_has_other_charts(&self) -> bool {
+        !self.extra_charts.is_empty() && self.layout.mode.chart_count() > 1
+    }
+
+    /// Applies `copy` when every chart can take it, and otherwise first lists what they lack.
+    fn request_layout_copy(&mut self, copy: LayoutCopy) {
+        let mut charts: Vec<_> = self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
+        charts.insert(self.layout_slot, &mut self.chart);
+        let issues = self.layout.copy_issues(
+            &charts,
+            self.layout_slot,
+            &copy,
+            self.indicator_dialog.factory(),
+        );
+        if issues.is_empty() {
+            self.apply_layout_copy(copy);
+            return;
+        }
+        let any_reached = (0..self.layout.mode.chart_count().min(charts.len()))
+            .filter(|slot| *slot != self.layout_slot)
+            .any(|slot| {
+                !issues
+                    .iter()
+                    .any(|issue| issue.slot == slot && issue.kind.skips_chart())
+            });
+        let mut lines: Vec<_> = issues
+            .iter()
+            .map(|issue| {
+                let (slot, symbol) = (issue.slot + 1, charts[issue.slot].symbol());
+                format!("Chart {slot} ({symbol}): {}", issue.kind)
+            })
+            .collect();
+        if !any_reached {
+            self.toasts.error(lines.join("\n"));
+            return;
+        }
+        // The dialog does not scroll: its buttons stay on screen with many charts and studies.
+        if lines.len() > 12 {
+            let more = lines.len() - 12;
+            lines.truncate(12);
+            lines.push(format!("and {more} more"));
+        }
+        self.layout_copy_prompt = Some((copy, lines.join("\n")));
+    }
+
+    fn apply_layout_copy(&mut self, copy: LayoutCopy) {
+        self.chart.begin_user_action();
+        if let LayoutCopy::Settings(state) = &copy {
+            self.apply_chart_settings((**state).clone());
+        }
+        let mut charts: Vec<_> = self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
+        charts.insert(self.layout_slot, &mut self.chart);
+        self.layout.apply_copy(
+            &mut charts,
+            self.layout_slot,
+            &copy,
+            self.indicator_dialog.factory(),
+        );
+        self.chart.end_user_action();
+    }
+
+    fn show_layout_copy_prompt(&mut self, ctx: &egui::Context) {
+        let Some((_, message)) = &self.layout_copy_prompt else {
+            return;
+        };
+        let mut open = true;
+        let result = egui_charts::ui_kit::modal::dialogs::ConfirmDialog::new(
+            "layout_copy",
+            "Apply to all charts",
+            message,
+        )
+        .confirm_text("Apply")
+        .show(ctx, &mut open);
+        if result.is_open() {
+            return;
+        }
+        let Some((copy, _)) = self.layout_copy_prompt.take() else {
+            return;
+        };
+        if result.is_confirmed() {
+            self.apply_layout_copy(copy);
+        } else if let LayoutCopy::Settings(state) = copy {
+            // The edits came from the dialog, which closed for this prompt; hand them back.
+            self.settings_dialog.open(*state);
         }
     }
 
@@ -2640,6 +2737,7 @@ impl DemoApp {
             item.z_index = d.z_order;
             item.label = d.label.clone();
             item.folder = d.folder.clone();
+            item.folder_sync = d.folder_sync_mode();
             items.push(item);
         }
         items
@@ -3351,6 +3449,7 @@ impl DemoApp {
             .set_order_entries(self.trading.quantity, self.trading.capabilities());
         self.menus
             .set_watchlists(self.watchlist.lists().iter().map(|list| list.name.as_str()));
+        self.menus.set_layout_copies(self.layout_has_other_charts());
         if let Some(action) = self.menus.show(ui.ctx(), &mut self.chart) {
             self.handle_context_action(ui.ctx(), action);
         }
@@ -3519,6 +3618,7 @@ impl DemoApp {
             StudyContextMenuAction::AddToFavorites(name) => {
                 self.indicator_dialog.favorites.insert(name);
             }
+            StudyContextMenuAction::AddToLayout => self.request_layout_copy(LayoutCopy::Study(id)),
             StudyContextMenuAction::Help(url) => ctx.open_url(egui::OpenUrl::new_tab(url)),
             StudyContextMenuAction::Copy => self.copy_study(ctx, id),
             StudyContextMenuAction::ObjectTree => {
@@ -3549,6 +3649,9 @@ impl DemoApp {
             ContextMenuAction::OpenSeriesSettings => self.open_chart_settings_dialog(),
             ContextMenuAction::ObjectTree => self.open_panel = Some(SidePanel::ObjectTree),
             ContextMenuAction::RemoveAllIndicators => self.remove_all_indicators(),
+            ContextMenuAction::ApplyIndicatorsToLayout => {
+                self.request_layout_copy(LayoutCopy::Studies)
+            }
             ContextMenuAction::AddAlert { symbol, price } => self.quick_price_alert(symbol, price),
             ContextMenuAction::AddToWatchlist { list, symbol } => {
                 if !self.watchlist.add_symbol_to(list, &symbol) {
@@ -3736,6 +3839,7 @@ impl DemoApp {
             || self.comparison_settings.is_some()
             || self.indicator_dialog.is_open()
             || self.settings_dialog.is_open
+            || self.layout_copy_prompt.is_some()
             || self.drawing_toolbar.state.pending_removal.is_some()
             || self.drawing_props.is_open
             || self.export_dialog.is_open()
@@ -4077,6 +4181,46 @@ mod tests {
     use egui_charts::model::{AlertSource, LineStyle};
     use egui_charts::ui::dialogs::DrawingProps;
     use egui_charts::ui::timeframe_toolbar::DateRange;
+
+    /// The menu actions reach the other chart, which lacks nothing, without a prompt; a chart
+    /// without bars is named first, and the copy waits for the answer.
+    #[test]
+    fn layout_copy_actions_reach_other_charts_and_prompt_for_what_they_lack() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
+        let id = app
+            .chart
+            .add_indicator(Box::new(egui_charts::studies::SMA::new(5)));
+        let studies = |chart: &Chart| chart.indicators().count();
+        let before = studies(&app.extra_charts[0].chart);
+
+        app.handle_study_context(&ctx, id, StudyContextMenuAction::AddToLayout);
+        assert_eq!(studies(&app.extra_charts[0].chart), before + 1);
+        assert!(app.layout_copy_prompt.is_none());
+
+        app.handle_chart_context(ContextMenuAction::ApplyIndicatorsToLayout);
+        assert_eq!(studies(&app.extra_charts[0].chart), studies(&app.chart));
+
+        app.extra_charts[0]
+            .chart
+            .set_data(SeriesId::MAIN, Vec::new());
+        app.handle_study_context(&ctx, id, StudyContextMenuAction::AddToLayout);
+        let (_, message) = app.layout_copy_prompt.as_ref().expect("prompt");
+        assert!(message.starts_with("Chart 2 ("), "{message}");
+        assert_eq!(studies(&app.extra_charts[0].chart), studies(&app.chart));
+
+        // Nothing could take this one, so there is no Apply to offer.
+        app.layout_copy_prompt = None;
+        let linked = app
+            .chart
+            .add_indicator(Box::new(egui_charts::studies::SMA::new(3)));
+        let source = egui_charts::model::StudySource::Study { id: id.0, plot: 0 };
+        app.chart.set_indicator_source(linked, source).unwrap();
+        app.handle_study_context(&ctx, linked, StudyContextMenuAction::AddToLayout);
+        assert!(app.layout_copy_prompt.is_none());
+    }
 
     pub(super) fn ui_frame(
         ctx: &egui::Context,

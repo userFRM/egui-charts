@@ -2,13 +2,10 @@
 //!
 //! Includes: Candlestick, OHLC Bars, Hollow Candles, Volume Candles, Columns
 
-use super::helpers::{
-    OhlcYCoords, bar_color, body_rect, draw_body_filled, draw_wicks, prev_close, push_body,
-    push_wicks,
-};
+use super::helpers::{OhlcYCoords, body_rect, prev_close, push_body, push_wicks};
 use super::volume::render_volume_bars;
 use crate::chart::rendering::{self, BarRenderParams, RenderContext, StyleColors};
-use crate::model::{Bar, BarsStyle, CandlesStyle, HollowStyle};
+use crate::model::{Bar, BarsStyle, CandlesStyle, HollowStyle, VolumeCandlesStyle};
 use crate::scales::PriceMap;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke};
@@ -198,31 +195,43 @@ pub(super) fn render_columns(
 }
 
 /// Volume candles: body width proportional to the bar's share of `max_volume`, the largest
-/// visible volume.
+/// visible volume. Body, border and wick have their own visibility and colours.
 pub(super) fn render_volume_candles(
     price_ctx: &RenderContext,
     volume_ctx: &RenderContext,
     price_scale: &PriceMap,
     colors: &StyleColors,
     visible_data: &[Bar],
+    full_data: &[Bar],
     start_idx: usize,
     base_bar_width: f32,
     wick_width: f32,
     max_volume: f64,
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
-    bullish_color: Color32,
-    bearish_color: Color32,
+    style: &VolumeCandlesStyle,
 ) {
-    let painter = price_ctx.painter;
     let coords = *price_scale;
+    let border_width = DESIGN_TOKENS.stroke.medium;
+    // At most two wicks, a fill and a border per bar, under one paint list lock.
+    let mut shapes = Vec::with_capacity(4 * visible_data.len());
 
     for (i, bar) in visible_data.iter().enumerate() {
         if bar.is_whitespace() {
             continue;
         }
-        let x = idx_to_coord(start_idx + i, chart_rect_min_x);
-        let color = bar_color(bar, bullish_color, bearish_color);
+        let g = start_idx + i;
+        let x = idx_to_coord(g, chart_rect_min_x);
+        let rising = if style.color_by_previous_close {
+            bar.close >= prev_close(full_data, g)
+        } else {
+            bar.is_bullish()
+        };
+        let (body, border, wick) = if rising {
+            (style.body_up, style.border_up, style.wick_up)
+        } else {
+            (style.body_down, style.border_down, style.wick_down)
+        };
         let y = OhlcYCoords::from_bar(bar, &coords);
 
         // A zero or missing volume leaves a body as thin as the wick; without any visible
@@ -239,9 +248,16 @@ pub(super) fn render_volume_candles(
         };
         let bar_width = (base_bar_width * volume_ratio).max(wick_width);
 
-        draw_wicks(painter, x, &y, wick_width, color);
-        draw_body_filled(painter, x, bar_width, &y, color);
+        if style.wick_visible {
+            push_wicks(&mut shapes, x, &y, Stroke::new(wick_width, wick));
+        }
+        let fill = style.body_visible.then_some(body);
+        let border = style
+            .border_visible
+            .then(|| Stroke::new(border_width, border));
+        push_body(&mut shapes, body_rect(x, bar_width, &y), fill, border);
     }
+    price_ctx.painter.extend(shapes);
 
     // Volume candles don't show separate volume bars
     let _ = (volume_ctx, colors);
@@ -458,14 +474,14 @@ mod tests {
                     &map,
                     &colors,
                     &bars,
+                    &bars,
                     0,
                     20.0,
                     1.0,
                     max_volume,
                     0.0,
                     |i, _| 25.0 + i as f32 * 50.0,
-                    Color32::GREEN,
-                    Color32::RED,
+                    &VolumeCandlesStyle::default(),
                 );
             });
             let drawn: Vec<_> = output

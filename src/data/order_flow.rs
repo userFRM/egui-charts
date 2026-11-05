@@ -333,6 +333,8 @@ impl Distinct {
 struct State {
     source: Source,
     trade_bars: super::inbox::TradeBars,
+    /// A footprint that lost the stream's anchor adds only the sink's allocations.
+    awaits_sink: bool,
     bars: BTreeMap<DateTime<Utc>, ([f64; 3], u64)>,
     last: Option<DateTime<Utc>>,
     inside: Option<(f64, f64)>,
@@ -683,6 +685,9 @@ impl OrderFlowInput {
         }
         let mut state = self.state();
         if matches!(state.source, Source::Footprint) {
+            if state.awaits_sink {
+                return;
+            }
             return state.push_footprint(clock, trade, None);
         }
         if let Some(timeframe) = clock.timeframe().filter(|tf| tf.is_trade_based()) {
@@ -718,6 +723,13 @@ impl OrderFlowInput {
 
     pub(crate) fn set_trade_bar(&self, open: DateTime<Utc>) {
         self.state().trade_bars.forming = Some(open);
+    }
+
+    /// Forgets the forming bar, so that [`replace_trades`](Self::replace_trades) rebuilds a source
+    /// the sink allocated to before. Sources it does not rebuild keep their values.
+    #[cfg(feature = "widget")]
+    pub(crate) fn forget_trade_bar(&self) {
+        self.state().trade_bars.forming = None;
     }
 
     /// Expires rolling rates and movement during an idle part of a bar with stream data.
@@ -775,7 +787,8 @@ impl OrderFlowInput {
     /// bar that lost an execution to the store's limit is left out, and a rolling window gives no
     /// value while it reaches back to the loss, as when the window overflows. On a trade-based
     /// interval it rebuilds only a source the sink has not allocated an execution to yet, from the
-    /// executions that arrived live.
+    /// executions that arrived live. A footprint source that lost some of those waits for the
+    /// sink's allocations, leaving out the executions still queued: they open no bar of their own.
     #[cfg(feature = "widget")]
     pub(crate) fn replace_trades(&self, clock: &BarClock, trades: &super::trades::Trades) {
         let footprint = match self.state().source {
@@ -801,6 +814,7 @@ impl OrderFlowInput {
         if footprint {
             // Without the original live anchor, wait for allocations from the sink.
             if trade_based && lost.is_some() {
+                self.state().awaits_sink = trades.live().next().is_some();
                 return;
             }
             // In arrival order, as the chart's footprint is built.
@@ -1177,6 +1191,7 @@ impl State {
         Self {
             source,
             trade_bars: super::inbox::TradeBars::default(),
+            awaits_sink: false,
             bars: BTreeMap::new(),
             last: None,
             inside: None,
@@ -1721,6 +1736,50 @@ mod tests {
             [(start, 2.0, 2.0)]
         );
         assert_eq!(flow.values(), BTreeMap::from([(start, [2.0, 2.0, 0.0])]));
+    }
+
+    /// Hand counts: three-tick bars of buys of one open at 09:59:57 and 10:00:00, three each.
+    /// The chart drained 09:59:57 to 10:00:00 and kept them all, or only the newest two. A
+    /// footprint source connected while the buy of 10:00:01 is still queued, then given the buy
+    /// of 10:00:02, offers both whole bars, or after the loss none of the forming bar's parts.
+    #[cfg(feature = "widget")]
+    #[test]
+    fn footprint_connected_after_a_store_loss_offers_only_whole_bars() {
+        let clock = BarClock::new("3t".parse().unwrap());
+        let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let buy = |second: i64| {
+            Tick::new(
+                start + TimeDelta::seconds(second),
+                100.0,
+                1.0,
+                Some(OrderSide::Buy),
+            )
+        };
+        for (capacity, want) in [(100, vec![(-3, 3.0), (0, 3.0)]), (2, vec![])] {
+            let inbox = Arc::new(super::super::inbox::Inbox::default());
+            let sink = inbox.subscribe("A".into(), clock.clone(), 100, Some(1.0));
+            for second in -3..=0 {
+                sink.push_tick(buy(second));
+            }
+            let (_, drained) = inbox.drain().updates.pop().unwrap();
+            let mut held = super::super::trades::Trades::new(capacity);
+            drained
+                .trades
+                .iter()
+                .for_each(|trade| held.push(trade.clone()));
+            let footprint = OrderFlowInput::footprint();
+            footprint.set_tick_size(Some(1.0));
+            // As the chart connects a new source: rebuilt from its store, then given the queue.
+            footprint.replace_trades(&clock, &held);
+            sink.push_tick(buy(1));
+            inbox.study_inputs(sink.id, vec![footprint.clone()]);
+            sink.push_tick(buy(2));
+            let got: Vec<_> = (footprint.footprints_from(DateTime::<Utc>::MIN_UTC).bars)
+                .values()
+                .map(|bar| ((bar.time - start).num_seconds(), bar.volume()))
+                .collect();
+            assert_eq!(got, want, "store of {capacity}");
+        }
     }
 
     /// Hand counts: ids 7 and 8 fill in the first minute (7 twice, an unidentified fill

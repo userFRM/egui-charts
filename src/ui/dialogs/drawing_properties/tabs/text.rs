@@ -1,6 +1,8 @@
 //! Text tab: the text, its font, colour and style, and its box.
 
-use crate::drawings::{DrawingToolType, FontWeight};
+use crate::drawings::{
+    DrawingToolType, FontWeight, LineTextHorizontalAlign, LineTextVerticalAlign,
+};
 use crate::localization as l10n;
 use egui::Ui;
 
@@ -72,7 +74,60 @@ impl TextTab {
                 return;
             };
             let settings = &mut template.settings;
-            if !has_text_box(settings.tool_type) {
+            if settings.tool_type.supports_line_measurements() {
+                let measurements = &mut settings.line_measurements;
+                let label = ui.label(l10n::text(ui.ctx(), "Horizontal alignment"));
+                ui.label_inputs_by(label.id, |ui| {
+                    let ctx = ui.ctx().clone();
+                    ui.combo_select(
+                        "line_text_horizontal_align",
+                        &mut measurements.text_horizontal_align,
+                        [
+                            LineTextHorizontalAlign::Left,
+                            LineTextHorizontalAlign::Center,
+                            LineTextHorizontalAlign::Right,
+                        ],
+                        |align| {
+                            l10n::text(
+                                &ctx,
+                                match align {
+                                    LineTextHorizontalAlign::Left => "Left",
+                                    LineTextHorizontalAlign::Center => "Center",
+                                    LineTextHorizontalAlign::Right => "Right",
+                                },
+                            )
+                        },
+                    );
+                });
+                ui.end_row();
+
+                let label = ui.label(l10n::text(ui.ctx(), "Vertical alignment"));
+                ui.label_inputs_by(label.id, |ui| {
+                    let ctx = ui.ctx().clone();
+                    ui.combo_select(
+                        "line_text_vertical_align",
+                        &mut measurements.text_vertical_align,
+                        [
+                            LineTextVerticalAlign::Top,
+                            LineTextVerticalAlign::Middle,
+                            LineTextVerticalAlign::Bottom,
+                        ],
+                        |align| {
+                            l10n::text(
+                                &ctx,
+                                match align {
+                                    LineTextVerticalAlign::Top => "Top",
+                                    LineTextVerticalAlign::Middle => "Middle",
+                                    LineTextVerticalAlign::Bottom => "Bottom",
+                                },
+                            )
+                        },
+                    );
+                });
+                ui.end_row();
+            }
+            let boxed = has_text_box(settings.tool_type);
+            if !(boxed || settings.tool_type == DrawingToolType::InfoLine) {
                 return;
             }
             // The swatches show the colours the chart draws with the edits so far.
@@ -87,12 +142,15 @@ impl TextTab {
             // A box switched on this frame shows its colours at once.
             shown.background = true;
             shown.border = true;
-            let boxed = shown.text_box_colors(ui.ctx());
+            let box_colors = shown.text_box_colors(ui.ctx());
             let [text_picker, background_picker, border_picker] = pickers;
 
             ui.label(l10n::text(ui.ctx(), "Text color"));
             if let Some(picked) = color_swatch(ui, text_picker, text, "drawing_props_text_color") {
-                settings.text_color = Some(picked.to_srgba_unmultiplied());
+                // Palette swatches are opaque: keep the text's opacity unless it was edited.
+                let [r, g, b, a] = picked.to_srgba_unmultiplied();
+                let a = if text_picker.custom_mode { a } else { text.a() };
+                settings.text_color = Some([r, g, b, a]);
             }
             ui.end_row();
 
@@ -113,6 +171,9 @@ impl TextTab {
             });
             ui.end_row();
 
+            if !boxed {
+                return;
+            }
             let label = ui.label(l10n::text(ui.ctx(), "Background"));
             ui.horizontal(|ui| {
                 ui.checkbox(
@@ -124,7 +185,7 @@ impl TextTab {
                     && let Some(picked) = color_swatch(
                         ui,
                         background_picker,
-                        boxed.fill,
+                        box_colors.fill,
                         "drawing_props_background",
                     )
                 {
@@ -142,7 +203,7 @@ impl TextTab {
                     && let Some(picked) = color_swatch(
                         ui,
                         border_picker,
-                        boxed.border.color,
+                        box_colors.border.color,
                         "drawing_props_border",
                     )
                 {

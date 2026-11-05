@@ -409,7 +409,7 @@ impl Chart {
             y_to_price: &|y| price_map.y_to_price(y),
             time_axis: self.horizontal_scale.is_none(),
             executions: self.feed_link.as_ref().and_then(|link| {
-                if self.replay_time().is_some() {
+                if self.replay.is_some() {
                     link.replay_footprint.as_ref()?.1.as_ref()
                 } else {
                     link.footprint.as_ref()

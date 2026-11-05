@@ -233,6 +233,12 @@ pub trait Indicator: Send {
         self.plot_style(line).visible
     }
 
+    /// The output lines the legend lists, in the order it lists them: all of them in plot order
+    /// by default. A study whose leading reading is not its first output lists that one first.
+    fn legend_lines(&self) -> Vec<usize> {
+        (0..self.line_count()).collect()
+    }
+
     /// Whether plot `line` shows its last value in a tag on the price scale while the chart
     /// shows study values. By default every plot of a study with up to four plots does and no
     /// plot of a study with more, whose values stay in the legend, so that the tags leave the
@@ -468,9 +474,10 @@ pub trait Indicator: Send {
     /// The oldest time this study reads from `request`, one of its
     /// [`data_requests`](Indicator::data_requests). A connected feed stops loading older
     /// history of that series once it holds a bar at or before the earliest such time of the
-    /// studies reading it, and loads more when that time moves earlier. `None`, the default,
-    /// and a time before the chart's first bar load the series back to that bar. Price-based
-    /// chart types such as Renko do not use the times and always load it back to that bar.
+    /// studies reading it or the feed reports its end, and loads more when that time moves
+    /// earlier. The time may lie before the chart's first bar, however few bars the chart holds.
+    /// `None`, the default, counts as the chart's first bar. Price-based chart types such as
+    /// Renko do not use the times and always load the series back to that bar.
     fn data_start(
         &self,
         request: &super::StudyDataRequest,
