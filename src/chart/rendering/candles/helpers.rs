@@ -72,26 +72,6 @@ pub fn draw_body_filled(
     painter.add(Shape::rect_filled(body_rect(x, bar_width, y), 0.0, color));
 }
 
-/// Draw hollow candle body (stroke only)
-pub fn draw_body_hollow(
-    painter: &Painter,
-    x: f32,
-    bar_width: f32,
-    y: &OhlcYCoords,
-    color: Color32,
-) {
-    let body_rect = Rect::from_min_max(
-        Pos2::new(x - bar_width / 2.0, y.body_top),
-        Pos2::new(x + bar_width / 2.0, y.body_bottom),
-    );
-    painter.add(Shape::rect_stroke(
-        body_rect,
-        0.0,
-        Stroke::new(DESIGN_TOKENS.stroke.medium, color),
-        egui::epaint::StrokeKind::Inside,
-    ));
-}
-
 /// Draw a brick/block with border (for Renko, Line Break)
 pub fn draw_brick(painter: &Painter, rect: Rect, color: Color32, corner_radius: f32) {
     painter.add(Shape::rect_filled(rect, corner_radius, color));

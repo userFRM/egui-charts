@@ -157,6 +157,21 @@ impl ChartSettingsState {
         settings.candle_colors.show_border = config.candle_border_width > 0.0;
         settings.candle_colors.show_wick = candles.wick_visible;
         settings.candle_colors.color_by_previous_close = candles.color_by_previous_close;
+        if chart.chart_type() == crate::model::ChartType::HollowCandles {
+            let style = &chart.chart_type_params().styles.hollow;
+            settings.candle_colors = super::CandleColorConfig {
+                color_by_previous_close: true,
+                show_body: style.body_visible,
+                show_border: style.border_visible,
+                show_wick: style.wick_visible,
+                body_up: style.body_up,
+                body_down: style.body_down,
+                border_up: style.border_up,
+                border_down: style.border_down,
+                wick_up: style.wick_up,
+                wick_down: style.wick_down,
+            };
+        }
         if chart.chart_type() == crate::model::ChartType::Heikin {
             let style = &chart.chart_type_params().styles.heikin;
             settings.candle_colors = super::CandleColorConfig {
@@ -418,7 +433,10 @@ impl ChartSettingsState {
         }
         chart.set_pane_axis_options(chart.main_series_pane(), axis_layout);
         let config = chart.config_mut();
-        if self.chart_type != crate::model::ChartType::Heikin {
+        if !matches!(
+            self.chart_type,
+            crate::model::ChartType::Heikin | crate::model::ChartType::HollowCandles
+        ) {
             config.bullish_color = self.candle_colors.body_up;
             config.bearish_color = self.candle_colors.body_down;
             config.bullish_border_color = Some(self.candle_colors.border_up);
@@ -591,6 +609,22 @@ impl ChartSettingsState {
             style.border_visible = colors.show_border;
             style.wick_visible = colors.show_wick;
             style.color_by_previous_close = colors.color_by_previous_close;
+            style.body_up = colors.body_up;
+            style.body_down = colors.body_down;
+            style.border_up = colors.border_up;
+            style.border_down = colors.border_down;
+            style.wick_up = colors.wick_up;
+            style.wick_down = colors.wick_down;
+            if chart.chart_type_params() != &params {
+                chart.set_chart_type_params(params);
+            }
+        } else if self.chart_type == crate::model::ChartType::HollowCandles {
+            let mut params = chart.chart_type_params().clone();
+            let style = &mut params.styles.hollow;
+            let colors = &self.candle_colors;
+            style.body_visible = colors.show_body;
+            style.border_visible = colors.show_border;
+            style.wick_visible = colors.show_wick;
             style.body_up = colors.body_up;
             style.body_down = colors.body_down;
             style.border_up = colors.border_up;
@@ -916,6 +950,133 @@ mod tests {
                     chart.set_chart_type(ChartType::Heikin);
                     assert_eq!(ChartSettingsState::from_chart(&chart).candle_colors, c);
                 }
+            }
+        }
+    }
+
+    /// Hollow candles colour by the close against the previous close, and are hollow when the
+    /// close is above the open; each component has its own switch and colours, and saved
+    /// styles and undo keep them apart from the plain candle settings.
+    #[test]
+    #[cfg(feature = "drawings")]
+    fn hollow_components_paint_and_keep_independent_saved_values() {
+        use crate::model::ChartType;
+        use crate::widget::ChartSnapshot;
+        use crate::widget::test_frames::{frame, shapes};
+        let palette = [
+            Color32::from_rgb(1, 100, 2),
+            Color32::from_rgb(101, 2, 3),
+            Color32::from_rgb(3, 4, 102),
+            Color32::from_rgb(103, 5, 104),
+            Color32::from_rgb(105, 106, 6),
+            Color32::from_rgb(7, 107, 108),
+        ];
+        // Open, high, low, close; the colour index (rising 0, falling 1) and whether the body
+        // is filled. The last two bars close against the previous close, not their open.
+        let bars = [
+            ((10.0, 18.0, 8.0, 14.0), 0, false),
+            ((13.0, 17.0, 8.5, 11.0), 1, true),
+            ((11.0, 14.0, 6.0, 12.0), 0, false),
+            ((13.0, 15.0, 10.0, 12.5), 0, true),
+            ((9.0, 13.0, 8.0, 10.0), 1, false),
+        ];
+        for theme in [Theme::light(), Theme::dark()] {
+            for flags in 0..8 {
+                let ctx = Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let mut chart = Chart::new(BarData::from_bars(
+                    bars.iter()
+                        .enumerate()
+                        .map(|(i, ((o, h, l, c), _, _))| {
+                            Bar::new(
+                                chrono::DateTime::UNIX_EPOCH + chrono::Duration::days(i as i64),
+                                *o,
+                                *h,
+                                *l,
+                                *c,
+                                0.0,
+                            )
+                        })
+                        .collect(),
+                ));
+                chart.set_chart_type(ChartType::HollowCandles);
+                chart.config_mut().show_volume = false;
+                let before = ChartSettingsState::from_chart(&chart);
+                let mut settings = before.clone();
+                let c = &mut settings.candle_colors;
+                c.show_body = flags & 1 != 0;
+                c.show_border = flags & 2 != 0;
+                c.show_wick = flags & 4 != 0;
+                [
+                    c.body_up,
+                    c.body_down,
+                    c.border_up,
+                    c.border_down,
+                    c.wick_up,
+                    c.wick_down,
+                ] = palette;
+                let c = settings.candle_colors.clone();
+                chart.begin_user_action();
+                settings.apply_to_chart(&mut chart).unwrap();
+                chart.end_user_action();
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+                let plot = chart.get_rendered_price_rect();
+                let mut bodies = Vec::new();
+                let mut wicks = Vec::new();
+                for shape in painted {
+                    match shape {
+                        Shape::Rect(r)
+                            if plot.contains(r.rect.center())
+                                && (palette[..2].contains(&r.fill)
+                                    || palette[2..4].contains(&r.stroke.color)) =>
+                        {
+                            bodies.push((r.fill, (r.stroke.width > 0.0).then_some(r.stroke.color)));
+                        }
+                        Shape::LineSegment { points, stroke }
+                            if palette[4..].contains(&stroke.color)
+                                && points[0].x == points[1].x =>
+                        {
+                            wicks.push(stroke.color)
+                        }
+                        _ => {}
+                    }
+                }
+                let mut expected_bodies = Vec::new();
+                let mut expected_wicks = Vec::new();
+                for (_, dir, filled) in bars {
+                    let fill = (c.show_body && filled).then_some(palette[dir]);
+                    let stroke = c.show_border.then_some(palette[2 + dir]);
+                    if fill.is_some() || stroke.is_some() {
+                        expected_bodies.push((fill.unwrap_or(Color32::TRANSPARENT), stroke));
+                    }
+                    if c.show_wick {
+                        expected_wicks.extend([palette[4 + dir]; 2]);
+                    }
+                }
+                assert_eq!(bodies, expected_bodies, "flags={flags}");
+                assert_eq!(wicks, expected_wicks, "flags={flags}");
+                assert_eq!(ChartSettingsState::from_chart(&chart).candle_colors, c);
+                let saved: ChartSnapshot = serde_json::from_str(
+                    &serde_json::to_string(&chart.snapshot().unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert!(chart.undo());
+                assert_eq!(
+                    ChartSettingsState::from_chart(&chart).candle_colors,
+                    before.candle_colors
+                );
+                assert!(chart.redo());
+                chart.restore(&saved).unwrap();
+                assert_eq!(ChartSettingsState::from_chart(&chart).candle_colors, c);
+                chart.set_chart_type(ChartType::Candles);
+                assert_eq!(chart.config().bullish_color, before.candle_colors.body_up);
+                assert_eq!(
+                    chart.chart_type_params().styles.candles,
+                    before.chart_type_params.as_ref().unwrap().styles.candles
+                );
+                chart.set_chart_type(ChartType::HollowCandles);
+                assert_eq!(ChartSettingsState::from_chart(&chart).candle_colors, c);
             }
         }
     }
