@@ -952,6 +952,27 @@ fn bars_key(chart: &Chart) -> BarsKey {
     )
 }
 
+/// A group name field that returns an edited name once, when it loses focus or on Enter, so
+/// nothing joins a group while typing. Escape discards the edit.
+fn group_name_edit(ui: &mut Ui, current: &str) -> Option<String> {
+    let id = ui.scope_id().with("group_name");
+    let mut name = ui
+        .data(|data| data.get_temp::<String>(id))
+        .unwrap_or_else(|| current.to_owned());
+    let response = ui.add(
+        egui::TextEdit::singleline(&mut name)
+            .id(id)
+            .desired_width(140.0),
+    );
+    if response.has_focus() {
+        ui.data_mut(|data| data.insert_temp(id, name));
+        return None;
+    }
+    ui.data_mut(|data| data.remove_temp::<String>(id));
+    (response.lost_focus() && name != current && !ui.input(|i| i.key_pressed(egui::Key::Escape)))
+        .then_some(name)
+}
+
 /// A range a chart fits once bars of its new interval replace those it held at the switch.
 #[derive(Clone, Copy)]
 struct PendingRange {
@@ -1365,7 +1386,7 @@ impl ChartLayout {
 
     /// Shows the preset and synchronizes its charts. Click or scroll a panel to activate it.
     /// Its header and corner menu offer independent symbol and interval groups; the corner menu
-    /// also offers detachment. The active border is painted
+    /// also offers detachment and the synchronization group. The active border is painted
     /// inside the chart; stacked charts have a two-point gap and side-by-side charts meet at their
     /// edge.
     /// Dragging a border resizes its neighbours and Shift also moves the borders aligned with it; a
@@ -1585,6 +1606,16 @@ impl ChartLayout {
                                     ui.close();
                                 }
                                 self.show_link_groups(ui, index);
+                                ui.label(l10n::text(ui.ctx(), "Sync group"));
+                                let group = self.groups[index].as_deref().unwrap_or_default();
+                                if let Some(name) = group_name_edit(ui, group) {
+                                    if name.trim().is_empty() {
+                                        // `set_sync_group(None)` would unlink both fields.
+                                        self.groups[index] = None;
+                                    } else {
+                                        self.set_sync_group(index, Some(name));
+                                    }
+                                }
                             });
                     }
                 },
@@ -3471,5 +3502,124 @@ mod tests {
             assert_eq!(layout.sync_group(0), Some("Desk"));
             assert_eq!(layout.link_groups(0), Some(memberships));
         }
+    }
+
+    /// One frame and each text shape it painted: text, painted rect inside its clip, centre.
+    fn frame_texts(
+        ctx: &egui::Context,
+        layout: &mut ChartLayout,
+        charts: &mut [Chart],
+        size: Vec2,
+        time: f64,
+        events: Vec<Event>,
+    ) -> Vec<(String, Rect, Pos2)> {
+        let output = ctx.run_ui(
+            RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
+                time: Some(time),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                layout.show(ui, &mut charts.iter_mut().collect::<Vec<_>>());
+            },
+        );
+        let mut texts = Vec::new();
+        for shape in &output.shapes {
+            if let egui::Shape::Text(text) = &shape.shape {
+                texts.push((
+                    text.galley.text().to_owned(),
+                    text.galley
+                        .rect
+                        .translate(text.pos.to_vec2())
+                        .intersect(shape.clip_rect),
+                    text.pos + text.galley.size() / 2.0,
+                ));
+            }
+        }
+        output.drop_without_applying_deltas();
+        texts
+    }
+
+    fn pointer_button(pos: Pos2, pressed: bool) -> Event {
+        Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        }
+    }
+
+    fn key(key: egui::Key) -> Event {
+        Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        }
+    }
+
+    fn text_center(texts: &[(String, Rect, Pos2)], label: &str) -> Pos2 {
+        texts
+            .iter()
+            .find(|(text, ..)| text == label)
+            .map(|(.., center)| *center)
+            .unwrap_or_else(|| {
+                panic!(
+                    "no {label:?} among {:?}",
+                    texts.iter().map(|t| &t.0).collect::<Vec<_>>()
+                )
+            })
+    }
+
+    /// The chart menu names the chart's synchronization group, which decides its scrolling,
+    /// crosshair, drawing, date range and replay links, and leaves its field memberships alone.
+    #[test]
+    fn chart_menu_still_assigns_the_synchronization_group() {
+        let ctx = egui::Context::default();
+        let mut layout = ChartLayout {
+            mode: ChartLayoutMode::TwoHorizontal,
+            ..Default::default()
+        };
+        let memberships = ChartLinkGroups {
+            symbol: ChartLink::Group("🔶".into()),
+            interval: ChartLink::Group("💧".into()),
+        };
+        layout.set_link_groups(0, memberships.clone(), true);
+        let mut charts = [chart(60), chart(60)];
+        let mut time = 0.0;
+        let mut frame = |layout: &mut ChartLayout, charts: &mut [Chart; 2], events| {
+            time += 0.1;
+            frame_texts(&ctx, layout, charts, vec2(640.0, 900.0), time, events)
+        };
+        frame(&mut layout, &mut charts, vec![]);
+        let corner = pos2(308.0, 12.0);
+        frame(&mut layout, &mut charts, vec![Event::PointerMoved(corner)]);
+        frame(&mut layout, &mut charts, vec![pointer_button(corner, true)]);
+        frame(
+            &mut layout,
+            &mut charts,
+            vec![pointer_button(corner, false)],
+        );
+        frame(&mut layout, &mut charts, vec![]);
+        let texts = frame(&mut layout, &mut charts, vec![]);
+        let input = text_center(&texts, "Sync group") + vec2(0.0, 22.0);
+        frame(&mut layout, &mut charts, vec![Event::PointerMoved(input)]);
+        frame(&mut layout, &mut charts, vec![pointer_button(input, true)]);
+        frame(&mut layout, &mut charts, vec![pointer_button(input, false)]);
+        frame(&mut layout, &mut charts, vec![Event::Text("Desk".into())]);
+        assert_eq!(layout.sync_group(0), None, "typing joins no group");
+        frame(&mut layout, &mut charts, vec![key(egui::Key::Enter)]);
+        assert_eq!(layout.sync_group(0), Some("Desk"));
+        assert_eq!(layout.link_groups(0).as_ref(), Some(&memberships));
+        frame(&mut layout, &mut charts, vec![pointer_button(input, true)]);
+        frame(&mut layout, &mut charts, vec![pointer_button(input, false)]);
+        for _ in 0.."Desk".len() {
+            frame(&mut layout, &mut charts, vec![key(egui::Key::Backspace)]);
+        }
+        frame(&mut layout, &mut charts, vec![key(egui::Key::Enter)]);
+        assert_eq!(layout.sync_group(0), None, "clearing returns it to unnamed");
+        assert_eq!(layout.link_groups(0), Some(memberships));
     }
 }
