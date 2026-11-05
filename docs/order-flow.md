@@ -18,7 +18,7 @@ the sample snapshot. Depth and executions have separate coverage.
 
 The source beside the running example supplies candles independently, pushes chronological
 fills through `Footprint` and `OrderFlowInput`, and reads `complete_from` and the last book.
-It uses the default footprint presentation. This is a finite integration sample; a production
+It uses the default footprint presentation with the theme's text colour. This is a finite integration sample; a production
 host owns retrieval, stream sequencing, retention and recovery. See
 [recording and replay](order-flow-replay.md#try-a-recording) for the same live sink driven by recorded events.
 
@@ -28,8 +28,11 @@ new executions with [`push`](https://userfrm.github.io/egui-charts/docs/api/egui
 volume and remain outside bid/ask delta. [`Chart::show_footprint`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.show_footprint) draws volume, delta, trade count and
 average size columns, profiles, grouped rows, imbalances, POC and value area in place of the price series. Its
 [`FootprintConfig`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/overlays/struct.FootprintConfig.html) controls the presentation: cell colour, number abbreviation and zero display,
-value-sized fonts, extreme ask/bid ratios and the pullback range. Automatic grouping affects
-display only.
+value-sized fonts, extreme ask/bid ratios, the pullback range and the summary below each bar. Automatic grouping affects
+display only. By default a bar is a ladder: sell volume left and buy volume right of a narrow candle body, each
+side shaded in four strengths by where its volume falls in that side's range. The POC row is filled, a side that
+dominates under the imbalance settings gets a strip along its outer edge, and two dotted lines mark the value area.
+`text_color` defaults to white, so set the theme's text colour on a light chart.
 
 ## Liquidity
 

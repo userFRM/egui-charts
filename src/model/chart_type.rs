@@ -594,7 +594,8 @@ pub struct ChartTypeParams {
     pub footprint_colors: [Option<egui::Color32>; 4],
     /// Footprint: instrument ticks per row; zero groups automatically with zoom.
     pub footprint_row_ticks: u32,
-    /// Footprint: outline the highest-volume row.
+    /// Footprint: outline the highest-volume row, or fill it under
+    /// [`FootprintColor::VolumeSteps`].
     pub footprint_poc: bool,
     /// Footprint: share of volume in the value area; None hides it.
     pub footprint_value_area: Option<f64>,
