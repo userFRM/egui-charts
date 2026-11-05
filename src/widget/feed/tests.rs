@@ -1205,7 +1205,8 @@ fn paged_trade_bar_cells_match_the_history_bar_they_draw_on() {
 /// Hand counts on two-trade bars: buy 1 and buy 2 give 3; sell 4 and buy 8, traded while the
 /// studies are removed, give 4 and a total of 7; sell 16 and buy 32, after undo, give 16 and 23.
 /// On one-minute bars all six fall in one bar of 23. The profile's footprint holds the same
-/// executions: volumes 3, 12 and 48, or 63 on the one-minute bar.
+/// executions: volumes 3, 12 and 48, or 63 on the one-minute bar. A spread of 2 quoted in the
+/// first bar has no execution to rebuild it from, and stays.
 #[cfg(feature = "studies")]
 #[test]
 fn restored_order_flow_studies_count_executions_traded_while_they_were_removed() {
@@ -1224,6 +1225,7 @@ fn restored_order_flow_studies_count_executions_traded_while_they_were_removed()
             max: f64::MAX,
         })));
         let profile = chart.add_indicator(Box::new(VolProfileVisible::new(24)));
+        let spread = chart.add_indicator(Box::new(OrderFlowStudy::new(OrderFlowKind::Spread)));
         let mut frames = Frames::new();
         frames.run(&mut chart);
         feed.resolve()
@@ -1243,7 +1245,9 @@ fn restored_order_flow_studies_count_executions_traded_while_they_were_removed()
         for (i, &(size, side)) in fills.iter().enumerate() {
             if i == 2 {
                 assert!(chart.user_action(|chart| {
-                    chart.remove_series(cvd) && chart.remove_series(profile)
+                    chart.remove_series(cvd)
+                        && chart.remove_series(profile)
+                        && chart.remove_series(spread)
                 }));
                 frames.run(&mut chart);
             }
@@ -1253,6 +1257,16 @@ fn restored_order_flow_studies_count_executions_traded_while_they_were_removed()
             }
             let at = start + TimeDelta::seconds(i as i64);
             sink.push_tick(Tick::new(at, 100.0, size, Some(side)));
+            if i == 0 {
+                sink.push_quote(crate::model::Level1Quote {
+                    ts: at,
+                    symbol: "A".into(),
+                    bid: 99.0,
+                    ask: 101.0,
+                    bid_size: 1.0,
+                    ask_size: 1.0,
+                });
+            }
             frames.run(&mut chart);
         }
         for _ in 0..8 {
@@ -1267,6 +1281,7 @@ fn restored_order_flow_studies_count_executions_traded_while_they_were_removed()
             .map(|bar| bar.volume())
             .collect();
         assert_eq!(volumes, want_volumes, "{interval}");
+        assert_eq!(study(spread).values().line(0)[0], 2.0, "{interval}");
     }
 }
 

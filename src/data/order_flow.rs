@@ -714,6 +714,13 @@ impl OrderFlowInput {
         self.state().trade_bars.forming = Some(open);
     }
 
+    /// Forgets the forming bar, so that [`replace_trades`](Self::replace_trades) rebuilds a source
+    /// the sink allocated to before. Sources it does not rebuild keep their values.
+    #[cfg(feature = "widget")]
+    pub(crate) fn forget_trade_bar(&self) {
+        self.state().trade_bars.forming = None;
+    }
+
     /// Expires rolling rates and movement during an idle part of a bar with stream data.
     /// A bar without that data remains missing. Hosts without a feed call this on a heartbeat.
     pub fn advance_time(&self, clock: &BarClock, now: DateTime<Utc>) {
