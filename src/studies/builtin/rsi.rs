@@ -30,9 +30,14 @@
 //!
 //! This is a **non-overlay** indicator (drawn in its own sub-pane).
 //!
+//! # RSI-based moving average
+//!
+//! [`RSI::default`] also draws a 14-bar simple average of the RSI for reading crossovers, whose
+//! type (none, SMA or EMA) and length are inputs. [`RSI::new`] starts without it.
+//!
 //! # Default colour
 //!
-//! Purple (#7E57C2), with a one-pixel line.
+//! Purple (#7E57C2), with a one-pixel line, and the average yellow (#FDD835).
 //!
 //! # Example
 //!
@@ -47,6 +52,7 @@
 //! assert!(matches!(rsi.values().to_rows()[14], IndicatorValue::Single(_)));
 //! ```
 
+use super::price_oscillator::{Mean, OscillatorAverage};
 use crate::model::Bar;
 use crate::studies::palette;
 use crate::studies::stepper::Stepper;
@@ -60,11 +66,30 @@ use egui::Color32;
 #[derive(Clone)]
 pub struct RSI {
     period: usize,
+    ma_type: MaType,
+    ma_length: usize,
     values: IndicatorValues,
-    stepper: Stepper<State>,
+    stepper: Stepper<Averaged>,
     color: Color32,
+    ma_color: Color32,
     fill_color: Color32,
     visible: bool,
+}
+
+/// The moving average of the RSI that the study draws with it.
+#[allow(clippy::upper_case_acronyms)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MaType {
+    None,
+    SMA,
+    EMA,
+}
+
+/// The RSI and the average of its values.
+#[derive(Clone, Default)]
+struct Averaged {
+    rsi: State,
+    mean: Mean,
 }
 
 #[derive(Clone)]
@@ -127,16 +152,19 @@ impl State {
 }
 
 impl RSI {
-    /// Create a new RSI indicator.
+    /// Create a new RSI indicator without an RSI-based moving average.
     ///
     /// # Arguments
     /// * `period` -- The lookback period (default convention: 14).
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
+            ma_type: MaType::None,
+            ma_length: 14,
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             color: palette::PURPLE,
+            ma_color: palette::YELLOW,
             fill_color: palette::PURPLE.gamma_multiply_u8(26),
             visible: true,
         }
@@ -149,10 +177,13 @@ impl RSI {
     }
 }
 
-/// Construct with the conventional default parameters.
+/// Construct with the conventional default parameters: a 14-bar RSI and its 14-bar SMA.
 impl Default for RSI {
     fn default() -> Self {
-        Self::new(14)
+        Self {
+            ma_type: MaType::SMA,
+            ..Self::new(14)
+        }
     }
 }
 
@@ -168,7 +199,9 @@ impl Indicator for RSI {
     }
 
     crate::studies::inputs::study_inputs!(self;
-        period: length("Period", 1, usize::MAX)
+        period: length("Period", 1, usize::MAX),
+        ma_type: choice("MA type", [MaType::None, MaType::SMA, MaType::EMA]),
+        ma_length: length("MA length", 1, usize::MAX)
     ; {});
 
     fn name(&self) -> &str {
@@ -188,10 +221,22 @@ impl Indicator for RSI {
     }
 
     fn update(&mut self, data: &[Bar], from: usize) {
-        let period = self.period;
+        let (period, ma_type, ma_length) = (self.period, self.ma_type, self.ma_length);
         self.stepper
             .run(data, from, &mut self.values, |state, bar| {
-                state.next(bar, period)
+                let value = state.rsi.next(bar, period);
+                let average = match ma_type {
+                    MaType::None => return value,
+                    MaType::SMA => OscillatorAverage::Simple,
+                    MaType::EMA => OscillatorAverage::Exponential,
+                };
+                match value {
+                    IndicatorValue::Single(rsi) => IndicatorValue::Multiple(vec![
+                        rsi,
+                        state.mean.next(average, rsi, ma_length),
+                    ]),
+                    other => other,
+                }
             });
     }
 
@@ -203,14 +248,16 @@ impl Indicator for RSI {
         &self.values
     }
 
+    /// The RSI, the average and the band between the levels.
     fn colors(&self) -> Vec<Color32> {
-        vec![self.color, self.fill_color]
+        vec![self.color, self.ma_color, self.fill_color]
     }
 
     fn set_colors(&mut self, colors: Vec<Color32>) {
         if !colors.is_empty() {
             self.color = colors[0];
-            self.fill_color = colors.get(1).copied().unwrap_or_else(|| {
+            self.ma_color = colors.get(1).copied().unwrap_or(self.ma_color);
+            self.fill_color = colors.get(2).copied().unwrap_or_else(|| {
                 Color32::from_rgba_unmultiplied(self.color.r(), self.color.g(), self.color.b(), 16)
             });
         }
@@ -223,6 +270,7 @@ impl Indicator for RSI {
             levels: vec![
                 (70.0, palette::MUTED, "Overbought"),
                 (30.0, palette::MUTED, "Oversold"),
+                (50.0, palette::MUTED, "Middle"),
             ],
             fill_between_levels: true,
         }
@@ -244,8 +292,16 @@ impl Indicator for RSI {
         Box::new(self.clone())
     }
 
+    fn line_count(&self) -> usize {
+        if self.ma_type == MaType::None { 1 } else { 2 }
+    }
+
     fn line_names(&self) -> Vec<String> {
-        vec![format!("RSI({})", self.period)]
+        let mut names = vec![format!("RSI({})", self.period)];
+        if self.ma_type != MaType::None {
+            names.push("RSI-based MA".to_owned());
+        }
+        names
     }
 }
 
@@ -300,5 +356,52 @@ mod tests {
         assert_eq!(rsi_of(&[1e-12, 2e-12, 3e-12, 4e-12], 2)[2], Some(100.0));
         assert_eq!(rsi_of(&[4e-12, 3e-12, 2e-12, 1e-12], 2)[2], Some(0.0));
         assert_eq!(rsi_of(&[5.0, 5.0, 5.0, 5.0], 2)[2..], [Some(50.0); 2]);
+    }
+
+    /// RSI(1) of 1, 2, 1, 2, 3 is missing, 100, 0, 100, 100. The two-bar SMA is their mean: 50, 50,
+    /// 100. The two-bar EMA starts from that same first mean, then adds 2/3 of each step: 50 + 2/3
+    /// * 50, then 250/3 + 2/3 * 50 / 3. The default study is a 14-bar SMA, first defined on bar 27,
+    /// the 14th of the RSI values that start on bar 14.
+    #[test]
+    fn the_average_of_the_rsi_follows_its_inputs() {
+        let bars = bars_from_closes(&[1.0, 2.0, 1.0, 2.0, 3.0]);
+        for (ma_type, want) in [
+            (1, [50.0, 50.0, 100.0]),
+            (2, [50.0, 250.0 / 3.0, 850.0 / 9.0]),
+        ] {
+            let mut study = RSI::default();
+            study
+                .set_input("period", crate::studies::InputValue::Length(1))
+                .unwrap();
+            study
+                .set_input("ma_length", crate::studies::InputValue::Length(2))
+                .unwrap();
+            study
+                .set_input("ma_type", crate::studies::InputValue::Choice(ma_type))
+                .unwrap();
+            study.calculate(&bars);
+            assert_eq!(study.values().value(0, 1), Some(100.0));
+            assert_eq!(study.plot_value(1, 1), None);
+            for (bar, want) in (2..).zip(want) {
+                let got = study.values().value(1, bar).unwrap();
+                assert!((got - want).abs() < 1e-9, "{ma_type} bar {bar}: {got}");
+            }
+        }
+
+        let added = crate::studies::IndicatorFactory::new().create("RSI");
+        assert_eq!(added.unwrap().line_count(), 2);
+        let mut study = RSI::default();
+        assert_eq!(study.line_count(), 2);
+        assert_eq!(study.line_names()[1], "RSI-based MA");
+        assert_eq!(study.plot_style(1).color, palette::YELLOW);
+        study.calculate(&bars_from_closes(
+            &(0..30).map(|i| f64::from(i % 3)).collect::<Vec<_>>(),
+        ));
+        assert_eq!(study.plot_value(1, 26), None);
+        assert!(study.plot_value(1, 27).is_some());
+        study
+            .set_input("ma_type", crate::studies::InputValue::Choice(0))
+            .unwrap();
+        assert_eq!(study.line_count(), 1);
     }
 }

@@ -657,7 +657,7 @@ mod tests {
         assert_eq!(config.height, 138.0);
         assert_eq!(
             config.zones.iter().map(|z| z.0).collect::<Vec<_>>(),
-            vec![70.0, 30.0]
+            vec![70.0, 30.0, 50.0]
         );
         let mut edited =
             crate::studies::ConfiguredStudy::new(Box::new(crate::studies::RSI::default()));
@@ -669,6 +669,7 @@ mod tests {
         let mut settings: crate::studies::StudySettings = serde_json::from_value(settings).unwrap();
         settings.levels[0].pattern = crate::model::LineStyle::LargeDashed;
         settings.levels[1].visible = false;
+        settings.levels[2].visible = false;
         settings.level_fill_color = Color32::from_rgba_unmultiplied(1, 2, 3, 40);
         edited.apply_settings(&[], settings).unwrap();
         let bare = crate::studies::RSI::default();
@@ -680,7 +681,7 @@ mod tests {
                 config,
                 &bare as &dyn Indicator,
                 [(30.0, 70.0), (30.0, 70.0)],
-                [&[30.0, 70.0][..], &[30.0, 70.0]],
+                [&[30.0, 50.0, 70.0][..], &[30.0, 50.0, 70.0]],
                 crate::studies::palette::GRAY,
                 4.0,
                 Color32::from_rgba_unmultiplied(126, 87, 194, 26),

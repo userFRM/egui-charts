@@ -199,6 +199,22 @@ impl StudyTemplate {
                         .push((id.to_owned(), InputValue::Toggle(false)));
                 }
             }
+            // An RSI drew no average and no middle line before it opened with both; the hidden
+            // level keeps the styles saved for the other two.
+            "RSI" if !has("ma_type") => {
+                template
+                    .inputs
+                    .push(("ma_type".to_owned(), InputValue::Choice(0)));
+                if template.settings.levels.len() == 2 {
+                    template.settings.levels.push(crate::studies::LevelStyle {
+                        value: None,
+                        color: crate::studies::palette::MUTED,
+                        pattern: crate::model::LineStyle::Dashed,
+                        width: 1.0,
+                        visible: false,
+                    });
+                }
+            }
             // Profile endpoints were Unix milliseconds before they read as UTC dates and times.
             "Vol Profile FR" | "Vol Profile Anchored"
                 if self.inputs.iter().any(|(id, value)| {
@@ -546,6 +562,29 @@ mod tests {
 
     /// Templates and layouts saved before the channel studies' inputs changed load and draw the
     /// lines they drew.
+    #[test]
+    fn saved_studies_keep_the_plots_they_had_before_their_defaults_gained_more() {
+        let mut rsi = ConfiguredStudy::new(Box::new(RSI::new(9)));
+        let mut settings = rsi.settings();
+        settings.levels[0].value = Some(80.0);
+        rsi.apply_settings(&[], settings).unwrap();
+        let mut saved = StudyTemplate::from_study(&rsi);
+        saved.inputs.retain(|(id, _)| !id.starts_with("ma_"));
+        saved.settings.levels.truncate(2);
+        let restored = saved.create().unwrap();
+        assert_eq!(restored.line_count(), 1);
+        assert_eq!(
+            restored
+                .pane()
+                .levels
+                .iter()
+                .map(|l| l.0)
+                .collect::<Vec<_>>(),
+            [80.0, 30.0, 50.0]
+        );
+        assert!(!restored.settings().levels[2].visible);
+    }
+
     #[test]
     fn templates_saved_before_the_channel_inputs_changed_keep_their_lines() {
         use crate::studies::{IndicatorValue, StudySource};
