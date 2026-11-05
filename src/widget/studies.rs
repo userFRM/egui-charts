@@ -216,7 +216,8 @@ impl Chart {
     /// [`remove_oldest_bars`](Self::remove_oldest_bars) evicts the oldest bars, it keeps its
     /// values on the bars that remain until its next full recompute, with none for the bars added
     /// since, unless it draws candles, zones, markers, labels, projections, provisional segments
-    /// or drawings; so it does when its order-flow input drops its oldest bars. On price-based types these remain the source-bar results;
+    /// or drawings; so it does when its order-flow input drops its oldest bars, or when live bars
+    /// change only the last bar of a history it reads. On price-based types these remain the source-bar results;
     /// [`Self::study_values_at`] returns the displayed element results.
     pub fn indicators(&self) -> impl Iterator<Item = (SeriesId, &dyn Indicator)> {
         let studies = self.studies.indicators().iter().map(|study| study.as_ref());
@@ -241,9 +242,9 @@ impl Chart {
     /// is earliest. Its next full recompute then waits, from the end of this one,
     /// the longer of a quarter second and four times what this one took. Until its turn, a
     /// study whose change starts at the first bar has no values, since its values belong to
-    /// other bars. A study whose values still hold, after an eviction or a drop of its
-    /// order-flow input's oldest bars, keeps them and waits for its `next_refresh` like a tail
-    /// update instead. Returns how long until the next waiting study
+    /// other bars. A study whose values still hold, after an eviction, a drop of its order-flow
+    /// input's oldest bars or a live bar of a history it reads, keeps them and waits for its
+    /// `next_refresh` like a tail update instead. Returns how long until the next waiting study
     /// is due, zero if one is due now.
     pub(super) fn refresh_studies(&mut self, now: f64) -> Option<f64> {
         let instrument = self.instrument().cloned();
