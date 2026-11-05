@@ -929,6 +929,9 @@ pub struct ChartLayout {
     /// The chart slot Alt+Enter shows alone in place of the preset.
     maximized: Option<usize>,
     focus_active: bool,
+    /// The slot whose corner menu is open. It stays shown when a click selects another chart, so
+    /// a name being edited in it can still be committed.
+    corner_menu: Option<usize>,
     groups: [Option<String>; 16],
     links: LinkState,
     detached: [bool; 16],
@@ -1219,14 +1222,14 @@ impl ChartLayout {
                 };
                 let menu = ui.menu_button(caption, |ui| {
                     ui.label(&label);
-                    if ui
+                    let unlink = ui
                         .selectable_label(
                             *field == ChartLink::Unlinked
                                 || *field == ChartLink::Layout && !enabled,
                             l10n::text(ui.ctx(), "Unlinked"),
                         )
-                        .clicked()
-                    {
+                        .clicked();
+                    if unlink {
                         *field = ChartLink::Unlinked;
                         ui.close();
                     }
@@ -1265,11 +1268,14 @@ impl ChartLayout {
                     }
                     if self.text_sync_groups {
                         ui.separator();
-                        let mut name = match field {
-                            ChartLink::Group(name) => name.clone(),
-                            _ => String::new(),
+                        let name = match field {
+                            ChartLink::Group(name) => name.as_str(),
+                            _ => "",
                         };
-                        if ui.text_edit_singleline(&mut name).changed() {
+                        // The click on "Unlinked" also ends the edit; the click wins.
+                        if let Some(name) = group_name_edit(ui, name)
+                            && !unlink
+                        {
                             *field = if name.trim().is_empty() {
                                 ChartLink::Unlinked
                             } else {
@@ -1576,14 +1582,15 @@ impl ChartLayout {
                             },
                         );
                     }
-                    if index == self.active
-                        && (ui.rect_contains_pointer(rect)
-                            || egui::Popup::is_any_open(ui.ctx())
-                            || total > 1 && rect.width() < LINK_CONTROLS_MIN_WIDTH)
-                        && charts[index]
-                            .pane_layout
-                            .maximized
-                            .is_none_or(|pane| pane == super::PaneId::MAIN)
+                    if self.corner_menu == Some(index)
+                        || index == self.active
+                            && (ui.rect_contains_pointer(rect)
+                                || egui::Popup::is_any_open(ui.ctx())
+                                || total > 1 && rect.width() < LINK_CONTROLS_MIN_WIDTH)
+                            && charts[index]
+                                .pane_layout
+                                .maximized
+                                .is_none_or(|pane| pane == super::PaneId::MAIN)
                     {
                         let button = ui.put(
                             Rect::from_min_size(
@@ -1598,7 +1605,7 @@ impl ChartLayout {
                             ),
                             egui::Button::new("…").frame(false),
                         );
-                        egui::Popup::menu(&button)
+                        let menu = egui::Popup::menu(&button)
                             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                             .show(|ui| {
                                 if ui.button(l10n::text(ui.ctx(), "Detach chart")).clicked() {
@@ -1617,6 +1624,7 @@ impl ChartLayout {
                                     }
                                 }
                             });
+                        self.corner_menu = menu.map(|_| index);
                     }
                 },
             );
@@ -3621,5 +3629,87 @@ mod tests {
         frame(&mut layout, &mut charts, vec![key(egui::Key::Enter)]);
         assert_eq!(layout.sync_group(0), None, "clearing returns it to unnamed");
         assert_eq!(layout.link_groups(0), Some(memberships));
+    }
+
+    /// Naming a group by typing is one membership edit, however it ends: Enter and a click on
+    /// another chart, which selects it, commit it as one undo step, Escape discards it.
+    #[test]
+    fn typing_a_group_name_is_one_undo_step() {
+        let outside = pos2(500.0, 500.0);
+        for (commit, committed) in [
+            (vec![key(egui::Key::Enter)], true),
+            (
+                vec![
+                    pointer_button(outside, true),
+                    pointer_button(outside, false),
+                ],
+                true,
+            ),
+            (vec![key(egui::Key::Escape)], false),
+        ] {
+            let ctx = egui::Context::default();
+            let mut layout = ChartLayout {
+                mode: ChartLayoutMode::TwoHorizontal,
+                text_sync_groups: true,
+                ..Default::default()
+            };
+            let mut charts = [chart(60), chart(60)];
+            let mut time = 0.0;
+            let mut frame = |layout: &mut ChartLayout, charts: &mut [Chart; 2], events| {
+                time += 0.1;
+                frame_texts(&ctx, layout, charts, vec2(640.0, 900.0), time, events)
+            };
+            frame(&mut layout, &mut charts, vec![]);
+            let corner = pos2(308.0, 12.0);
+            frame(&mut layout, &mut charts, vec![Event::PointerMoved(corner)]);
+            frame(&mut layout, &mut charts, vec![pointer_button(corner, true)]);
+            frame(
+                &mut layout,
+                &mut charts,
+                vec![pointer_button(corner, false)],
+            );
+            frame(&mut layout, &mut charts, vec![]);
+            let texts = frame(&mut layout, &mut charts, vec![]);
+            let picker = text_center(&texts, "Symbol group  ○");
+            frame(&mut layout, &mut charts, vec![Event::PointerMoved(picker)]);
+            frame(&mut layout, &mut charts, vec![pointer_button(picker, true)]);
+            frame(
+                &mut layout,
+                &mut charts,
+                vec![pointer_button(picker, false)],
+            );
+            frame(&mut layout, &mut charts, vec![]);
+            let texts = frame(&mut layout, &mut charts, vec![]);
+            let unlinked = text_center(&texts, "Unlinked");
+            let follow = text_center(&texts, "Follow layout setting");
+            // The name field sits between the two rows, each one separator away.
+            let field = pos2(unlinked.x, (unlinked.y + follow.y) / 2.0);
+            frame(&mut layout, &mut charts, vec![Event::PointerMoved(field)]);
+            frame(&mut layout, &mut charts, vec![pointer_button(field, true)]);
+            frame(&mut layout, &mut charts, vec![pointer_button(field, false)]);
+            for letter in ["D", "e", "s", "k"] {
+                frame(&mut layout, &mut charts, vec![Event::Text(letter.into())]);
+                assert_eq!(
+                    layout.link_groups(0).unwrap().symbol,
+                    ChartLink::Layout,
+                    "typing joins no group"
+                );
+            }
+            frame(&mut layout, &mut charts, commit);
+            frame(&mut layout, &mut charts, vec![]);
+            frame(&mut layout, &mut charts, vec![]);
+            let symbol = || layout.link_groups(0).unwrap().symbol;
+            if committed {
+                assert_eq!(symbol(), ChartLink::Group("Desk".into()));
+                let active = layout.active();
+                assert!(charts[active].undo());
+                assert_eq!(symbol(), ChartLink::Layout, "one name, one undo step");
+                assert!(charts[active].redo());
+                assert_eq!(symbol(), ChartLink::Group("Desk".into()));
+            } else {
+                assert_eq!(symbol(), ChartLink::Layout);
+                assert!(!charts[0].can_undo(), "a discarded name records nothing");
+            }
+        }
     }
 }
