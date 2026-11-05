@@ -36,11 +36,12 @@ use crate::model::{
 /// lookbacks and preceding source values. For `OncePerBarClose`, the shortest interval uses its
 /// newest completed bar; other intervals keep their live observations. Each completed occurrence
 /// is evaluated once after compatible observations arrive. The shortest interval supplies the
-/// occurrence bar. Other observations must cover its open: a longer bar closes together with the
-/// last shorter bar of its period, so that bar joins it even when the next longer bar has arrived,
-/// a session has ended or trading has paused. For that, each other interval also keeps the bar
-/// before its newest. Observations from later windows cannot satisfy an earlier event, nor can
-/// expired observations satisfy a newer one. Each direct update evaluates the latest overlapping
+/// occurrence bar. Other observations must cover its open, wherever inside its period the feed
+/// stamped their bar. A longer bar closes together with the last shorter bar of its period, so
+/// that bar joins it even when the next longer bar has arrived, a session has ended or trading
+/// has paused. For that, each other interval also keeps the bar before its newest. Observations
+/// from later windows cannot satisfy an earlier event, nor can expired observations satisfy a
+/// newer one. Each direct update evaluates the latest overlapping
 /// observations; `AlertEvaluator` gathers a complete poll before evaluating. Missing or non-finite
 /// sources make their conditions false. Price and volume come from each interval's own bars.
 /// Messages retain the first condition's interval and source values. Hosts feeding the engine
@@ -780,13 +781,7 @@ fn observe(
             earlier,
         }
     };
-    let event = |at: usize| {
-        if closed {
-            clock.bar_open(bars[at].time)
-        } else {
-            bars[at].time
-        }
-    };
+    let event = |at: usize| clock.bar_open(bars[at].time);
     let kept = run
         .intervals
         .remove(&timeframe)
@@ -2135,5 +2130,40 @@ mod tests {
             fired.extend(host.fired());
         }
         assert_eq!(fired, [101.0], "the 00:00 bar's last close, at 00:05");
+    }
+
+    #[test]
+    fn daily_bar_stamped_inside_its_day_joins_an_earlier_intraday_bar() {
+        // Daily bars stamped at noon UTC, inside their calendar day as history pages allow.
+        let host = Host::new(vec![
+            serde_json::from_value(serde_json::json!({
+                "symbol":"SYM", "timeframe":"Min5", "condition":{"Above":50.0},
+                "frequency":"OncePerBar", "additional_timeframes":["Day1"],
+                "additional_conditions":[{"source":"Price","condition":{"Above":50.0}}]
+            }))
+            .unwrap(),
+        ]);
+        host.events();
+        let at = |text: &str| text.parse::<DateTime<Utc>>().unwrap();
+        let bar = |text: &str, close: f64| Bar::new(at(text), close, close, close, close, 1.0);
+        let daily = [
+            bar("2024-03-11T12:00:00Z", 90.0),
+            bar("2024-03-12T12:00:00Z", 100.0),
+        ];
+        let five = [
+            bar("2024-03-12T09:00:00Z", 99.0),
+            bar("2024-03-12T09:05:00Z", 100.0),
+        ];
+        host.engine.update_matching(
+            None,
+            "SYM",
+            &[
+                (&BarClock::new(Timeframe::Day1), &daily[..]),
+                (&BarClock::new(Timeframe::Min5), &five[..]),
+            ],
+            at("2024-03-12T09:07:00Z"),
+            |_, _, _| None,
+        );
+        assert_eq!(host.fired(), [100.0], "the bar of 2024-03-12 covers 09:05");
     }
 }
