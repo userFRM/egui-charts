@@ -123,6 +123,8 @@ pub struct AlertTrigger {
     pub price: Option<f64>,
     /// The alert's message with its placeholders filled in, empty if there is none.
     pub message: String,
+    /// The trigger fell outside the alert's notification schedule: logged without a popup.
+    pub silent: bool,
 }
 
 /// Reply key of the inline draft's save, apart from the stream generations and other replies.
@@ -578,9 +580,27 @@ impl AlertsPanel {
                         time,
                         price,
                         message,
+                        silent: false,
                     },
                     toasts,
                 );
+            }
+            AlertEvent::SilentTriggered {
+                id,
+                symbol,
+                time,
+                price,
+                message,
+            } => {
+                let price = price.filter(|p| p.is_finite());
+                self.log_trigger(AlertTrigger {
+                    id,
+                    symbol,
+                    time,
+                    price,
+                    message,
+                    silent: true,
+                });
             }
             AlertEvent::Triggered { id, time, price } => {
                 let symbol = self
@@ -597,6 +617,7 @@ impl AlertsPanel {
                         time,
                         price,
                         message: String::new(),
+                        silent: false,
                     },
                     toasts,
                 );
@@ -628,17 +649,27 @@ impl AlertsPanel {
                 },
             )],
         );
-        toasts.add(
-            Toast::info(if message.is_empty() {
-                title
-            } else {
-                format!("{title}\n{message}")
-            })
-            .duration(self.notification_seconds),
-        );
-        self.sound = self.sound_choice.clone();
-        let extra = toasts.len().saturating_sub(5);
-        toasts.toasts_mut().drain(..extra);
+        // A firing of an alert removed meanwhile keeps the default delivery.
+        let delivery = self
+            .alerts
+            .iter()
+            .find(|a| a.id.as_ref() == Some(id))
+            .map(|a| &a.delivery);
+        if delivery.is_none_or(|d| d.popup) {
+            toasts.add(
+                Toast::info(if message.is_empty() {
+                    title
+                } else {
+                    format!("{title}\n{message}")
+                })
+                .duration(self.notification_seconds),
+            );
+            let extra = toasts.len().saturating_sub(5);
+            toasts.toasts_mut().drain(..extra);
+        }
+        if delivery.is_none_or(|d| d.sound) {
+            self.sound = self.sound_choice.clone();
+        }
         if let Some(alert) = self
             .alerts
             .iter_mut()
@@ -651,6 +682,10 @@ impl AlertsPanel {
             );
         }
         trigger.price = trigger.price.filter(|p| p.is_finite());
+        self.log_trigger(trigger);
+    }
+
+    fn log_trigger(&mut self, trigger: AlertTrigger) {
         self.log.push_back(trigger);
         if self.log.len() > 10_000 {
             self.log.pop_front();
@@ -659,16 +694,17 @@ impl AlertsPanel {
 
     /// Export the retained trigger log. Text fields are quoted and embedded quotes doubled.
     pub fn log_csv(&self) -> String {
-        let mut csv = String::from("id,symbol,time,price,message\r\n");
+        let mut csv = String::from("id,symbol,time,price,message,silent\r\n");
         for trigger in &self.log {
             let id = trigger.id.0.replace('"', "\"\"");
             let symbol = trigger.symbol.replace('"', "\"\"");
             let price = trigger.price.map(|p| p.to_string()).unwrap_or_default();
             let message = trigger.message.replace('"', "\"\"");
             csv.push_str(&format!(
-                "\"{id}\",\"{symbol}\",{},{},\"{message}\"\r\n",
+                "\"{id}\",\"{symbol}\",{},{},\"{message}\",{}\r\n",
                 trigger.time.to_rfc3339(),
-                price
+                price,
+                trigger.silent
             ));
         }
         csv
@@ -842,9 +878,14 @@ impl AlertsPanel {
                 .show(ui, |ui| {
                     for trigger in self.log.iter().rev() {
                         ui.label(format!(
-                            "{} · {}",
+                            "{} · {}{}",
                             trigger.symbol,
-                            trigger.time.format("%Y-%m-%d %H:%M:%S UTC")
+                            trigger.time.format("%Y-%m-%d %H:%M:%S UTC"),
+                            if trigger.silent {
+                                format!(" · {}", l10n::text(ui.ctx(), "Silent"))
+                            } else {
+                                String::new()
+                            }
                         ));
                         if let Some(price) = trigger.price {
                             ui.label(l10n::text(ui.ctx(), price.to_string()));
@@ -1084,7 +1125,7 @@ fn schedule_tooltip(ui: &mut Ui, schedule: &crate::model::NotificationSchedule) 
             window.end.format("%H:%M")
         );
         ui.label(range);
-        if window.end < window.start {
+        if window.end <= window.start {
             ui.label(l10n::text(ui.ctx(), "Ends on the following day"));
         }
     }
@@ -1150,7 +1191,7 @@ mod tests {
         assert_eq!(panel.log().len(), 1);
         assert_eq!(
             panel.log_csv(),
-            "id,symbol,time,price,message\r\n\"host,\"\"1\",\"S\"\"IM\",2026-10-23T12:00:00+00:00,12.5,\"\"\r\n"
+            "id,symbol,time,price,message,silent\r\n\"host,\"\"1\",\"S\"\"IM\",2026-10-23T12:00:00+00:00,12.5,\"\",false\r\n"
         );
         alert.status = AlertStatus::Disabled;
         events.push(AlertEvent::Upsert(Box::new(alert.clone())));
@@ -1231,9 +1272,26 @@ mod tests {
         assert!(
             panel
                 .log_csv()
-                .ends_with(",123,\"AAPL closed at \"\"123\"\"\"\r\n")
+                .ends_with(",123,\"AAPL closed at \"\"123\"\"\",false\r\n")
         );
         assert_eq!(panel.take_sound(), Some("Bell".into()));
+        assert_eq!(panel.take_sound(), None);
+        // A silent trigger is logged and marked, without a popup or a sound.
+        let popups = toasts.toasts().len();
+        panel.apply_event(
+            &egui::Context::default(),
+            AlertEvent::SilentTriggered {
+                id: AlertId("watchlist".into()),
+                symbol: "AAPL".into(),
+                time: Utc::now(),
+                price: Some(124.0),
+                message: String::new(),
+            },
+            &mut toasts,
+        );
+        assert!(panel.log().back().unwrap().silent);
+        assert!(panel.log_csv().ends_with(",124,\"\",true\r\n"));
+        assert_eq!(toasts.toasts().len(), popups);
         assert_eq!(panel.take_sound(), None);
         drop(panel);
         assert!(!renewed.is_active());
@@ -1430,6 +1488,37 @@ mod tests {
             // Save and restore the host's record, with no transient UI state to retain.
             let restored: Alert = serde_json::from_value(saved()).unwrap();
             assert_eq!(serde_json::to_value(restored).unwrap(), saved());
+        }
+    }
+
+    #[test]
+    fn a_firing_is_logged_and_shown_only_on_the_channels_its_alert_keeps() {
+        let host = Arc::new(Host::default());
+        let mut panel = AlertsPanel::default();
+        panel.set_service(host.clone());
+        panel.set_sound(Some("Bell".into()));
+        let events = host.events.lock().unwrap().clone().unwrap();
+        let ctx = egui::Context::default();
+        for (popup, sound) in [(true, true), (false, true), (true, false)] {
+            let mut alert = Alert::new("SYM", AlertCondition::Above(1.0));
+            alert.id = Some(AlertId("1".into()));
+            alert.delivery.popup = popup;
+            alert.delivery.sound = sound;
+            let logged = panel.log().len();
+            let mut toasts = Toasts::new();
+            events.push(AlertEvent::Upsert(Box::new(alert.clone())));
+            events.push(AlertEvent::Triggered {
+                id: alert.id.clone().unwrap(),
+                time: "2026-10-23T12:00:00Z".parse().unwrap(),
+                price: None,
+            });
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                panel.poll(ui.ctx(), &mut toasts)
+            })
+            .drop_without_applying_deltas();
+            assert_eq!(panel.log().len(), logged + 1);
+            assert_eq!(toasts.len(), usize::from(popup));
+            assert_eq!(panel.take_sound().is_some(), sound);
         }
     }
 
