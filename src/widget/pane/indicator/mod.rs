@@ -430,6 +430,9 @@ impl IndicatorPane {
                 mapping: mapping.clone(),
                 bars,
                 visible: displayed_range.clone(),
+                custom: primitives
+                    .iter()
+                    .find_map(|item| item.custom_view(bars, &mapping)),
             });
         let crosshair = hover.map(|(mut pos, options)| {
             if let Some(index) = self.bar_index {
