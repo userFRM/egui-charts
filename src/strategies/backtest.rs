@@ -101,6 +101,8 @@ pub struct BacktestSettings {
     pub fill_on_close: bool,
     /// Further price points a new order waits before it can fill, modelling execution latency.
     /// Zero fills at the next price point. Delayed orders cannot fill on the closing tick.
+    /// Requesting a working order again with the same quantity, kind and prices leaves it as it
+    /// is, its delay included; a request that changes any of them restarts the delay.
     pub order_delay: u32,
     /// Decide again after every fill, at its execution price, without exposing future bars.
     pub recalculate_after_fills: bool,
@@ -302,7 +304,8 @@ pub trait Strategy {
 /// and cancels working orders by id.
 ///
 /// An order placed with the id of a working order replaces it, keeping its original place
-/// among orders reached at the same point. Working orders stay until they fill or are cancelled. A
+/// among orders reached at the same point; an identical request leaves the working order as it
+/// is. Working orders stay until they fill or are cancelled. A
 /// quantity must be positive and finite and a price finite; an order with any other is ignored.
 pub struct StrategyContext<'a> {
     bars: &'a [Bar],
@@ -438,12 +441,16 @@ impl StrategyContext<'_> {
             kind,
             deferred: (self.after_fill || self.forming).then_some(self.tick),
             delay: self.order_delay,
+            triggered: None,
         };
         match self
             .orders
             .iter_mut()
             .find(|working| working.id == order.id)
         {
+            Some(working)
+                if working.quantity == order.quantity
+                    && (working.kind == order.kind || working.triggered == Some(order.kind)) => {}
             Some(working) => *working = order,
             None => self.orders.push(order),
         }
@@ -461,6 +468,8 @@ struct Working {
     deferred: Option<u64>,
     /// Price points still to pass before the order can fill.
     delay: u32,
+    /// The stop-limit request this order came from, once its stop has triggered.
+    triggered: Option<Kind>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1174,6 +1183,7 @@ impl<'a> Run<'a> {
                     ),
                     deferred: order.deferred,
                     delay: 0,
+                    triggered: None,
                 };
                 return self.fill_price(&exit, start, end);
             }
@@ -1221,6 +1231,7 @@ impl<'a> Run<'a> {
                 kind: order.kind,
                 deferred: None,
                 delay: 0,
+                triggered: None,
             };
             self.fill_price(&next, end, end)
         } else {
@@ -1338,6 +1349,7 @@ impl<'a> Run<'a> {
                         kind: Kind::Exit(None, None, exit_side(self.position())),
                         deferred: None,
                         delay: 0,
+                        triggered: None,
                     },
                     price,
                     true,
@@ -1364,6 +1376,7 @@ impl<'a> Run<'a> {
             }
             start = price;
             if let Kind::Entry(side, OrderType::StopLimit { limit, .. }) = self.orders[index].kind {
+                self.orders[index].triggered = Some(self.orders[index].kind);
                 self.orders[index].kind = Kind::Entry(side, OrderType::Limit(limit));
                 self.orders[index].deferred = None;
                 continue;
@@ -1896,6 +1909,98 @@ mod tests {
             let live = engine.report().unwrap();
             assert_eq!(live.trades.first().map(|t| t.entry_price), Some(entry));
             assert_eq!(live.equity.last().map(|(_, value)| *value), Some(equity));
+        }
+    }
+
+    #[test]
+    fn refreshing_a_working_order_keeps_it_working_after_its_delay() {
+        fn stop_105(_: usize, context: &mut StrategyContext<'_>) {
+            context.entry("A", OrderSide::Buy, 1.0, OrderType::Stop(105.0));
+        }
+        fn stop_103(_: usize, context: &mut StrategyContext<'_>) {
+            context.entry("A", OrderSide::Buy, 1.0, OrderType::Stop(103.0));
+        }
+        fn moving_stop(bar: usize, context: &mut StrategyContext<'_>) {
+            let stop = 105.0 + bar as f64 / 100.0;
+            context.entry("A", OrderSide::Buy, 1.0, OrderType::Stop(stop));
+        }
+        fn stop_limit(_: usize, context: &mut StrategyContext<'_>) {
+            let (stop, limit) = (105.0, 104.0);
+            let order = OrderType::StopLimit { stop, limit };
+            context.entry("A", OrderSide::Buy, 1.0, order);
+        }
+        let flat = |at: i64| Bar::new(hour(at), 100.0, 100.0, 100.0, 100.0, 0.0);
+        let gap = || {
+            vec![
+                flat(0),
+                flat(1),
+                flat(2),
+                Bar::new(hour(3), 107.0, 108.0, 106.0, 107.0, 0.0),
+            ]
+        };
+        let mut channel = crate::strategies::StrategyFactory::new()
+            .create("Channel Breakout")
+            .unwrap();
+        channel
+            .set_input("length", crate::studies::InputValue::Length(2))
+            .unwrap();
+        for (strategy, delay, history, bars, expected) in [
+            // First requested at the first close, the stop has passed its four points by the
+            // second close; the last bar opens through it at 107.
+            (
+                &mut Script(stop_105) as &mut dyn Strategy,
+                4,
+                false,
+                gap(),
+                Some((hour(3), 107.0)),
+            ),
+            // First requested at the first open, the stop has passed its one point long before
+            // the second bar rises from 99 through 103.
+            (
+                &mut Script(stop_103),
+                1,
+                true,
+                vec![flat(0), Bar::new(hour(1), 100.0, 106.0, 99.0, 105.0, 0.0)],
+                Some((hour(1), 103.0)),
+            ),
+            // The built-in breakout requests the same stops at the two-bar high and low, 101
+            // and 99, at every close from the second. They pass their four points in the third
+            // bar, and the fourth rises from 100.5 to 101 before it falls to 99.
+            (
+                channel.as_mut(),
+                4,
+                false,
+                (0..4)
+                    .map(|at| Bar::new(hour(at), 100.5, 101.0, 99.0, 100.5, 0.0))
+                    .collect(),
+                Some((hour(3), 101.0)),
+            ),
+            // A stop that changes at every close restarts its delay: requested at the third
+            // close, it spends all four points of the last bar waiting.
+            (&mut Script(moving_stop), 4, false, gap(), None),
+            // Triggered at 105 in the second bar, which closes above the limit. Requested again,
+            // the order stays triggered and fills as the third bar, below the stop, reaches 104.
+            (
+                &mut Script(stop_limit),
+                0,
+                false,
+                vec![
+                    flat(0),
+                    Bar::new(hour(1), 100.0, 106.0, 100.0, 104.5, 0.0),
+                    Bar::new(hour(2), 104.5, 104.5, 103.0, 104.0, 0.0),
+                ],
+                Some((hour(2), 104.0)),
+            ),
+        ] {
+            let mut engine = Backtest::new("Delay", "TEST", Timeframe::Hour1, 1000.0);
+            engine.settings.order_delay = delay;
+            engine.settings.recalculate_on_history = history;
+            let report = engine.run(strategy, &bars, &[]);
+            let observed = report
+                .trades
+                .first()
+                .map(|trade| (trade.entry_time, trade.entry_price));
+            assert_eq!(observed, expected);
         }
     }
 
@@ -2828,9 +2933,11 @@ mod tests {
                     recalculate_on_history: true,
                     ..terms.clone()
                 },
-                vec![(100.0, 100.0, 100.0, 100.0), (100.0, 110.0, 90.0, 105.0)],
-                vec![trade(Buy, 2.0, 1, 90.0, None, "A")],
-                vec![1000.0, 1000.0, 1030.0],
+                // Requested at the first open and again at each later decision of that bar, it
+                // passes the two extremes and fills at the close.
+                vec![(100.0, 102.0, 100.0, 101.0), (100.0, 110.0, 90.0, 105.0)],
+                vec![trade(Buy, 2.0, 0, 101.0, None, "A")],
+                vec![1000.0, 1000.0, 1008.0],
                 0,
             ),
             (

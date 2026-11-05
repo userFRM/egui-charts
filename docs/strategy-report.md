@@ -94,7 +94,9 @@ leaving equity 500 before exit costs, even if the bar later recovers.
 the price trades through the limit by one [`price_increment`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.price_increment). They then fill at the limit, or at
 the better price of a gap beyond that threshold. [`order_delay`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.order_delay) holds a new order back for that
 many further price points, so market orders placed at a close fill at the next bar's open with
-zero, its first extreme with one and its second extreme with two.
+zero, its first extreme with one and its second extreme with two. Requesting a working order again
+with the same quantity, kind and prices leaves it as it is, its delay included; a request that
+changes any of them restarts the delay.
 
 [`recalculate_on_history`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.recalculate_on_history) replays each bar as its open, two extremes and close, or as those four
 points of each finer bar, and decides at each with a candle holding only the prices reached so far.
