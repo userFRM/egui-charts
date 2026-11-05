@@ -987,4 +987,4 @@ Terminal,Watchlists and screeners,Watchlist panel in the right toolbar,incomplet
 Studies,Strategy tester,Live strategy updates,incomplete,library,src/strategies/live.rs;src/strategies/backtest.rs;src/strategies/mod.rs,
 Terminal,Alerts,Strategy order fill alerts,incomplete,library,src/model/alert.rs;src/services/alerts.rs;src/services/alert_engine.rs;src/strategies/live.rs;examples/demo/strategy_live.rs,
 Builder API,Builder integration,Responsive landing chart sample,incomplete,library,examples/demo/landing.rs;docs/site/src/components/LiveChart.astro;docs/site/src/styles/custom.css,
-Order flow,Order flow,TPO level captions and price readouts at the plot edge,incomplete,library,src/chart/rendering/candles/tpo.rs,
+Order flow,Order flow,TPO level captions and price readouts at the plot edge,incomplete,library,src/chart/rendering/candles/tpo.rs;src/model/tpo.rs;src/model/chart_type.rs;src/ui/dialogs/series_settings/tabs/symbol.rs;src/studies/builtin/time_price_opportunity.rs,
