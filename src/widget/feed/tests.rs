@@ -1076,6 +1076,14 @@ fn footprint_trade_intervals_follow_pages_streams_and_interval_changes() {
 fn paged_trade_bar_cells_match_the_history_bar_they_draw_on() {
     use crate::model::OrderSide::{Buy, Sell};
     type Cells = Option<(f64, f64)>;
+    type Row<'a> = (
+        &'a str,
+        &'a [(i64, f64, f64, crate::model::OrderSide)],
+        usize,
+        bool,
+        bool,
+        [Cells; 3],
+    );
     let tape_2t = [
         (0, 100.0, 1.0, Buy),
         (1, 101.0, 2.0, Sell),
@@ -1084,7 +1092,7 @@ fn paged_trade_bar_cells_match_the_history_bar_they_draw_on() {
         (3, 104.0, 5.0, Buy),
         (4, 105.0, 6.0, Sell),
     ];
-    let rows: [(&str, &[_], usize, bool, bool, [Cells; 3]); 7] = [
+    let rows: [Row; 7] = [
         (
             "5v",
             &[
