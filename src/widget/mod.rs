@@ -149,6 +149,9 @@ mod volume;
 pub use layout::{
     ChartLayout, ChartLayoutMode, ChartLayoutSizing, ChartLink, ChartLinkGroups, ChartSyncOptions,
 };
+#[cfg(feature = "studies")]
+#[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
+pub use layout::{LayoutCopy, LayoutCopyIssue, LayoutCopyIssueKind};
 pub(crate) mod sync;
 mod time_scale;
 use feed::FeedLink;
