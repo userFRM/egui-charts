@@ -63,24 +63,36 @@ impl SymbolTab {
                     Self::marker_radius_row(ui, &mut styles.area.marker_radius);
                 }
                 ChartType::HlcArea => {
-                    let label = ui.label(l10n::text(ui.ctx(), "Fill opacity"));
-                    ui.add(
-                        egui::DragValue::new(&mut styles.hlc_area.fill_opacity)
-                            .range(0.0..=1.0)
-                            .speed(0.01),
-                    )
-                    .labelled_by(label.id);
-                    ui.end_row();
-                    let label = ui.label(l10n::text(ui.ctx(), "Line width"));
-                    ui.add(
-                        egui::DragValue::new(&mut styles.hlc_area.line_width)
-                            .range(0.0..=10.0)
-                            .speed(0.1)
-                            .suffix(l10n::text(ui.ctx(), " pt")),
-                    )
-                    .labelled_by(label.id);
-                    ui.end_row();
-                    Self::candle_colors_section(ui, settings);
+                    let style = &mut styles.hlc_area;
+                    Self::hlc_line_row(
+                        ui,
+                        "High line",
+                        Some(&mut style.high_line_visible),
+                        &mut style.high_line,
+                    );
+                    Self::hlc_line_row(
+                        ui,
+                        "Low line",
+                        Some(&mut style.low_line_visible),
+                        &mut style.low_line,
+                    );
+                    Self::hlc_line_row(ui, "Close line", None, &mut style.close_line);
+                    for (label, visible, color) in [
+                        (
+                            "High to close fill",
+                            &mut style.high_to_close_fill_visible,
+                            &mut style.high_to_close_fill,
+                        ),
+                        (
+                            "Close to low fill",
+                            &mut style.close_to_low_fill_visible,
+                            &mut style.close_to_low_fill,
+                        ),
+                    ] {
+                        ui.checkbox(visible, l10n::text(ui.ctx(), label));
+                        ui.add_enabled_ui(*visible, |ui| Self::color_picker(ui, color));
+                        ui.end_row();
+                    }
                 }
                 ChartType::Baseline => {
                     ui.label(l10n::text(ui.ctx(), "Above base"));
@@ -856,6 +868,41 @@ impl SymbolTab {
                 LineStyle::all().iter().copied(),
                 |s| s.name().to_owned(),
             );
+        });
+        ui.end_row();
+    }
+
+    /// A line of the HLC area on one row, so that the three lines and two fills fit the dialog.
+    fn hlc_line_row(
+        ui: &mut Ui,
+        label: &str,
+        visible: Option<&mut bool>,
+        style: &mut LinePlotStyle,
+    ) {
+        let text = l10n::text(ui.ctx(), label);
+        let enabled = visible.as_deref().is_none_or(|visible| *visible);
+        let label_id = match visible {
+            Some(visible) => ui.checkbox(visible, text).id,
+            None => ui.label(text).id,
+        };
+        ui.add_enabled_ui(enabled, |ui| {
+            ui.horizontal(|ui| {
+                ui.label_inputs_by(label_id, |ui| {
+                    Self::color_picker(ui, &mut style.color);
+                    ui.add(
+                        egui::DragValue::new(&mut style.width)
+                            .range(0.0..=10.0)
+                            .speed(0.1)
+                            .suffix(l10n::text(ui.ctx(), " pt")),
+                    );
+                    ui.combo_select(
+                        label,
+                        &mut style.style,
+                        LineStyle::all().iter().copied(),
+                        |s| s.name().to_owned(),
+                    );
+                });
+            });
         });
         ui.end_row();
     }

@@ -267,8 +267,6 @@ pub fn render_chart_type(
                 ctx.price_scale,
                 params.chart_rect_min_x(),
                 &idx_to_coord,
-                params.bullish_color(),
-                params.bearish_color(),
                 &params.type_params.styles.hlc_area,
                 params.price_source(),
             );
