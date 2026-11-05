@@ -401,7 +401,7 @@ fn endpoint_requests_preserve_interval_bounds_and_search_filters() {
         for body in [
             r#"{"supported_resolutions":["1","15","60","240","1D"],"exchanges":[{"value":"X"}],"symbols_types":[{"value":"stock"}]}"#,
             r#"{"name":"ABC","ticker":"X:ABC","description":"ABC Inc","exchange":"X","type":"stock","minmov":5,"pricescale":100,"currency_code":"USD","volume_precision":2,"timezone":"UTC","session":"0930-1600:23456","supported_resolutions":["15"],"data_status":"streaming"}"#,
-            r#"[{"symbol":"X:ABC","description":"ABC Inc","type":"stock","exchange":"X","country":"GB","sector":"Energy","source":"Provider/A","root":"ABC","logo":"bytes://company","exchange_logo":"bytes://venue"}]"#,
+            r#"[{"symbol":"X:BAD","timezone":"Mars/Olympus_Mons"},{"symbol":"X:ABC","description":"ABC Inc","type":"stock","exchange":"X","country":"GB","sector":"Energy","source":"Provider/A","root":"ABC","logo":"bytes://company","exchange_logo":"bytes://venue"}]"#,
             r#"{"s":"no_data","nextTime":-60}"#,
         ] {
             let (mut connection, _) = listener.accept().unwrap();
@@ -491,6 +491,8 @@ fn endpoint_requests_preserve_interval_bounds_and_search_filters() {
         .downcast::<Result<Vec<Instrument>, FeedError>>()
         .unwrap())
     .unwrap();
+    // A result with a time zone this build does not know is left out.
+    assert_eq!(found.len(), 1);
     assert_eq!(found[0].symbol, "X:ABC");
     assert_eq!(found[0].country.as_deref(), Some("GB"));
     assert_eq!(found[0].sector.as_deref(), Some("Energy"));

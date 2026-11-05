@@ -85,7 +85,8 @@ is `minmov / pricescale`, with `minmov` defaulting to one. Time zones use the
 library's [`TimezoneId`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.TimezoneId.html) parser. Sessions accept `24x7` or
 `HHMM-HHMM[,HHMM-HHMM]:days` windows (one day suffix for all windows), where 1 is Sunday and 7 is Saturday; an overnight
 window belongs to its closing day. Omitted days mean Monday through Friday. Unsupported
-session syntax or unavailable time zones report invalid data rather than guessing.
+session syntax or unavailable time zones report invalid data rather than guessing;
+search leaves out a result it cannot read and lists the others.
 
 Configuration lists may be omitted (unknown, unrestricted) or empty (none).
 Exchange and type entries use their `value` field. Optional feed services are

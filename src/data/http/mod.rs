@@ -157,11 +157,18 @@ impl HttpDatafeed {
     ) {
         let target = url(&self.base, "search", params);
         get(target, String::new(), move |result| {
-            reply.send(result.and_then(|symbols: Vec<Symbol>| {
+            // A result this build cannot read is left out rather than hiding the others; resolving
+            // it still reports why.
+            reply.send(result.map(|symbols: Vec<serde_json::Value>| {
                 symbols
                     .into_iter()
+                    .filter_map(|symbol| {
+                        serde_json::from_value::<Symbol>(symbol)
+                            .ok()?
+                            .into_instrument()
+                            .ok()
+                    })
                     .take(limit)
-                    .map(Symbol::into_instrument)
                     .collect()
             }));
         });
