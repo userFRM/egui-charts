@@ -302,8 +302,9 @@ pub struct Chart {
     /// For each study in `studies`, the first bar it must be updated from on the next frame.
     pub(crate) pending_from: Vec<Option<usize>>,
     /// For each study in `studies`, whether it must be recomputed from the first bar while its
-    /// values still hold, on the bars that remain after an eviction. It draws them until its
-    /// recompute, which waits for `next_refresh` like a tail update.
+    /// values still hold: on the bars that remain after an eviction, after a drop of its
+    /// order-flow input's oldest bars or after a live bar of a history it reads. It draws them
+    /// until its recompute, which waits for `next_refresh` like a tail update.
     pub(crate) stale: Vec<bool>,
     /// For each study in `studies`, the input time in seconds from which it may be recomputed
     /// in full again.

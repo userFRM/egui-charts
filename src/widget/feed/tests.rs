@@ -2800,8 +2800,8 @@ fn stream_studies_keep_every_quote_and_book_loss_between_frames() {
 /// so the CVD of bar 10,999 is 11,000 and a 10-bar flow sum is 10. Bar 11,000 is the 11,001st:
 /// the input drops its oldest 1,001 and the CVD starts again at bar 1,001, 9,999 at bar 10,999.
 /// On the first frame after the drop one study recalculates and the other keeps its 11,000
-/// earlier values, 11,000 or 10 at bar 10,999, until the next frame. Bar 11,001 crosses no boundary, so both studies update on its first
-/// frame and bar 10,999 keeps 9,999 and 10.
+/// earlier values, 11,000 or 10 at bar 10,999, until the next frame. Bar 11,001 crosses no
+/// boundary, so both studies update on its first frame and bar 10,999 keeps 9,999 and 10.
 #[cfg(feature = "studies")]
 #[test]
 fn order_flow_studies_update_incrementally_between_input_drops() {
