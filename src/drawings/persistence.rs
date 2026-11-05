@@ -1261,6 +1261,7 @@ mod tests {
             drawing.listed = false;
             drawing.group = Some("levels".into());
             drawing.folder = vec!["Analysis".into(), "Support / resistance".into()];
+            drawing.folder_sync = vec![None, Some(crate::drawings::FolderSync::Layout)];
             if matches!(
                 tool,
                 DrawingToolType::AnchoredText | DrawingToolType::AnchoredNote

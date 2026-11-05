@@ -34,21 +34,25 @@ impl ObjectTreePanel {
                 }
                 let mut path = parent.clone();
                 path.push(name.to_owned());
-                if !self.state_mut().folders.insert(path.clone()) {
-                    return false;
-                }
-                self.state_mut().expanded_groups.insert("Drawings".into());
-                for depth in 1..=path.len() {
-                    self.state_mut().collapsed_folders.remove(&path[..depth]);
-                }
                 let ids: Vec<_> = selected
                     .iter()
                     .filter(|s| s.is_drawing())
                     .map(|s| s.id)
                     .collect();
-                chart
-                    .drawings_mut()
-                    .edit_drawings(&ids, |d| d.folder = path.clone());
+                // A folder exists while it holds a drawing, and one above the new folder stays.
+                let mut folders = super::folders::selected_folders(self.state(), sources);
+                folders.retain(|folder| !path.starts_with(folder));
+                if ids.is_empty()
+                    || self.state().folders.contains(&path)
+                    || !chart.drawings_mut().move_to_folder(&ids, &folders, &path)
+                {
+                    return false;
+                }
+                self.state_mut().folders.insert(path.clone());
+                self.state_mut().expanded_groups.insert("Drawings".into());
+                for depth in 1..=path.len() {
+                    self.state_mut().collapsed_folders.remove(&path[..depth]);
+                }
             }
             ObjectTreeAction::MoveToFolder(ids, path) => {
                 if !path.is_empty() && !self.state().folders.contains(path) {
@@ -65,9 +69,34 @@ impl ObjectTreePanel {
                     })
                     .map(|d| d.id)
                     .collect();
-                chart
-                    .drawings_mut()
-                    .edit_drawings(&ids, |d| d.folder = path.clone());
+                chart.drawings_mut().move_to_folder(&ids, &[], path);
+            }
+            ObjectTreeAction::MoveFolder(folder, parent) => {
+                if !self.state().folders.contains(folder)
+                    || (!parent.is_empty() && !self.state().folders.contains(parent))
+                {
+                    return false;
+                }
+                return chart.drawings_mut().move_to_folder(
+                    &[],
+                    std::slice::from_ref(folder),
+                    parent,
+                );
+            }
+            ObjectTreeAction::DeleteFolder(path) => {
+                if !self.state().folders.contains(path) {
+                    return false;
+                }
+                let ids: Vec<_> = sources
+                    .iter()
+                    .filter(|s| s.is_drawing() && s.folder.starts_with(path))
+                    .map(|s| s.id)
+                    .collect();
+                chart.drawings_mut().delete_drawings(&ids);
+                self.state_mut().selected_ids.retain(|id| !ids.contains(id));
+            }
+            ObjectTreeAction::SetFolderSync(path, sync) => {
+                return chart.drawings_mut().set_folder_sync(path, *sync);
             }
             ObjectTreeAction::SetFolderVisible(path, value)
             | ObjectTreeAction::SetFolderLocked(path, value) => {
@@ -117,7 +146,9 @@ impl ObjectTreePanel {
             }
             ObjectTreeAction::AddToSelection(_)
             | ObjectTreeAction::RangeSelect(_)
-            | ObjectTreeAction::SelectAll => {
+            | ObjectTreeAction::SelectAll
+            | ObjectTreeAction::SelectFolder(_)
+            | ObjectTreeAction::AddFolderToSelection(_) => {
                 chart.clear_selection();
                 chart
                     .drawings_mut()
@@ -170,7 +201,11 @@ impl ObjectTreePanel {
                 delete(chart, source);
             }
             ObjectTreeAction::DeleteSelected => {
-                for source in selected {
+                let (drawings, others): (Vec<_>, Vec<_>) =
+                    selected.into_iter().partition(|s| s.is_drawing());
+                let ids: Vec<_> = drawings.iter().map(|s| s.id).collect();
+                chart.drawings_mut().delete_drawings(&ids);
+                for source in others {
                     delete(chart, source);
                 }
                 self.state_mut().clear_selection();

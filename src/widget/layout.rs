@@ -872,6 +872,7 @@ pub struct ChartSyncOptions {
     /// Charts that keep their drawings in the same storage are left to it: they read each other's
     /// stored drawings whether this is on or off, so a drawing reaches them once a chart history
     /// edit writes it. Only drawings that are not saveable still sync between them here.
+    /// A top-level folder's `FolderSync` overrides this for its drawings.
     pub sync_drawings: bool,
     /// Synchronize symbol changes for fields following the layout setting.
     /// Explicit individual groups work independently. A host without a feed supplies bars.
@@ -1635,10 +1636,21 @@ impl ChartLayout {
             ui.ctx().request_repaint();
         }
         #[cfg(feature = "drawings")]
-        if self.sync.sync_drawings
-            && self
-                .drawings
-                .sync(charts, total, &self.groups, pointer_down)
+        if (self.sync.sync_drawings
+            || charts.iter().take(total).any(|chart| {
+                chart
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .any(|d| d.folder_sync_mode().is_some())
+            }))
+            && self.drawings.sync(
+                charts,
+                total,
+                &self.groups,
+                pointer_down,
+                self.sync.sync_drawings,
+            )
         {
             ui.ctx().request_repaint();
         }
