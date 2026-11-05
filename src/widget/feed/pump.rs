@@ -390,8 +390,13 @@ impl Chart {
                                 .bars
                                 .partition_point(|bar| link.clock.bar_open(bar.time) < time)
                         });
-                        self.pending_from[at] =
-                            Some(self.pending_from[at].map_or(from, |old| old.min(from)));
+                        // Dropping the input's oldest bars leaves the other bars' values in place.
+                        if input.only_dropped_since(*seen) && self.pending_from[at] != Some(0) {
+                            self.stale[at] = true;
+                        } else {
+                            self.pending_from[at] =
+                                Some(self.pending_from[at].map_or(from, |old| old.min(from)));
+                        }
                     }
                 }
                 *seen = revision;
