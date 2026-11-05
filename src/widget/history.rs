@@ -916,6 +916,7 @@ impl Chart {
             self.study_inputs.insert(at, inputs);
             self.study_autoscale.insert(at, autoscale);
             self.pending_from.insert(at, None);
+            self.stale.insert(at, false);
             self.next_refresh.insert(at, f64::NEG_INFINITY);
         }
         self.recalculate_studies();

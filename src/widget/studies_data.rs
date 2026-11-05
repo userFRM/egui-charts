@@ -223,6 +223,9 @@ impl Chart {
     /// Replace a study history with host-owned historical or streaming bars. Bars are sorted,
     /// deduplicated and validated like chart data. This takes ownership of this request from
     /// the connected feed; the host supplies further replacements. Metadata sets its calendar.
+    /// The studies that read the history are recomputed on it. Bars that change only the last of
+    /// the previous ones or add newer ones, as a stream does, leave their values drawn until
+    /// their next full recompute; other bars clear them until it, which is then due at once.
     pub fn set_study_data(
         &mut self,
         request: StudyDataRequest,
@@ -232,6 +235,21 @@ impl Chart {
         let request = resolved(&request, self.symbol(), self.timeframe());
         let clock = clock(&request, instrument.as_ref(), self.extended_hours());
         let (bars, _) = super::series::clean(bars, &clock);
+        // Bars that differ from the previous ones at most from the last of those on, as when the
+        // host streams a history, leave the earlier values right.
+        let live = self.study_data.series.iter().any(|old| {
+            old.request == request
+                && old.stream.is_none()
+                && old.instrument == instrument
+                && old.clock == clock
+                && old.bars.split_last().is_some_and(|(last, earlier)| {
+                    bars.get(earlier.len())
+                        .is_some_and(|bar| bar.time == last.time)
+                        && bars[..earlier.len()] == *earlier
+                })
+        });
+        let mut changes = Changes::default();
+        changes.note(&request, !live);
         self.study_data
             .series
             .retain(|series| series.request != request);
@@ -244,7 +262,7 @@ impl Chart {
             stream: None,
             from_ticks: BTreeMap::new(),
         });
-        self.invalidate_study_data();
+        self.restart_study_data(&changes);
     }
 
     /// The last error for a requested study history. Recoverable resolve and page failures retry
@@ -312,17 +330,21 @@ impl Chart {
 
     pub(super) fn pump_study_data(&mut self, ctx: &egui::Context, feed: Option<Arc<dyn Datafeed>>) {
         let requests = self.study_data_reaches();
-        let previous = self.study_data.series.len();
+        // Each changed history, and whether its bars changed before its last one.
+        let mut changes = Changes::default();
         self.study_data.series.retain(|series| {
-            requests
+            let kept = requests
                 .iter()
                 .any(|(request, _)| *request == series.request)
                 && series.stream.as_ref().is_none_or(|stream| {
                     feed.as_ref()
                         .is_some_and(|feed| Arc::ptr_eq(feed, &stream.feed))
-                })
+                });
+            if !kept {
+                changes.note(&series.request, true);
+            }
+            kept
         });
-        let removed = self.study_data.series.len() != previous;
         if let Some(feed) = &feed {
             for (request, _) in &requests {
                 if request.symbol.is_empty() {
@@ -352,6 +374,7 @@ impl Chart {
                     self.conversion.as_deref(),
                     inbox.reply(0),
                 );
+                changes.note(request, true);
                 self.study_data.series.push(Series {
                     request: request.clone(),
                     bars: Vec::new(),
@@ -380,13 +403,12 @@ impl Chart {
         let adjusted = self.dividend_adjusted();
         let now = ctx.input(|input| input.time);
         let count = self.state.data().bars.len().max(300);
-        let mut changed = removed || self.study_data.series.len() != previous;
         for series in &mut self.study_data.series {
             let Some(stream) = &mut series.stream else {
                 let clock = clock(&series.request, series.instrument.as_ref(), extended);
                 if clock != series.clock {
                     series.clock = clock;
-                    changed = true;
+                    changes.note(&series.request, true);
                 }
                 continue;
             };
@@ -484,7 +506,7 @@ impl Chart {
                             {
                                 stream.end = true;
                             }
-                            changed = true;
+                            changes.note(&series.request, true);
                         }
                         Err(error) => {
                             stream.failed(&error, now);
@@ -503,16 +525,21 @@ impl Chart {
                     stream.retry_at = None;
                     stream.failures = 0;
                     stream.end = false;
-                    changed = true;
+                    changes.note(&series.request, true);
                 }
                 if !updates.bars.is_empty() {
-                    merge(
+                    let len = series.bars.len();
+                    let merged = merge(
                         &mut series.bars,
                         &mut series.from_ticks,
                         &series.clock,
                         updates.bars.into_values().collect(),
                     );
-                    changed = true;
+                    // Live bars that change at most the last one leave the earlier values right;
+                    // into an empty history they are its first bars.
+                    if let Some(first) = merged.first_changed {
+                        changes.note(&series.request, len == 0 || first + 1 < len);
+                    }
                 }
                 if updates.error.is_some() {
                     series.error = updates.error;
@@ -594,8 +621,57 @@ impl Chart {
                 stream.request(&series.request);
             }
         }
-        if changed {
-            self.invalidate_study_data();
+        if !changes.0.is_empty() {
+            self.restart_study_data(&changes);
+        }
+    }
+
+    /// Restarts the studies that read a changed history: at once and without their values after
+    /// a change before its last bar, as for a new history, and otherwise keeping their values until
+    /// their next full recompute. Studies that read only other histories stay as they are.
+    fn restart_study_data(&mut self, changes: &Changes) {
+        for (at, study) in self.studies.indicators().iter().enumerate() {
+            let mut read = None::<bool>;
+            for request in study.data_requests() {
+                let request = resolved(&request, &self.symbol, self.timeframe);
+                if let Some((_, hard)) = changes.0.iter().find(|(changed, _)| *changed == request) {
+                    read = Some(read.unwrap_or(false) || *hard);
+                }
+            }
+            match read {
+                Some(true) => {
+                    self.pending_from[at] = Some(0);
+                    self.next_refresh[at] = f64::NEG_INFINITY;
+                    self.element_studies.dirty = true;
+                }
+                Some(false) => {
+                    self.stale[at] = true;
+                    // Its copy on the elements of a price-based chart type keeps its values too;
+                    // while another type is shown the copies are not kept current and are rebuilt.
+                    if self.chart_type.is_time_independent()
+                        && let Some(stale) = self.element_studies.stale.get_mut(at)
+                    {
+                        *stale = true;
+                    } else {
+                        self.element_studies.dirty = true;
+                    }
+                }
+                None => {}
+            }
+        }
+        self.fill_fed_series();
+    }
+}
+
+/// The study histories one pump changed, each with whether it changed before its last bar.
+#[derive(Default)]
+struct Changes(Vec<(StudyDataRequest, bool)>);
+
+impl Changes {
+    fn note(&mut self, request: &StudyDataRequest, hard: bool) {
+        match self.0.iter_mut().find(|(changed, _)| changed == request) {
+            Some((_, known)) => *known |= hard,
+            None => self.0.push((request.clone(), hard)),
         }
     }
 }
@@ -1725,5 +1801,244 @@ pub(super) mod tests {
         chart.drawings_mut().drawings[0].visible = true;
         chart.set_chart_type(ChartType::Renko);
         assert!(chart.study_data_requests().is_empty());
+    }
+
+    /// Trades that move today's daily bar of a one-minute chart recompute Performance, which reads
+    /// the daily bars, at most once per refresh interval and keep it drawn while it waits; an SMA
+    /// calculated on the hourly bars is neither recomputed nor blanked, whichever was added first,
+    /// on candles and on Renko bricks.
+    #[test]
+    fn live_daily_bars_refresh_only_their_studies_and_keep_them_drawn() {
+        use crate::model::ChartType;
+        use crate::studies::{Indicator, IndicatorValues, Performance};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        /// A study counting its calculations from the first bar.
+        struct Counted(Box<dyn Indicator>, Arc<AtomicUsize>);
+        impl Counted {
+            fn count(&self, data: &[Bar], from: usize) {
+                if from == 0 && !data.is_empty() {
+                    self.1.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+        impl Indicator for Counted {
+            fn name(&self) -> &str {
+                self.0.name()
+            }
+            fn calculate(&mut self, data: &[Bar]) {
+                self.update_data(data, 0, &[]);
+            }
+            fn update(&mut self, data: &[Bar], from: usize) {
+                self.count(data, from);
+                self.0.update(data, from);
+            }
+            fn update_data(&mut self, data: &[Bar], from: usize, sources: &[StudyData<'_>]) {
+                self.count(data, from);
+                self.0.update_data(data, from, sources);
+            }
+            fn data_requests(&self) -> Vec<StudyDataRequest> {
+                self.0.data_requests()
+            }
+            fn set_timeframe(&mut self, timeframe: Timeframe) {
+                self.0.set_timeframe(timeframe);
+            }
+            fn is_incremental(&self) -> bool {
+                self.0.is_incremental()
+            }
+            fn values(&self) -> &IndicatorValues {
+                self.0.values()
+            }
+            fn colors(&self) -> Vec<egui::Color32> {
+                self.0.colors()
+            }
+            fn set_colors(&mut self, colors: Vec<egui::Color32>) {
+                self.0.set_colors(colors);
+            }
+            fn is_visible(&self) -> bool {
+                self.0.is_visible()
+            }
+            fn set_visible(&mut self, visible: bool) {
+                self.0.set_visible(visible);
+            }
+            fn clone_box(&self) -> Box<dyn Indicator> {
+                Box::new(Counted(self.0.clone_box(), self.1.clone()))
+            }
+        }
+        for (chart_type, performance_first) in [
+            (ChartType::Candles, true),
+            (ChartType::Candles, false),
+            (ChartType::Renko, true),
+            (ChartType::Renko, false),
+        ] {
+            let feed = Arc::new(Live::default());
+            let mut chart = ChartBuilder::new()
+                .with_feed(feed.clone())
+                .with_symbol("MAIN")
+                .with_timeframe(Timeframe::Min1)
+                .build();
+            chart.set_chart_type(chart_type);
+            let counts = [(); 2].map(|_| Arc::new(AtomicUsize::new(0)));
+            let mut studies = [
+                Counted(Box::new(Performance::new()), counts[0].clone()),
+                Counted(Box::new(SMA::new(3)), counts[1].clone()),
+            ]
+            .map(Some);
+            let mut ids = [None; 2];
+            for at in if performance_first { [0, 1] } else { [1, 0] } {
+                ids[at] = Some(chart.add_indicator(Box::new(studies[at].take().unwrap())));
+            }
+            let ids = ids.map(Option::unwrap);
+            chart
+                .indicator_mut(ids[1])
+                .unwrap()
+                .set_input(
+                    "calculation_timeframe",
+                    InputValue::Timeframe(Some(Timeframe::Hour1)),
+                )
+                .unwrap();
+            let ctx = egui::Context::default();
+            for frame in 0..10 {
+                shapes(&ctx, &mut chart, frame as f64, Vec::new());
+            }
+            // The drawn values, on Renko those calculated on the bricks.
+            let last = |chart: &Chart| {
+                ids.map(|id| {
+                    let at = chart
+                        .indicators()
+                        .position(|(other, _)| other == id)
+                        .unwrap();
+                    let values = chart.rendered_studies().indicators()[at].values();
+                    values
+                        .len()
+                        .checked_sub(1)
+                        .and_then(|at| values.value(0, at))
+                })
+            };
+            // 1W against a daily close of 50 is 100 * (100 - 50) / 50 = 100, and hourly closes of
+            // 100 give an SMA of 100 at the last bar or brick, which closes at 100.
+            assert_eq!(
+                last(&chart),
+                [Some(100.0); 2],
+                "{chart_type:?} {performance_first}"
+            );
+            let sink = feed.sink(Timeframe::Day1);
+            let today: DateTime<chrono::Utc> = "2024-03-15T00:00:00Z".parse().unwrap();
+            for count in &counts {
+                count.store(0, Ordering::Relaxed);
+            }
+            let mut blank = [0; 2];
+            // Half a second of trades at 60 frames a second, each moving today's daily bar.
+            for frame in 0..30 {
+                let close = 100.0 + frame as f64;
+                sink.push_bar(Bar::new(today, 100.0, close, 100.0, close, 1.0));
+                shapes(&ctx, &mut chart, 10.0 + frame as f64 / 60.0, Vec::new());
+                for (blank, value) in blank.iter_mut().zip(last(&chart)) {
+                    *blank += usize::from(value.is_none());
+                }
+            }
+            let counts = counts.map(|count| count.load(Ordering::Relaxed));
+            // On Renko the studies of the bricks recompute too.
+            let limit = if chart_type == ChartType::Renko { 6 } else { 3 };
+            assert!(
+                counts[0] <= limit && counts[1] == 0 && blank == [0, 0],
+                "{chart_type:?}, Performance first: {performance_first}, full recalculations of \
+                 Performance and the SMA in half a second {counts:?}, frames without a last value \
+                 {blank:?}"
+            );
+        }
+    }
+
+    /// A study calculated on an SMA of the hourly bars follows it while trades move the current
+    /// hourly bar of a one-minute chart, although that SMA has a full recompute waiting on every
+    /// frame. A second apart, longer than any refresh wait, the two take turns at the one full
+    /// recompute per frame, so the study shows a close at most three frames old.
+    /// Hand values: hourly closes of 100 and a current close of 200 + frame give an SMA(3) of
+    /// (200 + close) / 3, which an SMA(1) repeats; the last of ten frames has a close of 209.
+    #[test]
+    fn a_study_on_a_live_history_study_follows_it() {
+        let feed = Arc::new(Live::default());
+        let mut chart = ChartBuilder::new()
+            .with_feed(feed.clone())
+            .with_symbol("MAIN")
+            .with_timeframe(Timeframe::Min1)
+            .build();
+        let parent = chart.add_indicator(Box::new(SMA::new(3)));
+        let study = chart.indicator_mut(parent).unwrap();
+        let hourly = InputValue::Timeframe(Some(Timeframe::Hour1));
+        study.set_input("calculation_timeframe", hourly).unwrap();
+        study
+            .set_input("wait_for_close", InputValue::Toggle(false))
+            .unwrap();
+        let child = chart.add_indicator(Box::new(SMA::new(1)));
+        let source = crate::studies::StudySource::Study {
+            id: parent.0,
+            plot: 0,
+        };
+        chart.set_indicator_source(child, source).unwrap();
+        let ctx = egui::Context::default();
+        for frame in 0..10 {
+            shapes(&ctx, &mut chart, frame as f64, Vec::new());
+        }
+        let sink = feed.sink(Timeframe::Hour1);
+        let hour: DateTime<chrono::Utc> = "2024-03-15T14:00:00Z".parse().unwrap();
+        for frame in 0..10 {
+            let close = 200.0 + frame as f64;
+            sink.push_bar(Bar::new(hour, 100.0, close, 100.0, close, 1.0));
+            shapes(&ctx, &mut chart, 10.0 + frame as f64, Vec::new());
+        }
+        let (_, study) = chart.indicators().find(|(id, _)| *id == child).unwrap();
+        let value = study.values().value(0, study.values().len() - 1);
+        assert!(
+            value.is_some_and(|value| (406.0 / 3.0..=409.0 / 3.0).contains(&value)),
+            "{value:?}, expected the SMA of a close from 206 to 209"
+        );
+    }
+
+    /// Daily bars of close 50 for the 400 days before 2024-03-15, hourly bars of close 100 up to
+    /// 14:00 that day and minute bars closing at 102 and 100 in turn up to 14:00, at 100. Keeps
+    /// the sink of every subscription.
+    #[derive(Default)]
+    struct Live(Mutex<Vec<(Timeframe, Sink)>>);
+
+    impl Live {
+        fn sink(&self, timeframe: Timeframe) -> Sink {
+            let sinks = self.0.lock().unwrap();
+            let found = sinks.iter().find(|(candidate, _)| *candidate == timeframe);
+            found.unwrap().1.clone()
+        }
+    }
+
+    impl Datafeed for Live {
+        fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
+            let flat = |time, close| Bar::new(time, close, close, close, close, 1.0);
+            let today: DateTime<chrono::Utc> = "2024-03-15T00:00:00Z".parse().unwrap();
+            let last = today + Duration::hours(14);
+            let bars: Vec<_> = match request.timeframe {
+                Timeframe::Day1 => (1..=400)
+                    .rev()
+                    .map(|day| flat(today - Duration::days(day), 50.0))
+                    .collect(),
+                Timeframe::Hour1 => (0..500)
+                    .map(|hour| flat(last - Duration::hours(499 - hour), 100.0))
+                    .collect(),
+                _ => (0..5000)
+                    .map(|minute| {
+                        let close = 100.0 + 2.0 * ((4999 - minute) % 2) as f64;
+                        flat(last - Duration::minutes(4999 - minute), close)
+                    })
+                    .collect(),
+            };
+            let bars = bars
+                .into_iter()
+                .filter(|bar| request.before.is_none_or(|before| bar.time < before))
+                .collect();
+            reply.send(Ok(HistoryPage::new(bars, true)));
+        }
+        fn subscribe(&self, subscription: Subscription) {
+            self.0
+                .lock()
+                .unwrap()
+                .push((subscription.timeframe, subscription.sink));
+        }
     }
 }

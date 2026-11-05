@@ -37,7 +37,7 @@ Builder API,Datafeed API,"Option expiries and chain snapshots with open interest
 Builder API,Datafeed API,"Per-symbol order-flow data: trades, trade sides, quotes and depth",incomplete,host,src/data/mod.rs;src/model/instrument.rs;src/data/inbox/sink.rs;,
 Builder API,Datafeed API,Bar data model,unverified,library,src/model/bar/bar.rs;src/model/bar/io.rs;src/widget/builder.rs;src/chart/rendering/candles/mod.rs;src/widget/series/mod.rs,1861
 Builder API,Datafeed API,Bar marks,unverified,host,src/services/marks.rs;src/widget/marks.rs;src/chart/rendering/markers.rs;src/model/markers.rs;src/widget/events.rs;src/widget/series/scales/mod.rs;src/widget/pane/render/mod.rs;src/widget/frame/mod.rs;src/scales/pricescale.rs;examples/demo/marks.rs;examples/demo/layouts.rs;src/widget/series/paint.rs,1897;1931
-Builder API,Datafeed API,Bounded history size,unverified,library,src/widget/series/mod.rs;src/widget/feed/pump.rs;src/widget/replay.rs;src/data/order_flow.rs;examples/demo/replay.rs;examples/demo/live.rs,1924
+Builder API,Datafeed API,Bounded history size,unverified,library,src/widget/series/mod.rs;src/widget/feed/pump.rs;src/widget/replay.rs;src/data/order_flow.rs;examples/demo/replay.rs;examples/demo/live.rs;benches/frame_time.rs;benches/regression/mod.rs;src/widget/studies.rs;src/studies/settings.rs,1924;1591;1592
 Builder API,Datafeed API,Cache reset and full reload,unverified,host,src/widget/anchors.rs;src/widget/feed/mod.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs,
 Builder API,Datafeed API,Chart time zone,unverified,library,src/chart/rendering/session_breaks.rs;src/widget/feed/mod.rs;src/widget/time_scale.rs;src/model/bar/time.rs;src/model/clock.rs;src/model/session/exchange.rs;src/widget/frame/mod.rs;src/widget/format.rs,
 Builder API,Datafeed API,Connection status and symbol list notifications,unverified,host,src/widget/series/mod.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/widget/feed/mod.rs,
@@ -497,7 +497,7 @@ Order flow,Order flow,Stop-run detection from bursts of same-side market orders 
 Order flow,Order flow,TPO initial balance period and extension levels,incomplete,library,src/model/tpo.rs;src/model/chart_type.rs;src/chart/rendering/candles/tpo.rs;src/ui/dialogs/series_settings/tabs/symbol.rs,
 Order flow,Order flow,TPO poor high and poor low marks,unverified,library,src/model/tpo.rs;src/model/chart_type.rs;src/chart/rendering/candles/tpo.rs;src/ui/dialogs/series_settings/tabs/symbol.rs,
 Order flow,Order flow,Tape reconstruction and passive fill details,unverified,library,src/data/trades.rs;src/data/orders.rs;src/model/quote.rs;src/widget/feed/mod.rs;src/ui/widget_bar/panels/time_and_sales.rs,
-Order flow,Order flow,Tick-by-tick trade replay with speed control and multi-symbol sessions,incomplete,library,src/data/replay.rs;src/data/mod.rs;src/widget/replay.rs;src/widget/series/mod.rs;src/widget/feed/pump.rs;examples/demo/replay.rs;examples/demo/comparison.rs,2126
+Order flow,Order flow,Tick-by-tick trade replay with speed control and multi-symbol sessions,incomplete,library,src/data/replay.rs;src/data/mod.rs;src/widget/replay.rs;examples/demo/replay.rs;src/widget/series/mod.rs;src/widget/feed/pump.rs;examples/demo/comparison.rs,
 Order flow,Order flow,Tick-count bars,incomplete,library,src/model/timeframe.rs;src/ui/top_toolbar/components/timeframe_selector/mod.rs;src/data/inbox/mod.rs;src/widget/feed/mod.rs;src/data/inbox/sink.rs,
 Order flow,Order flow,"Time and sales with size filters, sound alerts and fractional timestamps",incomplete,library,src/ui/widget_bar/panels/time_and_sales.rs;src/data/trades.rs,
 Order flow,Order flow,Time price opportunity profiles and single prints,unverified,library,src/model/tpo.rs;src/model/session/exchange.rs;src/chart/rendering/candles/tpo.rs;src/studies/builtin/time_price_opportunity.rs;src/tokens/mod.rs;src/tokens/semantic.rs;src/model/chart_type.rs;src/ui/dialogs/series_settings/tabs/symbol.rs;src/chart/rendering/legend/mod.rs;src/widget/frame/mod.rs,
@@ -522,7 +522,7 @@ Order flow,Order flow data model,Level 2 order book snapshots,unverified,library
 Order flow,Order flow data model,Market-by-order events,unverified,library,src/data/orders.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/widget/feed/mod.rs,
 Order flow,Order flow data model,Memory bounds for trade and depth history,unverified,library,src/data/trades.rs;src/data/depth_history.rs;src/chart/overlays/volume_bubbles.rs;src/widget/feed/mod.rs;src/data/footprint.rs;src/data/depth.rs,
 Order flow,Order flow data model,Order book reconstruction from updates,unverified,library,src/data/depth.rs;src/model/quote.rs;src/widget/feed/mod.rs;src/data/inbox/sink.rs,
-Order flow,Order flow data model,Order-flow inputs to studies,incomplete,library,src/studies/indicator_trait.rs;src/data/order_flow.rs;src/widget/feed/mod.rs;src/studies/builtin/trade_delta.rs;src/studies/builtin/order_flow.rs;src/widget/feed/pump.rs;src/widget/studies.rs;src/widget/replay.rs;src/data/inbox/sink.rs,
+Order flow,Order flow data model,Order-flow inputs to studies,incomplete,library,src/studies/indicator_trait.rs;src/data/order_flow.rs;src/widget/feed/mod.rs;src/studies/builtin/trade_delta.rs;src/studies/builtin/order_flow.rs;src/widget/feed/pump.rs;src/widget/studies.rs;src/widget/replay.rs;src/data/inbox/sink.rs,1592
 Order flow,Order flow data model,Recording ticks and depth to disk for later sessions and replay,unverified,library,src/data/recording.rs;src/data/replay.rs;src/data/mod.rs;examples/demo/replay.rs;examples/demo/live.rs;examples/demo/controller.rs;examples/demo/commands.rs;examples/demo/Cargo.toml,1924;1945
 Order flow,Order flow data model,Replay clock merging trades and book events in timestamp order,unverified,library,src/data/replay.rs;src/data/mod.rs,
 Order flow,Order flow data model,Streaming path that delivers trades into the chart,unverified,library,src/widget/builder.rs;src/widget/feed/mod.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/data/trades.rs;benches/regression/mod.rs;benches/check-regressions.sh;src/widget/frame/mod.rs,
@@ -531,7 +531,7 @@ Order flow,Order flow data model,Top-of-book quote stream,unverified,library,src
 Order flow,Order flow data model,Trade tick record with aggressor side,unverified,library,src/model/quote.rs;src/data/mod.rs,
 Order flow,Order flow,Cumulative delta divergence markers,unverified,library,src/studies/builtin/trade_delta.rs;src/studies/builtin/order_flow.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/chart/rendering/indicator.rs;src/widget/frame/mod.rs,
 Order flow,Order flow,Delta exhaustion markers,incomplete,library,src/studies/builtin/trade_delta.rs;src/studies/builtin/order_flow.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/chart/rendering/indicator.rs;src/widget/frame/mod.rs,
-Studies,Custom studies,Custom studies reading other symbols or timeframes,unverified,library,src/studies/indicator_trait.rs;src/widget/studies_data.rs;src/widget/studies.rs;src/studies/settings.rs,
+Studies,Custom studies,Custom studies reading other symbols or timeframes,unverified,library,src/studies/indicator_trait.rs;src/widget/studies_data.rs;src/widget/studies.rs;src/studies/settings.rs,2110
 Studies,Custom studies,Custom study input metadata,unverified,library,src/studies/inputs.rs;src/studies/custom.rs;src/ui/dialogs/indicator_dialog/settings.rs,
 Studies,Custom studies,Custom study plot and style metadata,unverified,library,src/studies/custom.rs;src/studies/indicator_trait.rs;src/studies/plots.rs;src/chart/rendering/indicator.rs;src/painting/dashed_line.rs,
 Studies,Custom studies,Custom study registration,unverified,library,src/studies/factory/mod.rs;src/ui/dialogs/indicator_dialog/dialog.rs;src/ui/dialogs/indicator_dialog/data.rs;terminal/src/studies.rs,
@@ -555,7 +555,7 @@ Studies,Indicator infrastructure,Overlay versus separate pane,unverified,library
 Studies,Indicator infrastructure,Per-study legend values,unverified,library,src/studies/settings.rs;src/studies/indicator_trait.rs;src/ui/dialogs/indicator_dialog/settings.rs;src/chart/rendering/legend/mod.rs;src/widget/pane/indicator/paint.rs;src/widget/frame/mod.rs;src/widget/pane/render/mod.rs,2040
 Studies,Indicator infrastructure,Plot offset,incomplete,library,src/studies/indicator_trait.rs;src/studies/custom.rs;src/studies/settings.rs;src/chart/rendering/indicator.rs,
 Studies,Indicator infrastructure,Plot styles,unverified,library,src/studies/settings.rs;src/studies/custom.rs;src/chart/rendering/indicator.rs;src/widget/pane/indicator/mod.rs;src/widget/pane/indicator/paint.rs;src/studies/indicator_trait.rs;src/studies/palette.rs;src/painting/dashed_line.rs;src/ui/dialogs/indicator_dialog/settings.rs;src/chart/indicators/plots.rs,2061
-Studies,Indicator infrastructure,Recalculation on realtime updates,unverified,library,src/widget/series/mod.rs;src/widget/studies.rs;src/studies/settings.rs;src/studies/stepper.rs,
+Studies,Indicator infrastructure,Recalculation on realtime updates,unverified,library,src/widget/series/mod.rs;src/widget/studies.rs;src/studies/settings.rs;src/studies/stepper.rs;src/widget/studies_data.rs,2110
 Studies,Indicator infrastructure,Remove a study,unverified,library,src/widget/series/mod.rs;src/widget/studies.rs;src/widget/pane/render/mod.rs,
 Studies,Indicator infrastructure,Settings dialog: Inputs tab,unverified,library,src/ui/dialogs/indicator_dialog/settings.rs;src/studies/settings.rs,
 Studies,Indicator infrastructure,Settings dialog: Style tab,unverified,library,src/ui/dialogs/indicator_dialog/settings.rs;src/studies/settings.rs;src/chart/rendering/legend/mod.rs;src/widget/pane/indicator/paint.rs;src/studies/indicator_trait.rs;src/chart/rendering/indicator.rs;src/chart/indicators/plots.rs;src/studies/builtin/awesome_oscillator.rs,2040;2061
@@ -674,7 +674,7 @@ Studies,Indicators,Commodity Channel Index,unverified,library,src/studies/builti
 Studies,Indicators,Connors RSI,incomplete,library,src/studies/builtin/connors_rsi.rs,
 Studies,Indicators,Coppock Curve,unverified,library,src/studies/builtin/coppock.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Correlation - Log,missing,library,,
-Studies,Indicators,Correlation Coefficient,incomplete,library,src/studies/builtin/symbol_pair.rs,
+Studies,Indicators,Correlation Coefficient,incomplete,library,;src/studies/builtin/symbol_pair.rs,
 Studies,Indicators,Crypto derivatives metrics,incomplete,host,src/data/metrics.rs;src/data/mod.rs;src/studies/metric.rs;src/widget/studies_data.rs;src/ui/dialogs/indicator_dialog/dialog.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Crypto on-chain and ETF metrics,unverified,host,src/data/metrics.rs;src/data/mod.rs;src/studies/metric.rs;src/widget/studies_data.rs;src/ui/dialogs/indicator_dialog/dialog.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Cumulative Volume Delta,unverified,library,src/data/footprint.rs;src/studies/builtin/trade_delta.rs;src/chart/series/trade_delta.rs;src/studies/builtin/mod.rs;src/studies/builtin/volume_delta.rs;src/studies/builtin/lower_interval.rs,
@@ -732,7 +732,7 @@ Studies,Indicators,Options Volume Profile,incomplete,host,src/studies/builtin/op
 Studies,Indicators,Parabolic SAR,incomplete,library,src/studies/builtin/parabolic_sar.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
 Studies,Indicators,Percentage Price Oscillator,incomplete,library,src/studies/builtin/price_oscillator.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/studies/builtin/macd.rs;src/studies/palette.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Percentage Volume Oscillator,incomplete,library,src/studies/builtin/percentage_volume_oscillator.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/studies/builtin/macd.rs;src/studies/palette.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Performance,incomplete,library,src/studies/builtin/performance.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs;src/studies/table.rs;src/widget/pane/indicator/mod.rs;src/data/study.rs;src/widget/studies_data.rs,
+Studies,Indicators,Performance,incomplete,library,src/studies/builtin/performance.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs;src/studies/table.rs;src/widget/pane/indicator/mod.rs;src/data/study.rs;src/widget/studies_data.rs,2110
 Studies,Indicators,Periodic Volume Profile,incomplete,library,src/studies/builtin/volume_profile.rs;src/data/volume_profile.rs;src/chart/rendering/indicator.rs;src/painting/volume_profile.rs;src/chart/rendering/volume_profile.rs;src/data/study.rs;src/widget/studies_data.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/model/instrument.rs;src/data/order_flow.rs;src/data/footprint.rs,
 Studies,Indicators,Pivot Points High Low,unverified,library,src/studies/builtin/pivot_points_high_low.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
 Studies,Indicators,Pivot Points Standard,incomplete,library,src/studies/builtin/pivot_points.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs;src/chart/indicators/plots.rs;src/studies/template.rs,
@@ -752,9 +752,9 @@ Studies,Indicators,Relative Vigor Index,unverified,library,src/studies/builtin/r
 Studies,Indicators,Relative Volatility Index,unverified,library,src/studies/builtin/relative_volatility_index.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Relative Volume at Time,unverified,library,src/studies/builtin/relative_volume_at_time.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Rob Booker - ADX Breakout,unverified,library,src/studies/builtin/adx_breakout.rs;src/studies/builtin/adx.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Rob Booker - Knoxville Divergence,incomplete,library,src/studies/builtin/knoxville_divergence.rs,
-Studies,Indicators,Rob Booker Intraday Pivot Points,incomplete,library,src/studies/builtin/intraday_pivot_points.rs,
-Studies,Indicators,Rob Booker Missed Pivot Points,incomplete,library,src/studies/builtin/missed_pivots.rs,
+Studies,Indicators,Rob Booker - Knoxville Divergence,incomplete,library,;src/studies/builtin/knoxville_divergence.rs,
+Studies,Indicators,Rob Booker Intraday Pivot Points,incomplete,library,;src/studies/builtin/intraday_pivot_points.rs,
+Studies,Indicators,Rob Booker Missed Pivot Points,incomplete,library,;src/studies/builtin/missed_pivots.rs,
 Studies,Indicators,Rob Booker Reversal,missing,library,,
 Studies,Indicators,Rob Booker Ziv Ghost Pivots,missing,library,,
 Studies,Indicators,SMI Ergodic Indicator,unverified,library,src/studies/builtin/smi_ergodic.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
