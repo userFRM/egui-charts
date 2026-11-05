@@ -134,8 +134,8 @@ mod drawing_api;
 pub use drawing_api::DrawingError;
 mod studies_data;
 pub use crate::chart::primitives::{
-    PanePrimitive, PanePrimitiveView, PriceAxisLabel, Primitive, PrimitiveHit, PrimitiveId,
-    PrimitivePass, PrimitiveView, TimeAxisLabel,
+    CustomPoint, PanePrimitive, PanePrimitiveView, PriceAxisLabel, Primitive, PrimitiveHit,
+    PrimitiveId, PrimitivePass, PrimitiveView, TimeAxisLabel,
 };
 pub use pane::VisualOrder;
 pub use series::{BarsInRange, MismatchDirection, PriceLineId, SeriesLastValue};

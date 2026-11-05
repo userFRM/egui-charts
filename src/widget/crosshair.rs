@@ -70,6 +70,7 @@ impl Chart {
             let at = item.bars.binary_search_by_key(&time, |bar| bar.time).ok()?;
             Some((item.visible, !item.bars[at].is_whitespace()))
         });
+        let custom = self.custom_values_at(time);
         let studies = self
             .rendered_studies()
             .indicators()
@@ -92,6 +93,7 @@ impl Chart {
             && index.is_some_and(|index| !self.state.shown()[index].is_whitespace());
         for (visible, has_value) in std::iter::once((self.main_series_visible, main_value))
             .chain(series)
+            .chain(custom)
             .chain(studies)
         {
             if has_value {

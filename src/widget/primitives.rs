@@ -1,15 +1,20 @@
 //! Host primitives attached to series or panes, and custom series drawn by them.
 
-use super::{Chart, ChartElementId, PaneId, PointerTarget, SeriesId};
+use super::series::{BarsInRange, MismatchDirection, index_of_key};
+use super::{Chart, ChartElementId, DataOperation, PaneId, PointerTarget, SeriesId};
 use crate::chart::coords::ChartMapping;
 use crate::chart::primitives::{
-    PanePrimitive, PanePrimitiveView, Primitive, PrimitiveHit, PrimitiveId, PrimitivePass,
-    PrimitiveView,
+    CustomPoint, CustomView, PanePrimitive, PanePrimitiveView, Primitive, PrimitiveHit,
+    PrimitiveId, PrimitivePass, PrimitiveView,
 };
-use crate::model::{AutoscaleInfo, AutoscaleMargins, Bar};
-use crate::studies::Indicator;
+use crate::data::FeedState;
+use crate::model::{AutoscaleInfo, AutoscaleMargins, Bar, LogicalRange};
+use crate::studies::{CustomIndicator, Indicator, IndicatorValue};
+use chrono::{DateTime, Utc};
 use egui::{Painter, Pos2};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::any::Any;
+use std::ops::Range;
+use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard};
 
 /// A primitive and its series or pane owner.
 #[derive(Clone)]
@@ -24,6 +29,140 @@ pub(super) struct Attached {
     pub(super) replaces: bool,
     /// The series' bars last reported; `None` until `attached` ran.
     pub(super) seen: Option<Seen>,
+    /// The points of a custom data series, which live and go with its renderer.
+    pub(super) custom: Option<CustomData>,
+}
+
+/// What the chart reads from a custom point, without knowing its type.
+#[derive(Clone, Copy)]
+pub(super) struct CustomKey {
+    pub(super) time: DateTime<Utc>,
+    /// Lowest, highest and current price; `None` for whitespace.
+    prices: Option<(f64, f64, f64)>,
+}
+
+impl CustomKey {
+    /// `None` for an invalid point: not whitespace, with no prices or a non-finite one.
+    fn of<P: CustomPoint>(point: &P) -> Option<Self> {
+        let time = point.time();
+        if point.is_whitespace() {
+            return Some(Self { time, prices: None });
+        }
+        let prices = point.prices();
+        let current = *prices.last()?;
+        prices.iter().all(|price| price.is_finite()).then(|| Self {
+            time,
+            prices: Some((
+                prices.iter().copied().fold(f64::INFINITY, f64::min),
+                prices.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+                current,
+            )),
+        })
+    }
+}
+
+/// The host's points of a custom data series, in key order.
+#[derive(Clone)]
+pub(super) struct CustomData {
+    /// A `Vec` of the point type, parallel to `keys`. Image exports share it.
+    points: Arc<dyn Any + Send + Sync>,
+    /// Shared with the calculation of the series' study, which outlives its removal until undo
+    /// history lets it go, and with the clones of that study on price-based charts.
+    keys: Arc<RwLock<Vec<CustomKey>>>,
+    clone_point: fn(&(dyn Any + Send + Sync), usize) -> Arc<dyn Any + Send + Sync>,
+    revision: u64,
+    feed: FeedState,
+    /// The last key a replay has reached, as of the last frame.
+    cutoff: Option<DateTime<Utc>>,
+}
+
+impl CustomData {
+    fn new<P: CustomPoint>(keys: Arc<RwLock<Vec<CustomKey>>>) -> Self {
+        Self {
+            points: Arc::new(Vec::<P>::new()),
+            keys,
+            clone_point: |points, at| {
+                let points: &Vec<P> = points.downcast_ref().expect("the series' point type");
+                Arc::new(points[at].clone())
+            },
+            revision: crate::model::next_revision(),
+            feed: FeedState::default(),
+            cutoff: None,
+        }
+    }
+
+    pub(super) fn keys(&self) -> RwLockReadGuard<'_, Vec<CustomKey>> {
+        self.keys
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// The part of `keys` that is shown: all of them, or those a replay has reached.
+    pub(super) fn shown<'k>(&self, keys: &'k [CustomKey]) -> &'k [CustomKey] {
+        let end = self.cutoff.map_or(keys.len(), |cutoff| {
+            keys.partition_point(|key| key.time <= cutoff)
+        });
+        &keys[..end]
+    }
+
+    fn len(&self) -> usize {
+        self.shown(&self.keys()).len()
+    }
+
+    fn points_mut<P: CustomPoint>(&mut self) -> Option<&mut Vec<P>> {
+        if Arc::get_mut(&mut self.points).is_none() {
+            self.points = Arc::new(self.points.downcast_ref::<Vec<P>>()?.clone());
+        }
+        Arc::get_mut(&mut self.points)?.downcast_mut()
+    }
+
+    /// The points with logical positions from `left` to `right`, with edges rounded to whole
+    /// indices as in [`Chart::bars_in_logical_range`].
+    fn visible(&self, bars: &[Bar], left: f64, right: f64) -> Range<usize> {
+        let keys = self.keys();
+        let keys = self.shown(&keys);
+        let index = |key: &CustomKey| crate::model::index_at(bars, key.time).unwrap_or(f64::NAN);
+        let start = keys.partition_point(|key| index(key) < left.round());
+        let end = keys
+            .partition_point(|key| index(key) <= right.round())
+            .max(start);
+        start..end
+    }
+
+    /// The prices the points in view add to the fit of their scale.
+    fn autoscale(&self, bars: &[Bar], left: f64, right: f64) -> Option<AutoscaleInfo> {
+        let visible = self.visible(bars, left, right);
+        self.keys()[visible]
+            .iter()
+            .filter_map(|key| key.prices)
+            .map(|(low, high, _)| (low, high))
+            .reduce(|(low, high), (lower, higher)| (low.min(lower), high.max(higher)))
+            .map(Into::into)
+    }
+
+    fn at(&self, time: DateTime<Utc>) -> Option<usize> {
+        index_of_key(
+            self.shown(&self.keys()),
+            |key| key.time,
+            time,
+            MismatchDirection::Exact,
+        )
+    }
+}
+
+/// The current value of the points at the times of `bars`, a value per bar as a study holds them.
+/// A point between bars has no row; its renderer still places it by time.
+fn custom_values(keys: &[CustomKey], bars: &[Bar]) -> Vec<IndicatorValue> {
+    bars.iter()
+        .map(|bar| {
+            keys.binary_search_by_key(&bar.time, |key| key.time)
+                .ok()
+                .and_then(|at| keys[at].prices)
+                .map_or(IndicatorValue::None, |(_, _, current)| {
+                    IndicatorValue::Single(current)
+                })
+        })
+        .collect()
 }
 
 /// Reuses pass ordering and hit ranking without exposing series or scale hooks to pane code.
@@ -103,6 +242,24 @@ impl Attached {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
+
+    /// The points of a custom data series, with those in view on `mapping`.
+    pub(super) fn custom_view<'a>(
+        &'a self,
+        bars: &[Bar],
+        mapping: &ChartMapping,
+    ) -> Option<CustomView<'a>> {
+        let custom = self.custom.as_ref()?;
+        Some(CustomView {
+            points: custom.points.as_ref(),
+            len: custom.len(),
+            visible: custom.visible(
+                bars,
+                mapping.x_to_idx_f64(mapping.rect.left()),
+                mapping.x_to_idx_f64(mapping.rect.right()),
+            ),
+        })
+    }
 }
 
 /// A primitive under the pointer and the cursor it asks for.
@@ -124,7 +281,7 @@ impl Chart {
         series: SeriesId,
         primitive: impl Primitive + 'static,
     ) -> Option<PrimitiveId> {
-        self.attach(series, Arc::new(Mutex::new(primitive)), false)
+        self.attach(series, Arc::new(Mutex::new(primitive)), false, None)
     }
 
     /// Attaches host drawing to an existing pane without selecting a series or price scale.
@@ -147,6 +304,7 @@ impl Chart {
             primitive: Arc::new(Mutex::new(PaneDrawing(pane, primitive))),
             replaces: false,
             seen: None,
+            custom: None,
         });
         Some(id)
     }
@@ -175,8 +333,323 @@ impl Chart {
         renderer: impl Primitive + 'static,
     ) -> SeriesId {
         let id = self.add_indicator(study);
-        self.attach(id, Arc::new(Mutex::new(renderer)), true);
+        self.attach(id, Arc::new(Mutex::new(renderer)), true, None);
         id
+    }
+
+    /// Adds a series type the host defines, fed with its own [`CustomPoint`]s instead of values
+    /// computed from the bars. `P` is the point type of the series; `name` is its legend name.
+    /// `configure` sets up the study behind it, such as
+    /// [`with_overlay(false)`](CustomIndicator::with_overlay) for a pane of its own, or a colour.
+    ///
+    /// `renderer` draws the points through [`PrimitiveView::custom_points`] and hit tests them,
+    /// as for [`add_custom_series`](Self::add_custom_series). The legend and crosshair read the
+    /// [current price](CustomPoint::prices) of a point at the time of a main bar, and the
+    /// last-value tag that of a point at the last main bar; a renderer can tag another point with
+    /// [`price_axis_labels`](Primitive::price_axis_labels). All prices of the points in view fit
+    /// the scale of the series. Points outside the bars are placed by extrapolation on the shared
+    /// time scale, which only the main bars define, so a
+    /// chart without bars draws no points. The series starts empty, and is shown, hidden and
+    /// removed like a study. Undoing its removal restores the study with its last values, without
+    /// its renderer or points.
+    ///
+    /// ```rust
+    /// use chrono::{DateTime, Utc};
+    /// use egui::{Painter, Pos2, Stroke};
+    /// use egui_charts::model::BarData;
+    /// use egui_charts::widget::{Chart, CustomPoint, Primitive, PrimitivePass, PrimitiveView};
+    ///
+    /// #[derive(Clone)]
+    /// struct Range {
+    ///     time: DateTime<Utc>,
+    ///     low: f64,
+    ///     high: f64,
+    /// }
+    ///
+    /// impl CustomPoint for Range {
+    ///     fn time(&self) -> DateTime<Utc> {
+    ///         self.time
+    ///     }
+    ///     fn prices(&self) -> Vec<f64> {
+    ///         vec![self.low, self.high]
+    ///     }
+    /// }
+    ///
+    /// struct Bars;
+    /// impl Primitive for Bars {
+    ///     fn draw(&self, painter: &Painter, view: &PrimitiveView<'_>, pass: PrimitivePass) {
+    ///         if pass == PrimitivePass::Series {
+    ///             let points = view.custom_points::<Range>();
+    ///             for point in &points[view.visible_custom_points()] {
+    ///                 let Some(x) = view.time_to_x(point.time) else { continue };
+    ///                 painter.line_segment(
+    ///                     [point.low, point.high]
+    ///                         .map(|price| Pos2::new(x, view.mapping.price_to_y(price))),
+    ///                     Stroke::new(2.0, egui::Color32::GRAY),
+    ///                 );
+    ///             }
+    ///         }
+    ///     }
+    /// }
+    ///
+    /// let mut chart = Chart::new(BarData::new());
+    /// let id = chart.add_custom_data_series::<Range>("Range", |study| study.with_overlay(false), Bars);
+    /// let time = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+    /// assert!(chart.set_custom_data(id, vec![Range { time, low: 1.0, high: 2.0 }]));
+    /// assert_eq!(chart.custom_points::<Range>(id)[0].high, 2.0);
+    /// ```
+    pub fn add_custom_data_series<P: CustomPoint>(
+        &mut self,
+        name: impl Into<String>,
+        configure: impl FnOnce(CustomIndicator) -> CustomIndicator,
+        renderer: impl Primitive + 'static,
+    ) -> SeriesId {
+        let keys = Arc::new(RwLock::new(Vec::new()));
+        let source = Arc::clone(&keys);
+        let study = configure(CustomIndicator::new(name, move |bars| {
+            let keys = source.read().unwrap_or_else(|poison| poison.into_inner());
+            custom_values(&keys, bars)
+        }));
+        let id = self.add_indicator(Box::new(study));
+        self.attach(
+            id,
+            Arc::new(Mutex::new(renderer)),
+            true,
+            Some(CustomData::new::<P>(keys)),
+        );
+        id
+    }
+
+    /// Replaces the points of a custom data series. Points are sorted by key, and of several
+    /// with one key, or in one slot of the timeframe for a chart built with a feed, the last is
+    /// kept. A [whitespace](CustomPoint::is_whitespace) point keeps its key without values. A
+    /// point that is not whitespace, without prices or with a non-finite one, is invalid: it is
+    /// dropped before duplicates are resolved and counted in [`feed_state`](Self::feed_state).
+    /// The main bars are not touched, and study values follow on the next [`show`](Self::show).
+    ///
+    /// Returns `false`, changing nothing, for an id that is not a custom data series or a point
+    /// type other than the one the series was added with.
+    pub fn set_custom_data<P: CustomPoint>(&mut self, series: SeriesId, points: Vec<P>) -> bool {
+        let clock = self.clock();
+        let Some(custom) = self.custom_data_mut::<P>(series, "set_custom_data") else {
+            return false;
+        };
+        let total = points.len();
+        let mut rows: Vec<_> = points
+            .into_iter()
+            .filter_map(|point| Some((CustomKey::of(&point)?, point)))
+            .collect();
+        custom.feed.rejected_bars += (total - rows.len()) as u64;
+        // A stable sort leaves duplicates in the order they arrived, so the last one wins.
+        rows.sort_by_key(|(key, _)| clock.bar_open(key.time));
+        let mut kept: Vec<(CustomKey, P)> = Vec::with_capacity(rows.len());
+        for row in rows {
+            match kept.last_mut() {
+                Some(last) if clock.bar_open(last.0.time) == clock.bar_open(row.0.time) => {
+                    *last = row;
+                }
+                _ => kept.push(row),
+            }
+        }
+        let (keys, points): (Vec<_>, Vec<_>) = kept.into_iter().unzip();
+        custom.points = Arc::new(points);
+        *custom
+            .keys
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = keys;
+        custom.revision = crate::model::next_revision();
+        self.custom_data_changed(series, 0);
+        self.data_set(series);
+        true
+    }
+
+    /// Merges `point` into a custom data series by the rules of
+    /// [`set_custom_data`](Self::set_custom_data): a point at a stored key or slot replaces it,
+    /// including with whitespace, a newer one is appended and an older one is inserted in order.
+    /// An invalid point is dropped and counted, leaving the stored point at its key in place.
+    /// Reported by [`ChartEvent::DataUpdated`](super::ChartEvent::DataUpdated) and, when
+    /// enabled, [`DataOperation`].
+    ///
+    /// Returns `false`, changing nothing, for an id that is not a custom data series or a point
+    /// type other than the one the series was added with.
+    pub fn update_custom_data<P: CustomPoint>(&mut self, series: SeriesId, point: P) -> bool {
+        let clock = self.clock();
+        let Some(custom) = self.custom_data_mut::<P>(series, "update_custom_data") else {
+            return false;
+        };
+        let Some(key) = CustomKey::of(&point) else {
+            custom.feed.rejected_bars += 1;
+            return true;
+        };
+        let slot = clock.bar_open(key.time);
+        let (found, len) = {
+            let keys = custom.keys();
+            let found = keys.binary_search_by_key(&slot, |key| clock.bar_open(key.time));
+            (found, keys.len())
+        };
+        let Some(points) = custom.points_mut::<P>() else {
+            return false;
+        };
+        match found {
+            Ok(at) => points[at] = point,
+            Err(at) => points.insert(at, point),
+        }
+        let mut keys = custom
+            .keys
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let operation = match found {
+            Ok(at) => {
+                keys[at] = key;
+                DataOperation::Update(key.time)
+            }
+            Err(at) => {
+                keys.insert(at, key);
+                if at == len {
+                    DataOperation::Append(key.time)
+                } else {
+                    DataOperation::Insert(key.time)
+                }
+            }
+        };
+        drop(keys);
+        custom.revision = crate::model::next_revision();
+        // A change at the first bar would blank the study until its turn to recompute.
+        let last = self.state.shown().len().saturating_sub(1);
+        self.custom_data_changed(series, last.max(1));
+        self.data_updated(series);
+        self.data_operation(series, operation);
+        true
+    }
+
+    /// The points of a custom data series in key order, including whitespace; during a replay,
+    /// those the replay reached by the last frame. Empty for a removed or other series, or
+    /// another point type. `custom_points(id).last()` is the last point.
+    pub fn custom_points<P: CustomPoint>(&self, series: SeriesId) -> &[P] {
+        self.custom_of(series)
+            .and_then(|custom| Some(&custom.points.downcast_ref::<Vec<P>>()?[..custom.len()]))
+            .unwrap_or_default()
+    }
+
+    /// The point of a custom data series at key `time`, or else its nearest neighbour in
+    /// `direction`, including whitespace. `None` when there is no such point.
+    pub fn custom_point_at<P: CustomPoint>(
+        &self,
+        series: SeriesId,
+        time: DateTime<Utc>,
+        direction: MismatchDirection,
+    ) -> Option<&P> {
+        let points = self.custom_points::<P>(series);
+        points.get(index_of_key(points, P::time, time, direction)?)
+    }
+
+    /// The point of a custom data series at a logical position on the shared horizontal scale,
+    /// or its nearest neighbour in `direction`, as [`bar_at_index`](Self::bar_at_index) selects
+    /// bars. `None` for a non-finite index, an empty time scale or no point in that direction.
+    pub fn custom_point_at_index<P: CustomPoint>(
+        &self,
+        series: SeriesId,
+        index: f64,
+        direction: MismatchDirection,
+    ) -> Option<&P> {
+        let points = self.custom_points::<P>(series);
+        points.get(self.key_at_index(points, P::time, index, direction)?)
+    }
+
+    /// The points of a custom data series inside `range`, with the distances to the ends of the
+    /// series, as [`bars_in_logical_range`](Self::bars_in_logical_range) selects bars. The
+    /// result indexes [`custom_points`](Self::custom_points). `None` for a series without
+    /// points or a chart without a time scale.
+    pub fn custom_points_in_logical_range(
+        &self,
+        series: SeriesId,
+        range: LogicalRange,
+    ) -> Option<BarsInRange> {
+        let custom = self.custom_of(series)?;
+        self.keys_in_logical_range(custom.shown(&custom.keys()), |key| key.time, range)
+    }
+
+    /// The custom data of a present series; hooks of a removed one still wait for the next frame.
+    fn custom_of(&self, series: SeriesId) -> Option<&CustomData> {
+        if !self.study_ids.contains(&series) {
+            return None;
+        }
+        self.primitives_of(series)
+            .find_map(|item| item.custom.as_ref())
+    }
+
+    fn custom_data_mut<P: CustomPoint>(
+        &mut self,
+        series: SeriesId,
+        call: &str,
+    ) -> Option<&mut CustomData> {
+        let present = self.study_ids.contains(&series);
+        let custom = self
+            .primitives
+            .iter_mut()
+            .filter(|item| present && item.series == series)
+            .find_map(|item| item.custom.as_mut())
+            .filter(|custom| custom.points.is::<Vec<P>>());
+        if custom.is_none() {
+            log::warn!("Chart::{call} ignored: {series:?} holds no such custom points");
+        }
+        custom
+    }
+
+    fn custom_data_changed(&mut self, series: SeriesId, from: usize) {
+        if let Some(at) = self.study_ids.iter().position(|id| *id == series) {
+            self.pending_from[at] =
+                Some(self.pending_from[at].map_or(from, |pending| pending.min(from)));
+            self.element_studies.dirty = true;
+            self.readout_revision = crate::model::next_revision();
+        }
+    }
+
+    /// The bars or points a series holds, as data events report them.
+    pub(super) fn series_len(&self, series: SeriesId) -> usize {
+        self.custom_of(series)
+            .map_or_else(|| self.bars(series).len(), CustomData::len)
+    }
+
+    pub(super) fn custom_feed_state(&self, series: SeriesId) -> Option<&FeedState> {
+        self.custom_of(series).map(|custom| &custom.feed)
+    }
+
+    /// The custom data series, for the pointer's nearest-point search.
+    pub(super) fn custom_series(&self) -> impl Iterator<Item = &CustomData> {
+        self.primitives
+            .iter()
+            .filter_map(|item| item.custom.as_ref())
+    }
+
+    /// For each custom data series with a point at `time`, whether the series is visible and
+    /// the point has a value.
+    pub(super) fn custom_values_at(
+        &self,
+        time: DateTime<Utc>,
+    ) -> impl Iterator<Item = (bool, bool)> + '_ {
+        self.primitives.iter().filter_map(move |item| {
+            let custom = item.custom.as_ref()?;
+            let at = custom.at(time)?;
+            let valued = custom.keys()[at].prices.is_some();
+            Some((self.is_series_visible(item.series), valued))
+        })
+    }
+
+    /// Each custom data series' point at `time`, with its id and data revision.
+    pub(super) fn custom_points_at(
+        &self,
+        time: DateTime<Utc>,
+    ) -> impl Iterator<Item = (SeriesId, u64, Arc<dyn Any + Send + Sync>)> + '_ {
+        self.primitives.iter().filter_map(move |item| {
+            let custom = item.custom.as_ref()?;
+            let at = custom.at(time)?;
+            Some((
+                item.series,
+                custom.revision,
+                (custom.clone_point)(custom.points.as_ref(), at),
+            ))
+        })
     }
 
     fn attach(
@@ -184,6 +657,7 @@ impl Chart {
         series: SeriesId,
         primitive: Arc<Mutex<dyn Primitive>>,
         replaces: bool,
+        custom: Option<CustomData>,
     ) -> Option<PrimitiveId> {
         self.primitive_source(series)?;
         let id = PrimitiveId(self.next_primitive);
@@ -195,6 +669,7 @@ impl Chart {
             primitive,
             replaces,
             seen: None,
+            custom,
         });
         Some(id)
     }
@@ -220,15 +695,27 @@ impl Chart {
                 .is_some()
                 .then(|| (seen(self.state.revision(), bars), bars))
         } else {
-            self.primitive_source(item.series)
+            let (mut current, bars) = self.primitive_source(item.series)?;
+            // Both counters only grow, so their sum changes whenever either does.
+            if let Some(custom) = &item.custom {
+                current.0 = current.0.wrapping_add(custom.revision);
+            }
+            Some((current, bars))
         }
     }
 
     /// Runs the lifecycle hooks before a frame is drawn: `detached` for the primitives of
     /// removed series, `attached` for new ones and `data_changed` when their bars changed.
     pub(super) fn sync_primitives(&mut self, ctx: &egui::Context) {
+        let cutoff = self
+            .replay_time()
+            .and_then(|_| self.state.shown().last())
+            .map(|bar| bar.time);
         let mut primitives = std::mem::take(&mut self.primitives);
         primitives.retain_mut(|item| {
+            if let Some(custom) = &mut item.custom {
+                custom.cutoff = cutoff;
+            }
             let Some((current, bars)) = self.attachment_source(item) else {
                 if item.seen.is_some() {
                     item.get().detached();
@@ -267,6 +754,9 @@ impl Chart {
         mapping: ChartMapping,
     ) -> PrimitiveView<'_> {
         let (start, end) = self.state.visible_range();
+        let custom = self
+            .primitives_of(series)
+            .find_map(|item| item.custom_view(self.state.shown(), &mapping));
         PrimitiveView {
             series,
             study: self
@@ -278,6 +768,7 @@ impl Chart {
             mapping,
             bars: self.state.shown(),
             visible: start..end,
+            custom,
         }
     }
 
@@ -363,8 +854,16 @@ impl Chart {
         series: SeriesId,
     ) -> impl Iterator<Item = AutoscaleInfo> + '_ {
         let (start, end) = self.state.visible_range();
-        self.primitives_of(series)
-            .filter_map(move |item| item.get().autoscale_info(self.state.shown(), start..end))
+        let scale = self.state.time_scale();
+        let left = scale.coord_to_idx_precise(0.0, 0.0, scale.width());
+        let right = scale.coord_to_idx_precise(scale.width(), 0.0, scale.width());
+        self.primitives_of(series).flat_map(move |item| {
+            let shown = self.state.shown();
+            let points =
+                (item.custom.as_ref()).and_then(|custom| custom.autoscale(shown, left, right));
+            let renderer = item.get().autoscale_info(shown, start..end);
+            renderer.into_iter().chain(points)
+        })
     }
 
     /// The prices the primitives of the main series and of the overlay studies on the main
@@ -625,6 +1124,19 @@ mod tests {
     use egui::{Color32, CursorIcon, Event, Shape};
 
     type Log = Arc<Mutex<Vec<String>>>;
+
+    /// A point type other than [`Band`].
+    #[derive(Clone, Debug, PartialEq)]
+    struct BandAlias(DateTime<Utc>);
+
+    impl CustomPoint for BandAlias {
+        fn time(&self) -> DateTime<Utc> {
+            self.0
+        }
+        fn prices(&self) -> Vec<f64> {
+            vec![1.0]
+        }
+    }
 
     struct Probe(&'static str, Log);
 
@@ -1869,6 +2381,225 @@ mod tests {
             frame(&ctx, &mut chart, 9.1, vec![]);
             assert!(chart.host_events.primitive_hit.is_none());
         }
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    struct Band {
+        time: DateTime<Utc>,
+        /// Low and high, the current value being the high. `None` is whitespace.
+        values: Option<(f64, f64)>,
+        note: &'static str,
+    }
+
+    impl CustomPoint for Band {
+        fn time(&self) -> DateTime<Utc> {
+            self.time
+        }
+        fn prices(&self) -> Vec<f64> {
+            self.values
+                .map_or_else(Vec::new, |(low, high)| vec![low, high])
+        }
+    }
+
+    /// Records the notes of the points it is given to draw.
+    struct BandNotes(Arc<Mutex<Vec<&'static str>>>);
+
+    impl Primitive for BandNotes {
+        fn draw(&self, _: &Painter, view: &PrimitiveView<'_>, pass: PrimitivePass) {
+            if pass == PrimitivePass::Series {
+                let points = view.custom_points::<Band>();
+                *self.0.lock().unwrap() = points[view.visible_custom_points()]
+                    .iter()
+                    .map(|point| point.note)
+                    .collect();
+            }
+        }
+    }
+
+    fn band_series(chart: &mut Chart) -> (SeriesId, Arc<Mutex<Vec<&'static str>>>) {
+        let drawn = Arc::<Mutex<Vec<&'static str>>>::default();
+        let id = chart.add_custom_data_series::<Band>(
+            "Band",
+            |study| study.with_overlay(false),
+            BandNotes(Arc::clone(&drawn)),
+        );
+        (id, drawn)
+    }
+
+    #[test]
+    fn custom_points_reach_renderer_scale_cursor_and_queries_apart_from_the_bars() {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[10.0], &[20.0]);
+        let main = chart.bars(SeriesId::MAIN).to_vec();
+        let (id, drawn) = band_series(&mut chart);
+        let time = |bar: usize| main[bar].time;
+        let band = |at, low, high, note| Band {
+            time: at,
+            values: Some((low, high)),
+            note,
+        };
+        let half_past_90 = time(90) + chrono::TimeDelta::hours(12);
+
+        assert!(chart.set_custom_data(
+            id,
+            vec![
+                band(time(92), 1000.0, 1100.0, "c"),
+                band(time(90), 1000.0, 1100.0, "replaced by the later duplicate"),
+                band(time(90), 1200.0, 1300.0, "a"),
+                band(half_past_90, 1400.0, 1500.0, "b"),
+                band(
+                    time(92),
+                    f64::NAN,
+                    1100.0,
+                    "invalid, so it does not replace c"
+                ),
+                Band {
+                    time: time(94),
+                    values: None,
+                    note: "whitespace"
+                },
+            ],
+        ));
+        let notes = |chart: &Chart| -> Vec<&str> {
+            chart
+                .custom_points::<Band>(id)
+                .iter()
+                .map(|point| point.note)
+                .collect()
+        };
+        assert_eq!(notes(&chart), ["a", "b", "c", "whitespace"]);
+        assert_eq!(chart.feed_state(id).unwrap().rejected_bars, 1);
+        // A series keeps one point type, and bars are not its data.
+        assert!(!chart.set_custom_data(SeriesId::MAIN, vec![band(time(1), 1.0, 2.0, "")]));
+        assert!(!chart.set_custom_data::<BandAlias>(id, vec![BandAlias(time(1))]));
+        chart.set_visible_bars(12);
+
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        frame(&ctx, &mut chart, 0.1, vec![]);
+        assert_eq!(*drawn.lock().unwrap(), ["a", "b", "c", "whitespace"]);
+        let range = |chart: &Chart| chart.series_price_map(id).unwrap().range();
+        // The lowest price is no point's current value, and no bar comes close.
+        assert!(range(&chart).min <= 1000.0 && range(&chart).max >= 1500.0);
+        let readout =
+            |chart: &Chart, bar| chart.indicator_value_at(id, bar).map(|(_, value)| value);
+        assert_eq!(readout(&chart, 90), Some(1300.0));
+        assert_eq!(readout(&chart, 94), None);
+        assert_eq!(readout(&chart, 80), None);
+
+        // An update at a stored key, a new key, an older key and invalid input.
+        assert!(chart.update_custom_data(id, band(time(92), 2000.0, 2100.0, "c2")));
+        assert!(chart.update_custom_data(id, band(time(96), 3000.0, 3100.0, "d")));
+        assert!(chart.update_custom_data(id, band(time(91), 1000.0, 1100.0, "older")));
+        assert!(chart.update_custom_data(
+            id,
+            Band {
+                time: time(90),
+                values: Some((f64::INFINITY, 1.0)),
+                note: "bad"
+            }
+        ));
+        assert_eq!(notes(&chart), ["a", "b", "older", "c2", "whitespace", "d"]);
+        assert_eq!(chart.feed_state(id).unwrap().rejected_bars, 2);
+        frame(&ctx, &mut chart, 1.0, vec![]);
+        frame(&ctx, &mut chart, 1.1, vec![]);
+        assert_eq!(readout(&chart, 92), Some(2100.0));
+        assert!(range(&chart).max >= 3100.0, "{:?}", range(&chart));
+
+        // The cursor selects stored keys of the series, on a main bar and between two.
+        let pane = chart
+            .pane_layout
+            .panes
+            .iter()
+            .find(|pane| pane.members.contains(&id))
+            .unwrap()
+            .rect;
+        let coords = chart.get_chart_mapping();
+        let mut hover = |at: f64, time_at: f64| {
+            let pos = Pos2::new(coords.index_to_x(at), pane.center().y);
+            frame(&ctx, &mut chart, time_at, vec![Event::PointerMoved(pos)]);
+            frame(&ctx, &mut chart, time_at + 0.01, vec![]);
+            chart
+                .drain_events()
+                .filter_map(|event| match event {
+                    ChartEvent::CrosshairMoved(Some(pointer)) => Some(pointer),
+                    _ => None,
+                })
+                .last()
+                .expect("the pointer moved inside the pane")
+        };
+        let on_bar = hover(92.0, 2.0);
+        assert_eq!(on_bar.time, Some(time(92)));
+        assert_eq!(
+            on_bar.custom_point::<Band>(id).map(|point| point.note),
+            Some("c2")
+        );
+        assert_eq!(on_bar.custom_point::<BandAlias>(id), None);
+        let between = hover(90.5, 3.0);
+        assert_eq!(between.time, Some(half_past_90));
+        assert_eq!(
+            between.custom_point::<Band>(id).map(|point| point.note),
+            Some("b")
+        );
+
+        for (at, direction, note) in [
+            (time(91), MismatchDirection::Exact, Some("older")),
+            (time(93), MismatchDirection::Exact, None),
+            (time(93), MismatchDirection::NearestLeft, Some("c2")),
+            (
+                time(93),
+                MismatchDirection::NearestRight,
+                Some("whitespace"),
+            ),
+        ] {
+            let point = chart.custom_point_at::<Band>(id, at, direction);
+            assert_eq!(point.map(|point| point.note), note, "{at} {direction:?}");
+        }
+        assert_eq!(
+            chart
+                .custom_point_at_index::<Band>(id, 91.0, MismatchDirection::Exact)
+                .map(|point| point.note),
+            Some("older"),
+        );
+        let inside = chart
+            .custom_points_in_logical_range(id, LogicalRange::new(91.0, 94.0))
+            .unwrap();
+        assert_eq!(inside.bars, 2..5);
+
+        // Removal takes the points with it and leaves the bars alone.
+        assert!(chart.remove_series(id));
+        assert!(chart.custom_points::<Band>(id).is_empty());
+        assert!(!chart.update_custom_data(id, band(time(98), 1.0, 2.0, "gone")));
+        frame(&ctx, &mut chart, 5.0, vec![]);
+        assert_eq!(chart.bars(SeriesId::MAIN), main);
+    }
+
+    /// A replay must not show points ahead of its position, even in the whitespace past the bars.
+    #[test]
+    fn replay_withholds_custom_points_it_has_not_reached() {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[10.0], &[20.0]);
+        let main = chart.bars(SeriesId::MAIN).to_vec();
+        let (id, drawn) = band_series(&mut chart);
+        let point = |bar: usize, high, note| Band {
+            time: main[bar].time,
+            values: Some((high, high)),
+            note,
+        };
+        chart.set_custom_data(
+            id,
+            vec![point(50, 1000.0, "reached"), point(60, 9000.0, "ahead")],
+        );
+        chart.set_replay_time(Some(main[55].time));
+        chart.set_visible_bars(40);
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        frame(&ctx, &mut chart, 0.1, vec![]);
+        assert_eq!(*drawn.lock().unwrap(), ["reached"]);
+        assert_eq!(chart.custom_points::<Band>(id).len(), 1);
+        assert!(chart.series_price_map(id).unwrap().range().max < 9000.0);
+        chart.set_replay_time(None);
+        frame(&ctx, &mut chart, 0.2, vec![]);
+        frame(&ctx, &mut chart, 0.3, vec![]);
+        assert_eq!(chart.custom_points::<Band>(id).len(), 2);
     }
 
     #[test]
