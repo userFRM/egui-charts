@@ -967,7 +967,8 @@ impl Chart {
                 let ranges = self.execution_profile_ranges(profile_start..end_idx)?;
                 let mapping = self.get_chart_mapping().with_rect(price_rect);
                 let bars = &self.state.data().bars;
-                let mut profiles = crate::studies::trade_profiles(flow, &ranges);
+                let mut profiles =
+                    crate::studies::trade_profiles_with_rows(flow, &ranges, settings.rows);
                 profiles.retain(|profile| {
                     let first = bars.partition_point(|b| b.time < profile.range.start);
                     let end = bars.partition_point(|b| b.time < profile.range.end);
@@ -1025,6 +1026,7 @@ impl Chart {
             .iter()
             .flat_map(|(step, tick, profiles, shown)| {
                 profiles[*shown..].iter().flat_map(move |profile| {
+                    let step = step * profile.group as f64;
                     profile
                         .volume
                         .levels
@@ -3115,6 +3117,7 @@ impl Chart {
         #[cfg(feature = "studies")]
         if let Some((step, tick, profiles, shown)) = &execution_profiles {
             for profile in &profiles[*shown..] {
+                let step = step * profile.group as f64;
                 let levels = &profile.volume.levels;
                 let Some(((&low, _), (&high, _))) =
                     levels.first_key_value().zip(levels.last_key_value())

@@ -72,8 +72,9 @@ pub use chart_style::{
     HollowStyle, KagiStyle, LastPriceAnimation, LinePlotStyle, LineType,
 };
 pub use chart_type::{
-    BaselineLevel, ChartType, ChartTypeCategory, ChartTypeParams, FootprintColor, FootprintMode,
-    FootprintStatistic, NodeSensitivity, TradeProfileSettings,
+    BaselineLevel, ChartType, ChartTypeCategory, ChartTypeParams, CustomProfileSession,
+    FootprintColor, FootprintMode, FootprintStatistic, NodeSensitivity, ProfileRows,
+    ProfileSession, TradeProfileSettings,
 };
 pub use clock::BarClock;
 pub use color::ColorType;

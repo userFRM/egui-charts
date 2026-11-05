@@ -3,9 +3,11 @@
 use super::frame::session_ranges;
 use super::{Chart, SeriesId};
 use crate::chart::overlays::TradeProfileSettings;
-use crate::model::{BarClock, SessionProvider};
+use crate::model::{
+    BarClock, ChartType, ProfileSession, Session, SessionProvider, SessionWindow, TimezoneId,
+};
 use crate::studies::TradeProfileRanges;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Utc, Weekday};
 use std::ops::{Range, RangeInclusive};
 
 #[derive(Clone, Default)]
@@ -89,16 +91,48 @@ impl Chart {
         self.trade_profiles.splits.clear();
     }
 
+    /// The calendar that divides the chart into profile sessions, as the settings choose it.
     pub(crate) fn profile_clock(&self) -> BarClock {
         let mut clock = self.bar_clock();
-        if let Some(zone) = self
-            .instrument()
-            .filter(|i| i.session.is_none())
-            .and_then(|i| i.time_zone.as_ref())
-        {
-            clock = clock.with_timezone(zone.clone());
+        let instrument = self.instrument();
+        let exchange_zone = || {
+            instrument
+                .and_then(|i| i.time_zone.clone())
+                .unwrap_or_else(TimezoneId::utc)
+        };
+        // The profile settings divide only the session volume profile chart: the market profile
+        // chart and its menu keep the chart's calendar.
+        let selection = match self.chart_type {
+            ChartType::SessionVolumeProfile => &self.trade_profile_settings().session,
+            _ => &ProfileSession::Chart,
+        };
+        match selection {
+            ProfileSession::Custom(custom) => {
+                use Weekday::*;
+                let zone = custom.zone.clone().unwrap_or_else(exchange_zone);
+                let every_day = [Mon, Tue, Wed, Thu, Fri, Sat, Sun];
+                let session =
+                    Session::new([SessionWindow::new(every_day, custom.start, custom.end)]);
+                clock.with_session(zone, session, false)
+            }
+            // Without instrument hours there is nothing to select among, so the chart's calendar stays.
+            selection @ (ProfileSession::Regular | ProfileSession::Extended)
+                if instrument.is_some_and(|i| i.session.is_some()) =>
+            {
+                let session = instrument.and_then(|i| i.session.clone()).unwrap();
+                let extended = *selection == ProfileSession::Extended;
+                clock.with_session(exchange_zone(), session, extended)
+            }
+            _ => {
+                if let Some(zone) = instrument
+                    .filter(|i| i.session.is_none())
+                    .and_then(|i| i.time_zone.as_ref())
+                {
+                    clock = clock.with_timezone(zone.clone());
+                }
+                clock
+            }
         }
-        clock
     }
 
     fn profile_edits_current(&self) -> bool {
@@ -200,5 +234,86 @@ impl Chart {
             .filter(|range| range.end > clock.bar_open(bars[0].time))
             .collect();
         TradeProfileRanges::new(ranges).ok()
+    }
+}
+
+#[cfg(all(test, feature = "timezones"))]
+mod tests {
+    use crate::chart::overlays::TradeProfileSettings;
+    use crate::model::{
+        Bar, BarData, ChartType, CustomProfileSession, Instrument, ProfileSession, Session,
+        SessionWindow, Timeframe, TimezoneId,
+    };
+    use crate::widget::Chart;
+    use chrono::{DateTime, NaiveTime, TimeDelta, Utc, Weekday};
+
+    fn hourly(instrument: Instrument, session: ProfileSession) -> Chart {
+        // Hourly bars from Friday 2024-03-08 20:00 UTC across the New York clock change early
+        // on Sunday March 10.
+        let start: DateTime<Utc> = "2024-03-08T20:00:00Z".parse().unwrap();
+        let bars = (0..80)
+            .map(|i| Bar::new(start + TimeDelta::hours(i), 100.0, 102.0, 99.0, 101.0, 1.0))
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars));
+        chart.set_chart_type(ChartType::SessionVolumeProfile);
+        chart.set_timeframe(Timeframe::Hour1);
+        chart.set_instrument(Some(instrument));
+        chart.set_trade_profile_settings(TradeProfileSettings {
+            session,
+            ..Default::default()
+        });
+        chart
+    }
+
+    fn starts(chart: &Chart) -> Vec<String> {
+        let ranges = chart.trade_profile_ranges().unwrap();
+        ranges
+            .ranges()
+            .iter()
+            .map(|r| r.start.format("%d %H:%M").to_string())
+            .collect()
+    }
+
+    /// An overnight custom session opens at its own wall-clock time on both sides of a clock
+    /// change, whatever the instrument's own hours say.
+    #[test]
+    fn custom_sessions_open_at_their_local_time_across_a_clock_change() {
+        let new_york = TimezoneId::named("America/New_York").unwrap();
+        let at = |hour| NaiveTime::from_hms_opt(hour, 0, 0).unwrap();
+        let custom = ProfileSession::Custom(CustomProfileSession {
+            start: at(18),
+            end: at(17),
+            zone: None,
+        });
+        // Monday daytime hours in New York: only the custom session can explain the starts.
+        let exchange = Instrument::new("X")
+            .with_time_zone(new_york)
+            .with_session(Session::new([SessionWindow::new(
+                [Weekday::Mon],
+                at(9),
+                at(15),
+            )]));
+        let chart = hourly(exchange.clone(), custom.clone());
+        // 18:00 is 23:00 UTC in winter and 22:00 UTC after the change.
+        assert_eq!(
+            starts(&chart),
+            ["08 20:00", "08 23:00", "09 23:00", "10 22:00", "11 22:00"]
+        );
+        // Its own zone overrides the instrument's.
+        let ProfileSession::Custom(mut other) = custom.clone() else {
+            unreachable!()
+        };
+        other.zone = Some(TimezoneId::utc());
+        let chart = hourly(exchange.clone(), ProfileSession::Custom(other));
+        assert_eq!(starts(&chart)[..2], ["08 20:00", "09 18:00"]);
+        // Other chart types keep the chart's calendar, so their menus find the same sessions.
+        let mut other_type = hourly(exchange.clone(), ProfileSession::Chart);
+        let plain = other_type.profile_clock();
+        other_type.set_trade_profile_settings(TradeProfileSettings {
+            session: custom,
+            ..Default::default()
+        });
+        other_type.set_chart_type(ChartType::TimePriceOpportunity);
+        assert_eq!(other_type.profile_clock(), plain);
     }
 }
