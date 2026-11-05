@@ -185,7 +185,7 @@ impl HandleService {
             }
         }
 
-        if drawing.tool_type == DrawingToolType::ExtendedLine
+        if drawing.tool_type.supports_line_measurements()
             && drawing.line_measurements.midpoint
             && let &[a, b, ..] = drawing.points.as_slice()
         {
@@ -896,20 +896,21 @@ mod tests {
             }
             assert_eq!(HandleService::get_handles(&drawing), expected, "{tool:?}");
         }
-        let mut line = create_test_drawing(
-            DrawingToolType::ExtendedLine,
-            vec![pos2(100.0, 100.0), pos2(300.0, 200.0)],
-        );
-        assert!(
-            !HandleService::get_handles(&line)
-                .iter()
-                .any(|(h, _)| *h == Middle)
-        );
-        line.line_measurements.midpoint = true;
-        assert_eq!(
-            HandleService::get_handles(&line).last(),
-            Some(&(Middle, pos2(200.0, 150.0)))
-        );
+        for tool in [DrawingToolType::ExtendedLine, DrawingToolType::Ray] {
+            let mut line = create_test_drawing(tool, vec![pos2(100.0, 100.0), pos2(300.0, 200.0)]);
+            assert!(
+                !HandleService::get_handles(&line)
+                    .iter()
+                    .any(|(h, _)| *h == Middle),
+                "{tool:?}"
+            );
+            line.line_measurements.midpoint = true;
+            assert_eq!(
+                HandleService::get_handles(&line).last(),
+                Some(&(Middle, pos2(200.0, 150.0))),
+                "{tool:?}"
+            );
+        }
         // Renderer control counts, including generated position stops.
         let anchor_counts: &[(&[DrawingToolType], usize)] = &[
             (
