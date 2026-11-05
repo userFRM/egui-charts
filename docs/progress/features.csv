@@ -843,7 +843,7 @@ Studies,Strategy tester,Strategy properties,done,library,src/strategies/backtest
 Studies,Strategy tester,Strategy tester panel,done,library,src/ui/strategy_report/tester.rs;src/ui/strategy_report/inputs.rs;src/ui/strategy_report/properties.rs;src/ui/strategy_report/mod.rs;examples/demo/strategy.rs,2059
 Studies,Strategy tester,Trade markers on the chart,done,library,src/model/strategy.rs;src/ui/strategy_report/tester.rs;src/widget/signals.rs;examples/demo/strategy.rs;src/widget/frame/mod.rs;terminal/src/trading.rs,
 Terminal,Alerts,"Alert editing, pause, resume and duplication",done,library,src/ui/widget_bar/panels/alerts_panel.rs;src/ui/dialogs/alert_dialog/dialog.rs;terminal/src/alerts.rs,
-Terminal,Alerts,Alert evaluation engine,done,library,src/services/alerts.rs;src/services/alert_engine.rs;src/services/alert_evaluator.rs;src/services/alert_feed.rs;terminal/src/alerts.rs,
+Terminal,Alerts,Alert evaluation engine,done,library,src/services/alerts.rs;src/services/alert_engine.rs;src/services/alert_evaluator.rs;src/services/alert_feed.rs;src/widget/alerts.rs;terminal/src/alerts.rs,2130
 Terminal,Alerts,Alert expiration,done,library,src/ui/dialogs/alert_dialog/dialog.rs;src/services/alert_engine.rs;terminal/src/alerts.rs,
 Terminal,Alerts,Alert levels drawn on the chart,done,library,src/chart/rendering/alert_levels.rs;src/model/alert.rs;src/ui/widget_bar/panels/alerts_panel.rs;src/services/alert_engine.rs;examples/demo/controller.rs;terminal/src/alerts.rs,2065
 Terminal,Alerts,Alert log,done,library,src/ui/widget_bar/panels/alerts_panel.rs;src/services/alert_engine.rs;terminal/src/alerts.rs,
