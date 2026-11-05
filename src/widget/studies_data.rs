@@ -1903,14 +1903,24 @@ mod tests {
             // The drawn values, on Renko those calculated on the bricks.
             let last = |chart: &Chart| {
                 ids.map(|id| {
-                    let at = chart.indicators().position(|(other, _)| other == id).unwrap();
+                    let at = chart
+                        .indicators()
+                        .position(|(other, _)| other == id)
+                        .unwrap();
                     let values = chart.rendered_studies().indicators()[at].values();
-                    values.len().checked_sub(1).and_then(|at| values.value(0, at))
+                    values
+                        .len()
+                        .checked_sub(1)
+                        .and_then(|at| values.value(0, at))
                 })
             };
             // 1W against a daily close of 50 is 100 * (100 - 50) / 50 = 100, and hourly closes of
             // 100 give an SMA of 100 at the last bar or brick, which closes at 100.
-            assert_eq!(last(&chart), [Some(100.0); 2], "{chart_type:?} {performance_first}");
+            assert_eq!(
+                last(&chart),
+                [Some(100.0); 2],
+                "{chart_type:?} {performance_first}"
+            );
             let sink = feed.sink(Timeframe::Day1);
             let today: DateTime<chrono::Utc> = "2024-03-15T00:00:00Z".parse().unwrap();
             for count in &counts {
