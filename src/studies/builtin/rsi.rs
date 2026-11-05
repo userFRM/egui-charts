@@ -359,9 +359,9 @@ mod tests {
     }
 
     /// RSI(1) of 1, 2, 1, 2, 3 is missing, 100, 0, 100, 100. The two-bar SMA is their mean: 50, 50,
-    /// 100. The two-bar EMA starts from that same first mean, then adds 2/3 of each step: 50 + 2/3
-    /// * 50, then 250/3 + 2/3 * 50 / 3. The default study is a 14-bar SMA, first defined on bar 27,
-    /// the 14th of the RSI values that start on bar 14.
+    /// 100. The two-bar EMA starts from that same first mean, then adds 2/3 of each step: 250/3,
+    /// then 850/9. The default study is a 14-bar SMA, first defined on bar 27, the 14th of the RSI
+    /// values that start on bar 14.
     #[test]
     fn the_average_of_the_rsi_follows_its_inputs() {
         let bars = bars_from_closes(&[1.0, 2.0, 1.0, 2.0, 3.0]);
