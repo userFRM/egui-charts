@@ -34,6 +34,16 @@ pub struct AlertDialog {
     /// The zone the expiry date and time are entered in, UTC by default. Set it before
     /// [`open`](Self::open) or [`edit`](Self::edit), usually to the chart's time zone.
     pub timezone: TimezoneId,
+    /// The account's time zone, when the host knows it. A notification schedule then offers it as
+    /// its zone and starts from it, instead of from [`timezone`](Self::timezone). Set it before
+    /// [`open`](Self::open) or [`edit`](Self::edit).
+    pub account_timezone: Option<TimezoneId>,
+    /// Whether the staged alert starts monitoring at a set time; otherwise it starts when saved.
+    starts: bool,
+    /// The start date as `YYYY-MM-DD` in [`timezone`](Self::timezone).
+    start_date: String,
+    /// The start time as `HH:MM` in [`timezone`](Self::timezone).
+    start_time: String,
     /// Whether the staged alert expires; without an expiry it stays active until removed.
     expires: bool,
     /// The expiry date as `YYYY-MM-DD` in [`timezone`](Self::timezone).
@@ -48,6 +58,8 @@ pub struct AlertDialog {
     schedule_days: [bool; 7],
     /// The windows as `HH:MM` start and end texts.
     schedule_windows: Vec<[String; 2]>,
+    /// The schedule of the latest saved alert that had one, offered to the next new alert.
+    last_schedule: Option<NotificationSchedule>,
     editing_condition: usize,
     preset_name: String,
     presets: BTreeMap<String, Alert>,
@@ -74,6 +86,10 @@ impl AlertDialog {
             sources: Vec::new(),
             watchlists: Vec::new(),
             timezone: TimezoneId::utc(),
+            account_timezone: None,
+            starts: false,
+            start_date: String::new(),
+            start_time: String::new(),
             expires: false,
             expiry_date: String::new(),
             expiry_time: String::new(),
@@ -81,6 +97,7 @@ impl AlertDialog {
             schedule_zone: String::new(),
             schedule_days: [false; 7],
             schedule_windows: Vec::new(),
+            last_schedule: None,
             editing_condition: 0,
             preset_name: String::new(),
             presets: BTreeMap::new(),
@@ -104,8 +121,12 @@ impl AlertDialog {
     }
 
     /// Open a fresh price alert at the last or hovered price, discarding earlier cancelled edits.
+    /// It starts with the schedule of the latest saved alert that had one, if any.
     pub fn open(&mut self, symbol: String, price: f64) {
         self.edit(Alert::new(symbol, AlertCondition::Crossing(price)));
+        if let Some(schedule) = self.last_schedule.clone() {
+            self.set_schedule_fields(Some(&schedule));
+        }
     }
 
     /// Stage an existing alert, retaining its host identifier and status when saved.
@@ -114,39 +135,41 @@ impl AlertDialog {
             self.sources = inputs.sources.clone();
         }
 
+        self.starts = alert.starts.is_some();
+        [self.start_date, self.start_time] = self.entry_fields(alert.starts);
         self.expires = alert.expires.is_some();
-        self.set_expiry_fields(alert.expires);
+        [self.expiry_date, self.expiry_time] = self.entry_fields(alert.expires);
         self.set_schedule_fields(alert.schedule.as_deref());
         self.alert = alert;
         self.editing_condition = 0;
         self.is_open = true;
     }
 
-    /// Fill the expiry date and time fields with `expiry` in the entry zone, or clear them.
-    fn set_expiry_fields(&mut self, expiry: Option<DateTime<Utc>>) {
-        let local = expiry.map(|t| t.with_timezone(&self.timezone));
+    /// The date and time field texts of `at` in the entry zone, empty without one.
+    fn entry_fields(&self, at: Option<DateTime<Utc>>) -> [String; 2] {
+        let local = at.map(|t| t.with_timezone(&self.timezone));
         let format = |pattern| {
             local
                 .as_ref()
                 .map_or_else(String::new, |t| t.format(pattern).to_string())
         };
-        self.expiry_date = format("%Y-%m-%d");
-        self.expiry_time = format("%H:%M");
+        [format("%Y-%m-%d"), format("%H:%M")]
     }
 
-    /// The staged expiry: none without one, otherwise the entered date and time in the entry
-    /// zone, which must exist there and lie after `now`.
-    fn expiry(&self, now: DateTime<Utc>) -> Result<Option<DateTime<Utc>>, &'static str> {
-        if !self.expires {
-            return Ok(None);
-        }
-        let date = NaiveDate::parse_from_str(self.expiry_date.trim(), "%Y-%m-%d")
-            .map_err(|_| "Enter the expiry date as YYYY-MM-DD")?;
-        let time = NaiveTime::parse_from_str(self.expiry_time.trim(), "%H:%M")
-            .map_err(|_| "Enter the expiry time as HH:MM")?;
-        // Unchanged fields retain the saved seconds and repeated-hour occurrence. A saved
-        // expiry whose local time is past the representable range matches no entry.
-        let saved = self.alert.expires.filter(|saved| {
+    /// The instant entered as `date` and `time` in the entry zone, or the matching error of
+    /// `errors`: bad date, bad time, time skipped when clocks go forward. Unchanged fields retain
+    /// the `saved` seconds and repeated-hour occurrence. A saved instant whose local time is past
+    /// the representable range matches no entry.
+    fn entered(
+        &self,
+        saved: Option<DateTime<Utc>>,
+        date: &str,
+        time: &str,
+        errors: [&'static str; 3],
+    ) -> Result<DateTime<Utc>, &'static str> {
+        let date = NaiveDate::parse_from_str(date.trim(), "%Y-%m-%d").map_err(|_| errors[0])?;
+        let time = NaiveTime::parse_from_str(time.trim(), "%H:%M").map_err(|_| errors[1])?;
+        let saved = saved.filter(|saved| {
             let offset = saved.with_timezone(&self.timezone).offset().fix();
             saved
                 .naive_utc()
@@ -157,27 +180,75 @@ impl AlertDialog {
                         && local.minute() == time.minute()
                 })
         });
-        let expiry = if let Some(saved) = saved {
-            saved
-        } else {
-            // A newly entered time repeated when clocks go back uses its first occurrence.
-            self.timezone
-                .from_local_datetime(&date.and_time(time))
-                .earliest()
-                .ok_or("The expiry time is skipped when clocks go forward")?
-                .with_timezone(&Utc)
-        };
+        if let Some(saved) = saved {
+            return Ok(saved);
+        }
+        // A newly entered time repeated when clocks go back uses its first occurrence.
+        Ok(self
+            .timezone
+            .from_local_datetime(&date.and_time(time))
+            .earliest()
+            .ok_or(errors[2])?
+            .with_timezone(&Utc))
+    }
+
+    /// The staged expiry: none without one, otherwise the entered date and time in the entry
+    /// zone, which must exist there and lie after `now`.
+    fn expiry(&self, now: DateTime<Utc>) -> Result<Option<DateTime<Utc>>, &'static str> {
+        if !self.expires {
+            return Ok(None);
+        }
+        let expiry = self.entered(
+            self.alert.expires,
+            &self.expiry_date,
+            &self.expiry_time,
+            [
+                "Enter the expiry date as YYYY-MM-DD",
+                "Enter the expiry time as HH:MM",
+                "The expiry time is skipped when clocks go forward",
+            ],
+        )?;
         if expiry <= now {
             return Err("Choose an expiry after the current time");
         }
         Ok(Some(expiry))
     }
 
+    /// The staged start: none without one, otherwise the entered date and time in the entry
+    /// zone, which must exist there and lie before the staged `expiry`.
+    fn start(&self, expiry: Option<DateTime<Utc>>) -> Result<Option<DateTime<Utc>>, &'static str> {
+        if !self.starts {
+            return Ok(None);
+        }
+        let start = self.entered(
+            self.alert.starts,
+            &self.start_date,
+            &self.start_time,
+            [
+                "Enter the start date as YYYY-MM-DD",
+                "Enter the start time as HH:MM",
+                "The start time is skipped when clocks go forward",
+            ],
+        )?;
+        if expiry.is_some_and(|expiry| start >= expiry) {
+            return Err("Choose a start before the expiry");
+        }
+        Ok(Some(start))
+    }
+
     /// Fill the schedule fields with `schedule`, or clear them.
     fn set_schedule_fields(&mut self, schedule: Option<&NotificationSchedule>) {
         self.scheduled = schedule.is_some();
-        self.schedule_zone =
-            schedule.map_or_else(|| self.timezone.name().into(), |s| s.timezone.name().into());
+        self.schedule_zone = schedule.map_or_else(
+            || {
+                self.account_timezone
+                    .as_ref()
+                    .unwrap_or(&self.timezone)
+                    .name()
+                    .into()
+            },
+            |s| s.timezone.name().into(),
+        );
         self.schedule_days = std::array::from_fn(|i| {
             schedule.is_some_and(|s| s.days.contains(&Weekday::try_from(i as u8).unwrap()))
         });
@@ -220,8 +291,6 @@ impl AlertDialog {
             Err("Select at least one weekday")
         } else if schedule.windows.is_empty() {
             Err("Add a notification window")
-        } else if !schedule.is_valid() {
-            Err("A window needs different start and end times")
         } else {
             Ok(Some(schedule))
         }
@@ -255,7 +324,12 @@ impl AlertDialog {
                             .transpose();
                         match result {
                             Ok(doc) if doc.as_ref().is_none_or(|doc| doc.version == 1) => {
-                                self.presets = doc.map(|doc| doc.presets).unwrap_or_default();
+                                if let Some(doc) = doc {
+                                    self.presets = doc.presets;
+                                    // A schedule saved before the load finished is newer.
+                                    self.last_schedule =
+                                        self.last_schedule.take().or(doc.last_schedule);
+                                }
                                 self.loaded = true;
                             }
                             Ok(_) => self.error = Some("Unsupported alert preset version".into()),
@@ -276,9 +350,25 @@ impl AlertDialog {
     fn save_preset(&mut self) {
         self.presets
             .insert(self.preset_name.trim().into(), self.alert.clone());
+        self.write_presets();
+    }
+
+    /// Keep the staged alert's schedule, if it has one, for the next new alert and the storage.
+    fn remember_schedule(&mut self) {
+        if let Some(schedule) = &self.alert.schedule {
+            self.last_schedule = Some((**schedule).clone());
+            if self.loaded && !self.pending {
+                self.write_presets();
+            }
+        }
+    }
+
+    /// Write the presets and the remembered schedule to the host storage.
+    fn write_presets(&mut self) {
         let document = PresetDocument {
             version: 1,
             presets: self.presets.clone(),
+            last_schedule: self.last_schedule.clone(),
         };
         match serde_json::to_string(&document) {
             Ok(document) => {
@@ -326,6 +416,7 @@ impl AlertDialog {
                 }
                 ui.separator();
                 let mut expiry = Ok(None);
+                let mut start = Ok(None);
                 let mut schedule = Ok(None);
                 let mut valid = false;
                 egui::ScrollArea::vertical()
@@ -337,8 +428,12 @@ impl AlertDialog {
                     .show(ui, |ui| {
                         self.form(ui);
                         expiry = self.expiry(Utc::now());
+                        start = self.start(expiry.ok().flatten());
                         schedule = self.schedule();
-                        valid = self.alert.is_valid() && expiry.is_ok() && schedule.is_ok();
+                        valid = self.alert.is_valid()
+                            && expiry.is_ok()
+                            && start.is_ok()
+                            && schedule.is_ok();
                         if !self.alert.is_valid() {
                             let intervals = self.alert.timeframes();
                             let message = if self.alert.name.chars().count() > Alert::MAX_NAME_CHARS
@@ -361,6 +456,9 @@ impl AlertDialog {
                         if let Err(error) = expiry {
                             status_message(ui, MessageKind::Error, error);
                         }
+                        if let Err(error) = start {
+                            status_message(ui, MessageKind::Error, error);
+                        }
                         if let Err(error) = schedule {
                             status_message(ui, MessageKind::Error, error);
                         }
@@ -377,8 +475,10 @@ impl AlertDialog {
                     action = AlertDialogAction::Cancel;
                 }
                 if save {
+                    self.alert.starts = start.unwrap();
                     self.alert.expires = expiry.unwrap();
                     self.alert.schedule = schedule.unwrap().map(Box::new);
+                    self.remember_schedule();
                     action = AlertDialogAction::Create(Box::new(self.alert.clone()));
                     self.close();
                 }
@@ -396,19 +496,28 @@ impl AlertDialog {
             "Expiry time ({0})",
             &[("0", self.timezone.name().to_owned())],
         );
-        let label_width = [l10n::text(ui.ctx(), "Expiry date"), time_label.clone()]
-            .into_iter()
-            .map(|label| {
-                ui.painter()
-                    .layout_no_wrap(
-                        label,
-                        egui::TextStyle::Body.resolve(ui.style()),
-                        ui.visuals().text_color(),
-                    )
-                    .size()
-                    .x
-            })
-            .fold(0.0, f32::max);
+        let start_label = l10n::format_text(
+            ui.ctx(),
+            "Start time ({0})",
+            &[("0", self.timezone.name().to_owned())],
+        );
+        let label_width = [
+            l10n::text(ui.ctx(), "Expiry date"),
+            time_label.clone(),
+            start_label.clone(),
+        ]
+        .into_iter()
+        .map(|label| {
+            ui.painter()
+                .layout_no_wrap(
+                    label,
+                    egui::TextStyle::Body.resolve(ui.style()),
+                    ui.visuals().text_color(),
+                )
+                .size()
+                .x
+        })
+        .fold(0.0, f32::max);
         ui.spacing_mut().text_edit_width =
             (ui.available_width() - label_width - ui.spacing().item_spacing.x).max(0.0);
         FormGrid::new("alert_details").show(ui, |ui| {
@@ -482,6 +591,37 @@ impl AlertDialog {
                 .response
                 .accessible_name(l10n::text(ui.ctx(), "Frequency"));
             ui.end_row();
+            ui.scope(|ui| {
+                ui.set_min_width(label_width);
+                ui.label(l10n::text(ui.ctx(), "Start"));
+            });
+            let mut start_now = !self.starts;
+            if ui
+                .checkbox(&mut start_now, l10n::text(ui.ctx(), "Start when saved"))
+                .changed()
+            {
+                self.starts = !start_now;
+                if self.starts && self.start_date.is_empty() {
+                    [self.start_date, self.start_time] = self.entry_fields(Some(Utc::now()));
+                }
+            }
+            ui.end_row();
+            if self.starts {
+                ui.label(l10n::text(ui.ctx(), "Start date"));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.start_date)
+                        .hint_text(l10n::text(ui.ctx(), "YYYY-MM-DD")),
+                )
+                .accessible_name(l10n::text(ui.ctx(), "Start date"));
+                ui.end_row();
+                ui.label(&start_label);
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.start_time)
+                        .hint_text(l10n::text(ui.ctx(), "HH:MM")),
+                )
+                .accessible_name(start_label);
+                ui.end_row();
+            }
             // The widest expiry label's width keeps the fields in place when No expiry toggles.
             ui.scope(|ui| {
                 ui.set_min_width(label_width);
@@ -496,7 +636,8 @@ impl AlertDialog {
                 if self.expires && self.expiry_date.is_empty() {
                     // Start a month ahead, to the minute, so an expiry needs no typing.
                     let now = Utc::now();
-                    self.set_expiry_fields(now.checked_add_months(Months::new(1)).or(Some(now)));
+                    [self.expiry_date, self.expiry_time] =
+                        self.entry_fields(now.checked_add_months(Months::new(1)).or(Some(now)));
                 }
             }
             ui.end_row();
@@ -527,8 +668,22 @@ impl AlertDialog {
             ui.end_row();
             if self.scheduled {
                 ui.label(l10n::text(ui.ctx(), "Time zone"));
-                ui.text_edit_singleline(&mut self.schedule_zone)
+                ui.horizontal_wrapped(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.schedule_zone).desired_width(160.0),
+                    )
                     .accessible_name(l10n::text(ui.ctx(), "Time zone"));
+                    if let Some(account) = &self.account_timezone
+                        && ui
+                            .selectable_label(
+                                self.schedule_zone.trim() == account.name(),
+                                l10n::text(ui.ctx(), "Account time zone"),
+                            )
+                            .clicked()
+                    {
+                        self.schedule_zone = account.name().into();
+                    }
+                });
                 ui.end_row();
                 ui.label(l10n::text(ui.ctx(), "Days"));
                 ui.horizontal_wrapped(|ui| {
@@ -676,7 +831,9 @@ impl AlertDialog {
                     )
                     .clicked()
                     && let (Ok(expiry), Ok(schedule)) = (self.expiry(Utc::now()), self.schedule())
+                    && let Ok(start) = self.start(expiry)
                 {
+                    self.alert.starts = start;
                     self.alert.expires = expiry;
                     self.alert.schedule = schedule.map(Box::new);
                     self.save_preset();
@@ -712,6 +869,9 @@ const DAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 struct PresetDocument {
     version: u32,
     presets: BTreeMap<String, Alert>,
+    /// The schedule of the latest saved alert that had one.
+    #[serde(default)]
+    last_schedule: Option<NotificationSchedule>,
 }
 
 fn interval_picker(ui: &mut Ui, interval: &mut Option<Timeframe>, inherited: &str) {
@@ -1513,11 +1673,6 @@ mod tests {
         assert_eq!(dialog.schedule(), Err("Select at least one weekday"));
         dialog.schedule_days[4] = true;
         assert_eq!(dialog.schedule(), Err("Add a notification window"));
-        dialog.schedule_windows = vec![["22:00".into(), "22:00".into()]];
-        assert_eq!(
-            dialog.schedule(),
-            Err("A window needs different start and end times")
-        );
         dialog.schedule_windows = vec![["22:00".into(), "2am".into()]];
         assert_eq!(dialog.schedule(), Err("Enter the window times as HH:MM"));
         dialog.schedule_windows = vec![["22:00".into(), "02:00".into()]];
@@ -1532,6 +1687,59 @@ mod tests {
         let mut other = AlertDialog::new();
         other.edit(alert);
         assert_eq!(other.schedule(), Ok(Some(schedule)));
+        // Equal bounds are a full day.
+        dialog.schedule_windows = vec![["22:00".into(), "22:00".into()]];
+        assert!(dialog.schedule().is_ok());
+    }
+
+    #[test]
+    fn a_new_schedule_starts_in_the_account_zone_and_the_last_schedule_is_remembered() {
+        let store = Arc::new(Store::default());
+        let ctx = Context::default();
+        let mut dialog = AlertDialog::new();
+        dialog.set_storage(store.clone());
+        dialog.poll(&ctx);
+        dialog.timezone = TimezoneId::fixed_offset(3600).unwrap();
+        dialog.open("AAPL".into(), 1.0);
+        assert_eq!(dialog.schedule_zone, "+01:00");
+        dialog.account_timezone = Some(TimezoneId::fixed_offset(-7200).unwrap());
+        dialog.open("AAPL".into(), 1.0);
+        assert_eq!(dialog.schedule_zone, "-02:00");
+        assert!(!dialog.scheduled, "no schedule is remembered yet");
+
+        dialog.scheduled = true;
+        dialog.schedule_days[0] = true;
+        dialog.schedule_windows = vec![["09:00".into(), "09:00".into()]];
+        let schedule = dialog.schedule().unwrap().unwrap();
+        dialog.alert.schedule = Some(Box::new(schedule.clone()));
+        dialog.remember_schedule();
+        dialog.poll(&ctx);
+
+        // A new dialog on the same storage offers it to a new alert but not to an edited one.
+        let mut restored = AlertDialog::new();
+        restored.set_storage(store);
+        restored.poll(&ctx);
+        restored.open("AAPL".into(), 1.0);
+        assert_eq!(restored.schedule(), Ok(Some(schedule)));
+        restored.edit(Alert::new("AAPL", AlertCondition::Crossing(1.0)));
+        assert_eq!(restored.schedule(), Ok(None));
+    }
+
+    #[test]
+    fn a_start_must_precede_the_expiry() {
+        let mut dialog = AlertDialog::new();
+        assert_eq!(dialog.start(None), Ok(None));
+        dialog.starts = true;
+        dialog.start_date = "2026-03-08".into();
+        dialog.start_time = "02:30".into();
+        let start = "2026-03-08T02:30:00Z".parse::<DateTime<Utc>>().unwrap();
+        assert_eq!(dialog.start(None), Ok(Some(start)));
+        assert_eq!(
+            dialog.start(Some(start)),
+            Err("Choose a start before the expiry")
+        );
+        dialog.start_time = "2:30 pm".into();
+        assert_eq!(dialog.start(None), Err("Enter the start time as HH:MM"));
     }
 
     #[test]
