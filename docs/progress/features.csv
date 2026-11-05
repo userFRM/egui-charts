@@ -100,7 +100,7 @@ Builder API,Widget API and customization,Multiple charts per widget,unverified,l
 Builder API,Widget API and customization,Price scale API,unverified,library,src/scales/pricescale.rs;src/widget/mod.rs;src/widget/series/options.rs;src/widget/series/scales/mod.rs;src/widget/frame/mod.rs;src/model/series_scale.rs,
 Builder API,Widget API and customization,Screenshots,unverified,library,src/widget/export.rs;src/widget/raster.rs;src/widget/svg.rs;src/widget/feed/mod.rs;examples/demo/commands.rs;Cargo.toml;src/widget/frame/mod.rs;src/widget/pane/render/mod.rs;src/chart/rendering/watermark.rs;src/widget/pane/mod.rs,1934;1963;1890
 Builder API,Widget API and customization,Series and scale API facade,unverified,library,src/widget/series/options.rs;src/widget/series/scales/mod.rs;src/widget/time_scale.rs;src/widget/series/mod.rs;src/widget/mod.rs;src/model/timescale.rs;src/studies/chart_state.rs;src/widget/frame/mod.rs,1862;1863;1865;1882;1915
-Builder API,Widget API and customization,Series draw order including the main series,unverified,library,src/widget/series/options.rs;src/widget/pane/mod.rs;src/widget/frame/mod.rs;src/widget/snapshot.rs,1866
+Builder API,Widget API and customization,Series draw order including the main series,unverified,library,src/widget/series/options.rs;src/widget/pane/mod.rs;src/widget/frame/mod.rs;src/widget/snapshot.rs;src/widget/pane/render/mod.rs,1866
 Builder API,Widget API and customization,Study defaults,unverified,library,src/studies/factory/mod.rs;src/studies/template.rs;src/widget/clipboard.rs;src/services/alert_evaluator.rs;src/ui/dialogs/indicator_dialog/dialog.rs,2063
 Builder API,Widget API and customization,Style overrides,incomplete,library,src/widget/mod.rs;src/widget/builder.rs;src/config/chart.rs;src/widget/frame/mod.rs,
 Builder API,Widget API and customization,Themes and custom colour schemes,unverified,library,src/widget/mod.rs;src/theme/context.rs;src/chart/rendering/markers.rs;src/config/chart.rs;src/widget/palette.rs;src/model/markers.rs;src/theme/presets.rs;src/theme/style.rs;src/widget/frame/mod.rs;examples/demo/formatting.rs;examples/demo/layouts.rs,1940
@@ -577,7 +577,7 @@ Studies,Indicators,Advance/Decline Line,unverified,host,src/studies/builtin/mark
 Studies,Indicators,Advance/Decline Ratio,unverified,host,src/studies/builtin/market_breadth.rs;src/widget/studies_data.rs;src/studies/factory/mod.rs,
 Studies,Indicators,Advance/Decline Ratio bars,unverified,library,src/studies/builtin/advance_decline_ratio_bars.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
 Studies,Indicators,All Candlestick Patterns,incomplete,library,src/studies/builtin/candlestick_patterns/mod.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,All Chart Patterns,incomplete,library,src/studies/builtin/chart_patterns.rs,
+Studies,Indicators,All Chart Patterns,incomplete,library,src/studies/builtin/chart_patterns.rs;,
 Studies,Indicators,Analyst price forecast,unverified,host,src/data/mod.rs;src/data/targets.rs;src/widget/targets.rs;src/widget/frame/mod.rs,
 Studies,Indicators,Anchored Volume Profile,unverified,library,src/studies/builtin/volume_profile.rs;src/data/volume_profile.rs;src/chart/rendering/indicator.rs;src/painting/volume_profile.rs;src/chart/rendering/volume_profile.rs;src/data/study.rs;src/widget/studies_data.rs;src/studies/indicator_trait.rs;src/studies/settings.rs;src/model/instrument.rs;src/studies/template.rs;src/chart/rendering/legend/mod.rs;src/data/order_flow.rs;src/data/footprint.rs,
 Studies,Indicators,Arnaud Legoux Moving Average,unverified,library,src/studies/builtin/alma.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs,
@@ -587,7 +587,7 @@ Studies,Indicators,Auto Anchored Volume Profile,unverified,library,src/studies/b
 Studies,Indicators,Auto Fib Retracement,unverified,library,src/studies/builtin/auto_drawing.rs;src/studies/builtin/zigzag.rs;src/chart/indicators/plots.rs;src/drawings/rendering/mod.rs;src/drawings/rendering/fibonacci.rs;src/studies/factory/mod.rs;src/studies/builtin/atr.rs;src/drawings/domain/options.rs,1362
 Studies,Indicators,Auto Pitchfork,incomplete,library,src/studies/builtin/auto_drawing.rs;src/studies/builtin/zigzag.rs;src/chart/indicators/plots.rs;src/drawings/rendering/mod.rs;src/drawings/rendering/pitchfork.rs;src/studies/factory/mod.rs;src/studies/builtin/atr.rs,
 Studies,Indicators,Auto fib extension,unverified,library,src/studies/builtin/auto_drawing.rs;src/studies/builtin/zigzag.rs;src/chart/indicators/plots.rs;src/drawings/rendering/mod.rs;src/drawings/rendering/fibonacci.rs;src/studies/factory/mod.rs;src/studies/builtin/atr.rs;src/drawings/domain/options.rs,1362
-Studies,Indicators,Auto key levels,incomplete,library,src/studies/builtin/key_levels.rs,
+Studies,Indicators,Auto key levels,incomplete,library,src/studies/builtin/key_levels.rs;,
 Studies,Indicators,Auto trendlines,unverified,library,src/studies/builtin/auto_drawing.rs;src/studies/builtin/zigzag.rs;src/studies/factory/mod.rs;src/chart/indicators/plots.rs;src/drawings/rendering/mod.rs;src/drawings/rendering/lines.rs;src/studies/builtin/atr.rs,
 Studies,Indicators,Average Daily Range,incomplete,library,src/studies/builtin/average_daily_range.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Average Directional Index,incomplete,library,src/studies/builtin/adx.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
@@ -658,7 +658,7 @@ Studies,Indicators,Chart Pattern Bullish Pennant,unverified,library,src/studies/
 Studies,Indicators,Chart Pattern Cup and Handle,unverified,library,src/studies/builtin/chart_patterns.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Chart Pattern Double Bottom,unverified,library,src/studies/builtin/chart_patterns.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Chart Pattern Double Top,unverified,library,src/studies/builtin/chart_patterns.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Chart Pattern Elliott Wave,incomplete,library,src/studies/builtin/elliott_wave.rs,
+Studies,Indicators,Chart Pattern Elliott Wave,incomplete,library,src/studies/builtin/elliott_wave.rs;,
 Studies,Indicators,Chart Pattern Falling Wedge,missing,library,,
 Studies,Indicators,Chart Pattern Head And Shoulders,incomplete,library,src/studies/builtin/chart_patterns.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Chart Pattern Inverse Head And Shoulders,unverified,library,src/studies/builtin/chart_patterns.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/chart/rendering/indicator.rs,
