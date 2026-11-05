@@ -1227,6 +1227,7 @@ impl Chart {
         self.state
             .price_scale_mut()
             .update_bar_ratio(bar_spacing, price_rect.height());
+        self.update_secondary_bar_ratios(bar_spacing, price_rect.height());
         let price_map = self
             .series_display_map(
                 super::SeriesId::MAIN,
