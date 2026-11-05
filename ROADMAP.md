@@ -60,7 +60,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 
 ### Geometry and Annotations
 
-- [x] Trend lines, rays, extended lines, horizontal and vertical levels, cross lines, trend angle and info line. Extended lines offer independent price, percentage, pip, bar, elapsed-time, length and inclination readouts, selection-only or persistent display, left/centre/right placement and a movable midpoint; settings survive undo, templates and saves.
+- [x] Trend lines, rays, extended lines, horizontal and vertical levels, cross lines, trend angle and info line. Rays and extended lines offer independent price, percentage, pip, bar, elapsed-time, length and inclination readouts, selection-only or persistent display, left/centre/right placement and a movable midpoint; settings survive undo, templates and saves.
 - [x] Parallel, flat-top/bottom, disjoint and regression channels; regression uses the selected closes and configurable deviation bands.
 - [x] Andrews, Schiff, modified Schiff and inside pitchforks, with configurable levels and fills; three-anchor pitchfans.
 - [x] Fibonacci retracement, three-anchor extension and channel, time zones, circles, arcs, speed fan, spiral, wedge and trend-based time projections.
