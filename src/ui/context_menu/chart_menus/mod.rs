@@ -167,6 +167,16 @@ impl ChartMenus {
         self.chart.order_types = capabilities;
     }
 
+    /// Offers copying a study, or the chart's whole study set, to the other charts of the layout,
+    /// for a host showing several charts. The choices return as
+    /// [`StudyContextMenuAction::AddToLayout`](crate::ui::dialogs::StudyContextMenuAction::AddToLayout)
+    /// and [`ContextMenuAction::ApplyIndicatorsToLayout`] for
+    /// [`ChartLayout::apply_copy`](crate::widget::ChartLayout::apply_copy). Off by default.
+    pub fn set_layout_copies(&mut self, offered: bool) {
+        self.chart.layout_copies = offered;
+        self.study.layout_copies = offered;
+    }
+
     /// Offers adding the chart's symbol to these watchlists, such as the names of
     /// [`WatchlistPanel::lists`](crate::ui::widget_bar::WatchlistPanel::lists), in a submenu.
     /// The choice returns as [`ContextMenuAction::AddToWatchlist`] with the list's index. Without

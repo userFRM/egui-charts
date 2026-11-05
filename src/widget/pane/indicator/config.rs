@@ -82,6 +82,7 @@ impl IndicatorPaneConfig {
             zones: vec![
                 (70.0, Color32::from_rgb(120, 123, 134), "Overbought"),
                 (30.0, Color32::from_rgb(120, 123, 134), "Oversold"),
+                (50.0, Color32::from_rgb(120, 123, 134), "Middle"),
             ],
             fill_between_zones: true,
             show_legend: true,
