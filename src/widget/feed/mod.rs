@@ -15,7 +15,7 @@ use crate::data::{
     Datafeed, DepthHistory, DepthRequest, FeedCapabilities, FeedError, Footprint, HistoryRequest,
     Reply, SubscriptionId, TradeRequest,
 };
-use crate::model::{BarClock, Instrument, OrderBook, Tick, Timeframe};
+use crate::model::{Bar, BarClock, Instrument, OrderBook, Tick, Timeframe};
 use crate::theme::ThemeExt;
 use egui::ViewportId;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -72,7 +72,7 @@ pub(crate) struct FeedLink {
     pub(super) footprint: Option<Footprint>,
     /// Live trade-bar allocations shared with the sink, independent of paged executions.
     footprint_input: Option<(crate::data::OrderFlowInput, u64)>,
-    /// The footprint of the trades before the replay cutoff, while a replay runs under a visible
+    /// The footprint of the trades before the cutoff, while a candle replay runs under a visible
     /// volume profile drawing, rebuilt when the cutoff moves.
     pub(super) replay_footprint: Option<(chrono::DateTime<chrono::Utc>, Option<Footprint>)>,
     order_book: Option<OrderBook>,
@@ -130,12 +130,13 @@ impl FeedLink {
     }
 
     /// Sums the held trades again, after the clock, the instrument or the trades changed.
-    fn rebuild_bubbles(&mut self) {
+    /// `history` holds the chart's bars.
+    fn rebuild_bubbles(&mut self, history: &[Bar]) {
         if let Some(bubbles) = self.bubbles.take() {
             self.bubbles = Some(self.bubbles(bubbles.config));
         }
         if self.footprint.is_some() {
-            self.footprint = self.footprint(None);
+            self.footprint = self.footprint(None, history);
         }
     }
 
@@ -190,37 +191,44 @@ impl FeedLink {
     /// The held trades as a footprint, or `None` without the instrument's tick size. A trade
     /// older than the one before it is left out, as it is when it arrives live. The bar of the
     /// oldest held trade is incomplete until a trade page reports the start of trade history.
-    /// With `before`, includes only executions strictly before that replay cutoff.
+    /// On a trade-based interval, paged trades fill only the bars of `history`, the chart's, that
+    /// they rebuild ([`Footprint::push_history`]). With `before`, includes only executions
+    /// strictly before that replay cutoff.
     pub(super) fn footprint(
         &self,
         before: Option<chrono::DateTime<chrono::Utc>>,
+        history: &[Bar],
     ) -> Option<Footprint> {
         let tick_size = self.instrument.as_ref()?.tick_size?;
         let mut flow = Footprint::new(self.clock.clone(), tick_size, 1).ok()?;
         flow.set_budget(FOOTPRINT_BARS, FOOTPRINT_ROWS);
         let trade_based = self.clock.timeframe().is_some_and(|tf| tf.is_trade_based());
-        let trades = || {
-            self.trades
-                .iter()
-                .take(if trade_based {
-                    self.trades.iter().count() - self.trades.live().count()
-                } else {
-                    usize::MAX
-                })
-                .take_while(|trade| before.is_none_or(|time| trade.ts < time))
+        let held = || {
+            self.trades.iter().take(if trade_based {
+                self.trades.iter().count() - self.trades.live().count()
+            } else {
+                usize::MAX
+            })
         };
+        let trades = || held().take_while(|trade| before.is_none_or(|time| trade.ts < time));
         // Paged executions have their own anchor; the sink supplies live allocations below.
         if !trade_based || self.trades.lost_until().is_none() || self.trades.live().next().is_none()
         {
-            for trade in trades() {
-                let _ = flow.push(trade);
+            if trade_based && !history.is_empty() {
+                flow.push_history(&held().collect::<Vec<_>>(), history, before);
+            } else {
+                for trade in trades() {
+                    let _ = flow.push(trade);
+                }
             }
         }
         if let Some(lost) = self.trades.lost_until() {
             flow.drop_through(lost, trades());
         }
         let first = self.unconfirmed_start().or_else(|| {
-            if trade_based && self.trades.lost_until().is_some() {
+            // Without bars to match, paged trades group from the oldest held one.
+            let unmatched = history.is_empty() && !self.trades_from_start;
+            if trade_based && (unmatched || self.trades.lost_until().is_some()) {
                 self.trades.iter().next().map(|trade| trade.ts)
             } else {
                 None
@@ -250,12 +258,20 @@ impl FeedLink {
 
     /// The oldest held trade, where the footprint starts, while executions before it may
     /// exist that never arrived: no trade page reported the start of trade history and the
-    /// store lost none. A loss is marked exactly by `drop_through` instead.
+    /// store lost none. A loss is marked exactly by `drop_through` instead. Paged trades on a
+    /// trade-based interval need no mark: they fill only bars they were proven to rebuild.
     fn unconfirmed_start(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         if self.trades_from_start || self.trades.lost_until().is_some() {
             return None;
         }
-        self.trades.iter().next().map(|trade| trade.ts)
+        let oldest = self.trades.iter().next()?;
+        let paged = self.clock.timeframe().is_some_and(|tf| tf.is_trade_based())
+            && !self
+                .trades
+                .live()
+                .next()
+                .is_some_and(|live| std::ptr::eq(live, oldest));
+        (!paged).then_some(oldest.ts)
     }
 
     fn bubbles(&self, config: VolumeBubblesConfig) -> VolumeBubbles {
@@ -784,6 +800,7 @@ impl Chart {
         if let (Some(heatmap), Some(history)) = (&link.heatmap, &link.depth_history) {
             let mut heatmap = heatmap.borrow_mut();
             heatmap.config = link.heatmap_config;
+            heatmap.background = Some(self.config.background_color);
             heatmap.render(
                 painter,
                 mapping,

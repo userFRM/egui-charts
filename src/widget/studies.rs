@@ -38,13 +38,11 @@ impl Chart {
         Ok(self.add_indicator(indicator))
     }
 
-    /// Adds a study, computed at once from the bars. An [`Indicator::is_overlay`] study uses
-    /// the original price pane or, after its removal, the surviving main series' pane. Other
-    /// studies start in new panes, as do overlays with neither destination. Returns the study's
-    /// id, which stays valid when other studies are removed. Host code adds past the cap; the
-    /// interface goes through
-    /// [`try_add_indicator`](Self::try_add_indicator).
-    pub fn add_indicator(&mut self, mut indicator: Box<dyn Indicator>) -> SeriesId {
+    /// `indicator` set to this chart's interval, instrument and events and computed from its bars.
+    pub(super) fn prepare_indicator(
+        &self,
+        mut indicator: Box<dyn Indicator>,
+    ) -> Box<dyn Indicator> {
         if !indicator.has_settings() {
             indicator = Box::new(crate::studies::ConfiguredStudy::new(indicator));
         }
@@ -80,6 +78,17 @@ impl Chart {
             );
             indicator.update_data(&self.state.data().bars, 0, &sources);
         }
+        indicator
+    }
+
+    /// Adds a study, computed at once from the bars. An [`Indicator::is_overlay`] study uses
+    /// the original price pane or, after its removal, the surviving main series' pane. Other
+    /// studies start in new panes, as do overlays with neither destination. Returns the study's
+    /// id, which stays valid when other studies are removed. Host code adds past the cap; the
+    /// interface goes through
+    /// [`try_add_indicator`](Self::try_add_indicator).
+    pub fn add_indicator(&mut self, indicator: Box<dyn Indicator>) -> SeriesId {
+        let indicator = self.prepare_indicator(indicator);
         let id = SeriesId(self.next_series);
         self.next_series += 1;
         self.record_study(id);

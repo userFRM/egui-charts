@@ -46,25 +46,33 @@ impl Chart {
         let executions = self.chart_type == ChartType::VolumeFootprint
             || (self.chart_type == ChartType::SessionVolumeProfile && cfg!(feature = "studies"))
             || (self.feed_link.is_some() && self.profile_drawings());
+        // Replay keeps the bars after its cutoff aside; paged trades are matched to all of them.
+        let history = (self.replay.as_ref())
+            .and_then(|replay| replay.bars.get(&SeriesId::MAIN))
+            .map_or(self.state.data().bars.as_slice(), Vec::as_slice);
         if let Some(link) = self
             .feed_link
             .as_mut()
             .filter(|link| executions != link.footprint.is_some())
         {
             link.footprint = if executions {
-                link.footprint(None)
+                link.footprint(None, history)
             } else {
                 None
             };
         }
-        // Replay can stop inside a bar, so profile drawings sum only executions before the cutoff.
-        let cutoff = self.replay_time().filter(|_| self.profile_drawings());
+        // Candle replay can stop inside a bar while the feed holds later trades, so profile
+        // drawings sum only executions before its cutoff. A market replay's feed delivers none
+        // past its cursor, so they read the footprint it extends.
+        let cutoff = (self.replay.as_ref())
+            .map(|replay| replay.time)
+            .filter(|_| self.profile_drawings());
         if let Some(link) = self
             .feed_link
             .as_mut()
             .filter(|link| link.replay_footprint.as_ref().map(|(time, _)| *time) != cutoff)
         {
-            link.replay_footprint = cutoff.map(|time| (time, link.footprint(Some(time))));
+            link.replay_footprint = cutoff.map(|time| (time, link.footprint(Some(time), history)));
         }
         if self.feed_link.as_ref().is_some_and(|link| link.paused) {
             return;
@@ -129,6 +137,8 @@ impl Chart {
                         (input.clone(), seen)
                     } else {
                         input.set_tick_size(link.instrument.as_ref().and_then(|i| i.tick_size));
+                        // A source restored by undo missed what the sink allocated while away.
+                        input.forget_trade_bar();
                         input.replace_trades(&link.clock, &link.trades);
                         if let Some(now) = link.time {
                             input.advance_time(&link.clock, now);
@@ -247,7 +257,7 @@ impl Chart {
                 link.order_book = None;
                 link.order_queue = None;
                 link.depth_history.iter_mut().for_each(DepthHistory::clear);
-                link.rebuild_bubbles();
+                link.rebuild_bubbles(&[]);
             }
             if !updates.bars.is_empty() {
                 let incoming = updates.bars.into_values().collect();
@@ -481,7 +491,7 @@ impl Chart {
         link.paging_stopped = false;
         let timeframe = self.timeframe.unwrap_or_default();
         link.clock = clock;
-        link.rebuild_bubbles();
+        link.rebuild_bubbles(&[]);
         // Timestamp anchors survive the empty interval between history requests.
         self.replace_main_data(Vec::new());
         self.feed = FeedState::default();
@@ -545,7 +555,7 @@ impl Chart {
         let timeframe = self.timeframe.unwrap_or_default();
         let withheld = !supports(self.legend_instrument.as_ref(), timeframe);
         link.instrument = Some(instrument);
-        link.rebuild_bubbles();
+        link.rebuild_bubbles(&self.state.data().bars);
         if !supports(link.instrument.as_ref(), timeframe) {
             self.rule_out(link);
             return;
@@ -637,6 +647,11 @@ impl Chart {
             && !self.bar_limit_reached();
         let incoming = page.bars.into_iter().map(|bar| (bar, Origin::History));
         self.apply_by(&link.clock, incoming.collect());
+        // Paged executions on a trade-based interval fill the bars they rebuild.
+        if link.footprint.is_some() && link.clock.timeframe().is_some_and(|tf| tf.is_trade_based())
+        {
+            link.footprint = link.footprint(None, &self.state.data().bars);
+        }
         let older = self.bars(SeriesId::MAIN).first().map(|bar| bar.time) < oldest;
         // A nonempty page with no valid bar older than the oldest held would be requested
         // again on every frame.
@@ -712,7 +727,7 @@ impl Chart {
             }
         }
         if (changed || reached_start) && link.footprint.is_some() {
-            link.footprint = link.footprint(None);
+            link.footprint = link.footprint(None, &self.state.data().bars);
         }
         link.trade_cursor = continuation;
         link.trades_complete |=

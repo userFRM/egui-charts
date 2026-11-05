@@ -130,6 +130,9 @@ pub struct SourceItem {
     /// Drawing folder path, copied from [`crate::drawings::Drawing::folder`].
     /// Non-drawing rows ignore this field.
     pub folder: Vec<String>,
+    /// Synchronization the drawing follows, copied from
+    /// [`crate::drawings::Drawing::folder_sync_mode`]. Non-drawing rows ignore this field.
+    pub folder_sync: Option<crate::drawings::FolderSync>,
 }
 
 impl SourceItem {
@@ -161,6 +164,7 @@ impl SourceItem {
             parameters: None,
             panes: Vec::new(),
             folder: Vec::new(),
+            folder_sync: None,
         }
     }
 
@@ -189,6 +193,7 @@ impl SourceItem {
             parameters: None,
             panes: Vec::new(),
             folder: Vec::new(),
+            folder_sync: None,
         }
     }
 
@@ -230,6 +235,7 @@ impl SourceItem {
             parameters: None,
             panes: Vec::new(),
             folder: Vec::new(),
+            folder_sync: None,
         }
     }
 
@@ -257,6 +263,7 @@ impl SourceItem {
             parameters: None,
             panes: Vec::new(),
             folder: Vec::new(),
+            folder_sync: None,
         }
     }
 

@@ -14,6 +14,11 @@ they would be too small to read. **Lose latest book** removes that bar's depth, 
 unavailable readout until a synchronized snapshot is supplied again. Clear it to restore
 the sample snapshot. Depth and executions have separate coverage.
 
+On a tick, volume, range or delta interval, the chart matches the executions of its trade pages
+to the bars of its history: a bar shows cells only when the held executions rebuild its open,
+high, low, close and volume, grouped from one of the bars' first executions. A page may start
+anywhere inside a bar; the bars it does not rebuild stay candles, without cells from another bar.
+
 <!-- example -->
 
 The source beside the running example supplies candles independently, pushes chronological
@@ -41,11 +46,16 @@ lost. A merged historical column averages size over its span and uses its best r
 the inside-market path; it cannot restore individual quotes from before merging.
 
 The renderer stores one texel per time column and grouped price level in texture atlases. New
-or corrected columns upload only their column. Each column uses `ln(1 + size) / ln(1 + max_size)`
-contrast; bid and ask size at a crossed price are summed and their colours blended. Linear
-scales draw a quad per tile and column. Logarithmic scales map each row edge individually to
-preserve price geometry. Expired history releases texture slots. No tile side exceeds the
-backend limit. The current book appears as a size profile at the right of the pane.
+or corrected columns upload only their column. One colour scale encodes size, the same for bids
+and asks, at `ln(1 + size) / ln(1 + cut_off)`; its contrast against the chart background grows
+with size and sizes near zero fade away. The cut-off is by default the size that 96% of the held
+rows do not exceed, shared by every column; the held columns redraw only when it moves by more
+than 10%. Bid and ask size at a crossed price are summed. Best bid and ask are 2 point lines in
+the chart's bullish and bearish colours. Linear scales draw a quad per tile and column.
+Logarithmic scales map each row edge individually to preserve price geometry. Expired history
+releases texture slots. No tile side exceeds the backend limit. The current book appears as a size
+profile at the right of the pane; a key and the row's exact price, side and size appear while the
+pointer is over it.
 
 [`set_volume_bubbles(Some(Default::default()))`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_volume_bubbles) overlays executed volume using the same feed's
 trades. Disabling the heatmap releases its textures and retains configured depth history.
@@ -207,7 +217,7 @@ reaches back to the loss. Custom hosts
 can push chronological events and book loss through the same handle, then call [`calculate`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#tymethod.calculate) or
 [`update`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#method.update). Cloned studies share their market-data source, which receives each event once.
 Replacing aggregation inputs creates a new source; hosts replay their history, while a chart replays the executions it still retains
-for a newly attached rate study. Other studies keep their sources and accumulated bar totals
+for a newly attached rate study, and for one restored by undo, which then shows the values it would have had if it had stayed. Other studies keep their sources and accumulated bar totals
 when the catalogue changes, including totals of executions that aged out of the raw store.
 Quote and book history before a study was connected must come from the host. Bars alone give
 no substitute values. Counts of orders require fills grouped by order by the host; [`Tick`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/quote/struct.Tick.html) has

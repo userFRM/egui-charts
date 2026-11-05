@@ -109,6 +109,8 @@ pub struct TPOConfig {
     pub show_poc: bool,
     /// Show Value Area
     pub show_value_area: bool,
+    /// Show the caption and marker at the middle of the profile's range
+    pub show_midpoint: bool,
     /// Show Initial Balance
     pub show_initial_balance: bool,
     /// Draw one and two initial balance ranges above its high and below its low.
@@ -147,6 +149,7 @@ impl Default for TPOConfig {
             color_mode: TPOColorMode::ByPeriod,
             show_poc: true,
             show_value_area: true,
+            show_midpoint: false,
             show_initial_balance: true,
             show_initial_balance_extensions: false,
             show_poor_highs_lows: false,
