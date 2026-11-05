@@ -59,6 +59,9 @@ pub struct FootprintConfig {
     pub imbalance_min_volume: f64,
     /// Compare to the opposite side one price away instead of at the same price.
     pub diagonal: bool,
+    /// Put a strip along the outer edge of a side that dominates under the imbalance settings,
+    /// under [`FootprintColor::VolumeSteps`].
+    pub show_imbalance: bool,
     /// Outline the highest-volume row when its cells are large enough for the stroke, or fill it
     /// under [`FootprintColor::VolumeSteps`].
     pub show_poc: bool,
@@ -117,6 +120,7 @@ impl Default for FootprintConfig {
             imbalance_ratio: 3.0,
             imbalance_min_volume: 0.0,
             diagonal: true,
+            show_imbalance: true,
             show_poc: true,
             value_area: Some(0.7),
             value_area_high: Some(Stroke::new(1.0, Color32::GRAY)),
@@ -154,6 +158,7 @@ impl FootprintConfig {
             imbalance_ratio: params.footprint_imbalance_ratio,
             imbalance_min_volume: params.footprint_imbalance_min_volume,
             diagonal: params.footprint_diagonal,
+            show_imbalance: params.footprint_imbalance,
             show_poc: params.footprint_poc,
             value_area: params.footprint_value_area,
             abbreviate: params.footprint_abbreviate,
@@ -218,7 +223,12 @@ pub fn pullback_range(bar: &Bar, flow: &Footprint) -> Option<(i64, i64)> {
 pub(crate) fn footprint_column_width(bar_spacing: f32, config: &FootprintConfig) -> Option<f32> {
     let columns = config.modes.len().min(4);
     let width = bar_spacing * 0.92 / columns as f32;
-    (columns > 0 && bar_spacing.is_finite() && width - 0.5 >= 1.0).then_some(width)
+    let cell = if has_ladder(config) {
+        (width - 0.5) * LADDER_CELL_SHARE
+    } else {
+        width - 0.5
+    };
+    (columns > 0 && bar_spacing.is_finite() && cell >= 1.0).then_some(width)
 }
 
 /// Draws visible footprint bars, bounded by the visible bar range and clipped to `mapping.rect`.
@@ -405,7 +415,7 @@ pub fn render_footprint(
                 }
                 let ladder = *mode == FootprintMode::Ladder;
                 let poc_row = poc == Some(row.level);
-                let imbalances = if steps {
+                let imbalances = if steps && config.show_imbalance {
                     shown.imbalance(
                         row.level,
                         config.imbalance_ratio,
@@ -674,16 +684,17 @@ pub fn render_footprint(
                         config.text_color,
                         Stroke::NONE,
                     ));
-                }
-                let galley = painter.layout_no_wrap(
-                    label.to_owned(),
-                    FontId::monospace(FONT_LIMITS[0]),
-                    config.text_color,
-                );
-                // Beside the marker only where the gap to the previous bar has room.
-                if galley.size().x + 7.0 <= mapping.bar_spacing * 0.08 {
-                    let at = Align2::RIGHT_CENTER.anchor_size(pos2(left - 7.0, y), galley.size());
-                    painter.galley(at.min, galley, config.text_color);
+                    let galley = painter.layout_no_wrap(
+                        label.to_owned(),
+                        FontId::monospace(FONT_LIMITS[0]),
+                        config.text_color,
+                    );
+                    // Beside the marker only where the gap to the previous bar has room.
+                    if galley.size().x + 7.0 <= mapping.bar_spacing * 0.08 {
+                        let at =
+                            Align2::RIGHT_CENTER.anchor_size(pos2(left - 7.0, y), galley.size());
+                        painter.galley(at.min, galley, config.text_color);
+                    }
                 }
             }
         }
@@ -1010,14 +1021,20 @@ fn render_info_box(
     block: Rect,
     config: &FootprintConfig,
 ) {
-    let Some((&lowest, _)) = shown.levels.first_key_value() else {
+    let (Some((&lowest, _)), Some((&highest, _))) = (
+        shown.levels.first_key_value(),
+        shown.levels.last_key_value(),
+    ) else {
         return;
     };
     let step = flow.price_step() * group as f64;
-    let bottom = mapping.price_to_y(lowest as f64 * step - flow.tick_size() * 0.5);
-    if !bottom.is_finite() {
+    let edge = |level: i64| mapping.price_to_y(level as f64 * step - flow.tick_size() * 0.5);
+    // An inverted scale puts the highest row at the bottom.
+    let (low_edge, high_edge) = (edge(lowest), edge(highest + 1));
+    if !low_edge.is_finite() || !high_edge.is_finite() {
         return;
     }
+    let bottom = low_edge.max(high_edge);
     let font = FontId::monospace(10.0);
     let text = |value, color| {
         painter.layout_no_wrap(ladder_text(value, config, false), font.clone(), color)
@@ -1849,10 +1866,11 @@ mod tests {
     }
 
     /// One bar of (price, sell, buy) rows at a spacing, painted with `config` over the 98 to 110
-    /// range. Returns the shapes and the centre of the bar.
+    /// range, inverted or not. Returns the shapes and the centre of the bar.
     fn paint_ladder(
         rows: &[(f64, f64, f64)],
         spacing: f32,
+        inverted: bool,
         config: &FootprintConfig,
     ) -> (Vec<Shape>, f32) {
         let time = "2026-01-05T10:00:00Z".parse().unwrap();
@@ -1870,7 +1888,7 @@ mod tests {
                 PriceRange::new(98.0, 110.0),
                 0.0,
                 160.0,
-                false,
+                inverted,
             ),
         );
         let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
@@ -1917,17 +1935,23 @@ mod tests {
             (101.0, 20.0, 10.0),
             (100.0, 30.0, 10.0),
         ];
-        for (spacing, modes) in [
-            (120.0, vec![FootprintMode::Ladder]),
-            (40.0, vec![FootprintMode::Ladder]),
-            (240.0, vec![FootprintMode::Ladder, FootprintMode::Volume]),
+        for (spacing, modes, show_imbalance) in [
+            (120.0, vec![FootprintMode::Ladder], true),
+            (120.0, vec![FootprintMode::Ladder], false),
+            (40.0, vec![FootprintMode::Ladder], true),
+            (
+                240.0,
+                vec![FootprintMode::Ladder, FootprintMode::Volume],
+                true,
+            ),
         ] {
             let config = FootprintConfig {
                 modes,
                 auto_row_height: None,
+                show_imbalance,
                 ..Default::default()
             };
-            let (shapes, center) = paint_ladder(&rows, spacing, &config);
+            let (shapes, center) = paint_ladder(&rows, spacing, false, &config);
             let [left, right] = [center - spacing * 0.46, center + spacing * 0.46 - 0.5];
             let slot = (center - spacing * 0.5)..=(center + spacing * 0.5);
             let mut strips = [0, 0];
@@ -1951,7 +1975,11 @@ mod tests {
                     }
                 }
             }
-            assert_eq!(strips, [1, 1], "strips at spacing {spacing}");
+            assert_eq!(
+                strips,
+                [usize::from(show_imbalance); 2],
+                "strips at spacing {spacing}"
+            );
             for shape in &shapes {
                 if let Shape::Path(path) = shape {
                     assert!(
@@ -1974,16 +2002,26 @@ mod tests {
         };
         // A buy cell of 22 points cannot hold 123.5K even at 8 points; the sell number 1 fits.
         let one_sided = [(103.0, 1.0, 123_456.0), (102.0, 1.0, 123_456.0)];
-        let (shapes, _) = paint_ladder(&one_sided, 70.0, &config);
+        let (shapes, _) = paint_ladder(&one_sided, 70.0, false, &config);
         let numbers = painted_text(&shapes);
         assert!(numbers.is_empty(), "one side kept its numbers: {numbers:?}");
         // Totals of 543.5K and 370.1K are wide enough to reach the centred ratio below the bar.
         let rows = [(106.0, 223_400.0, 250_100.0), (105.0, 320_100.0, 120_000.0)];
+        // On an inverted scale the lowest price is on top, and the rows end at 106.5, y 113.33.
+        let (shapes, _) = paint_ladder(&rows, 120.0, true, &config);
+        let text = painted_text(&shapes);
+        for total in ["543.5K", "370.1K"] {
+            let (_, rect) = text
+                .iter()
+                .find(|(label, _)| label == total)
+                .unwrap_or_else(|| panic!("{total} missing from {text:?}"));
+            assert!(rect.top() >= 113.0, "{total} over the rows at {rect:?}");
+        }
         let ratio = FootprintConfig {
             extreme_ratio: true,
-            ..config
+            ..config.clone()
         };
-        let (shapes, _) = paint_ladder(&rows, 120.0, &ratio);
+        let (shapes, _) = paint_ladder(&rows, 120.0, false, &ratio);
         let text = painted_text(&shapes);
         let below = text
             .iter()
@@ -1998,6 +2036,9 @@ mod tests {
                 .unwrap_or_else(|| panic!("{total} missing from {text:?}"));
             assert!(!rect.intersects(below), "{total} over the extreme ratio");
         }
+        // A side cell needs a point: 3.3 points per bar leave it 0.99, 3.4 leave it 1.02.
+        assert!(paint_ladder(&rows, 3.3, false, &config).0.is_empty());
+        assert!(!paint_ladder(&rows, 3.4, false, &config).0.is_empty());
     }
 
     /// Rows cover the nearest-tick band; spacing that leaves cells under a point wide produces no

@@ -594,6 +594,9 @@ pub struct ChartTypeParams {
     pub footprint_colors: [Option<egui::Color32>; 4],
     /// Footprint: instrument ticks per row; zero groups automatically with zoom.
     pub footprint_row_ticks: u32,
+    /// Footprint: put a strip along the outer edge of a side that dominates under the imbalance
+    /// settings, under [`FootprintColor::VolumeSteps`].
+    pub footprint_imbalance: bool,
     /// Footprint: outline the highest-volume row, or fill it under
     /// [`FootprintColor::VolumeSteps`].
     pub footprint_poc: bool,
@@ -713,6 +716,7 @@ impl Default for ChartTypeParams {
             footprint_color_by: FootprintColor::VolumeSteps,
             footprint_colors: [None; 4],
             footprint_row_ticks: 0,
+            footprint_imbalance: true,
             footprint_poc: true,
             footprint_value_area: Some(0.7),
             footprint_imbalance_ratio: 3.0,

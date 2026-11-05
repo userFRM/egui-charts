@@ -294,6 +294,7 @@ impl SymbolTab {
             Self::value_area(ui, &mut params.footprint_value_area);
         });
         Self::section(ui, "Imbalance", true, |ui| {
+            Self::switch(ui, "Edge strips", &mut params.footprint_imbalance);
             let label = ui.label(l10n::text(ui.ctx(), "Ratio"));
             ui.add(
                 egui::DragValue::new(&mut params.footprint_imbalance_ratio)
