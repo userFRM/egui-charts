@@ -443,7 +443,7 @@ fn line_style_rows(ui: &mut egui::Ui, style: &mut LinePlotStyle, curves: bool) {
         .labelled_by(label.id);
     ui.end_row();
     let label = ui.label("Line thickness");
-    ui.add(egui::DragValue::new(&mut style.width).range(0.0..=10.0))
+    ui.add(egui::DragValue::new(&mut style.width).range(0.1..=10.0))
         .labelled_by(label.id);
     ui.end_row();
     let label = ui.label("Line pattern");
