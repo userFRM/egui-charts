@@ -467,12 +467,12 @@ impl IndicatorPane {
         width
     }
 
-    /// Layout each value with its plot colour, using a swatch when text would be faint.
+    /// Layout the name, the inputs in `muted` and each value in its plot colour.
     fn legend_job(
         &self,
         indicator: &dyn Indicator,
         text_color: Color32,
-        background: Color32,
+        muted: Color32,
         font_size: f32,
     ) -> egui::text::LayoutJob {
         let mut job = egui::text::LayoutJob::default();
@@ -484,40 +484,33 @@ impl IndicatorPane {
             if !job.text.is_empty() {
                 job.append(" ", 0.0, format(text_color));
             }
-            job.append(&self.config.inputs, 0.0, format(text_color));
+            job.append(&self.config.inputs, 0.0, format(muted));
         }
         if self.config.show_values
             && let Some(bar) = self
                 .bar_index
                 .or_else(|| indicator.values().len().checked_sub(1))
         {
-            let names = indicator.line_names();
-            for line in (0..indicator.line_count()).filter(|line| indicator.legend_visible(*line)) {
+            for line in indicator
+                .legend_lines()
+                .into_iter()
+                .filter(|line| indicator.legend_visible(*line))
+            {
                 if let Some(value) = indicator.plot_value(line, bar) {
                     if !job.text.is_empty() {
                         job.append(" ", 0.0, format(text_color));
                     }
-                    let color = indicator.plot_style(line).color;
-                    let readable = crate::theme::contrast(color, background) >= 4.5;
-                    if !readable {
-                        let mut swatch = format(color);
-                        swatch.background = color;
-                        swatch.font_id.size = 8.0;
-                        swatch.valign = egui::Align::Center;
-                        job.append("  ", 0.0, swatch);
-                        job.append(" ", 0.0, format(text_color));
-                    }
-                    if indicator.line_count() > 1
-                        && let Some(name) = names.get(line)
-                    {
-                        job.append(&format!("{name}: "), 0.0, format(text_color));
-                    }
+                    let color = indicator
+                        .plot_color(line, bar)
+                        .unwrap_or_else(|| indicator.plot_style(line).color);
+                    // A fully transparent colour holds no RGB, so it has no opaque form.
+                    let color = if color.a() == 0 {
+                        text_color
+                    } else {
+                        color.to_opaque()
+                    };
                     let label = indicator.format_plot_value(line, value);
-                    job.append(
-                        &label,
-                        0.0,
-                        format(if readable { color } else { text_color }),
-                    );
+                    job.append(&label, 0.0, format(color));
                 }
             }
         }
@@ -592,7 +585,7 @@ impl IndicatorPane {
         text_color: Color32,
     ) -> std::sync::Arc<egui::Galley> {
         let theme = painter.ctx().active_theme();
-        let mut job = self.legend_job(indicator, text_color, theme.chart.bg, theme.text.ohlc);
+        let mut job = self.legend_job(indicator, text_color, theme.ui.text_muted, theme.text.ohlc);
         let controls_width = crate::chart::rendering::controls_width(indicator);
         job.wrap.max_width = (rect.width()
             - controls_width
@@ -883,7 +876,7 @@ mod tests {
     }
 
     #[test]
-    fn legend_values_identify_each_plot_without_low_contrast_text() {
+    fn legend_values_take_their_plot_colours_without_names() {
         for (_, theme) in crate::theme::presets() {
             let ctx = egui::Context::default();
             crate::theme::apply_to_egui(&ctx, &theme);
@@ -916,7 +909,7 @@ mod tests {
                     .unwrap();
                 let sections = &text.galley.job.sections;
                 for name in study.line_names() {
-                    assert!(text.galley.text().contains(&format!("{name}: ")));
+                    assert!(!text.galley.text().contains(&name));
                 }
                 let backdrop = shapes
                     .iter()
@@ -940,11 +933,7 @@ mod tests {
                                 .contains(&value)
                         })
                         .unwrap();
-                    assert!(crate::theme::contrast(section.format.color, theme.chart.bg) >= 4.5);
-                    assert!(
-                        sections.iter().any(|s| s.format.color == *color),
-                        "missing plot colour {color:?}"
-                    );
+                    assert_eq!(section.format.color, *color);
                 }
                 assert_eq!(sections[0].format.color, theme.ui.text);
             }
@@ -1006,23 +995,10 @@ mod tests {
                 );
                 let job = pane.legend_job(&study, Color32::WHITE, Color32::BLACK, 12.0);
                 assert!(
-                    job.text.contains(&format!("{total_name}: {total} ")),
+                    job.text.contains(&format!("{total} {expected_rate:.2}")),
                     "{}",
                     job.text
                 );
-                assert!(
-                    job.text.contains(&format!(
-                        "Rolling 60s ({}): {expected_rate:.2}",
-                        if expected_rate == 4.0 {
-                            "executions/s"
-                        } else {
-                            "orders/s"
-                        }
-                    )),
-                    "{}",
-                    job.text
-                );
-                assert!(job.text.contains("Instant 5s"), "{}", job.text);
 
                 // A saved visible total uses count units in tags and data-window rows too.
                 let mut settings = study.settings();
@@ -1110,7 +1086,7 @@ mod tests {
         ]);
         study.calculate(&[]);
         let pane = IndicatorPane::with_config(IndicatorPaneConfig::default());
-        for width in [320.0, 800.0, 1440.0] {
+        for width in [200.0, 800.0, 1440.0] {
             let mut controls_left = 0.0;
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
                 let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(width, 150.0));
@@ -1124,7 +1100,7 @@ mod tests {
             for shape in &output.shapes {
                 if let egui::Shape::Text(text) = &shape.shape {
                     assert!(text.pos.x + text.galley.size().x <= controls_left);
-                    if width == 320.0 {
+                    if width == 200.0 {
                         assert!(text.galley.rows.len() > 1);
                     }
                     assert!(!text.galley.elided);

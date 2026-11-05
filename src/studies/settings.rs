@@ -1264,6 +1264,9 @@ impl Indicator for ConfiguredStudy {
             self.study.format_plot_value(line, value)
         }
     }
+    fn legend_lines(&self) -> Vec<usize> {
+        self.study.legend_lines()
+    }
     fn legend_visible(&self, line: usize) -> bool {
         let (shown, own) = (
             self.study.legend_visible(line),
