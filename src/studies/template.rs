@@ -585,8 +585,8 @@ mod tests {
         }
     }
 
-    /// Templates and layouts saved before the channel studies' inputs changed load and draw the
-    /// lines they drew.
+    /// An RSI and a VWAP saved before their defaults gained an average and a band restore with the
+    /// plots they had.
     #[test]
     fn saved_studies_keep_the_plots_they_had_before_their_defaults_gained_more() {
         let mut rsi = ConfiguredStudy::new(Box::new(RSI::new(9)));
@@ -627,6 +627,8 @@ mod tests {
         assert_eq!(filled.fills().len(), 2);
     }
 
+    /// Templates and layouts saved before the channel studies' inputs changed load and draw the
+    /// lines they drew.
     #[test]
     fn templates_saved_before_the_channel_inputs_changed_keep_their_lines() {
         use crate::studies::{IndicatorValue, StudySource};
