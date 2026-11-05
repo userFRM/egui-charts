@@ -223,7 +223,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Inline creation and series-level alert visibility, labels and colour work alongside the shared dialog.
 - [x] Drawing alerts follow fork, pitchfan and regression lines on linear and logarithmic scales, with entry, exit, inside and outside conditions resolving both moving boundaries.
 - [ ] Model persistent inside/outside-channel conditions and once-per-minute frequency.
-- [x] Alert messages fill symbol, exchange, ticker, interval, bar, trigger time, source, study plot and drawing level placeholders from the triggering event, with names capped at 300 and messages at 4000 characters; per-alert notification schedules are configurable for host processing.
+- [x] Alert messages fill symbol, exchange, ticker, interval, bar, trigger time, source, study plot and drawing level placeholders from the triggering event, with names capped at 300 and messages at 4000 characters; per-alert notification schedules are configurable for host processing. A schedule may use the account time zone the host supplies, a window with equal bounds covers a full day, triggers outside the schedule are logged as silent entries without a popup or delivery, an alert can start monitoring at a set time, and the dialog offers the latest saved schedule to the next new alert.
 
 ## UI Components
 

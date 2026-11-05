@@ -68,8 +68,11 @@ use crate::model::{
 /// [`OncePerMinute`](AlertFrequency::OncePerMinute) fires at most once per minute of the update
 /// time `now`; moving the clock backwards does not repeat a minute.
 ///
-/// *Schedule.* An alert's `schedule` restricts triggers. Outside it the engine keeps observing
-/// values for crossings, but does not fire or consume an occurrence. A once alert stays armed.
+/// *Schedule.* An alert's `schedule` restricts notifications. Outside it the engine keeps
+/// observing values for crossings and records each trigger as a silent
+/// [`AlertEvent::SilentTriggered`] entry without calling the delivery callback or consuming an
+/// occurrence, so a once alert stays armed. It records at most one entry per occurrence of its
+/// frequency, a once alert one per bar. `starts` holds back evaluation altogether until that time.
 ///
 /// *Expiry.* Every `update` and [`tick`](Self::tick) first marks active alerts whose expiry has
 /// passed as [`Expired`](AlertStatus::Expired), so an alert never fires at or after its expiry
@@ -123,6 +126,9 @@ struct Run {
     /// The occurrence the alert last fired on: the open time of a bar, or the minute for a
     /// per-minute alert.
     fired: Option<DateTime<Utc>>,
+    /// The occurrence of the last silent entry, so a lasting condition outside the schedule
+    /// does not log every update.
+    silent: Option<DateTime<Utc>>,
     /// A watchlist alert with frequency once has fired on this symbol.
     done: bool,
     #[cfg(feature = "strategies")]
@@ -310,6 +316,7 @@ impl AlertEngine {
         for alert in alerts.iter_mut().filter(|alert| {
             alert.status == AlertStatus::Active
                 && alert.is_valid()
+                && alert.starts.is_none_or(|starts| starts <= now)
                 && !matches!(alert.condition, AlertCondition::StrategyFills(_))
                 && id.is_none_or(|id| alert.id.as_ref() == Some(id))
         }) {
@@ -355,10 +362,22 @@ impl AlertEngine {
             if !matched || !ready {
                 continue;
             }
-            let Some((bar, message)) = evaluate(alert, run, now) else {
+            let Some((bar, message, silent)) = evaluate(alert, run, now) else {
                 continue;
             };
             let price = bar.close.is_finite().then_some(bar.close);
+            if silent {
+                if let Some(events) = events {
+                    events.push(AlertEvent::SilentTriggered {
+                        id,
+                        symbol: symbol.to_owned(),
+                        time: now,
+                        price,
+                        message,
+                    });
+                }
+                continue;
+            }
             alert.last_triggered_at = Some(alert.last_triggered_at.map_or(now, |old| old.max(now)));
             if alert.frequency == AlertFrequency::Once {
                 run.done = true;
@@ -428,6 +447,7 @@ impl AlertEngine {
         for alert in alerts.iter_mut().filter(|alert| {
             alert.status == AlertStatus::Active
                 && alert.is_valid()
+                && alert.starts.is_none_or(|starts| starts <= now)
                 && matches!(&alert.condition, AlertCondition::StrategyFills(id) if id == run)
                 && alert.timeframe.is_none_or(|own| own == timeframe)
                 && match &alert.watchlist {
@@ -455,27 +475,8 @@ impl AlertEngine {
                     continue;
                 }
                 seen.last_fill = fill.sequence;
-                if seen.done
-                    || alert
-                        .schedule
-                        .as_ref()
-                        .is_some_and(|schedule| !schedule.allows(now))
-                {
+                if seen.done {
                     continue;
-                }
-                alert.last_triggered_at = Some(
-                    alert
-                        .last_triggered_at
-                        .map_or(fill.time, |old| old.max(fill.time)),
-                );
-                if alert.frequency == AlertFrequency::Once {
-                    seen.done = true;
-                    if alert.watchlist.is_none() {
-                        alert.status = AlertStatus::Triggered;
-                    }
-                    if let Some(events) = events {
-                        events.push(AlertEvent::Upsert(Box::new(alert.clone())));
-                    }
                 }
                 let side = match fill.side {
                     crate::model::OrderSide::Buy => "Buy",
@@ -498,6 +499,36 @@ impl AlertEngine {
                     );
                     alert.expand_message(symbol, timeframe, &bar, fill.time, |_| Some(fill.price))
                 };
+                if alert
+                    .schedule
+                    .as_ref()
+                    .is_some_and(|schedule| !schedule.allows(now))
+                {
+                    if let Some(events) = events {
+                        events.push(AlertEvent::SilentTriggered {
+                            id: id.clone(),
+                            symbol: symbol.to_owned(),
+                            time: fill.time,
+                            price: Some(fill.price),
+                            message,
+                        });
+                    }
+                    continue;
+                }
+                alert.last_triggered_at = Some(
+                    alert
+                        .last_triggered_at
+                        .map_or(fill.time, |old| old.max(fill.time)),
+                );
+                if alert.frequency == AlertFrequency::Once {
+                    seen.done = true;
+                    if alert.watchlist.is_none() {
+                        alert.status = AlertStatus::Triggered;
+                    }
+                    if let Some(events) = events {
+                        events.push(AlertEvent::Upsert(Box::new(alert.clone())));
+                    }
+                }
                 let event = AlertEvent::TriggeredForSymbol {
                     id: id.clone(),
                     symbol: symbol.to_owned(),
@@ -701,37 +732,36 @@ fn observe(
         }
         return true;
     }
-    let holds = seen.scheduled
-        && rules.iter().enumerate().all(|(n, (src, condition))| {
-            let [current, a, b] = seen.rules[n];
-            let previous = match previous.map(|previous| &previous.seen) {
-                Some(last)
-                    if last.time == bar.time
-                        || !matches!(condition, AlertCondition::Channel { .. }) =>
-                {
-                    last.rules[n]
-                }
-                _ => {
-                    let previous = |src| index.checked_sub(1).and_then(|at| source(src, at));
-                    let [a, b] = condition.partners().map(|other| other.and_then(previous));
-                    [previous(src), a, b]
-                }
-            };
-            current.is_some_and(|current| {
-                condition_holds(
-                    condition,
-                    current,
-                    previous,
-                    [a, b],
-                    &bars[..=index],
-                    |back| {
-                        index
-                            .checked_sub(back as usize)
-                            .and_then(|at| source(src, at))
-                    },
-                )
-            })
-        });
+    let holds = rules.iter().enumerate().all(|(n, (src, condition))| {
+        let [current, a, b] = seen.rules[n];
+        let previous = match previous.map(|previous| &previous.seen) {
+            Some(last)
+                if last.time == bar.time
+                    || !matches!(condition, AlertCondition::Channel { .. }) =>
+            {
+                last.rules[n]
+            }
+            _ => {
+                let previous = |src| index.checked_sub(1).and_then(|at| source(src, at));
+                let [a, b] = condition.partners().map(|other| other.and_then(previous));
+                [previous(src), a, b]
+            }
+        };
+        current.is_some_and(|current| {
+            condition_holds(
+                condition,
+                current,
+                previous,
+                [a, b],
+                &bars[..=index],
+                |back| {
+                    index
+                        .checked_sub(back as usize)
+                        .and_then(|at| source(src, at))
+                },
+            )
+        })
+    });
     let event = if closed {
         clock.next_open(bar.time).unwrap_or(bars[index + 1].time)
     } else {
@@ -758,7 +788,9 @@ fn observe(
 }
 
 /// Test one coherent set of interval observations and consume its occurrence.
-fn evaluate(alert: &Alert, run: &mut Run, now: DateTime<Utc>) -> Option<(Bar, String)> {
+/// The bar and message to fire, and whether the trigger falls outside the schedule and is only
+/// logged.
+fn evaluate(alert: &Alert, run: &mut Run, now: DateTime<Utc>) -> Option<(Bar, String, bool)> {
     let intervals = alert.timeframes();
     let anchor = run.intervals.get(&intervals[0])?;
     if alert.frequency == AlertFrequency::OncePerBarClose
@@ -786,13 +818,9 @@ fn evaluate(alert: &Alert, run: &mut Run, now: DateTime<Utc>) -> Option<(Bar, St
     }
     run.joined = joined;
     let bar = &anchor.bar;
-    let holds = alert
-        .schedule
-        .as_ref()
-        .is_none_or(|schedule| schedule.allows(now))
-        && intervals
-            .iter()
-            .all(|interval| run.intervals[interval].holds);
+    let holds = intervals
+        .iter()
+        .all(|interval| run.intervals[interval].holds);
     let fires = holds
         && match alert.frequency {
             AlertFrequency::Once => !run.done,
@@ -804,10 +832,22 @@ fn evaluate(alert: &Alert, run: &mut Run, now: DateTime<Utc>) -> Option<(Bar, St
                 run.fired != Some(occurrence(alert.frequency, bar, now))
             }
         };
-    fires.then(|| {
-        let primary = &run.intervals[&alert.timeframe.unwrap_or_default()];
-        (bar.clone(), primary.message.clone())
-    })
+    if !fires {
+        return None;
+    }
+    let silent = alert
+        .schedule
+        .as_ref()
+        .is_some_and(|schedule| !schedule.allows(now));
+    if silent {
+        let at = occurrence(alert.frequency, bar, now);
+        if alert.frequency != AlertFrequency::EveryTime && run.silent == Some(at) {
+            return None;
+        }
+        run.silent = Some(at);
+    }
+    let primary = &run.intervals[&alert.timeframe.unwrap_or_default()];
+    Some((bar.clone(), primary.message.clone(), silent))
 }
 
 /// What a frequency fires at most once per: the bar, or for a per-minute alert the minute of `now`.
@@ -1452,7 +1492,14 @@ mod tests {
                 host.events();
                 let bars = [bar(-2, 100.0, 10.0), bar(-1, 100.0, 10.0)];
                 feed(&host, &bars, &[], 59);
-                assert!(host.events().is_empty(), "{condition:?}, {frequency}");
+                // Outside the window the trigger is only logged, once, and nothing is delivered.
+                let events = host.events();
+                assert!(
+                    matches!(events.as_slice(), [AlertEvent::SilentTriggered { price: Some(p), .. }] if *p == 100.0),
+                    "{condition:?}, {frequency}: {events:?}"
+                );
+                feed(&host, &bars, &[], 59);
+                assert!(host.events().is_empty());
                 assert_eq!(host.engine.alerts()[0].status, AlertStatus::Active);
                 assert!(host.delivered.lock().unwrap().is_empty());
 
@@ -1625,6 +1672,16 @@ mod tests {
         );
         feed(&host, &bars, &[], 2_001);
         assert!(host.events().is_empty());
+
+        // An alert with a start time ignores data until then.
+        let mut timed = alert(AlertCondition::Above(100.0), AlertFrequency::EveryTime);
+        timed.starts = Some(time(1_000));
+        let host = Host::new(vec![timed]);
+        host.events();
+        feed(&host, &bars, &[], 999);
+        assert!(host.events().is_empty());
+        feed(&host, &bars, &[], 1_000);
+        assert_eq!(host.fired(), [101.0]);
 
         // A disabled alert is ignored; saving it active again starts with a first observation.
         let mut paused = alert(AlertCondition::CrossingUp(100.0), AlertFrequency::Once);
