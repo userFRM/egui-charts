@@ -36,9 +36,10 @@ use crate::model::{
 /// lookbacks and preceding source values. For `OncePerBarClose`, the shortest interval uses its
 /// newest completed bar; other intervals keep their live observations. Each completed occurrence
 /// is evaluated once after compatible observations arrive. The shortest interval supplies the
-/// occurrence bar. Other observations must cover its event time: a forming observation covers its
-/// clock's bar window; a completed observation covers the window beginning at its close. Window
-/// ends are excluded. Observations from later windows cannot satisfy an earlier event, nor can
+/// occurrence bar. Other observations must cover its open: a longer bar closes together with the
+/// last shorter bar of its period, so that bar joins it even when the next longer bar has arrived,
+/// a session has ended or trading has paused. For that, each other interval also keeps the bar
+/// before its newest. Observations from later windows cannot satisfy an earlier event, nor can
 /// expired observations satisfy a newer one. Each direct update evaluates the latest overlapping
 /// observations; `AlertEvaluator` gathers a complete poll before evaluating. Missing or non-finite
 /// sources make their conditions false. Price and volume come from each interval's own bars.
@@ -150,6 +151,9 @@ struct Observation {
     event: DateTime<Utc>,
     bar: Bar,
     message: String,
+    /// The bar before this one as it ended, for a shorter bar that closes with it. Only a longer
+    /// interval of an alert evaluated at bar close keeps it.
+    earlier: Option<Box<Observation>>,
 }
 
 /// The inputs of one evaluation: the bar, its close and volume, and for each rule the value of
@@ -724,60 +728,46 @@ fn observe(
             })
             .collect()
     };
-    let seen = Seen {
-        time: bar.time,
+    let seen_at = |at: usize| Seen {
+        time: bars[at].time,
         scheduled: alert
             .schedule
             .as_ref()
             .is_none_or(|schedule| schedule.allows(now)),
         minute: (alert.frequency == AlertFrequency::OncePerMinute)
-            .then(|| occurrence(alert.frequency, bar, now)),
-        bar: (bar.close.to_bits(), bar.volume.to_bits()),
-        rules: read(Some(index)),
+            .then(|| occurrence(alert.frequency, &bars[at], now)),
+        bar: (bars[at].close.to_bits(), bars[at].volume.to_bits()),
+        rules: read(Some(at)),
     };
+    let seen = seen_at(index);
     if previous.is_some_and(|previous| previous.seen == seen) {
         if let Some(previous) = run.intervals.get_mut(&timeframe) {
             previous.available = true;
         }
         return true;
     }
-    let holds = rules
-        .iter()
-        .zip(&seen.rules)
-        .all(|((src, condition), &[current, a, b])| {
-            reads_previous(condition)
-                || current.is_some_and(|current| {
-                    condition_holds(
-                        condition,
-                        current,
-                        [None; 3],
-                        [a, b],
-                        &bars[..=index],
-                        |back| {
-                            index
-                                .checked_sub(back as usize)
-                                .and_then(|at| source(src, at))
-                        },
-                    )
-                })
-        });
-    let event = if closed {
-        clock.next_open(bar.time).unwrap_or(bars[index + 1].time)
-    } else {
-        bar.time
-    };
-    let message = if holds {
-        alert.expand_message(symbol, timeframe, bar, now, |src| source(src, index))
-    } else {
-        String::new()
-    };
-    let before = run
-        .intervals
-        .remove(&timeframe)
-        .filter(|old| old.seen.time == bar.time)
-        .map_or_else(|| read(index.checked_sub(1)), |old| old.before);
-    run.intervals.insert(
-        timeframe,
+    let observed = |at: usize, seen: Seen, before, event, earlier| {
+        let holds = rules
+            .iter()
+            .zip(&seen.rules)
+            .all(|((src, condition), &[current, a, b])| {
+                reads_previous(condition)
+                    || current.is_some_and(|current| {
+                        condition_holds(
+                            condition,
+                            current,
+                            [None; 3],
+                            [a, b],
+                            &bars[..=at],
+                            |back| at.checked_sub(back as usize).and_then(|at| source(src, at)),
+                        )
+                    })
+            });
+        let message = if holds {
+            alert.expand_message(symbol, timeframe, &bars[at], now, |src| source(src, at))
+        } else {
+            String::new()
+        };
         Observation {
             available: true,
             seen,
@@ -785,10 +775,42 @@ fn observe(
             before,
             clock: clock.clone(),
             event,
-            bar: bar.clone(),
+            bar: bars[at].clone(),
             message,
-        },
-    );
+            earlier,
+        }
+    };
+    let event = |at: usize| {
+        if closed {
+            clock.bar_open(bars[at].time)
+        } else {
+            bars[at].time
+        }
+    };
+    let kept = run
+        .intervals
+        .remove(&timeframe)
+        .filter(|old| old.seen.time == bar.time);
+    let newest = match kept {
+        Some(old) => observed(index, seen, old.before, old.event, old.earlier),
+        None => {
+            let earlier = index
+                .checked_sub(1)
+                .filter(|_| alert.frequency == AlertFrequency::OncePerBarClose && !closed)
+                .map(|at| {
+                    let before = read(at.checked_sub(1));
+                    Box::new(observed(at, seen_at(at), before, event(at), None))
+                });
+            observed(
+                index,
+                seen,
+                read(index.checked_sub(1)),
+                event(index),
+                earlier,
+            )
+        }
+    };
+    run.intervals.insert(timeframe, newest);
     true
 }
 
@@ -808,24 +830,38 @@ fn evaluate(alert: &Alert, run: &mut Run, now: DateTime<Utc>) -> Option<(Bar, St
     let joined: Option<Vec<_>> = intervals
         .iter()
         .map(|interval| {
-            let observation = run.intervals.get(interval)?;
-            (observation.available
-                && observation.event <= anchor.event
-                && (intervals.len() == 1
-                    || observation.clock.same_bar(observation.event, anchor.event)))
-            .then(|| observation.seen.clone())
+            let newest = run.intervals.get(interval)?;
+            std::iter::once(newest)
+                .chain(newest.earlier.as_deref())
+                .find(|observation| {
+                    newest.available
+                        && observation.event <= anchor.event
+                        && (intervals.len() == 1
+                            || observation.clock.same_bar(observation.event, anchor.event))
+                })
         })
         .collect();
     let joined = joined?;
-    if joined == run.joined {
+    if joined
+        .iter()
+        .map(|observation| &observation.seen)
+        .eq(&run.joined)
+    {
         return None;
     }
-    let holds = intervals.iter().enumerate().all(|(position, interval)| {
-        let observation = &run.intervals[interval];
-        observation.holds
-            && previous_rules_hold(alert, *interval, observation, run.joined.get(position))
-    });
-    run.joined = joined;
+    let holds =
+        joined
+            .iter()
+            .zip(&intervals)
+            .enumerate()
+            .all(|(position, (observation, interval))| {
+                observation.holds
+                    && previous_rules_hold(alert, *interval, observation, run.joined.get(position))
+            });
+    run.joined = joined
+        .iter()
+        .map(|observation| observation.seen.clone())
+        .collect();
     let bar = &anchor.bar;
     let fires = holds
         && match alert.frequency {
@@ -852,7 +888,11 @@ fn evaluate(alert: &Alert, run: &mut Run, now: DateTime<Utc>) -> Option<(Bar, St
         }
         run.silent = Some(at);
     }
-    let primary = &run.intervals[&alert.timeframe.unwrap_or_default()];
+    let first = alert.timeframe.unwrap_or_default();
+    let (primary, _) = joined
+        .iter()
+        .zip(&intervals)
+        .find(|(_, interval)| **interval == first)?;
     Some((bar.clone(), primary.message.clone(), silent))
 }
 
@@ -1362,7 +1402,11 @@ mod tests {
                     1,
                     "frequency follows the smaller interval"
                 );
-                send(Timeframe::Min1, if closed { 4 } else { 5 }, 99.0, 10.0);
+                if closed {
+                    send(Timeframe::Min1, 4, 99.0, 10.0);
+                    assert_eq!(host.fired().len(), 1, "closes with the slow bar");
+                }
+                send(Timeframe::Min1, 5, 99.0, 10.0);
                 assert!(host.fired().is_empty(), "expired slow observation");
                 send(Timeframe::Min5, 5, 101.0, 1.0);
                 assert_eq!(host.fired().len(), 1, "late matching interval");
@@ -1371,9 +1415,9 @@ mod tests {
                     host.fired().is_empty(),
                     "future interval cannot use an older fast observation"
                 );
-                send(Timeframe::Min1, if closed { 9 } else { 10 }, 99.0, 10.0);
+                send(Timeframe::Min1, 10, 99.0, 10.0);
                 assert_eq!(host.fired().len(), 1);
-                send(Timeframe::Min1, if closed { 4 } else { 5 }, 99.0, 10.0);
+                send(Timeframe::Min1, 5, 99.0, 10.0);
                 assert!(host.fired().is_empty(), "rewind");
             }
         }
@@ -1989,5 +2033,107 @@ mod tests {
             fired.extend(host.fired());
         }
         assert_eq!(fired, [102.0], "crossed between two one-minute closes");
+    }
+
+    #[test]
+    fn once_per_close_evaluates_the_last_bar_of_a_session() {
+        use crate::model::{Session, SessionWindow, TimezoneId};
+        use chrono::{NaiveTime, Weekday::*};
+        let session = Session::new([SessionWindow::new(
+            [Mon, Tue, Wed, Thu, Fri],
+            NaiveTime::from_hms_opt(9, 30, 0).unwrap(),
+            NaiveTime::from_hms_opt(16, 0, 0).unwrap(),
+        )]);
+        let clock = |tf| BarClock::new(tf).with_session(TimezoneId::utc(), session.clone(), false);
+        let (one, five) = (clock(Timeframe::Min1), clock(Timeframe::Min5));
+        let at = |text: &str| text.parse::<DateTime<Utc>>().unwrap();
+        let bar = |text: &str, close: f64| Bar::new(at(text), close, close, close, close, 1.0);
+        let host = Host::new(vec![
+            serde_json::from_value(serde_json::json!({
+                "symbol":"SYM", "timeframe":"Min1", "condition":{"Above":50.0},
+                "frequency":"OncePerBarClose", "additional_timeframes":["Min5"],
+                "additional_conditions":[{"source":"Price","condition":{"Above":50.0}}]
+            }))
+            .unwrap(),
+        ]);
+        host.events();
+        // Tuesday's last two one-minute bars, then Wednesday's first two.
+        let fast = [
+            bar("2024-03-12T15:58:00Z", 100.0),
+            bar("2024-03-12T15:59:00Z", 101.0),
+            bar("2024-03-13T09:30:00Z", 102.0),
+            bar("2024-03-13T09:31:00Z", 103.0),
+        ];
+        let mut fired = Vec::new();
+        for (count, slow) in [
+            (2, vec![bar("2024-03-12T15:55:00Z", 101.0)]),
+            (
+                3,
+                vec![
+                    bar("2024-03-12T15:55:00Z", 101.0),
+                    bar("2024-03-13T09:30:00Z", 102.0),
+                ],
+            ),
+            (
+                4,
+                vec![
+                    bar("2024-03-12T15:55:00Z", 101.0),
+                    bar("2024-03-13T09:30:00Z", 103.0),
+                ],
+            ),
+        ] {
+            host.engine.update_matching(
+                None,
+                "SYM",
+                &[(&one, &fast[..count]), (&five, &slow[..])],
+                fast[count - 1].time + chrono::TimeDelta::seconds(30),
+                |_, _, _| None,
+            );
+            fired.extend(host.fired());
+        }
+        assert_eq!(fired, [100.0, 101.0, 102.0], "every one-minute close");
+    }
+
+    #[test]
+    fn last_close_of_a_longer_bar_reads_its_final_value() {
+        // The five-minute close is 99 at the one-minute close of 00:03 and 101 at that of 00:04,
+        // when both bars end together, so it crossed 100 between the two evaluations. By the poll
+        // that completes 00:04 the next five-minute bar has opened at 99.
+        let host = Host::new(vec![
+            serde_json::from_value(serde_json::json!({
+                "symbol":"SYM", "timeframe":"Min1", "condition":{"Above":50.0},
+                "frequency":"OncePerBarClose", "additional_timeframes":["Min5"],
+                "additional_conditions":[{"source":"Price","condition":{"CrossingUp":100.0}}]
+            }))
+            .unwrap(),
+        ]);
+        host.events();
+        let (one, five) = (
+            BarClock::new(Timeframe::Min1),
+            BarClock::new(Timeframe::Min5),
+        );
+        let mut fired = Vec::new();
+        for (now, fast, slow) in [
+            (
+                290,
+                vec![bar(3, 99.0, 1.0), bar(4, 99.0, 1.0)],
+                vec![bar(0, 99.0, 1.0)],
+            ),
+            (
+                301,
+                vec![bar(3, 99.0, 1.0), bar(4, 101.0, 2.0), bar(5, 99.0, 1.0)],
+                vec![bar(0, 101.0, 2.0), bar(5, 99.0, 1.0)],
+            ),
+        ] {
+            host.engine.update_matching(
+                None,
+                "SYM",
+                &[(&one, &fast[..]), (&five, &slow[..])],
+                time(now),
+                |_, _, _| None,
+            );
+            fired.extend(host.fired());
+        }
+        assert_eq!(fired, [101.0], "the 00:00 bar's last close, at 00:05");
     }
 }
