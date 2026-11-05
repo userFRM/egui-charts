@@ -17,10 +17,9 @@
 
 use std::cell::{Ref, RefCell};
 
-use egui::epaint::RectShape;
-use egui::{Color32, Pos2, Shape, Stroke, StrokeKind};
+use egui::Stroke;
 
-use super::helpers::{OhlcYCoords, body_rect};
+use super::helpers::{OhlcYCoords, body_rect, push_body, push_wicks};
 use crate::model::Bar;
 
 /// A whitespace bar stays whitespace, and the bar after it continues from the last bar with a
@@ -150,47 +149,16 @@ pub(super) fn render(
         };
         let y = OhlcYCoords::from_bar(bar, ctx.price_scale);
         if style.wick_visible {
-            let stroke = Stroke::new(params.wick_width(), wick);
-            // A trending bar has no wick on one side; a segment without length paints nothing.
-            for (from, to) in [(y.wick_top, y.body_top), (y.body_bottom, y.wick_bottom)] {
-                if from != to {
-                    shapes.push(Shape::line_segment(
-                        [Pos2::new(x, from), Pos2::new(x, to)],
-                        stroke,
-                    ));
-                }
-            }
+            push_wicks(&mut shapes, x, &y, Stroke::new(params.wick_width(), wick));
         }
-        let rect = body_rect(x, params.bar_width(), &y);
-        // A border in the colour of an opaque body changes no pixel.
-        let border_width = if style.body_visible && border == body && body.is_opaque() {
-            0.0
-        } else {
-            border_width
-        };
-        if style.body_visible && border_width > 0.0 && !border.is_opaque() {
-            // The tessellator stops a shared fill at the middle of the stroke, so only an opaque
-            // border may share the body's shape.
-            shapes.push(Shape::rect_filled(rect, 0.0, body));
-            shapes.push(Shape::rect_stroke(
-                rect,
-                0.0,
-                Stroke::new(border_width, border),
-                StrokeKind::Inside,
-            ));
-        } else if style.body_visible || border_width > 0.0 {
-            let fill = if style.body_visible {
-                body
-            } else {
-                Color32::TRANSPARENT
-            };
-            let stroke = if border_width > 0.0 {
-                Stroke::new(border_width, border)
-            } else {
-                Stroke::NONE
-            };
-            shapes.push(RectShape::new(rect, 0.0, fill, stroke, StrokeKind::Inside).into());
-        }
+        let fill = style.body_visible.then_some(body);
+        let border = (border_width > 0.0).then(|| Stroke::new(border_width, border));
+        push_body(
+            &mut shapes,
+            body_rect(x, params.bar_width(), &y),
+            fill,
+            border,
+        );
     }
     ctx.price_ctx.painter.extend(shapes);
     if params.show_volume() {
