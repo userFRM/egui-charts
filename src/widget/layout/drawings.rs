@@ -1,7 +1,7 @@
 //! Propagate drawing changes without consuming the host's persistence queue.
 
-use crate::drawings::Drawing;
 use crate::drawings::manager::sync_id;
+use crate::drawings::{Drawing, FolderSync};
 use crate::widget::{Chart, PaneId};
 use std::collections::{HashMap, HashSet};
 
@@ -14,6 +14,16 @@ struct Snapshot {
     points: Vec<(Option<chrono::DateTime<chrono::Utc>>, f64)>,
     notes: Option<String>,
     symbol: String,
+    sync: Option<FolderSync>,
+}
+
+/// Whether a drawing with this folder synchronization is mirrored to the other charts.
+fn mirrored(sync: Option<FolderSync>, layout_wide: bool) -> bool {
+    match sync {
+        Some(FolderSync::Chart) => false,
+        Some(FolderSync::Layout) => true,
+        None => layout_wide,
+    }
 }
 
 /// The time and price of each point, which is what a linked copy follows: bars evicted or loaded
@@ -43,6 +53,7 @@ impl DrawingLinks {
         count: usize,
         groups: &[Option<String>; 16],
         pointer_down: bool,
+        layout_wide: bool,
     ) -> bool {
         let mut changed = false;
         let mut changes = Vec::new();
@@ -76,6 +87,17 @@ impl DrawingLinks {
             if joined.contains(&key) {
                 continue;
             }
+            // A drawing that stops being mirrored leaves the charts its copies are on.
+            let was_mirrored = self
+                .previous
+                .get(&key)
+                .is_some_and(|old| mirrored(old.sync, layout_wide));
+            let mirror = drawing
+                .as_ref()
+                .is_some_and(|d| mirrored(d.folder_sync_mode(), layout_wide));
+            if !mirror && !was_mirrored {
+                continue;
+            }
             let origin = *self.origins.entry(key).or_insert(key);
             let symbol = charts[key.0].symbol().to_owned();
             for slot in 0..count {
@@ -97,7 +119,7 @@ impl DrawingLinks {
                             && charts[slot].drawings().drawings.iter().any(|d| d.id == id))
                         .then_some(id)
                     });
-                if let Some(drawing) = &drawing {
+                if let Some(drawing) = drawing.as_ref().filter(|_| mirror) {
                     let Some(mut copy) = map_drawing(drawing, charts[key.0], charts[slot]) else {
                         self.retry.insert(key);
                         continue;
@@ -146,6 +168,7 @@ impl DrawingLinks {
                             points: timed_points(chart, drawing),
                             notes: drawing.notes.clone(),
                             symbol: chart.symbol().to_owned(),
+                            sync: drawing.folder_sync_mode(),
                         },
                     );
                 }
@@ -245,6 +268,82 @@ mod tests {
     use crate::widget::SeriesId;
     use chrono::DateTime;
 
+    /// The top-level folder decides whether its drawings mirror, over the layout-wide switch, and
+    /// the charts lose the copies once its drawings stop mirroring.
+    #[test]
+    fn folder_sync_overrides_the_layout_switch() {
+        let chart = || {
+            let mut chart = Chart::new(BarData::from_bars(
+                (0..10)
+                    .map(|i| {
+                        Bar::new(
+                            DateTime::from_timestamp(i * 60, 0).unwrap(),
+                            10.0,
+                            11.0,
+                            9.0,
+                            10.0,
+                            1.0,
+                        )
+                    })
+                    .collect(),
+            ));
+            chart.set_symbol("SAMPLE");
+            chart
+        };
+        let groups = std::array::from_fn(|_| None);
+        let top = ["Top".to_owned()];
+        use FolderSync::{Chart as Local, Layout};
+        for (mode, layout_wide, copies) in [
+            (Some(Layout), false, 1),
+            (Some(Local), true, 0),
+            (None, true, 1),
+            (None, false, 0),
+        ] {
+            let (mut a, mut b) = (chart(), chart());
+            let mut links = DrawingLinks::default();
+            let mut drawing = Drawing::new(0, DrawingToolType::TrendLine);
+            drawing.chart_points = vec![ChartPoint::new(2.0, 10.0), ChartPoint::new(4.0, 12.0)];
+            drawing.completed = true;
+            // Nested, so the mode comes from the top-level folder.
+            drawing.folder = vec![top[0].clone(), "Inner".into()];
+            a.drawings_mut().add_synced_drawing(drawing).unwrap();
+            assert!(a.drawings_mut().set_folder_sync(&top, mode));
+            links.sync(&mut [&mut a, &mut b], 2, &groups, false, layout_wide);
+            assert_eq!(
+                b.drawings().drawings.len(),
+                copies,
+                "{mode:?} {layout_wide}"
+            );
+        }
+
+        // Mirrored, then confined to the chart: the copy leaves and an undo brings it back.
+        let (mut a, mut b) = (chart(), chart());
+        let mut links = DrawingLinks::default();
+        let mut drawing = Drawing::new(0, DrawingToolType::TrendLine);
+        drawing.chart_points = vec![ChartPoint::new(2.0, 10.0), ChartPoint::new(4.0, 12.0)];
+        drawing.completed = true;
+        drawing.folder = top.to_vec();
+        a.drawings_mut().add_synced_drawing(drawing).unwrap();
+        a.drawings_mut().set_folder_sync(&top, Some(Layout));
+        let mut sync = |a: &mut Chart, b: &mut Chart| {
+            links.sync(&mut [a, b], 2, &groups, false, false);
+        };
+        sync(&mut a, &mut b);
+        assert_eq!(b.drawings().drawings.len(), 1);
+        a.drawings_mut().set_folder_sync(&top, Some(Local));
+        sync(&mut a, &mut b);
+        assert!(b.drawings().drawings.is_empty());
+        assert_eq!(a.drawings().drawings.len(), 1);
+        assert!(a.drawings_mut().undo());
+        sync(&mut a, &mut b);
+        assert_eq!(b.drawings().drawings.len(), 1);
+        // A mirrored drawing deleted here goes from the other chart too, with the switch off.
+        let id = a.drawings().drawings[0].id;
+        a.drawings_mut().delete_drawing(id);
+        sync(&mut a, &mut b);
+        assert!(b.drawings().drawings.is_empty());
+    }
+
     #[test]
     fn drawing_changes_map_time_preserve_local_work_and_never_echo() {
         let chart = |step: i64| {
@@ -282,7 +381,7 @@ mod tests {
             .add_synced_drawing(drawing)
             .unwrap();
         let mut refs: Vec<_> = charts.iter_mut().collect();
-        links.sync(&mut refs, 4, &groups, false);
+        links.sync(&mut refs, 4, &groups, false, true);
         assert_eq!(refs[1].drawings().drawings.len(), 2);
         assert!(refs[2].drawings().drawings.is_empty());
         assert!(refs[3].drawings().drawings.is_empty());
@@ -293,7 +392,7 @@ mod tests {
             vec![ChartPoint::new(1.0, 10.0), ChartPoint::new(2.0, 12.0)]
         );
         let queued = refs[1].drawings().pending_sync.lock().unwrap().len();
-        links.sync(&mut refs, 4, &groups, false);
+        links.sync(&mut refs, 4, &groups, false, true);
         assert_eq!(
             refs[1].drawings().pending_sync.lock().unwrap().len(),
             queued
@@ -301,12 +400,12 @@ mod tests {
         refs[1]
             .drawings_mut()
             .edit_drawing(id, |d| d.chart_points[0].bar_idx = 1.5);
-        links.sync(&mut refs, 4, &groups, false);
+        links.sync(&mut refs, 4, &groups, false, true);
         assert_eq!(refs[0].drawings().drawings[0].chart_points[0].bar_idx, 3.0);
         refs[1]
             .drawings_mut()
             .edit_drawing(id, |d| d.notes = Some("shared note".into()));
-        links.sync(&mut refs, 4, &groups, false);
+        links.sync(&mut refs, 4, &groups, false, true);
         assert_eq!(
             refs[0].drawings().drawings[0].notes.as_deref(),
             Some("shared note")
@@ -324,14 +423,14 @@ mod tests {
             refs[0]
                 .drawings_mut()
                 .edit_drawing(source_id, |d| d.chart_points[0].bar_idx = index);
-            links.sync(&mut refs, 4, &groups, true);
+            links.sync(&mut refs, 4, &groups, true, true);
         }
         assert_eq!(
             refs[1].drawings().pending_sync.lock().unwrap().len(),
             queued,
             "a mirrored drag must not queue an update for every frame"
         );
-        links.sync(&mut refs, 4, &groups, false);
+        links.sync(&mut refs, 4, &groups, false, true);
         assert_eq!(
             refs[1].drawings().pending_sync.lock().unwrap().len(),
             queued + 1
@@ -348,9 +447,9 @@ mod tests {
                 .bar_idx,
             1.5
         );
-        links.sync(&mut refs, 4, &groups, false);
+        links.sync(&mut refs, 4, &groups, false, true);
         refs[1].drawings_mut().delete_drawing(id);
-        links.sync(&mut refs, 4, &groups, false);
+        links.sync(&mut refs, 4, &groups, false, true);
         assert!(
             refs[0]
                 .drawings()
@@ -360,7 +459,7 @@ mod tests {
         );
         assert_eq!(refs[1].drawings().drawings[0].chart_points[0].price, 42.0);
         assert!(refs[1].drawings_mut().undo());
-        links.sync(&mut refs, 4, &groups, false);
+        links.sync(&mut refs, 4, &groups, false, true);
         assert_eq!(
             refs[0]
                 .drawings()
@@ -379,10 +478,10 @@ mod tests {
             .add_synced_drawing(refs[0].drawings().drawings[0].clone())
             .unwrap();
         let mut pending = DrawingLinks::default();
-        pending.sync(&mut [&mut source, &mut target], 2, &groups, false);
+        pending.sync(&mut [&mut source, &mut target], 2, &groups, false, true);
         assert!(target.drawings().drawings.is_empty());
         target.set_data(SeriesId::MAIN, source.bars(SeriesId::MAIN).to_vec());
-        pending.sync(&mut [&mut source, &mut target], 2, &groups, false);
+        pending.sync(&mut [&mut source, &mut target], 2, &groups, false, true);
         assert_eq!(target.drawings().drawings.len(), 1);
         // Element coordinates and retained timestamps must not be read as source bar indices.
         source.state.set_elements(
@@ -414,7 +513,7 @@ mod tests {
         owned.pane = Some(7);
         source.drawings_mut().add_synced_drawing(owned).unwrap();
         let mut local = DrawingLinks::default();
-        local.sync(&mut [&mut source, &mut target], 2, &groups, false);
+        local.sync(&mut [&mut source, &mut target], 2, &groups, false, true);
         assert!(target.drawings().drawings.iter().all(|d| d.pane.is_none()));
     }
 
@@ -461,7 +560,8 @@ mod tests {
         drawing.completed = true;
         a.drawings_mut().add_synced_drawing(drawing).unwrap();
         let source = a.drawings().drawings[0].id;
-        let mut sync = |a: &mut Chart, b: &mut Chart| links.sync(&mut [a, b], 2, &groups, false);
+        let mut sync =
+            |a: &mut Chart, b: &mut Chart| links.sync(&mut [a, b], 2, &groups, false, true);
         sync(&mut a, &mut b);
         let copy = &b.drawings().drawings[0];
         let id = copy.id;
@@ -522,7 +622,7 @@ mod tests {
             drawing.chart_points = vec![ChartPoint::new(4.0, 10.0), ChartPoint::new(6.0, 12.0)];
             drawing.completed = true;
             source.drawings_mut().add_synced_drawing(drawing).unwrap();
-            links.sync(&mut [&mut source, &mut target], 2, &groups, false);
+            links.sync(&mut [&mut source, &mut target], 2, &groups, false, true);
             target.drawings().pending_sync.lock().unwrap().clear();
             if evict {
                 // Ten bars exceed the limit: the oldest two go, and minute 5 moves from index 4
@@ -535,7 +635,7 @@ mod tests {
                 source.set_bar_limit(SeriesId::MAIN, None);
                 source.set_data(SeriesId::MAIN, (0..10).map(bar).collect());
             }
-            links.sync(&mut [&mut source, &mut target], 2, &groups, false);
+            links.sync(&mut [&mut source, &mut target], 2, &groups, false, true);
             assert!(
                 target.drawings().pending_sync.lock().unwrap().is_empty(),
                 "evict {evict}"

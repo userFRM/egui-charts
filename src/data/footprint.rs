@@ -545,6 +545,52 @@ impl Footprint {
         self.push_allocated(trade, None)
     }
 
+    /// Adds paged executions only to the `history` bars they rebuild, on a trade-based interval.
+    /// Bars there are grouped from their first execution, which a page need not start with, so
+    /// each candidate is tried against the chart's bars instead: an execution first at the time a
+    /// bar opens, grouped on from there. A second bar that opens and sums as grouped, or the page
+    /// ending exactly with the first, proves the start; one bar alone could be a fill split by
+    /// the bar before it. The newest proven run is kept, so its bars have no gap. Older bars get
+    /// no cells and draw candles. With `before`, adds only the executions strictly before it.
+    #[cfg(feature = "widget")]
+    pub(crate) fn push_history(
+        &mut self,
+        trades: &[&Tick],
+        history: &[crate::model::Bar],
+        before: Option<DateTime<Utc>>,
+    ) {
+        let Some(timeframe) = self.clock.timeframe().filter(|tf| tf.is_trade_based()) else {
+            return;
+        };
+        let mut newest = Vec::new();
+        let mut at = 0;
+        while at < trades.len() {
+            let start = at;
+            at += 1;
+            if start > 0 && trades[start - 1].ts == trades[start].ts {
+                continue;
+            }
+            let Ok(first) = history.binary_search_by_key(&trades[start].ts, |bar| bar.time) else {
+                continue;
+            };
+            let run = history_run(
+                timeframe,
+                self.tick_size,
+                &trades[start..],
+                &history[first..],
+            );
+            if run.proven {
+                newest = run.parts;
+                at = start + run.next.max(1);
+            }
+        }
+        for (trade, open, size) in newest {
+            if before.is_none_or(|before| trade.ts < before) {
+                let _ = self.push_part(trade, open, size);
+            }
+        }
+    }
+
     /// Adds a part already allocated by the live sink, without starting another grouping anchor.
     pub(crate) fn push_part(
         &mut self,
@@ -661,6 +707,76 @@ impl Footprint {
         }
         bar.min_delta = bar.min_delta.min(bar.delta());
         bar.max_delta = bar.max_delta.max(bar.delta());
+    }
+}
+
+/// Paged executions grouped along the chart's bars from one start.
+#[cfg(feature = "widget")]
+struct HistoryRun<'a> {
+    /// The parts of the bars that match: execution, bar open and allocated size.
+    parts: Vec<(&'a Tick, DateTime<Utc>, f64)>,
+    /// Whether they prove the start (see [`Footprint::push_history`]).
+    proven: bool,
+    /// Index of the first execution of the bar that did not match.
+    next: usize,
+}
+
+/// Groups `trades` from their first execution along `history`, the bars from the one it opens.
+#[cfg(feature = "widget")]
+fn history_run<'a>(
+    timeframe: crate::model::Timeframe,
+    tick_size: f64,
+    trades: &[&'a Tick],
+    history: &[crate::model::Bar],
+) -> HistoryRun<'a> {
+    use crate::model::Bar;
+    let near = |a: f64, b: f64| (a - b).abs() <= 1e-9 * a.abs().max(b.abs());
+    let same = |grouped: &Bar, bar: Option<&Bar>| {
+        bar.is_some_and(|bar| {
+            grouped.time == bar.time
+                && near(grouped.open, bar.open)
+                && near(grouped.high, bar.high)
+                && near(grouped.low, bar.low)
+                && near(grouped.close, bar.close)
+                && near(grouped.volume, bar.volume)
+        })
+    };
+    let mut bars = super::inbox::TradeBars::default();
+    let mut parts = Vec::new();
+    let (mut kept, mut matched, mut opened) = (0, 0, 0);
+    let mut forming: Option<Bar> = None;
+    'trades: for (index, trade) in trades.iter().enumerate() {
+        // Older than the one before it: left out, as `Footprint::push` does.
+        let Ok(allocated) = bars.push(timeframe, trade, Some(tick_size)) else {
+            continue;
+        };
+        for (bar, size) in allocated {
+            if let Some(grouped) = forming.as_ref().filter(|grouped| grouped.time != bar.time) {
+                if !same(grouped, history.get(matched)) {
+                    forming = None;
+                    break 'trades;
+                }
+                matched += 1;
+                kept = parts.len();
+                opened = index;
+            }
+            parts.push((*trade, bar.time, size));
+            forming = Some(bar);
+        }
+    }
+    // The page ends here, so a last bar that sums as grouped closes no earlier than it should.
+    if forming.is_some_and(|grouped| same(&grouped, history.get(matched))) {
+        return HistoryRun {
+            parts,
+            proven: true,
+            next: trades.len(),
+        };
+    }
+    parts.truncate(kept);
+    HistoryRun {
+        parts,
+        proven: matched >= 2,
+        next: opened,
     }
 }
 

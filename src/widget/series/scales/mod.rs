@@ -209,8 +209,16 @@ impl Chart {
             None
         } else if pane == PaneId::MAIN && key != self.main_series_scale {
             self.series_scales.get(&key)
-        } else {
+        } else if pane == PaneId::MAIN
+            || (pane == self.main_series_pane() && key == self.main_series_scale)
+        {
             Some(self.pane_price_scale(pane, key))
+        } else {
+            self.pane_layout
+                .panes
+                .iter()
+                .find(|item| item.id == pane)?
+                .own_scale(key)
         }
     }
 
@@ -1089,11 +1097,13 @@ impl Chart {
                 transform.base = 1.0;
             }
             let scale = self.pane_price_scale_mut(pane, key);
-            let manual =
-                (scale.is_manual() && scale.transform().mode == mode).then(|| scale.range());
+            let manual = (scale.is_manual() && scale.transform().mode == mode)
+                .then(|| (scale.range(), scale.bar_ratio()));
             scale.rebase(transform);
-            if let Some(range) = manual {
+            if let Some((range, ratio)) = manual {
                 scale.set_range(range.min, range.max);
+                // Restoring the range is not a zoom, which would rescale the ratio.
+                scale.set_bar_ratio(ratio);
             }
             scale.autoscale(bounds.0, bounds.1);
             let rect = self.pane_layout.panes[at].rect;
@@ -1107,7 +1117,30 @@ impl Chart {
                     self.series_marker_bounds(painter, item.id, self.series_map(item, rect))
                 })
                 .collect();
-            Self::fit_marker_bounds(self.pane_price_scale_mut(pane, key), rect, markers, margins);
+            let bar_spacing = self.state.time_scale().bar_spacing();
+            let scale = self.pane_price_scale_mut(pane, key);
+            Self::fit_marker_bounds(scale, rect, markers, margins);
+            scale.update_bar_ratio(bar_spacing, rect.height());
+        }
+    }
+
+    /// Applies the locked ratios of the scales beside the main series' scale in its pane.
+    pub(in crate::widget) fn update_secondary_bar_ratios(&mut self, bar_spacing: f32, height: f32) {
+        let pane = self.main_series_pane();
+        if pane == PaneId::MAIN {
+            for scale in self.series_scales.values_mut() {
+                scale.update_bar_ratio(bar_spacing, height);
+            }
+        } else if let Some(pane) = self
+            .pane_layout
+            .panes
+            .iter_mut()
+            .find(|item| item.id == pane)
+        {
+            pane.scale.update_bar_ratio(bar_spacing, height);
+            for (_, scale) in &mut pane.scales {
+                scale.update_bar_ratio(bar_spacing, height);
+            }
         }
     }
 
@@ -1219,10 +1252,12 @@ impl Chart {
                 let scale = self.pane_price_scale_mut(pane, key);
                 // Membership and scrolling change references, not a manual range's scale units.
                 let manual = (scale.is_manual() && scale.transform().mode == transform.mode)
-                    .then(|| scale.range());
+                    .then(|| (scale.range(), scale.bar_ratio()));
                 scale.rebase(transform);
-                if let Some(range) = manual {
+                if let Some((range, ratio)) = manual {
                     scale.set_range(range.min, range.max);
+                    // Restoring the range is not a zoom, which would rescale the ratio.
+                    scale.set_bar_ratio(ratio);
                 }
                 scale.autoscale(min, max);
             }
