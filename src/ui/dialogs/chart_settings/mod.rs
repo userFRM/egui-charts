@@ -743,7 +743,9 @@ impl SettingsDialog {
             };
             if matches!(
                 self.settings.chart_type,
-                crate::model::ChartType::Heikin | crate::model::ChartType::HollowCandles
+                crate::model::ChartType::Heikin
+                    | crate::model::ChartType::HollowCandles
+                    | crate::model::ChartType::VolumeCandles
             ) {
                 self.settings.candle_colors.show_border = true;
             }
@@ -834,6 +836,10 @@ mod tests {
         for (kind, label) in [
             (ChartType::Heikin, "Body"),
             (ChartType::HollowCandles, "Body"),
+            (
+                ChartType::VolumeCandles,
+                "Color bars based on previous close",
+            ),
             (ChartType::Bars, "Body"),
             (ChartType::Line, "Line width"),
             (ChartType::Baseline, "Base level"),
