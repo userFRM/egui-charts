@@ -178,6 +178,7 @@ impl SymbolTab {
             FootprintMode::BidAskTrades => "Sell × buy trades",
             FootprintMode::Trades => "Trades",
             FootprintMode::AverageSize => "Average size",
+            FootprintMode::Ladder => "Sell and buy around the candle",
         }
         .to_owned()
     }
@@ -203,6 +204,7 @@ impl SymbolTab {
                         ("footprint_column", i),
                         mode,
                         [
+                            FootprintMode::Ladder,
                             FootprintMode::BidAsk,
                             FootprintMode::Volume,
                             FootprintMode::Delta,
@@ -218,12 +220,14 @@ impl SymbolTab {
                 ui.end_row();
             }
             Self::switch(ui, "Profile in bar", &mut params.footprint_profile);
+            Self::switch(ui, "Summary below bars", &mut params.footprint_info_box);
             let label = ui.label(l10n::text(ui.ctx(), "Colouring"));
             ui.label_inputs_by(label.id, |ui| {
                 ui.combo_select(
                     "footprint_colour",
                     &mut params.footprint_color_by,
                     [
+                        FootprintColor::VolumeSteps,
                         FootprintColor::Volume,
                         FootprintColor::Delta,
                         FootprintColor::Imbalance,
@@ -232,6 +236,7 @@ impl SymbolTab {
                     ],
                     |color| {
                         match color {
+                            FootprintColor::VolumeSteps => "Volume steps",
                             FootprintColor::Volume => "Volume",
                             FootprintColor::Delta => "Delta",
                             FootprintColor::Imbalance => "Imbalance",
@@ -301,6 +306,7 @@ impl SymbolTab {
             Self::value_area(ui, &mut params.footprint_value_area);
         });
         Self::section(ui, "Imbalance", true, |ui| {
+            Self::switch(ui, "Edge strips", &mut params.footprint_imbalance);
             let label = ui.label(l10n::text(ui.ctx(), "Ratio"));
             ui.add(
                 egui::DragValue::new(&mut params.footprint_imbalance_ratio)
