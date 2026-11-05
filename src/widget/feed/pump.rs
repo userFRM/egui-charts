@@ -51,7 +51,7 @@ impl Chart {
             .filter(|link| executions != link.footprint.is_some())
         {
             link.footprint = if executions {
-                link.footprint(None)
+                link.footprint(None, &self.state.data().bars)
             } else {
                 None
             };
@@ -63,7 +63,8 @@ impl Chart {
             .as_mut()
             .filter(|link| link.replay_footprint.as_ref().map(|(time, _)| *time) != cutoff)
         {
-            link.replay_footprint = cutoff.map(|time| (time, link.footprint(Some(time))));
+            link.replay_footprint =
+                cutoff.map(|time| (time, link.footprint(Some(time), &self.state.data().bars)));
         }
         if self.feed_link.as_ref().is_some_and(|link| link.paused) {
             return;
@@ -246,7 +247,7 @@ impl Chart {
                 link.order_book = None;
                 link.order_queue = None;
                 link.depth_history.iter_mut().for_each(DepthHistory::clear);
-                link.rebuild_bubbles();
+                link.rebuild_bubbles(&[]);
             }
             if !updates.bars.is_empty() {
                 let incoming = updates.bars.into_values().collect();
@@ -475,7 +476,7 @@ impl Chart {
         link.paging_stopped = false;
         let timeframe = self.timeframe.unwrap_or_default();
         link.clock = clock;
-        link.rebuild_bubbles();
+        link.rebuild_bubbles(&[]);
         // Timestamp anchors survive the empty interval between history requests.
         self.replace_main_data(Vec::new());
         self.feed = FeedState::default();
@@ -539,7 +540,7 @@ impl Chart {
         let timeframe = self.timeframe.unwrap_or_default();
         let withheld = !supports(self.legend_instrument.as_ref(), timeframe);
         link.instrument = Some(instrument);
-        link.rebuild_bubbles();
+        link.rebuild_bubbles(&self.state.data().bars);
         if !supports(link.instrument.as_ref(), timeframe) {
             self.rule_out(link);
             return;
@@ -631,6 +632,11 @@ impl Chart {
             && !self.bar_limit_reached();
         let incoming = page.bars.into_iter().map(|bar| (bar, Origin::History));
         self.apply_by(&link.clock, incoming.collect());
+        // Paged executions on a trade-based interval fill the bars they rebuild.
+        if link.footprint.is_some() && link.clock.timeframe().is_some_and(|tf| tf.is_trade_based())
+        {
+            link.footprint = link.footprint(None, &self.state.data().bars);
+        }
         let older = self.bars(SeriesId::MAIN).first().map(|bar| bar.time) < oldest;
         // A nonempty page with no valid bar older than the oldest held would be requested
         // again on every frame.
@@ -706,7 +712,7 @@ impl Chart {
             }
         }
         if (changed || reached_start) && link.footprint.is_some() {
-            link.footprint = link.footprint(None);
+            link.footprint = link.footprint(None, &self.state.data().bars);
         }
         link.trade_cursor = continuation;
         link.trades_complete |=

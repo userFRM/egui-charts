@@ -14,6 +14,11 @@ they would be too small to read. **Lose latest book** removes that bar's depth, 
 unavailable readout until a synchronized snapshot is supplied again. Clear it to restore
 the sample snapshot. Depth and executions have separate coverage.
 
+On a tick, volume, range or delta interval, the chart matches the executions of its trade pages
+to the bars of its history: a bar shows cells only when the held executions rebuild its open,
+high, low, close and volume, grouped from one of the bars' first executions. A page may start
+anywhere inside a bar; the bars it does not rebuild stay candles, without cells from another bar.
+
 <!-- example -->
 
 The source beside the running example supplies candles independently, pushes chronological
