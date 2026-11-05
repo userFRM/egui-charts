@@ -85,7 +85,8 @@ is `minmov / pricescale`, with `minmov` defaulting to one. Time zones use the
 library's [`TimezoneId`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.TimezoneId.html) parser. Sessions accept `24x7` or
 `HHMM-HHMM[,HHMM-HHMM]:days` windows (one day suffix for all windows), where 1 is Sunday and 7 is Saturday; an overnight
 window belongs to its closing day. Omitted days mean Monday through Friday. Unsupported
-session syntax or unavailable time zones report invalid data rather than guessing.
+session syntax or unavailable time zones report invalid data rather than guessing;
+search leaves out a result it cannot read and lists the others.
 
 Configuration lists may be omitted (unknown, unrestricted) or empty (none).
 Exchange and type entries use their `value` field. Optional feed services are
@@ -97,8 +98,13 @@ passes the chosen conversion to `/symbols` so metadata and bars share the same u
 
 History timestamps and bounds are Unix seconds in UTC; bounds may include a
 fraction. `from` is inclusive and `to` exclusive, and an omitted bound is
-unbounded. Return the newest `countback` bars within those bounds. Keep interval,
-extended-hours and conversion semantics on the server; return an HTTP error for
+unbounded. A bar of whole days, weeks or months is dated by the UTC calendar
+date of its timestamp, such as 00:00 UTC on its trading date or a session open
+that falls on that date in UTC. The adapter
+places it in the day, week or month holding that date in the time zone the
+chart displays, and bounds such requests at 00:00 UTC on a date. Return the
+newest `countback` bars within those bounds. Keep interval, extended-hours and
+conversion semantics on the server; return an HTTP error for
 an unsupported request rather than serving different prices under those labels.
 For example:
 
@@ -107,19 +113,25 @@ For example:
 ```
 
 Each index is one bar; all supplied columns must have equal lengths. `v` may be
-omitted when volume is unavailable (zero). Invalid lengths, prices or timestamps
-report [`FeedError::InvalidData`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/enum.FeedError.html#variant.InvalidData). The adapter orders bars, enforces bounds and keeps
+omitted when volume is unavailable (zero). Columns of different lengths, or
+`no_data` with rows, report [`FeedError::InvalidData`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/enum.FeedError.html#variant.InvalidData). An invalid row costs only its
+own bar: the chart drops a bar whose high or low does not contain its open and
+close, or whose volume is negative, and counts it in
+[`FeedState::rejected_bars`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.FeedState.html#structfield.rejected_bars); the adapter drops a row whose timestamp is out of
+range and logs a warning. The adapter orders bars, enforces bounds and keeps
 at most the requested count. Optional `end_of_history: true` says no older bars
 exist. An empty window may answer `{"s":"no_data","nextTime":0}` to continue
-at that UTC instant. The adapter advances this bar timestamp by one second
+at the bar of that timestamp. The adapter advances the bar's time by one second
 (or half the gap to `to`, if smaller) to form an exclusive continuation bound
 that includes the named bar and still moves backward. `nextTime` must be earlier
 than the requested `to`.
 Without continuation, `no_data` ends paging. `{"s":"error","errmsg":"..."}`
 reports invalid data. HTTP 404 maps to symbol not found, 429 to rate limited
 (with `Retry-After` seconds or HTTP date), and 408 or 5xx to a recoverable network
-error. Other unsuccessful statuses report invalid data. Historical request retries
-follow the chart's normal retry policy.
+error. Other unsuccessful statuses report invalid data. A request whose response
+has not arrived within 10 seconds also reports a recoverable network error, and
+a later response is discarded. Historical request retries follow the chart's
+normal retry policy.
 
 Live subscriptions poll the same history endpoint every five seconds, starting
 with the latest 500 bars and then including the newest received timestamp so the
