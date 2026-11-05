@@ -745,7 +745,7 @@ fn history_run<'a>(
     let mut parts = Vec::new();
     let (mut kept, mut matched, mut opened) = (0, 0, 0);
     let mut forming: Option<Bar> = None;
-    for (index, trade) in trades.iter().enumerate() {
+    'trades: for (index, trade) in trades.iter().enumerate() {
         // Older than the one before it: left out, as `Footprint::push` does.
         let Ok(allocated) = bars.push(timeframe, trade, Some(tick_size)) else {
             continue;
@@ -753,27 +753,12 @@ fn history_run<'a>(
         for (bar, size) in allocated {
             if let Some(grouped) = forming.as_ref().filter(|grouped| grouped.time != bar.time) {
                 if !same(grouped, history.get(matched)) {
-                    parts.truncate(kept);
-                    return HistoryRun {
-                        parts,
-                        proven: matched >= 2,
-                        next: opened,
-                    };
+                    forming = None;
+                    break 'trades;
                 }
                 matched += 1;
                 kept = parts.len();
                 opened = index;
-                if history
-                    .get(matched)
-                    .is_none_or(|next| next.time != bar.time)
-                {
-                    parts.truncate(kept);
-                    return HistoryRun {
-                        parts,
-                        proven: matched >= 2,
-                        next: opened,
-                    };
-                }
             }
             parts.push((*trade, bar.time, size));
             forming = Some(bar);
