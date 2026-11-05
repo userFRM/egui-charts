@@ -1185,13 +1185,14 @@ mod tests {
     }
 
     /// Delete and Backspace remove the selected study, and the pane it leaves empty, in the
-    /// frame that handles the key, and that frame reads only what remains. Undo and Redo then
-    /// bring the removal back and repeat it as one step each.
+    /// frame that handles the key, and that frame reads only what remains and draws no
+    /// separator across the removed pane. Undo and Redo then bring the removal back and repeat
+    /// it as one step each.
     #[cfg(all(feature = "studies", feature = "drawings"))]
     #[test]
     fn deleting_a_selected_study_by_key_keeps_the_frame() {
         use crate::studies::{RSI, SMA};
-        use crate::widget::test_frames::frame;
+        use crate::widget::test_frames::{frame, shapes};
         use crate::widget::{ChartElementId, SeriesId};
         let press = |key, modifiers| Event::Key {
             key,
@@ -1200,6 +1201,7 @@ mod tests {
             repeat: false,
             modifiers,
         };
+        let separator = egui::Color32::from_rgb(1, 2, 3);
         let mut failures = Vec::new();
         for (name, own_pane, beside_a_pane, maximized) in [
             ("RSI pane", true, false, false),
@@ -1214,6 +1216,7 @@ mod tests {
                     let ctx = egui::Context::default();
                     let mut chart = chart(&[100.0, 105.0], &[110.0, 115.0]);
                     chart.config.show_volume = volume;
+                    chart.pane_options_mut().separator_color = Some(separator);
                     let study = if own_pane {
                         chart.add_indicator(Box::new(RSI::new(14)))
                     } else {
@@ -1234,7 +1237,13 @@ mod tests {
                         chart
                             .selection
                             .select(ChartElementId::Indicator(study), None);
-                        frame(&ctx, &mut chart, 0.2, vec![press(key, Modifiers::NONE)]);
+                        let painted =
+                            shapes(&ctx, &mut chart, 0.2, vec![press(key, Modifiers::NONE)]);
+                        // Separators are hairlines; a taller one covers the removed pane.
+                        let spanned = painted.iter().any(|shape| {
+                            matches!(shape, egui::Shape::Rect(rect)
+                                if rect.fill == separator && rect.rect.height() > 2.0)
+                        });
                         let removed = chart.get_chart_mapping().price.range();
                         let gone = !chart.indicators().any(|(id, _)| id == study)
                             && (!own_pane || !chart.panes().contains(&pane));
@@ -1257,13 +1266,17 @@ mod tests {
                         );
                         let gone_again = !chart.indicators().any(|(id, _)| id == study);
                         frame(&ctx, &mut chart, 0.7, vec![]);
-                        (gone, removed, settled, restored, gone_again)
+                        (gone, spanned, removed, settled, restored, gone_again)
                     }));
                     match result {
                         Err(_) => failures.push(format!("{name}: the frame panicked")),
-                        Ok((gone, removed, settled, restored, gone_again)) => {
+                        Ok((gone, spanned, removed, settled, restored, gone_again)) => {
                             if !gone {
                                 failures.push(format!("{name}: the key left the study"));
+                            }
+                            if spanned {
+                                failures
+                                    .push(format!("{name}: a separator covers the removed pane"));
                             }
                             // The pane heights only settle a frame later when a pane goes.
                             if !own_pane && removed != settled {

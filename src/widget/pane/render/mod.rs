@@ -1527,7 +1527,10 @@ impl Chart {
             .zip(&rects)
             .map(|((idx, _, collapsed), rect)| (*idx, *rect, *collapsed))
             .collect();
-        self.pane_separators(ui, &drawn);
+        // Until the panes reflow on the next frame, a separator would span a removed pane.
+        if panes.len() == recorded {
+            self.pane_separators(ui, &drawn);
+        }
         for ((_, id, collapsed), rect) in panes.iter().copied().zip(rects) {
             if id == main_pane {
                 continue;
