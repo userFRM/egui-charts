@@ -3,6 +3,7 @@
 //! Includes: measure, price range, date range, date and price range, info line, and bars pattern.
 
 use super::{ChartView, bars_between};
+use crate::drawings::LineTextVerticalAlign;
 use crate::drawings::domain::{Drawing, DrawingToolType};
 use crate::model::{Bar, percent_change};
 use crate::scales::price_decimals;
@@ -96,59 +97,9 @@ impl Drawing {
         self.range_card(painter, rect, view);
     }
 
-    pub(crate) fn render_info_line(&self, painter: &egui::Painter, view: &ChartView) {
-        if self.points.len() < 2 {
-            return;
-        }
-        let start = self.points[0];
-        let end = self.points[1];
-        let color = Color32::from_rgba_unmultiplied(
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            self.color[3],
-        );
-
-        // Draw the main line with proper stroke
-        painter.line_segment([start, end], Stroke::new(self.stroke_width, color));
-
-        let clip = painter.clip_rect();
-        // A line out of view leaves no box at the pane's edge.
-        let Some(info_text) = self
-            .measurement_label(
-                view.bars,
-                view.instrument,
-                view.time_axis,
-                view.price_formatter,
-            )
-            .filter(|_| crate::painting::dashed_line::clip_segment(start, end, clip).is_some())
-        else {
-            self.render_line_text(painter, start, end, end.y >= start.y);
-            return;
-        };
-        let mid = start.lerp(end, 0.5);
-        let card = stats_card(
-            painter,
-            Align2::LEFT_TOP,
-            mid + egui::vec2(8.0, 8.0),
-            info_text,
-        );
-        // Keep custom text on the side away from the card, even after the card is clamped.
-        let angle = super::lines::upright_angle(start, end);
-        let up = egui::vec2(angle.sin(), -angle.cos());
-        let above = (card.center() - mid).dot(up) <= 0.0;
-        let side = if above { up } else { -up };
-        let reach = [card.min, card.max, card.left_bottom(), card.right_top()]
-            .into_iter()
-            .map(|corner| (corner - mid).dot(side))
-            .fold(0.0_f32, f32::max);
-        let offset = side * reach;
-        self.render_line_text(painter, start + offset, end + offset, above);
-    }
-
-    /// Readout card beside a trend line, ray or extended line; the midpoint is independent of
-    /// selection and readout visibility. Its screen midpoint remains on the line on logarithmic
-    /// scales.
+    /// Readout card beside a trend line, ray, extended line or info line, which writes it in its
+    /// text settings; the midpoint and price labels are independent of selection and readout
+    /// visibility. Its screen midpoint remains on the line on logarithmic scales.
     pub(super) fn render_line_measurements(
         &self,
         painter: &egui::Painter,
@@ -166,6 +117,9 @@ impl Drawing {
         if settings.midpoint && !selected {
             painter.circle_filled(a.lerp(b, 0.5), 3.0, self.color32());
         }
+        if settings.price_labels {
+            self.render_anchor_prices(painter, a, b, view);
+        }
         if !(settings.persistent || selected || !self.completed) {
             return;
         }
@@ -180,7 +134,12 @@ impl Drawing {
         {
             return;
         }
-        let galley = stats_galley(painter, text);
+        let galley = if self.tool_type == DrawingToolType::InfoLine {
+            let color = self.text_box_colors(painter.ctx()).text;
+            self.annotation_galley(painter, text, color)
+        } else {
+            stats_galley(painter, text)
+        };
         let size = galley.size() + CARD_PADDING * 2.0;
         let (left, right) = if a.x <= b.x { (a, b) } else { (b, a) };
         let gap = DESIGN_TOKENS.spacing.sm + self.stroke_width / 2.0;
@@ -197,23 +156,36 @@ impl Drawing {
             ),
             P::Center => {
                 let direction = right - left;
-                let mut normal = if direction.length_sq() == 0.0 {
+                let normal = if direction.length_sq() == 0.0 {
                     egui::Vec2::UP
                 } else if direction.x == 0.0 {
                     egui::Vec2::LEFT
                 } else {
                     egui::vec2(direction.y, -direction.x).normalized()
                 };
-                // Custom line text already occupies the upper side.
-                if self
-                    .text
-                    .as_deref()
-                    .is_some_and(|text| !text.trim().is_empty())
-                {
-                    normal = -normal;
-                }
-                let clearance = gap + normal.abs().dot(size) / 2.0;
-                (a.lerp(b, 0.5) + normal * clearance, Align2::CENTER_CENTER)
+                // The custom text takes this much of each side, up the normal and down it.
+                let height = self.text_galley(painter).map_or(0.0, |text| text.size().y);
+                let (above, below) = match self.line_measurements.text_vertical_align {
+                    _ if height == 0.0 => (0.0, 0.0),
+                    LineTextVerticalAlign::Bottom => (gap + height, 0.0),
+                    LineTextVerticalAlign::Middle => (height / 2.0, height / 2.0),
+                    LineTextVerticalAlign::Top => (0.0, gap + height),
+                };
+                let at = |(normal, taken): (egui::Vec2, f32)| {
+                    a.lerp(b, 0.5) + normal * (gap + taken + normal.abs().dot(size) / 2.0)
+                };
+                let (free, other) = if below < above {
+                    ((-normal, below), (normal, above))
+                } else {
+                    ((normal, above), (-normal, below))
+                };
+                // The side with more room for the card, unless only the other one fits it.
+                let pos = [free, other]
+                    .map(at)
+                    .into_iter()
+                    .find(|&pos| clip.contains_rect(Rect::from_center_size(pos, size)))
+                    .unwrap_or_else(|| at(free));
+                (pos, Align2::CENTER_CENTER)
             }
             P::Right => (
                 right + egui::vec2(gap, if rising { gap } else { -gap }),
@@ -227,8 +199,41 @@ impl Drawing {
         paint_stats_card(painter, align, pos, galley, size);
     }
 
+    /// Paints each anchor's price on a small label on the side away from the other anchor.
+    fn render_anchor_prices(&self, painter: &egui::Painter, a: Pos2, b: Pos2, view: &ChartView) {
+        let [first, second, ..] = self.chart_points.as_slice() else {
+            return;
+        };
+        let chart = painter.ctx().active_theme().chart;
+        let gap = DESIGN_TOKENS.spacing.sm + self.stroke_width / 2.0;
+        for (point, other, price) in [(a, b, first.price), (b, a, second.price)] {
+            let Some(text) = super::annotations::price_text(price, view) else {
+                continue;
+            };
+            let (align, away) = if point.x < other.x {
+                (Align2::RIGHT_CENTER, egui::vec2(-gap, 0.0))
+            } else if point.x > other.x {
+                (Align2::LEFT_CENTER, egui::vec2(gap, 0.0))
+            } else if point.y <= other.y {
+                (Align2::CENTER_BOTTOM, egui::vec2(0.0, -gap))
+            } else {
+                (Align2::CENTER_TOP, egui::vec2(0.0, gap))
+            };
+            boxed_label(
+                painter,
+                align,
+                point + away,
+                text,
+                chart.axis_text,
+                chart.bg_tooltip,
+            );
+        }
+    }
+
     /// Readouts use raw prices and timestamps. Only inclination and length depend on the
     /// displayed geometry; length is measured in horizontal bar spacings, not price units.
+    /// Up to three lines, each present only with a readout: the price change and its percentage
+    /// and pips, then the bars, elapsed time and length, then the inclination.
     fn line_measurement_label(&self, view: &ChartView) -> String {
         let ([a, b, ..], [start, end, ..]) = (self.chart_points.as_slice(), self.points.as_slice())
         else {
@@ -236,26 +241,22 @@ impl Drawing {
         };
         let settings = self.line_measurements;
         let change = b.price - a.price;
-        let mut lines = Vec::new();
-        if settings.price_change && change.is_finite() {
-            lines.push(change_text(
-                a.price,
-                change,
-                view.instrument,
-                view.price_formatter,
-            ));
-        }
+        let price = (settings.price_change && change.is_finite())
+            .then(|| change_text(a.price, change, view.instrument, view.price_formatter));
         let percent = percent_change(a.price, b.price);
-        if settings.percent_change && a.price != 0.0 && percent.is_finite() {
-            lines.push(format!("{percent:+.2}%"));
+        let percent = (settings.percent_change && a.price != 0.0 && percent.is_finite())
+            .then(|| format!("{percent:+.2}%"));
+        let mut prices = Vec::new();
+        prices.extend(match (price, percent) {
+            (Some(price), Some(percent)) => Some(format!("{price} ({percent})")),
+            (price, percent) => price.or(percent),
+        });
+        if settings.pip_change {
+            prices.extend(unit_change_text(change, view.instrument, false));
         }
-        if settings.pip_change
-            && let Some(text) = unit_change_text(change, view.instrument, false)
-        {
-            lines.push(text);
-        }
+        let mut spans = Vec::new();
         if settings.bar_count {
-            lines.push(format!(
+            spans.push(format!(
                 "{} bars",
                 (b.bar_idx.round() - a.bar_idx.round()).abs() as i64
             ));
@@ -272,7 +273,7 @@ impl Drawing {
                 .map(|(a, b)| b.saturating_sub(a))
                 .or_else(|| elapsed_ms(view.bars, a.bar_idx, b.bar_idx));
             if let Some(elapsed) = elapsed {
-                lines.push(format_duration(elapsed));
+                spans.push(format_duration(elapsed));
             }
         }
         let delta = *end - *start;
@@ -280,13 +281,15 @@ impl Drawing {
             let spacing = ((view.bar_to_x)(a.bar_idx + 1.0) - (view.bar_to_x)(a.bar_idx)).abs();
             let length = delta.length() / spacing;
             if spacing > 0.0 && length.is_finite() {
-                lines.push(format!("{length:.2} periods"));
+                spans.push(format!("{length:.2} periods"));
             }
         }
+        let mut lines = vec![prices.join("  "), spans.join(", ")];
         if settings.inclination && delta.is_finite() {
             let angle = (-delta.y).atan2(delta.x).to_degrees();
             lines.push(format!("{:.1}°", angle + 0.0));
         }
+        lines.retain(|line| !line.is_empty());
         lines.join("\n")
     }
 
@@ -295,8 +298,7 @@ impl Drawing {
     /// Label of the measuring tools: the price change from the first anchor to the second in
     /// `price_formatter`'s text, else the instrument's price decimals (by magnitude without them),
     /// its percentage and its whole number of pips, or else ticks, the bars between them and,
-    /// on a `time_axis`, the time they span, the volume traded over them, and for the info line
-    /// the angle of the line on screen.
+    /// on a `time_axis`, the time they span, and the volume traded over them.
     /// Volume drops trailing zeros. Each anchor counts at its nearest bar: anchors N bars apart
     /// span N bars of time and the volume of the N + 1 bars from one to the other, both included.
     pub(crate) fn measurement_label(
@@ -346,14 +348,6 @@ impl Drawing {
                 format!("{change}\n{span}{volume}")
             }
             DrawingToolType::DateRange => format!("{span}{volume}"),
-            DrawingToolType::InfoLine => {
-                let [start, end, ..] = self.points[..] else {
-                    return None;
-                };
-                // Screen y grows downward, so a rising line has a positive angle.
-                let angle = (start.y - end.y).atan2(end.x - start.x).to_degrees();
-                format!("{change}\n{span}\n{angle:.1}°")
-            }
             _ => return None,
         })
     }
@@ -644,12 +638,6 @@ mod tests {
                 "-5.00 (-5.00%)\n3 bars, 3h\nVol 900",
             ),
             (
-                DrawingToolType::InfoLine,
-                (0.0, 100.0),
-                (30.0, 110.0),
-                "+10.00 (+10.00%)\n30 bars, 3d 6h\n1.9°",
-            ),
-            (
                 DrawingToolType::DateRange,
                 (2.0, 100.0),
                 (5.0, 100.0),
@@ -762,7 +750,7 @@ mod tests {
             bar.time = chrono::DateTime::from_timestamp(i as i64 * 3600, 0).unwrap();
         }
         let mut instrument = crate::model::Instrument::new("TEST").with_tick_size(0.25);
-        let x = |bar| 100.0 + bar * 10.0;
+        let x = |bar| 300.0 + bar * 10.0;
         let y = |price: f64| 300.0 - 40.0 * (price / 100.0).log2() as f32;
         let inverse = |y: f32| 100.0 * 2_f64.powf(f64::from(300.0 - y) / 40.0);
         let mut drawing = Drawing::new(1, DrawingToolType::ExtendedLine);
@@ -783,25 +771,26 @@ mod tests {
                 false,
                 None,
                 true,
-                "+100.00\n+100.00%\n+400 ticks\n3 bars\n3h\n5.00 periods\n53.1°",
+                "+100.00 (+100.00%)  +400 ticks\n3 bars, 3h, 5.00 periods\n53.1°",
             ),
             (
                 true,
                 Some(0.5),
                 true,
-                "-100.00\n-50.00%\n-200 pips\n3 bars\n3h\n5.00 periods\n-126.9°",
+                "-100.00 (-50.00%)  -200 pips\n3 bars, 3h, 5.00 periods\n-126.9°",
             ),
             (
                 false,
                 Some(0.5),
                 false,
-                "+100.00\n+100.00%\n+200 pips\n3 bars\n5.00 periods\n53.1°",
+                "+100.00 (+100.00%)  +200 pips\n3 bars, 5.00 periods\n53.1°",
             ),
         ];
         let tools = [
             DrawingToolType::TrendLine,
             DrawingToolType::ExtendedLine,
             DrawingToolType::Ray,
+            DrawingToolType::InfoLine,
         ];
         for ((reverse, pip, time_axis, want), tool) in cases
             .into_iter()
@@ -833,7 +822,13 @@ mod tests {
             drawing.line_measurements = options;
             assert_eq!(drawing.line_measurement_label(&view), want);
             // Each switch independently removes exactly its own readout.
-            for (index, label) in want.lines().enumerate() {
+            for (index, label) in want
+                .split(['\n', ','])
+                .flat_map(|line| line.split("  "))
+                .flat_map(|part| part.split(" ("))
+                .map(|readout| readout.trim().trim_end_matches(')'))
+                .enumerate()
+            {
                 let mut only = LineMeasurements::default();
                 match label {
                     text if text.ends_with('%') => only.percent_change = true,
@@ -870,7 +865,7 @@ mod tests {
                     let mut output = egui::Context::default().run_ui(Default::default(), |ui| {
                         drawing.render_with_selection(
                             ui.painter(),
-                            Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 400.0)),
+                            Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 400.0)),
                             &view,
                             selected,
                         );
@@ -886,7 +881,7 @@ mod tests {
                         assert_ne!(Some(text.pos), previous_position);
                         previous_position = Some(text.pos);
                         assert!(
-                            Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 400.0))
+                            Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 400.0))
                                 .contains_rect(Rect::from_min_size(text.pos, text.galley.size()))
                         );
                         let bounds = Rect::from_min_size(text.pos, text.galley.size());
@@ -914,7 +909,7 @@ mod tests {
             let mut output = egui::Context::default().run_ui(Default::default(), |ui| {
                 drawing.render_with_selection(
                     ui.painter(),
-                    Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 400.0)),
+                    Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 400.0)),
                     &view,
                     false,
                 );
@@ -1119,6 +1114,146 @@ mod tests {
                     "{offset} above: {shape:?}"
                 );
             }
+        }
+    }
+
+    /// A new info line shows every readout without being selected, in its own blue 14 px text;
+    /// colour, opacity, size and slant reach the card. +10 on 100 is 10%, 40 quarter-point
+    /// ticks; bars 0 to 30 are 30 bars and 30 periods of 10 px plus a 10 px rise, atan(10 / 300)
+    /// = 1.9 degrees.
+    #[test]
+    fn info_line_writes_its_readouts_in_its_text_settings() {
+        let bars = sample_bars();
+        let instrument = crate::model::Instrument::new("TEST").with_tick_size(0.25);
+        let card_text = |drawing: &Drawing| {
+            let output = egui::Context::default().run_ui(Default::default(), |ui| {
+                let view = ChartView {
+                    instrument: Some(&instrument),
+                    price_formatter: None,
+                    time_formatter: None,
+                    bar_seconds: 0,
+                    bars: &bars,
+                    revision: 0,
+                    bar_to_x: &|bar| 10.0 * bar,
+                    price_to_y: &|price| 300.0 - price as f32,
+                    y_to_price: &|y| f64::from(300.0 - y),
+                    time_axis: false,
+                    executions: None,
+                    timeframe: None,
+                    finer: &[],
+                };
+                drawing.render_with_selection(
+                    ui.painter(),
+                    Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 400.0)),
+                    &view,
+                    false,
+                );
+            });
+            let text = output.shapes.iter().find_map(|s| match &s.shape {
+                egui::Shape::Text(t) => Some(t.clone()),
+                _ => None,
+            });
+            output.drop_without_applying_deltas();
+            text
+        };
+        let mut drawing = Drawing::new(1, DrawingToolType::InfoLine);
+        drawing.completed = true;
+        drawing.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(30.0, 110.0)];
+        drawing.update_screen_coords(|bar| 10.0 * bar, |price| 300.0 - price as f32);
+        let text = card_text(&drawing).expect("readouts show without selection");
+        assert_eq!(
+            text.galley.job.text,
+            "+10.00 (+10.00%)  +40 ticks\n30 bars, 30.02 periods\n1.9°"
+        );
+        let format = &text.galley.job.sections[0].format;
+        // sqrt(300^2 + 10^2) / 10 = 30.02 periods.
+        assert_eq!(format.color, Color32::from_rgb(41, 98, 255));
+        assert_eq!(format.font_id.size, 14.0);
+        assert!(!format.italics);
+
+        // The line's colour leaves the readouts' colour alone.
+        drawing.color = [255, 0, 0, 255];
+        drawing.text_color = Some([1, 2, 3, 128]);
+        drawing.font_size = 20.0;
+        drawing.italic = true;
+        let plain = card_text(&drawing).unwrap();
+        let format = &plain.galley.job.sections[0].format;
+        assert_eq!(
+            format.color,
+            Color32::from_rgba_unmultiplied(1, 2, 3, 128),
+            "opacity"
+        );
+        assert_eq!(format.font_id.size, 20.0);
+        assert!(format.italics);
+        drawing.line_measurements.persistent = false;
+        assert!(card_text(&drawing).is_none(), "selection only");
+    }
+
+    /// On a horizontal line from x = 100 to 300 at y = 200, in either anchor order, the alignment
+    /// settings put the text's left, middle or right at x = 100, 200 or 300, and its top below the
+    /// line, its middle on it or its bottom above it. Price labels sit outside each anchor.
+    #[test]
+    fn info_line_text_alignment_and_price_labels_follow_the_settings() {
+        use crate::drawings::{LineTextHorizontalAlign as H, LineTextVerticalAlign as V};
+        use egui::Shape;
+        for points in [[(100., 200.), (300., 200.)], [(300., 200.), (100., 200.)]] {
+            let mut drawing = Drawing::new(1, DrawingToolType::InfoLine);
+            drawing.completed = true;
+            drawing.text = Some("note".into());
+            drawing.line_measurements = Default::default();
+            drawing.points = points.map(|(x, y)| Pos2::new(x, y)).to_vec();
+            drawing.chart_points = points
+                .map(|(x, y)| ChartPoint::new(x / 10.0, 500.0 - f64::from(y)))
+                .to_vec();
+            for (horizontal, want) in [(H::Left, 100.0), (H::Center, 200.0), (H::Right, 300.0)] {
+                for vertical in [V::Top, V::Middle, V::Bottom] {
+                    drawing.line_measurements.text_horizontal_align = horizontal;
+                    drawing.line_measurements.text_vertical_align = vertical;
+                    let shapes = super::super::tests::paint(&drawing);
+                    let bounds = shapes
+                        .iter()
+                        .find_map(|s| match s {
+                            Shape::Text(t) if t.galley.job.text == "note" => {
+                                Some(Rect::from_min_size(t.pos, t.galley.size()))
+                            }
+                            _ => None,
+                        })
+                        .expect("text");
+                    let got = match horizontal {
+                        H::Left => bounds.left(),
+                        H::Center => bounds.center().x,
+                        H::Right => bounds.right(),
+                    };
+                    assert!((got - want).abs() < 0.01, "{horizontal:?}: {bounds:?}");
+                    match vertical {
+                        V::Top => assert!(bounds.top() > 200.0),
+                        V::Middle => assert!((bounds.center().y - 200.0).abs() < 0.01),
+                        V::Bottom => assert!(bounds.bottom() < 200.0),
+                    }
+                }
+            }
+            drawing.text = None;
+            drawing.line_measurements.price_labels = true;
+            // The line now rises to y = 100 at x = 300, a price of 500 - 100.
+            let rising = points.map(|(x, y)| if x == 300. { (x, 100.) } else { (x, y) });
+            drawing.points = rising.map(|(x, y)| Pos2::new(x, y)).to_vec();
+            drawing.chart_points = rising
+                .map(|(x, y)| ChartPoint::new(x / 10.0, 500.0 - f64::from(y)))
+                .to_vec();
+            let shapes = super::super::tests::paint(&drawing);
+            let label = |price: &str| {
+                shapes
+                    .iter()
+                    .find_map(|s| match s {
+                        Shape::Text(t) if t.galley.job.text == price => {
+                            Some(Rect::from_min_size(t.pos, t.galley.size()))
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("{price}: {shapes:?}"))
+            };
+            assert!(label("300.00").right() < 100.0);
+            assert!(label("400.00").left() > 300.0);
         }
     }
 }

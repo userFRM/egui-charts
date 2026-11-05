@@ -528,6 +528,7 @@ mod tests {
             for label in [
                 "Middle point",
                 "Keep statistics visible",
+                "Price labels",
                 "Price change",
                 "Percentage change",
                 "Pip change",
@@ -589,6 +590,9 @@ mod tests {
                 inclination: true,
                 midpoint: true,
                 position: crate::drawings::LineMeasurementPosition::Left,
+                price_labels: true,
+                text_horizontal_align: crate::drawings::LineTextHorizontalAlign::Right,
+                text_vertical_align: crate::drawings::LineTextVerticalAlign::Top,
             };
             settings.line_measurements = measurements;
             settings.bars_pattern = Some(crate::drawings::BarsPatternConfig {
@@ -656,7 +660,7 @@ mod tests {
             assert!(chart.undo());
             assert_eq!(
                 chart.drawings().drawings[0].line_measurements,
-                Default::default()
+                crate::drawings::LineMeasurements::for_tool(tool)
             );
             assert_eq!(
                 format!("{:?}", chart.drawings().drawings[0].fib_config),

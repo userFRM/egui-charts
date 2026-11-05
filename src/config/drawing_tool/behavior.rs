@@ -187,7 +187,10 @@ impl DrawingToolType {
 
     /// Whether the renderer shows the drawing's line measurements and midpoint.
     pub fn supports_line_measurements(&self) -> bool {
-        matches!(self, Self::TrendLine | Self::Ray | Self::ExtendedLine)
+        matches!(
+            self,
+            Self::TrendLine | Self::Ray | Self::ExtendedLine | Self::InfoLine
+        )
     }
 
     /// Whether a double click edits the drawing's text in place instead of opening its settings.
