@@ -156,6 +156,10 @@ mod tests {
                 chart.add_indicator(Box::new(tpo));
             } else {
                 chart.set_chart_type(ChartType::TimePriceOpportunity);
+                chart.set_chart_type_params(crate::model::ChartTypeParams {
+                    tpo_single_prints: true,
+                    ..Default::default()
+                });
             }
             let painted = shapes(&egui::Context::default(), &mut chart, 0.0, vec![]);
             let highlighted = painted

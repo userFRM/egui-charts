@@ -7,6 +7,16 @@ use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke};
 use std::ops::Range;
 
+/// Strongest opacity of a study's rows, that of its default value area colours, so that saved
+/// opaque colours also leave the price bars beneath them readable.
+const STUDY_ROW_ALPHA: u8 = 163;
+
+/// Whether a study's profile measures the bars in view, not a span of its own, so that its rows fill
+/// their strip and its point of control crosses the plot. An options profile measures strikes.
+pub(crate) fn measures_view(profile: &VolumeProfile, right_aligned: bool) -> bool {
+    right_aligned && profile.source() != ProfileSource::Options
+}
+
 /// Study rows leave candles visible; drawings also tint their span.
 pub(crate) enum ProfileStyle {
     Study {
@@ -39,11 +49,19 @@ pub(crate) fn paint_profile(
         return;
     };
     let y_at_row = |row: usize| (price_to_y)(profile.low + row as f64 * profile.row_height);
+    // `Color32::PLACEHOLDER` follows the active theme until a colour is chosen.
+    let color = if color == Color32::PLACEHOLDER.to_srgba_unmultiplied() {
+        painter.ctx().active_theme().ui.text.to_srgba_unmultiplied()
+    } else {
+        color
+    };
     let (drawing, right_aligned) = match style {
         ProfileStyle::Study { right_aligned } => (false, right_aligned),
         #[cfg(feature = "drawings")]
         ProfileStyle::Drawing { anchored } => (true, anchored),
     };
+    let options = profile.source() == ProfileSource::Options;
+    let spans_view = !drawing && measures_view(profile, right_aligned);
     let rect = Rect::from_two_pos(
         Pos2::new(left, y_at_row(profile.volume.len())),
         Pos2::new(right, y_at_row(0)),
@@ -62,14 +80,21 @@ pub(crate) fn paint_profile(
             width = width.min(painter.clip_rect().width());
         }
     }
-    let max_width = width * if drawing { 1.0 / 3.0 } else { 0.9 };
+    let max_width = width
+        * if drawing {
+            1.0 / 3.0
+        } else if spans_view {
+            1.0
+        } else {
+            0.9
+        };
     let max_volume = profile.volume[poc];
 
     for (row, &volume) in profile.volume.iter().enumerate() {
         // Ordered on screen: the upper row edge is lower down on an inverted scale.
         let (upper, lower) = (y_at_row(row + 1), y_at_row(row));
         let (top, bottom) = (upper.min(lower), upper.max(lower));
-        let gap = ((bottom - top) * 0.5).min(if drawing { 1.0 } else { 2.0 });
+        let gap = ((bottom - top) * 0.5).min(1.0);
         let width = (volume / max_volume) as f32 * max_width;
 
         let in_value_area = (va_low..=va_high).contains(&row);
@@ -83,11 +108,10 @@ pub(crate) fn paint_profile(
         };
 
         let paint = |start, width, color: Color32| {
-            // Studies can sit above price bars, also with opaque colours from saved styles.
-            let color = if drawing {
-                color
-            } else {
+            let color = if options {
                 color.gamma_multiply(0.35)
+            } else {
+                color
             };
             let start = if right_aligned {
                 row_right - (start - left) - width
@@ -106,8 +130,11 @@ pub(crate) fn paint_profile(
         let rgba = |c: [u8; 4]| {
             let alpha = if drawing && !in_value_area {
                 c[3] / 2
-            } else {
+            } else if drawing || options {
                 c[3]
+            } else {
+                // Studies can sit above price bars, also with opaque colours from saved styles.
+                c[3].min(STUDY_ROW_ALPHA)
             };
             Color32::from_rgba_unmultiplied(c[0], c[1], c[2], alpha)
         };
@@ -119,7 +146,17 @@ pub(crate) fn paint_profile(
             [config.up_color, config.down_color]
         };
         match config.display {
-            ProfileDisplay::Total => paint(left, width, bar_color),
+            ProfileDisplay::Total => {
+                paint(
+                    left,
+                    width,
+                    if drawing || options {
+                        bar_color
+                    } else {
+                        rgba(up)
+                    },
+                );
+            }
             ProfileDisplay::UpDown => {
                 let up_width = (profile.up[row] / max_volume) as f32 * max_width;
                 let down_width = (profile.down[row] / max_volume) as f32 * max_width;
@@ -158,6 +195,16 @@ pub(crate) fn paint_profile(
         &line_rect,
         color,
         poc_y,
+        if spans_view {
+            painter.clip_rect().x_range()
+        } else {
+            line_rect.x_range()
+        },
+        if options {
+            stroke::HAIRLINE
+        } else {
+            stroke::THICK
+        },
         [y_at_row(va_high + 1), y_at_row(va_low)],
         config.show_value_area_lines,
         drawing,
@@ -355,6 +402,8 @@ fn draw_volume_profile_lines(
     rect: &Rect,
     color: [u8; 4],
     poc_y: f32,
+    poc_span: egui::Rangef,
+    poc_width: f32,
     [vah_y, val_y]: [f32; 2],
     show_value_area_lines: bool,
     drawing: bool,
@@ -368,15 +417,11 @@ fn draw_volume_profile_lines(
         Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3])
     };
     painter.add(egui::Shape::line(
-        vec![Pos2::new(rect.min.x, poc_y), Pos2::new(rect.max.x, poc_y)],
-        Stroke::new(
-            if drawing {
-                stroke::THICK
-            } else {
-                stroke::HAIRLINE
-            },
-            poc_color,
-        ),
+        vec![
+            Pos2::new(poc_span.min, poc_y),
+            Pos2::new(poc_span.max, poc_y),
+        ],
+        Stroke::new(poc_width, poc_color),
     ));
 
     let va_color = Color32::from_rgba_unmultiplied(color[0], color[1], color[2], 200);
@@ -416,9 +461,9 @@ mod tests {
     use chrono::{TimeZone, Utc};
     use egui::{Color32, Context, Pos2, RawInput, Rect, Shape, Stroke};
 
-    /// A study's rows alone show its extent, 2 px apart, with its point of control a 1 px line in
-    /// the profile's colour and no label. Study fills stay translucent in every display mode;
-    /// a drawing keeps its colours, 1 px gaps and stronger line.
+    /// A study's rows alone show its extent, 1 px apart, with its point of control a 2 px line in
+    /// the profile's colour and no label. Study fills stay translucent in every display mode, also
+    /// with saved opaque colours; a drawing keeps its colours and a line in the theme's foreground.
     #[test]
     fn studies_mark_the_point_of_control_without_a_box_or_label() {
         let bars = [
@@ -448,9 +493,9 @@ mod tests {
         let tone = Color32::from_rgb(51, 74, 212);
         // Drawing, row gap, point of control line width and volume display.
         for (drawing, row_gap, poc_width, display) in [
-            (false, 2.0, 1.0, ProfileDisplay::Total),
-            (false, 2.0, 1.0, ProfileDisplay::UpDown),
-            (false, 2.0, 1.0, ProfileDisplay::Delta),
+            (false, 1.0, 2.0, ProfileDisplay::Total),
+            (false, 1.0, 2.0, ProfileDisplay::UpDown),
+            (false, 1.0, 2.0, ProfileDisplay::Delta),
             (true, 1.0, 2.0, ProfileDisplay::Total),
             (true, 1.0, 2.0, ProfileDisplay::UpDown),
             (true, 1.0, 2.0, ProfileDisplay::Delta),
@@ -488,13 +533,13 @@ mod tests {
                 .collect();
             assert!(!rows.is_empty());
             if !drawing {
-                assert!(rows.iter().all(|row| row.fill.a() <= 89), "{display:?}");
+                assert!(rows.iter().all(|row| row.fill.a() <= 163), "{display:?}");
             } else {
                 assert!(rows.iter().any(|row| row.fill.a() == 255), "{display:?}");
             }
             if display != ProfileDisplay::Total {
-                // 35% of 89 and 255 rounds to 31 and 89; drawings only halve outside rows.
-                for alpha in if drawing { [44, 255] } else { [31, 89] } {
+                // Studies limit the opaque value area; drawings only halve outside rows.
+                for alpha in if drawing { [44, 255] } else { [89, 163] } {
                     assert!(
                         rows.iter().any(|row| row.fill.a() == alpha),
                         "{display:?}: {alpha}"
@@ -529,6 +574,65 @@ mod tests {
                 poc[0].color,
                 egui::epaint::ColorMode::Solid(if drawing { text } else { tone })
             );
+        }
+    }
+
+    /// A profile of the bars in view runs its point of control across the plot, at the middle of
+    /// its row, with its rows filling the strip at the right. A profile of its own span keeps the
+    /// line on that span.
+    #[test]
+    fn point_of_control_crosses_the_plot_only_for_a_profile_of_the_bars_in_view() {
+        let bars = [Bar::new(
+            Utc.timestamp_opt(0, 0).unwrap(),
+            100.0,
+            110.0,
+            100.0,
+            110.0,
+            10.0,
+        )];
+        let config = VolumeProfileConfig::new(10, 0.7).unwrap();
+        let profile = VolumeProfile::from_bars(&bars, config).unwrap();
+        let plot = Rect::from_min_max(Pos2::new(40.0, 0.0), Pos2::new(1040.0, 100.0));
+        // Right aligned, span, the ends of the line and the longest row.
+        for (right_aligned, span, line, row) in [
+            (true, 740.0..1040.0, [40.0, 1040.0], 300.0),
+            (false, 200.0..500.0, [200.0, 500.0], 270.0),
+        ] {
+            let ctx = Context::default();
+            let mut output = ctx.run_ui(RawInput::default(), |ui| {
+                paint_profile(
+                    &ui.painter().with_clip_rect(plot),
+                    &profile,
+                    config,
+                    [51, 74, 212, 255],
+                    span.clone(),
+                    ProfileStyle::Study { right_aligned },
+                    &|price| (price - 100.0) as f32 * 10.0,
+                );
+            });
+            let shapes = std::mem::take(&mut output.shapes);
+            output.drop_without_applying_deltas();
+            let poc = shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    Shape::Path(line) => Some(line.points.clone()),
+                    _ => None,
+                })
+                .expect("point of control");
+            // The tallest rows are level, so the first of the middle rows takes the line.
+            assert_eq!(poc.len(), 2);
+            assert_eq!([poc[0].x, poc[1].x], line, "right aligned: {right_aligned}");
+            assert_eq!(poc[0].y, 5.0);
+            let widest = shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    Shape::Rect(row) => Some(row.rect),
+                    _ => None,
+                })
+                .max_by(|a, b| a.width().total_cmp(&b.width()))
+                .expect("rows");
+            assert!((widest.width() - row).abs() < 0.01, "{widest:?}");
+            assert_eq!(widest.right(), if right_aligned { 1040.0 } else { 470.0 });
         }
     }
 

@@ -17,8 +17,9 @@
 //! A profile whose executions start after its first bar sums those held and reports itself
 //! partial; one without them, or whose bars do not each hold their own executions, keeps the bars.
 //!
-//! Row fills stay at or below 35% opacity so price bars remain readable. The point of control
-//! and value-area guides keep their line colours and widths.
+//! Row fills stay translucent so price bars remain readable: the painter limits saved opaque colours
+//! to the opacity of the default value area rows. The point of control is a 2 px line in the theme's
+//! foreground colour until a line colour is chosen.
 
 use super::AutoAnchor;
 use super::anchor_period::{AnchorPeriod, ExchangeDays};
@@ -186,11 +187,11 @@ impl ProfileStudy {
             cache: RefCell::new(Vec::new()),
             values: IndicatorValues::new(),
             colors: vec![
-                Color32::from_rgb(41, 98, 255),
-                Color32::from_rgba_unmultiplied(51, 74, 212, 89),
-                Color32::from_rgba_unmultiplied(214, 140, 35, 89),
-                Color32::from_rgb(51, 74, 212),
-                Color32::from_rgb(214, 140, 35),
+                Color32::PLACEHOLDER,
+                Color32::from_rgba_unmultiplied(0, 188, 212, 110),
+                Color32::from_rgba_unmultiplied(233, 30, 99, 110),
+                Color32::from_rgba_unmultiplied(0, 188, 212, 163),
+                Color32::from_rgba_unmultiplied(233, 30, 99, 163),
             ],
             visible: true,
         }
@@ -1793,7 +1794,7 @@ mod rendering_tests {
             .iter()
             .filter(|shape| {
                 matches!(&shape.shape,
-            egui::Shape::Rect(r) if (r.rect.height() - 48.0).abs() < 0.01)
+            egui::Shape::Rect(r) if (r.rect.height() - 49.0).abs() < 0.01)
             })
             .count();
         // The rows are estimated from the bar, as noted at the top left of the
@@ -1809,11 +1810,13 @@ mod rendering_tests {
         output.drop_without_applying_deltas();
         assert_eq!(notes, [egui::pos2(283.0, 50.0)]);
         assert!(rows >= 2, "profile rows {rows}");
-        // Equal row volumes put the POC at y=125; its line extends past the row fill.
+        // Equal row volumes put the POC at y=125 and fill the strip from x=280; the line crosses
+        // the plot, past the rows.
         for (x, y, expected) in [
             (395.0, 125.0, true),
-            (285.0, 125.0, true),
-            (285.0, 75.0, false),
+            (285.0, 75.0, true),
+            (5.0, 125.0, true),
+            (5.0, 75.0, false),
         ] {
             let hit = crate::chart::indicators::hit_test_indicator(
                 egui::pos2(x, y),
@@ -1856,6 +1859,100 @@ mod rendering_tests {
             )
             .is_some()
         );
+    }
+
+    /// A new session profile paints cyan and pink rows, stronger in the value area, under a 2 px
+    /// point of control in the foreground colour of either theme. Saved colours keep theirs.
+    #[test]
+    fn session_profile_paints_its_default_and_saved_colours() {
+        let time = |minute| chrono::DateTime::UNIX_EPOCH + TimeDelta::minutes(minute);
+        // Rows 10 and 11 hold most of the volume, up and down; rows 12 to 19 hold the rest of each.
+        let bars = [
+            Bar::new(time(0), 10.0, 12.0, 10.0, 12.0, 100.0),
+            Bar::new(time(1), 20.0, 20.0, 10.0, 10.0, 100.0),
+            Bar::new(time(2), 12.0, 20.0, 12.0, 20.0, 100.0),
+        ];
+        let saved = vec![
+            Color32::from_rgb(41, 98, 255),
+            Color32::from_rgba_unmultiplied(51, 74, 212, 89),
+            Color32::from_rgba_unmultiplied(214, 140, 35, 89),
+            Color32::from_rgb(51, 74, 212),
+            Color32::from_rgb(214, 140, 35),
+        ];
+        let defaults = [
+            [0, 188, 212, 110],
+            [233, 30, 99, 110],
+            [0, 188, 212, 163],
+            [233, 30, 99, 163],
+        ];
+        let stored = [
+            [51, 74, 212, 89],
+            [214, 140, 35, 89],
+            [51, 74, 212, 163],
+            [214, 140, 35, 163],
+        ];
+        let light = crate::theme::Theme::light();
+        let dark = crate::theme::Theme::dark();
+        // Theme, saved colours, the rows outside and inside the value area, and the line colour.
+        for (theme, colors, rows, poc) in [
+            (&light, None, defaults, light.ui.text),
+            (&dark, None, defaults, dark.ui.text),
+            (&light, Some(saved.clone()), stored, saved[0]),
+        ] {
+            let mut study = VolProfileSession::new(10);
+            if let Some(colors) = colors {
+                study.set_colors(colors);
+            }
+            study.calculate(&bars);
+            let indicators: Vec<Box<dyn Indicator>> = vec![Box::new(study)];
+            let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 200.0));
+            let price = PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(9.0, 21.0),
+                0.0,
+                200.0,
+                false,
+            );
+            let coords = ChartMapping::new(rect, 40.0, 0, 0, 0.0, price);
+            let ctx = egui::Context::default();
+            crate::theme::apply_to_egui(&ctx, theme);
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                IndicatorRenderer::render(
+                    &RenderContext::new(ui.painter(), rect),
+                    &indicators,
+                    &bars,
+                    &price,
+                    &coords,
+                );
+            });
+            let fills: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Rect(row) => Some(row.fill),
+                    _ => None,
+                })
+                .collect();
+            let lines: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Path(line) => Some(line.stroke.clone()),
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            for [r, g, b, a] in rows {
+                // Colours pass through the study's stored and painted forms as Color32 does.
+                let [r, g, b, a] =
+                    Color32::from_rgba_unmultiplied(r, g, b, a).to_srgba_unmultiplied();
+                let row = Color32::from_rgba_unmultiplied(r, g, b, a);
+                assert!(fills.contains(&row), "{row:?} among {fills:?}");
+            }
+            assert_eq!(lines.len(), 1);
+            assert_eq!(lines[0].width, 2.0);
+            assert_eq!(lines[0].color, egui::epaint::ColorMode::Solid(poc));
+        }
     }
 
     /// A box that starts at the pane's left edge, under the chart legend, keeps its source note

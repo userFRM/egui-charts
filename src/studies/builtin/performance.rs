@@ -5,7 +5,8 @@
 //! of a shorter month. Year to date uses the last close of the previous calendar year.
 //! Dates follow the instrument's trading calendar, as VWAP does. On an interval shorter than a
 //! day the study requests the symbol's daily bars and takes the later of the daily close and the
-//! chart's own close on or before each date, the daily close on the same date. Missing history
+//! chart's own close on or before each date, the daily close on the same date. A connected feed
+//! loads those daily bars back to the oldest date, one year before the latest. Missing history
 //! and a zero reference close have no value.
 
 use super::anchor_period::ExchangeDays;
@@ -17,7 +18,7 @@ use crate::studies::{
     Indicator, IndicatorValue, IndicatorValues, PlotStyle, StudyCell, StudyData, StudyDataRequest,
     StudyTable,
 };
-use chrono::{Datelike, Days, Months, NaiveDate};
+use chrono::{DateTime, Datelike, Days, Months, NaiveDate, NaiveTime, Utc};
 use egui::Color32;
 
 const PERIODS: [&str; 6] = ["1W", "1M", "3M", "6M", "YTD", "1Y"];
@@ -35,6 +36,8 @@ pub struct Performance {
     timeframe: Option<Timeframe>,
     /// Trading date and finite close of each requested daily bar, in time order.
     daily: Vec<(NaiveDate, f64)>,
+    /// The latest one-year target, kept while the study is emptied for a recompute.
+    oldest_target: Option<NaiveDate>,
     table: StudyTable,
     colors: [Color32; 6],
     visible: bool,
@@ -61,6 +64,7 @@ impl Performance {
             intraday: false,
             timeframe: None,
             daily: Vec::new(),
+            oldest_target: None,
             table: StudyTable {
                 title: "Performance".into(),
                 columns: vec!["Period".into(), "Change".into()],
@@ -108,6 +112,12 @@ impl Indicator for Performance {
             })
             .into_iter()
             .collect()
+    }
+
+    /// The start of the 1Y target, the oldest period, as UTC because daily bars count by UTC date.
+    fn data_start(&self, _: &StudyDataRequest) -> Option<DateTime<Utc>> {
+        self.oldest_target
+            .map(|target| target.and_time(NaiveTime::MIN).and_utc())
     }
 
     fn update_data(&mut self, data: &[Bar], from: usize, sources: &[StudyData<'_>]) {
@@ -171,6 +181,7 @@ impl Indicator for Performance {
                         NaiveDate::from_ymd_opt(date.year(), 1, 1).and_then(|day| day.pred_opt()),
                         date.checked_sub_months(Months::new(12)),
                     ];
+                    self.oldest_target = targets[5];
                     let before = |history: &[(NaiveDate, f64)], target| {
                         let at = history.partition_point(|(day, _)| *day <= target);
                         at.checked_sub(1).map(|at| history[at])

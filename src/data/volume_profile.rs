@@ -16,7 +16,8 @@ pub struct StudyProfile {
     pub profile: Arc<VolumeProfile>,
     /// Row layout, value area and display settings.
     pub config: VolumeProfileConfig,
-    /// Colour of total volume and value-area lines.
+    /// Colour of the point of control and value-area lines, `Color32::PLACEHOLDER` as bytes
+    /// following the theme's foreground.
     pub color: [u8; 4],
     /// Draw at the right of the viewport instead of beside the first source bar.
     pub right_aligned: bool,

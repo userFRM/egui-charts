@@ -873,7 +873,7 @@ fn draw_session_profile(
                 guide_color,
             ),
             (
-                true,
+                config.show_midpoint,
                 (profile.profile_high + profile.profile_low) * 0.5,
                 coords.price_to_y((profile.profile_high + profile.profile_low) * 0.5),
                 "Mid",
@@ -1671,6 +1671,7 @@ mod tests {
                 .collect();
             let config = TPOConfig {
                 tick_size: tick,
+                show_midpoint: true,
                 ..Default::default()
             };
             let rect = Rect::from_x_y_ranges(0.0..=400.0, 0.0..=400.0);

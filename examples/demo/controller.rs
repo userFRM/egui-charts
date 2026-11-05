@@ -1108,6 +1108,9 @@ impl DemoApp {
         let price = price
             .or_else(|| self.chart.bars(SeriesId::MAIN).last().map(|b| b.close))
             .unwrap_or(0.0);
+        // The demo has no account service; a host supplies the zone of the user's account.
+        self.alert_dialog.account_timezone =
+            egui_charts::model::TimezoneId::named("America/New_York");
         self.alert_dialog.open(self.state.symbol.clone(), price);
         self.alert_dialog.alert.timeframe = Some(self.state.timeframe);
         self.chart.prepare_alert(&mut self.alert_dialog.alert);
@@ -2734,6 +2737,7 @@ impl DemoApp {
             item.z_index = d.z_order;
             item.label = d.label.clone();
             item.folder = d.folder.clone();
+            item.folder_sync = d.folder_sync_mode();
             items.push(item);
         }
         items
