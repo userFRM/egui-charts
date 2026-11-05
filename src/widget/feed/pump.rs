@@ -36,6 +36,7 @@ impl Chart {
     /// Refreshes the instrument grid, issues what the feed must be asked and applies its answers.
     /// Called first in [`show`](Self::show).
     pub(crate) fn pump(&mut self, ctx: &egui::Context) {
+        self.follow_market_replay();
         // A restored scale still takes its default grid from the current instrument.
         let tick_size = self
             .instrument()

@@ -112,7 +112,7 @@ impl Chart {
     pub fn set_data(&mut self, series: SeriesId, bars: Vec<Bar>) {
         if (series == SeriesId::MAIN && self.main_series_present
             || self.price_series.iter().any(|item| item.id == series))
-            && self.replay.is_some()
+            && self.replay_retains(series)
         {
             self.replay_set_data(series, bars);
             self.data_set(series);
@@ -175,8 +175,8 @@ impl Chart {
             let clock = self.clock();
             let slot = clock.bar_open(bar.time);
             let bars = self
-                .replay
-                .as_ref()
+                .replay_window()
+                .filter(|_| self.replay_retains(series))
                 .and_then(|replay| replay.bars.get(&series))
                 .map_or_else(|| self.bars(series), Vec::as_slice);
             Some(
@@ -191,7 +191,7 @@ impl Chart {
         };
         let changed = if (series == SeriesId::MAIN && self.main_series_present
             || self.price_series.iter().any(|item| item.id == series))
-            && self.replay.is_some()
+            && self.replay_retains(series)
         {
             self.replay_update(series, bar)
         } else if let Some(at) = self.price_series.iter().position(|item| item.id == series) {
@@ -235,7 +235,7 @@ impl Chart {
     pub fn pop_bars(&mut self, series: SeriesId, count: usize) -> Vec<Bar> {
         let present = series == SeriesId::MAIN && self.main_series_present
             || self.price_series.iter().any(|item| item.id == series);
-        let removed = if present && self.replay.is_some() {
+        let removed = if present && self.replay_retains(series) {
             self.replay_pop(series, count)
         } else if let Some(item) = self.price_series.iter_mut().find(|item| item.id == series) {
             item.revision = crate::model::next_revision();
@@ -290,9 +290,8 @@ impl Chart {
                 self.bar_limits.remove(&series);
             }
         }
-        if self.replay.is_some() {
-            self.apply_replay_window();
-        } else if self.enforce_bar_limit(series) > 0 {
+        self.apply_replay_window();
+        if !self.replay_windows(series) && self.enforce_bar_limit(series) > 0 {
             self.data_updated(series);
         }
     }
@@ -305,7 +304,8 @@ impl Chart {
     /// Removes up to `count` oldest bars of `series`, returning them oldest first. Studies
     /// restart on the retained window; drawings keep their timestamps and the view keeps its
     /// time position where possible. During replay this removes from the full retained history
-    /// and its matching finer-source slots.
+    /// and its matching finer-source slots; in market replay the main series and the series a
+    /// feed supplies lose the bars the driver built instead.
     /// Emits [`ChartEvent::DataUpdated`](super::ChartEvent::DataUpdated) when bars are removed.
     /// Unknown ids and study ids are ignored with a warning.
     pub fn remove_oldest_bars(&mut self, series: SeriesId, count: usize) -> Vec<Bar> {
@@ -323,7 +323,9 @@ impl Chart {
         let clock = self
             .timeframe
             .map_or_else(BarClock::exact, |_| self.bar_clock());
-        let removed = if let Some(replay) = &mut self.replay {
+        let removed = if self.replay_windows(series)
+            && let Some(replay) = self.replay_window_mut()
+        {
             let removed = replay.remove_oldest_bars(series, count, &clock);
             self.apply_replay_window();
             removed
