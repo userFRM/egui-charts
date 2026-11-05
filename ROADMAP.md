@@ -1,6 +1,6 @@
 # egui-charts Roadmap
 
-[Feature status and progress](https://userfrm.github.io/egui-charts/docs/progress/)
+[Feature status and progress](https://userfrm.github.io/egui-charts/docs/progress/) distinguishes independently verified, unverified, incomplete and missing behaviour. Checked items below describe implementation; the status page records independent verification.
 
 The crate provides an engine without egui, an egui 0.37 chart widget, and terminal UI components. Checked items describe working capabilities, including public APIs that applications can compose. Unchecked items describe remaining library work. `ui::terminal::Terminal` assembles the components on the host's feed and services and lets the application intercept their actions; it returns those it does not perform yet, and the demo still routes the components by hand.
 
@@ -224,7 +224,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Inline creation and series-level alert visibility, labels and colour work alongside the shared dialog.
 - [x] Drawing alerts follow fork, pitchfan and regression lines on linear and logarithmic scales, with entry, exit, inside and outside conditions resolving both moving boundaries.
 - [ ] Model persistent inside/outside-channel conditions and once-per-minute frequency.
-- [x] Alert messages fill symbol, exchange, ticker, interval, bar, trigger time, source, study plot and drawing level placeholders from the triggering event, with names capped at 300 and messages at 4000 characters; per-alert notification schedules are configurable for host processing.
+- [x] Alert messages fill symbol, exchange, ticker, interval, bar, trigger time, source, study plot and drawing level placeholders from the triggering event, with names capped at 300 and messages at 4000 characters; per-alert notification schedules are configurable for host processing. A schedule may use the account time zone the host supplies, a window with equal bounds covers a full day, triggers outside the schedule are logged as silent entries without a popup or delivery, an alert can start monitoring at a set time, and the dialog offers the latest saved schedule to the next new alert.
 
 ## UI Components
 

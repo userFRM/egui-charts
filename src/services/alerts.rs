@@ -167,4 +167,19 @@ pub enum AlertEvent {
         /// does, empty if the alert has none. The terminal shows it in the popup and the log.
         message: String,
     },
+    /// The alert's conditions held outside its notification schedule. Log it, marked as silent,
+    /// without a popup, sound or delivery. It leaves the alert's status and firing time as they
+    /// are, so a once alert stays armed.
+    SilentTriggered {
+        /// Identifier of the alert whose conditions held.
+        id: AlertId,
+        /// Symbol whose live source satisfied the conditions.
+        symbol: String,
+        /// UTC instant of the trigger.
+        time: DateTime<Utc>,
+        /// Price observed by the host when available.
+        price: Option<f64>,
+        /// The alert's message with its placeholders filled in, empty if the alert has none.
+        message: String,
+    },
 }

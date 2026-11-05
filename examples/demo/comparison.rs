@@ -782,8 +782,9 @@ pub(super) fn refresh_spreads(chart: &mut Chart, spreads: &mut [Spread], paused:
     let timeframe = chart.timeframe().unwrap_or(Timeframe::Hour1);
     let clock = chart.bar_clock();
     let extended_hours = chart.extended_hours();
-    // Candle replay windows supplied series; market replay leaves host series to the host.
-    let replay_time = chart.replay_driver().and_then(|_| chart.replay_time());
+    // Replay windows the supplied history at the cursor. A count bar has no closing time, so
+    // one still open there is built from the executions before the cursor.
+    let replay_time = chart.replay_time().filter(|_| timeframe.is_trade_based());
     let session = if !clock.has_session() {
         egui_charts::ui::timeframe_toolbar::SessionType::Full24x7
     } else if extended_hours {
@@ -815,15 +816,7 @@ pub(super) fn refresh_spreads(chart: &mut Chart, spreads: &mut [Spread], paused:
         let histories: Vec<_> = spread
             .feeds
             .iter()
-            .map(|feed| {
-                let mut bars =
-                    feed.snapshot_before(timeframe, clock.clone(), extended_hours, replay_time);
-                if let Some(time) = replay_time {
-                    let end = bars.partition_point(|bar| bar.time < clock.bar_open(time));
-                    bars.truncate(end);
-                }
-                bars
-            })
+            .map(|feed| feed.snapshot_before(timeframe, clock.clone(), extended_hours, replay_time))
             .collect();
         let symbols = spread.expression.symbols();
         let history = |symbol: &str| {
@@ -834,9 +827,11 @@ pub(super) fn refresh_spreads(chart: &mut Chart, spreads: &mut [Spread], paused:
             let loaded = chart.bars(spread.id);
             let tail = loaded.len().saturating_sub(1);
             if !loaded.is_empty()
-                && (replay_time.is_some() || chart.replay_time().is_none())
+                && chart.replay_time().is_none()
                 && bars.len() >= loaded.len()
                 && bars[..tail] == loaded[..tail]
+                // Bars of another interval, as a replay can retain, are replaced.
+                && bars[tail].time == loaded[tail].time
             {
                 let start = if bars[tail] == loaded[tail] {
                     tail + 1
@@ -1745,7 +1740,7 @@ mod tests {
             now - chrono::TimeDelta::minutes(10),
             now - chrono::TimeDelta::minutes(30),
         ] {
-            driver.seek(time);
+            chart.set_replay_time(Some(time + chrono::TimeDelta::nanoseconds(1)));
             refresh_spreads(&mut chart, &mut spreads, true);
             let expected: Vec<_> = history
                 .iter()
