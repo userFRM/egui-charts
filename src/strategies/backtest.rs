@@ -1863,6 +1863,42 @@ mod tests {
         );
     }
 
+    #[test]
+    fn heikin_decisions_continue_after_a_whitespace_bar() {
+        fn buy(bar: usize, context: &mut StrategyContext<'_>) {
+            if bar == 2 {
+                context.entry("A", OrderSide::Buy, 1.0, OrderType::Market);
+            }
+        }
+        let bars = [
+            Bar::new(hour(0), 100.0, 112.0, 96.0, 108.0, 1.0),
+            Bar::whitespace(hour(1)),
+            Bar::new(hour(2), 120.0, 128.0, 116.0, 124.0, 1.0),
+            Bar::new(hour(3), 125.0, 132.0, 120.0, 128.0, 1.0),
+        ];
+        // As the chart draws them, the candle after the gap continues from the first one:
+        // open (104 + 104) / 2 = 104, close 122, so the last open is (104 + 122) / 2 = 113
+        // and its close (125 + 132 + 120 + 128) / 4 = 126.25. Original prices: 125 to 128.
+        for (original, entry, equity) in [(false, 113.0, 1013.25), (true, 125.0, 1003.0)] {
+            let mut engine = Backtest::new("Candles", "TEST", Timeframe::Hour1, 1000.0);
+            engine.settings.chart_type = ChartType::Heikin;
+            engine.settings.original_price_fills = original;
+            let report = engine.run(&mut Script(buy), &bars, &[]);
+            assert_eq!(report.trades.first().map(|t| t.entry_price), Some(entry));
+            assert_eq!(report.equity.last().map(|(_, value)| *value), Some(equity));
+            // The live path derives its candles the same way; the last bar is still forming.
+            let mut live_bars = bars.to_vec();
+            live_bars.push(Bar::new(hour(4), 128.0, 128.0, 128.0, 128.0, 1.0));
+            let mut strategy = Script(buy);
+            for count in 1..=live_bars.len() {
+                engine.update(&mut strategy, &live_bars[..count], &[]);
+            }
+            let live = engine.report().unwrap();
+            assert_eq!(live.trades.first().map(|t| t.entry_price), Some(entry));
+            assert_eq!(live.equity.last().map(|(_, value)| *value), Some(equity));
+        }
+    }
+
     /// Places the orders of a script on the bars it names.
     struct Script(fn(usize, &mut StrategyContext<'_>));
 

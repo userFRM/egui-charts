@@ -20,40 +20,7 @@ use std::cell::{Ref, RefCell};
 use egui::Stroke;
 
 use super::helpers::{OhlcYCoords, body_rect, push_body, push_wicks};
-use crate::model::Bar;
-
-/// A whitespace bar stays whitespace, and the bar after it continues from the last bar with a
-/// value.
-fn extend(ha_bars: &mut Vec<Bar>, bars: &[Bar]) {
-    for bar in bars {
-        if bar.is_whitespace() {
-            ha_bars.push(Bar::whitespace(bar.time));
-            continue;
-        }
-        let ha_close = (bar.open + bar.high + bar.low + bar.close) / 4.0;
-        let (ha_open, ha_high, ha_low) = match ha_bars.iter().rev().find(|ha| !ha.is_whitespace()) {
-            Some(prev) => {
-                let open = (prev.open + prev.close) / 2.0;
-                (
-                    open,
-                    bar.high.max(open).max(ha_close),
-                    bar.low.min(open).min(ha_close),
-                )
-            }
-            None => ((bar.open + bar.close) / 2.0, bar.high, bar.low),
-        };
-        ha_bars.push(Bar {
-            time: bar.time,
-            open: ha_open,
-            high: ha_high,
-            low: ha_low,
-            close: ha_close,
-            volume: bar.volume,
-            colors: None,
-            payload: None,
-        });
-    }
-}
+use crate::model::{Bar, BarData};
 
 #[derive(Default)]
 struct CachedSeries {
@@ -98,7 +65,7 @@ impl HeikinAshiCache {
                 }
             });
             entry.bars.truncate(from);
-            extend(&mut entry.bars, &full_data[from..]);
+            BarData::extend_heikin_ashi(&mut entry.bars, &full_data[from..]);
             entry.revision = Some(revision);
             entry.last = full_data.last().cloned();
         }
@@ -205,7 +172,6 @@ mod tests {
 
     #[test]
     fn streaming_updates_retain_the_prefix_and_match_hand_computed_bars() {
-        use crate::model::BarData;
         use crate::studies::ChartState;
         let mut state = ChartState::new(BarData::new());
         let cache = HeikinAshiCache::default();

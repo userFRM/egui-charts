@@ -101,7 +101,8 @@ points of each finer bar, and decides at each with a candle holding only the pri
 `prepare` then receives no bars and `prepare_update` refreshes calculations before each decision.
 It is unavailable on transformed chart types. [`chart_type`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.chart_type) set to Heikin Ashi derives decision candles
 from the original bars you supply; these candles also set fills and equity unless
-[`original_price_fills`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.original_price_fills) keeps those on the original prices.
+[`original_price_fills`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.original_price_fills) keeps those on the original prices. A whitespace
+bar stays empty in those candles, and the next one continues from the last bar with a value.
 
 [`recalculate_after_fills`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.recalculate_after_fills) calls the strategy again after every fill, with [`price()`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.StrategyContext.html#method.price) equal
 to the execution price and [`equity()`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.StrategyContext.html#method.equity) marked there after commission. [`is_after_fill()`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.StrategyContext.html#method.is_after_fill)
