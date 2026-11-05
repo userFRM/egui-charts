@@ -859,7 +859,7 @@ Terminal,Alerts,Drawing alerts,incomplete,library,src/ui/context_menu/drawing.rs
 Terminal,Alerts,Indicator alerts on study plots,incomplete,library,src/ui/dialogs/alert_dialog/dialog.rs;src/services/alert_engine.rs;src/services/alert_evaluator.rs;src/services/alert_feed.rs;terminal/src/alerts.rs,
 Terminal,Alerts,Inline alert creation forms in the alerts panel,unverified,library,src/ui/widget_bar/panels/alerts_panel.rs;src/ui/dialogs/alert_dialog/dialog.rs;src/model/alert.rs;src/services/alerts.rs;terminal/src/alerts.rs,
 Terminal,Alerts,Moving up / moving down operators,unverified,library,src/ui/dialogs/alert_dialog/dialog.rs,
-Terminal,Alerts,Multi-condition alerts,incomplete,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs;src/services/alert_engine.rs;src/services/alert_evaluator.rs;src/services/alert_feed.rs,2064
+Terminal,Alerts,Multi-condition alerts,incomplete,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs;src/services/alert_engine.rs;src/services/alert_evaluator.rs;src/services/alert_feed.rs,2064;2163
 Terminal,Alerts,Notification: email and plain-text email,incomplete,host,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs,
 Terminal,Alerts,Notification: in-app popup when an alert fires,incomplete,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs;src/ui/widget_bar/panels/alerts_panel.rs;src/services/alert_engine.rs;terminal/src/alerts.rs,
 Terminal,Alerts,Notification: mobile app push,incomplete,host,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs,

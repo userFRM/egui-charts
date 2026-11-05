@@ -52,9 +52,11 @@ use crate::model::{
 /// reloading history, rewinding a replay or switching to a coarser timeframe never fires an
 /// alert again.
 ///
-/// *Crossings.* The previous value is the value at the alert's previous evaluation, within a bar
-/// and across bars, and on the first evaluation the value one bar earlier. Crossing up needs a
-/// previous value strictly below the level and a current value at or above it, crossing down the
+/// *Crossings.* On every interval the previous value is the value at the alert's previous
+/// evaluation, within a bar and across bars, and on the first evaluation the value one bar earlier.
+/// A crossing on a longer interval therefore fires once whatever the shorter interval does, and
+/// one between two closes of the shorter interval is caught at the later close. Crossing up needs
+/// a previous value strictly below the level and a current value at or above it, crossing down the
 /// reverse; a value that touches the level and stays there fires once. Moving by and volume
 /// above average read the bars before the evaluated one, as [`AlertCondition`] documents.
 /// Moving channels resolve the preceding bar again when a new bar arrives, so edits and
@@ -139,7 +141,11 @@ struct Run {
 struct Observation {
     available: bool,
     seen: Seen,
+    /// Whether the rules that read this bar alone hold. Those that compare two evaluations are
+    /// tested when the alert evaluates, see [`reads_previous`].
     holds: bool,
+    /// The values of `seen.rules` one bar earlier, read when this bar first arrived.
+    before: Vec<[Option<f64>; 3]>,
     clock: BarClock,
     event: DateTime<Utc>,
     bar: Bar,
@@ -708,6 +714,16 @@ fn observe(
         .filter(|(_, _, interval)| *interval == timeframe)
         .map(|(source, condition, _)| (source, condition))
         .collect();
+    let read = |at: Option<usize>| -> Vec<_> {
+        let source = |src| at.and_then(|at| source(src, at));
+        rules
+            .iter()
+            .map(|(src, condition)| {
+                let [a, b] = condition.partners().map(|other| other.and_then(source));
+                [source(src), a, b]
+            })
+            .collect()
+    };
     let seen = Seen {
         time: bar.time,
         scheduled: alert
@@ -717,15 +733,7 @@ fn observe(
         minute: (alert.frequency == AlertFrequency::OncePerMinute)
             .then(|| occurrence(alert.frequency, bar, now)),
         bar: (bar.close.to_bits(), bar.volume.to_bits()),
-        rules: rules
-            .iter()
-            .map(|(src, condition)| {
-                let [a, b] = condition
-                    .partners()
-                    .map(|other| other.and_then(|other| source(other, index)));
-                [source(src, index), a, b]
-            })
-            .collect(),
+        rules: read(Some(index)),
     };
     if previous.is_some_and(|previous| previous.seen == seen) {
         if let Some(previous) = run.intervals.get_mut(&timeframe) {
@@ -733,36 +741,26 @@ fn observe(
         }
         return true;
     }
-    let holds = rules.iter().enumerate().all(|(n, (src, condition))| {
-        let [current, a, b] = seen.rules[n];
-        let previous = match previous.map(|previous| &previous.seen) {
-            Some(last)
-                if last.time == bar.time
-                    || !matches!(condition, AlertCondition::Channel { .. }) =>
-            {
-                last.rules[n]
-            }
-            _ => {
-                let previous = |src| index.checked_sub(1).and_then(|at| source(src, at));
-                let [a, b] = condition.partners().map(|other| other.and_then(previous));
-                [previous(src), a, b]
-            }
-        };
-        current.is_some_and(|current| {
-            condition_holds(
-                condition,
-                current,
-                previous,
-                [a, b],
-                &bars[..=index],
-                |back| {
-                    index
-                        .checked_sub(back as usize)
-                        .and_then(|at| source(src, at))
-                },
-            )
-        })
-    });
+    let holds = rules
+        .iter()
+        .zip(&seen.rules)
+        .all(|((src, condition), &[current, a, b])| {
+            reads_previous(condition)
+                || current.is_some_and(|current| {
+                    condition_holds(
+                        condition,
+                        current,
+                        [None; 3],
+                        [a, b],
+                        &bars[..=index],
+                        |back| {
+                            index
+                                .checked_sub(back as usize)
+                                .and_then(|at| source(src, at))
+                        },
+                    )
+                })
+        });
     let event = if closed {
         clock.next_open(bar.time).unwrap_or(bars[index + 1].time)
     } else {
@@ -773,12 +771,18 @@ fn observe(
     } else {
         String::new()
     };
+    let before = run
+        .intervals
+        .remove(&timeframe)
+        .filter(|old| old.seen.time == bar.time)
+        .map_or_else(|| read(index.checked_sub(1)), |old| old.before);
     run.intervals.insert(
         timeframe,
         Observation {
             available: true,
             seen,
             holds,
+            before,
             clock: clock.clone(),
             event,
             bar: bar.clone(),
@@ -816,11 +820,13 @@ fn evaluate(alert: &Alert, run: &mut Run, now: DateTime<Utc>) -> Option<(Bar, St
     if joined == run.joined {
         return None;
     }
+    let holds = intervals.iter().enumerate().all(|(position, interval)| {
+        let observation = &run.intervals[interval];
+        observation.holds
+            && previous_rules_hold(alert, *interval, observation, run.joined.get(position))
+    });
     run.joined = joined;
     let bar = &anchor.bar;
-    let holds = intervals
-        .iter()
-        .all(|interval| run.intervals[interval].holds);
     let fires = holds
         && match alert.frequency {
             AlertFrequency::Once => !run.done,
@@ -848,6 +854,57 @@ fn evaluate(alert: &Alert, run: &mut Run, now: DateTime<Utc>) -> Option<(Bar, St
     }
     let primary = &run.intervals[&alert.timeframe.unwrap_or_default()];
     Some((bar.clone(), primary.message.clone(), silent))
+}
+
+/// Whether the rules of `interval` that compare two evaluations hold between `last`, the inputs of
+/// the alert's previous evaluation, and `observation`. Without `last`, and for a moving channel
+/// on a new bar, the earlier side is the bar before the observed one.
+fn previous_rules_hold(
+    alert: &Alert,
+    interval: Timeframe,
+    observation: &Observation,
+    last: Option<&Seen>,
+) -> bool {
+    alert
+        .rules()
+        .filter(|(_, _, own)| *own == interval)
+        .enumerate()
+        .filter(|(_, (_, condition, _))| reads_previous(condition))
+        .all(|(n, (_, condition, _))| {
+            let [current, a, b] = observation.seen.rules[n];
+            let previous = match last {
+                Some(last)
+                    if last.time == observation.seen.time
+                        || !matches!(condition, AlertCondition::Channel { .. }) =>
+                {
+                    last.rules[n]
+                }
+                _ => observation.before[n],
+            };
+            current.is_some_and(|current| {
+                condition_holds(condition, current, previous, [a, b], &[], |_| None)
+            })
+        })
+}
+
+/// Whether `condition` compares a value with its previous one, and reads no bars.
+fn reads_previous(condition: &AlertCondition) -> bool {
+    match condition {
+        AlertCondition::Crossing(_)
+        | AlertCondition::CrossingUp(_)
+        | AlertCondition::CrossingDown(_)
+        | AlertCondition::EnteringChannel { .. }
+        | AlertCondition::ExitingChannel { .. } => true,
+        AlertCondition::Compare { comparison, .. } => matches!(
+            comparison,
+            AlertComparison::Crossing | AlertComparison::CrossingUp | AlertComparison::CrossingDown
+        ),
+        AlertCondition::Channel { comparison, .. } => matches!(
+            comparison,
+            AlertChannelComparison::Entering | AlertChannelComparison::Exiting
+        ),
+        _ => false,
+    }
 }
 
 /// What a frequency fires at most once per: the bar, or for a per-minute alert the minute of `now`.
@@ -1848,5 +1905,89 @@ mod tests {
                 comparison == "Entering" || comparison == "Inside"
             );
         }
+    }
+
+    #[test]
+    fn longer_interval_crossing_fires_once_across_shorter_heartbeat_bars() {
+        // The five-minute close crosses 100 once (99, then 101) and stays there. One-minute bars 3
+        // and 4 are empty heartbeat candles, so only the one-minute input changes in those polls.
+        let host = Host::new(vec![
+            serde_json::from_value(serde_json::json!({
+                "symbol":"SYM", "timeframe":"Min5", "condition":{"CrossingUp":100.0},
+                "frequency":"OncePerBar", "additional_timeframes":["Min1"],
+                "additional_conditions":[{"source":"Price","condition":{"Above":50.0}}]
+            }))
+            .unwrap(),
+        ]);
+        host.events();
+        let (five, one) = (
+            BarClock::new(Timeframe::Min5),
+            BarClock::new(Timeframe::Min1),
+        );
+        let poll = |slow: &[Bar], fast: &[Bar], now| {
+            host.engine.update_matching(
+                None,
+                "SYM",
+                &[(&five, slow), (&one, fast)],
+                time(now),
+                |_, _, _| None,
+            );
+            host.fired()
+        };
+        let mut fired = poll(
+            &[bar(-5, 99.0, 10.0), bar(0, 99.0, 10.0)],
+            &[bar(1, 99.0, 5.0), bar(2, 99.0, 5.0)],
+            150,
+        );
+        let slow = [bar(-5, 99.0, 10.0), bar(0, 101.0, 11.0)];
+        let mut fast = vec![bar(1, 99.0, 5.0), bar(2, 101.0, 6.0)];
+        fired.extend(poll(&slow, &fast, 160));
+        for minute in [3, 4] {
+            fast.push(bar(minute, 101.0, 0.0));
+            fired.extend(poll(&slow, &fast, minute * 60));
+        }
+        assert_eq!(fired, [101.0], "one crossing fires once");
+    }
+
+    #[test]
+    fn once_per_close_sees_a_longer_interval_crossing_during_the_bar() {
+        // At the close of one-minute bar -1 the five-minute close is 99; at the close of bar 0 it
+        // is 102, so it crossed 100 between the alert's two evaluations.
+        let host = Host::new(vec![
+            serde_json::from_value(serde_json::json!({
+                "symbol":"SYM", "timeframe":"Min5", "condition":{"CrossingUp":100.0},
+                "frequency":"OncePerBarClose", "additional_timeframes":["Min1"],
+                "additional_conditions":[{"source":"Price","condition":{"Above":50.0}}]
+            }))
+            .unwrap(),
+        ]);
+        host.events();
+        let (five, one) = (
+            BarClock::new(Timeframe::Min5),
+            BarClock::new(Timeframe::Min1),
+        );
+        let older = (bar(-5, 99.0, 10.0), bar(-1, 99.0, 10.0));
+        let mut fired = Vec::new();
+        for (now, close, volume, next) in [
+            (30, 99.0, 1.0, false),
+            (40, 101.0, 2.0, false),
+            (50, 102.0, 3.0, false),
+            (65, 102.0, 4.0, true),
+        ] {
+            let slow = [older.0.clone(), bar(0, close, volume)];
+            let mut fast = vec![older.1.clone(), bar(0, close, volume.min(3.0))];
+            if next {
+                fast.push(bar(1, close, 1.0));
+            }
+            host.engine.update_matching(
+                None,
+                "SYM",
+                &[(&five, &slow[..]), (&one, &fast[..])],
+                time(now),
+                |_, _, _| None,
+            );
+            fired.extend(host.fired());
+        }
+        assert_eq!(fired, [102.0], "crossed between two one-minute closes");
     }
 }
