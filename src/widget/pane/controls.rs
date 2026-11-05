@@ -6,7 +6,8 @@ use egui::{Pos2, Rect, Sense, Ui};
 impl Chart {
     /// Whether this frame is a Ctrl/Command double-click that collapses the pointed pane. Pane
     /// and chart handlers drop their own double-click on it. A maximised pane has no other pane
-    /// to collapse, so it keeps the ordinary double-click.
+    /// to collapse, and a point outside every pane such as the time axis has none to name, so
+    /// both keep the ordinary double-click.
     pub(in crate::widget) fn pane_collapse_click(&self, ctx: &egui::Context) -> bool {
         self.has_panes()
             && self.pane_layout.maximized.is_none()
@@ -18,6 +19,12 @@ impl Chart {
                     && input
                         .pointer
                         .button_double_clicked(egui::PointerButton::Primary)
+                    && input.pointer.interact_pos().is_some_and(|pos| {
+                        self.pane_layout
+                            .panes
+                            .iter()
+                            .any(|pane| pane.rect.contains(pos))
+                    })
             })
     }
 
@@ -707,6 +714,58 @@ mod tests {
                     "{location} {modifiers:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn command_double_click_outside_every_pane_keeps_the_time_axis_reset() {
+        for modifiers in [
+            Modifiers::CTRL.plus(Modifiers::COMMAND),
+            Modifiers::MAC_CMD.plus(Modifiers::COMMAND),
+        ] {
+            let ctx = Context::default();
+            let mut chart = crate::widget::test_frames::chart(&[100.0; 100], &[110.0; 100]);
+            chart.add_indicator(Box::new(crate::studies::RSI::new(14)));
+            let mut time = 0.0;
+            let mut frame = |chart: &mut Chart, events| {
+                time += 0.02;
+                crate::widget::test_frames::frame(&ctx, chart, time, events);
+            };
+            for _ in 0..3 {
+                frame(&mut chart, vec![]);
+            }
+            let rects = |chart: &Chart| -> Vec<_> {
+                chart
+                    .pane_layout
+                    .panes
+                    .iter()
+                    .map(|pane| pane.rect)
+                    .collect()
+            };
+            let before = rects(&chart);
+            chart.state.time_scale_mut().set_bar_spacing(12.0);
+            frame(&mut chart, vec![]);
+            // The time axis lies below every pane, so no pane can collapse here.
+            let axis = chart.time_axis_rect.center();
+            assert!(before.iter().all(|rect| !rect.contains(axis)));
+            for pressed in [true, false, true, false] {
+                frame(
+                    &mut chart,
+                    vec![
+                        Event::ModifiersChanged(modifiers),
+                        Event::PointerMoved(axis),
+                        Event::PointerButton {
+                            pos: axis,
+                            pressed,
+                            button: PointerButton::Primary,
+                            modifiers,
+                        },
+                    ],
+                );
+            }
+            frame(&mut chart, vec![]);
+            assert_eq!(rects(&chart), before, "no pane collapses");
+            assert_eq!(chart.state.time_scale().bar_spacing(), 6.0);
         }
     }
 }
