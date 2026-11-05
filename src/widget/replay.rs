@@ -1,5 +1,6 @@
 //! Retained history and a shared, exclusive replay cutoff.
 
+use super::events::same_bar;
 use super::series::PriceSeries;
 use super::{Chart, ChartLayout, SeriesId};
 use crate::data::ReplayDriver;
@@ -333,7 +334,9 @@ impl Chart {
             if let Some(bars) = replay.bars.get(&item.id) {
                 let visible = completed(bars, &clock, time);
                 // Market playback runs this every frame; an unchanged window keeps the revision.
-                if item.bars.as_slice() != visible {
+                if item.bars.len() != visible.len()
+                    || !item.bars.iter().zip(visible).all(|(a, b)| same_bar(a, b))
+                {
                     item.bars = visible.to_vec();
                     item.revision = crate::model::next_revision();
                 }
@@ -1061,5 +1064,57 @@ mod tests {
         assert_eq!(chart.bars(added), minutes);
         assert!(chart.undo());
         assert_eq!(chart.bars(removed), minutes, "undone after exit");
+    }
+
+    /// Playback that completes no host bar leaves the host series as it was, also when it holds
+    /// a whitespace bar, whose NaN values never compare equal: its primitives see no change.
+    #[test]
+    fn market_playback_keeps_an_unchanged_host_window() {
+        use crate::chart::primitives::Primitive;
+        use crate::data::{MarketEvent, ReplayEvent};
+        use crate::model::{Instrument, Tick};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Changes(Arc<AtomicUsize>);
+        impl Primitive for Changes {
+            fn data_changed(&mut self, _: &[Bar]) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        let trade = MarketEvent::Trade(Tick::new(time(0), 10.0, 1.0, None));
+        let driver = Arc::new(
+            ReplayDriver::new(
+                vec![ReplayEvent::new("A", time(0), 0, trade)],
+                vec![Instrument::new("A").with_tick_size(1.0)],
+            )
+            .unwrap(),
+        );
+        let mut chart = Chart::new(BarData::new());
+        chart.set_symbol("A");
+        chart.set_timeframe(Timeframe::Min1);
+        let comparison = chart.add_series(Default::default());
+        let mut minutes: Vec<_> = (0..10).map(|m| bar(m, [1.0; 5])).collect();
+        minutes[1] = Bar::whitespace(time(1));
+        chart.set_data(comparison, minutes);
+        let changes = Arc::new(AtomicUsize::new(0));
+        chart.attach_primitive(comparison, Changes(changes.clone()));
+        driver.set_speed(0.0).unwrap();
+        driver.seek(time(5));
+        chart.set_market_replay(Some(driver.clone()));
+        let ctx = egui::Context::default();
+        crate::widget::test_frames::frame(&ctx, &mut chart, 0.0, vec![]);
+        let seen = changes.load(Ordering::Relaxed);
+        driver.set_speed(1.0).unwrap();
+        for second in 1..3 {
+            // 00:05:10 and 00:05:20 complete no bar.
+            driver.advance(std::time::Duration::from_secs(10)).unwrap();
+            crate::widget::test_frames::frame(&ctx, &mut chart, f64::from(second), vec![]);
+        }
+        assert_eq!(chart.bars(comparison).len(), 5, "with the whitespace bar");
+        assert_eq!(changes.load(Ordering::Relaxed), seen, "no bar completed");
+        // 00:06 completes the 00:05 bar.
+        driver.advance(std::time::Duration::from_secs(40)).unwrap();
+        crate::widget::test_frames::frame(&ctx, &mut chart, 3.0, vec![]);
+        assert_eq!(chart.bars(comparison).len(), 6);
+        assert_eq!(changes.load(Ordering::Relaxed), seen + 1);
     }
 }

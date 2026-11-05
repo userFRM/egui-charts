@@ -102,8 +102,8 @@ impl ChartPointer {
     }
 }
 
-fn same_bar(left: &Bar, right: &Bar) -> bool {
-    // Empty slots contain NaNs, but do not change while the pointer stays still.
+/// Whether two bars are the same, including whitespace bars, whose NaN values never compare equal.
+pub(super) fn same_bar(left: &Bar, right: &Bar) -> bool {
     left == right
         || (left.is_whitespace()
             && right.is_whitespace()
