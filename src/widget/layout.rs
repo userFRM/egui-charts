@@ -936,6 +936,7 @@ pub struct ChartLayout {
     links: LinkState,
     detached: [bool; 16],
     previous: [Option<(String, Option<Timeframe>)>; 16],
+    previous_charts: [u64; 16],
     previous_ranges: [Option<VisibleTimeRange>; 16],
     previous_bars: [BarsKey; 16],
     pending_ranges: [Option<PendingRange>; 16],
@@ -1412,6 +1413,17 @@ impl ChartLayout {
         if let Some(index) = self.maximized {
             self.active = index;
         }
+        // A chart supplied or restored in a slot starts a new baseline: nothing changed in it.
+        for (index, chart) in charts.iter().enumerate() {
+            if self.previous_charts[index] != chart.layout_identity {
+                self.previous_charts[index] = chart.layout_identity;
+                self.previous[index] = None;
+                self.previous_ranges[index] = None;
+                self.pending_ranges[index] = None;
+            }
+        }
+        // Before this frame's input selects a chart, so a change is sent from the chart it is in.
+        self.sync_state(charts, total);
         if self.mode == ChartLayoutMode::Tabs {
             egui::ScrollArea::horizontal().show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -1464,7 +1476,6 @@ impl ChartLayout {
         {
             self.active = index;
         }
-        self.sync_state(charts, total);
         for (index, chart) in charts.iter().enumerate() {
             if !self.sync.sync_time_axis || total == 1 {
                 self.pending_ranges[index] = None;
@@ -1479,6 +1490,7 @@ impl ChartLayout {
                 });
                 self.pending_ranges[index] = self.pending_ranges[index].or(own);
             }
+            self.record_state(index, chart);
         }
         for chart in charts.iter_mut() {
             chart.last_hover_bar_idx = None;
@@ -1706,7 +1718,13 @@ impl ChartLayout {
             ui.ctx().request_repaint();
         }
         for (index, chart) in charts.iter().enumerate() {
-            self.previous[index] = Some((chart.symbol().to_owned(), chart.timeframe()));
+            // A change the active chart made while rendering, such as keyboard undo, stays
+            // unrecorded, so the next frame sends it like one made between frames.
+            if index != self.active {
+                self.record_state(index, chart);
+            } else if !self.state_recorded(index, chart) {
+                ui.ctx().request_repaint();
+            }
             self.previous_bars[index] = bars_key(chart);
             if self.pending_ranges[index].is_none()
                 && let Some(range) = chart.visible_time_range()
@@ -1730,13 +1748,30 @@ impl ChartLayout {
         }
     }
 
+    fn state_recorded(&self, index: usize, chart: &Chart) -> bool {
+        self.previous[index]
+            .as_ref()
+            .is_some_and(|p| p.0 == chart.symbol() && p.1 == chart.timeframe())
+    }
+
+    fn record_state(&mut self, index: usize, chart: &Chart) {
+        if !self.state_recorded(index, chart) {
+            self.previous[index] = Some((chart.symbol().to_owned(), chart.timeframe()));
+        }
+    }
+
     fn sync_state(&mut self, charts: &mut [&mut Chart], count: usize) {
         let source = &charts[self.active];
+        let Some(previous) = &self.previous[self.active] else {
+            return;
+        };
+        let symbol_changed = previous.0 != source.symbol();
+        let timeframe_changed = previous.1 != source.timeframe();
+        if !symbol_changed && !timeframe_changed {
+            return;
+        }
         let symbol = source.symbol().to_owned();
         let timeframe = source.timeframe();
-        let previous = self.previous[self.active].as_ref();
-        let symbol_changed = previous.is_some_and(|p| p.0 != symbol);
-        let timeframe_changed = previous.is_some_and(|p| p.1 != timeframe);
         for (index, chart) in charts.iter_mut().take(count).enumerate() {
             if index == self.active {
                 continue;
@@ -3711,5 +3746,146 @@ mod tests {
                 assert!(!charts[0].can_undo(), "a discarded name records nothing");
             }
         }
+    }
+
+    /// Ctrl+Z reaches the active chart while the layout renders it, as in a host that leaves
+    /// shortcut dispatch to `show`. The undone symbol or interval must reach its linked chart
+    /// as the edit did.
+    #[test]
+    fn keyboard_undo_of_a_linked_change_reaches_the_group() {
+        let command = egui::Modifiers {
+            ctrl: true,
+            command: true,
+            ..Default::default()
+        };
+        let state = |chart: &Chart| (chart.symbol().to_owned(), chart.timeframe());
+        let original = ("SAMPLE".to_owned(), Some(Timeframe::Min1));
+        let mut received = Vec::new();
+        for interval in [false, true] {
+            let ctx = egui::Context::default();
+            let mut layout = ChartLayout {
+                mode: ChartLayoutMode::TwoHorizontal,
+                ..Default::default()
+            };
+            let link = ChartLinkGroups {
+                symbol: ChartLink::Group("🔶".into()),
+                interval: ChartLink::Group("💧".into()),
+            };
+            layout.set_link_groups(0, link.clone(), true);
+            layout.set_link_groups(1, link, true);
+            let mut charts = [chart(60), chart(60)];
+            let mut time = 0.0;
+            let mut frame = |layout: &mut ChartLayout, charts: &mut [Chart; 2], events| {
+                time += 0.1;
+                frame_texts(&ctx, layout, charts, vec2(1440.0, 900.0), time, events);
+            };
+            frame(&mut layout, &mut charts, vec![]);
+            // A toolbar edit between frames reaches the linked chart.
+            charts[0].user_action(|chart| {
+                if interval {
+                    chart.set_timeframe(Timeframe::Hour1);
+                } else {
+                    chart.set_symbol("OTHER");
+                }
+            });
+            frame(&mut layout, &mut charts, vec![]);
+            let edited = if interval {
+                ("SAMPLE".to_owned(), Some(Timeframe::Hour1))
+            } else {
+                ("OTHER".to_owned(), Some(Timeframe::Min1))
+            };
+            assert_eq!(
+                state(&charts[1]),
+                edited,
+                "the edit reaches the linked chart"
+            );
+            frame(
+                &mut layout,
+                &mut charts,
+                vec![
+                    Event::ModifiersChanged(command),
+                    Event::Key {
+                        key: egui::Key::Z,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: command,
+                    },
+                ],
+            );
+            assert_eq!(
+                state(&charts[0]),
+                original,
+                "keyboard undo restores the active chart"
+            );
+            frame(
+                &mut layout,
+                &mut charts,
+                vec![Event::ModifiersChanged(egui::Modifiers::NONE)],
+            );
+            frame(&mut layout, &mut charts, vec![]);
+            received.push(state(&charts[1]));
+        }
+        assert_eq!(
+            received,
+            [original.clone(), original],
+            "the undone symbol, then the undone interval, reaches the linked chart"
+        );
+    }
+
+    /// A host opens a saved layout by supplying its charts in the same slots or restoring
+    /// snapshots into them. Nobody changed a symbol or interval, so each opened chart keeps its
+    /// own, also in slots that share a symbol and an interval group; the next change is sent.
+    #[test]
+    fn charts_opened_into_linked_slots_keep_their_symbols() {
+        let ctx = egui::Context::default();
+        let mut layout = ChartLayout {
+            mode: ChartLayoutMode::TwoHorizontal,
+            ..Default::default()
+        };
+        let link = ChartLinkGroups {
+            symbol: ChartLink::Group("🔶".into()),
+            interval: ChartLink::Group("💧".into()),
+        };
+        layout.set_link_groups(0, link.clone(), true);
+        layout.set_link_groups(1, link, true);
+        let mut charts = vec![chart(60), chart(60)];
+        let mut time = 0.0;
+        let mut frames = |layout: &mut ChartLayout, charts: &mut Vec<Chart>| {
+            for _ in 0..2 {
+                time += 0.1;
+                frame_texts(&ctx, layout, charts, vec2(1440.0, 900.0), time, vec![]);
+            }
+        };
+        let state = |charts: &[Chart]| {
+            charts
+                .iter()
+                .map(|chart| (chart.symbol().to_owned(), chart.timeframe()))
+                .collect::<Vec<_>>()
+        };
+        let opened = [
+            ("AAPL".to_owned(), Some(Timeframe::Hour1)),
+            ("MSFT".to_owned(), Some(Timeframe::Day1)),
+        ];
+        frames(&mut layout, &mut charts);
+        // Assigned in place, so a new chart can sit at the address of the one it replaces.
+        charts[0] = chart(3600);
+        charts[0].set_symbol("AAPL");
+        charts[0].set_timeframe(Timeframe::Hour1);
+        charts[1] = chart(86_400);
+        charts[1].set_symbol("MSFT");
+        charts[1].set_timeframe(Timeframe::Day1);
+        frames(&mut layout, &mut charts);
+        assert_eq!(state(&charts), opened, "supplied charts");
+
+        let saved = charts[0].snapshot().unwrap();
+        charts[0].set_symbol("TSLA");
+        frames(&mut layout, &mut charts);
+        assert_eq!(charts[1].symbol(), "TSLA", "the next change is sent");
+        charts[1].set_symbol("MSFT");
+        frames(&mut layout, &mut charts);
+        charts[0].restore(&saved).unwrap();
+        frames(&mut layout, &mut charts);
+        assert_eq!(state(&charts), opened, "a restored chart");
     }
 }

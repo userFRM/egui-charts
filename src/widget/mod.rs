@@ -424,6 +424,9 @@ pub struct Chart {
     pub(crate) layout_inactive: bool,
     /// The layout's field selectors occupy the right end of the status line this frame.
     pub(crate) layout_link_controls: bool,
+    /// Tells `ChartLayout` this is another chart: new for each chart and each restored snapshot,
+    /// whose symbol and interval are no change for the layout to send to linked charts.
+    pub(crate) layout_identity: u64,
     /// External crosshair position from synced chart (bar index)
     pub(crate) synced_crosshair_bar_idx: Option<f64>,
     /// Source period retained by time-based setters and resolved against the current bars.
