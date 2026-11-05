@@ -588,6 +588,18 @@ pub trait Indicator: Send {
         false
     }
 
+    /// Called by the chart after it evicted the oldest `count` source bars, before it calculates
+    /// the study again in full, which can be a few frames later. Returns whether the study
+    /// dropped the outputs of those bars and keeps the others on the bars that remain until
+    /// then; otherwise it has no values until then. The default keeps nothing. The chart's
+    /// presentation wrapper, which holds every study whose
+    /// [`has_settings`](Indicator::has_settings) is `false`, keeps the values of a study that
+    /// draws no candles, zones, markers, labels, projections, provisional segments or drawings.
+    fn remove_oldest_bars(&mut self, count: usize) -> bool {
+        let _ = count;
+        false
+    }
+
     /// Apply the chart instrument's time zone and trading session. Returns `true`
     /// if calculation settings changed and the caller must recalculate from bar 0.
     /// The chart calls this on add and before calculation after its symbol or metadata changes.
@@ -610,7 +622,8 @@ pub trait Indicator: Send {
     /// Return the computed output columns, with NaN for missing values.
     ///
     /// The length of the returned output matches the length of the `data`
-    /// slice most recently passed to [`calculate`](Indicator::calculate).
+    /// slice most recently passed to [`calculate`](Indicator::calculate), less the bars
+    /// [`remove_oldest_bars`](Indicator::remove_oldest_bars) removed since.
     fn values(&self) -> &IndicatorValues;
 
     /// Rendering style of an overlay line. Defaults to a 1 px line in its configured colour.

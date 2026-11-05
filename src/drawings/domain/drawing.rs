@@ -178,7 +178,8 @@ pub struct Drawing {
     pub time_axis_label: bool,
 
     // === Tool-specific configuration (None uses the defaults) ===
-    /// Readouts and midpoint of a ray or extended line. Other tools ignore these settings.
+    /// Readouts and midpoint of a trend line, ray or extended line. Other tools ignore these
+    /// settings.
     #[serde(default)]
     pub line_measurements: LineMeasurements,
     /// Quantity of the long and short position tools
