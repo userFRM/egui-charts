@@ -1105,6 +1105,9 @@ impl DemoApp {
         let price = price
             .or_else(|| self.chart.bars(SeriesId::MAIN).last().map(|b| b.close))
             .unwrap_or(0.0);
+        // The demo has no account service; a host supplies the zone of the user's account.
+        self.alert_dialog.account_timezone =
+            egui_charts::model::TimezoneId::named("America/New_York");
         self.alert_dialog.open(self.state.symbol.clone(), price);
         self.alert_dialog.alert.timeframe = Some(self.state.timeframe);
         self.chart.prepare_alert(&mut self.alert_dialog.alert);
@@ -9237,7 +9240,13 @@ mod tests {
     #[test]
     fn alerts_on_one_symbol_see_one_series() {
         let ctx = egui::Context::default();
-        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        // The feed is generated from the clock. At some times the last three closes make the two
+        // averages equal or too close for the alert level to separate them, so the time is fixed.
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-04T17:30:00Z".parse().unwrap(),
+            false,
+        );
         app.live.set_paused(true);
         finish_feed(&app.live);
         app.apply_session();

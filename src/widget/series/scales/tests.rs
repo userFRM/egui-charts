@@ -2973,7 +2973,8 @@ fn secondary_pane_scale_follows_price_axis_visibility() {
 }
 
 /// The main series can sit before, between or after added series; paint and selection use
-/// that order on every frame, including after restoring a serialized chart.
+/// that order on every frame, in the price pane and in another pane, including after restoring a
+/// serialized chart.
 #[test]
 fn main_series_order_controls_paint_and_selection() {
     use crate::widget::ChartElementId;
@@ -3092,11 +3093,78 @@ fn main_series_order_controls_paint_and_selection() {
     assert!(chart.set_series_order(ids[2], 0));
     assert_eq!(chart.series_order(ids[1]), Some(1));
     assert_eq!(chart.series_order(ids[2]), Some(0));
+
+    #[cfg(feature = "ui")]
+    {
+        let snapshot = chart.snapshot().unwrap();
+        chart.restore(&snapshot).unwrap();
+        for id in &mut ids[1..] {
+            *id = chart.restored_series_id(id.0).unwrap();
+            chart.set_data(*id, data.clone());
+        }
+        assert_eq!(chart.series_order(ids[1]), Some(1), "restored pane order");
+        assert_eq!(chart.series_order(ids[2]), Some(0), "restored pane order");
+    }
+
+    // A secondary pane paints and selects in its own order too, and a study placed there
+    // keeps its slot.
+    let pane = chart.series_pane(ids[1]).unwrap();
+    let study = chart.add_indicator(Box::new(crate::studies::CustomIndicator::new(
+        "Pane study",
+        |bars| vec![crate::studies::IndicatorValue::Single(50.0); bars.len()],
+    )));
+    assert!(chart.move_series_to_pane(study, pane));
+    frame(&ctx, &mut chart, 10.0, vec![]);
+    for (step, (order, members)) in [(1, [1, 2]), (0, [2, 1])].into_iter().enumerate() {
+        assert!(chart.set_series_order(ids[2], order));
+        assert_eq!(chart.series_order(ids[2]), Some(order));
+        assert_eq!(
+            chart.pane_series(pane),
+            [ids[members[0]], ids[members[1]], study]
+        );
+        chart.clear_selection();
+        let time = 11.0 + step as f64;
+        let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, time, vec![]);
+        let paths: Vec<_> = painted
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::Path(path) if path.points.len() == data.len() => colors
+                    .iter()
+                    .position(|color| path.stroke.color == egui::epaint::ColorMode::Solid(*color))
+                    .filter(|index| *index != 0)
+                    .map(|index| (index, path.points[49])),
+                _ => None,
+            })
+            .collect();
+        let drawn: Vec<_> = paths.iter().map(|(index, _)| *index).collect();
+        assert_eq!(drawn, members, "pane paint at step {step}");
+        let pos = paths[1].1;
+        for (input, pressed) in [None, Some(true), Some(false), None]
+            .into_iter()
+            .enumerate()
+        {
+            let mut events = vec![Event::PointerMoved(pos)];
+            if let Some(pressed) = pressed {
+                events.push(Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                });
+            }
+            frame(&ctx, &mut chart, time + (input + 1) as f64 * 0.1, events);
+        }
+        assert_eq!(
+            chart.selected_element(),
+            Some(ChartElementId::Series(ids[members[1]])),
+            "pane selection at step {step}"
+        );
+    }
     assert!(chart.move_series_to_pane(ids[2], PaneId::MAIN));
     assert_eq!(chart.series_order(ids[0]), Some(0));
     assert_eq!(chart.series_order(ids[2]), Some(1));
     assert!(chart.set_series_visible(ids[2], false));
-    frame(&ctx, &mut chart, 6.0, vec![]);
+    frame(&ctx, &mut chart, 20.0, vec![]);
     assert_eq!(chart.series_order(ids[2]), Some(1));
     assert!(chart.set_series_visible(ids[2], true));
     assert!(chart.set_series_visible(ids[0], false));
