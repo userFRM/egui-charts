@@ -305,12 +305,14 @@ pub struct ReplayDriver {
 struct Playback {
     clock: ReplayClock,
     instruments: HashMap<String, Instrument>,
-    routes: HashMap<SubscriptionId, Route>,
+    /// Replaced when a subscription starts or ends, so a frame shares them without copying.
+    routes: Arc<[Route]>,
 }
 
 /// Where one subscription's events go.
 #[derive(Clone)]
 struct Route {
+    id: SubscriptionId,
     symbol: String,
     sink: Sink,
     /// The instrument's trading hours; `None` trades around the clock.
@@ -341,7 +343,7 @@ impl ReplayDriver {
             state: Mutex::new(Playback {
                 clock: ReplayClock::new(events)?,
                 instruments,
-                routes: HashMap::new(),
+                routes: Arc::new([]),
             }),
             dispatch: Mutex::new(()),
         })
@@ -394,19 +396,23 @@ impl ReplayDriver {
 
     /// Advances once by wall-clock elapsed time and routes due events by symbol. Publishes the
     /// resulting time to every sink, including quiet symbols and paused frames, and opens the
-    /// flat candles of the quiet slots it passed, so the candles do not depend on the speed.
-    /// Clock errors leave the position and subscriptions unchanged.
+    /// flat candles of the quiet slots it passed, so the candles do not depend on the speed. A
+    /// frame that moves nothing allocates nothing. Clock errors leave the position and
+    /// subscriptions unchanged.
     pub fn advance(&self, elapsed: Duration) -> Result<(), FeedError> {
         let _dispatch = self.dispatch.lock().unwrap_or_else(PoisonError::into_inner);
-        let (events, start, end, time, routes) = {
+        let (events, start, end, time, moved, routes) = {
             let mut state = self.state();
+            let before = state.clock.time();
             let count = state.clock.advance(elapsed)?.len();
             let end = state.clock.cursor;
+            let time = state.clock.time();
             (
                 Arc::clone(&state.clock.events),
                 end - count,
                 end,
-                state.clock.time(),
+                time,
+                count > 0 || time != before,
                 state.routes(),
             )
         };
@@ -416,7 +422,12 @@ impl ReplayDriver {
             }
         }
         for route in routes.iter() {
-            route.publish(time);
+            if moved {
+                route.publish(time);
+            } else {
+                route.sink.set_server_time(time);
+                route.sink.hold_time(time);
+            }
         }
         Ok(())
     }
@@ -446,9 +457,12 @@ impl ReplayDriver {
 
 impl Playback {
     /// The active routes, dropping those of ended subscriptions.
-    fn routes(&mut self) -> Vec<Route> {
-        self.routes.retain(|_, route| route.sink.is_active());
-        self.routes.values().cloned().collect()
+    fn routes(&mut self) -> Arc<[Route]> {
+        if self.routes.iter().any(|route| !route.sink.is_active()) {
+            let active = self.routes.iter().filter(|route| route.sink.is_active());
+            self.routes = active.cloned().collect();
+        }
+        Arc::clone(&self.routes)
     }
 }
 
@@ -537,12 +551,14 @@ impl Datafeed for ReplayDriver {
                 });
             hours.map(|hours| {
                 let route = Route {
+                    id: subscription.id,
                     symbol: subscription.symbol.clone(),
                     sink: subscription.sink.clone(),
                     hours,
                     extended_hours: subscription.extended_hours,
                 };
-                state.routes.insert(subscription.id, route.clone());
+                let others = state.routes.iter().cloned();
+                state.routes = others.chain([route.clone()]).collect();
                 (
                     route,
                     Arc::clone(&state.clock.events),
@@ -559,7 +575,11 @@ impl Datafeed for ReplayDriver {
     }
 
     fn unsubscribe(&self, id: SubscriptionId) {
-        self.state().routes.remove(&id);
+        let mut state = self.state();
+        if state.routes.iter().any(|route| route.id == id) {
+            let others = state.routes.iter().filter(|route| route.id != id);
+            state.routes = others.cloned().collect();
+        }
     }
 
     fn depth_history(&self, request: DepthRequest, reply: Reply<DepthPage>) {

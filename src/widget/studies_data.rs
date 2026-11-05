@@ -751,6 +751,36 @@ mod tests {
         Arc::new(crate::data::ReplayDriver::new(events, vec![instrument]).unwrap())
     }
 
+    /// Hosts advance the driver once per frame, also while it is paused and routes nothing.
+    #[test]
+    fn paused_replay_driver_frame_does_not_allocate() {
+        let plain = Instrument::new("A").with_tick_size(1.0);
+        let mut trading = plain.clone();
+        trading.session = Some(crate::model::Session::new([]));
+        for instrument in [plain, trading] {
+            let driver = replay_driver(3, instrument.clone());
+            let mut chart = ChartBuilder::new()
+                .with_feed(driver.clone())
+                .with_symbol("A")
+                .with_timeframe(Timeframe::Min1)
+                .build();
+            let ctx = egui::Context::default();
+            for _ in 0..4 {
+                chart.pump(&ctx);
+            }
+            driver.set_speed(0.0).unwrap();
+            driver.advance(std::time::Duration::ZERO).unwrap();
+            let (count, result) =
+                allocations(|| driver.advance(std::time::Duration::from_millis(16)));
+            result.unwrap();
+            assert_eq!(
+                count, 0,
+                "paused advance allocations, {:?}",
+                instrument.session
+            );
+        }
+    }
+
     /// A playing frame that delivers no execution must not fold the held ones again.
     #[cfg(feature = "drawings")]
     #[test]

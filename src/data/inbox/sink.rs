@@ -246,6 +246,27 @@ impl Sink {
             });
     }
 
+    /// [`Self::advance_time`] for a replay frame that stayed at `now`: the slot of `now` was
+    /// settled when the replay got there, and finding it again allocates on a clock with a
+    /// session.
+    pub(crate) fn hold_time(&self, now: DateTime<Utc>) {
+        self.inbox.push(|state| {
+            let Some(live) = state.subscriptions.get_mut(&self.id) else {
+                return false;
+            };
+            let sampled = live.sample_book(now);
+            if live
+                .clock
+                .timeframe()
+                .is_none_or(|tf| tf.duration_ms() <= 0)
+            {
+                return sampled;
+            }
+            live.updates.time = live.updates.time.max(Some(now));
+            sampled || !live.study_inputs.is_empty()
+        });
+    }
+
     /// A bar of the subscribed timeframe, stamped with its open or any instant inside it:
     /// replaces the bar it shares a slot with, appends a newer one, corrects an older one. A bar
     /// of a day or longer is stamped inside its calendar period, as [`HistoryPage::bars`] describes. A
