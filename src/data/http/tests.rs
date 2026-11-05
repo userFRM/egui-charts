@@ -539,6 +539,7 @@ fn old_subscription_cannot_publish_or_schedule_after_cancellation() {
             cancelled,
             since: None,
             retry: REFRESH,
+            live: false,
         }
     };
     let page = || HistoryPage::new(vec![Bar::new(Utc::now(), 1.0, 2.0, 0.0, 1.5, 10.0)], false);
@@ -661,6 +662,61 @@ fn stalled_requests_answer_a_network_error() {
             && matches!(live, Some(FeedError::Network(_))),
         "after {:?}: history {answer:?}, live {live:?}",
         start.elapsed()
+    );
+}
+
+#[test]
+fn only_connection_attempts_report_connecting() {
+    let base = stalled_server();
+    let inbox = Arc::new(Inbox::default());
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let poll = || {
+        let clock = BarClock::new(Timeframe::Min1);
+        let sink = inbox.subscribe("ABC".into(), clock.clone(), 10, None);
+        Poll {
+            base: base.clone(),
+            subscription: Subscription {
+                id: sink.id,
+                symbol: "ABC".into(),
+                timeframe: Timeframe::Min1,
+                clock,
+                extended_hours: false,
+                conversion: None,
+                sink,
+            },
+            cancelled: cancelled.clone(),
+            since: None,
+            retry: REFRESH,
+            live: false,
+        }
+    };
+    let page = HistoryPage::new(vec![Bar::new(Utc::now(), 1.0, 2.0, 0.5, 1.5, 10.0)], false);
+    let refresh = poll().received(Ok(page)).unwrap().0;
+    let retry = poll()
+        .received(Err(FeedError::Network("offline".into())))
+        .unwrap()
+        .0;
+    inbox.drain();
+    let mut statuses = Vec::new();
+    for poll in [poll(), refresh, retry] {
+        poll.fetch();
+        statuses.push(
+            inbox
+                .drain()
+                .updates
+                .into_iter()
+                .find_map(|(_, update)| update.status),
+        );
+    }
+    cancelled.store(true, Ordering::Release);
+    // The first request and a retry connect; the refresh of a live subscription stays live.
+    assert_eq!(
+        statuses,
+        [
+            Some(FeedStatus::Connecting),
+            None,
+            Some(FeedStatus::Connecting)
+        ]
     );
 }
 

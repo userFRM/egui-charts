@@ -118,6 +118,7 @@ impl Datafeed for HttpDatafeed {
             cancelled,
             since: None,
             retry: REFRESH,
+            live: false,
         }
         .fetch();
     }
@@ -241,6 +242,9 @@ struct Poll {
     cancelled: Arc<AtomicBool>,
     since: Option<chrono::DateTime<chrono::Utc>>,
     retry: Duration,
+    /// Whether the last request was answered, so the next one refreshes a live subscription
+    /// rather than attempting to connect.
+    live: bool,
 }
 
 impl Poll {
@@ -267,7 +271,9 @@ impl Poll {
             Ok(target) => target,
             Err(error) => return self.subscription.sink.report_error(error),
         };
-        self.subscription.sink.set_status(FeedStatus::Connecting);
+        if !self.live {
+            self.subscription.sink.set_status(FeedStatus::Connecting);
+        }
         get(target, request.symbol.clone(), move |result| {
             let result = result.and_then(|columns: Columns| columns.into_page(&request));
             if let Some((poll, delay)) = self.received(result) {
@@ -302,6 +308,7 @@ impl Poll {
                 }
                 sink.set_status(FeedStatus::Live);
                 self.retry = REFRESH;
+                self.live = true;
                 REFRESH
             }
             Err(error) => {
@@ -314,6 +321,7 @@ impl Poll {
                 };
                 sink.set_status(FeedStatus::Disconnected);
                 sink.report_error(error);
+                self.live = false;
                 if !recoverable {
                     return None;
                 }
