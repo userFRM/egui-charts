@@ -146,8 +146,9 @@ impl Drawing {
         self.render_line_text(painter, start + offset, end + offset, above);
     }
 
-    /// Readout card beside an extended line; the midpoint is independent of selection and
-    /// readout visibility. Its screen midpoint remains on the line on logarithmic scales.
+    /// Readout card beside a trend line, ray or extended line; the midpoint is independent of
+    /// selection and readout visibility. Its screen midpoint remains on the line on logarithmic
+    /// scales.
     pub(super) fn render_line_measurements(
         &self,
         painter: &egui::Painter,
@@ -754,7 +755,7 @@ mod tests {
     /// Raw 100 to 200 is +100 (+100%), 400 quarter-point ticks or 200 half-point pips.
     /// A logarithmic midpoint is sqrt(100*200), not the arithmetic price midpoint.
     #[test]
-    fn ray_and_extended_line_readouts_follow_units_selection_and_scale() {
+    fn line_tool_readouts_follow_units_selection_and_scale() {
         use crate::drawings::{LineMeasurementPosition as P, LineMeasurements};
         let mut bars = sample_bars();
         for (i, bar) in bars.iter_mut().enumerate() {
@@ -797,7 +798,11 @@ mod tests {
                 "+100.00\n+100.00%\n+200 pips\n3 bars\n5.00 periods\n53.1°",
             ),
         ];
-        let tools = [DrawingToolType::ExtendedLine, DrawingToolType::Ray];
+        let tools = [
+            DrawingToolType::TrendLine,
+            DrawingToolType::ExtendedLine,
+            DrawingToolType::Ray,
+        ];
         for ((reverse, pip, time_axis, want), tool) in cases
             .into_iter()
             .flat_map(|case| tools.map(|tool| (case, tool)))

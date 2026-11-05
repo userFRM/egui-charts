@@ -24,10 +24,10 @@ the instrument's trading calendar. On an interval shorter than a day it declares
 symbol's daily bars in [`data_requests`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#method.data_requests) and reads each period's starting close from them, so the
 longer periods fill without scrolling back. Where the chart's own bars hold a later close on or
 before the target, as when the daily bars stop earlier, that close counts. Daily and longer
-charts, and hosts that supply no daily bars, use the chart's loaded bars. Missing history and
-zero reference prices show N/A. A connected feed loads as many daily bars as the chart holds,
-and at least 300, so on a symbol that trades every day a chart of fewer than 366 bars can leave
-1Y at N/A.
+charts, and hosts that supply no daily bars, use the chart's loaded bars. A connected feed pages
+the daily bars back to the start of the date one year before the last chart bar's trading date,
+the oldest period, and stops there or at the end of its history, whatever its page size and the
+chart's first bar. Missing history and zero reference prices show N/A.
 
 The chart supplies Visible Average Price with its visible source range before autoscaling.
 Direct callers use [`set_visible_range(start..end)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#method.set_visible_range) before [`calculate`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#tymethod.calculate). The end is exclusive;
