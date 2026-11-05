@@ -315,9 +315,11 @@ impl Columns {
         }
         let mut bars = Vec::with_capacity(count.min(request.count));
         let mut end_of_history = self.end_of_history;
+        let mut out_of_range = 0;
         for (index, stamp) in self.t.into_iter().enumerate() {
             // A row costs only its own bar: the chart drops and counts bars with invalid prices.
             let Some(time) = DateTime::from_timestamp(stamp, 0) else {
+                out_of_range += 1;
                 continue;
             };
             let time = bar_time(request, time);
@@ -334,6 +336,13 @@ impl Columns {
             } else if request.before.is_none_or(|before| time < before) {
                 bars.push(bar);
             }
+        }
+        // The chart counts the bars it rejects, but it never sees these rows.
+        if out_of_range > 0 {
+            log::warn!(
+                "the server sent {out_of_range} history rows of {} with out-of-range timestamps; those rows were dropped",
+                request.symbol
+            );
         }
         bars.sort_by_key(|bar| bar.time);
         bars.dedup_by_key(|bar| bar.time);

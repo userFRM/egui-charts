@@ -117,7 +117,7 @@ omitted when volume is unavailable (zero). Columns of different lengths, or
 own bar: the chart drops a bar whose high or low does not contain its open and
 close, or whose volume is negative, and counts it in
 [`FeedState::rejected_bars`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.FeedState.html#structfield.rejected_bars); the adapter drops a row whose timestamp is out of
-range. The adapter orders bars, enforces bounds and keeps
+range and logs a warning. The adapter orders bars, enforces bounds and keeps
 at most the requested count. Optional `end_of_history: true` says no older bars
 exist. An empty window may answer `{"s":"no_data","nextTime":0}` to continue
 at the bar of that timestamp. The adapter advances the bar's time by one second
