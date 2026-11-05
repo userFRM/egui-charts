@@ -23,8 +23,8 @@ pub enum CursorDataPolicy {
 #[non_exhaustive]
 pub struct ChartPointer {
     /// Stored timestamp of the nearest eligible main, added-series or custom point, including
-    /// whitespace.
-    /// `None` without eligible cursor data or when the selected position has no stored point.
+    /// whitespace. `None` without eligible cursor data or when the selected position has no
+    /// stored point.
     pub time: Option<DateTime<Utc>>,
     /// Price on the main pane, or the value on the scale of the hovered pane or volume.
     pub price: f64,
@@ -265,12 +265,13 @@ pub enum ChartEvent {
     #[cfg(feature = "drawings")]
     #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
     ImageRequested(ImageRequest),
-    /// A successful history page or `set_data` completed, including an empty result.
-    /// Live updates emit `DataUpdated` instead; failed or obsolete feed replies emit nothing.
+    /// A successful history page, `set_data` or `set_custom_data` completed, including an empty
+    /// result. Live updates emit `DataUpdated` instead; failed or obsolete feed replies emit
+    /// nothing.
     DataLoaded {
-        /// Bar series that received data.
+        /// Series that received data.
         series: SeriesId,
-        /// Total accepted bars now held by that series, after cleaning and merging.
+        /// Total accepted bars or points now held by that series, after cleaning and merging.
         bars: usize,
     },
     /// A live bar from `update` or the chart's feed changed the bars of a series, `pop_bars`
@@ -282,12 +283,13 @@ pub enum ChartEvent {
         /// Total bars or points now held by that series.
         bars: usize,
     },
-    /// One accepted `set_data` or `update` call, when enabled with
-    /// [`Chart::set_data_operation_notifications`]. Never coalesced; additional to the compact
-    /// `DataLoaded` and `DataUpdated` events. Feed replies, removals and constructor data do not
-    /// emit this event. Overflow is reported by `EventsDropped` as for other notifications.
+    /// One accepted `set_data`, `update`, `set_custom_data` or `update_custom_data` call, when
+    /// enabled with [`Chart::set_data_operation_notifications`]. Never coalesced; additional to
+    /// the compact `DataLoaded` and `DataUpdated` events. Feed replies, removals and constructor
+    /// data do not emit this event. Overflow is reported by `EventsDropped` as for other
+    /// notifications.
     DataOperation {
-        /// Bar series that accepted the operation.
+        /// Series that accepted the operation.
         series: SeriesId,
         /// The operation and, for an update, its incoming bar time.
         operation: DataOperation,

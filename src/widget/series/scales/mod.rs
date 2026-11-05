@@ -1061,7 +1061,7 @@ impl Chart {
                     for value in shared_prices(study.as_ref(), visible.clone()) {
                         include(&mut bounds, value, transform);
                     }
-                } else {
+                } else if !self.is_custom_data(id) {
                     let range = crate::widget::IndicatorPane::with_config(
                         crate::widget::IndicatorPaneConfig::from_study(study.as_ref()),
                     )

@@ -72,7 +72,7 @@ pub(super) struct CustomData {
     clone_point: fn(&(dyn Any + Send + Sync), usize) -> Arc<dyn Any + Send + Sync>,
     revision: u64,
     feed: FeedState,
-    /// The last key a replay has reached, as of the last frame.
+    /// The exclusive cutoff of a replay, as of the last frame.
     cutoff: Option<DateTime<Utc>>,
 }
 
@@ -100,13 +100,21 @@ impl CustomData {
     /// The part of `keys` that is shown: all of them, or those a replay has reached.
     pub(super) fn shown<'k>(&self, keys: &'k [CustomKey]) -> &'k [CustomKey] {
         let end = self.cutoff.map_or(keys.len(), |cutoff| {
-            keys.partition_point(|key| key.time <= cutoff)
+            keys.partition_point(|key| key.time < cutoff)
         });
         &keys[..end]
     }
 
     fn len(&self) -> usize {
         self.shown(&self.keys()).len()
+    }
+
+    /// Keeps the points before `cutoff`, for a copy of the chart that has no replay to hide the
+    /// others.
+    fn freeze(&mut self, cutoff: Option<DateTime<Utc>>) {
+        self.cutoff = cutoff;
+        let keys = self.shown(&self.keys()).to_vec();
+        self.keys = Arc::new(RwLock::new(keys));
     }
 
     fn points_mut<P: CustomPoint>(&mut self) -> Option<&mut Vec<P>> {
@@ -348,10 +356,9 @@ impl Chart {
     /// last-value tag that of a point at the last main bar; a renderer can tag another point with
     /// [`price_axis_labels`](Primitive::price_axis_labels). All prices of the points in view fit
     /// the scale of the series. Points outside the bars are placed by extrapolation on the shared
-    /// time scale, which only the main bars define, so a
-    /// chart without bars draws no points. The series starts empty, and is shown, hidden and
-    /// removed like a study. Undoing its removal restores the study with its last values, without
-    /// its renderer or points.
+    /// time scale, which only the main bars define, so a chart without bars draws no points. The
+    /// series starts empty, and is shown, hidden and removed like a study. Undoing its removal
+    /// restores the study with its last values, without its renderer or points.
     ///
     /// ```rust
     /// use chrono::{DateTime, Utc};
@@ -426,6 +433,8 @@ impl Chart {
     /// point that is not whitespace, without prices or with a non-finite one, is invalid: it is
     /// dropped before duplicates are resolved and counted in [`feed_state`](Self::feed_state).
     /// The main bars are not touched, and study values follow on the next [`show`](Self::show).
+    /// Reported by [`ChartEvent::DataLoaded`](super::ChartEvent::DataLoaded) and, when enabled,
+    /// [`DataOperation`].
     ///
     /// Returns `false`, changing nothing, for an id that is not a custom data series or a point
     /// type other than the one the series was added with.
@@ -611,6 +620,11 @@ impl Chart {
             .map_or_else(|| self.bars(series).len(), CustomData::len)
     }
 
+    /// Whether `series` is a custom data series, whose prices reach its scale through its points.
+    pub(super) fn is_custom_data(&self, series: SeriesId) -> bool {
+        self.custom_of(series).is_some()
+    }
+
     pub(super) fn custom_feed_state(&self, series: SeriesId) -> Option<&FeedState> {
         self.custom_of(series).map(|custom| &custom.feed)
     }
@@ -707,10 +721,7 @@ impl Chart {
     /// Runs the lifecycle hooks before a frame is drawn: `detached` for the primitives of
     /// removed series, `attached` for new ones and `data_changed` when their bars changed.
     pub(super) fn sync_primitives(&mut self, ctx: &egui::Context) {
-        let cutoff = self
-            .replay_time()
-            .and_then(|_| self.state.shown().last())
-            .map(|bar| bar.time);
+        let cutoff = self.replay_time();
         let mut primitives = std::mem::take(&mut self.primitives);
         primitives.retain_mut(|item| {
             if let Some(custom) = &mut item.custom {
@@ -739,6 +750,15 @@ impl Chart {
 
     /// Marks primitives as current for an image export, avoiding repeated attachment and
     /// series data hooks. Pane update hooks still refresh their drawing state for the frame.
+    /// Limits the custom points of a frozen copy of a chart to those shown at `cutoff`.
+    pub(super) fn freeze_custom_points(&mut self, cutoff: Option<DateTime<Utc>>) {
+        for item in &mut self.primitives {
+            if let Some(custom) = &mut item.custom {
+                custom.freeze(cutoff);
+            }
+        }
+    }
+
     pub(super) fn settle_primitives(&mut self) {
         for at in 0..self.primitives.len() {
             let current = self
@@ -1124,19 +1144,6 @@ mod tests {
     use egui::{Color32, CursorIcon, Event, Shape};
 
     type Log = Arc<Mutex<Vec<String>>>;
-
-    /// A point type other than [`Band`].
-    #[derive(Clone, Debug, PartialEq)]
-    struct BandAlias(DateTime<Utc>);
-
-    impl CustomPoint for BandAlias {
-        fn time(&self) -> DateTime<Utc> {
-            self.0
-        }
-        fn prices(&self) -> Vec<f64> {
-            vec![1.0]
-        }
-    }
 
     struct Probe(&'static str, Log);
 
@@ -2401,6 +2408,19 @@ mod tests {
         }
     }
 
+    /// A point type other than [`Band`].
+    #[derive(Clone, Debug, PartialEq)]
+    struct OtherPoint(DateTime<Utc>);
+
+    impl CustomPoint for OtherPoint {
+        fn time(&self) -> DateTime<Utc> {
+            self.0
+        }
+        fn prices(&self) -> Vec<f64> {
+            vec![1.0]
+        }
+    }
+
     /// Records the notes of the points it is given to draw.
     struct BandNotes(Arc<Mutex<Vec<&'static str>>>);
 
@@ -2443,6 +2463,7 @@ mod tests {
         assert!(chart.set_custom_data(
             id,
             vec![
+                band(time(10), -1e6, 1e6, "out of view"),
                 band(time(92), 1000.0, 1100.0, "c"),
                 band(time(90), 1000.0, 1100.0, "replaced by the later duplicate"),
                 band(time(90), 1200.0, 1300.0, "a"),
@@ -2467,11 +2488,11 @@ mod tests {
                 .map(|point| point.note)
                 .collect()
         };
-        assert_eq!(notes(&chart), ["a", "b", "c", "whitespace"]);
+        assert_eq!(notes(&chart), ["out of view", "a", "b", "c", "whitespace"]);
         assert_eq!(chart.feed_state(id).unwrap().rejected_bars, 1);
         // A series keeps one point type, and bars are not its data.
         assert!(!chart.set_custom_data(SeriesId::MAIN, vec![band(time(1), 1.0, 2.0, "")]));
-        assert!(!chart.set_custom_data::<BandAlias>(id, vec![BandAlias(time(1))]));
+        assert!(!chart.set_custom_data::<OtherPoint>(id, vec![OtherPoint(time(1))]));
         chart.set_visible_bars(12);
 
         frame(&ctx, &mut chart, 0.0, vec![]);
@@ -2480,6 +2501,7 @@ mod tests {
         let range = |chart: &Chart| chart.series_price_map(id).unwrap().range();
         // The lowest price is no point's current value, and no bar comes close.
         assert!(range(&chart).min <= 1000.0 && range(&chart).max >= 1500.0);
+        assert!(range(&chart).min > -1e6 && range(&chart).max < 1e6);
         let readout =
             |chart: &Chart, bar| chart.indicator_value_at(id, bar).map(|(_, value)| value);
         assert_eq!(readout(&chart, 90), Some(1300.0));
@@ -2487,6 +2509,8 @@ mod tests {
         assert_eq!(readout(&chart, 80), None);
 
         // An update at a stored key, a new key, an older key and invalid input.
+        chart.drain_events().for_each(drop);
+        chart.set_data_operation_notifications(true);
         assert!(chart.update_custom_data(id, band(time(92), 2000.0, 2100.0, "c2")));
         assert!(chart.update_custom_data(id, band(time(96), 3000.0, 3100.0, "d")));
         assert!(chart.update_custom_data(id, band(time(91), 1000.0, 1100.0, "older")));
@@ -2498,8 +2522,28 @@ mod tests {
                 note: "bad"
             }
         ));
-        assert_eq!(notes(&chart), ["a", "b", "older", "c2", "whitespace", "d"]);
+        assert_eq!(
+            notes(&chart),
+            ["out of view", "a", "b", "older", "c2", "whitespace", "d"]
+        );
         assert_eq!(chart.feed_state(id).unwrap().rejected_bars, 2);
+        let operations: Vec<_> = chart
+            .drain_events()
+            .filter_map(|event| match event {
+                ChartEvent::DataOperation {
+                    operation, bars, ..
+                } => Some((operation, bars)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            operations,
+            [
+                (DataOperation::Update(time(92)), 5),
+                (DataOperation::Append(time(96)), 6),
+                (DataOperation::Insert(time(91)), 7),
+            ]
+        );
         frame(&ctx, &mut chart, 1.0, vec![]);
         frame(&ctx, &mut chart, 1.1, vec![]);
         assert_eq!(readout(&chart, 92), Some(2100.0));
@@ -2533,7 +2577,7 @@ mod tests {
             on_bar.custom_point::<Band>(id).map(|point| point.note),
             Some("c2")
         );
-        assert_eq!(on_bar.custom_point::<BandAlias>(id), None);
+        assert_eq!(on_bar.custom_point::<OtherPoint>(id), None);
         let between = hover(90.5, 3.0);
         assert_eq!(between.time, Some(half_past_90));
         assert_eq!(
@@ -2563,7 +2607,13 @@ mod tests {
         let inside = chart
             .custom_points_in_logical_range(id, LogicalRange::new(91.0, 94.0))
             .unwrap();
-        assert_eq!(inside.bars, 2..5);
+        assert_eq!(inside.bars, 3..6);
+
+        // Points between bars have no study value, whose empty range must not reach the fit.
+        chart.set_custom_data(id, vec![band(half_past_90, 1400.0, 1500.0, "between")]);
+        frame(&ctx, &mut chart, 4.0, vec![]);
+        frame(&ctx, &mut chart, 4.1, vec![]);
+        assert!(range(&chart).min > 1000.0, "{:?}", range(&chart));
 
         // Removal takes the points with it and leaves the bars alone.
         assert!(chart.remove_series(id));
@@ -2587,19 +2637,34 @@ mod tests {
         };
         chart.set_custom_data(
             id,
-            vec![point(50, 1000.0, "reached"), point(60, 9000.0, "ahead")],
+            vec![
+                point(50, 1000.0, "reached"),
+                Band {
+                    time: main[54].time + chrono::TimeDelta::hours(12),
+                    ..point(54, 1000.0, "between the last bar and the cursor")
+                },
+                point(55, 9000.0, "ahead"),
+            ],
         );
         chart.set_replay_time(Some(main[55].time));
         chart.set_visible_bars(40);
         frame(&ctx, &mut chart, 0.0, vec![]);
         frame(&ctx, &mut chart, 0.1, vec![]);
-        assert_eq!(*drawn.lock().unwrap(), ["reached"]);
-        assert_eq!(chart.custom_points::<Band>(id).len(), 1);
+        let reached = ["reached", "between the last bar and the cursor"];
+        assert_eq!(*drawn.lock().unwrap(), reached);
+        assert_eq!(chart.custom_points::<Band>(id).len(), 2);
         assert!(chart.series_price_map(id).unwrap().range().max < 9000.0);
+        // An image export draws a copy of the chart that has no replay of its own.
+        drawn.lock().unwrap().clear();
+        let mut image = chart
+            .export_image(&ctx, &crate::widget::ImageExportOptions::default())
+            .unwrap();
+        image.textures_delta.clear();
+        assert_eq!(*drawn.lock().unwrap(), reached);
         chart.set_replay_time(None);
         frame(&ctx, &mut chart, 0.2, vec![]);
         frame(&ctx, &mut chart, 0.3, vec![]);
-        assert_eq!(chart.custom_points::<Band>(id).len(), 2);
+        assert_eq!(chart.custom_points::<Band>(id).len(), 3);
     }
 
     #[test]

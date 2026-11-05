@@ -446,7 +446,7 @@ impl Chart {
     }
 
     /// The position in `items`, in time order, at a logical position on the shared scale.
-    pub(in crate::widget) fn key_at_index<T>(
+    pub(super) fn key_at_index<T>(
         &self,
         items: &[T],
         key: impl Fn(&T) -> DateTime<Utc>,
@@ -486,7 +486,7 @@ impl Chart {
     }
 
     /// [`bars_in_logical_range`](Self::bars_in_logical_range) over any items in time order.
-    pub(in crate::widget) fn keys_in_logical_range<T>(
+    pub(super) fn keys_in_logical_range<T>(
         &self,
         items: &[T],
         key: impl Fn(&T) -> DateTime<Utc>,

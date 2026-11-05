@@ -1053,6 +1053,7 @@ impl Chart {
                 && self.study_autoscale[*idx]
                 && !self.config.scale_price_chart_only
                 && study.scale() == crate::studies::StudyScale::Main
+                && !self.is_custom_data(self.study_ids[*idx])
             {
                 let range = super::IndicatorPane::with_config(
                     super::IndicatorPaneConfig::from_study(study.as_ref()),
