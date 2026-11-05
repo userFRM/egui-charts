@@ -344,6 +344,9 @@ struct State {
     last_price: [Option<f64>; 2],
     revision: u64,
     reset_revision: u64,
+    /// The revision of the latest bar that dropped the oldest bars, which restarts the readers
+    /// like `reset_revision` while the values of the bars kept still hold.
+    dropped_revision: u64,
     changes: BTreeMap<DateTime<Utc>, u64>,
     filter: Option<OrderFilter>,
     /// A footprint source's executions, from its first execution with a tick size.
@@ -367,7 +370,8 @@ struct State {
 /// no values for the dropped bars, and a cumulative one, such as
 /// [`FilteredCvd`](OrderFlowKind::FilteredCvd), starts again from the oldest retained bar. The
 /// chart recalculates the studies on a source in full after each drop, once per 1,001 new bars,
-/// and otherwise updates them from the first changed bar. At most 100,000 events per rolling
+/// drawing their earlier values until then, and otherwise updates them from the first changed
+/// bar. At most 100,000 events per rolling
 /// window are retained; an overflowing window gives no value until the missing events have
 /// expired, rather than understating the rate.
 ///
@@ -509,7 +513,7 @@ impl OrderFlowInput {
 
     #[cfg(feature = "studies")]
     pub(crate) fn reset_revision(&self) -> u64 {
-        self.state().reset_revision
+        self.state().restart_revision()
     }
 
     #[cfg(feature = "widget")]
@@ -520,7 +524,7 @@ impl OrderFlowInput {
     #[cfg(feature = "widget")]
     pub(crate) fn changed_since(&self, revision: u64) -> Option<DateTime<Utc>> {
         let state = self.state();
-        if state.reset_revision > revision {
+        if state.restart_revision() > revision {
             return None;
         }
         state
@@ -530,12 +534,20 @@ impl OrderFlowInput {
             .map(|(time, _)| *time)
     }
 
+    /// Whether the source only dropped its oldest bars since `revision`: the values of the bars
+    /// it kept still hold until the studies on it are recalculated.
+    #[cfg(feature = "widget")]
+    pub(crate) fn only_dropped_since(&self, revision: u64) -> bool {
+        let state = self.state();
+        state.dropped_revision > revision && state.reset_revision <= revision
+    }
+
     /// Updates the chart's execution cells from the sink's exact trade-bar allocations.
     #[cfg(feature = "widget")]
     pub(crate) fn copy_footprint(&self, target: &mut Footprint, since: u64) -> u64 {
         let state = self.state();
         if state.revision != since {
-            let from = if state.reset_revision > since {
+            let from = if state.restart_revision() > since {
                 None
             } else {
                 state
@@ -1055,6 +1067,12 @@ fn signed_size(trade: &Tick, min: f64, max: f64, size: f64) -> f64 {
 }
 
 impl State {
+    /// The revision from which readers start over: the latest reset or drop.
+    #[cfg(any(feature = "studies", feature = "widget"))]
+    fn restart_revision(&self) -> u64 {
+        self.reset_revision.max(self.dropped_revision)
+    }
+
     fn open(&self, clock: &BarClock, time: DateTime<Utc>) -> Option<DateTime<Utc>> {
         if clock.timeframe().is_some_and(|tf| tf.is_trade_based()) {
             self.trade_bars.forming
@@ -1169,6 +1187,7 @@ impl State {
             last_price: [None; 2],
             revision: 0,
             reset_revision: 0,
+            dropped_revision: 0,
             changes: BTreeMap::new(),
             filter: None,
             footprint: None,
@@ -1282,7 +1301,7 @@ impl State {
             if let Some(first) = first {
                 self.changes.retain(|bar, _| *bar >= first);
             }
-            self.reset_revision = self.revision;
+            self.dropped_revision = self.revision;
         }
     }
 
@@ -1337,7 +1356,7 @@ impl State {
                     self.book_rows -= book.bids.len() + book.asks.len();
                 }
             }
-            self.reset_revision = self.revision;
+            self.dropped_revision = self.revision;
         }
     }
 
@@ -1353,7 +1372,7 @@ impl State {
             if let Some((&first, _)) = self.bars.first_key_value() {
                 self.changes.retain(|bar, _| *bar >= first);
             }
-            self.reset_revision = self.revision;
+            self.dropped_revision = self.revision;
         }
     }
 }
