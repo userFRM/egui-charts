@@ -1115,7 +1115,7 @@ fn schedule_tooltip(ui: &mut Ui, schedule: &crate::model::NotificationSchedule) 
             window.end.format("%H:%M")
         );
         ui.label(range);
-        if window.end < window.start {
+        if window.end <= window.start {
             ui.label(l10n::text(ui.ctx(), "Ends on the following day"));
         }
     }
@@ -1265,6 +1265,23 @@ mod tests {
                 .ends_with(",123,\"AAPL closed at \"\"123\"\"\",false\r\n")
         );
         assert_eq!(panel.take_sound(), Some("Bell".into()));
+        assert_eq!(panel.take_sound(), None);
+        // A silent trigger is logged and marked, without a popup or a sound.
+        let popups = toasts.toasts().len();
+        panel.apply_event(
+            &egui::Context::default(),
+            AlertEvent::SilentTriggered {
+                id: AlertId("watchlist".into()),
+                symbol: "AAPL".into(),
+                time: Utc::now(),
+                price: Some(124.0),
+                message: String::new(),
+            },
+            &mut toasts,
+        );
+        assert!(panel.log().back().unwrap().silent);
+        assert!(panel.log_csv().ends_with(",124,\"\",true\r\n"));
+        assert_eq!(toasts.toasts().len(), popups);
         assert_eq!(panel.take_sound(), None);
         drop(panel);
         assert!(!renewed.is_active());

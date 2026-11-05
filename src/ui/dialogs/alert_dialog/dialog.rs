@@ -353,6 +353,16 @@ impl AlertDialog {
         self.write_presets();
     }
 
+    /// Keep the staged alert's schedule, if it has one, for the next new alert and the storage.
+    fn remember_schedule(&mut self) {
+        if let Some(schedule) = &self.alert.schedule {
+            self.last_schedule = Some((**schedule).clone());
+            if self.loaded && !self.pending {
+                self.write_presets();
+            }
+        }
+    }
+
     /// Write the presets and the remembered schedule to the host storage.
     fn write_presets(&mut self) {
         let document = PresetDocument {
@@ -468,12 +478,7 @@ impl AlertDialog {
                     self.alert.starts = start.unwrap();
                     self.alert.expires = expiry.unwrap();
                     self.alert.schedule = schedule.unwrap().map(Box::new);
-                    if let Some(schedule) = &self.alert.schedule {
-                        self.last_schedule = Some((**schedule).clone());
-                        if self.loaded && !self.pending {
-                            self.write_presets();
-                        }
-                    }
+                    self.remember_schedule();
                     action = AlertDialogAction::Create(Box::new(self.alert.clone()));
                     self.close();
                 }
@@ -1706,8 +1711,8 @@ mod tests {
         dialog.schedule_days[0] = true;
         dialog.schedule_windows = vec![["09:00".into(), "09:00".into()]];
         let schedule = dialog.schedule().unwrap().unwrap();
-        dialog.last_schedule = Some(schedule.clone());
-        dialog.write_presets();
+        dialog.alert.schedule = Some(Box::new(schedule.clone()));
+        dialog.remember_schedule();
         dialog.poll(&ctx);
 
         // A new dialog on the same storage offers it to a new alert but not to an edited one.

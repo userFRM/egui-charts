@@ -787,9 +787,8 @@ fn observe(
     true
 }
 
-/// Test one coherent set of interval observations and consume its occurrence.
-/// The bar and message to fire, and whether the trigger falls outside the schedule and is only
-/// logged.
+/// Test one coherent set of interval observations and consume its occurrence. Returns the bar
+/// and message to fire, and whether the trigger falls outside the schedule and is only logged.
 fn evaluate(alert: &Alert, run: &mut Run, now: DateTime<Utc>) -> Option<(Bar, String, bool)> {
     let intervals = alert.timeframes();
     let anchor = run.intervals.get(&intervals[0])?;
