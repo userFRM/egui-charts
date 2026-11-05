@@ -21,6 +21,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 const REFRESH: Duration = Duration::from_secs(5);
+/// How long a request waits for its response before it answers a recoverable network error.
+const TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A reusable feed for a server exposing `/config`, `/symbols`, `/search` and `/history`.
 ///
@@ -170,12 +172,38 @@ fn get<T: DeserializeOwned>(
     symbol: String,
     answer: impl FnOnce(Result<T, FeedError>) + Send + 'static,
 ) {
+    // The client bounds neither the wait for response headers nor a browser fetch, so the
+    // first of the response and the deadline answers and the other is discarded.
+    let answer = Arc::new(Mutex::new(Some(answer)));
+    let answered = Arc::new(AtomicBool::new(false));
+    let take = |answer: &Mutex<Option<_>>| {
+        answer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+    };
+    let late = answer.clone();
+    later(
+        TIMEOUT,
+        answered.clone(),
+        Box::new(move || {
+            if let Some(answer) = take(&late) {
+                answer(Err(FeedError::Network(format!(
+                    "no response within {} seconds",
+                    TIMEOUT.as_secs()
+                ))));
+            }
+        }),
+    );
     ehttp::fetch(ehttp::Request::get(target), move |result| {
-        answer(
-            result
-                .map_err(FeedError::Network)
-                .and_then(|response| decode(&symbol, response)),
-        );
+        answered.store(true, Ordering::Release);
+        if let Some(answer) = take(&answer) {
+            answer(
+                result
+                    .map_err(FeedError::Network)
+                    .and_then(|response| decode(&symbol, response)),
+            );
+        }
     });
 }
 

@@ -612,6 +612,58 @@ fn old_subscription_cannot_publish_or_schedule_after_cancellation() {
     assert!(dropped.received(Ok(page())).is_none());
 }
 
+/// A local server that accepts every connection and never answers, as a stalled server or a
+/// connection lost without a reset does.
+fn stalled_server() -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        let mut held = Vec::new();
+        for connection in listener.incoming() {
+            held.push(connection);
+        }
+    });
+    base
+}
+
+#[test]
+fn stalled_requests_answer_a_network_error() {
+    let feed = HttpDatafeed::new(stalled_server());
+    let inbox = Arc::new(Inbox::default());
+    let clock = BarClock::new(Timeframe::Min1);
+    let sink = inbox.subscribe("ABC".into(), clock.clone(), 10, None);
+    feed.subscribe(Subscription {
+        id: sink.id,
+        symbol: "ABC".into(),
+        timeframe: Timeframe::Min1,
+        clock,
+        extended_hours: false,
+        conversion: None,
+        sink,
+    });
+    feed.history(request(), inbox.reply(0));
+    let start = std::time::Instant::now();
+    let (mut answer, mut live) = (None, None);
+    while start.elapsed() < Duration::from_secs(30) && (answer.is_none() || live.is_none()) {
+        std::thread::sleep(Duration::from_millis(100));
+        let drained = inbox.drain();
+        for (_, reply) in drained.answers {
+            answer = Some(*reply.downcast::<Result<HistoryPage, FeedError>>().unwrap());
+        }
+        live = drained
+            .updates
+            .into_iter()
+            .find_map(|(_, update)| update.error)
+            .or(live);
+    }
+    assert!(
+        matches!(answer, Some(Err(FeedError::Network(_))))
+            && matches!(live, Some(FeedError::Network(_))),
+        "after {:?}: history {answer:?}, live {live:?}",
+        start.elapsed()
+    );
+}
+
 /// A cancelled browser retry releases its captured state without waiting for Retry-After.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen_test::wasm_bindgen_test]

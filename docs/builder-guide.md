@@ -126,8 +126,10 @@ than the requested `to`.
 Without continuation, `no_data` ends paging. `{"s":"error","errmsg":"..."}`
 reports invalid data. HTTP 404 maps to symbol not found, 429 to rate limited
 (with `Retry-After` seconds or HTTP date), and 408 or 5xx to a recoverable network
-error. Other unsuccessful statuses report invalid data. Historical request retries
-follow the chart's normal retry policy.
+error. Other unsuccessful statuses report invalid data. A request whose response
+has not arrived within 10 seconds also reports a recoverable network error, and
+a later response is discarded. Historical request retries follow the chart's
+normal retry policy.
 
 Live subscriptions poll the same history endpoint every five seconds, starting
 with the latest 500 bars and then including the newest received timestamp so the
