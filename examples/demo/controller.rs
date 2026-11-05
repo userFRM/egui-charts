@@ -9237,7 +9237,13 @@ mod tests {
     #[test]
     fn alerts_on_one_symbol_see_one_series() {
         let ctx = egui::Context::default();
-        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        // The feed is generated from the clock. At some times the last three closes make the two
+        // averages equal or too close for the alert level to separate them, so the time is fixed.
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-11-04T17:30:00Z".parse().unwrap(),
+            false,
+        );
         app.live.set_paused(true);
         finish_feed(&app.live);
         app.apply_session();
