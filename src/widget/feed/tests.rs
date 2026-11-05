@@ -1516,13 +1516,13 @@ fn heatmap_appearance_survives_visibility_and_frozen_images() {
             })
             .collect();
         output.textures_delta.clear();
-        // 99 reaches 2/3 intensity: round(255 * 0.75 * 2/3) * 0.5 = 64.
+        // 99 reaches an opaque part of the scale at 2/3 intensity: round(255 * 0.5) = 128.
         assert_eq!(
             alphas,
             if frame == 1 || frame == 4 {
                 vec![]
             } else {
-                vec![[64, 0]]
+                vec![[128, 0]]
             }
         );
     }

@@ -784,6 +784,7 @@ impl Chart {
         if let (Some(heatmap), Some(history)) = (&link.heatmap, &link.depth_history) {
             let mut heatmap = heatmap.borrow_mut();
             heatmap.config = link.heatmap_config;
+            heatmap.background = Some(self.config.background_color);
             heatmap.render(
                 painter,
                 mapping,

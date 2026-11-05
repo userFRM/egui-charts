@@ -41,11 +41,16 @@ lost. A merged historical column averages size over its span and uses its best r
 the inside-market path; it cannot restore individual quotes from before merging.
 
 The renderer stores one texel per time column and grouped price level in texture atlases. New
-or corrected columns upload only their column. Each column uses `ln(1 + size) / ln(1 + max_size)`
-contrast; bid and ask size at a crossed price are summed and their colours blended. Linear
+or corrected columns upload only their column. One colour scale encodes size, the same for bids
+and asks, at `ln(1 + size) / ln(1 + cut_off)`; its contrast against the chart background grows
+with size and sizes near zero fade away. The cut-off is by default the size that 96% of the held
+rows do not exceed, shared by every column; the held columns redraw only when it moves by more
+than 10%. Bid and ask size at a crossed price are summed. Best bid and ask are 2 point lines in
+the chart's bullish and bearish colours. Linear
 scales draw a quad per tile and column. Logarithmic scales map each row edge individually to
 preserve price geometry. Expired history releases texture slots. No tile side exceeds the
-backend limit. The current book appears as a size profile at the right of the pane.
+backend limit. The current book appears as a size profile at the right of the pane; a key and the
+row's exact price, side and size appear while the pointer is over it.
 
 [`set_volume_bubbles(Some(Default::default()))`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_volume_bubbles) overlays executed volume using the same feed's
 trades. Disabling the heatmap releases its textures and retains configured depth history.
