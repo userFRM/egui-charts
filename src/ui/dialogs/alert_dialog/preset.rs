@@ -377,26 +377,34 @@ fn channel_condition(comparison: AlertChannelComparison, lower: f64, upper: f64)
 struct PresetDocument<T> {
     version: u32,
     presets: T,
+    /// The schedule of the latest saved alert that had one.
+    #[serde(default)]
+    last_schedule: Option<NotificationSchedule>,
 }
 
-/// The stored document for `presets`.
-pub(super) fn to_document(presets: &BTreeMap<String, AlertPreset>) -> serde_json::Result<String> {
+/// The stored document for `presets` and the remembered `last_schedule`.
+pub(super) fn to_document(
+    presets: &BTreeMap<String, AlertPreset>,
+    last_schedule: Option<&NotificationSchedule>,
+) -> serde_json::Result<String> {
     serde_json::to_string(&PresetDocument {
         version: VERSION,
         presets,
+        last_schedule: last_schedule.cloned(),
     })
 }
 
 /// Read a stored document. Whole alerts from version 1 become presets of every group except an
 /// expiry, whose duration they did not record; a later save rewrites them without their excluded
-/// values. Any other version is an error, so that a save cannot overwrite it.
+/// values. Any other version is an error, so that a save cannot overwrite it. The remembered
+/// schedule is read from either version.
 pub(super) fn from_document(
     document: &str,
     now: DateTime<Utc>,
-) -> Result<BTreeMap<String, AlertPreset>, String> {
+) -> Result<(BTreeMap<String, AlertPreset>, Option<NotificationSchedule>), String> {
     let document: PresetDocument<serde_json::Value> =
         serde_json::from_str(document).map_err(|error| error.to_string())?;
-    match document.version {
+    let presets = match document.version {
         1 => serde_json::from_value::<BTreeMap<String, Alert>>(document.presets)
             .map(|alerts| {
                 alerts
@@ -413,7 +421,8 @@ pub(super) fn from_document(
             .map_err(|error| error.to_string()),
         VERSION => serde_json::from_value(document.presets).map_err(|error| error.to_string()),
         _ => Err("Unsupported alert preset version".into()),
-    }
+    };
+    presets.map(|presets| (presets, document.last_schedule))
 }
 
 #[cfg(test)]
@@ -469,6 +478,7 @@ mod tests {
             AlertPreset::capture(&alert, PresetFields::default(), now),
             from_document(&version_1, now)
                 .unwrap()
+                .0
                 .remove("Old")
                 .unwrap(),
         ] {
@@ -725,9 +735,9 @@ mod tests {
         let apply = |saved: &Alert, fields: PresetFields| {
             let preset = AlertPreset::capture(saved, fields, saved_at);
             let presets = BTreeMap::from([("P".to_owned(), preset)]);
-            let document = to_document(&presets).unwrap();
+            let document = to_document(&presets, None).unwrap();
             let mut alert = opened();
-            from_document(&document, saved_at).unwrap()["P"].apply(&mut alert, &[], now);
+            from_document(&document, saved_at).unwrap().0["P"].apply(&mut alert, &[], now);
             alert
         };
 

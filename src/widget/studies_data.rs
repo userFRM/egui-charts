@@ -601,7 +601,7 @@ impl Chart {
 }
 
 #[cfg(all(test, feature = "studies"))]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::data::{Reply, Sink};
     use crate::studies::{InputValue, SMA};
@@ -701,7 +701,7 @@ mod tests {
     }
 
     /// The heap allocations `run` makes on this thread, not counting the drop of its result.
-    fn allocations<T>(run: impl FnOnce() -> T) -> (usize, T) {
+    pub(in crate::widget) fn allocations<T>(run: impl FnOnce() -> T) -> (usize, T) {
         let before = ALLOCATIONS.with(std::cell::Cell::get);
         let result = run();
         (ALLOCATIONS.with(std::cell::Cell::get) - before, result)

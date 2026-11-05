@@ -74,6 +74,11 @@ pub struct Alert {
     /// Whether the alert fires once or on every occurrence.
     #[serde(default)]
     pub frequency: AlertFrequency,
+    /// The alert starts monitoring at this time; `None` monitors from the moment it is saved.
+    /// Before it, evaluation ignores the alert, so its first evaluation after the start compares
+    /// with the value one bar earlier, as for a new alert. Earlier than `expires` when both are set.
+    #[serde(default)]
+    pub starts: Option<DateTime<Utc>>,
     /// The alert expires at this time; `None` never expires.
     #[serde(default)]
     pub expires: Option<DateTime<Utc>>,
@@ -249,6 +254,7 @@ impl Alert {
                 AlertFrequency::default()
             },
             condition,
+            starts: None,
             expires: None,
             schedule: None,
             delivery: AlertDelivery::default(),
@@ -709,6 +715,10 @@ impl Alert {
                 .as_ref()
                 .is_none_or(|schedule| schedule.is_valid())
             && self.delivery.is_valid()
+            && self
+                .starts
+                .zip(self.expires)
+                .is_none_or(|(starts, expires)| starts < expires)
     }
 }
 
@@ -726,21 +736,21 @@ pub struct NotificationSchedule {
 }
 
 /// A window of the day, from `start` up to but excluding `end`, in the schedule's zone. A window
-/// whose `end` is before `start` crosses midnight and belongs to the weekday it starts on.
+/// whose `end` is before `start` crosses midnight and belongs to the weekday it starts on. A
+/// window whose `end` equals `start` covers the 24 hours from `start`, ending at `start` of the
+/// next day.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NotificationWindow {
     /// First clock time inside the window.
     pub start: NaiveTime,
-    /// First clock time after the window; different from `start`.
+    /// First clock time after the window; equal to `start` for a full day.
     pub end: NaiveTime,
 }
 
 impl NotificationSchedule {
-    /// Whether at least one weekday and one window are selected and no window is empty.
+    /// Whether at least one weekday and one window are selected.
     pub fn is_valid(&self) -> bool {
-        !self.days.is_empty()
-            && !self.windows.is_empty()
-            && self.windows.iter().all(|w| w.start != w.end)
+        !self.days.is_empty() && !self.windows.is_empty()
     }
 
     /// Whether a notification raised at `at` may be delivered.
@@ -906,7 +916,7 @@ mod tests {
     #[test]
     fn saved_alerts_require_finite_levels_ordered_channels_and_positive_lookbacks() {
         type Edit = fn(&mut Alert);
-        let rows: [(Edit, bool); 32] = [
+        let rows: [(Edit, bool); 33] = [
             (
                 |a| a.condition = AlertCondition::StrategyFills("run".into()),
                 true,
@@ -1038,6 +1048,14 @@ mod tests {
                         }],
                     }))
                 },
+                true,
+            ),
+            (
+                |a| {
+                    let time = DateTime::from_timestamp(1_000, 0);
+                    a.starts = time;
+                    a.expires = time;
+                },
                 false,
             ),
             (
@@ -1159,6 +1177,7 @@ mod tests {
                 symbol: "AAPL".into(),
                 condition: AlertCondition::CrossingUp(101.5),
                 frequency: AlertFrequency::Once,
+                starts: None,
                 expires: None,
                 schedule: None,
                 delivery: AlertDelivery::default(),
@@ -1195,5 +1214,17 @@ mod tests {
         assert!(schedule.allows(at("2026-03-14T02:30:00Z")));
         assert!(schedule.allows(at("2026-03-14T05:59:00Z")));
         assert!(!schedule.allows(at("2026-03-14T06:00:00Z")));
+        // Equal bounds cover 24 hours from the start: Friday 09:00 EST up to Saturday 09:00.
+        let full_day = NotificationSchedule {
+            windows: vec![NotificationWindow {
+                start: NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                end: NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+            }],
+            ..*schedule
+        };
+        assert!(full_day.allows(at("2026-03-06T14:00:00Z")));
+        assert!(full_day.allows(at("2026-03-07T13:59:00Z")));
+        assert!(!full_day.allows(at("2026-03-07T14:00:00Z")));
+        assert!(!full_day.allows(at("2026-03-06T13:59:00Z")));
     }
 }
