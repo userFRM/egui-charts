@@ -668,6 +668,63 @@ mod tests {
         }
     }
 
+    /// A chart's extended hours choice selects the driver's executions at the same position.
+    #[test]
+    fn switching_extended_hours_rebuilds_market_replay_at_the_position() {
+        use crate::data::{MarketEvent, ReplayEvent};
+        use crate::model::{Instrument, Session, SessionWindow, Tick};
+        use chrono::{NaiveTime, Weekday};
+        let hm = |h, m| NaiveTime::from_hms_opt(h, m, 0).unwrap();
+        let days = [
+            Weekday::Mon,
+            Weekday::Tue,
+            Weekday::Wed,
+            Weekday::Thu,
+            Weekday::Fri,
+        ];
+        let mut instrument = Instrument::new("A").with_tick_size(1.0);
+        instrument.session = Some(
+            Session::new([SessionWindow::new(days, hm(9, 30), hm(16, 0))])
+                .with_extended_windows([SessionWindow::new(days, hm(4, 0), hm(9, 30))]),
+        );
+        // Friday 1970-01-02 in UTC, the instrument's default zone: 08:00 and 09:31.
+        let at = |h: i64, m: i64| {
+            chrono::DateTime::UNIX_EPOCH + chrono::TimeDelta::minutes(1440 + 60 * h + m)
+        };
+        let events = [(at(8, 0), 50.0), (at(9, 31), 100.0)]
+            .into_iter()
+            .enumerate()
+            .map(|(id, (time, price))| {
+                let fill = Tick::new(time, price, 1.0, None).with_id(id as u64);
+                ReplayEvent::new("A", time, id as u64, MarketEvent::Trade(fill))
+            })
+            .collect();
+        let driver = Arc::new(ReplayDriver::new(events, vec![instrument]).unwrap());
+        driver.set_speed(0.0).unwrap();
+        driver.seek(at(9, 31));
+        let mut chart = Chart::new(BarData::new());
+        chart.set_symbol("A");
+        chart.set_timeframe(Timeframe::Min1);
+        chart.set_market_replay(Some(driver.clone()));
+        let ctx = egui::Context::default();
+        for (extended, expected) in [
+            (false, vec![at(9, 31)]),
+            (true, vec![at(8, 0), at(9, 31)]),
+            (false, vec![at(9, 31)]),
+        ] {
+            chart.set_extended_hours(extended);
+            for _ in 0..4 {
+                chart.pump(&ctx);
+            }
+            let executed: Vec<_> = (chart.bars(SeriesId::MAIN).iter())
+                .filter(|bar| bar.volume > 0.0)
+                .map(|bar| bar.time)
+                .collect();
+            assert_eq!(executed, expected, "extended hours {extended}");
+            assert_eq!(driver.time(), at(9, 31));
+        }
+    }
+
     #[cfg(feature = "studies")]
     #[test]
     fn rewind_clears_future_study_values_before_rendering() {

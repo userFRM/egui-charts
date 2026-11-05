@@ -613,7 +613,8 @@ mod tests {
         chart.config_mut().show_volume = false;
         chart.set_timeframe(Timeframe::Min30);
         chart.set_chart_type(ChartType::TimePriceOpportunity);
-        let mut letters_of = |params: ChartTypeParams| {
+        let single_print = crate::tokens::DESIGN_TOKENS.semantic.tpo.single_print;
+        let mut draw = |params: ChartTypeParams| {
             chart.set_chart_type_params(params);
             let ctx = Context::default();
             let output = ctx.run_ui(
@@ -638,19 +639,40 @@ mod tests {
                     _ => None,
                 })
                 .collect();
+            let captions = output
+                .shapes
+                .iter()
+                .filter(|s| matches!(&s.shape, Shape::Text(t) if t.galley.text() == "Mid"))
+                .count();
+            let highlights = output
+                .shapes
+                .iter()
+                .filter(|s| matches!(&s.shape, Shape::Rect(r) if r.fill == single_print))
+                .count();
             output.drop_without_applying_deltas();
-            letters.into_iter().collect::<String>()
+            (
+                letters.into_iter().collect::<String>(),
+                captions,
+                highlights,
+            )
         };
 
         // Settings saved before the option existed keep the blocks they were saved with.
         let saved = serde_json::from_str::<ChartTypeParams>("{}").unwrap();
-        assert_eq!(letters_of(saved.clone()), "");
+        assert_eq!(draw(saved.clone()), (String::new(), 0, 0));
         // Eight half-hour bars of one session are the periods A to H.
         let lettered = ChartTypeParams {
             tpo_letters: true,
-            ..saved
+            ..saved.clone()
         };
-        assert_eq!(letters_of(lettered), "ABCDEFGH");
+        assert_eq!(draw(lettered).0, "ABCDEFGH");
+        let (_, captions, highlights) = draw(ChartTypeParams {
+            tpo_midpoint: true,
+            tpo_single_prints: true,
+            ..saved
+        });
+        assert_eq!(captions, 1);
+        assert!(highlights > 0);
     }
 
     #[test]

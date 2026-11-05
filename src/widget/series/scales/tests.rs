@@ -4113,3 +4113,150 @@ fn placed_axes_report_their_side_and_respect_hidden_chart_axes() {
         );
     }
 }
+
+/// A locked axis keeps its units per bar, span * spacing / height, whichever axis shows it, and
+/// an unlocked scale keeps its range. The main axis is the control: a range of 10 inside margins
+/// of 10% spans 12.5, and twice the spacing at the same height halves it. A scale of a secondary
+/// pane has no margins and fits 10% of padding, so it spans 12.
+#[test]
+fn named_axis_lock_keeps_units_per_bar() {
+    use crate::widget::PaneScale;
+    use PriceScaleMode::{Normal, Percentage};
+    use SeriesScale::{Left, Right, Separate};
+    for (case, secondary, key, mode, hand) in [
+        ("left", false, Left, Normal, Some(12.5)),
+        ("additional", false, Separate(1), Normal, Some(12.5)),
+        ("left percent", false, Left, Percentage, None),
+        ("pane left", true, Left, Normal, Some(12.0)),
+        ("pane right", true, Right, Normal, Some(12.0)),
+        ("pane left percent", true, Left, Percentage, None),
+    ] {
+        let ctx = egui::Context::default();
+        let mut chart = Chart::new(BarData::from_bars(bars(&[100.0, 110.0].repeat(100))));
+        chart.config.show_volume = false;
+        // More bars than fit: zooming moves the first visible value, a percent scale's reference.
+        let prices: Vec<f64> = match mode {
+            Normal => [10.0, 20.0].repeat(100),
+            _ => (0..200).map(|at| 10.0 + f64::from(at)).collect(),
+        };
+        let other = chart.add_pane();
+        let pane = if secondary { other } else { PaneId::MAIN };
+        for scale in [key, Separate(9)] {
+            let id = chart.add_series(SeriesOptions {
+                scale,
+                ..Default::default()
+            });
+            chart.set_data(id, bars(&prices));
+            assert!(chart.move_series_to_pane(id, pane), "{case}");
+        }
+        let axis = PaneScale::Named(key);
+        chart.pane_scale_mut(pane, axis).unwrap().options_mut().mode = mode;
+        let unlocked = PaneScale::Named(Separate(9));
+        let fixed = crate::scales::PriceRange::new(0.0, 100.0);
+        chart
+            .pane_scale_mut(pane, unlocked)
+            .unwrap()
+            .set_range(fixed.min, fixed.max);
+        frame(&ctx, &mut chart, 0.0, vec![]);
+
+        let height = |chart: &Chart| {
+            if secondary {
+                chart.pane_height(pane).unwrap()
+            } else {
+                chart.get_rendered_price_rect().height()
+            }
+        };
+        let (spacing, offset) = chart.get_time_scale_state();
+        let main_height = chart.get_rendered_price_rect().height();
+        chart
+            .price_scale_mut()
+            .set_bar_ratio_locked(true, spacing, main_height);
+        let before = height(&chart);
+        chart
+            .pane_scale_mut(pane, axis)
+            .unwrap()
+            .set_bar_ratio_locked(true, spacing, before);
+        let range = |chart: &Chart| chart.pane_scale(pane, axis).unwrap().range();
+        let span = |range: crate::scales::PriceRange| range.max - range.min;
+        let near = |a: f64, b: f64| (a - b).abs() <= 1e-4 * b.abs().max(1.0);
+        let locked = range(&chart);
+        if let Some(hand) = hand {
+            assert!(near(span(locked), hand), "{case}: {locked:?}");
+        }
+        assert!(
+            near(span(chart.state.price_scale().range()), 12.5),
+            "{case}"
+        );
+
+        frame(&ctx, &mut chart, 0.1, vec![]);
+        assert!(near(span(range(&chart)), span(locked)), "{case}: a jump");
+
+        chart.apply_synced_time_scale(spacing * 2.0, offset);
+        frame(&ctx, &mut chart, 0.2, vec![]);
+        // Narrower axis labels widen the plot, which moves the spacing of a percent scale a little.
+        let (zoomed, _) = chart.get_time_scale_state();
+        assert!(zoomed > spacing * 1.5, "{case}: {spacing} -> {zoomed}");
+        assert_eq!(height(&chart), before, "{case}");
+        let zoom = f64::from(spacing / zoomed);
+        let halved = range(&chart);
+        assert!(
+            near(span(halved), span(locked) * zoom),
+            "{case}: {halved:?}"
+        );
+        if let Some(hand) = hand {
+            assert!(near(span(halved), hand / 2.0), "{case}: {halved:?}");
+        }
+        let centre = |range: crate::scales::PriceRange| (range.min + range.max) / 2.0;
+        assert!(near(centre(halved), centre(locked)), "{case}: {halved:?}");
+        assert!(
+            near(span(chart.state.price_scale().range()), 12.5 * zoom),
+            "{case}"
+        );
+
+        chart.set_pane_stretch_factor(other, 3.0);
+        frame(&ctx, &mut chart, 0.3, vec![]);
+        assert_ne!(height(&chart), before, "{case}: the pane was resized");
+        assert!(
+            near(
+                span(range(&chart)) * f64::from(chart.get_time_scale_state().0 / height(&chart)),
+                span(locked) * f64::from(spacing / before),
+            ),
+            "{case}: {:?}",
+            range(&chart)
+        );
+        assert_eq!(
+            chart.pane_scale(pane, unlocked).unwrap().range(),
+            fixed,
+            "{case}"
+        );
+    }
+}
+
+/// A study assigned to a named scale in a secondary pane has no scale before the frame that
+/// creates it, as documented and as in the initial pane, rather than the pane's right scale.
+#[test]
+fn unpainted_study_axis_in_a_secondary_pane_has_no_scale() {
+    use crate::model::AxisSide;
+    use crate::widget::PaneScale;
+    let ctx = egui::Context::default();
+    let mut chart = Chart::new(BarData::from_bars(bars(&[100.0; 30])));
+    chart.config.show_volume = false;
+    let study = chart.add_indicator(Box::new(
+        crate::studies::CustomIndicator::new("lower", |_| {
+            vec![crate::studies::IndicatorValue::Single(5.0); 30]
+        })
+        .with_overlay(false),
+    ));
+    let pane = chart.series_pane(study).unwrap();
+    assert_ne!(pane, PaneId::MAIN);
+    assert!(
+        chart.set_indicator_scale(study, crate::studies::StudyScale::Shared(SeriesScale::Left))
+    );
+    let left = PaneScale::Named(SeriesScale::Left);
+    assert_eq!(chart.pane_scales(pane, AxisSide::Left), [left]);
+    assert!(chart.pane_scale(pane, left).is_none());
+
+    frame(&ctx, &mut chart, 0.0, vec![]);
+    let right = chart.pane_price_scale(pane, SeriesScale::Right);
+    assert!(!std::ptr::eq(chart.pane_scale(pane, left).unwrap(), right));
+}
