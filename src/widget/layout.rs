@@ -969,9 +969,13 @@ impl ChartLayout {
     /// Current relative sizes of a preset's splits, including its default weights when unedited.
     /// Splits are visited depth first: the outer rows or columns, then each child's subdivisions.
     pub fn sizes(&self, mode: ChartLayoutMode) -> ChartLayoutSizing {
-        self.saved_sizes()
-            .into_iter()
+        self.sizing
+            .sizes
+            .lock()
+            .unwrap()
+            .iter()
             .find(|sizes| sizes.mode == mode)
+            .cloned()
             .unwrap_or_else(|| {
                 let mut weights = Vec::new();
                 mode.tracks().split().weights(&mut weights);
@@ -3399,5 +3403,35 @@ mod tests {
             assert_widths(&layout, narrow, dragged);
             assert_widths(&layout, wide, widened);
         }
+    }
+
+    /// Placing the charts of one preset, which the layout does on every frame, costs the same
+    /// however many other presets have stored sizes.
+    #[cfg(feature = "studies")]
+    #[test]
+    fn chart_placement_does_not_copy_other_presets_sizes() {
+        use super::super::studies_data::tests::allocations;
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 720.0));
+        let mut layout = ChartLayout {
+            mode: ChartLayoutMode::Four,
+            ..Default::default()
+        };
+        let cells = layout.visible_chart_rects(rect, 4);
+        let (unedited, same) = allocations(|| layout.visible_chart_rects(rect, 4));
+        assert_eq!(same, cells);
+        let others: Vec<_> = ChartLayoutMode::all()
+            .iter()
+            .filter(|&&mode| mode != layout.mode)
+            .filter_map(|&mode| {
+                let mut sizes = layout.sizes(mode);
+                sizes.weights.iter_mut().find(|split| split.len() > 1)?[0] *= 3.0;
+                Some(sizes)
+            })
+            .collect();
+        layout.set_sizes(&others, true).unwrap();
+        assert_eq!(layout.saved_sizes().len(), others.len());
+        let (edited, same) = allocations(|| layout.visible_chart_rects(rect, 4));
+        assert_eq!(same, cells);
+        assert_eq!(edited, unedited, "with {} other presets", others.len());
     }
 }
