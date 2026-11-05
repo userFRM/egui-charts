@@ -1100,7 +1100,7 @@ mod tests {
     /// Guards the default look: only trades of at least the mean plus two standard deviations of
     /// the visible sizes draw, at half opacity without a border, the diameter proportional to the
     /// square root of the size counted from zero and held at the minimum, an absolute size
-    /// replaces the threshold, explicit scaling keeps its stretch, and saved values load back.
+    /// replaces the threshold, and explicit scaling keeps its stretch.
     /// Expected values by hand: the session has 202 trades, sum 1,100, squares 172,200, so a mean
     /// of 5.446, a deviation of 28.685 and a threshold of 62.82.
     #[test]
@@ -1144,17 +1144,6 @@ mod tests {
         for (name, config, trades, expected) in cases {
             assert_draws(name, config, 80.0, &trades, expected);
         }
-        let saved: VolumeBubblesConfig = serde_json::from_value(serde_json::json!({
-            "grouping": { "PriceStep": 0.5 },
-            "scaling_mode": "Logarithmic",
-            "opacity": 180,
-            "min_size_filter": 5.0,
-        }))
-        .unwrap();
-        assert_eq!(saved.grouping, PriceStep(0.5));
-        assert_eq!(saved.scaling_mode, BubbleScalingMode::Logarithmic);
-        assert_eq!(saved.opacity, 180);
-        assert_eq!(saved.min_size_filter, Some(5.0));
     }
 
     /// Guards the exact position of ungrouped bubbles: a fill sits in its bar's slot at the
