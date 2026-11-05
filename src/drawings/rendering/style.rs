@@ -122,9 +122,7 @@ impl Drawing {
                     if styled
                         && matches!(
                             self.tool_type,
-                            DrawingToolType::InfoLine
-                                | DrawingToolType::TrendAngle
-                                | DrawingToolType::Arrow
+                            DrawingToolType::TrendAngle | DrawingToolType::Arrow
                         )
                         && let Shape::LineSegment { points, .. } = &mut s.shape
                         && self.points.get(..2) == Some(points.as_slice())
