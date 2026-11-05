@@ -445,7 +445,7 @@ Order flow,Order flow,"Depth ladder order entry, editing and brackets",incomplet
 Order flow,Order flow,Depth ladder session and resettable profiles,unverified,library,src/ui/trading/dom.rs;src/ui/trading/mod.rs;src/ui/trading/ticket/mod.rs;src/ui/trading/widgets.rs,
 Order flow,Order flow,Depth ladder with configurable visible levels,unverified,library,src/ui/trading/dom.rs;src/ui/trading/mod.rs;src/data/depth.rs,
 Order flow,Order flow,Developing POC line through the session,unverified,library,src/studies/builtin/trade_profile.rs;src/chart/overlays/trade_profile.rs;src/data/footprint.rs;src/widget/trade_profile.rs;src/widget/frame/mod.rs,
-Order flow,Order flow,Diagonal imbalance detection and highlighting,unverified,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/widget/frame/mod.rs,
+Order flow,Order flow,Diagonal imbalance detection and highlighting,incomplete,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/widget/frame/mod.rs,
 Order flow,Order flow,Execution volume bubbles at trade prices and times,unverified,library,src/widget/feed/mod.rs;src/chart/overlays/volume_bubbles.rs;src/model/clock.rs;src/widget/frame/mod.rs,
 Order flow,Order flow,Footprint and session volume profile settings in the chart settings dialog,incomplete,library,src/model/chart_type.rs;src/ui/dialogs/series_settings/tabs/symbol.rs;src/ui/dialogs/chart_settings/tabs/symbol.rs;src/widget/frame/mod.rs;src/widget/trade_profile.rs;src/chart/overlays/footprint.rs;src/chart/overlays/trade_profile.rs,1751
 Order flow,Order flow,Footprint cell colour and intensity modes,incomplete,library,src/chart/overlays/footprint.rs;src/data/footprint.rs;src/model/chart_type.rs;src/ui/dialogs/series_settings/tabs/symbol.rs;src/ui/dialogs/chart_settings/tabs/symbol.rs,
@@ -461,7 +461,7 @@ Order flow,Order flow,Heatmap colour scaling and intensity controls,unverified,l
 Order flow,Order flow,Heatmap depth source and order filters,unverified,library,src/data/orders.rs;src/data/depth_history.rs;src/data/inbox/sink.rs;src/widget/feed/mod.rs;src/chart/overlays/book_profile.rs,
 Order flow,Order flow,Heatmap history retention in memory with manual memory release,incomplete,library,src/data/depth_history.rs;src/widget/feed/mod.rs,
 Order flow,Order flow,Heatmap rendering at scale,unverified,library,src/chart/overlays/liquidity_heatmap.rs;src/data/depth_history.rs;src/data/depth.rs;benches/heatmap.rs;docs/order-flow.md;benches/regression/mod.rs,
-Order flow,Order flow,Horizontal bid vs ask imbalance,unverified,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/widget/frame/mod.rs,
+Order flow,Order flow,Horizontal bid vs ask imbalance,incomplete,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/widget/frame/mod.rs,
 Order flow,Order flow,Iceberg detection from order-level refills at one price,unverified,library,src/services/detectors/icebergs.rs;src/services/detectors/depth.rs;src/services/detectors/mod.rs;src/data/orders.rs;,
 Order flow,Order flow,Imbalance zone tracker and rejector,incomplete,library,src/studies/builtin/footprint_studies.rs;src/chart/overlays/footprint.rs;src/widget/frame/mod.rs,
 Order flow,Order flow,Large aggressive trades and historical loading,unverified,library,src/chart/overlays/volume_bubbles.rs;src/ui/widget_bar/panels/time_and_sales.rs;src/data/trades.rs;src/services/detectors/big_trades.rs;src/services/detectors/mod.rs;src/widget/feed/mod.rs;src/widget/signals.rs,
