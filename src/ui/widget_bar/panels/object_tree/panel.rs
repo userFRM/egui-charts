@@ -100,11 +100,15 @@ impl ObjectTreePanel {
         sources: &mut [SourceItem],
     ) -> ObjectTreeAction {
         let mut action = ObjectTreeAction::None;
-        for item in sources.iter().filter(|s| s.is_drawing()) {
-            for depth in 1..=item.folder.len() {
-                self.state.folders.insert(item.folder[..depth].to_vec());
-            }
-        }
+        self.state.folders = sources
+            .iter()
+            .filter(|s| s.is_drawing())
+            .flat_map(|s| (1..=s.folder.len()).map(|depth| s.folder[..depth].to_vec()))
+            .collect();
+        let folders = &self.state.folders;
+        self.state
+            .collapsed_folders
+            .retain(|path| folders.contains(path));
 
         if self.config.group_by_type {
             sources.sort_by_key(|s| {
@@ -131,7 +135,10 @@ impl ObjectTreePanel {
         // Main panel frame
         Frame::new().fill(ui.visuals().panel_fill).show(ui, |ui| {
             // Header
-            self.show_header(ui, &mut action);
+            let can_group = sources
+                .iter()
+                .any(|s| s.is_drawing() && self.state.is_selected(s.id));
+            self.show_header(ui, &mut action, can_group);
 
             ui.separator();
 
@@ -205,13 +212,14 @@ impl ObjectTreePanel {
     }
 
     /// Render header with title and controls
-    fn show_header(&mut self, ui: &mut Ui, action: &mut ObjectTreeAction) {
+    fn show_header(&mut self, ui: &mut Ui, action: &mut ObjectTreeAction, can_group: bool) {
         PanelHeader::new("Objects")
             .strong()
             .no_separator()
             .show(ui, |ui| {
                 if IconButton::new(&icons::PLUS)
                     .tooltip("New folder with selected drawings")
+                    .enabled(can_group)
                     .show(ui)
                     .clicked()
                 {
@@ -400,6 +408,20 @@ impl ObjectTreePanel {
             }
             ObjectTreeAction::SelectAll => {
                 self.state.select_all(&source_ids);
+            }
+            ObjectTreeAction::SelectFolder(path) | ObjectTreeAction::AddFolderToSelection(path) => {
+                let members: Vec<_> = sources
+                    .iter()
+                    .filter(|s| s.is_drawing() && s.folder.starts_with(path))
+                    .map(|s| s.id)
+                    .collect();
+                if matches!(action, ObjectTreeAction::SelectFolder(_)) {
+                    self.state.select_all(&members);
+                } else if members.iter().all(|id| self.state.is_selected(*id)) {
+                    self.state.selected_ids.retain(|id| !members.contains(id));
+                } else {
+                    self.state.selected_ids.extend(members);
+                }
             }
             _ => {}
         }
@@ -596,6 +618,7 @@ mod tests {
                     .all(|d| d["folder"] == serde_json::json!([]))
             );
             assert!(h.state_mut().1.drawings_mut().undo());
+            h.run();
             assert_eq!(saved(&h)[0]["folder"], nested[0]["folder"]);
             assert_eq!(saved(&h)[1]["folder"], nested[1]["folder"]);
             assert_eq!(
@@ -619,6 +642,147 @@ mod tests {
                     "unchanged {action:?} cleared redo"
                 );
             }
+        }
+    }
+
+    /// Through the tree: a folder row selects its descendants, drags into another folder and
+    /// back out, nests with a new folder, and leaves with its contents in one undo step.
+    #[test]
+    fn folder_rows_select_nest_delete_and_clean_up() {
+        use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        type App = (ObjectTreePanel, crate::Chart);
+        let mut chart = crate::widget::ChartBuilder::new().build();
+        for (name, folder) in [
+            ("Line", vec!["Levels"]),
+            ("Deep", vec!["Zones", "Inner"]),
+            ("Free", vec![]),
+        ] {
+            let mut drawing = Drawing::new(0, DrawingToolType::TrendLine);
+            drawing.label = Some(name.into());
+            drawing.folder = folder.into_iter().map(str::to_owned).collect();
+            drawing.chart_points = vec![ChartPoint::new(1.0, 100.0), ChartPoint::new(2.0, 110.0)];
+            drawing.completed = true;
+            chart.drawings_mut().add_synced_drawing(drawing).unwrap();
+        }
+        let ids: Vec<_> = chart.drawings().drawings.iter().map(|d| d.id).collect();
+        let panel = ObjectTreePanel::with_config(ObjectTreeConfig {
+            show_data_window: false,
+            ..Default::default()
+        });
+        let mut h = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(vec2(320.0, 600.0))
+            .build_ui_state(
+                |ui, (panel, chart): &mut App| {
+                    let mut sources: Vec<_> = chart
+                        .drawings()
+                        .drawings
+                        .iter()
+                        .map(|d| {
+                            let mut item = SourceItem::drawing(d.id, d.tool_type, d.color32());
+                            item.label = d.label.clone();
+                            item.folder = d.folder.clone();
+                            item.folder_sync = d.folder_sync_mode();
+                            item
+                        })
+                        .collect();
+                    let action = panel.show(ui, None, &mut sources);
+                    assert!(panel.apply_to_chart(chart, &action, &sources));
+                },
+                (panel, chart),
+            );
+        h.run();
+        let folder_of = |h: &Harness<'_, App>, index: usize| {
+            h.state().1.drawings().drawings[index].folder.join("/")
+        };
+        let drag = |h: &mut Harness<'_, App>, from: &str, to: &str| {
+            let from = h.get_by_label(from).rect().center();
+            h.drag_at(from);
+            h.run();
+            h.hover_at(from + vec2(0.0, 12.0));
+            h.run();
+            let to = h.get_by_label(to).rect().center();
+            h.hover_at(to);
+            h.run();
+            h.drop_at(to);
+            h.run();
+        };
+
+        // No selection means nothing to group: a folder never starts empty.
+        assert!(
+            h.get_by_label("New folder with selected drawings")
+                .accesskit_node()
+                .is_disabled()
+        );
+
+        // Selecting a folder takes every descendant, here through its nested folder.
+        h.get_by_label("Zones").click();
+        h.run();
+        assert_eq!(
+            h.state().1.drawings().selected_ids().collect::<Vec<_>>(),
+            [ids[1]]
+        );
+        h.get_by_label("Levels").click_modifiers(egui::Modifiers {
+            ctrl: true,
+            ..Default::default()
+        });
+        h.run();
+        assert_eq!(
+            h.state().1.drawings().selected_ids().collect::<Vec<_>>(),
+            [ids[0], ids[1]]
+        );
+
+        // Grouping the selected folders keeps their structure.
+        h.get_by_label("New folder with selected drawings").click();
+        h.run();
+        h.event(egui::Event::Text("All".into()));
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(folder_of(&h, 0), "All/Levels");
+        assert_eq!(folder_of(&h, 1), "All/Zones/Inner");
+        assert_eq!(folder_of(&h, 2), "");
+
+        // A folder drags out to the root and into another; never into its own descendant.
+        drag(&mut h, "Zones", "Levels");
+        assert_eq!(folder_of(&h, 1), "All/Levels/Zones/Inner");
+        drag(&mut h, "Levels", "Inner");
+        assert_eq!(folder_of(&h, 1), "All/Levels/Zones/Inner");
+        drag(&mut h, "Inner", "Move to root");
+        assert_eq!(folder_of(&h, 1), "Inner");
+        assert!(h.query_by_label("Zones").is_none(), "emptied folder stays");
+        assert!(h.state_mut().1.drawings_mut().undo());
+        h.run();
+        assert_eq!(folder_of(&h, 1), "All/Levels/Zones/Inner");
+        h.get_by_label("Zones");
+
+        // Deleting from the row or by key removes the descendants in one undo step each.
+        let delete: [fn(&mut Harness<'_, App>); 2] = [
+            |h| {
+                h.get_by_label("All").click_secondary();
+                h.run();
+                h.get_by_label("Delete folder").click();
+                h.run();
+            },
+            |h| {
+                h.get_by_label("All").click();
+                h.run();
+                h.key_press(egui::Key::Delete);
+                h.run();
+            },
+        ];
+        for delete in delete {
+            delete(&mut h);
+            assert_eq!(h.state().1.drawings().drawings.len(), 1);
+            assert!(h.query_by_label("All").is_none());
+            assert!(h.state_mut().1.drawings_mut().undo());
+            h.run();
+            assert_eq!(h.state().1.drawings().drawings.len(), 3);
+            assert_eq!(folder_of(&h, 1), "All/Levels/Zones/Inner");
+            h.get_by_label("All");
         }
     }
 

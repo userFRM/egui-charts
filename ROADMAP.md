@@ -99,7 +99,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] `Chart::set_storage` loads and saves drawings per symbol and retains failed writes for retry.
 - [x] Drawing templates save, apply and delete reusable styles through `TemplateStore` and `Storage`.
 - [x] Demonstration cursor with a fading pointer trail.
-- [ ] Add nested drawing folders and folder management to the object tree.
+- [x] Nested drawing folders in the object tree. New folders take the selected drawings and any fully selected folders. A folder row selects its descendants, drags into another folder or out to the root, and deletes with its contents in one undo step. Emptied folders go away and an undo restores them; cycles and name clashes are refused. A top-level folder keeps its drawings on the chart, mirrors them across the layout or follows the layout-wide switch. Nested folders follow it and keep their mode at the root. Nesting and modes are saved with the drawings.
 - [x] Sloping drawing alert levels agree with logarithmic rendering, and parallel, disjoint and flat top/bottom channels expose both lines.
 - [ ] Add a separate magic cursor mode.
 
@@ -113,7 +113,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Momentum and trend studies include RSI, MACD, Stochastic, ADX, SuperTrend, Ichimoku and Parabolic SAR.
 - [x] Volatility and channel studies include Bollinger Bands, ATR, Keltner, Donchian and historical volatility.
 - [x] Volume studies include OBV, MFI, accumulation/distribution and VWAP; VWAP supports calendar/session and supplied event anchors with deviation or percentage bands.
-- [x] Visible, fixed, session, periodic, anchored and auto-anchored volume profiles sum supplied executions in whole-tick rows, mark incomplete spans and fall back to finer-bar or chart-bar estimates, with translucent rows that keep candles readable, point of control and value area.
+- [x] Visible, fixed, session, periodic, anchored and auto-anchored volume profiles sum supplied executions in whole-tick rows, mark incomplete spans and fall back to finer-bar or chart-bar estimates, with translucent cyan and pink rows that keep candles readable and stay stronger in the value area, and a 2 px point of control in the foreground colour across each profile's span, or across the whole plot for the visible range.
 - [x] Regression, rank correlation, pivot levels, ZigZag, candlestick patterns, seasonality and market-structure studies.
 - [x] Majority Rule reports +1, -1 or zero from the majority of rising versus falling closes over its lookback.
 - [x] Automatic trend-line, channel, Fibonacci and pitchfork studies use ZigZag pivots with the `drawings` feature. Automatic Fibonacci drawings use the same initial level palette, visible ratios, spare levels and band opacity as manually placed drawings.
@@ -259,7 +259,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Bar replay hides future main-series bars, supports start-bar/date/random selection, stepping, autoplay, speed and seek, and restores live data on exit.
 - [x] Main-series studies recalculate against replayed bars and drawing anchors remain stable.
 - [x] Floating replay controls, keyboard shortcuts, saved replay sessions and synchronised layout replay are exercised by the demo.
-- [x] `ReplayClock` merges timestamped trades, quotes and depth events across symbols, supports speed and seek, and routes through normal sinks.
+- [x] `ReplayClock` merges timestamped trades, quotes and depth events across symbols, supports speed and seek, and routes through normal sinks. `ReplayDriver` gives each subscription the executions of the session windows it selected. Its seeks and playback at any speed build the same candles, flat candles of quiet slots included, and a seek delivers every bar through the position.
 - [x] `RecordingWriter` and `RecordingReader` encode/decode versioned trade and depth events through supplied I/O streams. The demo keeps at most five minutes and 8 MiB of recorded events per symbol subscription, with book snapshots at retained boundaries, shows the available market replay range, and hides unrecorded live analytics during market playback. Its menu saves a local recording with instrument metadata and imports it for deterministic playback on the matching chart; file size, event count and parsing batches are bounded, and invalid files leave the workspace intact.
 - [ ] Window additional-symbol/interval study histories to the replay cutoff.
 - [ ] Connect the standalone `ReplayToolbar` actions to the replay controller.
