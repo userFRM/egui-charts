@@ -310,8 +310,8 @@ impl Chart {
             .timeframe
             .map_or_else(BarClock::exact, |_| self.bar_clock());
         let market = self.market_replay.is_some();
-        let Some(replay) = (self.replay.as_mut())
-            .or(self.market_replay.as_mut().map(|replay| &mut replay.window))
+        let Some(replay) =
+            (self.replay.as_mut()).or(self.market_replay.as_mut().map(|replay| &mut replay.window))
         else {
             return;
         };
@@ -1035,7 +1035,11 @@ mod tests {
         assert_eq!(chart.bars(comparison), &minutes[..5], "entry");
         let added = chart.add_series(Default::default());
         chart.set_data(added, minutes.clone());
-        assert_eq!(chart.bars(added), &minutes[..5], "added during market replay");
+        assert_eq!(
+            chart.bars(added),
+            &minutes[..5],
+            "added during market replay"
+        );
         assert!(chart.user_action(|chart| chart.remove_series(removed)));
         let live = bar(10, [2.0; 5]);
         chart.update(SeriesId::MAIN, live.clone());
