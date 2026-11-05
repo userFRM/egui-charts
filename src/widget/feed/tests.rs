@@ -1202,6 +1202,74 @@ fn paged_trade_bar_cells_match_the_history_bar_they_draw_on() {
     }
 }
 
+/// Hand counts on two-trade bars: buy 1 and buy 2 give 3; sell 4 and buy 8, traded while the
+/// studies are removed, give 4 and a total of 7; sell 16 and buy 32, after undo, give 16 and 23.
+/// On one-minute bars all six fall in one bar of 23. The profile's footprint holds the same
+/// executions: volumes 3, 12 and 48, or 63 on the one-minute bar.
+#[cfg(feature = "studies")]
+#[test]
+fn restored_order_flow_studies_count_executions_traded_while_they_were_removed() {
+    use crate::data::OrderFlowKind;
+    use crate::model::OrderSide::{Buy, Sell};
+    use crate::studies::{OrderFlowStudy, VolProfileVisible};
+    for (interval, want_cvd, want_volumes) in [
+        ("2t", vec![3.0, 7.0, 23.0], vec![3.0, 12.0, 48.0]),
+        ("1min", vec![23.0], vec![63.0]),
+    ] {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        chart.set_timeframe(interval.parse().unwrap());
+        let cvd = chart.add_indicator(Box::new(OrderFlowStudy::new(OrderFlowKind::FilteredCvd {
+            min: 0.0,
+            max: f64::MAX,
+        })));
+        let profile = chart.add_indicator(Box::new(VolProfileVisible::new(24)));
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+        feed.page().send(page(Vec::new(), true));
+        frames.run(&mut chart);
+        let start = bars(1)[0].time;
+        let sink = feed.sink();
+        let fills = [
+            (1.0, Buy),
+            (2.0, Buy),
+            (4.0, Sell),
+            (8.0, Buy),
+            (16.0, Sell),
+            (32.0, Buy),
+        ];
+        for (i, &(size, side)) in fills.iter().enumerate() {
+            if i == 2 {
+                assert!(chart.user_action(|chart| {
+                    chart.remove_series(cvd) && chart.remove_series(profile)
+                }));
+                frames.run(&mut chart);
+            }
+            if i == 4 {
+                assert!(chart.undo());
+                frames.run(&mut chart);
+            }
+            let at = start + TimeDelta::seconds(i as i64);
+            sink.push_tick(Tick::new(at, 100.0, size, Some(side)));
+            frames.run(&mut chart);
+        }
+        for _ in 0..8 {
+            frames.run(&mut chart);
+        }
+        let study = |id| chart.indicators().find(|(seen, _)| *seen == id).unwrap().1;
+        assert_eq!(study(cvd).values().line(0).to_vec(), want_cvd, "{interval}");
+        let volumes: Vec<_> = study(profile).order_flow_inputs()[0]
+            .footprints_from(DateTime::<Utc>::MIN_UTC)
+            .bars
+            .values()
+            .map(|bar| bar.volume())
+            .collect();
+        assert_eq!(volumes, want_volumes, "{interval}");
+    }
+}
+
 /// The page answering an interval change holds what traded between the two subscriptions, and
 /// repeating the retained executions does not end the scroll-back for older ones.
 #[test]

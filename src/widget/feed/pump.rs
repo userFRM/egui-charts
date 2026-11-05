@@ -129,6 +129,10 @@ impl Chart {
                         (input.clone(), seen)
                     } else {
                         input.set_tick_size(link.instrument.as_ref().and_then(|i| i.tick_size));
+                        // A source restored by undo missed what the sink allocated while away.
+                        if link.clock.timeframe().is_some_and(|tf| tf.is_trade_based()) {
+                            input.clear();
+                        }
                         input.replace_trades(&link.clock, &link.trades);
                         if let Some(now) = link.time {
                             input.advance_time(&link.clock, now);
