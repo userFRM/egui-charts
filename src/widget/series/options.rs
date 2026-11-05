@@ -209,6 +209,15 @@ impl SeriesOptions {
                 line_with_markers: line_style,
                 marker_radius: self.marker_radius.unwrap_or(3.0),
                 area,
+                hollow: crate::model::HollowStyle {
+                    body_up: self.up_color,
+                    body_down: self.down_color,
+                    border_up: self.up_color,
+                    border_down: self.down_color,
+                    wick_up: self.up_color,
+                    wick_down: self.down_color,
+                    ..Default::default()
+                },
                 heikin: crate::model::HeikinStyle {
                     body_up: self.up_color,
                     body_down: self.down_color,

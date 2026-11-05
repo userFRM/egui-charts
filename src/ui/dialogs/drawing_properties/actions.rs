@@ -539,7 +539,7 @@ mod tests {
             ] {
                 assert_eq!(
                     labels.contains(&label),
-                    tool == T::ExtendedLine,
+                    tool.supports_line_measurements(),
                     "{tool:?}: {label}"
                 );
             }

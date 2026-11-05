@@ -21,6 +21,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 const REFRESH: Duration = Duration::from_secs(5);
+/// How long a request waits for its response before it answers a recoverable network error.
+const TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A reusable feed for a server exposing `/config`, `/symbols`, `/search` and `/history`.
 ///
@@ -116,6 +118,7 @@ impl Datafeed for HttpDatafeed {
             cancelled,
             since: None,
             retry: REFRESH,
+            live: false,
         }
         .fetch();
     }
@@ -154,11 +157,18 @@ impl HttpDatafeed {
     ) {
         let target = url(&self.base, "search", params);
         get(target, String::new(), move |result| {
-            reply.send(result.and_then(|symbols: Vec<Symbol>| {
+            // A result this build cannot read is left out rather than hiding the others; resolving
+            // it still reports why.
+            reply.send(result.map(|symbols: Vec<serde_json::Value>| {
                 symbols
                     .into_iter()
+                    .filter_map(|symbol| {
+                        serde_json::from_value::<Symbol>(symbol)
+                            .ok()?
+                            .into_instrument()
+                            .ok()
+                    })
                     .take(limit)
-                    .map(Symbol::into_instrument)
                     .collect()
             }));
         });
@@ -170,12 +180,38 @@ fn get<T: DeserializeOwned>(
     symbol: String,
     answer: impl FnOnce(Result<T, FeedError>) + Send + 'static,
 ) {
+    // The client bounds neither the wait for response headers nor a browser fetch, so the
+    // first of the response and the deadline answers and the other is discarded.
+    let answer = Arc::new(Mutex::new(Some(answer)));
+    let answered = Arc::new(AtomicBool::new(false));
+    let take = |answer: &Mutex<Option<_>>| {
+        answer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+    };
+    let late = answer.clone();
+    later(
+        TIMEOUT,
+        answered.clone(),
+        Box::new(move || {
+            if let Some(answer) = take(&late) {
+                answer(Err(FeedError::Network(format!(
+                    "no response within {} seconds",
+                    TIMEOUT.as_secs()
+                ))));
+            }
+        }),
+    );
     ehttp::fetch(ehttp::Request::get(target), move |result| {
-        answer(
-            result
-                .map_err(FeedError::Network)
-                .and_then(|response| decode(&symbol, response)),
-        );
+        answered.store(true, Ordering::Release);
+        if let Some(answer) = take(&answer) {
+            answer(
+                result
+                    .map_err(FeedError::Network)
+                    .and_then(|response| decode(&symbol, response)),
+            );
+        }
     });
 }
 
@@ -213,6 +249,9 @@ struct Poll {
     cancelled: Arc<AtomicBool>,
     since: Option<chrono::DateTime<chrono::Utc>>,
     retry: Duration,
+    /// Whether the last request was answered, so the next one refreshes a live subscription
+    /// rather than attempting to connect.
+    live: bool,
 }
 
 impl Poll {
@@ -239,7 +278,9 @@ impl Poll {
             Ok(target) => target,
             Err(error) => return self.subscription.sink.report_error(error),
         };
-        self.subscription.sink.set_status(FeedStatus::Connecting);
+        if !self.live {
+            self.subscription.sink.set_status(FeedStatus::Connecting);
+        }
         get(target, request.symbol.clone(), move |result| {
             let result = result.and_then(|columns: Columns| columns.into_page(&request));
             if let Some((poll, delay)) = self.received(result) {
@@ -274,6 +315,7 @@ impl Poll {
                 }
                 sink.set_status(FeedStatus::Live);
                 self.retry = REFRESH;
+                self.live = true;
                 REFRESH
             }
             Err(error) => {
@@ -286,6 +328,7 @@ impl Poll {
                 };
                 sink.set_status(FeedStatus::Disconnected);
                 sink.report_error(error);
+                self.live = false;
                 if !recoverable {
                     return None;
                 }

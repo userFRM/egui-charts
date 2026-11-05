@@ -402,11 +402,63 @@ pub struct NodeSensitivity {
     pub prominence: f64,
 }
 
+/// The daily hours of a [`ProfileSession::Custom`] session profile.
+///
+/// A window that ends at or before its start spans midnight and belongs to the day it ends on.
+/// Clock changes in `zone` move the window with them.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CustomProfileSession {
+    /// Wall-clock time each session opens, in `zone`.
+    pub start: chrono::NaiveTime,
+    /// Wall-clock time each session closes, in `zone`.
+    pub end: chrono::NaiveTime,
+    /// Zone of `start` and `end`. `None` uses the instrument's exchange zone, or UTC without one.
+    pub zone: Option<super::TimezoneId>,
+}
+
+/// Which hours divide a session volume profile chart into sessions.
+///
+/// Only intraday charts are divided this way: daily and longer bars profile by trading date.
+/// Bars outside the chosen hours still join the session before them, so a host that wants
+/// them left out should not supply them.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub enum ProfileSession {
+    /// The chart's own calendar: its instrument's hours, with extended hours as the chart shows
+    /// them, or calendar days in the instrument's zone without hours.
+    #[default]
+    Chart,
+    /// The instrument's regular windows only. The chart's calendar without instrument hours.
+    Regular,
+    /// The instrument's regular and extended windows. The chart's calendar without instrument
+    /// hours.
+    Extended,
+    /// The same hours every day, whatever the instrument trades.
+    Custom(CustomProfileSession),
+}
+
+/// How a session volume profile groups executions into price rows, in instrument ticks.
+///
+/// Rows are never finer than the feed's own rows, and align to multiples of their height.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProfileRows {
+    /// The rows the feed groups executions into.
+    #[default]
+    Feed,
+    /// About this many rows between each session's lowest and highest traded rows.
+    Count(u32),
+    /// At least this many instrument ticks per row.
+    Ticks(u32),
+}
+
 /// Display settings of the chart's execution-based session profiles.
 /// Defaults retain the stacked session histogram, with optional annotations hidden.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TradeProfileSettings {
+    /// Hours that divide the chart into sessions.
+    pub session: ProfileSession,
+    /// Price row grouping.
+    pub rows: ProfileRows,
     /// Bid/ask stacks, total volume or signed delta; `DeltaVolume` also draws signed delta.
     pub mode: FootprintMode,
     /// Trace the total-volume POC after each complete execution bar.
@@ -434,6 +486,8 @@ pub struct TradeProfileSettings {
 impl Default for TradeProfileSettings {
     fn default() -> Self {
         Self {
+            session: ProfileSession::Chart,
+            rows: ProfileRows::Feed,
             mode: FootprintMode::BidAsk,
             developing_poc: false,
             developing_value_area: false,

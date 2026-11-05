@@ -300,7 +300,7 @@ impl Drawing {
             | DrawingToolType::ArrowCursor
             | DrawingToolType::Eraser => {}
         }
-        if self.tool_type == DrawingToolType::ExtendedLine {
+        if self.tool_type.supports_line_measurements() {
             self.render_line_measurements(painter, view, selected);
         }
         self.finish_style(painter, start, rect);

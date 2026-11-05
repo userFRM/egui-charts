@@ -247,6 +247,51 @@ impl Default for HeikinStyle {
     }
 }
 
+/// Independent candle components for the hollow candles chart.
+///
+/// A bar is coloured by its close against the previous close and is hollow, an outline without
+/// fill, when its close is above its open.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HollowStyle {
+    /// Fill the body of a candle that is not hollow.
+    pub body_visible: bool,
+    /// Outline the body, which is all a hollow candle shows of it.
+    pub border_visible: bool,
+    /// Draw the high-to-low wick.
+    pub wick_visible: bool,
+    /// Rising body colour.
+    pub body_up: Color32,
+    /// Falling body colour.
+    pub body_down: Color32,
+    /// Rising border colour.
+    pub border_up: Color32,
+    /// Falling border colour.
+    pub border_down: Color32,
+    /// Rising wick colour.
+    pub wick_up: Color32,
+    /// Falling wick colour.
+    pub wick_down: Color32,
+}
+
+impl Default for HollowStyle {
+    fn default() -> Self {
+        let up = DESIGN_TOKENS.semantic.extended.bullish;
+        let down = DESIGN_TOKENS.semantic.extended.bearish;
+        Self {
+            body_visible: true,
+            border_visible: true,
+            wick_visible: true,
+            body_up: up,
+            body_down: down,
+            border_up: up,
+            border_down: down,
+            wick_up: up,
+            wick_down: down,
+        }
+    }
+}
+
 /// The Kagi chart's stroke widths in logical points. Non-positive or non-finite widths hide
 /// the lines of that thickness.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -267,8 +312,8 @@ impl Default for KagiStyle {
     }
 }
 
-/// Styles of the candle, Heikin-Ashi, bar, line, step, marker, area, HLC area, baseline and Kagi
-/// chart types.
+/// Styles of the candle, hollow candle, Heikin-Ashi, bar, line, step, marker, area, HLC area,
+/// baseline and Kagi chart types.
 /// Defaults use the design-token palette and remain independent of candle colours.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -289,6 +334,8 @@ pub struct ChartTypeStyles {
     pub hlc_area: HlcAreaStyle,
     /// Candles chart.
     pub candles: CandlesStyle,
+    /// Hollow candles chart.
+    pub hollow: HollowStyle,
     /// Heikin-Ashi chart.
     pub heikin: HeikinStyle,
     /// Bars chart.
@@ -321,6 +368,7 @@ impl Default for ChartTypeStyles {
             baseline: BaselineStyle::default(),
             hlc_area: HlcAreaStyle::default(),
             candles: CandlesStyle::default(),
+            hollow: HollowStyle::default(),
             heikin: HeikinStyle::default(),
             bars: BarsStyle::default(),
             kagi: KagiStyle::default(),
