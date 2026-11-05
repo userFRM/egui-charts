@@ -4227,3 +4227,32 @@ fn named_axis_lock_keeps_units_per_bar() {
         );
     }
 }
+
+/// A study assigned to a named scale in a secondary pane has no scale before the frame that
+/// creates it, as documented and as in the initial pane, rather than the pane's right scale.
+#[test]
+fn unpainted_study_axis_in_a_secondary_pane_has_no_scale() {
+    use crate::model::AxisSide;
+    use crate::widget::PaneScale;
+    let ctx = egui::Context::default();
+    let mut chart = Chart::new(BarData::from_bars(bars(&[100.0; 30])));
+    chart.config.show_volume = false;
+    let study = chart.add_indicator(Box::new(
+        crate::studies::CustomIndicator::new("lower", |_| {
+            vec![crate::studies::IndicatorValue::Single(5.0); 30]
+        })
+        .with_overlay(false),
+    ));
+    let pane = chart.series_pane(study).unwrap();
+    assert_ne!(pane, PaneId::MAIN);
+    assert!(
+        chart.set_indicator_scale(study, crate::studies::StudyScale::Shared(SeriesScale::Left))
+    );
+    let left = PaneScale::Named(SeriesScale::Left);
+    assert_eq!(chart.pane_scales(pane, AxisSide::Left), [left]);
+    assert!(chart.pane_scale(pane, left).is_none());
+
+    frame(&ctx, &mut chart, 0.0, vec![]);
+    let right = chart.pane_price_scale(pane, SeriesScale::Right);
+    assert!(!std::ptr::eq(chart.pane_scale(pane, left).unwrap(), right));
+}

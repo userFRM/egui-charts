@@ -209,8 +209,16 @@ impl Chart {
             None
         } else if pane == PaneId::MAIN && key != self.main_series_scale {
             self.series_scales.get(&key)
-        } else {
+        } else if pane == PaneId::MAIN
+            || (pane == self.main_series_pane() && key == self.main_series_scale)
+        {
             Some(self.pane_price_scale(pane, key))
+        } else {
+            self.pane_layout
+                .panes
+                .iter()
+                .find(|item| item.id == pane)?
+                .own_scale(key)
         }
     }
 
