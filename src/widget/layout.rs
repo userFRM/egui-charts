@@ -1084,21 +1084,25 @@ impl ChartLayout {
     }
 
     /// Assigns the legacy group used by view/drawing links and layout-wide field switches.
+    /// `Some` keeps both memberships: a field in an individual group or unlinked stays so, and a
+    /// field following the layout setting follows it within the new group.
     /// `None` restores the unnamed view group and unlinks both symbol and interval.
     /// Prefer [`Self::set_link_groups`] for independent field memberships.
     pub fn set_sync_group(&mut self, index: usize, group: Option<String>) {
         let group = group.filter(|name| !name.trim().is_empty());
         if let Some(slot) = self.groups.get_mut(index) {
-            *slot = group.clone();
-            let link = group.map_or(ChartLink::Unlinked, |_| ChartLink::Layout);
-            self.set_link_groups(
-                index,
-                ChartLinkGroups {
-                    symbol: link.clone(),
-                    interval: link,
-                },
-                true,
-            );
+            let unnamed = group.is_none();
+            *slot = group;
+            if unnamed {
+                self.set_link_groups(
+                    index,
+                    ChartLinkGroups {
+                        symbol: ChartLink::Unlinked,
+                        interval: ChartLink::Unlinked,
+                    },
+                    true,
+                );
+            }
         }
     }
 
@@ -3445,5 +3449,27 @@ mod tests {
         let (edited, same) = allocations(|| layout.visible_chart_rects(rect, 4));
         assert_eq!(same, cells);
         assert_eq!(edited, unedited, "with {} other presets", others.len());
+    }
+
+    /// Naming a synchronization group decides which charts a field following the layout setting
+    /// links to; it never changes a membership, so restoring works in either order.
+    #[test]
+    fn set_sync_group_keeps_individual_field_groups() {
+        for memberships in [
+            ChartLinkGroups {
+                symbol: ChartLink::Group("🔶".into()),
+                interval: ChartLink::Group("💧".into()),
+            },
+            ChartLinkGroups {
+                symbol: ChartLink::Unlinked,
+                interval: ChartLink::Layout,
+            },
+        ] {
+            let mut layout = ChartLayout::default();
+            layout.set_link_groups(0, memberships.clone(), true);
+            layout.set_sync_group(0, Some("Desk".into()));
+            assert_eq!(layout.sync_group(0), Some("Desk"));
+            assert_eq!(layout.link_groups(0), Some(memberships));
+        }
     }
 }
