@@ -53,11 +53,14 @@ impl SettingsDialog {
                     self.settings.candle_colors.body_down = series.bearish_color;
                 } else {
                     let heikin = kind == crate::model::ChartType::Heikin;
-                    let candles = kind == crate::model::ChartType::Candles || heikin;
+                    let hollow = kind == crate::model::ChartType::HollowCandles;
+                    let candles = kind == crate::model::ChartType::Candles || heikin || hollow;
                     self.draw_section_header(
                         ui,
                         if heikin {
                             "HEIKIN ASHI"
+                        } else if hollow {
+                            "HOLLOW CANDLES"
                         } else if candles {
                             "CANDLES"
                         } else {
@@ -79,7 +82,8 @@ impl SettingsDialog {
                             theme.ui.text,
                         );
                     }
-                    if candles {
+                    // Hollow candles always compare the close with the previous close.
+                    if candles && !hollow {
                         styled_checkbox(
                             ui,
                             &mut self.settings.candle_colors.color_by_previous_close,
