@@ -119,7 +119,7 @@ impl AlertPreset {
         if fields.expiry {
             preset.expires_after = alert
                 .expires
-                .map(|expiry| (expiry - now).num_seconds() + i64::from(now.second()));
+                .map(|expiry| expiry.timestamp() - now.timestamp() + i64::from(now.second()));
         }
         if fields.text {
             preset.name.clone_from(&alert.name);
@@ -673,7 +673,8 @@ mod tests {
 
     #[test]
     fn only_the_selected_groups_survive_the_document_and_reach_the_alert() {
-        let saved_at = Utc.with_ymd_and_hms(2026, 1, 1, 10, 0, 48).unwrap();
+        let saved_at =
+            Utc.with_ymd_and_hms(2026, 1, 1, 10, 0, 48).unwrap() + TimeDelta::milliseconds(500);
         let now = Utc.with_ymd_and_hms(2026, 3, 1, 8, 0, 15).unwrap();
         let schedule = Box::new(NotificationSchedule {
             timezone: TimezoneId::utc(),
@@ -688,7 +689,7 @@ mod tests {
         saved.message = "Message".into();
         saved.timeframe = Some(Timeframe::Hour1);
         saved.frequency = AlertFrequency::OncePerBar;
-        // An entered 11:00 at 10:00:48 means an hour.
+        // An entered 11:00 at 10:00:48.5 means an hour.
         saved.expires = Some(Utc.with_ymd_and_hms(2026, 1, 1, 11, 0, 0).unwrap());
         saved.schedule = Some(schedule.clone());
         saved.delivery.email = true;
