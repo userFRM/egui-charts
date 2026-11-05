@@ -107,8 +107,12 @@ For example:
 ```
 
 Each index is one bar; all supplied columns must have equal lengths. `v` may be
-omitted when volume is unavailable (zero). Invalid lengths, prices or timestamps
-report [`FeedError::InvalidData`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/enum.FeedError.html#variant.InvalidData). The adapter orders bars, enforces bounds and keeps
+omitted when volume is unavailable (zero). Columns of different lengths, or
+`no_data` with rows, report [`FeedError::InvalidData`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/enum.FeedError.html#variant.InvalidData). An invalid row costs only its
+own bar: the chart drops a bar whose high or low does not contain its open and
+close, or whose volume is negative, and counts it in
+[`FeedState::rejected_bars`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/data/struct.FeedState.html#structfield.rejected_bars); the adapter drops a row whose timestamp is out of
+range. The adapter orders bars, enforces bounds and keeps
 at most the requested count. Optional `end_of_history: true` says no older bars
 exist. An empty window may answer `{"s":"no_data","nextTime":0}` to continue
 at that UTC instant. The adapter advances this bar timestamp by one second

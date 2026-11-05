@@ -56,6 +56,22 @@ fn column_history_fixtures_preserve_rows_gaps_and_errors() {
             Ok(HistoryPage::new(bars.clone(), false)),
         ),
         (
+            // A row closing above its high reaches the chart, which drops and counts it; a row
+            // whose timestamp is out of range is dropped. Neither fails the other rows.
+            200,
+            json!({"s":"ok", "t":[0,60,i64::MAX], "o":[10,11,12], "h":[12,13,14],
+                "l":[9,10,11], "c":[11,13.5,12], "v":[100,200,300]})
+            .to_string(),
+            None,
+            Ok(HistoryPage::new(
+                vec![
+                    bars[0].clone(),
+                    Bar::new(at(60), 11.0, 13.0, 10.0, 13.5, 200.0),
+                ],
+                false,
+            )),
+        ),
+        (
             200,
             r#"{"s":"no_data"}"#.into(),
             None,
@@ -159,20 +175,14 @@ fn column_history_fixtures_preserve_rows_gaps_and_errors() {
         continued.continue_before,
         DateTime::from_timestamp(-60, 500_000_000)
     );
-    for bad in [
-        json!({"s":"no_data", "nextTime":60}),
-        json!({"s":"ok", "t":[i64::MAX], "o":[1], "h":[1], "l":[1], "c":[1]}),
-        json!({"s":"ok", "t":[0], "o":[2], "h":[1], "l":[1], "c":[1]}),
-    ] {
-        let mut request = request();
-        request.before = Some(at(60));
-        assert!(matches!(
-            serde_json::from_value::<Columns>(bad)
-                .unwrap()
-                .into_page(&request),
-            Err(FeedError::InvalidData(_))
-        ));
-    }
+    let mut request = request();
+    request.before = Some(at(60));
+    assert!(matches!(
+        serde_json::from_value::<Columns>(json!({"s":"no_data", "nextTime":60}))
+            .unwrap()
+            .into_page(&request),
+        Err(FeedError::InvalidData(_))
+    ));
 }
 
 #[test]

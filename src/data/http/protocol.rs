@@ -271,8 +271,10 @@ impl Columns {
         let mut bars = Vec::with_capacity(count.min(request.count));
         let mut end_of_history = self.end_of_history;
         for (index, stamp) in self.t.into_iter().enumerate() {
-            let time = DateTime::from_timestamp(stamp, 0)
-                .ok_or_else(|| invalid("invalid history timestamp"))?;
+            // A row costs only its own bar: the chart drops and counts bars with invalid prices.
+            let Some(time) = DateTime::from_timestamp(stamp, 0) else {
+                continue;
+            };
             let bar = Bar::new(
                 time,
                 self.o[index],
@@ -281,15 +283,6 @@ impl Columns {
                 self.c[index],
                 self.v.as_ref().map_or(0.0, |values| values[index]),
             );
-            if ![bar.open, bar.high, bar.low, bar.close, bar.volume]
-                .iter()
-                .all(|value| value.is_finite())
-                || bar.low > bar.open.min(bar.close)
-                || bar.high < bar.open.max(bar.close)
-                || bar.volume < 0.0
-            {
-                return Err(invalid("invalid history bar"));
-            }
             if request.since.is_some_and(|since| time < since) {
                 end_of_history = false;
             } else if request.before.is_none_or(|before| time < before) {
