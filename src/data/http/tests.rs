@@ -333,6 +333,30 @@ fn calendar_bars_keep_their_utc_trading_date_in_every_chart_time_zone() {
     }
 }
 
+/// The periods of an interval that is not whole days, such as 36 hours, do not open at midnight,
+/// so its bars and bounds keep their timestamps.
+#[test]
+fn bars_of_partial_day_intervals_keep_their_timestamps() {
+    let at = |seconds| DateTime::from_timestamp(seconds, 0).unwrap();
+    let mut request = request();
+    request.timeframe = "36h".parse().unwrap();
+    request.clock = BarClock::new(request.timeframe);
+    // Periods of 36 hours from 1970-01-01 open at 00:00 and 12:00 UTC in turn.
+    let page = serde_json::from_value::<Columns>(json!({"s":"ok", "t":[129_600, 259_200],
+        "o":[1,1], "h":[1,1], "l":[1,1], "c":[1,1]}))
+    .unwrap()
+    .into_page(&request)
+    .unwrap();
+    assert_eq!(
+        page.bars.iter().map(|bar| bar.time).collect::<Vec<_>>(),
+        [at(129_600), at(259_200)]
+    );
+    request.since = Some(at(129_600));
+    request.before = Some(at(388_800));
+    let target = history_url("https://example.test", &request).unwrap();
+    assert!(target.ends_with("&to=388800&from=129600"), "{target}");
+}
+
 #[test]
 fn endpoint_requests_preserve_interval_bounds_and_search_filters() {
     let mut request = request();

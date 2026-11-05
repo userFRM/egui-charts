@@ -64,9 +64,12 @@ fn time_param(time: DateTime<Utc>) -> String {
 /// Whether the bars of `clock` cover calendar periods, which this contract dates by the UTC
 /// calendar date of their timestamp.
 fn calendar(clock: &BarClock) -> bool {
-    clock
-        .timeframe()
-        .is_some_and(|timeframe| timeframe.duration_ms() >= Timeframe::Day1.duration_ms())
+    let day = Timeframe::Day1.duration_ms();
+    // An interval such as 36 hours is longer than a day, but its periods do not open at midnight.
+    clock.timeframe().is_some_and(|timeframe| {
+        let duration = timeframe.duration_ms();
+        duration >= day && duration % day == 0
+    })
 }
 
 /// The instant of a bar of a day or longer whose trading date is `date`: on that date and inside

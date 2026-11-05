@@ -98,9 +98,9 @@ passes the chosen conversion to `/symbols` so metadata and bars share the same u
 
 History timestamps and bounds are Unix seconds in UTC; bounds may include a
 fraction. `from` is inclusive and `to` exclusive, and an omitted bound is
-unbounded. A bar of a day or longer is dated by the UTC calendar date of its
-timestamp, such as 00:00 UTC on its trading date or a session open that falls on
-that date in UTC. The adapter
+unbounded. A bar of whole days, weeks or months is dated by the UTC calendar
+date of its timestamp, such as 00:00 UTC on its trading date or a session open
+that falls on that date in UTC. The adapter
 places it in the day, week or month holding that date in the time zone the
 chart displays, and bounds such requests at 00:00 UTC on a date. Return the
 newest `countback` bars within those bounds. Keep interval, extended-hours and
