@@ -92,7 +92,9 @@ pub struct BacktestSettings {
     /// Smallest price increment for limit verification. Must be positive and finite.
     pub price_increment: f64,
     /// Unit step used to truncate the minimum liquidation before closing four times that size.
-    /// Hosts derive this from the instrument's quantity precision. Defaults to one unit.
+    /// A deficit on a position smaller than one step closes the whole position, since truncation
+    /// could not reach it. Hosts derive this from the instrument's quantity precision. Defaults to
+    /// one unit.
     pub liquidation_increment: f64,
     /// Try working orders again on the closing tick of the bar they were placed on: market orders
     /// fill there and priced orders fill if the close satisfies them.
@@ -1281,6 +1283,10 @@ impl<'a> Run<'a> {
         if !step.is_finite() || step <= 0.0 {
             return held;
         }
+        // A fully funded fractional position sits at zero available funds give or take rounding.
+        if held < step && deficit > rounding_tolerance(held * price.abs() * fraction, 1e-9) {
+            return held;
+        }
         let needed = deficit / fraction / price.abs();
         let count = needed / step;
         let units = if count.is_finite() {
@@ -1793,6 +1799,68 @@ mod tests {
                 "smoothing cannot validate a bad source bar"
             );
         }
+    }
+
+    #[test]
+    fn short_smaller_than_the_liquidation_step_is_liquidated() {
+        fn short(bar: usize, context: &mut StrategyContext<'_>) {
+            if bar == 0 {
+                context.entry("A", OrderSide::Sell, None, OrderType::Market);
+            }
+        }
+        fn long(bar: usize, context: &mut StrategyContext<'_>) {
+            if bar == 0 {
+                context.entry("A", OrderSide::Buy, None, OrderType::Market);
+            }
+        }
+        let run = |script, capital, order_size, prices: &[f64]| {
+            let bars: Vec<_> = prices
+                .iter()
+                .enumerate()
+                .map(|(i, &p)| Bar::new(hour(i as i64), p, p, p, p, 0.0))
+                .collect();
+            // Default settings: full funding, unit step one.
+            let mut engine = Backtest::new("Funding", "TEST", Timeframe::Hour1, capital);
+            engine.settings.order_size = order_size;
+            engine.run(&mut Script(script), &bars, &[])
+        };
+        // At 48000 equity is 10000 - 0.25 * 8000 = 8000 against 0.25 * 48000 = 12000 required.
+        let report = run(
+            short,
+            10_000.0,
+            OrderSize::Fixed(0.25),
+            &[40_000.0, 40_000.0, 48_000.0, 120_000.0],
+        );
+        let exit = report.trades[0]
+            .exit
+            .as_ref()
+            .map(|exit| (exit.time, exit.price, exit.profit));
+        assert_eq!(exit, Some((hour(2), 48_000.0, -2000.0)));
+        assert_eq!(report.equity.last().map(|(_, value)| *value), Some(8000.0));
+
+        // 1000 / 1234.7 units fully funded: available funds at 1252 are -1.1e-13, not a deficit.
+        let report = run(
+            long,
+            1000.0,
+            OrderSize::EquityFraction(1.0),
+            &[1234.7, 1234.7, 1252.0],
+        );
+        assert!(report.trades[0].exit.is_none());
+
+        // One step or more keeps truncation. 100 short from 10: at 10.01 the shortfall is
+        // (1001 - 999) / 10.01 = 0.2 units, which truncates to none; at 10.06 it is
+        // (1006 - 994) / 10.06 = 1.19 units, which truncates to one, so four close.
+        let report = run(
+            short,
+            1000.0,
+            OrderSize::Fixed(100.0),
+            &[10.0, 10.0, 10.01, 10.06],
+        );
+        let exit = report.trades[0].exit.as_ref().unwrap();
+        assert_eq!(
+            (report.trades[0].quantity, exit.time, exit.price),
+            (4.0, hour(3), 10.06)
+        );
     }
 
     /// Places the orders of a script on the bars it names.

@@ -80,7 +80,8 @@ At each observed price point, equity below the required funding closes four time
 in units, truncated to [`liquidation_increment`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.liquidation_increment), oldest lots first. The fill is labelled `Margin call`,
 with exit fees and market slippage. For example, capital 1,000 and 40 long units entered at 100
 with 20% funding have equity 600 and require 720 at a price of 90; the shortfall of 120 buys 6.67
-units of funding, truncated to 6, so 24 units close and 16 stay open.
+units of funding, truncated to 6, so 24 units close and 16 stay open. A deficit on a position
+smaller than one step closes the whole position.
 
 Runs with leverage above one and no fraction for the position's side keep whole-position
 liquidation. Along every segment of the price path, equity below margin closes the whole position
