@@ -95,6 +95,7 @@ fn render_profiles(
     let pixel = 1.0 / painter.pixels_per_point();
     let mut extensions = Vec::new();
     for profile in profiles {
+        let step = step * profile.group as f64;
         let first = bars.partition_point(|b| b.time < profile.range.start);
         let end = bars.partition_point(|b| b.time < profile.range.end);
         if first >= end {
