@@ -495,10 +495,10 @@ pub(super) fn refresh_values(
             }
             _ => None,
         };
-        // Retained parent values can feed a waiting consumer while another tail update is pending.
-        // Replaced histories, edited sources and values kept for a full recompute must finish
-        // it first.
-        if parent.is_some_and(|parent| pending(pending_from, stale, parent) == Some(0)) {
+        // Retained parent values can feed a waiting consumer while another tail update is pending,
+        // and so can values kept for a full recompute, which a stream can keep pending on every
+        // frame. Replaced histories and edited sources must finish their full invalidation first.
+        if parent.is_some_and(|parent| pending_from[parent] == Some(0)) {
             continue;
         }
         let Some(from) = pending(pending_from, stale, at) else {
@@ -519,7 +519,7 @@ pub(super) fn refresh_values(
                         Some(crate::studies::StudySource::Study { id, .. }) => ids
                             .iter()
                             .position(|candidate| candidate.0 == id)
-                            .is_some_and(|parent| pending(pending_from, stale, parent) != Some(0)),
+                            .is_some_and(|parent| pending_from[parent] != Some(0)),
                         _ => true,
                     };
                     // Only a start at the first bar whose values belong to other bars is due at

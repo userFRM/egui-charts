@@ -1918,6 +1918,52 @@ mod tests {
         }
     }
 
+    /// A study calculated on an SMA of the hourly bars follows it while trades move the current
+    /// hourly bar of a one-minute chart, although that SMA has a full recompute waiting on every
+    /// frame. A second apart, longer than any refresh wait, the two take turns at the one full
+    /// recompute per frame, so the study shows a close at most three frames old.
+    /// Hand values: hourly closes of 100 and a current close of 200 + frame give an SMA(3) of
+    /// (200 + close) / 3, which an SMA(1) repeats; the last of ten frames has a close of 209.
+    #[test]
+    fn a_study_on_a_live_history_study_follows_it() {
+        let feed = Arc::new(Live::default());
+        let mut chart = ChartBuilder::new()
+            .with_feed(feed.clone())
+            .with_symbol("MAIN")
+            .with_timeframe(Timeframe::Min1)
+            .build();
+        let parent = chart.add_indicator(Box::new(SMA::new(3)));
+        let study = chart.indicator_mut(parent).unwrap();
+        let hourly = InputValue::Timeframe(Some(Timeframe::Hour1));
+        study.set_input("calculation_timeframe", hourly).unwrap();
+        study
+            .set_input("wait_for_close", InputValue::Toggle(false))
+            .unwrap();
+        let child = chart.add_indicator(Box::new(SMA::new(1)));
+        let source = crate::studies::StudySource::Study {
+            id: parent.0,
+            plot: 0,
+        };
+        chart.set_indicator_source(child, source).unwrap();
+        let ctx = egui::Context::default();
+        for frame in 0..10 {
+            shapes(&ctx, &mut chart, frame as f64, Vec::new());
+        }
+        let sink = feed.sink(Timeframe::Hour1);
+        let hour: DateTime<chrono::Utc> = "2024-03-15T14:00:00Z".parse().unwrap();
+        for frame in 0..10 {
+            let close = 200.0 + frame as f64;
+            sink.push_bar(Bar::new(hour, 100.0, close, 100.0, close, 1.0));
+            shapes(&ctx, &mut chart, 10.0 + frame as f64, Vec::new());
+        }
+        let (_, study) = chart.indicators().find(|(id, _)| *id == child).unwrap();
+        let value = study.values().value(0, study.values().len() - 1);
+        assert!(
+            value.is_some_and(|value| (406.0 / 3.0..=409.0 / 3.0).contains(&value)),
+            "{value:?}, expected the SMA of a close from 206 to 209"
+        );
+    }
+
     /// Daily bars of close 50 for the 400 days before 2024-03-15, and hourly and minute bars of
     /// close 100 up to 14:00 that day. Keeps the sink of every subscription.
     #[derive(Default)]
