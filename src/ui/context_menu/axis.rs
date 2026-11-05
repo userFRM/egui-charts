@@ -308,7 +308,13 @@ impl AxisMenus {
                 Action::LockRatio => {
                     let locked = !scale.bar_ratio_locked();
                     let spacing = chart.state().time_scale().bar_spacing();
-                    let height = chart.get_rendered_price_rect().height();
+                    // The frame holds the main series' pane to its plot, any other to its panel.
+                    let height =
+                        if chart.series_pane(SeriesId::MAIN).unwrap_or(PaneId::MAIN) == pane {
+                            chart.get_rendered_price_rect().height()
+                        } else {
+                            chart.pane_height(pane).unwrap_or_default()
+                        };
                     if let PaneScale::Named(key) = key {
                         chart
                             .pane_price_scale_mut(pane, key)
@@ -558,5 +564,51 @@ mod tests {
             side_after(Default::default(), "Axes on left"),
             Some(Some(AxisSide::Left))
         );
+    }
+
+    /// The lock row of a secondary pane's axis measures that pane, so the axis holds its range
+    /// on the frames after locking.
+    #[test]
+    fn lock_row_measures_the_pane_of_its_axis() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut chart = crate::widget::test_frames::chart(&[100.0], &[101.0]);
+        chart.config_mut().show_volume = false;
+        let id = chart.add_indicator(Box::new(
+            CustomIndicator::new("Lower", |_| vec![IndicatorValue::Single(10.0); 100])
+                .with_overlay(false),
+        ));
+        let pane = chart.series_pane(id).unwrap();
+        let axis = PaneScale::Named(crate::model::SeriesScale::Right);
+        let mut harness = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(Vec2::new(800.0, 600.0))
+            .build_ui_state(
+                |ui, (chart, menus): &mut (Chart, AxisMenus)| {
+                    chart.show(ui);
+                    menus.show(ui.ctx(), chart);
+                },
+                (chart, AxisMenus::default()),
+            );
+        harness.run();
+        let span = |chart: &Chart| {
+            let range = chart.pane_scale(pane, axis).unwrap().range();
+            range.max - range.min
+        };
+        let fitted = span(&harness.state().0);
+        let menus = &mut harness.state_mut().1;
+        menus.open = Some((false, Pos2::new(100.0, 100.0)));
+        menus.target = Some((pane, axis));
+        menus.just_opened = true;
+        harness.run();
+        harness.get_by_label("Lock price to bar ratio").click();
+        harness.run();
+
+        let chart = &harness.state().0;
+        let height = chart.pane_height(pane).unwrap();
+        assert_ne!(height, chart.get_rendered_price_rect().height());
+        let spacing = chart.state().time_scale().bar_spacing();
+        let ratio = chart.pane_scale(pane, axis).unwrap().bar_ratio().unwrap();
+        assert!((ratio - fitted * f64::from(spacing / height)).abs() <= 1e-4 * ratio);
+        assert!((span(chart) - fitted).abs() <= 1e-4 * fitted, "a jump");
     }
 }

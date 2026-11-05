@@ -122,18 +122,26 @@ impl Pane {
         })
     }
 
-    pub(super) fn assigned_scale(
+    /// The scale of an assignment, or `None` before anything creates it.
+    pub(super) fn own_scale(
         &self,
         key: crate::model::SeriesScale,
-    ) -> &crate::scales::PriceScale {
+    ) -> Option<&crate::scales::PriceScale> {
         if key == crate::model::SeriesScale::Right {
-            &self.scale
+            Some(&self.scale)
         } else {
             self.scales
                 .iter()
                 .find(|(item, _)| *item == key)
-                .map_or(&self.scale, |(_, scale)| scale)
+                .map(|(_, scale)| scale)
         }
+    }
+
+    pub(super) fn assigned_scale(
+        &self,
+        key: crate::model::SeriesScale,
+    ) -> &crate::scales::PriceScale {
+        self.own_scale(key).unwrap_or(&self.scale)
     }
 
     pub(super) fn assigned_scale_mut(

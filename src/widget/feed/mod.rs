@@ -72,7 +72,7 @@ pub(crate) struct FeedLink {
     pub(super) footprint: Option<Footprint>,
     /// Live trade-bar allocations shared with the sink, independent of paged executions.
     footprint_input: Option<(crate::data::OrderFlowInput, u64)>,
-    /// The footprint of the trades before the replay cutoff, while a replay runs under a visible
+    /// The footprint of the trades before the cutoff, while a candle replay runs under a visible
     /// volume profile drawing, rebuilt when the cutoff moves.
     pub(super) replay_footprint: Option<(chrono::DateTime<chrono::Utc>, Option<Footprint>)>,
     order_book: Option<OrderBook>,
