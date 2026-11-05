@@ -44,7 +44,8 @@ use crate::model::{
 /// newer one. Each direct update evaluates the latest overlapping
 /// observations; `AlertEvaluator` gathers a complete poll before evaluating. Missing or non-finite
 /// sources make their conditions false. Price and volume come from each interval's own bars.
-/// Messages retain the first condition's interval and source values. Hosts feeding the engine
+/// Messages are filled when the alert fires, with its firing time and the first condition's
+/// interval, bar and source values in the joined observations. Hosts feeding the engine
 /// directly use UTC windows; the evaluator retains feed calendars.
 ///
 /// *Change.* An update whose evaluated bar, its close and volume and the value of every source
@@ -151,7 +152,9 @@ struct Observation {
     clock: BarClock,
     event: DateTime<Utc>,
     bar: Bar,
-    message: String,
+    /// What the message of the first condition's interval reads on this bar. An update of another
+    /// interval, which may fire the alert, cannot read it.
+    values: Vec<(AlertSource, Option<f64>)>,
     /// The bar before this one as it ended, for a shorter bar that closes with it. Only a longer
     /// interval of an alert evaluated at bar close keeps it.
     earlier: Option<Box<Observation>>,
@@ -373,7 +376,7 @@ impl AlertEngine {
             if !matched || !ready {
                 continue;
             }
-            let Some((bar, message, silent)) = evaluate(alert, run, now) else {
+            let Some((bar, message, silent)) = evaluate(alert, run, symbol, now) else {
                 continue;
             };
             let price = bar.close.is_finite().then_some(bar.close);
@@ -764,11 +767,15 @@ fn observe(
                         )
                     })
             });
-        let message = if holds {
-            alert.expand_message(symbol, timeframe, &bars[at], now, |src| source(src, at))
-        } else {
-            String::new()
-        };
+        // Only the message knows the sources it names, so this expansion collects them.
+        let values = std::cell::RefCell::new(Vec::new());
+        if holds && timeframe == alert.timeframe.unwrap_or_default() {
+            alert.expand_message(symbol, timeframe, &bars[at], now, |src| {
+                let found = source(src, at);
+                values.borrow_mut().push((src.clone(), found));
+                found
+            });
+        }
         Observation {
             available: true,
             seen,
@@ -777,7 +784,7 @@ fn observe(
             clock: clock.clone(),
             event,
             bar: bars[at].clone(),
-            message,
+            values: values.into_inner(),
             earlier,
         }
     };
@@ -811,7 +818,12 @@ fn observe(
 
 /// Test one coherent set of interval observations and consume its occurrence. Returns the bar
 /// and message to fire, and whether the trigger falls outside the schedule and is only logged.
-fn evaluate(alert: &Alert, run: &mut Run, now: DateTime<Utc>) -> Option<(Bar, String, bool)> {
+fn evaluate(
+    alert: &Alert,
+    run: &mut Run,
+    symbol: &str,
+    now: DateTime<Utc>,
+) -> Option<(Bar, String, bool)> {
     let intervals = alert.timeframes();
     let anchor = run.intervals.get(&intervals[0])?;
     if alert.frequency == AlertFrequency::OncePerBarClose
@@ -888,7 +900,14 @@ fn evaluate(alert: &Alert, run: &mut Run, now: DateTime<Utc>) -> Option<(Bar, St
         .iter()
         .zip(&intervals)
         .find(|(_, interval)| **interval == first)?;
-    Some((bar.clone(), primary.message.clone(), silent))
+    let message = alert.expand_message(symbol, first, &primary.bar, now, |source| {
+        primary
+            .values
+            .iter()
+            .find(|(kept, _)| kept == source)
+            .and_then(|(_, value)| *value)
+    });
+    Some((bar.clone(), message, silent))
 }
 
 /// Whether the rules of `interval` that compare two evaluations hold between `last`, the inputs of
@@ -2165,5 +2184,49 @@ mod tests {
             |_, _, _| None,
         );
         assert_eq!(host.fired(), [100.0], "the bar of 2024-03-12 covers 09:05");
+    }
+
+    #[test]
+    fn trigger_time_of_a_mixed_interval_message_is_the_firing_time() {
+        // The one-minute study rises through 100 while the five-minute bar stays as it was.
+        let host = Host::new(vec![
+            serde_json::from_value(serde_json::json!({
+                "symbol":"SYM", "timeframe":"Min5", "condition":{"Above":50.0},
+                "message":"{{trigger_time}}", "frequency":"OncePerBar",
+                "additional_timeframes":["Min1"],
+                "additional_conditions":[{
+                    "source":{"Study":{"id":"s","output":0}}, "condition":{"Above":100.0}
+                }]
+            }))
+            .unwrap(),
+        ]);
+        host.events();
+        let (five, one) = (
+            BarClock::new(Timeframe::Min5),
+            BarClock::new(Timeframe::Min1),
+        );
+        let (slow, fast) = ([bar(0, 99.0, 10.0)], [bar(2, 99.0, 5.0)]);
+        for (now, study) in [(150, 99.0), (170, 101.0)] {
+            host.engine.update_matching(
+                None,
+                "SYM",
+                &[(&five, &slow[..]), (&one, &fast[..])],
+                time(now),
+                |_, _, _| Some(study),
+            );
+        }
+        let fired: Vec<_> = host
+            .events()
+            .into_iter()
+            .filter_map(|event| match event {
+                AlertEvent::TriggeredForSymbol { time, message, .. } => Some((time, message)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            fired,
+            [(time(170), "1970-01-01T00:02:50+00:00".to_owned())],
+            "the alert fires at 00:02:50"
+        );
     }
 }
