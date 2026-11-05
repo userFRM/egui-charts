@@ -314,6 +314,22 @@ impl ChartSettingsState {
         settings
     }
 
+    /// Whether [`Self::apply_to_chart`] accepts these settings for `chart`.
+    pub(crate) fn validate_for(&self, chart: &Chart) -> Result<TimezoneMode, ChartSettingsError> {
+        let timezone = self.validate()?;
+        if let Some(reason) = self
+            .chart_type_params
+            .as_ref()
+            .and_then(|params| params.invalid(chart.chart_type()))
+        {
+            return Err(ChartSettingsError::ChartTypeParams {
+                chart_type: chart.chart_type(),
+                reason,
+            });
+        }
+        Ok(timezone)
+    }
+
     pub(crate) fn validate(&self) -> Result<TimezoneMode, ChartSettingsError> {
         let timezone = match self.timezone.as_str() {
             "UTC" => TimezoneMode::Utc,
@@ -377,14 +393,8 @@ impl ChartSettingsState {
     /// Host-owned trading and alerts are left to their providers. Invalid timezone,
     /// margins or crosshair width returns an error before changing the chart.
     pub fn apply_to_chart(&self, chart: &mut Chart) -> Result<(), ChartSettingsError> {
-        let timezone = self.validate()?;
+        let timezone = self.validate_for(chart)?;
         if let Some(params) = &self.chart_type_params {
-            if let Some(error) = params.invalid(chart.chart_type()) {
-                return Err(ChartSettingsError::ChartTypeParams {
-                    chart_type: chart.chart_type(),
-                    reason: error,
-                });
-            }
             chart.set_chart_type_params(params.clone());
         }
         if let Some(source) = self.price_source {

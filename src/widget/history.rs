@@ -37,6 +37,8 @@ struct Pending {
 struct Action {
     layout_sizes: Option<super::layout::SizeChange>,
     layout_links: Option<super::layout::LinkChange>,
+    /// The cross-chart edit this action is one chart's part of.
+    layout_edit: Option<super::layout::LayoutEditLink>,
     symbol: Option<String>,
     series: Option<SeriesSet>,
     config: Option<ChartConfig>,
@@ -66,6 +68,7 @@ impl Action {
         let drawings_changed = false;
         self.layout_sizes.is_none()
             && self.layout_links.is_none()
+            && self.layout_edit.is_none()
             && self.symbol.is_none()
             && self.series.is_none()
             && self.view.is_none()
@@ -192,6 +195,14 @@ impl ChartHistory {
             layout_links: Some(change),
             ..Action::default()
         });
+    }
+
+    /// Makes the action in progress this chart's part of a cross-chart edit.
+    #[cfg(feature = "studies")]
+    pub(super) fn join_layout_edit(&mut self, edit: super::layout::LayoutEditLink) {
+        if let Some(pending) = &mut self.pending {
+            pending.before.layout_edit = Some(edit);
+        }
     }
 
     pub(super) fn record_sizes(&mut self, change: super::layout::SizeChange) {
@@ -752,6 +763,27 @@ impl Chart {
         self.history.edits
     }
 
+    /// Takes this chart's part of cross-chart edit `id` through the same step, with any later
+    /// edit of this chart first, as the action cannot leave its stack out of order.
+    pub(super) fn step_layout_edit(&mut self, id: u64, redo: bool) {
+        loop {
+            let stack = if redo {
+                &self.history.redo
+            } else {
+                &self.history.undo
+            };
+            let holds = stack.iter().any(|action| {
+                action
+                    .layout_edit
+                    .as_ref()
+                    .is_some_and(|edit| edit.id == id)
+            });
+            if !holds || !self.step_chart_history(redo) {
+                return;
+            }
+        }
+    }
+
     fn step_chart_history(&mut self, redo: bool) -> bool {
         if self.history.pending.is_some() {
             return false;
@@ -953,6 +985,9 @@ impl Chart {
         #[cfg(feature = "drawings")]
         if action.drawings.can_undo() || action.drawings.can_redo() {
             self.history.drawing_edits += 1;
+        }
+        if let Some(edit) = &action.layout_edit {
+            edit.request(redo);
         }
         if redo {
             self.history.undo.push(action);
