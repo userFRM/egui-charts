@@ -38,47 +38,6 @@ impl Chart {
         Ok(self.add_indicator(indicator))
     }
 
-    /// Adds a study, computed at once from the bars. An [`Indicator::is_overlay`] study uses
-    /// the original price pane or, after its removal, the surviving main series' pane. Other
-    /// studies start in new panes, as do overlays with neither destination. Returns the study's
-    /// id, which stays valid when other studies are removed. Host code adds past the cap; the
-    /// interface goes through
-    /// [`try_add_indicator`](Self::try_add_indicator).
-    pub fn add_indicator(&mut self, indicator: Box<dyn Indicator>) -> SeriesId {
-        let indicator = self.prepare_indicator(indicator);
-        let id = SeriesId(self.next_series);
-        self.next_series += 1;
-        self.record_study(id);
-        let original = self.panes().contains(&super::PaneId::MAIN);
-        let target = (!original && indicator.is_overlay())
-            .then(|| self.series_pane(SeriesId::MAIN))
-            .flatten();
-        let overlay = indicator.is_overlay() && original;
-        self.studies.add(indicator);
-        self.study_ids.push(id);
-        self.study_autoscale.push(true);
-        self.study_inputs.push(String::new());
-        self.pending_from.push(None);
-        self.next_refresh.push(f64::NEG_INFINITY);
-        if let Some(pane) = target {
-            self.studies
-                .indicators_mut()
-                .last_mut()
-                .expect("study was added")
-                .set_overlay(false);
-            self.pane_layout
-                .panes
-                .iter_mut()
-                .find(|item| item.id == pane)
-                .expect("main series belongs to pane")
-                .members
-                .push(id);
-        } else if !overlay {
-            self.add_study_pane(id);
-        }
-        id
-    }
-
     /// `indicator` set to this chart's interval, instrument and events and computed from its bars.
     pub(super) fn prepare_indicator(
         &self,
@@ -120,6 +79,47 @@ impl Chart {
             indicator.update_data(&self.state.data().bars, 0, &sources);
         }
         indicator
+    }
+
+    /// Adds a study, computed at once from the bars. An [`Indicator::is_overlay`] study uses
+    /// the original price pane or, after its removal, the surviving main series' pane. Other
+    /// studies start in new panes, as do overlays with neither destination. Returns the study's
+    /// id, which stays valid when other studies are removed. Host code adds past the cap; the
+    /// interface goes through
+    /// [`try_add_indicator`](Self::try_add_indicator).
+    pub fn add_indicator(&mut self, indicator: Box<dyn Indicator>) -> SeriesId {
+        let indicator = self.prepare_indicator(indicator);
+        let id = SeriesId(self.next_series);
+        self.next_series += 1;
+        self.record_study(id);
+        let original = self.panes().contains(&super::PaneId::MAIN);
+        let target = (!original && indicator.is_overlay())
+            .then(|| self.series_pane(SeriesId::MAIN))
+            .flatten();
+        let overlay = indicator.is_overlay() && original;
+        self.studies.add(indicator);
+        self.study_ids.push(id);
+        self.study_autoscale.push(true);
+        self.study_inputs.push(String::new());
+        self.pending_from.push(None);
+        self.next_refresh.push(f64::NEG_INFINITY);
+        if let Some(pane) = target {
+            self.studies
+                .indicators_mut()
+                .last_mut()
+                .expect("study was added")
+                .set_overlay(false);
+            self.pane_layout
+                .panes
+                .iter_mut()
+                .find(|item| item.id == pane)
+                .expect("main series belongs to pane")
+                .members
+                .push(id);
+        } else if !overlay {
+            self.add_study_pane(id);
+        }
+        id
     }
 
     /// Set the input caption displayed beside a study in the legend.

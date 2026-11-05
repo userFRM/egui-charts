@@ -1379,19 +1379,36 @@ impl DemoApp {
             &charts,
             self.layout_slot,
             &copy,
-            &egui_charts::studies::IndicatorFactory::new(),
+            self.indicator_dialog.factory(),
         );
         if issues.is_empty() {
             self.apply_layout_copy(copy);
             return;
         }
-        let lines: Vec<_> = issues
+        let any_reached = (0..self.layout.mode.chart_count().min(charts.len()))
+            .filter(|slot| *slot != self.layout_slot)
+            .any(|slot| {
+                !issues
+                    .iter()
+                    .any(|issue| issue.slot == slot && issue.kind.skips_chart())
+            });
+        let mut lines: Vec<_> = issues
             .iter()
             .map(|issue| {
                 let (slot, symbol) = (issue.slot + 1, charts[issue.slot].symbol());
                 format!("Chart {slot} ({symbol}): {}", issue.kind)
             })
             .collect();
+        if !any_reached {
+            self.toasts.error(lines.join("\n"));
+            return;
+        }
+        // The dialog does not scroll: its buttons stay on screen with many charts and studies.
+        if lines.len() > 12 {
+            let more = lines.len() - 12;
+            lines.truncate(12);
+            lines.push(format!("and {more} more"));
+        }
         self.layout_copy_prompt = Some((copy, lines.join("\n")));
     }
 
@@ -1406,7 +1423,7 @@ impl DemoApp {
             &mut charts,
             self.layout_slot,
             &copy,
-            &egui_charts::studies::IndicatorFactory::new(),
+            self.indicator_dialog.factory(),
         );
         self.chart.end_user_action();
     }
@@ -4189,6 +4206,16 @@ mod tests {
         let (_, message) = app.layout_copy_prompt.as_ref().expect("prompt");
         assert!(message.starts_with("Chart 2 ("), "{message}");
         assert_eq!(studies(&app.extra_charts[0].chart), studies(&app.chart));
+
+        // Nothing could take this one, so there is no Apply to offer.
+        app.layout_copy_prompt = None;
+        let linked = app
+            .chart
+            .add_indicator(Box::new(egui_charts::studies::SMA::new(3)));
+        let source = egui_charts::model::StudySource::Study { id: id.0, plot: 0 };
+        app.chart.set_indicator_source(linked, source).unwrap();
+        app.handle_study_context(&ctx, linked, StudyContextMenuAction::AddToLayout);
+        assert!(app.layout_copy_prompt.is_none());
     }
 
     pub(super) fn ui_frame(

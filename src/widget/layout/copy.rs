@@ -4,8 +4,9 @@
 use super::ChartLayout;
 use crate::config::ChartConfig;
 use crate::model::ChartType;
-use crate::studies::{IndicatorFactory, InputValue, StudySource, StudyTemplateSet};
-use crate::widget::settings::ChartSettingsState;
+use crate::scales::instrument_price_precision;
+use crate::studies::{Indicator, IndicatorFactory, InputValue, StudySource, StudyTemplateSet};
+use crate::widget::settings::{ChartSettingsState, PrecisionMode};
 use crate::widget::study_templates::NO_STUDY;
 use crate::widget::{Chart, SeriesId};
 
@@ -20,8 +21,9 @@ pub enum LayoutCopy {
     /// Replaces the studies of each other chart with those of the source, with their links and
     /// shared panes, as [`Chart::apply_study_template_set_with`] does.
     Studies,
-    /// Applies these settings to every chart, the source included. Each chart keeps its symbol,
-    /// interval and chart type.
+    /// Applies these settings to every chart, the source included. Each other chart keeps its
+    /// symbol, interval and chart type, the sizes and other parameters of that type, and the
+    /// precision of its instrument unless the source was given another one.
     Settings(Box<ChartSettingsState>),
 }
 
@@ -84,6 +86,16 @@ impl std::fmt::Display for LayoutCopyIssueKind {
     }
 }
 
+/// Whether `study` has a value to draw.
+fn draws(study: &dyn Indicator) -> bool {
+    study
+        .values()
+        .columns()
+        .iter()
+        .flatten()
+        .any(|v| v.is_finite())
+}
+
 /// The studies a copy takes from the source chart.
 struct CopiedStudies {
     set: StudyTemplateSet,
@@ -96,22 +108,11 @@ struct CopiedStudies {
 impl CopiedStudies {
     /// `None` for a copy of settings, or of a study the chart does not have.
     fn new(source: &Chart, copy: &LayoutCopy) -> Option<Self> {
-        let draws = |id: SeriesId| {
-            source.indicators().any(|(study, indicator)| {
-                study == id
-                    && indicator
-                        .values()
-                        .columns()
-                        .iter()
-                        .flatten()
-                        .any(|v| v.is_finite())
-            })
-        };
         let set = source.study_template_set();
-        let ids: Vec<_> = source.indicators().map(|(id, _)| id).collect();
+        let draws: Vec<_> = source.indicators().map(|(_, study)| draws(study)).collect();
         match copy {
             LayoutCopy::Study(id) => {
-                let at = ids.iter().position(|study| study == id)?;
+                let at = source.indicators().position(|(study, _)| study == *id)?;
                 let on_price_pane = set.price_pane.contains(&at);
                 Some(Self {
                     set: StudyTemplateSet {
@@ -123,13 +124,13 @@ impl CopiedStudies {
                             vec![vec![0]]
                         },
                     },
-                    draws: vec![draws(*id)],
+                    draws: vec![draws[at]],
                     adding: true,
                 })
             }
             LayoutCopy::Studies => Some(Self {
                 set,
-                draws: ids.into_iter().map(draws).collect(),
+                draws,
                 adding: false,
             }),
             LayoutCopy::Settings(_) => None,
@@ -153,7 +154,7 @@ impl CopiedStudies {
         if no_bars {
             issues.push(LayoutCopyIssueKind::NoHistory);
         }
-        for (template, draws) in self.set.studies.iter().zip(&self.draws) {
+        for (template, source_draws) in self.set.studies.iter().zip(&self.draws) {
             let linked = template.inputs.iter().any(|(_, value)| {
                 matches!(value, InputValue::Source(StudySource::Study { id, .. }) if *id != NO_STUDY)
             });
@@ -167,15 +168,8 @@ impl CopiedStudies {
                     reason: error.to_string(),
                 }),
                 // A linked study's values follow its parent, which reports its own shortage.
-                Ok(study) if *draws && !no_bars && !linked => {
-                    let study = chart.prepare_indicator(study);
-                    if !study
-                        .values()
-                        .columns()
-                        .iter()
-                        .flatten()
-                        .any(|v| v.is_finite())
-                    {
+                Ok(study) if *source_draws && !no_bars && !linked => {
+                    if !draws(chart.prepare_indicator(study).as_ref()) {
                         issues.push(LayoutCopyIssueKind::ShortHistory(template.name.clone()));
                     }
                 }
@@ -186,16 +180,46 @@ impl CopiedStudies {
     }
 }
 
-/// The candle colours of `from`, which the settings of a chart drawn with another style of
-/// candles do not hold.
-fn copy_candle_colors(from: &ChartConfig, to: &mut ChartConfig) {
-    to.bullish_color = from.bullish_color;
-    to.bearish_color = from.bearish_color;
-    to.bullish_border_color = from.bullish_border_color;
-    to.bearish_border_color = from.bearish_border_color;
-    to.bullish_wick_color = from.bullish_wick_color;
-    to.bearish_wick_color = from.bearish_wick_color;
-    to.candle_border_width = from.candle_border_width;
+/// Applies the settings of the chart with `from` as its configuration and `from_decimals` as its
+/// instrument's precision to another chart. That chart keeps the parameters of its chart type,
+/// whose sizes and base prices suit its own prices, and takes the colours of `from` for its
+/// candles when the settings describe another style of candles and so do not hold them.
+///
+/// shortcut: a precision chosen equal to the source instrument's follows each chart's instrument,
+/// as a chart does not keep whether its precision was chosen; keep that choice to tell them apart.
+fn apply_to_other_chart(
+    settings: &ChartSettingsState,
+    from: &ChartConfig,
+    from_decimals: Option<u8>,
+    chart: &mut Chart,
+) {
+    let mut settings = settings.clone();
+    if settings.precision.decimals().map(|value| value as u8) == from_decimals {
+        settings.precision = PrecisionMode::Default;
+    }
+    if let Some(params) = settings.chart_type_params.take() {
+        let mut own = chart.chart_type_params().clone();
+        own.styles = params.styles;
+        own.footprint_colors = params.footprint_colors;
+        if &own != chart.chart_type_params() {
+            chart.set_chart_type_params(own);
+        }
+    }
+    if settings.apply_to_chart(chart).is_ok()
+        && matches!(
+            settings.chart_type,
+            ChartType::Heikin | ChartType::HollowCandles
+        )
+    {
+        let to = chart.config_mut();
+        to.bullish_color = from.bullish_color;
+        to.bearish_color = from.bearish_color;
+        to.bullish_border_color = from.bullish_border_color;
+        to.bearish_border_color = from.bearish_border_color;
+        to.bullish_wick_color = from.bullish_wick_color;
+        to.bearish_wick_color = from.bearish_wick_color;
+        to.candle_border_width = from.candle_border_width;
+    }
 }
 
 impl ChartLayout {
@@ -219,7 +243,7 @@ impl ChartLayout {
         for (slot, chart) in charts.iter().enumerate().take(self.preset_charts(charts)) {
             let kinds = match (copy, &studies) {
                 (LayoutCopy::Settings(settings), _) => settings
-                    .validate_for(chart)
+                    .validate()
                     .err()
                     .map(|error| LayoutCopyIssueKind::UnsupportedSettings(error.to_string()))
                     .into_iter()
@@ -247,7 +271,7 @@ impl ChartLayout {
         copy: &LayoutCopy,
         factory: &IndicatorFactory,
     ) -> Vec<LayoutCopyIssue> {
-        let mut issues = self.copy_issues(charts, source, copy, factory);
+        let issues = self.copy_issues(charts, source, copy, factory);
         let Some(from) = charts.get(source) else {
             return issues;
         };
@@ -255,9 +279,9 @@ impl ChartLayout {
         if studies.is_none() && !matches!(copy, LayoutCopy::Settings(_)) {
             return issues;
         }
-        let candle_colors = from.config().clone();
+        let from_config = from.config().clone();
+        let from_decimals = from.instrument().and_then(instrument_price_precision);
         let edit = self.edits.start();
-        let mut failures = Vec::new();
         let mut reached = false;
         let count = self.preset_charts(charts);
         for (slot, chart) in charts.iter_mut().enumerate().take(count) {
@@ -269,34 +293,21 @@ impl ChartLayout {
                 continue;
             }
             reached = true;
-            let failure = chart.user_action(|chart| {
+            chart.user_action(|chart| {
                 chart.history.join_layout_edit(edit.clone());
+                // The issues above already refused what would fail here.
                 match (copy, &studies) {
-                    (LayoutCopy::Settings(settings), _) => settings
-                        .apply_to_chart(chart)
-                        .map(|()| {
-                            if matches!(
-                                settings.chart_type,
-                                ChartType::Heikin | ChartType::HollowCandles
-                            ) {
-                                copy_candle_colors(&candle_colors, chart.config_mut());
-                            }
-                        })
-                        .map_err(|error| error.to_string()),
-                    (_, Some(studies)) => chart
-                        .place_study_template_set(&studies.set, factory, !studies.adding)
-                        .map(|_| ())
-                        .map_err(|error| error.to_string()),
-                    _ => Ok(()),
+                    (LayoutCopy::Settings(settings), _) => {
+                        apply_to_other_chart(settings, &from_config, from_decimals, chart);
+                    }
+                    (_, Some(studies)) => {
+                        chart
+                            .place_study_template_set(&studies.set, factory, !studies.adding)
+                            .ok();
+                    }
+                    _ => {}
                 }
             });
-            // Issues were checked just above; a chart that still refuses reports why.
-            if let Err(reason) = failure {
-                failures.push(LayoutCopyIssue {
-                    slot,
-                    kind: LayoutCopyIssueKind::UnsupportedSettings(reason),
-                });
-            }
         }
         let source_refused = issues.iter().any(|i| i.slot == source);
         if let LayoutCopy::Settings(settings) = copy
@@ -311,7 +322,6 @@ impl ChartLayout {
             // An undo from the chart the user copied from reverses the copy too.
             charts[source].user_action(|chart| chart.history.join_layout_edit(edit));
         }
-        issues.append(&mut failures);
         issues
     }
 
@@ -323,8 +333,9 @@ impl ChartLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Bar, BarData, Timeframe};
+    use crate::model::{Bar, BarData, Instrument, Timeframe};
     use crate::studies::{RSI, SMA};
+    use crate::widget::settings::PrecisionMode;
     use crate::widget::{ChartLayoutMode, PaneId};
     use chrono::{DateTime, Duration};
 
@@ -472,6 +483,7 @@ mod tests {
         )
         .unwrap();
         full.set_study_limit(Some(0));
+        short.config_mut().show_volume = true;
         let factory = IndicatorFactory::new();
         let mut layout = ChartLayout {
             mode: ChartLayoutMode::Four,
@@ -504,6 +516,7 @@ mod tests {
         assert_eq!(layout.apply_copy(&mut charts, 0, &copy, &factory), expected);
         assert_eq!(names(charts[1]), ["SMA"]);
         assert_eq!(names(charts[2]), ["SMA"]);
+        assert!(charts[2].config().show_volume, "adding keeps its volume");
         assert_eq!(charts[3].indicators().count(), 0);
         assert!(!charts[3].can_undo());
 
@@ -518,11 +531,17 @@ mod tests {
         assert_eq!(names(charts[2]), ["SMA"]);
     }
 
-    /// Settings reach every chart whatever its style of candles, and leave its chart type alone.
+    /// Settings reach every chart whatever its style of candles, and leave its chart type, the
+    /// parameters of that type and the precision of its instrument alone.
     #[test]
     fn settings_copy_reaches_every_chart_and_reverses_as_one_edit() {
         let (mut a, mut b) = (chart(50), chart(50));
         b.set_chart_type(ChartType::HollowCandles);
+        let mut params = b.chart_type_params().clone();
+        params.renko_brick_size = 0.25;
+        b.set_chart_type_params(params);
+        a.set_instrument(Some(Instrument::new("SAMPLE").with_tick_size(0.01)));
+        b.set_instrument(Some(Instrument::new("SAMPLE").with_tick_size(0.0001)));
         a.config_mut().bullish_color = egui::Color32::RED;
         a.set_chart_type(ChartType::Heikin);
         let mut settings = ChartSettingsState::from_chart(&a);
@@ -546,6 +565,10 @@ mod tests {
             assert_eq!(chart.config().bullish_color, egui::Color32::RED);
         }
         assert_eq!(charts[1].chart_type(), ChartType::HollowCandles);
+        assert_eq!(charts[1].chart_type_params().renko_brick_size, 0.25);
+        let precision = |chart: &Chart| ChartSettingsState::from_chart(chart).precision;
+        assert_eq!(precision(charts[0]), PrecisionMode::Decimals2);
+        assert_eq!(precision(charts[1]), PrecisionMode::Decimals4);
 
         assert!(charts[0].undo());
         show(&mut layout, &mut charts);
