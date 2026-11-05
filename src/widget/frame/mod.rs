@@ -449,13 +449,6 @@ impl Chart {
         let show_right_axis = primary_side == Some(crate::model::AxisSide::Right);
         let main_pane = self.main_series_pane();
         let order = self.main_series_order().to_vec();
-        let study_indices: Vec<_> = self
-            .study_ids
-            .iter()
-            .enumerate()
-            .filter(|(_, id)| self.series_pane(**id) == Some(main_pane))
-            .map(|(idx, _)| idx)
-            .collect();
         // Register the icon loader once per context, and the general SVG loader for UI images.
         #[cfg(feature = "icons")]
         {
@@ -726,6 +719,15 @@ impl Chart {
 
         // Handle keyboard shortcuts
         self.handle_keyboard_shortcuts(ui, &time_response, chart_width, chart_rect.min.x);
+
+        // Taken after the shortcuts: a key can remove a study and shift the ones after it.
+        let study_indices: Vec<_> = self
+            .study_ids
+            .iter()
+            .enumerate()
+            .filter(|(_, id)| self.series_pane(**id) == Some(main_pane))
+            .map(|(idx, _)| idx)
+            .collect();
 
         // Calculate visible bars
         let logical_range = self.state.time_scale().visible_logical_range();
