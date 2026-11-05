@@ -76,7 +76,8 @@ pub struct RSI {
     visible: bool,
 }
 
-/// The moving average of the RSI that the study draws with it.
+/// The moving average of the RSI that the study draws with it. The variants' names are the
+/// choices the MA type input lists.
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MaType {
