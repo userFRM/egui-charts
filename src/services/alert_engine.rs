@@ -496,7 +496,7 @@ impl AlertEngine {
                     let bar = Bar::new(
                         fill.time, fill.price, fill.price, fill.price, fill.price, 0.0,
                     );
-                    alert.expand_message(symbol, timeframe, &bar, |_| Some(fill.price))
+                    alert.expand_message(symbol, timeframe, &bar, fill.time, |_| Some(fill.price))
                 };
                 let event = AlertEvent::TriggeredForSymbol {
                     id: id.clone(),
@@ -738,7 +738,7 @@ fn observe(
         bar.time
     };
     let message = if holds {
-        alert.expand_message(symbol, timeframe, bar, |src| source(src, index))
+        alert.expand_message(symbol, timeframe, bar, now, |src| source(src, index))
     } else {
         String::new()
     };
@@ -1520,7 +1520,7 @@ mod tests {
     fn a_trigger_follows_the_change_of_status_and_reloads_never_repeat_it() {
         let mut watching = alert(AlertCondition::Above(100.0), AlertFrequency::EveryTime);
         watching.timeframe = None;
-        watching.message = "{{symbol}} closed at {{close}}".into();
+        watching.message = "{{symbol}} closed at {{close}} on {{trigger_time}}".into();
         let host = Host::new(vec![watching]);
         host.events();
         let bars = [bar(0, 99.0, 1.0), bar(1, 101.0, 1.0), bar(2, 103.0, 1.0)];
@@ -1542,7 +1542,7 @@ mod tests {
         );
         // The message is filled in the event, and the host callback gets the same event.
         assert!(
-            matches!(&events[1], AlertEvent::TriggeredForSymbol { message, .. } if message == "SYM closed at 103")
+            matches!(&events[1], AlertEvent::TriggeredForSymbol { message, .. } if *message == format!("SYM closed at 103 on {}", time(1_000).to_rfc3339()))
         );
         let delivered = host.delivered.lock().unwrap().clone();
         assert_eq!(delivered.len(), 1);
