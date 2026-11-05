@@ -105,6 +105,8 @@ impl Timeline {
         save_frame(
             &mut self.h,
             &self.out.join(format!("{:04}.png", self.frame)),
+            CompressionType::Fast,
+            FilterType::NoFilter,
         );
         self.frame += 1;
         if self.frame.is_multiple_of(120) {

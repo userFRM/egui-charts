@@ -4,15 +4,12 @@
 set -euo pipefail
 root=$(realpath "$(dirname "$0")/../..")
 work=${1:?usage: regenerate.sh /absolute/temporary-directory}
-[[ "$work" = /* && "$work" != "$root"* ]] || { echo "Frames must live outside the repository" >&2; exit 2; }
 work=$(realpath -m "$work")
-[[ "$work" != "$root"* ]] || { echo "Frames must live outside the repository" >&2; exit 2; }
+[[ "$work/" != "$root/"* ]] || { echo "Frames must live outside the repository" >&2; exit 2; }
 mkdir -p "$work"
 [[ ! -e "$work/frames" && ! -e "$work/repeat" ]] || { echo "Use a fresh temporary directory" >&2; exit 2; }
-if [[ -z ${CAPTURE_BIN:-} ]]; then
-    RUSTUP_TOOLCHAIN=stable cargo build --release --manifest-path "$root/docs/capture/Cargo.toml"
-fi
-capture=${CAPTURE_BIN:-$root/docs/capture/target/release/capture}
+RUSTUP_TOOLCHAIN=stable cargo build --release --manifest-path "$root/docs/capture/Cargo.toml"
+capture=$root/docs/capture/target/release/capture
 cc -shared -fPIC -O2 -Wall -Wextra -Werror "$root/docs/capture/clock.c" -o "$work/clock.so"
 export CAPTURE_CLOCK="$work/clock.txt"
 printf '1793129390 0\n' > "$CAPTURE_CLOCK"
@@ -55,4 +52,4 @@ for theme in dark light; do
     webp tour "$theme" 11 720 72
     for scene in liquidity drawings replay; do webp "$scene" "$theme" 7 800 75; done
 done
-"${PYTHON:-python3}" "$root/docs/capture/verify.py" "$root" "$work"
+"${PYTHON:-python3}" "$root/docs/capture/verify.py" "$root"
