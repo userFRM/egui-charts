@@ -291,18 +291,18 @@ impl Chart {
         let touch_readout = crate::widget::interaction::touch_crosshair(ui, response.id);
 
         // A key handled by the price frame can remove a pane and shift the ones after it.
-        let (panes, rects): (Vec<_>, Vec<_>) = panes
-            .into_iter()
-            .zip(rects)
-            .filter_map(|((_, id, collapsed), rect)| {
-                let idx = self
-                    .pane_layout
-                    .panes
-                    .iter()
-                    .position(|pane| pane.id == id)?;
-                Some(((idx, id, collapsed), rect))
-            })
-            .unzip();
+        let recorded = panes.len();
+        let mut kept = 0;
+        for at in 0..recorded {
+            let (_, id, collapsed) = panes[at];
+            if let Some(idx) = self.pane_layout.panes.iter().position(|pane| pane.id == id) {
+                panes[kept] = (idx, id, collapsed);
+                rects[kept] = rects[at];
+                kept += 1;
+            }
+        }
+        panes.truncate(kept);
+        rects.truncate(kept);
         let main_at = panes.iter().position(|(_, id, _)| *id == main_pane);
 
         let horizontal = self.get_chart_mapping().with_rect(plot);
