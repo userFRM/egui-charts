@@ -371,9 +371,8 @@ struct State {
 /// [`FilteredCvd`](OrderFlowKind::FilteredCvd), starts again from the oldest retained bar. The
 /// chart recalculates the studies on a source in full after each drop, once per 1,001 new bars,
 /// drawing their earlier values until then, and otherwise updates them from the first changed
-/// bar. At most 100,000 events per rolling
-/// window are retained; an overflowing window gives no value until the missing events have
-/// expired, rather than understating the rate.
+/// bar. At most 100,000 events per rolling window are retained; an overflowing window gives no
+/// value until the missing events have expired, rather than understating the rate.
 ///
 /// Besides the fixed aggregations of [`OrderFlowKind`], a source can hold each bar's executions
 /// by price ([`footprint`](Self::footprint)) or its last synchronized book
