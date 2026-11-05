@@ -149,11 +149,12 @@ impl Chart {
                 .any(|pane| pane.id == main_pane && pane.collapsed == Some(true));
         let main_expanded = main_present && !main_collapsed;
         let main_minimum = if main_expanded { 40.0 } else { 0.0 };
-        let auto_collapse = usable_height
-            / (if main_present { 3.0 } else { 0.0 } + pane_count as f32).max(1.0)
-            < 40.0;
         let row_count = pane_count + usize::from(main_collapsed);
         let row_height = 24.0_f32.min(usable_height / row_count.max(1) as f32);
+        // A collapsed price pane is one header row and takes no share of the rest.
+        let auto_collapse = (usable_height - if main_collapsed { row_height } else { 0.0 })
+            / (if main_expanded { 3.0 } else { 0.0 } + pane_count as f32).max(1.0)
+            < 40.0;
         let mut expanded_budget = ((usable_height - row_height * row_count as f32 - main_minimum)
             / (40.0 - row_height))
             .max(0.0) as usize;
