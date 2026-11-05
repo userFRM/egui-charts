@@ -737,6 +737,58 @@ mod tests {
         }
     }
 
+    /// One execution a second from the epoch, across 50 prices, for `instrument`.
+    fn replay_driver(seconds: i64, instrument: Instrument) -> Arc<crate::data::ReplayDriver> {
+        use crate::data::{MarketEvent, ReplayEvent};
+        let second = |s: i64| DateTime::UNIX_EPOCH + Duration::seconds(s);
+        let events = (0..seconds)
+            .map(|s| {
+                let fill = crate::model::Tick::new(second(s), 100.0 + (s % 50) as f64, 1.0, None);
+                let fill = MarketEvent::Trade(fill.with_id(s as u64));
+                ReplayEvent::new("A", second(s), s as u64, fill)
+            })
+            .collect();
+        Arc::new(crate::data::ReplayDriver::new(events, vec![instrument]).unwrap())
+    }
+
+    /// A playing frame that delivers no execution must not fold the held ones again.
+    #[cfg(feature = "drawings")]
+    #[test]
+    fn market_playback_frame_does_not_refold_held_executions() {
+        use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+        let driver = replay_driver(2_000, Instrument::new("A").with_tick_size(1.0));
+        driver.set_speed(0.0).unwrap();
+        driver.seek(DateTime::UNIX_EPOCH + Duration::seconds(1_999));
+        let mut chart = Chart::new(crate::model::BarData::from_bars(bars(&[100.0; 3], 1)));
+        chart.set_symbol("A");
+        chart.set_timeframe(Timeframe::Min1);
+        chart.set_market_replay(Some(driver.clone()));
+        let mut drawing = Drawing::new(1, DrawingToolType::FixedRangeVolumeProfile);
+        drawing.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(30.0, 100.0)];
+        chart.drawings_mut().drawings.push(drawing);
+        let ctx = egui::Context::default();
+        for _ in 0..4 {
+            chart.pump(&ctx);
+        }
+        let frame = |chart: &mut Chart| {
+            allocations(|| {
+                let elapsed = std::time::Duration::from_millis(16);
+                driver.advance(elapsed).unwrap();
+                chart.pump(&ctx);
+            })
+            .0
+        };
+        frame(&mut chart);
+        let paused = frame(&mut chart);
+        driver.set_speed(1.0).unwrap();
+        frame(&mut chart);
+        let playing = frame(&mut chart);
+        assert!(
+            playing <= paused + 8,
+            "allocations per frame: paused {paused}, playing {playing}"
+        );
+    }
+
     #[derive(Default)]
     struct RetryFeed {
         resolves: Mutex<Vec<crate::data::Reply<Instrument>>>,
