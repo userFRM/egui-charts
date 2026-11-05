@@ -850,7 +850,7 @@ Terminal,Alerts,Alert levels drawn on the chart,unverified,library,src/chart/ren
 Terminal,Alerts,Alert log,unverified,library,src/ui/widget_bar/panels/alerts_panel.rs;src/services/alerts.rs;src/services/alert_engine.rs;terminal/src/alerts.rs,2068
 Terminal,Alerts,Alert manager panel,unverified,library,src/ui/widget_bar/panels/alerts_panel.rs;src/model/alert.rs;src/services/alerts.rs;src/services/alert_engine.rs;examples/demo/controller.rs;terminal/src/alerts.rs,2065
 Terminal,Alerts,"Alert name, custom message and placeholders",unverified,library,src/ui/dialogs/alert_dialog/dialog.rs;src/ui/widget_bar/panels/alerts_panel.rs;src/model/alert.rs;src/services/alert_engine.rs,2067
-Terminal,Alerts,Alert presets and per-alert notification schedule,incomplete,library,src/ui/dialogs/alert_dialog/dialog.rs;src/model/alert.rs;src/services/alert_engine.rs;src/services/alerts.rs;src/ui/widget_bar/panels/alerts_panel.rs,2065;2068
+Terminal,Alerts,Alert presets and per-alert notification schedule,incomplete,library,src/ui/dialogs/alert_dialog/dialog.rs;src/ui/dialogs/alert_dialog/preset.rs;src/model/alert.rs;src/services/alert_engine.rs;src/services/alerts.rs;src/ui/widget_bar/panels/alerts_panel.rs,2065;2068
 Terminal,Alerts,Alerts tab in series settings,unverified,library,src/model/series_style.rs;src/chart/series/settings.rs;src/ui/dialogs/series_settings/tabs/scales.rs;src/widget/mod.rs;src/widget/snapshot.rs;src/widget/history.rs;terminal/src/alerts.rs,
 Terminal,Alerts,"Channel operators: entering, exiting, inside, outside a channel",unverified,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs;src/services/alert_engine.rs;src/drawings/domain/alert_levels.rs;src/widget/alerts.rs,
 Terminal,Alerts,Create a price alert from the toolbar bell,unverified,library,src/ui/top_toolbar/toolbar.rs;src/ui/dialogs/alert_dialog/dialog.rs;src/services/alert_engine.rs;terminal/src/alerts.rs,
@@ -860,10 +860,10 @@ Terminal,Alerts,Indicator alerts on study plots,incomplete,library,src/ui/dialog
 Terminal,Alerts,Inline alert creation forms in the alerts panel,unverified,library,src/ui/widget_bar/panels/alerts_panel.rs;src/ui/dialogs/alert_dialog/dialog.rs;src/model/alert.rs;src/services/alerts.rs;terminal/src/alerts.rs,
 Terminal,Alerts,Moving up / moving down operators,unverified,library,src/ui/dialogs/alert_dialog/dialog.rs,
 Terminal,Alerts,Multi-condition alerts,incomplete,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs;src/services/alert_engine.rs;src/services/alert_evaluator.rs;src/services/alert_feed.rs,2064
-Terminal,Alerts,Notification: email and plain-text email,missing,host,,
-Terminal,Alerts,Notification: in-app popup when an alert fires,incomplete,library,src/ui/widget_bar/panels/alerts_panel.rs;src/services/alert_engine.rs;terminal/src/alerts.rs,
-Terminal,Alerts,Notification: mobile app push,missing,host,,
-Terminal,Alerts,Notification: webhook,missing,host,,
+Terminal,Alerts,Notification: email and plain-text email,incomplete,host,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs,
+Terminal,Alerts,Notification: in-app popup when an alert fires,incomplete,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs;src/ui/widget_bar/panels/alerts_panel.rs;src/services/alert_engine.rs;terminal/src/alerts.rs,
+Terminal,Alerts,Notification: mobile app push,incomplete,host,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs,
+Terminal,Alerts,Notification: webhook,incomplete,host,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs,
 Terminal,Alerts,"Price operators: crossing, crossing up, crossing down, greater than, less than",unverified,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs,
 Terminal,Alerts,Quick alert from the price-scale '+' or the chart context menu,unverified,library,src/ui/context_menu/mod.rs;src/chart/rendering/overlays/crosshair.rs;src/chart/rendering/axes/mod.rs;src/config/chart.rs;src/widget/settings/apply.rs;src/ui/context_menu/chart_menus/mod.rs;src/widget/keyboard.rs;terminal/src/alerts.rs;src/widget/frame/mod.rs;examples/demo/controller.rs,2028
 Terminal,Alerts,Server-side evaluation,unverified,host,src/services/alerts.rs;src/ui/widget_bar/panels/alerts_panel.rs,
