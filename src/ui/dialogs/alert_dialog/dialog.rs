@@ -664,8 +664,10 @@ impl AlertDialog {
             if self.scheduled {
                 ui.label(l10n::text(ui.ctx(), "Time zone"));
                 ui.horizontal_wrapped(|ui| {
-                    ui.text_edit_singleline(&mut self.schedule_zone)
-                        .accessible_name(l10n::text(ui.ctx(), "Time zone"));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.schedule_zone).desired_width(160.0),
+                    )
+                    .accessible_name(l10n::text(ui.ctx(), "Time zone"));
                     if let Some(account) = &self.account_timezone
                         && ui
                             .selectable_label(
