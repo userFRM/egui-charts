@@ -341,7 +341,13 @@ impl AlertDialog {
                         valid = self.alert.is_valid() && expiry.is_ok() && schedule.is_ok();
                         if !self.alert.is_valid() {
                             let intervals = self.alert.timeframes();
-                            let message = if self.alert.additional_conditions.len() > 4 {
+                            let message = if self.alert.name.chars().count() > Alert::MAX_NAME_CHARS
+                            {
+                                "The name is too long"
+                            } else if self.alert.message.chars().count() > Alert::MAX_MESSAGE_CHARS
+                            {
+                                "The message is too long"
+                            } else if self.alert.additional_conditions.len() > 4 {
                                 "An alert accepts five conditions"
                             } else if intervals.len() > 1
                                 && intervals.iter().any(|interval| interval.is_trade_based())
@@ -407,8 +413,10 @@ impl AlertDialog {
             (ui.available_width() - label_width - ui.spacing().item_spacing.x).max(0.0);
         FormGrid::new("alert_details").show(ui, |ui| {
             ui.label(l10n::text(ui.ctx(), "Name"));
-            ui.text_edit_singleline(&mut self.alert.name)
-                .accessible_name(l10n::text(ui.ctx(), "Name"));
+            ui.add(
+                egui::TextEdit::singleline(&mut self.alert.name).char_limit(Alert::MAX_NAME_CHARS),
+            )
+            .accessible_name(l10n::text(ui.ctx(), "Name"));
             ui.end_row();
             ui.label(l10n::text(ui.ctx(), "Symbol"));
             ui.text_edit_singleline(&mut self.alert.symbol)
@@ -554,8 +562,11 @@ impl AlertDialog {
                 ui.end_row();
             }
             ui.label(l10n::text(ui.ctx(), "Message"));
-            ui.text_edit_multiline(&mut self.alert.message)
-                .accessible_name(l10n::text(ui.ctx(), "Message"));
+            ui.add(
+                egui::TextEdit::multiline(&mut self.alert.message)
+                    .char_limit(Alert::MAX_MESSAGE_CHARS),
+            )
+            .accessible_name(l10n::text(ui.ctx(), "Message"));
             ui.end_row();
         });
         ui.separator();
