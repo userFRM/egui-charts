@@ -422,7 +422,7 @@ pub struct Chart {
     // =========================================================================
     /// This chart is an inactive, attached slot in a multi-chart layout for the current frame.
     pub(crate) layout_inactive: bool,
-    /// The layout's field selectors occupy the right end of the status line this frame.
+    /// The layout's field selectors occupy the right end of the status line's first row this frame.
     pub(crate) layout_link_controls: bool,
     /// Tells `ChartLayout` this is another chart: new for each chart and each restored snapshot,
     /// whose symbol and interval are no change for the layout to send to linked charts.

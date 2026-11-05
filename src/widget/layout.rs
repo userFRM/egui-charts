@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 
 /// Narrowest chart that shows the field selectors in its header.
 const LINK_CONTROLS_MIN_WIDTH: f32 = 320.0;
-/// Space the selectors reserve at the right end of the status line.
+/// Distance of the selectors from the chart's right edge, which ends the status line's first row.
 pub(super) const LINK_CONTROLS_INSET: f32 = 220.0;
 
 const LINK_MARKERS: [(&str, egui::Color32); 5] = [
@@ -3887,5 +3887,65 @@ mod tests {
         charts[0].restore(&saved).unwrap();
         frames(&mut layout, &mut charts);
         assert_eq!(state(&charts), opened, "a restored chart");
+    }
+
+    /// Four charts on a 1536 x 864 screen are 768 points wide. Beside the 70 point price axis
+    /// the status line keeps 768 - 70 - 48 = 650 points, over the 600 that show open, high, low
+    /// and close. The selectors cover x 548..658 of the first row only, so the values still fit,
+    /// and no status text may paint beneath the selectors.
+    #[test]
+    fn link_selectors_keep_open_high_low_in_the_status_line() {
+        let ctx = egui::Context::default();
+        let mut layout = ChartLayout {
+            mode: ChartLayoutMode::Four,
+            ..Default::default()
+        };
+        let mut charts = [chart(60), chart(60), chart(60), chart(60)];
+        let size = vec2(1536.0, 864.0);
+        let mut texts = Vec::new();
+        for frame in 0..3 {
+            texts = frame_texts(
+                &ctx,
+                &mut layout,
+                &mut charts,
+                size,
+                frame as f64 * 0.1,
+                vec![],
+            );
+        }
+        let slot = layout.rects(Rect::from_min_size(Pos2::ZERO, size), 4)[0];
+        let price = charts[0].get_rendered_price_rect();
+        assert!(price.width() - 48.0 >= 600.0, "{slot:?} {price:?}");
+        let own: Vec<_> = texts
+            .iter()
+            .filter(|(_, rect, _)| rect.is_positive() && slot.contains_rect(*rect))
+            .collect();
+        let selectors = Rect::from_min_max(
+            pos2(slot.right() - 220.0, slot.top() + 2.0),
+            pos2(slot.right() - 110.0, slot.top() + 24.0),
+        );
+        for (text, rect, _) in &own {
+            if !text.starts_with("S ") && !text.starts_with("I ") {
+                assert!(
+                    !rect.intersect(selectors).is_positive(),
+                    "{text:?} paints beneath the selectors"
+                );
+            }
+        }
+        let values: Vec<_> = own
+            .iter()
+            .map(|(text, ..)| text.as_str())
+            .filter(|text| {
+                ["O ", "H ", "L ", "C "]
+                    .iter()
+                    .any(|field| text.starts_with(field))
+            })
+            .collect();
+        let fields: Vec<_> = values.iter().map(|text| &text[..2]).collect();
+        assert_eq!(
+            fields,
+            ["O ", "H ", "L ", "C "],
+            "status line values {values:?}"
+        );
     }
 }
