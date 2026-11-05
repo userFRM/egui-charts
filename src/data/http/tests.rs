@@ -185,6 +185,145 @@ fn column_history_fixtures_preserve_rows_gaps_and_errors() {
     ));
 }
 
+/// A bar of a day or longer is dated by the UTC date of its timestamp and lands in the period of
+/// the chart's clock holding that date, in history, in live refresh and in the bounds sent.
+#[cfg(feature = "timezones")]
+#[test]
+fn calendar_bars_keep_their_utc_trading_date_in_every_chart_time_zone() {
+    use crate::model::TimezoneId;
+    use chrono::TimeZone as _;
+    const NEW_YORK: &str = "America/New_York";
+    const TOKYO: &str = "Asia/Tokyo";
+    let at = |text: &str| text.parse::<DateTime<Utc>>().unwrap();
+    let local = |year, month, day| {
+        chrono::Local
+            .with_ymd_and_hms(year, month, day, 0, 0, 0)
+            .earliest()
+            .unwrap()
+            .to_utc()
+    };
+    // New York is on EDT (UTC-4) through October 2026; Tokyo is UTC+9 all year. 2026-10-19 is a
+    // Monday; the two-week periods counted from Monday 1970-01-05 begin on 2026-10-12 and 10-26.
+    for (timeframe, zone, stamp, open) in [
+        (
+            "1D",
+            "UTC",
+            "2026-10-19T00:00:00Z",
+            at("2026-10-19T00:00:00Z"),
+        ),
+        (
+            "1D",
+            NEW_YORK,
+            "2026-10-19T00:00:00Z",
+            at("2026-10-19T04:00:00Z"),
+        ),
+        (
+            "1W",
+            NEW_YORK,
+            "2026-10-19T00:00:00Z",
+            at("2026-10-19T04:00:00Z"),
+        ),
+        (
+            "1M",
+            NEW_YORK,
+            "2026-10-01T00:00:00Z",
+            at("2026-10-01T04:00:00Z"),
+        ),
+        (
+            "2W",
+            NEW_YORK,
+            "2026-10-26T00:00:00Z",
+            at("2026-10-26T04:00:00Z"),
+        ),
+        (
+            "3M",
+            NEW_YORK,
+            "2026-10-01T00:00:00Z",
+            at("2026-10-01T04:00:00Z"),
+        ),
+        // A session open inside the trading date stays on it.
+        (
+            "1D",
+            NEW_YORK,
+            "2026-10-19T13:30:00Z",
+            at("2026-10-19T04:00:00Z"),
+        ),
+        (
+            "1D",
+            TOKYO,
+            "2026-10-19T00:00:00Z",
+            at("2026-10-18T15:00:00Z"),
+        ),
+        (
+            "1W",
+            TOKYO,
+            "2026-10-19T00:00:00Z",
+            at("2026-10-18T15:00:00Z"),
+        ),
+        (
+            "1M",
+            TOKYO,
+            "2026-10-01T00:00:00Z",
+            at("2026-09-30T15:00:00Z"),
+        ),
+        (
+            "1D",
+            TOKYO,
+            "2026-10-19T13:30:00Z",
+            at("2026-10-18T15:00:00Z"),
+        ),
+        ("1D", "local", "2026-10-19T00:00:00Z", local(2026, 10, 19)),
+        ("1W", "local", "2026-10-19T00:00:00Z", local(2026, 10, 19)),
+        ("1M", "local", "2026-10-01T00:00:00Z", local(2026, 10, 1)),
+    ] {
+        let case = format!("{timeframe} {zone} {stamp}");
+        let mut request = request();
+        request.timeframe = timeframe.parse().unwrap();
+        request.clock = match zone {
+            "local" => BarClock::new(request.timeframe).with_local_timezone(),
+            zone => {
+                BarClock::new(request.timeframe).with_timezone(TimezoneId::named(zone).unwrap())
+            }
+        };
+        let stamp = at(stamp);
+        let body = json!({"s":"ok", "t":[stamp.timestamp()], "o":[1], "h":[1], "l":[1], "c":[1]});
+        let page = serde_json::from_value::<Columns>(body)
+            .unwrap()
+            .into_page(&request)
+            .unwrap();
+        let time = page.bars[0].time;
+        assert_eq!(request.clock.bar_open(time), open, "{case}");
+        assert_eq!(time.date_naive(), stamp.date_naive(), "{case}");
+        // The live refresh asks from the bar it holds, scroll-back for the dates before it.
+        let midnight = stamp
+            .date_naive()
+            .and_time(chrono::NaiveTime::MIN)
+            .and_utc();
+        request.since = Some(time);
+        request.before = Some(time);
+        let target = history_url("https://example.test", &request).unwrap();
+        let bound = midnight.timestamp();
+        assert!(
+            target.contains(&format!("&to={bound}&from={bound}")),
+            "{case}: {target}"
+        );
+        // A continuation that names the bar asks for its date and the dates before it.
+        request.since = None;
+        request.before = Some(at("2027-01-01T00:00:00Z"));
+        let continued =
+            serde_json::from_value::<Columns>(json!({"s":"no_data", "nextTime":stamp.timestamp()}))
+                .unwrap()
+                .into_page(&request)
+                .unwrap();
+        request.before = continued.continue_before;
+        let target = history_url("https://example.test", &request).unwrap();
+        assert!(
+            target.ends_with(&format!("&to={}", bound + 86_400)),
+            "{case}: {target}"
+        );
+    }
+}
+
 #[test]
 fn endpoint_requests_preserve_interval_bounds_and_search_filters() {
     let mut request = request();

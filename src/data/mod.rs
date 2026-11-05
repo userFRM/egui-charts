@@ -497,11 +497,13 @@ pub struct HistoryRequest {
 #[non_exhaustive]
 pub struct HistoryPage {
     /// Any order, each stamped with its open or any instant inside it: a bar stamped with its
-    /// close time lands in the next bar. A bar of a day or longer covers a calendar period of
-    /// [`HistoryRequest::clock`], such as a day, a week from Monday or a calendar
-    /// month, in UTC by default: stamp it inside that period, for example at its local midnight. A
-    /// session open on the evening before can fall in the period of the bar before, and one of
-    /// the two bars is then dropped. The chart sorts, deduplicates and validates them.
+    /// close time lands in the next bar. A bar of a day or longer is dated by the UTC calendar
+    /// date of its timestamp and covers the calendar period of [`HistoryRequest::clock`] that
+    /// holds that date, such as a day, a week from Monday or a calendar month, in UTC by default:
+    /// stamp it on its trading date inside that period, at the later of 00:00 UTC on the date and
+    /// the period's open. A session open on the evening before can fall in the period of the bar
+    /// before, and one of the two bars is then dropped. The chart sorts, deduplicates and
+    /// validates them.
     pub bars: Vec<Bar>,
     /// Nothing exists before the oldest returned bar (or before `request.before` when `bars` is
     /// empty).

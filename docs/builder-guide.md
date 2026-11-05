@@ -97,8 +97,12 @@ passes the chosen conversion to `/symbols` so metadata and bars share the same u
 
 History timestamps and bounds are Unix seconds in UTC; bounds may include a
 fraction. `from` is inclusive and `to` exclusive, and an omitted bound is
-unbounded. Return the newest `countback` bars within those bounds. Keep interval,
-extended-hours and conversion semantics on the server; return an HTTP error for
+unbounded. A bar of a day or longer is dated by the UTC calendar date of its
+timestamp, such as 00:00 UTC or a session open on its trading date. The adapter
+places it in the day, week or month holding that date in the time zone the
+chart displays, and bounds such requests at 00:00 UTC on a date. Return the
+newest `countback` bars within those bounds. Keep interval, extended-hours and
+conversion semantics on the server; return an HTTP error for
 an unsupported request rather than serving different prices under those labels.
 For example:
 
@@ -115,7 +119,7 @@ close, or whose volume is negative, and counts it in
 range. The adapter orders bars, enforces bounds and keeps
 at most the requested count. Optional `end_of_history: true` says no older bars
 exist. An empty window may answer `{"s":"no_data","nextTime":0}` to continue
-at that UTC instant. The adapter advances this bar timestamp by one second
+at the bar of that timestamp. The adapter advances the bar's time by one second
 (or half the gap to `to`, if smaller) to form an exclusive continuation bound
 that includes the named bar and still moves backward. `nextTime` must be earlier
 than the requested `to`.

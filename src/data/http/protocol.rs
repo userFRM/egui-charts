@@ -1,8 +1,9 @@
 use super::{FeedCapabilities, FeedError, HistoryPage, HistoryRequest};
 use crate::model::{
-    Bar, DataStatus, Instrument, Session, SessionWindow, SymbolType, Timeframe, TimezoneId,
+    Bar, BarClock, DataStatus, Instrument, Session, SessionWindow, SymbolType, Timeframe,
+    TimezoneId,
 };
-use chrono::{DateTime, NaiveTime, TimeDelta, Utc, Weekday};
+use chrono::{DateTime, NaiveDate, NaiveTime, TimeDelta, Utc, Weekday};
 use serde::Deserialize;
 use std::fmt::Write as _;
 
@@ -60,6 +61,50 @@ fn time_param(time: DateTime<Utc>) -> String {
     }
 }
 
+/// Whether the bars of `clock` cover calendar periods, which this contract dates by the UTC
+/// calendar date of their timestamp.
+fn calendar(clock: &BarClock) -> bool {
+    clock
+        .timeframe()
+        .is_some_and(|timeframe| timeframe.duration_ms() >= Timeframe::Day1.duration_ms())
+}
+
+/// The instant of a bar of a day or longer whose trading date is `date`: on that date and inside
+/// the period of `clock` that holds it, where the chart and studies that date such bars by UTC
+/// both place it.
+fn on_trading_date(clock: &BarClock, date: NaiveDate) -> DateTime<Utc> {
+    let midnight = date.and_time(NaiveTime::MIN).and_utc();
+    // West of UTC the period opens after midnight UTC; east of UTC midnight lies inside it.
+    clock
+        .open_on_date(date)
+        .map_or(midnight, |open| open.max(midnight))
+}
+
+/// A bar's instant as the request's clock places it: server timestamps of bars of a day or
+/// longer name their trading date by their UTC date.
+fn bar_time(request: &HistoryRequest, time: DateTime<Utc>) -> DateTime<Utc> {
+    if calendar(&request.clock) {
+        on_trading_date(&request.clock, time.date_naive())
+    } else {
+        time
+    }
+}
+
+/// The server's bound for `time`, the start of a range or its exclusive end. For bars of a day or
+/// longer, 00:00 UTC on the first trading date whose bar is placed at or after `time`.
+fn bound(request: &HistoryRequest, time: DateTime<Utc>) -> DateTime<Utc> {
+    if !calendar(&request.clock) {
+        return time;
+    }
+    let date = time.date_naive();
+    let date = if on_trading_date(&request.clock, date) >= time {
+        date
+    } else {
+        date.succ_opt().unwrap_or(date)
+    };
+    date.and_time(NaiveTime::MIN).and_utc()
+}
+
 pub(super) fn history_url(base: &str, request: &HistoryRequest) -> Result<String, FeedError> {
     let mut params = vec![
         ("symbol", request.symbol.clone()),
@@ -68,10 +113,10 @@ pub(super) fn history_url(base: &str, request: &HistoryRequest) -> Result<String
         ("extended_hours", request.extended_hours.to_string()),
     ];
     if let Some(before) = request.before {
-        params.push(("to", time_param(before)));
+        params.push(("to", time_param(bound(request, before))));
     }
     if let Some(since) = request.since {
-        params.push(("from", time_param(since)));
+        params.push(("from", time_param(bound(request, since))));
     }
     if let Some(conversion) = &request.conversion {
         params.push(("conversion", conversion.clone()));
@@ -275,6 +320,7 @@ impl Columns {
             let Some(time) = DateTime::from_timestamp(stamp, 0) else {
                 continue;
             };
+            let time = bar_time(request, time);
             let bar = Bar::new(
                 time,
                 self.o[index],
@@ -299,6 +345,7 @@ impl Columns {
             .next_time
             .map(|stamp| {
                 let next = DateTime::from_timestamp(stamp, 0)
+                    .map(|next| bar_time(request, next))
                     .ok_or_else(|| invalid("invalid history continuation"))?;
                 // Include the named second without rounding it away in a server's numeric parser.
                 let step = request
