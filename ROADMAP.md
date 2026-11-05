@@ -112,7 +112,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Moving-average families include SMA, EMA, WMA, HMA, ALMA, KAMA and configurable combinations, ribbons and crossing markers.
 - [x] Momentum and trend studies include RSI, MACD, Stochastic, ADX, SuperTrend, Ichimoku and Parabolic SAR. RSI opens with a middle level and an RSI-based moving average whose type and length are inputs.
 - [x] Volatility and channel studies include Bollinger Bands, ATR, Keltner, Donchian and historical volatility.
-- [x] Volume studies include OBV, MFI, accumulation/distribution and VWAP; VWAP supports calendar/session and supplied event anchors with deviation or percentage bands.
+- [x] Volume studies include OBV, MFI, accumulation/distribution and VWAP; VWAP supports calendar/session and supplied event anchors with deviation or percentage bands, and opens with one filled band at one standard deviation.
 - [x] Visible, fixed, session, periodic, anchored and auto-anchored volume profiles sum supplied executions in whole-tick rows, mark incomplete spans and fall back to finer-bar or chart-bar estimates, with translucent rows that keep candles readable, point of control and value area.
 - [x] Regression, rank correlation, pivot levels, ZigZag, candlestick patterns, seasonality and market-structure studies.
 - [x] Majority Rule reports +1, -1 or zero from the majority of rising versus falling closes over its lookback.

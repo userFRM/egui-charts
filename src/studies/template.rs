@@ -157,6 +157,14 @@ impl StudyTemplate {
     /// change.
     fn upgraded(&self) -> Option<Self> {
         let has = |id: &str| self.inputs.iter().any(|(input, _)| input == id);
+        let bands = self
+            .inputs
+            .iter()
+            .find_map(|(id, value)| match (id.as_str(), value) {
+                ("band_count", InputValue::Length(count)) => Some(*count),
+                _ => None,
+            })
+            .unwrap_or(0);
         let mut template = self.clone();
         match self.name.as_str() {
             // One multiplier set both bands before each had its own.
@@ -214,6 +222,23 @@ impl StudyTemplate {
                         visible: false,
                     });
                 }
+            }
+            // A VWAP opened without bands, and no band was filled, before it opened with a filled
+            // one.
+            "VWAP" if !has("band_count") || (self.settings.fills.is_empty() && bands > 0) => {
+                if !has("band_count") {
+                    template
+                        .inputs
+                        .push(("band_count".to_owned(), InputValue::Length(0)));
+                }
+                template.settings.fills = vec![
+                    crate::studies::FillStyle {
+                        color: egui::Color32::TRANSPARENT,
+                        inverted_color: None,
+                        visible: false,
+                    };
+                    bands
+                ];
             }
             // Profile endpoints were Unix milliseconds before they read as UTC dates and times.
             "Vol Profile FR" | "Vol Profile Anchored"
@@ -583,6 +608,23 @@ mod tests {
             [80.0, 30.0, 50.0]
         );
         assert!(!restored.settings().levels[2].visible);
+
+        // Saved without bands, with an older flag instead of the band inputs, and with bands that
+        // were not filled yet.
+        let plain = StudyTemplate::from_study(&VolumeWeightedAvgPrice::new());
+        assert_eq!(plain.create().unwrap().line_count(), 1);
+        let mut older = plain.clone();
+        older.inputs = vec![("daily".to_owned(), InputValue::Toggle(false))];
+        assert_eq!(older.create().unwrap().line_count(), 1);
+        let bands = VolumeWeightedAvgPrice::new().with_std_dev_bands([1.0, 2.0]);
+        let mut unfilled = StudyTemplate::from_study(&bands);
+        unfilled.settings.fills.clear();
+        let restored = unfilled.create().unwrap();
+        assert_eq!(restored.line_count(), 5);
+        assert!(restored.fills().is_empty());
+        // Saved since then, a filled band stays filled.
+        let filled = StudyTemplate::from_study(&bands).create().unwrap();
+        assert_eq!(filled.fills().len(), 2);
     }
 
     #[test]
