@@ -20,7 +20,7 @@ mod vwap;
 pub use crate::config::{DrawingInteractionMode, DrawingToolType, ParseToolTypeError};
 pub use bars_pattern::{BarsPatternConfig, BarsPatternMode};
 pub use coordinates::ChartPoint;
-pub use drawing::Drawing;
+pub use drawing::{Drawing, FolderSync};
 pub use elliott::ElliottDegree;
 pub(crate) use gann::{GANN_MAX_ARC, GANN_SQUARE_UNITS};
 pub use gann::{GannConfig, GannFanDirection, GannLevel};

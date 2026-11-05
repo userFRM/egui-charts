@@ -65,6 +65,9 @@ struct Live {
     sampler: Option<Sampler>,
     study_inputs: Vec<crate::data::OrderFlowInput>,
     taken: TakenIds,
+    /// Pending bars the pending limit does not count, those of a replay rebuild until the chart
+    /// drains them; `usize::MAX` while the rebuild runs.
+    rebuilt_bars: usize,
     updates: Updates,
 }
 
@@ -221,6 +224,9 @@ impl Inbox {
             .map(|(id, live)| {
                 let next = Updates::new(live.updates.trades.empty());
                 let mut updates = std::mem::replace(&mut live.updates, next);
+                if live.rebuilt_bars != usize::MAX {
+                    live.rebuilt_bars = 0;
+                }
                 if updates.dropped_bars > 0 {
                     updates.rejected += updates.dropped_bars;
                     updates.error = Some(FeedError::InvalidData(format!(

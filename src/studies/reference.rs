@@ -537,7 +537,7 @@ fn staple_studies_match_published_definitions() {
         ("SMA(20)", Box::new(SMA::new(20))),
         ("EMA(12)", Box::new(EMA::new(12))),
         ("WMA(20)", Box::new(WMA::new(20))),
-        ("RSI(14)", Box::new(RSI::default())),
+        ("RSI(14)", Box::new(RSI::new(14))),
         ("StochRSI(14,14,3,3)", Box::new(StochasticRSI::default())),
         ("MACD(12,26,9)", Box::new(MACD::default())),
         (

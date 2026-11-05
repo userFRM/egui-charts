@@ -87,6 +87,10 @@ fn paint_link_marker(ui: &Ui, rect: Rect, marker: &str) {
     }
 }
 
+#[cfg(feature = "studies")]
+mod copy;
+#[cfg(feature = "studies")]
+pub use copy::{LayoutCopy, LayoutCopyIssue, LayoutCopyIssueKind};
 #[cfg(feature = "drawings")]
 mod drawings;
 #[cfg(feature = "drawings")]
@@ -860,6 +864,47 @@ impl LinkChange {
     }
 }
 
+/// Undo and redo steps of cross-chart edits, which every chart of the layout takes at the next
+/// [`ChartLayout::show`].
+#[derive(Default)]
+struct LayoutEdits {
+    steps: Arc<Mutex<Vec<(u64, bool)>>>,
+    #[cfg(feature = "studies")]
+    next: u64,
+}
+
+impl Clone for LayoutEdits {
+    /// A copy serves other charts, whose steps do not concern this layout.
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl LayoutEdits {
+    #[cfg(feature = "studies")]
+    fn start(&mut self) -> LayoutEditLink {
+        self.next += 1;
+        LayoutEditLink {
+            steps: Arc::clone(&self.steps),
+            id: self.next,
+        }
+    }
+}
+
+/// Marks a chart's history action as its part of a cross-chart edit.
+#[derive(Clone)]
+pub(super) struct LayoutEditLink {
+    steps: Arc<Mutex<Vec<(u64, bool)>>>,
+    pub(super) id: u64,
+}
+
+impl LayoutEditLink {
+    /// Asks the other charts of the edit to take the same step.
+    pub(super) fn request(&self, redo: bool) {
+        self.steps.lock().unwrap().push((self.id, redo));
+    }
+}
+
 /// Independent synchronization switches within each layout group.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChartSyncOptions {
@@ -872,6 +917,7 @@ pub struct ChartSyncOptions {
     /// Charts that keep their drawings in the same storage are left to it: they read each other's
     /// stored drawings whether this is on or off, so a drawing reaches them once a chart history
     /// edit writes it. Only drawings that are not saveable still sync between them here.
+    /// A top-level folder's `FolderSync` overrides this for its drawings.
     pub sync_drawings: bool,
     /// Synchronize symbol changes for fields following the layout setting.
     /// Explicit individual groups work independently. A host without a feed supplies bars.
@@ -939,6 +985,7 @@ pub struct ChartLayout {
     drawings: DrawingLinks,
     previous_preset: Option<(ChartLayoutMode, usize)>,
     sizing: SizingState,
+    edits: LayoutEdits,
 }
 
 /// Identifies a chart's bars: it changes when they are replaced, not when they stream.
@@ -1066,6 +1113,18 @@ impl ChartLayout {
     fn record_sizes(&mut self, chart: &mut Chart) {
         for change in self.sizing.pending.drain(..) {
             chart.history.record_sizes(change);
+        }
+    }
+
+    fn step_layout_edits(&mut self, charts: &mut [&mut Chart]) {
+        loop {
+            let step = self.edits.steps.lock().unwrap().pop();
+            let Some((id, redo)) = step else {
+                return;
+            };
+            for chart in charts.iter_mut() {
+                chart.step_layout_edit(id, redo);
+            }
         }
     }
 
@@ -1408,6 +1467,7 @@ impl ChartLayout {
         }
         self.record_sizes(charts[self.active]);
         self.record_links(charts[self.active]);
+        self.step_layout_edits(charts);
         let (mut rects, mut dividers) = self.geometry(rect, count);
         if self.move_divider(ui) {
             (rects, dividers) = self.geometry(rect, count);
@@ -1639,10 +1699,21 @@ impl ChartLayout {
             ui.ctx().request_repaint();
         }
         #[cfg(feature = "drawings")]
-        if self.sync.sync_drawings
-            && self
-                .drawings
-                .sync(charts, total, &self.groups, pointer_down)
+        if (self.sync.sync_drawings
+            || charts.iter().take(total).any(|chart| {
+                chart
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .any(|d| d.folder_sync_mode().is_some())
+            }))
+            && self.drawings.sync(
+                charts,
+                total,
+                &self.groups,
+                pointer_down,
+                self.sync.sync_drawings,
+            )
         {
             ui.ctx().request_repaint();
         }

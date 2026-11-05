@@ -134,8 +134,8 @@ mod drawing_api;
 pub use drawing_api::DrawingError;
 mod studies_data;
 pub use crate::chart::primitives::{
-    PanePrimitive, PanePrimitiveView, PriceAxisLabel, Primitive, PrimitiveHit, PrimitiveId,
-    PrimitivePass, PrimitiveView, TimeAxisLabel,
+    CustomPoint, PanePrimitive, PanePrimitiveView, PriceAxisLabel, Primitive, PrimitiveHit,
+    PrimitiveId, PrimitivePass, PrimitiveView, TimeAxisLabel,
 };
 pub use pane::VisualOrder;
 pub use series::{BarsInRange, MismatchDirection, PriceLineId, SeriesLastValue};
@@ -149,6 +149,9 @@ mod volume;
 pub use layout::{
     ChartLayout, ChartLayoutMode, ChartLayoutSizing, ChartLink, ChartLinkGroups, ChartSyncOptions,
 };
+#[cfg(feature = "studies")]
+#[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
+pub use layout::{LayoutCopy, LayoutCopyIssue, LayoutCopyIssueKind};
 pub(crate) mod sync;
 mod time_scale;
 use feed::FeedLink;

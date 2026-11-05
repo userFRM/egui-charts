@@ -32,7 +32,15 @@ pub(crate) fn hit_profile(
     profiles.into_iter().find_map(|plot| {
         let profile = &plot.profile;
         let span = profile_span(&plot, coords);
-        if span.start >= span.end || point.x < span.start || point.x > span.end {
+        if span.start >= span.end {
+            return None;
+        }
+        let in_span = (span.start..=span.end).contains(&point.x);
+        // The point of control of a profile of the bars in view crosses the plot, past its rows.
+        if !in_span
+            && (profile.exposure.is_some()
+                || !crate::painting::volume_profile::measures_view(profile, plot.right_aligned))
+        {
             return None;
         }
         if profile.exposure.is_some() {
@@ -52,13 +60,17 @@ pub(crate) fn hit_profile(
         }
         let (poc, (va_low, va_high)) = profile.poc_and_value_area(plot.config.value_area())?;
         let y_at = |row: usize| price_to_y(profile.low + row as f64 * profile.row_height);
-        let on_level = [
-            (y_at(poc) + y_at(poc + 1)) * 0.5,
-            y_at(va_low),
-            y_at(va_high + 1),
-        ]
-        .into_iter()
-        .any(|y| (point.y - y).abs() <= tolerance);
+        let on_poc = (point.y - (y_at(poc) + y_at(poc + 1)) * 0.5).abs() <= tolerance;
+        let on_value_area = in_span
+            && [y_at(va_low), y_at(va_high + 1)]
+                .into_iter()
+                .any(|y| (point.y - y).abs() <= tolerance);
+        let row_share =
+            if crate::painting::volume_profile::measures_view(profile, plot.right_aligned) {
+                1.0
+            } else {
+                0.9
+            };
         let on_row = profile.volume.iter().enumerate().any(|(row, &volume)| {
             let amount = if plot.config.display == ProfileDisplay::Delta {
                 (profile.up[row] - profile.down[row]).abs()
@@ -68,7 +80,7 @@ pub(crate) fn hit_profile(
             if amount <= 0.0 {
                 return false;
             }
-            let width = (amount / profile.volume[poc]) as f32 * (span.end - span.start) * 0.9;
+            let width = (amount / profile.volume[poc]) as f32 * (span.end - span.start) * row_share;
             let left = if plot.right_aligned {
                 span.end - width
             } else {
@@ -82,7 +94,7 @@ pub(crate) fn hit_profile(
                 .expand(tolerance)
                 .contains(point)
         });
-        (on_row || on_level).then(|| {
+        (on_row || on_poc || on_value_area).then(|| {
             coords
                 .x_to_idx(point.x)
                 .clamp(plot.bars.start, plot.bars.end - 1)
