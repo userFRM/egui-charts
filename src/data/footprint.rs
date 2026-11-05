@@ -573,15 +573,15 @@ impl Footprint {
             let Ok(first) = history.binary_search_by_key(&trades[start].ts, |bar| bar.time) else {
                 continue;
             };
-            let (parts, proven, next) = history_run(
+            let run = history_run(
                 timeframe,
                 self.tick_size,
                 &trades[start..],
                 &history[first..],
             );
-            if proven {
-                newest = parts;
-                at = start + next.max(1);
+            if run.proven {
+                newest = run.parts;
+                at = start + run.next.max(1);
             }
         }
         for (trade, open, size) in newest {
@@ -710,16 +710,25 @@ impl Footprint {
     }
 }
 
+/// Paged executions grouped along the chart's bars from one start.
+#[cfg(feature = "widget")]
+struct HistoryRun<'a> {
+    /// The parts of the bars that match: execution, bar open and allocated size.
+    parts: Vec<(&'a Tick, DateTime<Utc>, f64)>,
+    /// Whether they prove the start (see [`Footprint::push_history`]).
+    proven: bool,
+    /// Index of the first execution of the bar that did not match.
+    next: usize,
+}
+
 /// Groups `trades` from their first execution along `history`, the bars from the one it opens.
-/// Returns the parts of the bars that match, whether they prove the start (see
-/// [`Footprint::push_history`]), and the index of the first execution of the bar that did not.
 #[cfg(feature = "widget")]
 fn history_run<'a>(
     timeframe: crate::model::Timeframe,
     tick_size: f64,
     trades: &[&'a Tick],
     history: &[crate::model::Bar],
-) -> (Vec<(&'a Tick, DateTime<Utc>, f64)>, bool, usize) {
+) -> HistoryRun<'a> {
     use crate::model::Bar;
     let near = |a: f64, b: f64| (a - b).abs() <= 1e-9 * a.abs().max(b.abs());
     let same = |grouped: &Bar, bar: Option<&Bar>| {
@@ -745,7 +754,11 @@ fn history_run<'a>(
             if let Some(grouped) = forming.as_ref().filter(|grouped| grouped.time != bar.time) {
                 if !same(grouped, history.get(matched)) {
                     parts.truncate(kept);
-                    return (parts, matched >= 2, opened);
+                    return HistoryRun {
+                        parts,
+                        proven: matched >= 2,
+                        next: opened,
+                    };
                 }
                 matched += 1;
                 kept = parts.len();
@@ -755,7 +768,11 @@ fn history_run<'a>(
                     .is_none_or(|next| next.time != bar.time)
                 {
                     parts.truncate(kept);
-                    return (parts, matched >= 2, opened);
+                    return HistoryRun {
+                        parts,
+                        proven: matched >= 2,
+                        next: opened,
+                    };
                 }
             }
             parts.push((*trade, bar.time, size));
@@ -764,10 +781,18 @@ fn history_run<'a>(
     }
     // The page ends here, so a last bar that sums as grouped closes no earlier than it should.
     if forming.is_some_and(|grouped| same(&grouped, history.get(matched))) {
-        return (parts, true, trades.len());
+        return HistoryRun {
+            parts,
+            proven: true,
+            next: trades.len(),
+        };
     }
     parts.truncate(kept);
-    (parts, matched >= 2, opened)
+    HistoryRun {
+        parts,
+        proven: matched >= 2,
+        next: opened,
+    }
 }
 
 #[cfg(test)]
