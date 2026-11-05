@@ -630,7 +630,6 @@ impl Chart {
     /// a change before its last bar, as for a new history, and otherwise keeping their values until
     /// their next full recompute. Studies that read only other histories stay as they are.
     fn restart_study_data(&mut self, changes: &Changes) {
-        let mut restarted = false;
         for (at, study) in self.studies.indicators().iter().enumerate() {
             let mut read = None::<bool>;
             for request in study.data_requests() {
@@ -643,13 +642,23 @@ impl Chart {
                 Some(true) => {
                     self.pending_from[at] = Some(0);
                     self.next_refresh[at] = f64::NEG_INFINITY;
+                    self.element_studies.dirty = true;
                 }
-                Some(false) => self.stale[at] = true,
-                None => continue,
+                Some(false) => {
+                    self.stale[at] = true;
+                    // Its copy on the elements of a price-based chart type keeps its values too;
+                    // while another type is shown the copies are not kept current and are rebuilt.
+                    if self.chart_type.is_time_independent()
+                        && let Some(stale) = self.element_studies.stale.get_mut(at)
+                    {
+                        *stale = true;
+                    } else {
+                        self.element_studies.dirty = true;
+                    }
+                }
+                None => {}
             }
-            restarted = true;
         }
-        self.element_studies.dirty |= restarted;
         self.fill_fed_series();
     }
 }
@@ -1796,9 +1805,11 @@ mod tests {
 
     /// Trades that move today's daily bar of a one-minute chart recompute Performance, which reads
     /// the daily bars, at most once per refresh interval and keep it drawn while it waits; an SMA
-    /// calculated on the hourly bars is neither recomputed nor blanked, whichever was added first.
+    /// calculated on the hourly bars is neither recomputed nor blanked, whichever was added first,
+    /// on candles and on Renko bricks.
     #[test]
     fn live_daily_bars_refresh_only_their_studies_and_keep_them_drawn() {
+        use crate::model::ChartType;
         use crate::studies::{Indicator, IndicatorValues, Performance};
         use std::sync::atomic::{AtomicUsize, Ordering};
         /// A study counting its calculations from the first bar.
@@ -1853,13 +1864,19 @@ mod tests {
                 Box::new(Counted(self.0.clone_box(), self.1.clone()))
             }
         }
-        for performance_first in [true, false] {
+        for (chart_type, performance_first) in [
+            (ChartType::Candles, true),
+            (ChartType::Candles, false),
+            (ChartType::Renko, true),
+            (ChartType::Renko, false),
+        ] {
             let feed = Arc::new(Live::default());
             let mut chart = ChartBuilder::new()
                 .with_feed(feed.clone())
                 .with_symbol("MAIN")
                 .with_timeframe(Timeframe::Min1)
                 .build();
+            chart.set_chart_type(chart_type);
             let counts = [(); 2].map(|_| Arc::new(AtomicUsize::new(0)));
             let mut studies = [
                 Counted(Box::new(Performance::new()), counts[0].clone()),
@@ -1883,17 +1900,17 @@ mod tests {
             for frame in 0..10 {
                 shapes(&ctx, &mut chart, frame as f64, Vec::new());
             }
+            // The drawn values, on Renko those calculated on the bricks.
             let last = |chart: &Chart| {
                 ids.map(|id| {
-                    let (_, study) = chart.indicators().find(|(other, _)| *other == id).unwrap();
-                    let len = study.values().len();
-                    len.checked_sub(1)
-                        .and_then(|at| study.values().value(0, at))
+                    let at = chart.indicators().position(|(other, _)| other == id).unwrap();
+                    let values = chart.rendered_studies().indicators()[at].values();
+                    values.len().checked_sub(1).and_then(|at| values.value(0, at))
                 })
             };
             // 1W against a daily close of 50 is 100 * (100 - 50) / 50 = 100, and hourly closes of
-            // 100 give an SMA of 100 at the chart's last bar.
-            assert_eq!(last(&chart), [Some(100.0); 2], "{performance_first}");
+            // 100 give an SMA of 100 at the last bar or brick, which closes at 100.
+            assert_eq!(last(&chart), [Some(100.0); 2], "{chart_type:?} {performance_first}");
             let sink = feed.sink(Timeframe::Day1);
             let today: DateTime<chrono::Utc> = "2024-03-15T00:00:00Z".parse().unwrap();
             for count in &counts {
@@ -1910,10 +1927,13 @@ mod tests {
                 }
             }
             let counts = counts.map(|count| count.load(Ordering::Relaxed));
+            // On Renko the studies of the bricks recompute too.
+            let limit = if chart_type == ChartType::Renko { 6 } else { 3 };
             assert!(
-                counts[0] <= 3 && counts[1] == 0 && blank == [0, 0],
-                "Performance first: {performance_first}, full recalculations of Performance and \
-                 the SMA in half a second {counts:?}, frames without a last value {blank:?}"
+                counts[0] <= limit && counts[1] == 0 && blank == [0, 0],
+                "{chart_type:?}, Performance first: {performance_first}, full recalculations of \
+                 Performance and the SMA in half a second {counts:?}, frames without a last value \
+                 {blank:?}"
             );
         }
     }
@@ -1964,8 +1984,9 @@ mod tests {
         );
     }
 
-    /// Daily bars of close 50 for the 400 days before 2024-03-15, and hourly and minute bars of
-    /// close 100 up to 14:00 that day. Keeps the sink of every subscription.
+    /// Daily bars of close 50 for the 400 days before 2024-03-15, hourly bars of close 100 up to
+    /// 14:00 that day and minute bars closing at 102 and 100 in turn up to 14:00, at 100. Keeps
+    /// the sink of every subscription.
     #[derive(Default)]
     struct Live(Mutex<Vec<(Timeframe, Sink)>>);
 
@@ -1991,7 +2012,10 @@ mod tests {
                     .map(|hour| flat(last - Duration::hours(499 - hour), 100.0))
                     .collect(),
                 _ => (0..5000)
-                    .map(|minute| flat(last - Duration::minutes(4999 - minute), 100.0))
+                    .map(|minute| {
+                        let close = 100.0 + 2.0 * ((4999 - minute) % 2) as f64;
+                        flat(last - Duration::minutes(4999 - minute), close)
+                    })
                     .collect(),
             };
             let bars = bars

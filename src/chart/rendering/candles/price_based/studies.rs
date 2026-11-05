@@ -7,7 +7,8 @@ use std::sync::Arc;
 pub(crate) struct ElementStudies {
     pub(crate) studies: IndicatorRegistry,
     pub(crate) pending_from: Vec<Option<usize>>,
-    /// Always `false`: the elements are rebuilt rather than evicted.
+    /// Whether each study keeps its values until its next full recompute, after a live bar of a
+    /// history it reads. An eviction does not set it: the elements are rebuilt rather than evicted.
     pub(crate) stale: Vec<bool>,
     pub(crate) next_refresh: Vec<f64>,
     pub(crate) dirty: bool,
