@@ -10,12 +10,12 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 
 `ChartType` offers 21 chart types, with the rendering limits listed below.
 
-- [x] Candles, OHLC bars, hollow candles and volume candles, with configurable rising and falling colours. Hollow candles keep independent body, border and wick visibility and rising/falling colours, which persist in layouts and undo. Added candle series accept a border width and per-bar body, wick and border colours; borders stay inside the body and default to disabled.
+- [x] Candles, OHLC bars, hollow candles and volume candles, with configurable rising and falling colours. Hollow and volume candles keep independent body, border and wick visibility and rising/falling colours, which persist in layouts and undo; volume candles can also compare each close with the previous close. Added candle series accept a border width and per-bar body, wick and border colours; borders stay inside the body and default to disabled.
 - [x] Line, line with markers, step line, area, HLC area, baseline, columns and high-low charts; line and area charts accept a `PriceSource`. Added column series apply their configured hit tolerance around their painted bounds, including flat bodies, dense bars and single-point histories; zero uses the body bounds and all hits stay inside the plot. Baseline fills accept independent colours at the pane edge and the base on each price side, including point overrides, while older settings keep flat fills. Area and baseline plots support point markers with independent radii for main and added series. Added series retain their own curved and patterned lines, OHLC open-tick visibility and thin bars, area gradient endpoints, relative gradients and fill inversion. Line-based added series pulse continuously or on last-bar updates on their own pane and scale; expired update pulses stop requesting repaints.
 - [x] Main-series conflation has a configurable physical-pixel threshold or can be disabled. `Chart::prepare_conflation` prepares the shared render cache before a dense view; groups retain price extremes, gaps and per-bar colours and refresh after data, price-source or grouping changes.
 - [x] Heikin-Ashi, Renko, Kagi, line break, point and figure, and range-bar transformations and rendering. Heikin-Ashi retains independent body, border and wick visibility and rising/falling colours; Symbol settings also select original-only scale prices or the default pair of original and transformed closes. These choices persist in layouts and undo.
 - [x] Renko box sizing and wicks, line-break lookback, and price-based chart parameters are configurable.
-- [x] Market Profile (TPO) uses exchange sessions or calendar days, with letters or blocks, initial balance, point of control, value area and composite profiles; autoscale fits the full displayed distributions and cropped profiles retain their session and central-level readouts. POC, value-area and midpoint captions keep a gutter at the first or offscreen session opening, separate nearby levels and reveal their prices on hover.
+- [x] Market Profile (TPO) uses exchange sessions or calendar days, with letters or blocks, initial balance, point of control, value area and composite profiles; autoscale fits the full displayed distributions and cropped profiles retain their session and central-level readouts. POC, value-area and optional midpoint captions keep a gutter at the first or offscreen session opening, separate nearby levels and reveal their prices on hover.
 - [x] Volume Footprint and Session Volume Profile aggregate supplied executions on time, tick, volume, range and delta intervals with an instrument tick size; bars without complete retained executions use candles. Session profiles require `studies`, divide the chart by the chart's hours, the instrument's regular or extended hours, or a daily window of their own in any zone, and group executions into a row count or whole ticks per row; autoscale includes their full price rows after range edits, and manual crops retain session and POC/value-area readouts. Hosts can restrict the chart type menu and favourite strip to declared historical or live executions for the resolved instrument; unavailable favourites stay saved.
 - [ ] Leave bars outside the chosen session hours out of session volume profiles instead of joining them to the session before.
 - [ ] Change Kagi line thickness at shoulder and waist crossings within a continuing leg.
@@ -23,7 +23,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Range charts build their bars from the supplied executions, falling back to the OHLC approximation while the chart holds none; `Chart::range_bar_source` reports which one is shown.
 - [ ] Offer proportional volume-candle widths without the current minimum width.
 - [ ] Expose HLC fill opacity and close-line width, and Kagi stroke widths.
-- [ ] Render the TPO single-print highlights already calculated by the engine.
+- [x] TPO single-print highlights and the midpoint caption and marker are off by default and switch on from the chart's settings or the study's inputs.
 
 ### Pan, Zoom and Cursor
 
@@ -99,7 +99,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] `Chart::set_storage` loads and saves drawings per symbol and retains failed writes for retry.
 - [x] Drawing templates save, apply and delete reusable styles through `TemplateStore` and `Storage`.
 - [x] Demonstration cursor with a fading pointer trail.
-- [ ] Add nested drawing folders and folder management to the object tree.
+- [x] Nested drawing folders in the object tree. New folders take the selected drawings and any fully selected folders. A folder row selects its descendants, drags into another folder or out to the root, and deletes with its contents in one undo step. Emptied folders go away and an undo restores them; cycles and name clashes are refused. A top-level folder keeps its drawings on the chart, mirrors them across the layout or follows the layout-wide switch. Nested folders follow it and keep their mode at the root. Nesting and modes are saved with the drawings.
 - [x] Sloping drawing alert levels agree with logarithmic rendering, and parallel, disjoint and flat top/bottom channels expose both lines.
 - [ ] Add a separate magic cursor mode.
 
@@ -113,7 +113,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Momentum and trend studies include RSI, MACD, Stochastic, ADX, SuperTrend, Ichimoku and Parabolic SAR.
 - [x] Volatility and channel studies include Bollinger Bands, ATR, Keltner, Donchian and historical volatility.
 - [x] Volume studies include OBV, MFI, accumulation/distribution and VWAP; VWAP supports calendar/session and supplied event anchors with deviation or percentage bands.
-- [x] Visible, fixed, session, periodic, anchored and auto-anchored volume profiles sum supplied executions in whole-tick rows, mark incomplete spans and fall back to finer-bar or chart-bar estimates, with translucent rows that keep candles readable, point of control and value area.
+- [x] Visible, fixed, session, periodic, anchored and auto-anchored volume profiles sum supplied executions in whole-tick rows, mark incomplete spans and fall back to finer-bar or chart-bar estimates, with translucent cyan and pink rows that keep candles readable and stay stronger in the value area, and a 2 px point of control in the foreground colour across each profile's span, or across the whole plot for the visible range.
 - [x] Regression, rank correlation, pivot levels, ZigZag, candlestick patterns, seasonality and market-structure studies.
 - [x] Majority Rule reports +1, -1 or zero from the majority of rising versus falling closes over its lookback.
 - [x] Automatic trend-line, channel, Fibonacci and pitchfork studies use ZigZag pivots with the `drawings` feature. Automatic Fibonacci drawings use the same initial level palette, visible ratios, spare levels and band opacity as manually placed drawings.
@@ -178,7 +178,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] `DepthPanel` shares the ticket ladder's rows, optional columns and profiles without an account or order actions. The demo offers Depth for declared symbols; prices stay fixed through book updates until Center or Shift+Alt+C, and workspace storage retains the panel view.
 - [x] `DepthHistory` retains sampled resting-size columns in bounded tiers; the heatmap uses retained texture tiles and partial updates.
 - [x] Heatmap cells on one sequential colour scale of resting size against a cut-off shared by the held columns, 2 point best bid/ask paths and a compact current-book profile of total or largest-order resting size, with host-supplied quantity units and, while the pointer is over it, a maximum-size key including offscreen levels and exact price, side and size. The Order flow settings tab saves independent heatmap, book profile and volume bubble visibility and appearance; declared feed services and instrument tick size determine its controls.
-- [x] Volume bubbles aggregate by chart bar and price, adapt automatic grouping, sizing and borders to screen density, and offer side/delta colours, linear/square-root/logarithmic scaling and outlier limits.
+- [x] Volume bubbles mark the large trades by default, one translucent bubble each with an area proportional to the size. They can also aggregate by chart bar and price, adapt automatic grouping, sizing and borders to screen density, and offer side/delta colours, linear/square-root/logarithmic scaling and outlier limits.
 - [x] Time-and-sales panel with aggressor colours, size filters, sound intents, selectable milliseconds and full execution timestamps on hover.
 - [x] Explicit aggressor identifiers combine split fills into parent orders with total size, price span and fill count.
 - [x] Fixed stream studies calculate quoted spread, resting book totals/difference, execution rate and inside-quote movement. Execution and aggressor rates plot per-second windows by default and keep bar totals in labelled readouts.
@@ -216,7 +216,8 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 ## Alerts
 
 - [x] Typed `Alert` conditions model price crossings/comparisons, moves over a bar span, study plots, supported drawing levels, watchlists and up to five conditions. Each condition retains its calculation interval; synchronized evaluation uses the shortest interval for frequency and rejects expired observations.
-- [x] Shared creation/editing dialog validates conditions, name, message, frequency and expiry; editable condition previews retain interval choices and presets use storage.
+- [x] Shared creation/editing dialog validates conditions, name, message, frequency and expiry; editable condition previews retain interval choices. Up to five stored presets keep the selected condition, interval, frequency, expiry duration, name and message, delivery and schedule settings, leaving out levels, drawings and webhook URLs, and can be applied, replaced or deleted; a reset returns the dialog to its initial state.
+- [x] Each alert selects popup, sound, email, mobile push and webhook delivery. The alerts panel honours popup and sound and the host sends the rest from the saved alert.
 - [x] The terminal wires toolbar, context-menu, price-scale and configurable keyboard entry points, plus draggable chart alert levels. Alert display, toast duration and host sound playback follow the Alerts settings tab.
 - [x] Strategy-run fill alerts carry execution prices and position messages, suppress repeated fill batches and run on the demo live feed.
 - [x] `AlertsPanel` uses `services::Alerts` to list, edit, pause/enable and remove alerts, and to show supplied trigger events in toasts and an exportable log.
@@ -258,7 +259,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Bar replay hides future main-series bars, supports start-bar/date/random selection, stepping, autoplay, speed and seek, and restores live data on exit.
 - [x] Main-series studies recalculate against replayed bars and drawing anchors remain stable.
 - [x] Floating replay controls, keyboard shortcuts, saved replay sessions and synchronised layout replay are exercised by the demo.
-- [x] `ReplayClock` merges timestamped trades, quotes and depth events across symbols, supports speed and seek, and routes through normal sinks.
+- [x] `ReplayClock` merges timestamped trades, quotes and depth events across symbols, supports speed and seek, and routes through normal sinks. `ReplayDriver` gives each subscription the executions of the session windows it selected. Its seeks and playback at any speed build the same candles, flat candles of quiet slots included, and a seek delivers every bar through the position.
 - [x] `RecordingWriter` and `RecordingReader` encode/decode versioned trade and depth events through supplied I/O streams. The demo keeps at most five minutes and 8 MiB of recorded events per symbol subscription, with book snapshots at retained boundaries, shows the available market replay range, and hides unrecorded live analytics during market playback. Its menu saves a local recording with instrument metadata and imports it for deterministic playback on the matching chart; file size, event count and parsing batches are bounded, and invalid files leave the workspace intact.
 - [ ] Window additional-symbol/interval study histories to the replay cutoff.
 - [ ] Connect the standalone `ReplayToolbar` actions to the replay controller.

@@ -2640,6 +2640,7 @@ impl DemoApp {
             item.z_index = d.z_order;
             item.label = d.label.clone();
             item.folder = d.folder.clone();
+            item.folder_sync = d.folder_sync_mode();
             items.push(item);
         }
         items
