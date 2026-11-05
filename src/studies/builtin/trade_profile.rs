@@ -1,6 +1,7 @@
 //! Exact bid, ask and delta profiles over host-selected session or composite ranges.
 
-use crate::data::{FeedError, Footprint, FootprintBar, NodeSensitivity};
+use crate::data::{FeedError, Footprint, FootprintBar, FootprintLevel, NodeSensitivity};
+use crate::model::ProfileRows;
 use chrono::{DateTime, Utc};
 use std::ops::Range;
 
@@ -71,6 +72,10 @@ pub struct TradeProfile {
     /// before [`Footprint::complete_from`], or no bar is complete: `volume` and
     /// `developing_poc` then leave out the bars before it, and the profile is partial.
     pub complete: bool,
+    /// Rows of the footprint grouped into each row of `volume`, so a level's price is its key
+    /// times `group` times [`Footprint::price_step`]. One unless [`trade_profiles_with_rows`]
+    /// grouped them.
+    pub group: i64,
 }
 
 impl TradeProfile {
@@ -85,7 +90,7 @@ impl TradeProfile {
         let mut volume = FootprintBar::empty(self.range.start);
         flow.complete_bars(self.range.clone())
             .filter_map(|bar| {
-                volume.absorb(bar);
+                volume.absorb(&grouped(bar, self.group));
                 volume.value_area(share).map(|area| (bar.time, area))
             })
             .collect()
@@ -157,15 +162,45 @@ impl TradeProfile {
 /// Bars before [`Footprint::complete_from`], whose executions are not all held, are left
 /// out; [`TradeProfile::complete`] tells whether a range starts before it.
 pub fn trade_profiles(flow: &Footprint, ranges: &TradeProfileRanges) -> Vec<TradeProfile> {
+    trade_profiles_with_rows(flow, ranges, ProfileRows::Feed)
+}
+
+/// [`trade_profiles`] with the footprint's rows grouped as `rows` says, in whole footprint
+/// rows: a row is never finer than the footprint's. [`ProfileRows::Count`] sizes each profile
+/// from its own traded span, so profiles of one chart can differ in row height; see
+/// [`TradeProfile::group`].
+pub fn trade_profiles_with_rows(
+    flow: &Footprint,
+    ranges: &TradeProfileRanges,
+    rows: ProfileRows,
+) -> Vec<TradeProfile> {
     let complete_from = flow.complete_from();
     ranges
         .ranges()
         .iter()
         .map(|range| {
+            let group = match rows {
+                ProfileRows::Feed => 1,
+                ProfileRows::Ticks(ticks) => {
+                    let feed_ticks = (flow.price_step() / flow.tick_size()).round().max(1.0);
+                    (f64::from(ticks) / feed_ticks).ceil().max(1.0) as i64
+                }
+                ProfileRows::Count(count) => {
+                    let (low, high) = flow
+                        .complete_bars(range.clone())
+                        .flat_map(|bar| bar.levels.keys().copied())
+                        .fold((i64::MAX, i64::MIN), |(low, high), l| {
+                            (low.min(l), high.max(l))
+                        });
+                    let span = (i128::from(high) - i128::from(low) + 1).max(1);
+                    let count = i128::from(count.max(1));
+                    i64::try_from((span + count - 1) / count).unwrap_or(i64::MAX)
+                }
+            };
             let mut volume = FootprintBar::empty(range.start);
             let mut developing_poc = Vec::new();
             for bar in flow.complete_bars(range.clone()) {
-                volume.absorb(bar);
+                volume.absorb(&grouped(bar, group));
                 if let Some(poc) = volume.poc() {
                     developing_poc.push((bar.time, poc));
                 }
@@ -175,9 +210,38 @@ pub fn trade_profiles(flow: &Footprint, ranges: &TradeProfileRanges) -> Vec<Trad
                 volume,
                 developing_poc,
                 complete: complete_from.is_some_and(|from| from <= range.start),
+                group,
             }
         })
         .collect()
+}
+
+/// `bar` with every `group` neighbouring rows summed into the row keyed by their quotient.
+fn grouped(bar: &FootprintBar, group: i64) -> FootprintBar {
+    if group == 1 {
+        return bar.clone();
+    }
+    let mut shown = FootprintBar {
+        time: bar.time,
+        levels: Default::default(),
+        bid: bar.bid,
+        ask: bar.ask,
+        unknown: bar.unknown,
+        min_delta: bar.min_delta,
+        max_delta: bar.max_delta,
+    };
+    for row in bar.levels.values() {
+        let key = row.level.div_euclid(group);
+        shown
+            .levels
+            .entry(key)
+            .or_insert_with(|| FootprintLevel {
+                level: key,
+                ..Default::default()
+            })
+            .absorb(row);
+    }
+    shown
 }
 
 #[cfg(test)]
@@ -281,6 +345,7 @@ mod tests {
                 },
                 developing_poc: Vec::new(),
                 complete: true,
+                group: 1,
             }
             .nodes(NodeSensitivity {
                 smoothing,
@@ -311,6 +376,51 @@ mod tests {
                 (high, low),
                 "{volumes:?}, smoothing {smoothing}, prominence {prominence}"
             );
+        }
+    }
+
+    #[test]
+    fn row_rules_group_footprint_rows_in_whole_ticks() {
+        let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let end = start + TimeDelta::minutes(1);
+        // Ten ticks, 100.0 to 109.0, with the most volume at 107.0.
+        let build = |ticks_per_row| {
+            let mut flow =
+                Footprint::new(BarClock::new(Timeframe::Min1), 1.0, ticks_per_row).unwrap();
+            for price in 100..110 {
+                let size = if price == 107 { 5.0 } else { 1.0 };
+                flow.push(&Tick::new(start, f64::from(price), size, None))
+                    .unwrap();
+            }
+            flow
+        };
+        let ranges = TradeProfileRanges::new(vec![start..end]).unwrap();
+        // (ticks per feed row, rule, rows grouped, POC key, rows held)
+        for (feed, rows, group, poc, held) in [
+            (1, ProfileRows::Feed, 1, 107, 10),
+            (1, ProfileRows::Ticks(5), 5, 21, 2),
+            // A row is never finer than the feed's, and holds at least the ticks asked for.
+            (2, ProfileRows::Ticks(1), 1, 53, 5),
+            (2, ProfileRows::Ticks(3), 2, 26, 3),
+            // Ten ticks over four rows need three ticks each, so over three rows.
+            (1, ProfileRows::Count(4), 3, 35, 4),
+            (1, ProfileRows::Count(100), 1, 107, 10),
+        ] {
+            let profiles = trade_profiles_with_rows(&build(feed), &ranges, rows);
+            let profile = &profiles[0];
+            assert_eq!(profile.group, group, "{rows:?} over {feed}-tick rows");
+            assert_eq!(
+                profile.volume.poc(),
+                Some(poc),
+                "{rows:?} over {feed}-tick rows"
+            );
+            assert_eq!(
+                profile.volume.levels.len(),
+                held,
+                "{rows:?} over {feed}-tick rows"
+            );
+            assert_eq!(profile.volume.volume(), 14.0);
+            assert_eq!(profile.developing_poc, [(start, poc)]);
         }
     }
 }

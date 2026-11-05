@@ -4,11 +4,13 @@ use crate::chart::series::SeriesSettings;
 use crate::localization as l10n;
 use crate::model::{
     BaselineLevel, BoxSizeMethod, ChartType, ChartTypeParams, FootprintColor, FootprintMode,
-    FootprintStatistic, LinePlotStyle, LineStyle, PriceBasedSource, PriceSource,
+    FootprintStatistic, LinePlotStyle, LineStyle, PriceBasedSource, PriceSource, ProfileRows,
+    ProfileSession, TimezoneId,
 };
 use crate::theme::ThemeExt;
 use crate::ui_kit::ext::UiExt;
 use crate::ui_kit::{ColorPicker, ColorPickerState, FormGrid};
+use chrono::{NaiveTime, Timelike};
 use egui::{Color32, RichText, Ui};
 
 /// Symbol tab renderer - shows chart type and style settings
@@ -438,6 +440,8 @@ impl SymbolTab {
                 );
             });
             ui.end_row();
+            Self::profile_session(ui, &mut profile.session);
+            Self::profile_rows(ui, &mut profile.rows);
             Self::value_area(ui, &mut profile.value_area);
             Self::switch(ui, "Value area guides", &mut profile.value_area_guides);
             Self::switch(ui, "Developing POC", &mut profile.developing_poc);
@@ -469,6 +473,124 @@ impl SymbolTab {
                 ui.end_row();
             }
         });
+    }
+
+    /// Session hours: the chart's calendar, the instrument's regular or extended windows, or a
+    /// daily window of its own.
+    fn profile_session(ui: &mut Ui, session: &mut ProfileSession) {
+        let label = ui.label(l10n::text(ui.ctx(), "Session"));
+        let custom = || {
+            let at = |hour| NaiveTime::from_hms_opt(hour, 0, 0).unwrap();
+            ProfileSession::Custom(crate::model::CustomProfileSession {
+                start: at(0),
+                end: at(0),
+                zone: None,
+            })
+        };
+        let choice = |session: &ProfileSession| match session {
+            ProfileSession::Chart => 0,
+            ProfileSession::Regular => 1,
+            ProfileSession::Extended => 2,
+            ProfileSession::Custom(_) => 3,
+        };
+        let mut selected = choice(session);
+        ui.label_inputs_by(label.id, |ui| {
+            ui.combo_select("profile_session", &mut selected, 0..4, |i| {
+                ["Chart hours", "Regular hours", "Extended hours", "Custom"][*i].to_owned()
+            });
+        });
+        ui.end_row();
+        if selected != choice(session) {
+            *session = [
+                ProfileSession::Chart,
+                ProfileSession::Regular,
+                ProfileSession::Extended,
+                custom(),
+            ][selected]
+                .clone();
+        }
+        let ProfileSession::Custom(custom) = session else {
+            return;
+        };
+        for (name, time) in [
+            ("Session start", &mut custom.start),
+            ("Session end", &mut custom.end),
+        ] {
+            let label = ui.label(l10n::text(ui.ctx(), name));
+            ui.horizontal(|ui| {
+                let (mut hour, mut minute) = (time.hour(), time.minute());
+                ui.add(egui::DragValue::new(&mut hour).range(0..=23))
+                    .labelled_by(label.id);
+                ui.label(":");
+                ui.add(egui::DragValue::new(&mut minute).range(0..=59))
+                    .labelled_by(label.id);
+                *time = NaiveTime::from_hms_opt(hour, minute, 0).unwrap_or(*time);
+            });
+            ui.end_row();
+        }
+        let label = ui.label(l10n::text(ui.ctx(), "Session zone"));
+        let zones: &[&str] = if cfg!(feature = "timezones") {
+            &[
+                "UTC",
+                "America/New_York",
+                "America/Chicago",
+                "Europe/London",
+                "Asia/Tokyo",
+            ]
+        } else {
+            &["UTC", "-05:00", "+01:00", "+09:00"]
+        };
+        ui.label_inputs_by(label.id, |ui| {
+            let options = std::iter::once(None)
+                .chain(
+                    zones
+                        .iter()
+                        .filter_map(|zone| TimezoneId::named(zone))
+                        .map(Some),
+                )
+                .chain(custom.zone.clone().map(Some));
+            let mut options: Vec<_> = options.collect();
+            options.dedup();
+            ui.combo_select("profile_zone", &mut custom.zone, options, |zone| {
+                zone.as_ref()
+                    .map_or("Exchange", |zone| zone.name())
+                    .to_owned()
+            });
+        });
+        ui.end_row();
+    }
+
+    /// Row grouping: the feed's rows, a row count, or ticks per row.
+    fn profile_rows(ui: &mut Ui, rows: &mut ProfileRows) {
+        let label = ui.label(l10n::text(ui.ctx(), "Rows layout"));
+        let choice = |rows: &ProfileRows| match rows {
+            ProfileRows::Feed => 0,
+            ProfileRows::Count(_) => 1,
+            ProfileRows::Ticks(_) => 2,
+        };
+        let mut selected = choice(rows);
+        ui.label_inputs_by(label.id, |ui| {
+            ui.combo_select("profile_rows", &mut selected, 0..3, |i| {
+                ["Feed rows", "Number of rows", "Ticks per row"][*i].to_owned()
+            });
+        });
+        ui.end_row();
+        if selected != choice(rows) {
+            *rows = [
+                ProfileRows::Feed,
+                ProfileRows::Count(24),
+                ProfileRows::Ticks(1),
+            ][selected];
+        }
+        let (name, size, range) = match rows {
+            ProfileRows::Feed => return,
+            ProfileRows::Count(count) => ("Row count", count, 1..=1000),
+            ProfileRows::Ticks(ticks) => ("Row size", ticks, 1..=1_000_000),
+        };
+        let label = ui.label(l10n::text(ui.ctx(), name));
+        ui.add(egui::DragValue::new(size).range(range))
+            .labelled_by(label.id);
+        ui.end_row();
     }
 
     fn marker_radius_row(ui: &mut Ui, radius: &mut f32) {
