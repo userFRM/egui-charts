@@ -368,6 +368,9 @@ pub enum FootprintMode {
     Trades,
     /// Total volume divided by execution count; absent for an empty row.
     AverageSize,
+    /// A narrow candle body in the middle of the column, with the sell volume of each row in a
+    /// cell on its left and the buy volume in a cell on its right.
+    Ladder,
 }
 
 /// What determines a footprint cell's colour.
@@ -385,6 +388,11 @@ pub enum FootprintColor {
     /// opacity growing with the delta's absolute size relative to the bar's largest. A zero delta
     /// takes the neutral colour at full opacity.
     DeltaOpacity,
+    /// Sell and buy volume shaded separately, each in one of four strengths of its own colour by
+    /// the quarter it falls in between the smallest and the largest volume of its side in the
+    /// bar. The POC row takes the text colour, the value area is two dotted lines, and a side
+    /// that dominates under the imbalance settings gets a strip along its outer edge.
+    VolumeSteps,
 }
 
 /// How `studies::TradeProfile::nodes` (requires `studies`) chooses volume nodes.
@@ -624,6 +632,9 @@ pub struct ChartTypeParams {
     pub footprint_show_zero: bool,
     /// Footprint: preferred minimum and maximum font sizes in points, within 8 to 24.
     pub footprint_font_size: [f32; 2],
+    /// Footprint: write the sell and buy totals and a delta and total volume box below each bar
+    /// of a [`FootprintMode::Ladder`] column.
+    pub footprint_info_box: bool,
     /// Footprint: show the selected statistics rows below the price pane.
     pub footprint_statistics: bool,
     /// Footprint: statistics rows in display order; an empty list hides the table.
@@ -696,9 +707,9 @@ pub struct ChartTypeParams {
 impl Default for ChartTypeParams {
     fn default() -> Self {
         Self {
-            footprint_modes: vec![FootprintMode::BidAsk],
-            footprint_profile: true,
-            footprint_color_by: FootprintColor::Delta,
+            footprint_modes: vec![FootprintMode::Ladder],
+            footprint_profile: false,
+            footprint_color_by: FootprintColor::VolumeSteps,
             footprint_colors: [None; 4],
             footprint_row_ticks: 0,
             footprint_poc: true,
@@ -717,9 +728,10 @@ impl Default for ChartTypeParams {
             footprint_ratio: None,
             footprint_extreme_ratio: false,
             footprint_pullback: false,
-            footprint_abbreviate: false,
+            footprint_abbreviate: true,
             footprint_show_zero: true,
             footprint_font_size: [10.0, 10.0],
+            footprint_info_box: true,
             footprint_statistics: false,
             footprint_statistics_rows: vec![
                 FootprintStatistic::Volume,
