@@ -223,8 +223,9 @@ impl ChartMenus {
 
     /// Opens the menu for the chart's last right-click, shows the open one and returns the
     /// chosen action. Alt plus the platform command modifier reveals a price button at the
-    /// pointer, including when the price-axis button is hidden. Clicking it offers line, alert
-    /// and order actions in the pointed pane. Editors and drawing drags retain their input.
+    /// pointer, including when the price-axis button is hidden. Clicking it offers the line in
+    /// the pointed pane, and alert and order actions in the pane of the main series, whose scale
+    /// reads prices of the chart symbol. Editors and drawing drags retain their input.
     /// While a menu is open the chart draws no crosshair or tooltip under it.
     pub fn show(&mut self, ctx: &Context, chart: &mut Chart) -> Option<ChartContextAction> {
         if self.chart.hidden.contains(&Control::ContextMenus) {
@@ -337,6 +338,9 @@ impl ChartMenus {
                         .registry
                         .availability(crate::drawings::DrawingToolType::HorizontalLine);
                     self.chart.horizontal_line = line.visible && line.enabled;
+                    self.chart.symbol_price = chart
+                        .pane_at_position(pos)
+                        .is_none_or(|pane| Some(pane) == chart.series_pane(SeriesId::MAIN));
                     self.chart.open(pos, price);
                 }
             }
