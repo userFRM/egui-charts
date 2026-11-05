@@ -72,6 +72,15 @@ fn column_history_fixtures_preserve_rows_gaps_and_errors() {
             )),
         ),
         (
+            // Nor does an out-of-range row stop the rows after it.
+            200,
+            json!({"s":"ok", "t":[i64::MAX,0,60], "o":[12,10,11], "h":[14,12,13],
+                "l":[11,9,10], "c":[12,11,12], "v":[300,100,200]})
+            .to_string(),
+            None,
+            Ok(HistoryPage::new(bars.clone(), false)),
+        ),
+        (
             200,
             r#"{"s":"no_data"}"#.into(),
             None,
