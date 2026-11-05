@@ -1,6 +1,6 @@
 //! Style tab - color, line width, line style.
 
-use crate::drawings::{ArrowStyle, DrawingToolType, LineMeasurementPosition};
+use crate::drawings::{ArrowStyle, LineMeasurementPosition};
 use crate::localization as l10n;
 use crate::model::LineStyle;
 use egui::{Color32, Role, Sense, Stroke, StrokeKind, Ui, Vec2, WidgetInfo};
@@ -88,7 +88,7 @@ impl StyleTab {
                     .labelled_by(label.id);
                     ui.end_row();
                 }
-                if settings.tool_type == DrawingToolType::ExtendedLine {
+                if settings.tool_type.supports_line_measurements() {
                     let measurements = &mut settings.line_measurements;
                     for (label, value) in [
                         ("Middle point", &mut measurements.midpoint),

@@ -104,7 +104,7 @@ impl Chart {
         Ok(())
     }
 
-    /// Replaces an extended line's readouts and midpoint as one undoable edit.
+    /// Replaces a ray's or extended line's readouts and midpoint as one undoable edit.
     /// Unknown, locked and other drawing types leave drawings and history untouched.
     pub fn set_line_measurements(
         &mut self,
@@ -120,8 +120,10 @@ impl Chart {
         if drawing.locked {
             return Err(DrawingError::Locked(id));
         }
-        if drawing.tool_type != crate::drawings::DrawingToolType::ExtendedLine {
-            return Err(DrawingError::Invalid("Drawing is not an extended line"));
+        if !drawing.tool_type.supports_line_measurements() {
+            return Err(DrawingError::Invalid(
+                "Drawing is not a ray or an extended line",
+            ));
         }
         self.user_action(|chart| {
             chart.drawings_mut().edit_drawing(id, |drawing| {
@@ -425,6 +427,12 @@ mod tests {
             Err(DrawingError::Invalid(_))
         ));
         assert_eq!(chart.drawings().drawings[0].line_measurements, measurements);
+        chart.drawings_mut().drawings[0].tool_type = T::Ray;
+        chart.set_line_measurements(1, Default::default()).unwrap();
+        assert_eq!(
+            chart.drawings().drawings[0].line_measurements,
+            Default::default()
+        );
     }
 
     /// Guards #977: a drawing moves between the price pane and a study pane as one undoable

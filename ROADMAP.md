@@ -61,7 +61,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 
 ### Geometry and Annotations
 
-- [x] Trend lines, rays, extended lines, horizontal and vertical levels, cross lines, trend angle and info line. Extended lines offer independent price, percentage, pip, bar, elapsed-time, length and inclination readouts, selection-only or persistent display, left/centre/right placement and a movable midpoint; settings survive undo, templates and saves.
+- [x] Trend lines, rays, extended lines, horizontal and vertical levels, cross lines, trend angle and info line. Rays and extended lines offer independent price, percentage, pip, bar, elapsed-time, length and inclination readouts, selection-only or persistent display, left/centre/right placement and a movable midpoint; settings survive undo, templates and saves.
 - [x] Parallel, flat-top/bottom, disjoint and regression channels; regression uses the selected closes and configurable deviation bands.
 - [x] Andrews, Schiff, modified Schiff and inside pitchforks, with configurable levels and fills; three-anchor pitchfans.
 - [x] Fibonacci retracement, three-anchor extension and channel, time zones, circles, arcs, speed fan, spiral, wedge and trend-based time projections.
@@ -224,7 +224,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 - [x] Inline creation and series-level alert visibility, labels and colour work alongside the shared dialog.
 - [x] Drawing alerts follow fork, pitchfan and regression lines on linear and logarithmic scales, with entry, exit, inside and outside conditions resolving both moving boundaries.
 - [ ] Model persistent inside/outside-channel conditions and once-per-minute frequency.
-- [ ] Expose message placeholder and per-alert notification-schedule configuration for host processing.
+- [x] Alert messages fill symbol, exchange, ticker, interval, bar, trigger time, source, study plot and drawing level placeholders from the triggering event, with names capped at 300 and messages at 4000 characters; per-alert notification schedules are configurable for host processing.
 
 ## UI Components
 
