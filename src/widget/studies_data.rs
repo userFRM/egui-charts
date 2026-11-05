@@ -290,24 +290,25 @@ impl Chart {
     }
 
     /// [`Self::study_data_requests`], each with how far back the connected feed loads it: to
-    /// the chart's first bar, or to a later start that every study reading it states through
-    /// `Indicator::data_start`. `None` while the chart has no bars. Allocates only the requests,
-    /// since it runs every frame.
+    /// the earliest start among its readers, a study stating one through
+    /// `Indicator::data_start` and any other counting as the chart's first bar. `None` while
+    /// the chart has no bars. Allocates only the requests, since it runs every frame.
     fn study_data_reaches(&self) -> Vec<(StudyDataRequest, Option<chrono::DateTime<chrono::Utc>>)> {
         // Price-based chart types run their studies on elements; the source studies asked
         // here are not given the view, so their histories load in full.
         let full = self.chart_type.is_time_independent();
+        let first = self.state.data().bars.first().map(|bar| bar.time);
         let mut reaches: Vec<(StudyDataRequest, Option<_>)> = self
             .fed_requests()
             .into_iter()
-            .map(|request| (request, None))
+            .map(|request| (request, first))
             .collect();
         for (_, study) in self.indicators() {
             for declared in study.data_requests() {
                 let start = study.data_start(&declared).filter(|_| !full);
+                let start = first.and(start.or(first));
                 let request = resolved(&declared, self.symbol(), self.timeframe());
                 match reaches.iter_mut().find(|(known, _)| *known == request) {
-                    // `None` sorts first: a study without a start loads it to the first bar.
                     Some((_, reach)) => *reach = (*reach).min(start),
                     None => reaches.push((request, start)),
                 }
@@ -315,15 +316,12 @@ impl Chart {
         }
         #[cfg(feature = "drawings")]
         for (declared, start) in self.profile_histories(&self.drawings) {
+            let start = first.and(Some(start));
             let request = resolved(&declared, self.symbol(), self.timeframe());
             match reaches.iter_mut().find(|(known, _)| *known == request) {
-                Some((_, reach)) => *reach = (*reach).min(Some(start)),
-                None => reaches.push((request, Some(start))),
+                Some((_, reach)) => *reach = (*reach).min(start),
+                None => reaches.push((request, start)),
             }
-        }
-        let first = self.state.data().bars.first().map(|bar| bar.time);
-        for (_, reach) in &mut reaches {
-            *reach = first.map(|first| reach.map_or(first, |start| start.max(first)));
         }
         reaches
     }
@@ -811,6 +809,88 @@ pub(super) mod tests {
             assert_eq!(axes, 1);
             assert!(layout.price_rect.width() < rect.width());
         }
+    }
+
+    /// One execution a second from the epoch, across 50 prices, for `instrument`.
+    fn replay_driver(seconds: i64, instrument: Instrument) -> Arc<crate::data::ReplayDriver> {
+        use crate::data::{MarketEvent, ReplayEvent};
+        let second = |s: i64| DateTime::UNIX_EPOCH + Duration::seconds(s);
+        let events = (0..seconds)
+            .map(|s| {
+                let fill = crate::model::Tick::new(second(s), 100.0 + (s % 50) as f64, 1.0, None);
+                let fill = MarketEvent::Trade(fill.with_id(s as u64));
+                ReplayEvent::new("A", second(s), s as u64, fill)
+            })
+            .collect();
+        Arc::new(crate::data::ReplayDriver::new(events, vec![instrument]).unwrap())
+    }
+
+    /// Hosts advance the driver once per frame, also while it is paused and routes nothing.
+    #[test]
+    fn paused_replay_driver_frame_does_not_allocate() {
+        let plain = Instrument::new("A").with_tick_size(1.0);
+        let mut trading = plain.clone();
+        trading.session = Some(crate::model::Session::new([]));
+        for instrument in [plain, trading] {
+            let driver = replay_driver(3, instrument.clone());
+            let mut chart = ChartBuilder::new()
+                .with_feed(driver.clone())
+                .with_symbol("A")
+                .with_timeframe(Timeframe::Min1)
+                .build();
+            let ctx = egui::Context::default();
+            for _ in 0..4 {
+                chart.pump(&ctx);
+            }
+            driver.set_speed(0.0).unwrap();
+            driver.advance(std::time::Duration::ZERO).unwrap();
+            let (count, result) =
+                allocations(|| driver.advance(std::time::Duration::from_millis(16)));
+            result.unwrap();
+            assert_eq!(
+                count, 0,
+                "paused advance allocations, {:?}",
+                instrument.session
+            );
+        }
+    }
+
+    /// A playing frame that delivers no execution must not fold the held ones again.
+    #[cfg(feature = "drawings")]
+    #[test]
+    fn market_playback_frame_does_not_refold_held_executions() {
+        use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+        let driver = replay_driver(2_000, Instrument::new("A").with_tick_size(1.0));
+        driver.set_speed(0.0).unwrap();
+        driver.seek(DateTime::UNIX_EPOCH + Duration::seconds(1_999));
+        let mut chart = Chart::new(crate::model::BarData::from_bars(bars(&[100.0; 3], 1)));
+        chart.set_symbol("A");
+        chart.set_timeframe(Timeframe::Min1);
+        chart.set_market_replay(Some(driver.clone()));
+        let mut drawing = Drawing::new(1, DrawingToolType::FixedRangeVolumeProfile);
+        drawing.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(30.0, 100.0)];
+        chart.drawings_mut().drawings.push(drawing);
+        let ctx = egui::Context::default();
+        for _ in 0..4 {
+            chart.pump(&ctx);
+        }
+        let frame = |chart: &mut Chart| {
+            allocations(|| {
+                let elapsed = std::time::Duration::from_millis(16);
+                driver.advance(elapsed).unwrap();
+                chart.pump(&ctx);
+            })
+            .0
+        };
+        frame(&mut chart);
+        let paused = frame(&mut chart);
+        driver.set_speed(1.0).unwrap();
+        frame(&mut chart);
+        let playing = frame(&mut chart);
+        assert!(
+            playing <= paused + 8,
+            "allocations per frame: paused {paused}, playing {playing}"
+        );
     }
 
     #[derive(Default)]
@@ -1685,6 +1765,80 @@ pub(super) mod tests {
                 (1, Some(hour(12 * 24 + last)), 190, 190.0),
                 "{name}"
             );
+        }
+    }
+
+    /// Guards #2111: Performance's 1Y target on a one-minute chart lies far before the chart's
+    /// first bar, so its daily history pages back to the target, whatever the feed's page size
+    /// and even when a study with no stated start reads the same history. Then it stops.
+    #[test]
+    fn performance_daily_history_reaches_a_year_with_short_pages() {
+        use crate::studies::Indicator;
+        use chrono::Datelike;
+        let flat = |time, close| Bar::new(time, close, close, close, close, 1.0);
+        let open: DateTime<chrono::Utc> = "2024-03-15T13:30:00Z".parse().unwrap();
+        // A close of 50 at 00:00 UTC on every weekday of the two years before 2024-03-15.
+        let today: DateTime<chrono::Utc> = "2024-03-15T00:00:00Z".parse().unwrap();
+        let daily: Vec<_> = (1..=730)
+            .rev()
+            .map(|day| today - Duration::days(day))
+            .filter(|day| day.weekday().number_from_monday() <= 5)
+            .map(|day| flat(day, 50.0))
+            .collect();
+        for shared in [false, true] {
+            let feed = Arc::new(RetryFeed::default());
+            let minutes = (0..390)
+                .map(|minute| flat(open + Duration::minutes(minute), 100.0))
+                .collect();
+            let mut chart = Chart::new(crate::model::BarData::from_bars(minutes));
+            chart.set_symbol("MAIN");
+            chart.set_timeframe(Timeframe::Min1);
+            let id = chart.add_indicator(Box::new(crate::studies::Performance::new()));
+            if shared {
+                let mut average = crate::studies::ConfiguredStudy::new(Box::new(SMA::new(2)));
+                average
+                    .set_input(
+                        "calculation_timeframe",
+                        InputValue::Timeframe(Some(Timeframe::Day1)),
+                    )
+                    .unwrap();
+                chart.add_indicator(Box::new(average));
+            }
+            let ctx = egui::Context::default();
+            let mut pages = 0;
+            loop {
+                ctx.run_ui(egui::RawInput::default(), |_| {})
+                    .drop_without_applying_deltas();
+                chart.pump_study_data(&ctx, Some(feed.clone()));
+                let resolve = feed.resolves.lock().unwrap().pop();
+                if let Some(reply) = resolve {
+                    reply.send(Ok(Instrument::new("MAIN")));
+                    continue;
+                }
+                let Some((request, reply)) = feed.histories.lock().unwrap().pop() else {
+                    break;
+                };
+                // At most 250 bars a page, the newest before the request.
+                let end = daily
+                    .partition_point(|bar| request.before.is_none_or(|before| bar.time < before));
+                pages += 1;
+                reply.send(Ok(HistoryPage::new(
+                    daily[end.saturating_sub(250)..end].to_vec(),
+                    end <= 250,
+                )));
+            }
+            chart.recalculate_studies();
+            let study = chart
+                .indicators()
+                .find(|(candidate, _)| *candidate == id)
+                .unwrap()
+                .1;
+            // Every period starts from a close of 50: 100 * (100 - 50) / 50 = 100.
+            let changes: Vec<_> = (0..6).map(|line| study.values().value(line, 389)).collect();
+            assert_eq!(changes, [Some(100.0); 6], "shared {shared}");
+            // The first page ends on 2023-03-31 and the second passes the target, 2023-03-15; the
+            // two-year feed holds a third.
+            assert_eq!(pages, 2, "shared {shared}");
         }
     }
 

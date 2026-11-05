@@ -7,6 +7,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Months, NaiveDate, NaiveTime, Offset, TimeZone, Timelike, Utc, Weekday};
 use egui::{Context, Ui};
 
+use super::preset::{self, AlertPreset, MAX_PRESETS, PresetFields};
 use super::{AlertDialogAction, AlertDialogConfig};
 use crate::data::{FeedError, inbox::Inbox};
 use crate::model::{
@@ -62,7 +63,13 @@ pub struct AlertDialog {
     last_schedule: Option<NotificationSchedule>,
     editing_condition: usize,
     preset_name: String,
-    presets: BTreeMap<String, Alert>,
+    preset_fields: PresetFields,
+    presets: BTreeMap<String, AlertPreset>,
+    /// The presets being written; they replace `presets` once the host keeps them.
+    unsaved_presets: Option<BTreeMap<String, AlertPreset>>,
+    /// The alert as first shown, which resetting returns to. Hosts may adjust a staged alert
+    /// before its first frame.
+    initial: Option<Alert>,
     storage: Option<Arc<dyn Storage>>,
     inbox: Arc<Inbox>,
     pending: bool,
@@ -100,7 +107,10 @@ impl AlertDialog {
             last_schedule: None,
             editing_condition: 0,
             preset_name: String::new(),
+            preset_fields: PresetFields::default(),
             presets: BTreeMap::new(),
+            unsaved_presets: None,
+            initial: None,
             storage: None,
             inbox: Arc::default(),
             pending: false,
@@ -113,6 +123,7 @@ impl AlertDialog {
     pub fn set_storage(&mut self, storage: Arc<dyn Storage>) {
         self.inbox = Arc::default();
         self.presets.clear();
+        self.unsaved_presets = None;
         self.error = None;
         self.loaded = false;
         self.pending = true;
@@ -142,6 +153,9 @@ impl AlertDialog {
         self.set_schedule_fields(alert.schedule.as_deref());
         self.alert = alert;
         self.editing_condition = 0;
+        self.preset_name.clear();
+        self.preset_fields = PresetFields::default();
+        self.initial = None;
         self.is_open = true;
     }
 
@@ -317,40 +331,58 @@ impl AlertDialog {
                 let result = *answer
                     .downcast::<Result<Option<String>, FeedError>>()
                     .expect("preset load");
-                match result {
-                    Ok(document) => {
-                        let result = document
-                            .map(|doc| serde_json::from_str::<PresetDocument>(&doc))
-                            .transpose();
-                        match result {
-                            Ok(doc) if doc.as_ref().is_none_or(|doc| doc.version == 1) => {
-                                if let Some(doc) = doc {
-                                    self.presets = doc.presets;
-                                    // A schedule saved before the load finished is newer.
-                                    self.last_schedule =
-                                        self.last_schedule.take().or(doc.last_schedule);
-                                }
-                                self.loaded = true;
-                            }
-                            Ok(_) => self.error = Some("Unsupported alert preset version".into()),
-                            Err(error) => self.error = Some(error.to_string()),
-                        }
+                let loaded = result.map_err(|error| error.to_string()).and_then(|doc| {
+                    doc.map_or_else(
+                        || Ok(Default::default()),
+                        |doc| preset::from_document(&doc, Utc::now()),
+                    )
+                });
+                match loaded {
+                    Ok((presets, last_schedule)) => {
+                        self.presets = presets;
+                        // A schedule saved before the load finished is newer.
+                        self.last_schedule = self.last_schedule.take().or(last_schedule);
+                        self.loaded = true;
                     }
+                    Err(error) => self.error = Some(error),
+                }
+            } else {
+                let saved = *answer
+                    .downcast::<Result<(), FeedError>>()
+                    .expect("preset save");
+                let presets = self.unsaved_presets.take();
+                match saved {
+                    Ok(()) => self.presets = presets.unwrap_or_default(),
                     Err(error) => self.error = Some(error.to_string()),
                 }
-            } else if let Err(error) = *answer
-                .downcast::<Result<(), FeedError>>()
-                .expect("preset save")
-            {
-                self.error = Some(error.to_string());
             }
         }
     }
 
-    fn save_preset(&mut self) {
-        self.presets
-            .insert(self.preset_name.trim().into(), self.alert.clone());
-        self.write_presets();
+    /// Whether saving under the typed name would add a preset beyond the limit.
+    fn preset_limit_reached(&self) -> bool {
+        self.presets.len() >= MAX_PRESETS && !self.presets.contains_key(self.preset_name.trim())
+    }
+
+    /// Store the staged alert's selected settings under the typed name, replacing any preset
+    /// of that name.
+    fn save_preset(&mut self, now: DateTime<Utc>) {
+        if self.preset_limit_reached() {
+            return;
+        }
+        let mut presets = self.presets.clone();
+        presets.insert(
+            self.preset_name.trim().into(),
+            AlertPreset::capture(&self.alert, self.preset_fields, now),
+        );
+        self.write_presets(presets);
+    }
+
+    fn delete_preset(&mut self) {
+        let mut presets = self.presets.clone();
+        presets.remove(self.preset_name.trim());
+        self.preset_name.clear();
+        self.write_presets(presets);
     }
 
     /// Keep the staged alert's schedule, if it has one, for the next new alert and the storage.
@@ -358,23 +390,19 @@ impl AlertDialog {
         if let Some(schedule) = &self.alert.schedule {
             self.last_schedule = Some((**schedule).clone());
             if self.loaded && !self.pending {
-                self.write_presets();
+                self.write_presets(self.presets.clone());
             }
         }
     }
 
-    /// Write the presets and the remembered schedule to the host storage.
-    fn write_presets(&mut self) {
-        let document = PresetDocument {
-            version: 1,
-            presets: self.presets.clone(),
-            last_schedule: self.last_schedule.clone(),
-        };
-        match serde_json::to_string(&document) {
+    /// Write `presets` and the remembered schedule to the host storage.
+    fn write_presets(&mut self, presets: BTreeMap<String, AlertPreset>) {
+        match preset::to_document(&presets, self.last_schedule.as_ref()) {
             Ok(document) => {
                 if let Some(storage) = &self.storage {
                     self.pending = true;
                     self.error = None;
+                    self.unsaved_presets = Some(presets);
                     storage.save(
                         StoreKind::AlertPresets,
                         "presets",
@@ -384,6 +412,34 @@ impl AlertDialog {
                 }
             }
             Err(error) => self.error = Some(error.to_string()),
+        }
+    }
+
+    /// Set a preset's selected settings on the staged alert. Its name and fields stay in the
+    /// preset controls, so that a replacement starts from them.
+    fn apply_preset(&mut self, name: String, now: DateTime<Utc>) {
+        let Some(preset) = self.presets.get(&name) else {
+            return;
+        };
+        preset.apply(&mut self.alert, &self.sources, now);
+        let fields = preset.fields;
+        if fields.expiry {
+            self.expires = self.alert.expires.is_some();
+            [self.expiry_date, self.expiry_time] = self.entry_fields(self.alert.expires);
+        }
+        if fields.schedule {
+            let schedule = self.alert.schedule.clone();
+            self.set_schedule_fields(schedule.as_deref());
+        }
+        self.editing_condition = 0;
+        self.preset_name = name;
+        self.preset_fields = fields;
+    }
+
+    /// Return to the alert as first shown, whatever presets or edits changed since.
+    fn reset(&mut self) {
+        if let Some(initial) = self.initial.take() {
+            self.edit(initial);
         }
     }
 
@@ -442,6 +498,8 @@ impl AlertDialog {
                             } else if self.alert.message.chars().count() > Alert::MAX_MESSAGE_CHARS
                             {
                                 "The message is too long"
+                            } else if !self.alert.delivery.is_valid() {
+                                "Enter the webhook URL, starting with http:// or https://"
                             } else if self.alert.additional_conditions.len() > 4 {
                                 "An alert accepts five conditions"
                             } else if intervals.len() > 1
@@ -491,6 +549,9 @@ impl AlertDialog {
     }
 
     fn form(&mut self, ui: &mut Ui) {
+        if self.initial.is_none() {
+            self.initial = Some(self.alert.clone());
+        }
         let time_label = l10n::format_text(
             ui.ctx(),
             "Expiry time ({0})",
@@ -716,6 +777,29 @@ impl AlertDialog {
                 });
                 ui.end_row();
             }
+            ui.label(l10n::text(ui.ctx(), "Delivery"));
+            ui.horizontal_wrapped(|ui| {
+                let delivery = &mut self.alert.delivery;
+                for (selected, label) in [
+                    (&mut delivery.popup, "Popup"),
+                    (&mut delivery.sound, "Sound"),
+                    (&mut delivery.email, "Email"),
+                    (&mut delivery.push, "Mobile push"),
+                    (&mut delivery.webhook, "Webhook"),
+                ] {
+                    ui.checkbox(selected, l10n::text(ui.ctx(), label));
+                }
+            });
+            ui.end_row();
+            if self.alert.delivery.webhook {
+                ui.label(l10n::text(ui.ctx(), "Webhook URL"));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.alert.delivery.webhook_url)
+                        .hint_text("https://"),
+                )
+                .accessible_name(l10n::text(ui.ctx(), "Webhook URL"));
+                ui.end_row();
+            }
             ui.label(l10n::text(ui.ctx(), "Message"));
             ui.add(
                 egui::TextEdit::multiline(&mut self.alert.message)
@@ -821,58 +905,109 @@ impl AlertDialog {
                 ui.label(l10n::text(ui.ctx(), "Preset"));
                 ui.text_edit_singleline(&mut self.preset_name)
                     .accessible_name(l10n::text(ui.ctx(), "Preset"));
+                let now = Utc::now();
+                let (expiry, schedule) = (self.expiry(now), self.schedule());
+                let stored = self.presets.contains_key(self.preset_name.trim());
+                let ready = self.loaded && !self.pending;
+                let fields = self.preset_fields;
                 if ui
                     .add_enabled(
-                        self.loaded
-                            && !self.pending
+                        ready
                             && self.alert.is_valid()
-                            && !self.preset_name.trim().is_empty(),
-                        egui::Button::new(l10n::text(ui.ctx(), "Save preset")),
+                            && !self.preset_name.trim().is_empty()
+                            && fields.any()
+                            && !self.preset_limit_reached()
+                            && (!fields.expiry || expiry.is_ok())
+                            && (!fields.schedule || schedule.is_ok()),
+                        egui::Button::new(l10n::text(
+                            ui.ctx(),
+                            if stored {
+                                "Replace preset"
+                            } else {
+                                "Save preset"
+                            },
+                        )),
                     )
                     .clicked()
-                    && let (Ok(expiry), Ok(schedule)) = (self.expiry(Utc::now()), self.schedule())
-                    && let Ok(start) = self.start(expiry)
                 {
-                    self.alert.starts = start;
-                    self.alert.expires = expiry;
-                    self.alert.schedule = schedule.map(Box::new);
-                    self.save_preset();
+                    if let Ok(expiry) = expiry {
+                        self.alert.expires = expiry;
+                    }
+                    if let Ok(schedule) = schedule {
+                        self.alert.schedule = schedule.map(Box::new);
+                    }
+                    self.save_preset(now);
+                }
+                if ui
+                    .add_enabled(
+                        ready && stored,
+                        egui::Button::new(l10n::text(ui.ctx(), "Delete preset")),
+                    )
+                    .clicked()
+                {
+                    self.delete_preset();
+                }
+                if ui.button(l10n::text(ui.ctx(), "Reset changes")).clicked() {
+                    self.reset();
                 }
             });
+            ui.horizontal_wrapped(|ui| {
+                ui.label(l10n::text(ui.ctx(), "Keep in preset"));
+                let fields = &mut self.preset_fields;
+                for (selected, label, name) in [
+                    (&mut fields.condition, "Condition", "Keep condition"),
+                    (&mut fields.interval, "Interval", "Keep interval"),
+                    (&mut fields.frequency, "Frequency", "Keep frequency"),
+                    (&mut fields.expiry, "Expiry", "Keep expiry"),
+                    (
+                        &mut fields.text,
+                        "Name and message",
+                        "Keep name and message",
+                    ),
+                    (&mut fields.delivery, "Delivery", "Keep delivery"),
+                    (&mut fields.schedule, "Schedule", "Keep schedule"),
+                ] {
+                    ui.checkbox(selected, l10n::text(ui.ctx(), label))
+                        .accessible_name(l10n::text(ui.ctx(), name));
+                }
+            });
+            ui.label(
+                egui::RichText::new(l10n::text(
+                    ui.ctx(),
+                    "Presets leave out levels, drawings and webhook URLs.",
+                ))
+                .weak(),
+            );
+            if !self.preset_name.trim().is_empty() && self.preset_limit_reached() {
+                status_message(
+                    ui,
+                    MessageKind::Warning,
+                    "You can keep five presets. Replace or delete one to save another.",
+                );
+            }
             let mut apply = None;
             egui::ComboBox::from_id_salt("alert_presets")
                 .selected_text(l10n::text(ui.ctx(), "Apply preset"))
                 .show_ui(ui, |ui| {
-                    for (name, alert) in &self.presets {
+                    for name in self.presets.keys() {
                         if ui
                             .selectable_label(false, l10n::text(ui.ctx(), name))
                             .clicked()
                         {
-                            apply = Some(alert.clone());
+                            apply = Some(name.clone());
                         }
                     }
                 })
                 .response
                 .accessible_name(l10n::text(ui.ctx(), "Apply preset"));
-            if let Some(mut preset) = apply {
-                preset.id.clone_from(&self.alert.id);
-                preset.status = self.alert.status;
-                self.edit(preset);
+            if let Some(name) = apply {
+                self.apply_preset(name, Utc::now());
             }
         }
     }
 }
 
 const DAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct PresetDocument {
-    version: u32,
-    presets: BTreeMap<String, Alert>,
-    /// The schedule of the latest saved alert that had one.
-    #[serde(default)]
-    last_schedule: Option<NotificationSchedule>,
-}
 
 fn interval_picker(ui: &mut Ui, interval: &mut Option<Timeframe>, inherited: &str) {
     ui.horizontal_wrapped(|ui| {
@@ -1232,6 +1367,22 @@ mod tests {
         fn save(&self, _: StoreKind, _: &str, doc: String, reply: Reply<()>) {
             *self.0.lock().unwrap() = Some(doc);
             reply.send(Ok(()));
+        }
+        fn delete(&self, _: StoreKind, _: &str, reply: Reply<()>) {
+            reply.send(Ok(()));
+        }
+    }
+
+    struct Refusing;
+    impl Storage for Refusing {
+        fn list(&self, _: StoreKind, reply: Reply<Vec<String>>) {
+            reply.send(Ok(Vec::new()));
+        }
+        fn load(&self, _: StoreKind, _: &str, reply: Reply<Option<String>>) {
+            reply.send(Ok(None));
+        }
+        fn save(&self, _: StoreKind, _: &str, _: String, reply: Reply<()>) {
+            reply.send(Err(FeedError::NotSupported));
         }
         fn delete(&self, _: StoreKind, _: &str, reply: Reply<()>) {
             reply.send(Ok(()));
@@ -1743,30 +1894,100 @@ mod tests {
     }
 
     #[test]
-    fn presets_survive_a_new_dialog_and_unknown_versions_cannot_be_overwritten() {
+    fn presets_keep_their_limit_and_fields_through_replace_delete_reset_and_restart() {
         let store = Arc::new(Store::default());
         let ctx = Context::default();
+        let now = Utc.with_ymd_and_hms(2026, 1, 1, 10, 0, 0).unwrap();
         let mut dialog = AlertDialog::new();
         dialog.set_storage(store.clone());
         dialog.poll(&ctx);
         dialog.open("EURUSD".into(), 1.125);
         dialog.alert.name = "Breakout".into();
         dialog.alert.frequency = AlertFrequency::OncePerBarClose;
-        dialog.preset_name = "Close".into();
-        dialog.save_preset();
+        dialog.alert.delivery.webhook_url = "https://example.test/hook".into();
+        dialog.preset_fields = PresetFields {
+            text: false,
+            ..PresetFields::default()
+        };
+        dialog.preset_name = " Close ".into();
+        dialog.save_preset(now);
         dialog.poll(&ctx);
-        let expected = dialog.alert.clone();
+        let stored = store.0.lock().unwrap().clone().unwrap();
+        for excluded in ["EURUSD", "1.125", "Breakout", "example.test"] {
+            assert!(!stored.contains(excluded), "{excluded} in {stored}");
+        }
+
+        for name in ["A", "B", "C", "D"] {
+            dialog.preset_name = name.into();
+            dialog.save_preset(now);
+            dialog.poll(&ctx);
+        }
+        assert_eq!(dialog.presets.len(), MAX_PRESETS);
+        dialog.preset_name = "Sixth".into();
+        assert!(dialog.preset_limit_reached());
+        dialog.save_preset(now);
+        dialog.poll(&ctx);
+        assert_eq!(dialog.presets.len(), MAX_PRESETS, "a sixth is refused");
+        assert!(!dialog.presets.contains_key("Sixth"));
+
+        // A replacement holds what is selected now, even at the limit.
+        dialog.preset_name = "A".into();
+        assert!(!dialog.preset_limit_reached());
+        dialog.preset_fields = PresetFields {
+            frequency: false,
+            ..PresetFields::default()
+        };
+        dialog.save_preset(now);
+        dialog.poll(&ctx);
+        assert_eq!(dialog.presets.len(), MAX_PRESETS);
+        dialog.preset_name = "D".into();
+        dialog.delete_preset();
+        dialog.poll(&ctx);
+        assert_eq!(dialog.presets.len(), MAX_PRESETS - 1);
+
         let mut restored = AlertDialog::new();
         restored.set_storage(store.clone());
         restored.poll(&ctx);
-        assert_eq!(restored.presets["Close"], expected);
-        *store.0.lock().unwrap() = Some(r#"{"version":2,"presets":{}}"#.into());
+        assert_eq!(restored.presets, dialog.presets);
+        restored.open("AAPL".into(), 123.0);
+        // A host may adjust the staged alert before its first frame; that is the initial state.
+        restored.alert.delivery.webhook_url = "https://own.test".into();
+        ctx.run_ui(Default::default(), |ui| restored.form(ui))
+            .drop_without_applying_deltas();
+        let opened = restored.alert.clone();
+        restored.apply_preset("Close".into(), now);
+        assert_eq!(restored.alert.symbol, "AAPL");
+        assert_eq!(restored.alert.condition, AlertCondition::Crossing(123.0));
+        assert_eq!(restored.alert.frequency, AlertFrequency::OncePerBarClose);
+        assert!(restored.alert.name.is_empty(), "the name was not selected");
+        assert_eq!(restored.alert.delivery.webhook_url, "https://own.test");
+        assert_eq!(restored.preset_name, "Close");
+        restored.apply_preset("A".into(), now);
+        assert_eq!(
+            restored.alert.frequency,
+            AlertFrequency::OncePerBarClose,
+            "frequency left out of the replacement stays"
+        );
+        restored.reset();
+        assert_eq!(restored.alert, opened);
+        assert!(restored.preset_name.is_empty());
+        assert_eq!(restored.preset_fields, PresetFields::default());
+
+        // A refused save leaves the kept presets as they are.
+        let mut failing = AlertDialog::new();
+        failing.set_storage(Arc::new(Refusing));
+        failing.poll(&ctx);
+        failing.open("AAPL".into(), 123.0);
+        failing.preset_name = "New".into();
+        failing.save_preset(now);
+        failing.poll(&ctx);
+        assert!(failing.presets.is_empty());
+        assert!(failing.error.is_some());
+
+        *store.0.lock().unwrap() = Some(r#"{"version":3,"presets":{}}"#.into());
         restored.set_storage(store);
         restored.poll(&ctx);
         assert!(!restored.loaded);
         assert!(restored.error.is_some());
-        restored.open("AAPL".into(), 123.0);
-        assert_eq!(restored.alert.condition, AlertCondition::Crossing(123.0));
-        assert!(restored.alert.name.is_empty());
     }
 }

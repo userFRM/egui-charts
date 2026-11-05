@@ -226,9 +226,7 @@ impl Evaluation {
             .iter()
             .flat_map(|(_, study)| {
                 study.data_requests().into_iter().map(|request| {
-                    let start = study
-                        .data_start(&request)
-                        .map_or(first, |start| start.max(first));
+                    let start = study.data_start(&request).unwrap_or(first);
                     (request, start)
                 })
             })

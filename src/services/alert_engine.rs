@@ -580,7 +580,8 @@ impl State {
         let same_monitoring = existing.is_some_and(|old| {
             old.same_monitoring(&alert)
                 && (old.extend_line != alert.extend_line
-                    || old.blink_on_trigger != alert.blink_on_trigger)
+                    || old.blink_on_trigger != alert.blink_on_trigger
+                    || old.delivery != alert.delivery)
         });
         let same_strategy = matches!(alert.condition, AlertCondition::StrategyFills(_))
             && self
@@ -1594,16 +1595,21 @@ mod tests {
         assert_eq!(delivered.len(), 1);
         assert_eq!(delivered[0].1, events[1]);
         feed(&host, &bars, &[], 1_001);
-        for (line, blink) in [(true, false), (false, true)] {
+        for (line, blink, push) in [
+            (true, false, false),
+            (false, true, false),
+            (false, true, true),
+        ] {
             let mut edited = saved.clone();
             edited["extend_line"] = line.into();
             edited["blink_on_trigger"] = blink.into();
+            edited["delivery"]["push"] = push.into();
             let alert: Alert = serde_json::from_value(edited).unwrap();
             assert_eq!(host.save(alert), Ok(()));
             feed(&host, &bars, &[], 1_001);
             assert!(
                 host.fired().is_empty(),
-                "display changes must preserve occurrences"
+                "display and delivery changes must preserve occurrences"
             );
             let kept = serde_json::to_value(host.engine.alerts()[0].clone()).unwrap();
             assert_eq!(kept["created_at"], saved["created_at"]);
