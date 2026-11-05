@@ -81,6 +81,9 @@ pub struct Alert {
     /// observing values for crossings without firing or consuming an occurrence.
     #[serde(default)]
     pub schedule: Option<Box<NotificationSchedule>>,
+    /// Where a firing is delivered.
+    #[serde(default)]
+    pub delivery: AlertDelivery,
     /// Text the host shows or sends when the alert fires, at most [`Alert::MAX_MESSAGE_CHARS`]
     /// characters. [`Alert::expand_message`] fills in the placeholders `{{symbol}}`, `{{close}}`
     /// and so on when it fires.
@@ -93,6 +96,51 @@ pub struct Alert {
 
 fn alert_display_enabled() -> bool {
     true
+}
+
+/// Where a firing is delivered. The alerts panel honours `popup` and `sound`; the host sends the
+/// others itself, reading them from the saved alert. The trigger log records every firing.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+#[non_exhaustive]
+pub struct AlertDelivery {
+    /// Show a popup. Enabled by default.
+    pub popup: bool,
+    /// Play the sound chosen in the alert settings, if they turn sound on. Enabled by default.
+    pub sound: bool,
+    /// Ask the host to send an email.
+    pub email: bool,
+    /// Ask the host to send a push notification to the user's mobile app.
+    pub push: bool,
+    /// Ask the host to post to [`webhook_url`](Self::webhook_url).
+    pub webhook: bool,
+    /// Where the host posts, as an `http` or `https` URL.
+    pub webhook_url: String,
+}
+
+impl Default for AlertDelivery {
+    fn default() -> Self {
+        Self {
+            popup: true,
+            sound: true,
+            email: false,
+            push: false,
+            webhook: false,
+            webhook_url: String::new(),
+        }
+    }
+}
+
+impl AlertDelivery {
+    /// Whether an enabled webhook has an `http` or `https` URL.
+    pub fn is_valid(&self) -> bool {
+        let url = self.webhook_url.trim();
+        !self.webhook
+            || url
+                .strip_prefix("https://")
+                .or_else(|| url.strip_prefix("http://"))
+                .is_some_and(|rest| !rest.is_empty())
+    }
 }
 
 /// The source view and study definitions captured when an alert is created. The alert's
@@ -203,6 +251,7 @@ impl Alert {
             condition,
             expires: None,
             schedule: None,
+            delivery: AlertDelivery::default(),
             message: String::new(),
             status: AlertStatus::default(),
         }
@@ -217,6 +266,7 @@ impl Alert {
         copy.last_triggered_at = other.last_triggered_at;
         copy.extend_line = other.extend_line;
         copy.blink_on_trigger = other.blink_on_trigger;
+        copy.delivery.clone_from(&other.delivery);
         copy == *other
     }
 
@@ -658,6 +708,7 @@ impl Alert {
                 .schedule
                 .as_ref()
                 .is_none_or(|schedule| schedule.is_valid())
+            && self.delivery.is_valid()
     }
 }
 
@@ -1110,6 +1161,7 @@ mod tests {
                 frequency: AlertFrequency::Once,
                 expires: None,
                 schedule: None,
+                delivery: AlertDelivery::default(),
                 message: String::new(),
                 status: AlertStatus::Active,
             }

@@ -1,0 +1,805 @@
+//! Reusable alert settings, stored without the values that belong to one alert: symbols, levels,
+//! drawings and webhook addresses.
+
+use std::collections::BTreeMap;
+
+use chrono::{DateTime, TimeDelta, Timelike, Utc};
+use serde::{Deserialize, Serialize};
+
+use crate::model::{
+    Alert, AlertChannelComparison, AlertComparison, AlertCondition, AlertDelivery, AlertFrequency,
+    AlertRule, AlertSource, NotificationSchedule, Timeframe,
+};
+
+/// How many presets the user can keep.
+pub(super) const MAX_PRESETS: usize = 5;
+
+/// The stored document's current version. Version 1 kept whole alerts.
+const VERSION: u32 = 2;
+
+/// Which groups of settings a preset stores and restores.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct PresetFields {
+    /// Each rule's source and operator.
+    pub(super) condition: bool,
+    /// Each rule's interval.
+    pub(super) interval: bool,
+    /// How often the alert fires.
+    pub(super) frequency: bool,
+    /// The time left until expiry, or no expiry.
+    pub(super) expiry: bool,
+    /// The alert's name and message.
+    pub(super) text: bool,
+    /// The delivery choices, without the webhook address.
+    pub(super) delivery: bool,
+    /// The notification schedule.
+    pub(super) schedule: bool,
+}
+
+impl Default for PresetFields {
+    fn default() -> Self {
+        Self {
+            condition: true,
+            interval: true,
+            frequency: true,
+            expiry: true,
+            text: true,
+            delivery: true,
+            schedule: true,
+        }
+    }
+}
+
+impl PresetFields {
+    pub(super) fn any(self) -> bool {
+        self.condition
+            || self.interval
+            || self.frequency
+            || self.expiry
+            || self.text
+            || self.delivery
+            || self.schedule
+    }
+}
+
+/// A stored set of settings. Groups that `fields` leaves out keep their defaults.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub(super) struct AlertPreset {
+    pub(super) fields: PresetFields,
+    /// The first rule and the additional ones, with zero thresholds and no drawings.
+    rules: Vec<AlertRule>,
+    timeframe: Option<Timeframe>,
+    additional_timeframes: Vec<Option<Timeframe>>,
+    frequency: AlertFrequency,
+    /// Seconds from applying the preset to the expiry; `None` never expires.
+    expires_after: Option<i64>,
+    name: String,
+    message: String,
+    delivery: AlertDelivery,
+    schedule: Option<Box<NotificationSchedule>>,
+}
+
+impl AlertPreset {
+    /// The selected groups of `alert`, whose expiry counts from the start of `now`'s minute, as
+    /// entered times do.
+    pub(super) fn capture(alert: &Alert, fields: PresetFields, now: DateTime<Utc>) -> Self {
+        let mut preset = Self {
+            fields,
+            ..Self::default()
+        };
+        if fields.condition {
+            preset.rules = std::iter::once((&alert.source, &alert.condition))
+                .chain(
+                    alert
+                        .additional_conditions
+                        .iter()
+                        .map(|rule| (&rule.source, &rule.condition)),
+                )
+                .filter_map(|(source, condition)| {
+                    Some(AlertRule {
+                        source: match source {
+                            AlertSource::Drawing(_) => AlertSource::Price,
+                            source => source.clone(),
+                        },
+                        condition: without_thresholds(condition)?,
+                    })
+                })
+                .collect();
+        }
+        if fields.interval {
+            preset.timeframe = alert.timeframe;
+            preset
+                .additional_timeframes
+                .clone_from(&alert.additional_timeframes);
+        }
+        if fields.frequency {
+            preset.frequency = alert.frequency;
+        }
+        if fields.expiry {
+            preset.expires_after = alert
+                .expires
+                .map(|expiry| (expiry - now).num_seconds() + i64::from(now.second()));
+        }
+        if fields.text {
+            preset.name.clone_from(&alert.name);
+            preset.message.clone_from(&alert.message);
+        }
+        if fields.delivery {
+            preset.delivery = AlertDelivery {
+                webhook_url: String::new(),
+                ..alert.delivery.clone()
+            };
+        }
+        if fields.schedule {
+            preset.schedule.clone_from(&alert.schedule);
+        }
+        preset
+    }
+
+    /// Set the selected groups on `alert`, whose subject, levels, drawings and webhook address
+    /// stay. Sources that `sources` no longer offers stay as they are, and a strategy fill alert
+    /// keeps its condition, interval and any frequency it cannot use.
+    pub(super) fn apply(
+        &self,
+        alert: &mut Alert,
+        sources: &[(AlertSource, String)],
+        now: DateTime<Utc>,
+    ) {
+        let fills = matches!(alert.condition, AlertCondition::StrategyFills(_));
+        if self.fields.condition && !fills && !self.rules.is_empty() {
+            let first = AlertRule {
+                source: alert.source.clone(),
+                condition: alert.condition.clone(),
+            };
+            let mut rules = self.rules.iter().enumerate().map(|(index, rule)| {
+                let current = match index {
+                    0 => &first,
+                    _ => alert.additional_conditions.get(index - 1).unwrap_or(&first),
+                };
+                AlertRule {
+                    source: restored_source(&rule.source, &current.source, sources),
+                    condition: restored_condition(&rule.condition, &current.condition, sources),
+                }
+            });
+            let restored = rules.next();
+            let additional = rules.collect();
+            if let Some(rule) = restored {
+                alert.source = rule.source;
+                alert.condition = rule.condition;
+            }
+            alert.additional_conditions = additional;
+        }
+        if self.fields.interval && !fills {
+            if alert.timeframe != self.timeframe
+                && let Some(inputs) = &mut alert.inputs
+            {
+                // A captured span counts bars of the interval it was captured on.
+                inputs.start = None;
+                inputs.visible = None;
+            }
+            alert.timeframe = self.timeframe;
+            alert
+                .additional_timeframes
+                .clone_from(&self.additional_timeframes);
+        }
+        alert
+            .additional_timeframes
+            .truncate(alert.additional_conditions.len());
+        if self.fields.frequency
+            && (!fills
+                || matches!(
+                    self.frequency,
+                    AlertFrequency::Once | AlertFrequency::EveryTime
+                ))
+        {
+            alert.frequency = self.frequency;
+        }
+        if self.fields.expiry {
+            alert.expires = self
+                .expires_after
+                .and_then(TimeDelta::try_seconds)
+                .and_then(|after| now.checked_add_signed(after));
+        }
+        if self.fields.text {
+            alert.name.clone_from(&self.name);
+            alert.message.clone_from(&self.message);
+        }
+        if self.fields.delivery {
+            alert.delivery = AlertDelivery {
+                webhook_url: std::mem::take(&mut alert.delivery.webhook_url),
+                ..self.delivery.clone()
+            };
+        }
+        if self.fields.schedule {
+            alert.schedule.clone_from(&self.schedule);
+        }
+    }
+}
+
+/// `condition`'s operator with zero thresholds. A drawing's relationship becomes the same
+/// relationship to a level. `None` when only one strategy run can use it.
+fn without_thresholds(condition: &AlertCondition) -> Option<AlertCondition> {
+    use AlertCondition as C;
+    let channel = |comparison| channel_condition(comparison, 0.0, 0.0);
+    Some(match condition {
+        C::StrategyFills(_) => return None,
+        C::Crossing(_) => C::Crossing(0.0),
+        C::CrossingUp(_) => C::CrossingUp(0.0),
+        C::CrossingDown(_) => C::CrossingDown(0.0),
+        C::Above(_) => C::Above(0.0),
+        C::Below(_) => C::Below(0.0),
+        C::EnteringChannel { .. } => channel(AlertChannelComparison::Entering),
+        C::ExitingChannel { .. } => channel(AlertChannelComparison::Exiting),
+        C::InsideChannel { .. } => channel(AlertChannelComparison::Inside),
+        C::OutsideChannel { .. } => channel(AlertChannelComparison::Outside),
+        C::MovingBy { bars, .. } => C::MovingBy {
+            value: 0.0,
+            bars: *bars,
+        },
+        C::MovingByPercent { bars, .. } => C::MovingByPercent {
+            percent: 0.0,
+            bars: *bars,
+        },
+        C::Compare {
+            other: AlertSource::Drawing(_),
+            comparison,
+        } => level_condition(*comparison, 0.0),
+        C::Compare { other, comparison } => C::Compare {
+            other: other.clone(),
+            comparison: *comparison,
+        },
+        C::Channel { comparison, .. } => channel(*comparison),
+        C::VolumeAboveAverage { bars, .. } => C::VolumeAboveAverage {
+            multiplier: 0.0,
+            bars: *bars,
+        },
+    })
+}
+
+/// A stored operator with the thresholds or drawings of `current`. Without matching ones it takes
+/// the values the condition menu seeds.
+fn restored_condition(
+    stored: &AlertCondition,
+    current: &AlertCondition,
+    sources: &[(AlertSource, String)],
+) -> AlertCondition {
+    use AlertCondition as C;
+    let (lower, upper) = match current {
+        C::EnteringChannel { lower, upper }
+        | C::ExitingChannel { lower, upper }
+        | C::InsideChannel { lower, upper }
+        | C::OutsideChannel { lower, upper } => (*lower, *upper),
+        _ => {
+            let level = current.level().unwrap_or(0.0);
+            (level, level + 1.0)
+        }
+    };
+    let level = current.level().unwrap_or(lower);
+    let to_level = |comparison| match current {
+        C::Compare {
+            other: other @ AlertSource::Drawing(_),
+            ..
+        } => C::Compare {
+            other: other.clone(),
+            comparison,
+        },
+        _ => level_condition(comparison, level),
+    };
+    let to_channel = |comparison| match current {
+        C::Channel { boundaries, .. } => C::Channel {
+            boundaries: boundaries.clone(),
+            comparison,
+        },
+        _ => channel_condition(comparison, lower, upper),
+    };
+    let change = match current {
+        C::MovingBy { value, .. } => *value,
+        C::MovingByPercent { percent, .. } => *percent,
+        _ => 1.0,
+    };
+    match stored {
+        C::StrategyFills(_) | C::Channel { .. } => current.clone(),
+        C::Crossing(_) => to_level(AlertComparison::Crossing),
+        C::CrossingUp(_) => to_level(AlertComparison::CrossingUp),
+        C::CrossingDown(_) => to_level(AlertComparison::CrossingDown),
+        C::Above(_) => to_level(AlertComparison::Above),
+        C::Below(_) => to_level(AlertComparison::Below),
+        C::EnteringChannel { .. } => to_channel(AlertChannelComparison::Entering),
+        C::ExitingChannel { .. } => to_channel(AlertChannelComparison::Exiting),
+        C::InsideChannel { .. } => to_channel(AlertChannelComparison::Inside),
+        C::OutsideChannel { .. } => to_channel(AlertChannelComparison::Outside),
+        C::MovingBy { bars, .. } => C::MovingBy {
+            value: change,
+            bars: *bars,
+        },
+        C::MovingByPercent { bars, .. } => C::MovingByPercent {
+            percent: change,
+            bars: *bars,
+        },
+        C::Compare { other, comparison } if offered(other, sources) => C::Compare {
+            other: other.clone(),
+            comparison: *comparison,
+        },
+        C::Compare { comparison, .. } => to_level(*comparison),
+        C::VolumeAboveAverage { bars, .. } => C::VolumeAboveAverage {
+            multiplier: match current {
+                C::VolumeAboveAverage { multiplier, .. } => *multiplier,
+                _ => 2.0,
+            },
+            bars: *bars,
+        },
+    }
+}
+
+/// The stored source unless the alert watches a drawing or the chart no longer offers it.
+fn restored_source(
+    stored: &AlertSource,
+    current: &AlertSource,
+    sources: &[(AlertSource, String)],
+) -> AlertSource {
+    if matches!(current, AlertSource::Drawing(_)) || !offered(stored, sources) {
+        current.clone()
+    } else {
+        stored.clone()
+    }
+}
+
+/// Study identifiers belong to one chart, so a preset can outlive them.
+fn offered(source: &AlertSource, sources: &[(AlertSource, String)]) -> bool {
+    match source {
+        AlertSource::Price | AlertSource::Volume => true,
+        AlertSource::Study { .. } => sources.iter().any(|(offered, _)| offered == source),
+        AlertSource::Drawing(_) => false,
+    }
+}
+
+fn level_condition(comparison: AlertComparison, level: f64) -> AlertCondition {
+    match comparison {
+        AlertComparison::Crossing => AlertCondition::Crossing(level),
+        AlertComparison::CrossingUp => AlertCondition::CrossingUp(level),
+        AlertComparison::CrossingDown => AlertCondition::CrossingDown(level),
+        AlertComparison::Above => AlertCondition::Above(level),
+        AlertComparison::Below => AlertCondition::Below(level),
+    }
+}
+
+fn channel_condition(comparison: AlertChannelComparison, lower: f64, upper: f64) -> AlertCondition {
+    match comparison {
+        AlertChannelComparison::Entering => AlertCondition::EnteringChannel { lower, upper },
+        AlertChannelComparison::Exiting => AlertCondition::ExitingChannel { lower, upper },
+        AlertChannelComparison::Inside => AlertCondition::InsideChannel { lower, upper },
+        AlertChannelComparison::Outside => AlertCondition::OutsideChannel { lower, upper },
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct PresetDocument<T> {
+    version: u32,
+    presets: T,
+}
+
+/// The stored document for `presets`.
+pub(super) fn to_document(presets: &BTreeMap<String, AlertPreset>) -> serde_json::Result<String> {
+    serde_json::to_string(&PresetDocument {
+        version: VERSION,
+        presets,
+    })
+}
+
+/// Read a stored document. Whole alerts from version 1 become presets of every group except an
+/// expiry, whose duration they did not record; a later save rewrites them without their excluded
+/// values. Any other version is an error, so that a save cannot overwrite it.
+pub(super) fn from_document(
+    document: &str,
+    now: DateTime<Utc>,
+) -> Result<BTreeMap<String, AlertPreset>, String> {
+    let document: PresetDocument<serde_json::Value> =
+        serde_json::from_str(document).map_err(|error| error.to_string())?;
+    match document.version {
+        1 => serde_json::from_value::<BTreeMap<String, Alert>>(document.presets)
+            .map(|alerts| {
+                alerts
+                    .into_iter()
+                    .map(|(name, alert)| {
+                        let fields = PresetFields {
+                            expiry: alert.expires.is_none(),
+                            ..PresetFields::default()
+                        };
+                        (name, AlertPreset::capture(&alert, fields, now))
+                    })
+                    .collect()
+            })
+            .map_err(|error| error.to_string()),
+        VERSION => serde_json::from_value(document.presets).map_err(|error| error.to_string()),
+        _ => Err("Unsupported alert preset version".into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{AlertInputs, NotificationWindow, TimezoneId};
+    use chrono::{NaiveTime, TimeZone, Weekday};
+
+    fn study() -> AlertSource {
+        AlertSource::Study {
+            id: "rsi".into(),
+            output: 1,
+        }
+    }
+
+    #[test]
+    fn stored_presets_hold_no_subject_threshold_drawing_or_webhook_address() {
+        let now = Utc.with_ymd_and_hms(2026, 1, 1, 10, 0, 0).unwrap();
+        let mut alert = Alert::new("SECRETSYMBOL", AlertCondition::CrossingUp(123.456));
+        alert.id = Some(crate::model::AlertId("SECRETID".into()));
+        alert.watchlist = Some("SECRETLIST".into());
+        alert.source = AlertSource::Drawing("SECRETDRAWING".into());
+        alert.delivery.webhook = true;
+        alert.delivery.webhook_url = "https://SECRETHOOK".into();
+        alert.additional_conditions = vec![
+            AlertRule {
+                source: AlertSource::Price,
+                condition: AlertCondition::Compare {
+                    other: AlertSource::Drawing("SECRETDRAWING".into()),
+                    comparison: AlertComparison::Below,
+                },
+            },
+            AlertRule {
+                source: study(),
+                condition: AlertCondition::Channel {
+                    boundaries: Box::new([
+                        AlertSource::Drawing("SECRETDRAWING#1".into()),
+                        AlertSource::Drawing("SECRETDRAWING#2".into()),
+                    ]),
+                    comparison: AlertChannelComparison::Outside,
+                },
+            },
+            AlertRule {
+                source: AlertSource::Volume,
+                condition: AlertCondition::MovingByPercent {
+                    percent: 123.456,
+                    bars: 7,
+                },
+            },
+        ];
+        let version_1 = serde_json::json!({"version": 1, "presets": {"Old": alert}}).to_string();
+        for preset in [
+            AlertPreset::capture(&alert, PresetFields::default(), now),
+            from_document(&version_1, now)
+                .unwrap()
+                .remove("Old")
+                .unwrap(),
+        ] {
+            let stored = serde_json::to_string(&preset).unwrap();
+            assert!(!stored.contains("SECRET"), "{stored}");
+            assert!(!stored.contains("123.456"), "{stored}");
+            // Operators, lookbacks and the webhook choice stay.
+            let rules: Vec<_> = preset.rules.iter().map(|r| r.condition.clone()).collect();
+            assert_eq!(
+                rules,
+                [
+                    AlertCondition::CrossingUp(0.0),
+                    AlertCondition::Below(0.0),
+                    AlertCondition::OutsideChannel {
+                        lower: 0.0,
+                        upper: 0.0
+                    },
+                    AlertCondition::MovingByPercent {
+                        percent: 0.0,
+                        bars: 7
+                    },
+                ]
+            );
+            assert!(preset.delivery.webhook);
+        }
+    }
+
+    /// Each row applies a preset saved from `stored` on `stored_source` to an alert on
+    /// `current_source` with `current`, and expects the operator with the current values.
+    #[test]
+    fn applying_keeps_the_current_values_and_takes_the_stored_operator() {
+        use AlertCondition as C;
+        let now = Utc.with_ymd_and_hms(2026, 1, 1, 10, 0, 0).unwrap();
+        let drawing = |id: &str| AlertSource::Drawing(id.into());
+        let compare = |other, comparison| C::Compare { other, comparison };
+        let boundaries = Box::new([drawing("a#1"), drawing("a#2")]);
+        let gone = AlertSource::Study {
+            id: "gone".into(),
+            output: 0,
+        };
+        let price = AlertSource::Price;
+        let cases = [
+            // A level from the opened alert, and a channel seeded the way the menu seeds it.
+            (
+                price.clone(),
+                C::Above(9.0),
+                price.clone(),
+                C::Crossing(100.0),
+                price.clone(),
+                C::Above(100.0),
+            ),
+            (
+                price.clone(),
+                C::InsideChannel {
+                    lower: 1.0,
+                    upper: 2.0,
+                },
+                price.clone(),
+                C::Crossing(100.0),
+                price.clone(),
+                C::InsideChannel {
+                    lower: 100.0,
+                    upper: 101.0,
+                },
+            ),
+            (
+                price.clone(),
+                C::Below(9.0),
+                price.clone(),
+                C::EnteringChannel {
+                    lower: 5.0,
+                    upper: 6.0,
+                },
+                price.clone(),
+                C::Below(5.0),
+            ),
+            // Lookbacks are stored, changes and multipliers are not.
+            (
+                price.clone(),
+                C::MovingBy {
+                    value: 9.0,
+                    bars: 7,
+                },
+                price.clone(),
+                C::MovingByPercent {
+                    percent: 3.0,
+                    bars: 1,
+                },
+                price.clone(),
+                C::MovingBy {
+                    value: 3.0,
+                    bars: 7,
+                },
+            ),
+            (
+                AlertSource::Volume,
+                C::VolumeAboveAverage {
+                    multiplier: 9.0,
+                    bars: 7,
+                },
+                price.clone(),
+                C::Crossing(100.0),
+                AlertSource::Volume,
+                C::VolumeAboveAverage {
+                    multiplier: 2.0,
+                    bars: 7,
+                },
+            ),
+            // An available plot is reused, one the chart no longer has is not.
+            (
+                study(),
+                C::Above(9.0),
+                price.clone(),
+                C::Crossing(100.0),
+                study(),
+                C::Above(100.0),
+            ),
+            (
+                gone.clone(),
+                C::Above(9.0),
+                price.clone(),
+                C::Crossing(100.0),
+                price.clone(),
+                C::Above(100.0),
+            ),
+            (
+                price.clone(),
+                compare(study(), AlertComparison::CrossingDown),
+                price.clone(),
+                C::Crossing(100.0),
+                price.clone(),
+                compare(study(), AlertComparison::CrossingDown),
+            ),
+            (
+                price.clone(),
+                compare(gone.clone(), AlertComparison::Below),
+                price.clone(),
+                C::Crossing(100.0),
+                price.clone(),
+                C::Below(100.0),
+            ),
+            // A stored drawing leaves only its relationship; a drawing alert keeps its drawing.
+            (
+                price.clone(),
+                compare(drawing("old"), AlertComparison::Above),
+                price.clone(),
+                C::Crossing(100.0),
+                price.clone(),
+                C::Above(100.0),
+            ),
+            (
+                price.clone(),
+                C::CrossingUp(9.0),
+                price.clone(),
+                compare(drawing("new"), AlertComparison::Crossing),
+                price.clone(),
+                compare(drawing("new"), AlertComparison::CrossingUp),
+            ),
+            (
+                price.clone(),
+                C::Channel {
+                    boundaries: Box::new([drawing("old#1"), drawing("old#2")]),
+                    comparison: AlertChannelComparison::Exiting,
+                },
+                price.clone(),
+                C::Channel {
+                    boundaries: boundaries.clone(),
+                    comparison: AlertChannelComparison::Entering,
+                },
+                price.clone(),
+                C::Channel {
+                    boundaries,
+                    comparison: AlertChannelComparison::Exiting,
+                },
+            ),
+            (
+                study(),
+                C::Below(9.0),
+                drawing("new"),
+                C::Crossing(100.0),
+                drawing("new"),
+                C::Below(100.0),
+            ),
+        ];
+        let sources = [(study(), "RSI signal".to_owned())];
+        for (stored_source, stored, current_source, current, source, condition) in cases {
+            let mut saved = Alert::new("OLD", stored.clone());
+            saved.source = stored_source;
+            let preset = AlertPreset::capture(&saved, PresetFields::default(), now);
+            let mut alert = Alert::new("NEW", current.clone());
+            alert.source = current_source;
+            preset.apply(&mut alert, &sources, now);
+            assert_eq!(
+                (&alert.source, &alert.condition),
+                (&source, &condition),
+                "{stored:?} on {current:?}"
+            );
+            assert!(alert.is_valid(), "{alert:?}");
+            assert_eq!(alert.symbol, "NEW");
+        }
+    }
+
+    #[test]
+    fn only_the_selected_groups_survive_the_document_and_reach_the_alert() {
+        let saved_at = Utc.with_ymd_and_hms(2026, 1, 1, 10, 0, 48).unwrap();
+        let now = Utc.with_ymd_and_hms(2026, 3, 1, 8, 0, 15).unwrap();
+        let schedule = Box::new(NotificationSchedule {
+            timezone: TimezoneId::utc(),
+            days: vec![Weekday::Mon],
+            windows: vec![NotificationWindow {
+                start: NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                end: NaiveTime::from_hms_opt(17, 0, 0).unwrap(),
+            }],
+        });
+        let mut saved = Alert::new("OLD", AlertCondition::Below(9.0));
+        saved.name = "Name".into();
+        saved.message = "Message".into();
+        saved.timeframe = Some(Timeframe::Hour1);
+        saved.frequency = AlertFrequency::OncePerBar;
+        // An entered 11:00 at 10:00:48 means an hour.
+        saved.expires = Some(Utc.with_ymd_and_hms(2026, 1, 1, 11, 0, 0).unwrap());
+        saved.schedule = Some(schedule.clone());
+        saved.delivery.email = true;
+        saved.delivery.popup = false;
+        saved.additional_conditions.push(AlertRule {
+            source: AlertSource::Volume,
+            condition: AlertCondition::Above(1.0),
+        });
+        saved.additional_timeframes.push(Some(Timeframe::Min5));
+
+        let mut blank = PresetFields {
+            condition: false,
+            interval: false,
+            frequency: false,
+            expiry: false,
+            text: false,
+            delivery: false,
+            schedule: false,
+        };
+        assert!(!blank.any());
+        let span = chrono::DateTime::from_timestamp(0, 0);
+        let opened = || {
+            let mut alert = Alert::new("NEW", AlertCondition::Crossing(100.0));
+            alert.message = "Own".into();
+            alert.delivery.webhook_url = "https://own".into();
+            alert.expires = Some(now + TimeDelta::days(9));
+            alert.inputs = Some(Box::new(AlertInputs {
+                start: span,
+                ..Default::default()
+            }));
+            alert
+        };
+        let apply = |saved: &Alert, fields: PresetFields| {
+            let preset = AlertPreset::capture(saved, fields, saved_at);
+            let presets = BTreeMap::from([("P".to_owned(), preset)]);
+            let document = to_document(&presets).unwrap();
+            let mut alert = opened();
+            from_document(&document, saved_at).unwrap()["P"].apply(&mut alert, &[], now);
+            alert
+        };
+
+        assert_eq!(
+            apply(&saved, blank),
+            opened(),
+            "nothing selected changes nothing"
+        );
+        blank.condition = true;
+        let alert = apply(&saved, blank);
+        assert_eq!(alert.condition, AlertCondition::Below(100.0));
+        assert_eq!(alert.additional_conditions.len(), 1);
+        assert!(alert.additional_timeframes.is_empty());
+        assert_eq!((alert.timeframe, alert.message.as_str()), (None, "Own"));
+        blank.condition = false;
+        blank.interval = true;
+        let alert = apply(&saved, blank);
+        assert_eq!(alert.timeframe, Some(Timeframe::Hour1));
+        assert!(alert.additional_timeframes.is_empty(), "no rule takes it");
+        assert_eq!(alert.inputs.as_ref().unwrap().start, None);
+        assert_eq!(alert.condition, AlertCondition::Crossing(100.0));
+        blank.interval = false;
+        blank.frequency = true;
+        assert_eq!(apply(&saved, blank).frequency, AlertFrequency::OncePerBar);
+        blank.frequency = false;
+        blank.expiry = true;
+        assert_eq!(
+            apply(&saved, blank).expires,
+            Some(now + TimeDelta::hours(1))
+        );
+        saved.expires = None;
+        assert_eq!(
+            apply(&saved, blank).expires,
+            None,
+            "open-ended stays open-ended"
+        );
+        blank.expiry = false;
+        blank.text = true;
+        let alert = apply(&saved, blank);
+        assert_eq!(
+            (alert.name.as_str(), alert.message.as_str()),
+            ("Name", "Message")
+        );
+        blank.text = false;
+        blank.delivery = true;
+        let alert = apply(&saved, blank);
+        assert!(alert.delivery.email && !alert.delivery.popup);
+        assert_eq!(alert.delivery.webhook_url, "https://own");
+        blank.delivery = false;
+        blank.schedule = true;
+        assert_eq!(apply(&saved, blank).schedule, Some(schedule));
+        let all = apply(&saved, PresetFields::default());
+        assert_eq!(all.additional_timeframes, [Some(Timeframe::Min5)]);
+    }
+
+    #[test]
+    fn a_strategy_fill_alert_keeps_what_it_needs_to_stay_valid() {
+        let now = Utc.with_ymd_and_hms(2026, 1, 1, 10, 0, 0).unwrap();
+        let mut saved = Alert::new("OLD", AlertCondition::Below(9.0));
+        saved.frequency = AlertFrequency::OncePerBarClose;
+        saved.timeframe = Some(Timeframe::Hour1);
+        let preset = AlertPreset::capture(&saved, PresetFields::default(), now);
+        let run = AlertCondition::StrategyFills("run".into());
+        let mut alert = Alert::new("NEW", run.clone());
+        preset.apply(&mut alert, &[], now);
+        assert_eq!(alert.condition, run);
+        assert_eq!(alert.frequency, AlertFrequency::EveryTime);
+        assert_eq!(alert.timeframe, None);
+        assert!(alert.is_valid());
+        // The run itself is not reusable.
+        let fills = AlertPreset::capture(&Alert::new("OLD", run), PresetFields::default(), now);
+        let mut alert = Alert::new("NEW", AlertCondition::Above(1.0));
+        fills.apply(&mut alert, &[], now);
+        assert_eq!(alert.condition, AlertCondition::Above(1.0));
+    }
+}

@@ -628,17 +628,27 @@ impl AlertsPanel {
                 },
             )],
         );
-        toasts.add(
-            Toast::info(if message.is_empty() {
-                title
-            } else {
-                format!("{title}\n{message}")
-            })
-            .duration(self.notification_seconds),
-        );
-        self.sound = self.sound_choice.clone();
-        let extra = toasts.len().saturating_sub(5);
-        toasts.toasts_mut().drain(..extra);
+        // A firing of an alert removed meanwhile keeps the default delivery.
+        let delivery = self
+            .alerts
+            .iter()
+            .find(|a| a.id.as_ref() == Some(id))
+            .map(|a| &a.delivery);
+        if delivery.is_none_or(|d| d.popup) {
+            toasts.add(
+                Toast::info(if message.is_empty() {
+                    title
+                } else {
+                    format!("{title}\n{message}")
+                })
+                .duration(self.notification_seconds),
+            );
+            let extra = toasts.len().saturating_sub(5);
+            toasts.toasts_mut().drain(..extra);
+        }
+        if delivery.is_none_or(|d| d.sound) {
+            self.sound = self.sound_choice.clone();
+        }
         if let Some(alert) = self
             .alerts
             .iter_mut()
@@ -1430,6 +1440,37 @@ mod tests {
             // Save and restore the host's record, with no transient UI state to retain.
             let restored: Alert = serde_json::from_value(saved()).unwrap();
             assert_eq!(serde_json::to_value(restored).unwrap(), saved());
+        }
+    }
+
+    #[test]
+    fn a_firing_is_logged_and_shown_only_on_the_channels_its_alert_keeps() {
+        let host = Arc::new(Host::default());
+        let mut panel = AlertsPanel::default();
+        panel.set_service(host.clone());
+        panel.set_sound(Some("Bell".into()));
+        let events = host.events.lock().unwrap().clone().unwrap();
+        let ctx = egui::Context::default();
+        for (popup, sound) in [(true, true), (false, true), (true, false)] {
+            let mut alert = Alert::new("SYM", AlertCondition::Above(1.0));
+            alert.id = Some(AlertId("1".into()));
+            alert.delivery.popup = popup;
+            alert.delivery.sound = sound;
+            let logged = panel.log().len();
+            let mut toasts = Toasts::new();
+            events.push(AlertEvent::Upsert(Box::new(alert.clone())));
+            events.push(AlertEvent::Triggered {
+                id: alert.id.clone().unwrap(),
+                time: "2026-10-23T12:00:00Z".parse().unwrap(),
+                price: None,
+            });
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                panel.poll(ui.ctx(), &mut toasts)
+            })
+            .drop_without_applying_deltas();
+            assert_eq!(panel.log().len(), logged + 1);
+            assert_eq!(toasts.len(), usize::from(popup));
+            assert_eq!(panel.take_sound().is_some(), sound);
         }
     }
 

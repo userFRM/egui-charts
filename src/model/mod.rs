@@ -56,9 +56,9 @@ mod trading;
 mod watchlist;
 
 pub use alert::{
-    Alert, AlertCalendar, AlertChannelComparison, AlertComparison, AlertCondition, AlertFrequency,
-    AlertId, AlertInputs, AlertRule, AlertSource, AlertStatus, AlertStudy, NotificationSchedule,
-    NotificationWindow,
+    Alert, AlertCalendar, AlertChannelComparison, AlertComparison, AlertCondition, AlertDelivery,
+    AlertFrequency, AlertId, AlertInputs, AlertRule, AlertSource, AlertStatus, AlertStudy,
+    NotificationSchedule, NotificationWindow,
 };
 pub use bar::{Bar, BarColors, BarData};
 #[cfg(feature = "widget")]
