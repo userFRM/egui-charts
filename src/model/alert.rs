@@ -334,10 +334,12 @@ impl Alert {
     /// `bar`, `{{value}}` the value of the alert's source, `{{output_N}}` the value of output `N`
     /// of the study the source names (empty if the source is not a study), `{{plot_ID_N}}` the
     /// value of output `N` of the study `ID` whatever the source is, and `{{level}}` the label
-    /// that [`AlertInputs::sources`] gives a drawing source, empty for any other source. `value`
-    /// gives the value of a source at the bar. A value that is missing or not finite becomes
-    /// `NaN`, a number is written in the shortest form that reads back the same, and a
-    /// placeholder the alert does not know stays as written.
+    /// that [`AlertInputs::sources`] gives the drawing level the first condition tests: the source
+    /// if it is a drawing, otherwise the drawing it compares with or those bounding its channel,
+    /// joined by `, `, and empty if it tests no drawing. `value` gives the value of a source at
+    /// the bar. A value that is missing or not finite becomes `NaN`, a number is written in the
+    /// shortest form that reads back the same, and a placeholder the alert does not know stays as
+    /// written.
     ///
     /// ```
     /// use egui_charts::model::{Alert, AlertCondition, Bar, Timeframe};
@@ -385,15 +387,22 @@ impl Alert {
                 "close" => number(Some(bar.close)),
                 "volume" => number(Some(bar.volume)),
                 "value" => number(value(&self.source)),
-                "level" => match &self.source {
-                    AlertSource::Drawing(_) => self
-                        .inputs
-                        .as_ref()
-                        .and_then(|inputs| inputs.sources.iter().find(|(s, _)| *s == self.source))
-                        .map(|(_, label)| label.clone())
-                        .unwrap_or_default(),
-                    _ => String::new(),
-                },
+                "level" => {
+                    let tested = if matches!(self.source, AlertSource::Drawing(_)) {
+                        [Some(&self.source), None]
+                    } else {
+                        self.condition.partners()
+                    };
+                    let saved = self.inputs.as_ref().map_or(&[][..], |i| &i.sources);
+                    let labels: Vec<_> = tested
+                        .into_iter()
+                        .flatten()
+                        .filter(|source| matches!(source, AlertSource::Drawing(_)))
+                        .filter_map(|source| saved.iter().find(|(s, _)| s == source))
+                        .map(|(_, label)| label.as_str())
+                        .collect();
+                    labels.join(", ")
+                }
                 _ => {
                     if let Some(rest) = name.strip_prefix("plot_") {
                         let (id, output) = rest.rsplit_once('_')?;
@@ -909,6 +918,53 @@ mod tests {
                 alert.expand_message("NASDAQ:AAPL", Timeframe::Min5, &bar, trigger, value),
                 expected,
                 "{message}"
+            );
+        }
+    }
+
+    /// The drawing menu and the floating toolbar create the price crossing a drawing level
+    /// (`DrawingContextMenu::open_on`), the dialog a channel between two levels, and
+    /// `prepare_alert` stores each level's label in the inputs.
+    #[test]
+    fn level_names_the_drawing_level_a_price_alert_compares_with() {
+        let drawing = |id: &str| AlertSource::Drawing(id.into());
+        let time = DateTime::from_timestamp(0, 0).unwrap();
+        let bar = Bar::new(time, 123.0, 124.0, 122.0, 123.6, 10.0);
+        for (condition, expected) in [
+            (
+                AlertCondition::Compare {
+                    other: drawing("fib#1"),
+                    comparison: AlertComparison::Crossing,
+                },
+                "SAMPLE crossed Fib Retracement 7: 0.236",
+            ),
+            (
+                AlertCondition::Channel {
+                    boundaries: Box::new([drawing("fib#1"), drawing("fib#2")]),
+                    comparison: AlertChannelComparison::Entering,
+                },
+                "SAMPLE crossed Fib Retracement 7: 0.236, Fib Retracement 7: 0.382",
+            ),
+            (
+                AlertCondition::Compare {
+                    other: AlertSource::Volume,
+                    comparison: AlertComparison::Crossing,
+                },
+                "SAMPLE crossed ",
+            ),
+        ] {
+            let mut alert = Alert::new("SAMPLE", condition);
+            alert.inputs = Some(Box::new(AlertInputs {
+                sources: vec![
+                    (drawing("fib#1"), "Fib Retracement 7: 0.236".into()),
+                    (drawing("fib#2"), "Fib Retracement 7: 0.382".into()),
+                ],
+                ..AlertInputs::default()
+            }));
+            alert.message = "{{ticker}} crossed {{level}}".into();
+            assert_eq!(
+                alert.expand_message("SAMPLE", Timeframe::Min1, &bar, time, |_| Some(123.6)),
+                expected
             );
         }
     }
