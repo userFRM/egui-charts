@@ -781,6 +781,41 @@ pub(super) mod tests {
         (ALLOCATIONS.with(std::cell::Cell::get) - before, result)
     }
 
+    /// The chart rebuilds its session profiles on every frame, so grouping rows must not copy
+    /// each footprint bar: two-tick rows cost no more allocations than the feed's own rows.
+    #[test]
+    fn grouped_profile_rows_allocate_as_feed_rows_do() {
+        use crate::data::Footprint;
+        use crate::model::{BarClock, ProfileRows, Tick, Timeframe};
+        use crate::studies::{TradeProfileRanges, trade_profiles_with_rows};
+        let start: DateTime<chrono::Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        // 300 one-minute bars, each trading the ten prices 100 to 109 once.
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        for minute in 0..300 {
+            for price in 100..110 {
+                let at = start + Duration::minutes(minute);
+                flow.push(&Tick::new(at, f64::from(price), 1.0, None))
+                    .unwrap();
+            }
+        }
+        let ranges = TradeProfileRanges::new(vec![start..start + Duration::minutes(300)]).unwrap();
+        let (feed, feed_profiles) =
+            allocations(|| trade_profiles_with_rows(&flow, &ranges, ProfileRows::Feed));
+        let (ticks, profiles) =
+            allocations(|| trade_profiles_with_rows(&flow, &ranges, ProfileRows::Ticks(2)));
+        assert_eq!(profiles[0].volume.levels.len(), 5);
+        assert!(
+            ticks <= feed,
+            "two-tick rows allocate {ticks} times, feed rows {feed}"
+        );
+        let (feed, _) = allocations(|| feed_profiles[0].developing_value_area(&flow, 0.7));
+        let (ticks, _) = allocations(|| profiles[0].developing_value_area(&flow, 0.7));
+        assert!(
+            ticks <= feed,
+            "the developing area allocates {ticks} times on two-tick rows, {feed} on feed rows"
+        );
+    }
+
     #[test]
     fn primary_axis_layout_does_not_allocate() {
         use crate::model::AxisSide;

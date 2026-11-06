@@ -659,7 +659,7 @@ Studies,Indicators,Chart Pattern Cup and Handle,unverified,library,src/studies/b
 Studies,Indicators,Chart Pattern Double Bottom,unverified,library,src/studies/builtin/chart_patterns.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Chart Pattern Double Top,unverified,library,src/studies/builtin/chart_patterns.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Chart Pattern Elliott Wave,incomplete,library,;src/studies/builtin/elliott_wave.rs,
-Order flow,Order flow,Session volume profile session hours and row size,incomplete,library,src/model/chart_type.rs;src/model/instrument.rs;src/studies/builtin/trade_profile.rs;src/widget/trade_profile.rs;src/widget/frame/mod.rs;src/chart/overlays/trade_profile.rs;src/ui/dialogs/series_settings/tabs/symbol.rs,2054
+Order flow,Order flow,Session volume profile session hours and row size,incomplete,library,src/model/chart_type.rs;src/model/instrument.rs;src/studies/builtin/trade_profile.rs;src/widget/trade_profile.rs;src/widget/frame/mod.rs;src/chart/overlays/trade_profile.rs;src/ui/dialogs/series_settings/tabs/symbol.rs;src/data/footprint.rs,2054
 Studies,Indicators,Chart Pattern Falling Wedge,missing,library,,
 Studies,Indicators,Chart Pattern Head And Shoulders,incomplete,library,src/studies/builtin/chart_patterns.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Chart Pattern Inverse Head And Shoulders,unverified,library,src/studies/builtin/chart_patterns.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/chart/rendering/indicator.rs,
