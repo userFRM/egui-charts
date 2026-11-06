@@ -1,6 +1,6 @@
 //! Independent styles retained when switching chart types.
 
-use crate::model::LineStyle;
+use crate::model::{LineStyle, PriceSource};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 use serde::{Deserialize, Serialize};
@@ -204,6 +204,9 @@ pub struct BarsStyle {
     /// Draw bars with the chart's wick width at every zoom level instead of a stroke that
     /// widens with the bar spacing.
     pub thin_bars: bool,
+    /// Colour each bar by its close against the previous close instead of its open: rising when
+    /// the close is at or above the last close before it.
+    pub color_by_previous_close: bool,
 }
 
 impl Default for BarsStyle {
@@ -211,8 +214,17 @@ impl Default for BarsStyle {
         Self {
             open_visible: true,
             thin_bars: true,
+            color_by_previous_close: false,
         }
     }
+}
+
+/// The Columns chart's height.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ColumnsStyle {
+    /// The price each column reaches. Its colour still compares closes.
+    pub price_source: PriceSource,
 }
 
 /// The Candles chart's bodies, wicks and colouring. Borders are drawn while the chart's candle
@@ -449,8 +461,8 @@ impl Default for KagiStyle {
     }
 }
 
-/// Styles of the candle, hollow candle, volume candle, Heikin-Ashi, bar, high-low, line, step,
-/// marker, area, HLC area, baseline and Kagi chart types.
+/// Styles of the candle, hollow candle, volume candle, Heikin-Ashi, bar, column, high-low, line,
+/// step, marker, area, HLC area, baseline and Kagi chart types.
 /// Defaults use the design-token palette and remain independent of candle colours.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -481,6 +493,8 @@ pub struct ChartTypeStyles {
     pub heikin: HeikinStyle,
     /// Bars chart.
     pub bars: BarsStyle,
+    /// Columns chart.
+    pub columns: ColumnsStyle,
     /// High-low chart. Documents saved before this style restore without price labels, as they
     /// were drawn.
     #[serde(default = "HighLowStyle::saved_without_style")]
@@ -517,6 +531,7 @@ impl Default for ChartTypeStyles {
             volume_candles: VolumeCandlesStyle::default(),
             heikin: HeikinStyle::default(),
             bars: BarsStyle::default(),
+            columns: ColumnsStyle::default(),
             high_low: HighLowStyle::default(),
             kagi: KagiStyle::default(),
             crosshair_marker_radius: 0.0,

@@ -270,7 +270,7 @@ pub(super) const TEAL: [u8; 4] = [8, 153, 129, 255];
 pub(super) const CYAN: [u8; 4] = [0, 188, 212, 255];
 pub(super) const PINK: [u8; 4] = [233, 30, 99, 255];
 pub(super) const PURPLE: [u8; 4] = [156, 39, 176, 255];
-const DEEP_PURPLE: [u8; 4] = [103, 58, 183, 255];
+pub(super) const DEEP_PURPLE: [u8; 4] = [103, 58, 183, 255];
 pub(super) const GREY: [u8; 4] = [128, 128, 128, 255];
 const WHITE: [u8; 4] = [255, 255, 255, 255];
 
@@ -584,6 +584,12 @@ impl Drawing {
         drawing.text = Some(text);
         drawing.arrow_end_style = ArrowStyle::None;
         drawing
+    }
+
+    /// Whether the line colour is still the tool's default, which rendering may shade to read on
+    /// the theme, rather than one chosen for this drawing.
+    pub(crate) fn has_default_color(&self) -> bool {
+        self.color == default_style(self.tool_type).color
     }
 
     /// Update screen coordinates from chart_points using current transforms
@@ -1069,7 +1075,7 @@ mod tests {
         let mut fib = drawing(T::FibonacciRetracement, &[(0.0, 100.0), (10.0, 200.0)]);
         let mut config = FibonacciConfig {
             levels_as_percent: true,
-            ..Default::default()
+            ..FibonacciConfig::legacy()
         };
         config.levels[1].visible = false;
         config.levels[2].label = "100%".into();

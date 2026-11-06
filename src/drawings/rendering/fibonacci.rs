@@ -110,18 +110,18 @@ impl Drawing {
                 // Before configs were stored, extensions always reached the right pane edge.
                 let config = FibonacciConfig {
                     extend_right: true,
-                    ..FibonacciConfig::extension_default()
+                    ..FibonacciConfig::legacy_extension()
                 };
                 return Cow::Owned(config);
             }
             Tool::FibonacciWedge => {
-                let mut config = FibonacciConfig::default();
+                let mut config = FibonacciConfig::legacy();
                 for level in &mut config.levels {
                     level.color = self.color;
                 }
                 return Cow::Owned(config);
             }
-            _ => return Cow::Owned(FibonacciConfig::default()),
+            _ => return Cow::Owned(FibonacciConfig::legacy()),
         };
         let mut config = FibonacciConfig {
             levels: values
@@ -138,7 +138,7 @@ impl Drawing {
                 10
             },
             levels_as_percent: self.tool_type != Tool::FibonacciTimeZones,
-            ..FibonacciConfig::default()
+            ..FibonacciConfig::legacy()
         };
         if self.tool_type == Tool::FibonacciSpeedFan {
             let tokens = &DESIGN_TOKENS.semantic;
@@ -247,7 +247,8 @@ impl Drawing {
         let config = self.fibonacci_config();
         let mut levels: Vec<_> = config.visible_levels().filter(|l| l.value >= 0.0).collect();
         levels.sort_by(|a, b| a.value.total_cmp(&b.value));
-        let mut previous = None;
+        // The first band reaches the centre.
+        let mut previous = 0.0;
         for level in levels {
             let radius = base_radius * level.value;
             if !radius.is_finite() {
@@ -257,17 +258,15 @@ impl Drawing {
             let angles = [0.0, std::f64::consts::PI];
             let clip = painter.clip_rect().expand(level_width(&config) + 2.0);
             let ppp = painter.pixels_per_point();
-            let points = if config.show_background
-                && let Some(inner_radius) = previous
-            {
+            let points = if config.show_background {
                 let (inner, outer) = sampled_band(
                     start,
                     egui::vec2(
-                        inner_radius,
+                        previous,
                         if end.y >= start.y {
-                            inner_radius
+                            previous
                         } else {
-                            -inner_radius
+                            -previous
                         },
                     ),
                     axes,
@@ -285,7 +284,7 @@ impl Drawing {
             } else {
                 ellipse_arc(start, axes, angles, clip, ppp)
             };
-            previous = Some(radius);
+            previous = radius;
             paint_level_path(painter, points, &config, level);
             let at = speed_arc_point(start, end, radius, std::f32::consts::FRAC_PI_2);
             paint_ratio_label(
@@ -430,7 +429,8 @@ impl Drawing {
         let config = self.fibonacci_config();
         let mut levels: Vec<_> = config.visible_levels().filter(|l| l.value >= 0.0).collect();
         levels.sort_by(|a, b| a.value.total_cmp(&b.value));
-        let mut previous = None;
+        // The first band reaches the centre.
+        let mut previous = egui::Vec2::ZERO;
         for level in levels {
             let radii = half_axes * level.value;
             if !radii.is_finite() {
@@ -439,10 +439,8 @@ impl Drawing {
             let clip = painter.clip_rect().expand(level_width(&config) + 2.0);
             let ppp = painter.pixels_per_point();
             let angles = [0.0, std::f64::consts::TAU];
-            let mut points = if config.show_background
-                && let Some(inner_radii) = previous
-            {
-                let (inner, outer) = sampled_band(center, inner_radii, radii, angles, clip, ppp);
+            let mut points = if config.show_background {
+                let (inner, outer) = sampled_band(center, previous, radii, angles, clip, ppp);
                 paint_band(
                     painter,
                     &inner,
@@ -453,7 +451,7 @@ impl Drawing {
             } else {
                 ellipse_arc(center, radii, angles, clip, ppp)
             };
-            previous = Some(radii);
+            previous = radii;
             if points.is_empty() {
                 continue;
             }
@@ -602,19 +600,18 @@ impl Drawing {
             .filter(|l| l.value >= 0.0 && l.value.is_finite())
             .collect();
         levels.sort_by(|a, b| a.value.total_cmp(&b.value));
-        let mut previous: Option<f32> = None;
+        // The first band reaches the apex.
+        let mut previous = 0.0;
         let mut ends = None;
         for level in levels {
             let angles = wedge_angles(start, edge, boundary);
             let clip = painter.clip_rect().expand(level_width(&config) + 2.0);
             let ppp = painter.pixels_per_point();
             let radius = start.distance(edge);
-            let points = if config.show_background
-                && let Some(inner) = previous
-            {
+            let points = if config.show_background {
                 let (inside, outside) = sampled_band(
                     start,
-                    egui::Vec2::splat(radius * inner),
+                    egui::Vec2::splat(radius * previous),
                     egui::Vec2::splat(radius * level.value),
                     angles,
                     clip,
@@ -640,7 +637,7 @@ impl Drawing {
             );
             paint_ratio_label(&painter, &config, level, mid, egui::Align2::CENTER_BOTTOM);
             ends = Some([points[0], *points.last().unwrap()]);
-            previous = Some(level.value);
+            previous = level.value;
             paint_level_path(&painter, points, &config, level);
         }
         if let Some(ends) = ends {
@@ -893,12 +890,12 @@ fn paint_price_label(
         return;
     }
     let alignment = if config.labels_on_left {
-        egui::Align2::RIGHT_BOTTOM
+        egui::Align2::RIGHT_CENTER
     } else {
-        egui::Align2::LEFT_BOTTOM
+        egui::Align2::LEFT_CENTER
     };
     let bounds = alignment.anchor_size(
-        point + egui::vec2(if config.labels_on_left { -4.0 } else { 4.0 }, -2.0),
+        point + egui::vec2(if config.labels_on_left { -4.0 } else { 4.0 }, 0.0),
         galley.size(),
     );
     // Lines extended to the pane edge keep their labels inside the pane.
@@ -1125,14 +1122,15 @@ mod tests {
                     },
                 );
                 output.textures_delta.clear();
-                let mesh = output
+                let meshes: Vec<_> = output
                     .shapes
                     .iter()
-                    .find_map(|shape| match &shape.shape {
+                    .filter_map(|shape| match &shape.shape {
                         egui::Shape::Mesh(mesh) => Some(mesh),
                         _ => None,
                     })
-                    .unwrap();
+                    .collect();
+                let mesh = meshes.last().unwrap();
                 let pairs = mesh.vertices.as_chunks::<2>().0;
                 assert!(pairs.len() >= 3);
                 assert!(
@@ -1151,6 +1149,21 @@ mod tests {
                 } else {
                     egui::Vec2::splat(start.distance(end))
                 };
+                if inner_ratio > 0.0 {
+                    assert_eq!(
+                        meshes.len(),
+                        2,
+                        "{tool:?}: the first band fills to the centre"
+                    );
+                    assert!(
+                        meshes[0]
+                            .vertices
+                            .as_chunks::<2>()
+                            .0
+                            .iter()
+                            .all(|pair| pair[0].pos.distance(center) < 1e-3)
+                    );
+                }
                 let first = center + egui::vec2(axes.x, 0.0);
                 let last = center
                     + egui::vec2(
@@ -1569,6 +1582,12 @@ mod tests {
                         },
                         "{tool:?}, extend={extend}: label outside the level endpoints, in the pane"
                     );
+                    if !extend && price > 10.0 && price < 1000.0 {
+                        assert!(
+                            (label.center().y - y(price)).abs() < 1.0,
+                            "{tool:?}: label centred on its level"
+                        );
+                    }
                     assert!(
                         !output
                             .shapes
@@ -2033,7 +2052,7 @@ mod tests {
         ];
         channel.fib_config = Some(FibonacciConfig {
             extend_left: true,
-            ..FibonacciConfig::default()
+            ..FibonacciConfig::legacy()
         });
         let (_, lines) = channel.fib_channel_level_lines(rect).unwrap();
         for (level, [left, right]) in channel

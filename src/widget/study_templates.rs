@@ -28,16 +28,20 @@ impl Chart {
                 template
             })
             .collect();
+        // Without the original pane a study over the price series is no overlay.
+        let main_pane = self.main_series_pane();
         let price_pane: Vec<_> = self
             .indicators()
             .enumerate()
-            .filter(|(_, (_, study))| study.is_overlay())
+            .filter(|(_, (id, study))| {
+                study.is_overlay() || self.series_pane(*id) == Some(main_pane)
+            })
             .map(|(at, _)| at)
             .collect();
         let mut panes: Vec<Vec<_>> = self
             .panes()
             .into_iter()
-            .filter(|pane| *pane != PaneId::MAIN)
+            .filter(|pane| *pane != PaneId::MAIN && *pane != main_pane)
             .map(|pane| {
                 self.pane_series(pane)
                     .into_iter()
@@ -159,7 +163,7 @@ impl Chart {
             }
         }
         for &at in &set.price_pane {
-            self.move_series_to_pane(ids[at], PaneId::MAIN);
+            self.move_series_to_pane(ids[at], self.main_series_pane());
         }
         for pane in &set.panes {
             if let Some((&first, rest)) = pane.split_first() {
@@ -411,5 +415,31 @@ mod tests {
             .map(|pane| chart.pane_series(pane))
             .collect();
         assert_eq!(panes, [vec![SeriesId::MAIN, ids[1]], vec![ids[0]]]);
+    }
+
+    /// A template taken after the empty original pane was removed keeps a moving average
+    /// over the price series it was added to, on this chart and on a chart with its price pane.
+    #[test]
+    fn template_keeps_studies_over_the_relocated_price_series() {
+        use crate::widget::PaneId;
+
+        let mut chart = test_frames::chart(&[100.0], &[110.0]);
+        let price = chart.add_pane();
+        assert!(chart.move_series_to_pane(SeriesId::MAIN, price));
+        assert!(chart.remove_pane(PaneId::MAIN));
+        let sma = chart.add_indicator(Box::new(SMA::new(3)));
+        assert_eq!(
+            chart.series_pane(sma),
+            Some(price),
+            "added over the price series"
+        );
+        let set = chart.study_template_set();
+        let ids = chart.apply_study_template_set(&set).unwrap();
+        let mut fresh = test_frames::chart(&[100.0], &[110.0]);
+        let fresh_ids = fresh.apply_study_template_set(&set).unwrap();
+        assert_eq!(
+            [chart.series_pane(ids[0]), fresh.series_pane(fresh_ids[0])],
+            [Some(price), Some(PaneId::MAIN)]
+        );
     }
 }

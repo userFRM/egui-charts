@@ -55,6 +55,8 @@ use crate::studies::IndicatorRegistry;
 pub use builder::ChartBuilder;
 use chrono::{DateTime, Utc};
 use egui::{Pos2, Rect, Vec2};
+#[cfg(feature = "ui")]
+pub(crate) use export::ColumnId;
 pub use export::{ChartImage, DataTable, ExportError, ImageExportOptions};
 pub use pane::{IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneInteraction};
 use std::collections::BTreeMap;
@@ -285,8 +287,12 @@ pub struct Chart {
     bar_limits: std::collections::HashMap<SeriesId, std::num::NonZeroUsize>,
     /// The chart's studies, in the order they were added.
     pub(crate) studies: IndicatorRegistry,
-    /// Changes when study edits or completed calculations can affect table cells.
+    /// Changes when what the data table calculates from changes, unlike the steps of the chart's
+    /// own refresh, whose results the table does not read.
     readout_revision: u64,
+    /// See [`Self::data_table_identity`].
+    #[cfg(feature = "ui")]
+    data_table_identity: u64,
     study_data: studies_data::StudyDataCache,
     pub(crate) element_studies: crate::chart::rendering::candles::price_based::ElementStudies,
     /// Range bars built from the held trades, while the chart type is Range.
@@ -541,6 +547,9 @@ impl Chart {
     /// and the default tick-mark grid. An explicit `tick_marks.min_price_step` takes precedence.
     /// Pass `None` to clear the metadata. Feed metadata takes precedence when available.
     pub fn set_instrument(&mut self, instrument: Option<crate::model::Instrument>) {
+        if self.legend_instrument != instrument {
+            self.readout_revision = crate::model::next_revision();
+        }
         self.legend_instrument = instrument;
         let precision = self
             .instrument()

@@ -582,20 +582,34 @@ impl Chart {
         }
     }
 
-    /// The main series' last-value colour for `bar`: the price line colour, the bar's own
-    /// colour, or its direction.
-    pub(in crate::widget) fn main_value_color(&self, bar: &Bar) -> Color32 {
+    /// The main series' last-value colour for the bar at `index` of `bars`: the price line
+    /// colour, the bar's own colour, or its direction. Columns, hollow candles, and candles
+    /// coloured by the previous close, take the direction their painters give the bar.
+    pub(in crate::widget) fn main_value_color(&self, bars: &[Bar], index: usize) -> Color32 {
+        let styles = &self.chart_type_params.styles;
         let (up, down) = match self.chart_type {
             ChartType::HighLow => {
-                let color = self.chart_type_params.styles.high_low.bar_color;
+                let color = styles.high_low.bar_color;
                 (color, color)
             }
             _ => self.main_body_colors(),
         };
+        let bar = &bars[index];
+        let by_previous_close = match self.chart_type {
+            ChartType::HollowCandles | ChartType::Columns => true,
+            ChartType::Candles => styles.candles.color_by_previous_close,
+            ChartType::VolumeCandles => styles.volume_candles.color_by_previous_close,
+            _ => false,
+        };
+        let reference = if by_previous_close {
+            crate::chart::rendering::candles::prev_close(bars, index)
+        } else {
+            bar.open
+        };
         self.main_series_style
             .price_line_color
             .or_else(|| bar.colors.as_ref().and_then(|own| own.color))
-            .unwrap_or(if bar.close >= bar.open { up } else { down })
+            .unwrap_or(if bar.close >= reference { up } else { down })
     }
 
     /// The latest loaded or latest visible valued bar of a main or added bar series.
@@ -617,16 +631,17 @@ impl Chart {
             let (bars, start) = match source {
                 PriceLineSource::LastBar => (self.bars(id), 0),
                 PriceLineSource::LastVisible => {
-                    (self.state.visible_data(), self.state.visible_range().0)
+                    let (start, end) = self.state.visible_range();
+                    (&self.state.shown()[..end], start)
                 }
             };
-            let at = bars.iter().rposition(|bar| !bar.is_whitespace())?;
+            let at = start + bars[start..].iter().rposition(|bar| !bar.is_whitespace())?;
             let bar = &bars[at];
             let index = match source {
                 PriceLineSource::LastBar => self.time_to_index(bar.time)?,
-                PriceLineSource::LastVisible => (start + at) as f64,
+                PriceLineSource::LastVisible => at as f64,
             };
-            (bar, self.main_value_color(bar), index)
+            (bar, self.main_value_color(bars, at), index)
         } else {
             let item = self.price_series.iter().find(|item| item.id == id)?;
             let bar = self.series_bar_from(item, source)?;

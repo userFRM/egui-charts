@@ -157,6 +157,13 @@ impl ChartSettingsState {
         settings.candle_colors.show_border = config.candle_border_width > 0.0;
         settings.candle_colors.show_wick = candles.wick_visible;
         settings.candle_colors.color_by_previous_close = candles.color_by_previous_close;
+        if chart.chart_type() == crate::model::ChartType::Bars {
+            settings.candle_colors.color_by_previous_close = chart
+                .chart_type_params()
+                .styles
+                .bars
+                .color_by_previous_close;
+        }
         if chart.chart_type() == crate::model::ChartType::HollowCandles {
             let style = &chart.chart_type_params().styles.hollow;
             settings.candle_colors = super::CandleColorConfig {
@@ -668,6 +675,12 @@ impl ChartSettingsState {
             if chart.chart_type_params() != &params {
                 chart.set_chart_type_params(params);
             }
+        } else if self.chart_type == crate::model::ChartType::Bars {
+            let mut params = chart.chart_type_params().clone();
+            params.styles.bars.color_by_previous_close = self.candle_colors.color_by_previous_close;
+            if chart.chart_type_params() != &params {
+                chart.set_chart_type_params(params);
+            }
         } else {
             let candles = CandlesStyle {
                 body_visible: self.candle_colors.show_body,
@@ -1099,8 +1112,11 @@ mod tests {
                     if t.galley.job.sections[0].format.font_id.size == 12.0
                         && t.galley.text() == "18.00")));
                 // The falling and flat bars share the bar colour on the last-price label too.
-                let last = chart.state.data().bars.last().unwrap().clone();
-                assert_eq!(chart.main_value_color(&last), style.bar_color);
+                let last = chart.state.data().bars.clone();
+                assert_eq!(
+                    chart.main_value_color(&last, last.len() - 1),
+                    style.bar_color
+                );
 
                 // Labels that do not fit the bar spacing go together; the bars stay visible.
                 chart.state.time_scale_mut().set_bar_spacing(2.0);

@@ -27,7 +27,12 @@ pub(crate) fn paint_price_lines(
         {
             continue;
         }
-        let Some(value) = study.values().value(line, bar) else {
+        // Plot values are read at the bar they are drawn on, which displacement moves.
+        let value = bar.checked_add_signed(study.plot_offset(line)).map_or_else(
+            || study.values().value(line, bar),
+            |shown| study.plot_value(line, shown),
+        );
+        let Some(value) = value else {
             continue;
         };
         let y = price.price_to_y(value);
