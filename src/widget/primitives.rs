@@ -618,7 +618,15 @@ impl Chart {
         if let Some(at) = self.study_ids.iter().position(|id| *id == series) {
             self.pending_from[at] =
                 Some(self.pending_from[at].map_or(from, |pending| pending.min(from)));
-            self.element_studies.dirty = true;
+            // Its copy on the elements reads the same points and keeps its values until it
+            // recomputes; a rebuild would blank every other study's copy.
+            if self.chart_type.is_time_independent()
+                && let Some(stale) = self.element_studies.stale.get_mut(at)
+            {
+                *stale = true;
+            } else {
+                self.element_studies.dirty = true;
+            }
             self.readout_revision = crate::model::next_revision();
         }
     }
@@ -3232,5 +3240,55 @@ mod tests {
         let replaced = moved_after(&mut chart, 5.0);
         let seen = (copied, moved, replaced);
         assert_eq!(seen, (0, 0, 1), "{seen:?}");
+    }
+
+    /// On a price-based chart type, feeding the custom data series leaves the other studies
+    /// drawn, whose values do not depend on its points, and its own value follows its points.
+    #[test]
+    fn custom_updates_keep_other_studies_on_price_based_charts() {
+        use crate::model::{BarData, ChartType, ChartTypeParams};
+        let ctx = egui::Context::default();
+        let bars: Vec<Bar> = [100.0, 130.0, 160.0]
+            .into_iter()
+            .enumerate()
+            .map(|(index, close)| {
+                Bar::from_value(
+                    DateTime::UNIX_EPOCH + chrono::Duration::minutes(index as i64),
+                    close,
+                )
+            })
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+        let (id, _) = band_series(&mut chart);
+        let closes = chart.add_indicator(Box::new(CustomIndicator::new("Close", |bars| {
+            bars.iter()
+                .map(|bar| IndicatorValue::Single(bar.close))
+                .collect()
+        })));
+        chart.set_chart_type(ChartType::Renko);
+        chart.set_chart_type_params(ChartTypeParams {
+            renko_brick_size: 10.0,
+            ..Default::default()
+        });
+        for at in 0..4 {
+            frame(&ctx, &mut chart, f64::from(at), vec![]);
+        }
+        // Bricks of 10 from 100 close at 110, 120, ..., 160, so the third closes at 130.
+        assert_eq!(chart.indicator_value_at(closes, 2), Some((0, 130.0)));
+        let mut seen = Vec::new();
+        for at in 0..3 {
+            let point = Band {
+                time: bars[2].time,
+                values: Some((1.0, 2.0 + f64::from(at))),
+                note: "",
+            };
+            assert!(chart.update_custom_data(id, point));
+            frame(&ctx, &mut chart, 10.0 + f64::from(at), vec![]);
+            seen.push(chart.indicator_value_at(closes, 2));
+        }
+        assert_eq!(seen, [Some((0, 130.0)); 3], "{seen:?}");
+        // Bricks 3 to 5 are formed by the third bar and take its time, where the last point holds
+        // (1, 4), whose current price is its high.
+        assert_eq!(chart.indicator_value_at(id, 5), Some((0, 4.0)));
     }
 }
