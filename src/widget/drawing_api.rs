@@ -104,8 +104,8 @@ impl Chart {
         Ok(())
     }
 
-    /// Replaces a trend line's, ray's, extended line's or info line's readouts, midpoint, price
-    /// labels and text placement as one undoable edit.
+    /// Replaces a trend line's, ray's, extended line's, info line's or trend angle's readouts,
+    /// midpoint, price labels and text placement as one undoable edit.
     /// Unknown, locked and other drawing types leave drawings and history untouched.
     pub fn set_line_measurements(
         &mut self,
@@ -123,7 +123,7 @@ impl Chart {
         }
         if !drawing.tool_type.supports_line_measurements() {
             return Err(DrawingError::Invalid(
-                "Drawing is not a trend line, ray, extended line or info line",
+                "Drawing is not a trend line, ray, extended line, info line or trend angle",
             ));
         }
         self.user_action(|chart| {
@@ -435,13 +435,13 @@ mod tests {
             Err(DrawingError::UnknownDrawing(999))
         );
         chart.drawings_mut().drawings[0].locked = false;
-        chart.drawings_mut().drawings[0].tool_type = T::TrendAngle;
+        chart.drawings_mut().drawings[0].tool_type = T::Arrow;
         assert!(matches!(
             chart.set_line_measurements(1, measurements),
             Err(DrawingError::Invalid(_))
         ));
         assert_eq!(chart.drawings().drawings[0].line_measurements, measurements);
-        for tool in [T::TrendLine, T::Ray, T::InfoLine] {
+        for tool in [T::TrendLine, T::Ray, T::InfoLine, T::TrendAngle] {
             chart.drawings_mut().drawings[0].tool_type = tool;
             chart.drawings_mut().drawings[0].line_measurements = measurements;
             chart.set_line_measurements(1, Default::default()).unwrap();

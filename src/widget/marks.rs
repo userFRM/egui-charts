@@ -289,17 +289,23 @@ impl Chart {
         }
         let y = map.price_to_y(line.price);
         let stroke_hit = line.width > 0.0 && (pos.y - y).abs() <= (line.width * 0.5).max(3.0);
-        let title_hit = line.title.as_ref().is_some_and(|title| {
-            let galley = painter.layout_no_wrap(
-                title.clone(),
-                crate::chart::rendering::axes::axis_font(painter.ctx()),
-                line.color,
-            );
-            let title_rect = egui::Align2::LEFT_BOTTOM
-                .anchor_size(egui::pos2(rect.left(), y), galley.size())
-                .intersect(clip);
-            title_rect.is_positive() && title_rect.contains(pos)
-        });
+        let title_hit = !stroke_hit
+            && pos.y <= y
+            && line.title.as_ref().is_some_and(|title| {
+                let font = crate::chart::rendering::axes::axis_font(painter.ctx());
+                // Only lay out a title the pointer can be over: its rows stand on the line, each
+                // within a pixel of the font's row height once rounded to pixels.
+                let row = painter.ctx().fonts_mut(|fonts| fonts.row_height(&font))
+                    + painter.pixels_per_point().recip();
+                if y - pos.y > row * (1 + title.matches('\n').count()) as f32 {
+                    return false;
+                }
+                let galley = painter.layout_no_wrap(title.clone(), font, line.color);
+                let title_rect = egui::Align2::LEFT_BOTTOM
+                    .anchor_size(egui::pos2(rect.left(), y), galley.size())
+                    .intersect(clip);
+                title_rect.is_positive() && title_rect.contains(pos)
+            });
         if stroke_hit || title_hit {
             *self.host_events.annotation_target.borrow_mut() =
                 Some(super::PointerTarget::PriceLine { series, id });
@@ -587,6 +593,15 @@ mod tests {
                 probe(&ctx, &mut chart, title, &mut tick).target,
                 line_target
             );
+            // Every row of a title stands on its line, up to the top of the first.
+            let font = crate::chart::rendering::axes::axis_font(&ctx);
+            let row = ctx.fonts_mut(|fonts| fonts.row_height(&font));
+            for (text, rows) in [("Level", 1.0), ("Two\nrows", 2.0)] {
+                let titled = line.clone().with_width(0.0).with_title(text);
+                assert!(chart.update_price_line(handle, titled));
+                let top = egui::pos2(title.x, pos.y - rows * row + 1.0);
+                assert_eq!(probe(&ctx, &mut chart, top, &mut tick).target, line_target);
+            }
             assert!(chart.update_price_line(handle, line.clone()));
             assert_eq!(probe(&ctx, &mut chart, pos, &mut tick).target, line_target);
             assert!(chart.update_price_line(handle, PriceLine::new(1_000.0, Color32::BLUE)));
@@ -789,6 +804,366 @@ mod tests {
                 chart
                     .drain_events()
                     .any(|event| matches!(event, ChartEvent::CrosshairMoved(None)))
+            );
+        }
+    }
+
+    /// A custom series' renderer covers the annotations painted before it, not those after it.
+    #[test]
+    fn renderer_under_annotation_keeps_the_annotation_target() {
+        use crate::model::{LineStyle, MarkerShape, PriceLine};
+        use crate::studies::{CustomIndicator, IndicatorValue};
+        use crate::widget::{
+            ChartElementId, PointerTarget, Primitive, PrimitivePass, PrimitiveView, SeriesOptions,
+            VisualOrder,
+        };
+        use egui::{Color32, CursorIcon, Event, Painter, Pos2};
+
+        const RENDER: Color32 = Color32::from_rgb(1, 2, 3);
+        const MARK: Color32 = Color32::from_rgb(4, 5, 6);
+        const LINE: Color32 = Color32::from_rgb(7, 8, 9);
+        /// Paints a dot at bar 70, price 110 on the series pass and claims the pointer within 3 px of 110.
+        struct Claim;
+        impl Primitive for Claim {
+            fn draw(&self, painter: &Painter, view: &PrimitiveView<'_>, pass: PrimitivePass) {
+                if pass == PrimitivePass::Series {
+                    let centre = Pos2::new(view.index_to_x(70.0), view.mapping.price_to_y(110.0));
+                    painter.circle_filled(centre, 3.0, RENDER);
+                }
+            }
+            fn hit_test(&self, pos: Pos2, view: &PrimitiveView<'_>) -> Option<CursorIcon> {
+                (view.mapping.rect.contains(pos)
+                    && (pos.y - view.mapping.price_to_y(110.0)).abs() <= 3.0)
+                    .then_some(CursorIcon::PointingHand)
+            }
+        }
+        let first = |shapes: &[Shape], color: Color32| {
+            shapes.iter().position(|shape| match shape {
+                Shape::Circle(circle) => circle.fill == color,
+                Shape::LineSegment { stroke, .. } => stroke.color == color,
+                _ => false,
+            })
+        };
+        // 0: main-series marker over a renderer sent behind the main series. 1: added-series
+        // price line over a renderer sent behind that series. 2: default order, renderer last.
+        for row in 0..3 {
+            let ctx = Context::default();
+            let mut chart = test_frames::chart(&[95.0], &[105.0]);
+            chart.config_mut().show_volume = false;
+            let custom = chart.add_custom_series(
+                Box::new(
+                    CustomIndicator::new("Under", |bars| {
+                        vec![IndicatorValue::Single(110.0); bars.len()]
+                    })
+                    .with_overlay(true),
+                ),
+                Claim,
+            );
+            let time = chart.bars(SeriesId::MAIN)[70].time;
+            let (annotation, color) = if row == 0 {
+                assert!(chart.reorder_indicator(custom, VisualOrder::SendToBack));
+                chart.set_markers(
+                    SeriesId::MAIN,
+                    vec![
+                        Marker::new(time)
+                            .at_price(110.0, MarkerPos::AtPriceMiddle)
+                            .with_shape(MarkerShape::Circle)
+                            .with_color(MARK)
+                            .with_id("over"),
+                    ],
+                );
+                (
+                    PointerTarget::Marker {
+                        series: SeriesId::MAIN,
+                        id: Some("over".into()),
+                        time,
+                    },
+                    MARK,
+                )
+            } else {
+                let series = chart.add_series(SeriesOptions::default());
+                chart.set_data(series, chart.bars(SeriesId::MAIN).to_vec());
+                if row == 1 {
+                    assert!(chart.reorder_indicator(custom, VisualOrder::SendBackward));
+                }
+                let line = PriceLine::new(110.0, LINE)
+                    .with_style(LineStyle::Solid)
+                    .with_axis_label(false);
+                let id = chart.add_price_line(series, line).unwrap();
+                (PointerTarget::PriceLine { series, id }, LINE)
+            };
+            chart
+                .series_price_scale_mut(SeriesId::MAIN)
+                .unwrap()
+                .set_range(90.0, 120.0);
+            for tick in [0.0, 0.1, 0.2] {
+                test_frames::frame(&ctx, &mut chart, tick, vec![]);
+            }
+            let pos = Pos2::new(
+                chart.get_chart_mapping().idx_to_x(70),
+                chart
+                    .series_price_map(SeriesId::MAIN)
+                    .unwrap()
+                    .price_to_y(110.0),
+            );
+            test_frames::frame(&ctx, &mut chart, 0.3, vec![Event::PointerMoved(Pos2::ZERO)]);
+            chart.drain_events().for_each(drop);
+            let shapes = test_frames::shapes(&ctx, &mut chart, 0.4, vec![Event::PointerMoved(pos)]);
+            let hover = chart.drain_events().find_map(|event| match event {
+                ChartEvent::CrosshairMoved(Some(point)) => Some(point.target),
+                _ => None,
+            });
+            // The expected target follows the frame's own paint order, not the code under test.
+            let (renderer, painted) = (first(&shapes, RENDER), first(&shapes, color));
+            assert!(renderer.is_some() && painted.is_some(), "row {row}");
+            assert_eq!(painted > renderer, row < 2, "row {row}");
+            let expected = Some(if row < 2 {
+                annotation
+            } else {
+                PointerTarget::Element(ChartElementId::Indicator(custom))
+            });
+            assert_eq!(hover.as_ref(), Some(&expected), "row {row}: hover");
+            for (tick, pressed) in [(0.5, true), (0.6, false)] {
+                test_frames::frame(
+                    &ctx,
+                    &mut chart,
+                    tick,
+                    vec![Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    }],
+                );
+            }
+            let click = chart.drain_events().find_map(|event| match event {
+                ChartEvent::Click { position, .. } => Some(position.target),
+                _ => None,
+            });
+            assert_eq!(click, Some(expected), "row {row}: click");
+        }
+    }
+
+    /// A top marker covered by an above-pass primitive leaves the drawing as the target.
+    #[cfg(feature = "drawings")]
+    #[test]
+    fn covered_top_marker_keeps_the_drawing_target() {
+        use crate::model::MarkerOptions;
+        use crate::widget::{
+            PointerTarget, Primitive, PrimitiveHit, PrimitivePass, PrimitiveView, SeriesOptions,
+        };
+        use egui::{Event, Pos2};
+
+        struct Foreground;
+        impl Primitive for Foreground {
+            fn hit_test_result(&self, pos: Pos2, view: &PrimitiveView<'_>) -> Option<PrimitiveHit> {
+                (view.mapping.rect.contains(pos)
+                    && (pos.y - view.mapping.price_to_y(100.0)).abs() <= 3.0)
+                    .then(|| {
+                        let mut hit = PrimitiveHit::new(egui::CursorIcon::PointingHand);
+                        hit.pass = PrimitivePass::Above;
+                        hit
+                    })
+            }
+        }
+        for secondary in [false, true] {
+            let ctx = Context::default();
+            let mut chart = test_frames::chart(&[95.0], &[105.0]);
+            chart.config_mut().show_volume = false;
+            let series = if secondary {
+                let id = chart.add_series(SeriesOptions {
+                    chart_type: crate::model::ChartType::Candles,
+                    ..Default::default()
+                });
+                chart.set_data(id, chart.bars(SeriesId::MAIN).to_vec());
+                let pane = chart.add_pane();
+                assert!(chart.move_series_to_pane(id, pane));
+                id
+            } else {
+                SeriesId::MAIN
+            };
+            chart.set_marker_options(
+                series,
+                MarkerOptions {
+                    auto_scale: false,
+                    z_order: MarkerZOrder::Top,
+                },
+            );
+            let mut drawing = crate::drawings::Drawing::with_color(
+                77,
+                crate::drawings::DrawingToolType::HorizontalLine,
+                [0, 0, 255, 255],
+            );
+            drawing.chart_points = vec![crate::drawings::ChartPoint::new(70.0, 100.0)];
+            drawing.pane = secondary.then_some(series.0);
+            chart.drawings_mut().drawings.push(drawing);
+            assert!(chart.attach_primitive(series, Foreground).is_some());
+            let time = chart.bars(series)[70].time;
+            let mut tick = 0.0;
+            test_frames::frame(&ctx, &mut chart, tick, vec![]);
+            let pos = Pos2::new(
+                chart.get_chart_mapping().idx_to_x(70),
+                chart.series_price_map(series).unwrap().price_to_y(100.0),
+            );
+            for marked in [false, true] {
+                let marks = if marked {
+                    vec![
+                        Marker::new(time)
+                            .at_price(100.0, MarkerPos::AtPriceMiddle)
+                            .with_id("top"),
+                    ]
+                } else {
+                    Vec::new()
+                };
+                chart.set_markers(series, marks);
+                tick += 0.1;
+                test_frames::frame(
+                    &ctx,
+                    &mut chart,
+                    tick,
+                    vec![Event::PointerMoved(Pos2::ZERO)],
+                );
+                chart.drain_events().for_each(drop);
+                tick += 0.1;
+                test_frames::frame(&ctx, &mut chart, tick, vec![Event::PointerMoved(pos)]);
+                let point = chart
+                    .drain_events()
+                    .find_map(|event| match event {
+                        ChartEvent::CrosshairMoved(Some(point)) => Some(point),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("pointer in plot at {pos:?}"));
+                assert_eq!(
+                    (point.target, point.primitive_hit),
+                    (Some(PointerTarget::Drawing(77)), None),
+                    "secondary {secondary}, marked {marked}"
+                );
+            }
+        }
+    }
+
+    /// A chart without bars paints no marks, so a click there reports none, from its first
+    /// empty frame on.
+    #[test]
+    fn click_on_an_emptied_chart_reports_no_removed_mark() {
+        for settled in [false, true] {
+            let ctx = Context::default();
+            let mut chart = test_frames::chart(&[95.0], &[105.0]);
+            chart.config_mut().show_volume = false;
+            test_frames::frame(&ctx, &mut chart, 0.0, vec![]);
+            let time = chart.state.shown()[70].time;
+            chart.set_markers(
+                SeriesId::MAIN,
+                vec![Marker::new(time).with_pos(MarkerPos::InBar).with_id("old")],
+            );
+            test_frames::frame(&ctx, &mut chart, 0.1, vec![]);
+            test_frames::frame(&ctx, &mut chart, 0.2, vec![]);
+            let pos = chart.clickable_marks.last().unwrap().rect.center();
+            let button = |pressed| {
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                }]
+            };
+            if !settled {
+                test_frames::frame(&ctx, &mut chart, 0.3, button(true));
+            }
+            // The host drops the marks and the bars, as a symbol change does until new bars arrive.
+            chart.set_markers(SeriesId::MAIN, Vec::new());
+            chart.set_data(SeriesId::MAIN, Vec::new());
+            if settled {
+                test_frames::frame(&ctx, &mut chart, 0.3, vec![]);
+                test_frames::frame(&ctx, &mut chart, 0.4, vec![]);
+                chart.drain_events().for_each(drop);
+                test_frames::frame(&ctx, &mut chart, 0.5, button(true));
+            }
+            test_frames::frame(&ctx, &mut chart, 0.6, button(false));
+            let events: Vec<_> = chart
+                .drain_events()
+                .filter_map(|event| match event {
+                    ChartEvent::Click { position, .. } => {
+                        Some(format!("Click {:?}", position.target))
+                    }
+                    ChartEvent::MarkClick { id, .. } => Some(format!("MarkClick {id}")),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(events, ["Click None"], "settled {settled}");
+        }
+    }
+
+    /// Hovering a pane makes no heap allocation for each titled price line away from the pointer.
+    #[cfg(feature = "studies")]
+    #[test]
+    fn hover_allocates_nothing_per_titled_price_line() {
+        use crate::model::PriceLine;
+        use egui::{Color32, Event, Pos2, RawInput, Rect, vec2};
+
+        let hover_cost = |titled: bool| {
+            let ctx = Context::default();
+            let mut chart = test_frames::chart(&[95.0], &[105.0]);
+            chart.config_mut().show_volume = false;
+            for i in 0..24 {
+                let line = PriceLine::new(100.0 + f64::from(i) * 0.04, Color32::BLUE)
+                    .with_axis_label(false);
+                let line = if titled {
+                    line.with_title(format!("Line {i}"))
+                } else {
+                    line
+                };
+                assert!(chart.add_price_line(SeriesId::MAIN, line).is_some());
+            }
+            test_frames::frame(&ctx, &mut chart, 0.0, vec![]);
+            let plot = chart.get_rendered_price_rect();
+            let map = chart.series_price_map(SeriesId::MAIN).unwrap();
+            // On the time axis under the plot, then far below and far above every line and title.
+            let at = |y| Pos2::new(plot.center().x, y);
+            let positions = [
+                at(plot.bottom() + 8.0),
+                at(map.price_to_y(96.0)),
+                at(map.price_to_y(104.0)),
+            ];
+            assert!(!plot.contains(positions[0]));
+            assert!(plot.contains(positions[1]) && plot.contains(positions[2]));
+            let mut tick = 0.0;
+            positions.map(|pos| {
+                for _ in 0..3 {
+                    tick += 0.1;
+                    test_frames::frame(&ctx, &mut chart, tick, vec![Event::PointerMoved(pos)]);
+                }
+                chart.drain_events().for_each(drop);
+                (0..3)
+                    .map(|_| {
+                        tick += 0.1;
+                        let input = RawInput {
+                            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0))),
+                            time: Some(tick),
+                            ..Default::default()
+                        };
+                        let (count, output) =
+                            crate::widget::studies_data::tests::allocations(|| {
+                                ctx.run_ui(input, |ui| {
+                                    egui::CentralPanel::default().show(ui, |ui| {
+                                        chart.show(ui);
+                                    });
+                                })
+                            });
+                        output.drop_without_applying_deltas();
+                        count as i64
+                    })
+                    .min()
+                    .unwrap()
+            })
+        };
+        let (plain, titled) = (hover_cost(false), hover_cost(true));
+        // Titles do not change while the pointer moves, so they cost no more to hover than none.
+        // Each count is taken against the same chart off the plot.
+        for at in [1, 2] {
+            assert!(
+                (titled[at] - titled[0]) - (plain[at] - plain[0]) < 24,
+                "hover allocations at {at}: untitled lines {plain:?}, titled lines {titled:?}"
             );
         }
     }
