@@ -157,6 +157,13 @@ impl ChartSettingsState {
         settings.candle_colors.show_border = config.candle_border_width > 0.0;
         settings.candle_colors.show_wick = candles.wick_visible;
         settings.candle_colors.color_by_previous_close = candles.color_by_previous_close;
+        if chart.chart_type() == crate::model::ChartType::Bars {
+            settings.candle_colors.color_by_previous_close = chart
+                .chart_type_params()
+                .styles
+                .bars
+                .color_by_previous_close;
+        }
         if chart.chart_type() == crate::model::ChartType::HollowCandles {
             let style = &chart.chart_type_params().styles.hollow;
             settings.candle_colors = super::CandleColorConfig {
@@ -665,6 +672,12 @@ impl ChartSettingsState {
             style.border_down = colors.border_down;
             style.wick_up = colors.wick_up;
             style.wick_down = colors.wick_down;
+            if chart.chart_type_params() != &params {
+                chart.set_chart_type_params(params);
+            }
+        } else if self.chart_type == crate::model::ChartType::Bars {
+            let mut params = chart.chart_type_params().clone();
+            params.styles.bars.color_by_previous_close = self.candle_colors.color_by_previous_close;
             if chart.chart_type_params() != &params {
                 chart.set_chart_type_params(params);
             }

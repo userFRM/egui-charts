@@ -576,6 +576,44 @@ mod tests {
         assert!(engine.update(&mut strategy, &bars, &[]).is_empty());
     }
 
+    /// A fill carries no study output, so a plot placeholder in a fill message is missing.
+    #[test]
+    #[cfg(feature = "alert-engine")]
+    fn strategy_fill_message_reads_no_study_value() {
+        use crate::model::{Alert, AlertCondition};
+        use crate::services::{AlertEngine, AlertEvent};
+        use std::sync::{Arc, Mutex};
+        let mut alert = Alert::new("SYM", AlertCondition::StrategyFills("run-1".into()));
+        alert.message = "{{value}} rsi {{plot_3_0}}".into();
+        let delivered = Arc::new(Mutex::new(Vec::new()));
+        let sink = delivered.clone();
+        let engine = AlertEngine::new()
+            .with_alerts(vec![alert])
+            .on_trigger(move |_, event| sink.lock().unwrap().push(event.clone()));
+        let fill = StrategyFill {
+            sequence: 1,
+            time: DateTime::UNIX_EPOCH,
+            order_id: "Long".into(),
+            side: OrderSide::Buy,
+            price: 187.5,
+            quantity: 2.0,
+            position: 2.0,
+        };
+        engine.strategy_fills(
+            "run-1",
+            "SYM",
+            None,
+            Timeframe::Min1,
+            &[fill],
+            DateTime::UNIX_EPOCH,
+        );
+        let events = delivered.lock().unwrap();
+        let [AlertEvent::TriggeredForSymbol { message, .. }] = events.as_slice() else {
+            panic!("one fill");
+        };
+        assert_eq!(message, "187.5 rsi NaN");
+    }
+
     #[test]
     #[cfg(feature = "alert-engine")]
     fn strategy_alerts_deliver_each_fill_once_even_at_the_same_timestamp() {
@@ -618,6 +656,7 @@ mod tests {
             alerts.strategy_fills(
                 "other-run",
                 "SYM",
+                None,
                 Timeframe::Min1,
                 &fills,
                 bars[count - 1].time,
@@ -625,6 +664,7 @@ mod tests {
             alerts.strategy_fills(
                 "run-1",
                 "OTHER",
+                None,
                 Timeframe::Min1,
                 &fills,
                 bars[count - 1].time,
@@ -632,6 +672,7 @@ mod tests {
             alerts.strategy_fills(
                 "run-1",
                 "SYM",
+                None,
                 Timeframe::Hour1,
                 &fills,
                 bars[count - 1].time,
@@ -644,6 +685,7 @@ mod tests {
             alerts.strategy_fills(
                 "run-1",
                 "SYM",
+                None,
                 Timeframe::Min1,
                 &fills,
                 bars[count - 1].time,
@@ -651,6 +693,7 @@ mod tests {
             alerts.strategy_fills(
                 "run-1",
                 "SYM",
+                None,
                 Timeframe::Min1,
                 &fills,
                 bars[count - 1].time,
@@ -700,12 +743,12 @@ mod tests {
             edited.name = "Renamed".into();
             edited.status = status;
             alerts.save(edited, inbox.reply(0));
-            alerts.strategy_fills("run-1", "SYM", Timeframe::Min1, &all, bars[4].time);
+            alerts.strategy_fills("run-1", "SYM", None, Timeframe::Min1, &all, bars[4].time);
             assert_eq!(delivered.lock().unwrap().len(), 4);
         }
         let mut next = all[0].clone();
         next.sequence = 5;
-        alerts.strategy_fills("run-1", "SYM", Timeframe::Min1, &[next], bars[4].time);
+        alerts.strategy_fills("run-1", "SYM", None, Timeframe::Min1, &[next], bars[4].time);
         assert_eq!(delivered.lock().unwrap().len(), 5);
         // Fill alerts obey the same lifecycle rules, without needing a price subscription.
         use crate::model::{
@@ -747,12 +790,13 @@ mod tests {
                     .subjects(engine.alerts()[0].id.as_ref().unwrap())
                     .is_empty()
             );
-            engine.strategy_fills("run-1", "SYM", Timeframe::Min1, &all, bars[4].time);
+            engine.strategy_fills("run-1", "SYM", None, Timeframe::Min1, &all, bars[4].time);
             assert_eq!(delivered.lock().unwrap().len(), count);
             // Opening the schedule must not repeat fills observed outside it.
             engine.strategy_fills(
                 "run-1",
                 "SYM",
+                None,
                 Timeframe::Min1,
                 &all,
                 DateTime::UNIX_EPOCH + TimeDelta::hours(12),
@@ -774,7 +818,7 @@ mod tests {
                 });
             let mut fill = all[0].clone();
             fill.price = 0.00025;
-            engine.strategy_fills("run-1", "SYM", Timeframe::Min1, &[fill], bars[4].time);
+            engine.strategy_fills("run-1", "SYM", None, Timeframe::Min1, &[fill], bars[4].time);
             let events = delivered.lock().unwrap();
             let [AlertEvent::TriggeredForSymbol { message, .. }] = events.as_slice() else {
                 panic!("one fill");

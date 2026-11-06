@@ -23,12 +23,12 @@ This README and the [guide](https://userfrm.github.io/egui-charts/docs/) follow 
 
 </div>
 
-<picture>
-  <source media="(prefers-color-scheme: light)" srcset="docs/images/hero-light.webp">
-  <img src="docs/images/hero-dark.webp" alt="Intraday workspace with candles, volume, EMA overlays, VWAP, RSI, a long-position plan, working orders, an alert, watchlist and paper account">
-</picture>
+<a href="https://userfrm.github.io/egui-charts/docs/#product-tour"><picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/tour-light.webp">
+  <img src="docs/images/tour-dark.webp" alt="Four charts with footprints, volume profiles and filled study bands; the pointer switches layouts and searches for a study">
+</picture></a>
 
-*An intraday session: analysis, risk and orders on the same chart. Every image uses generated sample data and simulated trading.*
+*Chart layouts, studies and chart types in motion. [Watch the full demo tour](https://userfrm.github.io/egui-charts/docs/#product-tour). Every image uses generated sample data and simulated trading.*
 
 ## Inside the demo
 
@@ -79,12 +79,12 @@ This README and the [guide](https://userfrm.github.io/egui-charts/docs/) follow 
       Four linked charts with candles, Heikin-Ashi, OHLC bars and area.
     </td>
     <td width="50%" valign="top">
-      <strong>Mark the setup</strong><br>
+      <strong>Draw a trend line</strong><br>
       <a href="docs/images/drawings-dark.webp"><picture>
         <source media="(prefers-color-scheme: light)" srcset="docs/images/drawings-light.webp">
-        <img src="docs/images/drawings-dark.webp" alt="Pitchfork, Fibonacci extension, XABCD pattern and a retest callout.">
+        <img src="docs/images/drawings-dark.webp" alt="A trend line snaps to candle highs and lows, then its handle moves to another bar.">
       </picture></a><br>
-      Pitchfork, Fibonacci extension, XABCD pattern and a retest callout.
+      A trend line snaps to candle highs and lows, then its handle moves to another bar.
     </td>
   </tr>
   <tr>
@@ -100,9 +100,9 @@ This README and the [guide](https://userfrm.github.io/egui-charts/docs/) follow 
       <strong>Rehearse the session</strong><br>
       <a href="docs/images/replay-dark.webp"><picture>
         <source media="(prefers-color-scheme: light)" srcset="docs/images/replay-light.webp">
-        <img src="docs/images/replay-dark.webp" alt="Replay transport and a paper position with working orders.">
+        <img src="docs/images/replay-dark.webp" alt="Clicking a bar starts replay, and the replay bar steps the chart through historical bars.">
       </picture></a><br>
-      Replay transport and a paper position with working orders.
+      Clicking a bar starts replay, and the replay bar steps the chart through historical bars.
     </td>
   </tr>
   <tr>

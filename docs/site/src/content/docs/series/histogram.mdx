@@ -16,7 +16,9 @@ See the [series overview](../series.mdx) for bar-series lifecycle and
 ## Data
 
 Use [`Bar::from_value(time, value)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/bar/struct.Bar.html#method.from_value).
-The column height uses `close`, not the `volume` field. To plot volume, explicitly
+The column height uses `close`, or on the main chart the price chosen in
+[`ChartTypeStyles::columns`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.ChartTypeStyles.html#structfield.columns),
+not the `volume` field. To plot volume, explicitly
 map each source bar's volume into the scalar, as this scene does. Negative scalar
 values are valid; negative bar volume is not.
 

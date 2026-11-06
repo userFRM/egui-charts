@@ -95,7 +95,7 @@ use crate::model::{
 /// let time = |seconds| DateTime::<Utc>::from_timestamp(seconds, 0).unwrap();
 /// let bar = |seconds, close| Bar::new(time(seconds), close, close, close, close, 1.0);
 /// // The close rises through 100 on the second bar; `update` also takes the chart's source values.
-/// engine.update("AAPL", Timeframe::Min1, &[bar(0, 99.0), bar(60, 101.0)], time(61), |_, _| None);
+/// engine.update("AAPL", None, Timeframe::Min1, &[bar(0, 99.0), bar(60, 101.0)], time(61), |_, _| None);
 /// ```
 pub struct AlertEngine {
     state: Mutex<State>,
@@ -270,11 +270,13 @@ impl AlertEngine {
     /// Updates active conditions of `symbol` on `timeframe` against the newest of `bars`, oldest
     /// first, at the time `now`. Feed every interval in [`Alert::timeframes`]. `value` resolves a
     /// study or drawing source at a bar index of `bars`, for instance with `Chart::alert_value`;
-    /// price and volume come from `bars`. Call it each frame with the bars of every live chart, but
-    /// not with a chart in replay.
+    /// price and volume come from `bars`. `exchange` is the exchange of `symbol` for the
+    /// `{{exchange}}` placeholder, as [`Alert::expand_message`] takes it. Call it each frame with
+    /// the bars of every live chart, but not with a chart in replay.
     pub fn update(
         &self,
         symbol: &str,
+        exchange: Option<&str>,
         timeframe: Timeframe,
         bars: &[Bar],
         now: DateTime<Utc>,
@@ -283,6 +285,7 @@ impl AlertEngine {
         self.update_matching(
             None,
             symbol,
+            exchange,
             &[(&BarClock::new(timeframe), bars)],
             now,
             |_, source, at| value(source, at),
@@ -290,11 +293,13 @@ impl AlertEngine {
     }
 
     /// Updates one interval of an alert with its retained source definitions. Other alerts may
-    /// refer to different study instances with the same chart-local identifiers.
+    /// refer to different study instances with the same chart-local identifiers. `exchange` is
+    /// the exchange of `symbol`, as [`AlertEngine::update`] takes it.
     pub fn update_alert(
         &self,
         id: &AlertId,
         symbol: &str,
+        exchange: Option<&str>,
         timeframe: Timeframe,
         bars: &[Bar],
         now: DateTime<Utc>,
@@ -303,6 +308,7 @@ impl AlertEngine {
         self.update_matching(
             Some(id),
             symbol,
+            exchange,
             &[(&BarClock::new(timeframe), bars)],
             now,
             |_, source, at| value(source, at),
@@ -314,6 +320,7 @@ impl AlertEngine {
         &self,
         id: Option<&AlertId>,
         symbol: &str,
+        exchange: Option<&str>,
         inputs: &[(&BarClock, &[Bar])],
         now: DateTime<Utc>,
         value: impl Fn(Timeframe, &AlertSource, usize) -> Option<f64>,
@@ -368,16 +375,21 @@ impl AlertEngine {
                     continue;
                 };
                 matched = true;
-                if !observe(alert, run, (symbol, clock), bars, now, &|source, at| {
-                    value(timeframe, source, at)
-                }) {
+                if !observe(
+                    alert,
+                    run,
+                    (symbol, exchange, clock),
+                    bars,
+                    now,
+                    &|source, at| value(timeframe, source, at),
+                ) {
                     ready = false;
                 }
             }
             if !matched || !ready {
                 continue;
             }
-            let Some((bar, message, silent)) = evaluate(alert, run, symbol, now) else {
+            let Some((bar, message, silent)) = evaluate(alert, run, symbol, exchange, now) else {
                 continue;
             };
             let price = bar.close.is_finite().then_some(bar.close);
@@ -438,13 +450,16 @@ impl AlertEngine {
     /// `now` gates expiry and notification schedules; event times are the source fill times.
     /// Empty messages use the execution side, quantity, price and resulting signed position.
     /// Custom messages expand the usual placeholders using a flat bar at the fill price, with
-    /// its source time and zero volume. Strategy-fill alerts need no price-reader subscription.
+    /// its source time and zero volume, and `exchange` as [`Alert::expand_message`] takes it. A
+    /// fill carries no study values, so `{{plot_ID_N}}` reads `NaN`. Strategy-fill alerts need no
+    /// price-reader subscription.
     /// Delivery callbacks run after unlocking, as they do for price alerts.
     #[cfg(feature = "strategies")]
     pub fn strategy_fills(
         &self,
         run: &str,
         symbol: &str,
+        exchange: Option<&str>,
         timeframe: Timeframe,
         fills: &[crate::strategies::StrategyFill],
         now: DateTime<Utc>,
@@ -512,7 +527,9 @@ impl AlertEngine {
                     let bar = Bar::new(
                         fill.time, fill.price, fill.price, fill.price, fill.price, 0.0,
                     );
-                    alert.expand_message(symbol, timeframe, &bar, fill.time, |_| Some(fill.price))
+                    alert.expand_message(symbol, exchange, timeframe, &bar, fill.time, |source| {
+                        (*source == AlertSource::Price).then_some(fill.price)
+                    })
                 };
                 if alert
                     .schedule
@@ -682,7 +699,7 @@ impl Alerts for AlertEngine {
 fn observe(
     alert: &Alert,
     run: &mut Run,
-    (symbol, clock): (&str, &BarClock),
+    (symbol, exchange, clock): (&str, Option<&str>, &BarClock),
     bars: &[Bar],
     now: DateTime<Utc>,
     value: &impl Fn(&AlertSource, usize) -> Option<f64>,
@@ -771,7 +788,7 @@ fn observe(
         // Only the message knows the sources it names, so this expansion collects them.
         let values = std::cell::RefCell::new(Vec::new());
         if holds && timeframe == alert.timeframe.unwrap_or_default() {
-            alert.expand_message(symbol, timeframe, &bars[at], now, |src| {
+            alert.expand_message(symbol, exchange, timeframe, &bars[at], now, |src| {
                 let found = source(src, at);
                 values.borrow_mut().push((src.clone(), found));
                 found
@@ -826,6 +843,7 @@ fn evaluate(
     alert: &Alert,
     run: &mut Run,
     symbol: &str,
+    exchange: Option<&str>,
     now: DateTime<Utc>,
 ) -> Option<(Bar, String, bool)> {
     let intervals = alert.timeframes();
@@ -904,7 +922,7 @@ fn evaluate(
         .iter()
         .zip(&intervals)
         .find(|(_, interval)| **interval == first)?;
-    let message = alert.expand_message(symbol, first, &primary.bar, now, |source| {
+    let message = alert.expand_message(symbol, exchange, first, &primary.bar, now, |source| {
         primary
             .values
             .iter()
@@ -1179,7 +1197,7 @@ mod tests {
     /// Feeds `bars` with the study value `study` of each bar, as one update.
     fn feed(host: &Host, bars: &[Bar], study: &[f64], now: i64) {
         host.engine
-            .update("SYM", Timeframe::Min1, bars, time(now), |_, at| {
+            .update("SYM", None, Timeframe::Min1, bars, time(now), |_, at| {
                 study.get(at).copied()
             });
     }
@@ -1399,7 +1417,7 @@ mod tests {
                         bars.push(bar(minute + 1, 1.0, 1.0));
                     }
                     host.engine
-                        .update("SYM", tf, &bars, time(1000), |_, _| None);
+                        .update("SYM", None, tf, &bars, time(1000), |_, _| None);
                 };
                 let slow = || send(Timeframe::Min5, 0, 101.0, 1.0);
                 let fast = || send(Timeframe::Min1, 0, 99.0, 10.0);
@@ -1450,6 +1468,7 @@ mod tests {
         let slow = |close| {
             host.engine.update(
                 "SYM",
+                None,
                 Timeframe::Min5,
                 &[bar(0, close, 1.0)],
                 time(1000),
@@ -1459,6 +1478,7 @@ mod tests {
         let fast = |minute| {
             host.engine.update(
                 "SYM",
+                None,
                 Timeframe::Min1,
                 &[bar(minute, 99.0, 10.0), bar(minute + 1, 99.0, 0.0)],
                 time(1000),
@@ -1487,11 +1507,12 @@ mod tests {
             host.events();
             let fast = [bar(-1, 99.0, 0.0), bar(0, 99.0, 10.0), bar(1, 99.0, 0.0)];
             host.engine
-                .update("SYM", Timeframe::Min1, &fast, time(1000), |_, _| None);
+                .update("SYM", None, Timeframe::Min1, &fast, time(1000), |_, _| None);
             host.engine
-                .update("SYM", Timeframe::Min1, &[], time(1000), |_, _| None);
+                .update("SYM", None, Timeframe::Min1, &[], time(1000), |_, _| None);
             host.engine.update(
                 "SYM",
+                None,
                 Timeframe::Min5,
                 &[bar(0, 101.0, 1.0)],
                 time(1000),
@@ -1502,7 +1523,7 @@ mod tests {
                 "missing interval blocks cached observations"
             );
             host.engine
-                .update("SYM", Timeframe::Min1, &fast, time(1000), |_, _| None);
+                .update("SYM", None, Timeframe::Min1, &fast, time(1000), |_, _| None);
             assert_eq!(host.fired().len(), 1, "restored close is still eligible");
         }
 
@@ -1516,6 +1537,7 @@ mod tests {
         host.events();
         host.engine.update(
             "SYM",
+            None,
             Timeframe::Min1,
             &[bar(0, 101.0, 1.0), bar(1, 99.0, 0.0)],
             time(1000),
@@ -1523,6 +1545,7 @@ mod tests {
         );
         host.engine.update(
             "SYM",
+            None,
             "60s".parse().unwrap(),
             &[bar(0, 99.0, 10.0), bar(1, 99.0, 0.0)],
             time(1000),
@@ -1672,6 +1695,7 @@ mod tests {
             for symbol in ["SYM", "OTHER"] {
                 host.engine.update(
                     symbol,
+                    None,
                     Timeframe::Min1,
                     &[bar(-5, 100.0, 1.0)],
                     time(now),
@@ -1740,8 +1764,39 @@ mod tests {
         feed(&host, &reloaded, &[], 1_002);
         feed(&host, &bars[..2], &[], 1_003);
         host.engine
-            .update("SYM", Timeframe::Min5, &bars, time(1_004), |_, _| None);
+            .update("SYM", None, Timeframe::Min5, &bars, time(1_004), |_, _| {
+                None
+            });
         assert!(host.events().is_empty());
+    }
+
+    /// An alert stored before names and messages had limits, here with a 4001-character
+    /// message, loads with `with_alerts` and keeps working.
+    #[test]
+    fn an_alert_stored_with_a_long_message_keeps_firing_and_can_be_paused() {
+        let message = "é".repeat(Alert::MAX_MESSAGE_CHARS + 1);
+        let mut stored = alert(AlertCondition::Above(100.0), AlertFrequency::EveryTime);
+        stored.message.clone_from(&message);
+        let host = Host::new(vec![stored]);
+        host.events();
+        let id = host.engine.alerts()[0].id.clone().unwrap();
+        let subjects = host.engine.subjects(&id);
+        feed(&host, &[bar(0, 99.0, 1.0), bar(1, 101.0, 1.0)], &[], 61);
+        let fired: Vec<_> = host
+            .events()
+            .into_iter()
+            .filter_map(|event| match event {
+                AlertEvent::TriggeredForSymbol { price, message, .. } => Some((price, message)),
+                _ => None,
+            })
+            .collect();
+        let mut paused = host.engine.alerts()[0].clone();
+        paused.status = AlertStatus::Disabled;
+        let pause = host.save(paused);
+        assert_eq!(
+            (subjects, fired, pause),
+            (vec!["SYM".to_owned()], vec![(Some(101.0), message)], Ok(()))
+        );
     }
 
     #[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
@@ -1837,7 +1892,9 @@ mod tests {
         host.events();
         for symbol in ["SYM", "SYM", "OTHER", "NOT_A_MEMBER"] {
             host.engine
-                .update(symbol, Timeframe::Min1, &bars, time(1_000), |_, _| None);
+                .update(symbol, None, Timeframe::Min1, &bars, time(1_000), |_, _| {
+                    None
+                });
         }
         let symbols: Vec<_> = host
             .events()
@@ -1897,6 +1954,7 @@ mod tests {
             for i in 0..3 {
                 host.engine.update(
                     "SYM",
+                    None,
                     Timeframe::Min1,
                     &bars[..=i],
                     time(1000 + i as i64),
@@ -1920,10 +1978,14 @@ mod tests {
                 ([Some(105.0), Some(105.0)], false),
                 ([Some(110.0), Some(100.0)], comparison == "Inside"),
             ] {
-                host.engine
-                    .update("SYM", Timeframe::Min1, &bars, time(1010), |source, _| {
-                        bounds[usize::from(*source == AlertSource::Drawing("d#1".into()))]
-                    });
+                host.engine.update(
+                    "SYM",
+                    None,
+                    Timeframe::Min1,
+                    &bars,
+                    time(1010),
+                    |source, _| bounds[usize::from(*source == AlertSource::Drawing("d#1".into()))],
+                );
                 assert_eq!(!host.fired().is_empty(), fires, "{comparison} {bounds:?}");
             }
             // A later bar uses the edited drawing at the preceding bar, even after skipped updates.
@@ -1932,6 +1994,7 @@ mod tests {
                 host.events();
                 host.engine.update(
                     "SYM",
+                    None,
                     Timeframe::Min1,
                     &bars[..=last],
                     time(1020),
@@ -1946,6 +2009,7 @@ mod tests {
                 host.fired();
                 host.engine.update(
                     "SYM",
+                    None,
                     Timeframe::Min1,
                     &bars[..=current],
                     time(1030),
@@ -1961,7 +2025,7 @@ mod tests {
             let host = Host::new(host.engine.alerts());
             host.events();
             host.engine
-                .update("SYM", Timeframe::Min1, &bars[..2], time(1020), rising);
+                .update("SYM", None, Timeframe::Min1, &bars[..2], time(1020), rising);
             assert_eq!(
                 !host.fired().is_empty(),
                 comparison == "Entering" || comparison == "Inside"
@@ -1990,6 +2054,7 @@ mod tests {
             host.engine.update_matching(
                 None,
                 "SYM",
+                None,
                 &[(&five, slow), (&one, fast)],
                 time(now),
                 |_, _, _| None,
@@ -2044,6 +2109,7 @@ mod tests {
             host.engine.update_matching(
                 None,
                 "SYM",
+                None,
                 &[(&five, &slow[..]), (&one, &fast[..])],
                 time(now),
                 |_, _, _| None,
@@ -2103,6 +2169,7 @@ mod tests {
             host.engine.update_matching(
                 None,
                 "SYM",
+                None,
                 &[(&one, &fast[..count]), (&five, &slow[..])],
                 fast[count - 1].time + chrono::TimeDelta::seconds(30),
                 |_, _, _| None,
@@ -2146,6 +2213,7 @@ mod tests {
             host.engine.update_matching(
                 None,
                 "SYM",
+                None,
                 &[(&one, &fast[..]), (&five, &slow[..])],
                 time(now),
                 |_, _, _| None,
@@ -2180,6 +2248,7 @@ mod tests {
         host.engine.update_matching(
             None,
             "SYM",
+            None,
             &[
                 (&BarClock::new(Timeframe::Day1), &daily[..]),
                 (&BarClock::new(Timeframe::Min5), &five[..]),
@@ -2215,6 +2284,7 @@ mod tests {
             host.engine.update_matching(
                 None,
                 "SYM",
+                None,
                 &[(&five, &slow[..]), (&one, &fast[..])],
                 time(now),
                 |_, _, _| Some(study),
