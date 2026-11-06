@@ -3,7 +3,7 @@
 
 use super::ChartLayout;
 use crate::config::ChartConfig;
-use crate::model::ChartType;
+use crate::model::{Bar, ChartType};
 use crate::scales::instrument_price_precision;
 use crate::studies::{Indicator, IndicatorFactory, InputValue, StudySource, StudyTemplateSet};
 use crate::widget::settings::{ChartSettingsState, PrecisionMode};
@@ -44,8 +44,8 @@ pub struct LayoutCopyIssue {
 pub enum LayoutCopyIssueKind {
     /// The chart holds no bars yet. It takes the copy, and its studies draw once bars arrive.
     NoHistory,
-    /// The chart's bars are too few for this study to draw, though it draws on the source. The
-    /// chart takes the copy.
+    /// The chart's bars, or the elements of its price-based chart type, are too few for this study
+    /// to draw, though it draws on the source. The chart takes the copy.
     ShortHistory(String),
     /// The chart is skipped: this study reads another study's output, which a copy of it alone
     /// would not have. Copy the whole set with [`LayoutCopy::Studies`] instead.
@@ -185,7 +185,12 @@ impl CopiedStudies {
             chart
                 .study_data
                 .data(requests, &chart.symbol, chart.timeframe, chart.replay_time());
-        crate::widget::studies::calculate(&mut built, &ids, &chart.state.data().bars, &sources);
+        let bars: &[Bar] = if chart.chart_type().is_time_independent() {
+            &chart.element_studies.bars
+        } else {
+            &chart.state.data().bars
+        };
+        crate::widget::studies::calculate(&mut built, &ids, bars, &sources);
         for (study, id) in built.iter().zip(&ids) {
             if self.draws[id.0] && !no_bars && !draws(study.as_ref()) {
                 let name = self.set.studies[id.0].name.clone();
@@ -779,5 +784,49 @@ mod tests {
             .map(|(_, study)| (study.name().to_owned(), draws(study)))
             .collect();
         assert_eq!(drawn, [("RSI".to_owned(), true), ("SMA".to_owned(), false)]);
+    }
+
+    /// A study copied to a Renko chart draws on its bricks, not its bars: it is reported when they
+    /// are too few for it to draw.
+    #[test]
+    fn short_history_counts_the_bricks_of_a_renko_chart() {
+        use crate::widget::test_frames::frame;
+        let start = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        // Flat closes make no brick past the first. Closes rising by the default brick of 1 make
+        // one brick per bar after the first, enough for an SMA of 7.
+        for (rise, short) in [(0.0, true), (1.0, false)] {
+            let mut renko = Chart::new(BarData::from_bars(
+                (0..50)
+                    .map(|i| {
+                        let close = 10.0 + rise * i as f64;
+                        let time = start + Duration::minutes(i);
+                        Bar::new(time, close, close + 0.1, close - 0.1, close, 1.0)
+                    })
+                    .collect(),
+            ));
+            renko.set_timeframe(Timeframe::Min1);
+            renko.config_mut().show_volume = false;
+            renko.set_chart_type(ChartType::Renko);
+            let ctx = egui::Context::default();
+            frame(&ctx, &mut renko, 0.0, vec![]);
+            let mut a = chart(50);
+            let sma = a.add_indicator(Box::new(SMA::new(7)));
+            let factory = IndicatorFactory::new();
+            let mut charts = [&mut a, &mut renko];
+            let issues = pair().apply_copy(&mut charts, 0, &LayoutCopy::Study(sma), &factory);
+            let expected = short.then(|| LayoutCopyIssue {
+                slot: 1,
+                kind: LayoutCopyIssueKind::ShortHistory("SMA".into()),
+            });
+            assert_eq!(issues, Vec::from_iter(expected), "rise {rise}");
+            frame(&ctx, charts[1], 1.0, vec![]);
+            frame(&ctx, charts[1], 2.0, vec![]);
+            let shown = charts[1]
+                .rendered_studies()
+                .indicators()
+                .iter()
+                .any(|study| draws(study.as_ref()));
+            assert_eq!(shown, !short, "rise {rise}");
+        }
     }
 }
