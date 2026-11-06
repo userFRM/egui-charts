@@ -41,7 +41,7 @@ pub struct Alert {
     pub blink_on_trigger: bool,
     /// The symbol whose bars supply the sources, unless `watchlist` names the subject.
     pub symbol: String,
-    /// User-facing name, independent of the notification message, at most
+    /// User-facing name, independent of the notification message. The alert dialog takes at most
     /// [`Alert::MAX_NAME_CHARS`] characters.
     #[serde(default)]
     pub name: String,
@@ -89,9 +89,9 @@ pub struct Alert {
     /// Where a firing is delivered.
     #[serde(default)]
     pub delivery: AlertDelivery,
-    /// Text the host shows or sends when the alert fires, at most [`Alert::MAX_MESSAGE_CHARS`]
-    /// characters. [`Alert::expand_message`] fills in the placeholders `{{symbol}}`, `{{close}}`
-    /// and so on when it fires.
+    /// Text the host shows or sends when the alert fires. The alert dialog takes at most
+    /// [`Alert::MAX_MESSAGE_CHARS`] characters. [`Alert::expand_message`] fills in the placeholders
+    /// `{{symbol}}`, `{{close}}` and so on when it fires.
     #[serde(default)]
     pub message: String,
     /// Where the alert stands, as the host reports it.
@@ -321,23 +321,27 @@ impl Alert {
             })
     }
 
-    /// The most characters, counted as Unicode scalar values, a name may have.
+    /// The most characters, counted as Unicode scalar values, an edited name may have.
     pub const MAX_NAME_CHARS: usize = 300;
-    /// The most characters, counted as Unicode scalar values, a message may have.
+    /// The most characters, counted as Unicode scalar values, an edited message may have.
     pub const MAX_MESSAGE_CHARS: usize = 4000;
 
     /// The message with its placeholders filled in from the trigger: `{{symbol}}` and
-    /// `{{timeframe}}` (also `{{interval}}`) as given, `{{exchange}}` the text before the first
-    /// `:` of the symbol and `{{ticker}}` the text after it (the whole symbol without a `:`),
+    /// `{{timeframe}}` (also `{{interval}}`) as given, `{{exchange}}` the `exchange` the feed
+    /// reports for the symbol ([`Instrument::exchange`](super::Instrument::exchange)), or without
+    /// one the text before the first `:` of the symbol, and `{{ticker}}` the text after that `:`
+    /// (the whole symbol without one),
     /// `{{time}}` the open time of `bar` and `{{trigger_time}}` the instant `trigger` the alert
     /// fired, both in RFC 3339, `{{open}}`, `{{high}}`, `{{low}}`, `{{close}}` and `{{volume}}` of
     /// `bar`, `{{value}}` the value of the alert's source, `{{output_N}}` the value of output `N`
     /// of the study the source names (empty if the source is not a study), `{{plot_ID_N}}` the
     /// value of output `N` of the study `ID` whatever the source is, and `{{level}}` the label
-    /// that [`AlertInputs::sources`] gives a drawing source, empty for any other source. `value`
-    /// gives the value of a source at the bar. A value that is missing or not finite becomes
-    /// `NaN`, a number is written in the shortest form that reads back the same, and a
-    /// placeholder the alert does not know stays as written.
+    /// that [`AlertInputs::sources`] gives the drawing level the first condition tests: the source
+    /// if it is a drawing, otherwise the drawing it compares with or those bounding its channel,
+    /// joined by `, `, and empty if it tests no drawing. `value` gives the value of a source at
+    /// the bar. A value that is missing or not finite becomes `NaN`, a number is written in the
+    /// shortest form that reads back the same, and a placeholder the alert does not know stays as
+    /// written.
     ///
     /// ```
     /// use egui_charts::model::{Alert, AlertCondition, Bar, Timeframe};
@@ -347,13 +351,14 @@ impl Alert {
     /// let time = chrono::DateTime::from_timestamp(0, 0).unwrap();
     /// let bar = Bar::new(time, 99.0, 102.0, 98.0, 101.5, 1000.0);
     /// assert_eq!(
-    ///     alert.expand_message("NYSE:IBM", Timeframe::Min5, &bar, time, |_| None),
+    ///     alert.expand_message("NYSE:IBM", None, Timeframe::Min5, &bar, time, |_| None),
     ///     "IBM on NYSE closed at 101.5 on 5min"
     /// );
     /// ```
     pub fn expand_message(
         &self,
         symbol: &str,
+        exchange: Option<&str>,
         timeframe: Timeframe,
         bar: &Bar,
         trigger: DateTime<Utc>,
@@ -364,7 +369,8 @@ impl Alert {
                 .filter(|number| number.is_finite())
                 .map_or_else(|| "NaN".to_owned(), |number| number.to_string())
         };
-        let (exchange, ticker) = symbol.split_once(':').unwrap_or(("", symbol));
+        let (prefix, ticker) = symbol.split_once(':').unwrap_or(("", symbol));
+        let exchange = exchange.filter(|name| !name.is_empty()).unwrap_or(prefix);
         let study = |id: &str, output| {
             number(value(&AlertSource::Study {
                 id: id.to_owned(),
@@ -385,19 +391,25 @@ impl Alert {
                 "close" => number(Some(bar.close)),
                 "volume" => number(Some(bar.volume)),
                 "value" => number(value(&self.source)),
-                "level" => match &self.source {
-                    AlertSource::Drawing(_) => self
-                        .inputs
-                        .as_ref()
-                        .and_then(|inputs| inputs.sources.iter().find(|(s, _)| *s == self.source))
-                        .map(|(_, label)| label.clone())
-                        .unwrap_or_default(),
-                    _ => String::new(),
-                },
+                "level" => {
+                    let tested = if matches!(self.source, AlertSource::Drawing(_)) {
+                        [Some(&self.source), None]
+                    } else {
+                        self.condition.partners()
+                    };
+                    let saved = self.inputs.as_ref().map_or(&[][..], |i| &i.sources);
+                    let labels: Vec<_> = tested
+                        .into_iter()
+                        .flatten()
+                        .filter(|source| matches!(source, AlertSource::Drawing(_)))
+                        .filter_map(|source| saved.iter().find(|(s, _)| s == source))
+                        .map(|(_, label)| label.as_str())
+                        .collect();
+                    labels.join(", ")
+                }
                 _ => {
-                    if let Some(rest) = name.strip_prefix("plot_") {
-                        let (id, output) = rest.rsplit_once('_')?;
-                        return Some(study(id, output.parse().ok()?));
+                    if let Some((id, output)) = plot_placeholder(name) {
+                        return Some(study(id, output));
                     }
                     let output = name.strip_prefix("output_")?.parse().ok()?;
                     match &self.source {
@@ -407,22 +419,45 @@ impl Alert {
                 }
             })
         };
-        let mut text = String::new();
-        let mut rest = self.message.as_str();
-        while let Some(start) = rest.find("{{")
-            && let Some(length) = rest[start + 2..].find("}}")
-        {
-            let end = start + 2 + length;
-            text.push_str(&rest[..start]);
-            match field(&rest[start + 2..end]) {
-                Some(filled) => text.push_str(&filled),
-                None => text.push_str(&rest[start..end + 2]),
-            }
-            rest = &rest[end + 2..];
-        }
-        text.push_str(rest);
-        text
+        fill_placeholders(&self.message, field)
     }
+
+    /// The study identifiers that `{{plot_ID_N}}` placeholders of the message name.
+    #[cfg(all(feature = "alert-engine", feature = "studies"))]
+    pub(crate) fn plot_studies(&self) -> Vec<usize> {
+        let mut ids = Vec::new();
+        fill_placeholders(&self.message, |name| {
+            ids.extend(plot_placeholder(name).and_then(|(id, _)| id.parse::<usize>().ok()));
+            None
+        });
+        ids
+    }
+}
+
+/// The study identifier and output number of the placeholder `plot_ID_N`.
+fn plot_placeholder(name: &str) -> Option<(&str, usize)> {
+    let (id, output) = name.strip_prefix("plot_")?.rsplit_once('_')?;
+    Some((id, output.parse().ok()?))
+}
+
+/// `message` with each `{{name}}` replaced by what `field` gives for it, or left as written if
+/// `field` gives nothing.
+fn fill_placeholders(message: &str, mut field: impl FnMut(&str) -> Option<String>) -> String {
+    let mut text = String::new();
+    let mut rest = message;
+    while let Some(start) = rest.find("{{")
+        && let Some(length) = rest[start + 2..].find("}}")
+    {
+        let end = start + 2 + length;
+        text.push_str(&rest[..start]);
+        match field(&rest[start + 2..end]) {
+            Some(filled) => text.push_str(&filled),
+            None => text.push_str(&rest[start..end + 2]),
+        }
+        rest = &rest[end + 2..];
+    }
+    text.push_str(rest);
+    text
 }
 
 /// When an alert fires, judged on its source for each subject symbol.
@@ -674,15 +709,15 @@ impl std::fmt::Display for AlertCondition {
 }
 
 impl Alert {
-    /// Validate user input before handing it to host storage or evaluation.
+    /// Validate user input before handing it to host storage or evaluation. The length limits of
+    /// the name and the message are not part of it: they bind whoever edits the text, as the
+    /// alert dialog does, and an alert stored with a longer text keeps working.
     pub fn is_valid(&self) -> bool {
-        self.name.chars().count() <= Self::MAX_NAME_CHARS
-            && self.message.chars().count() <= Self::MAX_MESSAGE_CHARS
-            && (!self.symbol.trim().is_empty()
-                || self
-                    .watchlist
-                    .as_ref()
-                    .is_some_and(|id| !id.trim().is_empty()))
+        (!self.symbol.trim().is_empty()
+            || self
+                .watchlist
+                .as_ref()
+                .is_some_and(|id| !id.trim().is_empty()))
             && self
                 .watchlist
                 .as_ref()
@@ -906,7 +941,7 @@ mod tests {
                 ..AlertInputs::default()
             }));
             assert_eq!(
-                alert.expand_message("NASDAQ:AAPL", Timeframe::Min5, &bar, trigger, value),
+                alert.expand_message("NASDAQ:AAPL", None, Timeframe::Min5, &bar, trigger, value),
                 expected,
                 "{message}"
             );
@@ -914,9 +949,76 @@ mod tests {
     }
 
     #[test]
+    fn exchange_placeholder_prefers_the_reported_exchange_over_the_symbol_prefix() {
+        let time = DateTime::from_timestamp(0, 0).unwrap();
+        let bar = Bar::new(time, 1.0, 1.0, 1.0, 1.0, 1.0);
+        let mut alert = Alert::new("SAMPLE", AlertCondition::Above(0.0));
+        alert.message = "{{exchange}}/{{ticker}}".into();
+        for (symbol, exchange, expected) in [
+            ("NYSE:IBM", None, "NYSE/IBM"),
+            ("NYSE:IBM", Some(""), "NYSE/IBM"),
+            ("NYSE:IBM", Some("ARCA"), "ARCA/IBM"),
+            ("AAPL", Some("NASDAQ"), "NASDAQ/AAPL"),
+            ("AAPL", None, "/AAPL"),
+        ] {
+            assert_eq!(
+                alert.expand_message(symbol, exchange, Timeframe::Min1, &bar, time, |_| None),
+                expected
+            );
+        }
+    }
+
+    /// The drawing menu and the floating toolbar create the price crossing a drawing level
+    /// (`DrawingContextMenu::open_on`), the dialog a channel between two levels, and
+    /// `prepare_alert` stores each level's label in the inputs.
+    #[test]
+    fn level_names_the_drawing_level_a_price_alert_compares_with() {
+        let drawing = |id: &str| AlertSource::Drawing(id.into());
+        let time = DateTime::from_timestamp(0, 0).unwrap();
+        let bar = Bar::new(time, 123.0, 124.0, 122.0, 123.6, 10.0);
+        for (condition, expected) in [
+            (
+                AlertCondition::Compare {
+                    other: drawing("fib#1"),
+                    comparison: AlertComparison::Crossing,
+                },
+                "SAMPLE crossed Fib Retracement 7: 0.236",
+            ),
+            (
+                AlertCondition::Channel {
+                    boundaries: Box::new([drawing("fib#1"), drawing("fib#2")]),
+                    comparison: AlertChannelComparison::Entering,
+                },
+                "SAMPLE crossed Fib Retracement 7: 0.236, Fib Retracement 7: 0.382",
+            ),
+            (
+                AlertCondition::Compare {
+                    other: AlertSource::Volume,
+                    comparison: AlertComparison::Crossing,
+                },
+                "SAMPLE crossed ",
+            ),
+        ] {
+            let mut alert = Alert::new("SAMPLE", condition);
+            alert.inputs = Some(Box::new(AlertInputs {
+                sources: vec![
+                    (drawing("fib#1"), "Fib Retracement 7: 0.236".into()),
+                    (drawing("fib#2"), "Fib Retracement 7: 0.382".into()),
+                ],
+                ..AlertInputs::default()
+            }));
+            alert.message = "{{ticker}} crossed {{level}}".into();
+            assert_eq!(
+                alert.expand_message("SAMPLE", None, Timeframe::Min1, &bar, time, |_| Some(123.6)),
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn saved_alerts_require_finite_levels_ordered_channels_and_positive_lookbacks() {
         type Edit = fn(&mut Alert);
-        let rows: [(Edit, bool); 33] = [
+        let rows: [(Edit, bool); 29] = [
             (
                 |a| a.condition = AlertCondition::StrategyFills("run".into()),
                 true,
@@ -1130,14 +1232,6 @@ mod tests {
                 true,
             ),
             (|a| a.watchlist = Some(" ".into()), false),
-            // Limits count characters, not bytes.
-            (|a| a.name = "é".repeat(Alert::MAX_NAME_CHARS), true),
-            (|a| a.name = "é".repeat(Alert::MAX_NAME_CHARS + 1), false),
-            (|a| a.message = "€".repeat(Alert::MAX_MESSAGE_CHARS), true),
-            (
-                |a| a.message = "€".repeat(Alert::MAX_MESSAGE_CHARS + 1),
-                false,
-            ),
             (
                 |a| {
                     a.additional_conditions.push(AlertRule {

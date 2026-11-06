@@ -29,7 +29,8 @@ impl SettingsDialog {
                     || !kind.uses_ohlc()
                     || matches!(
                         kind,
-                        crate::model::ChartType::HlcArea
+                        crate::model::ChartType::HighLow
+                            | crate::model::ChartType::HlcArea
                             | crate::model::ChartType::TimePriceOpportunity
                             | crate::model::ChartType::VolumeFootprint
                             | crate::model::ChartType::SessionVolumeProfile
@@ -886,6 +887,124 @@ mod tests {
                         chart.restore(&saved).unwrap();
                         assert_eq!(chart.chart_type_params().styles.columns, expected);
                     }
+                }
+            }
+        }
+    }
+
+    /// Pointer edits of each high-low control reach the painter only after acceptance, and
+    /// Reset to defaults restores the single colour with its labels.
+    #[test]
+    fn high_low_dialog_edits_reach_the_painter_only_when_accepted() {
+        use crate::model::{ChartTypeParams, HighLowStyle};
+        use crate::widget::test_frames::shapes;
+        use egui::accesskit::Role;
+        use egui::{Color32, Vec2};
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let seeded = HighLowStyle {
+            bar_color: Color32::from_rgb(3, 4, 102),
+            labels_visible: true,
+            label_color: Color32::from_rgb(5, 6, 104),
+            label_font_size: 9.0,
+        };
+        let white = Color32::from_rgb(255, 255, 255);
+        for theme in [Theme::light(), Theme::dark()] {
+            for accept in [false, true] {
+                for edit in ["Bar", "Label", "Price labels", "Label size", "Reset"] {
+                    let mut chart = Chart::new(BarData::from_bars(vec![Bar::new(
+                        chrono::DateTime::UNIX_EPOCH,
+                        10.0,
+                        18.0,
+                        8.0,
+                        14.0,
+                        0.0,
+                    )]));
+                    chart.set_chart_type(ChartType::HighLow);
+                    chart.config_mut().show_volume = false;
+                    let mut params = ChartTypeParams::default();
+                    params.styles.high_low = seeded;
+                    chart.set_chart_type_params(params);
+                    let mut dialog = SettingsDialog::new();
+                    dialog.set_control_visible(crate::ui::Control::Templates, false);
+                    dialog.open(ChartSettingsState::from_chart(&chart));
+                    let harness_theme = theme.clone();
+                    let setup_theme = theme.clone();
+                    let mut harness = Harness::builder()
+                        .with_context_setup(move |ctx| {
+                            egui_extras::install_image_loaders(ctx);
+                            crate::theme::apply_to_egui(ctx, &setup_theme);
+                        })
+                        .with_size(Vec2::new(1440.0, 900.0))
+                        .build_ui_state(
+                            move |ui, (dialog, accepted): &mut (SettingsDialog, _)| {
+                                if let SettingsAction::Apply(settings) =
+                                    dialog.show(ui.ctx(), &harness_theme)
+                                {
+                                    *accepted = Some(settings);
+                                }
+                            },
+                            (dialog, None),
+                        );
+                    harness.run();
+                    match edit {
+                        "Bar" | "Label" => {
+                            let color = if edit == "Bar" { "#030466" } else { "#050668" };
+                            harness
+                                .get_by_role_and_label(Role::ColorWell, color)
+                                .click();
+                            harness.run();
+                            harness
+                                .get_by_role_and_label(Role::ColorWell, "#FFFFFF")
+                                .click();
+                        }
+                        "Price labels" => {
+                            harness.get_by_role_and_label(Role::CheckBox, edit).click();
+                        }
+                        "Label size" => {
+                            harness.get_by_role_and_label(Role::ComboBox, edit).click();
+                            harness.run();
+                            harness.get_by_role_and_label(Role::Button, "12").click();
+                        }
+                        _ => harness.get_by_label("Reset to defaults").click(),
+                    }
+                    harness.run();
+                    harness
+                        .get_by_label(if accept { "Ok" } else { "Cancel" })
+                        .click();
+                    harness.run();
+                    let (dialog, accepted) = harness.state();
+                    assert!(!dialog.is_open);
+                    if let Some(settings) = accepted {
+                        settings.apply_to_chart(&mut chart).unwrap();
+                    }
+                    assert_eq!(accepted.is_some(), accept);
+
+                    let mut expected = seeded;
+                    if accept {
+                        match edit {
+                            "Bar" => expected.bar_color = white,
+                            "Label" => expected.label_color = white,
+                            "Price labels" => expected.labels_visible = false,
+                            "Label size" => expected.label_font_size = 12.0,
+                            _ => expected = HighLowStyle::default(),
+                        }
+                    }
+                    assert_eq!(chart.chart_type_params().styles.high_low, expected);
+                    let ctx = Context::default();
+                    crate::theme::apply_to_egui(&ctx, &theme);
+                    let painted = shapes(&ctx, &mut chart, 1.0, vec![]);
+                    let plot = chart.get_rendered_price_rect();
+                    assert!(painted.iter().any(|s| matches!(s, Shape::Rect(r)
+                        if plot.contains(r.rect.center()) && r.fill == expected.bar_color)));
+                    let label = painted.iter().any(|s| {
+                        matches!(s, Shape::Text(t)
+                        if t.galley.text() == "18.00"
+                            && t.galley.job.sections[0].format.color == expected.label_color
+                            && t.galley.job.sections[0].format.font_id.size
+                                == expected.label_font_size)
+                    });
+                    assert_eq!(label, expected.labels_visible);
                 }
             }
         }

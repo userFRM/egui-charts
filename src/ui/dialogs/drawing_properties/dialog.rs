@@ -245,6 +245,7 @@ impl DrawingPropertiesDialog {
                 drawing.regression_trend = old.regression_trend;
                 drawing.vwap = old.vwap;
                 drawing.channel_midline = old.channel_midline;
+                drawing.line_measurements = old.line_measurements;
                 drawing.price_axis_label = old.price_axis_label;
                 drawing.time_axis_label = old.time_axis_label;
                 drawing.elliott_degree = old.elliott_degree;
@@ -448,7 +449,7 @@ impl DrawingPropertiesDialog {
                     .props
                     .tool_settings
                     .as_ref()
-                    .is_some_and(|t| t.settings.tool_type.supports_text()),
+                    .is_some_and(|t| TextTab::available(t.settings.tool_type)),
                 PropertiesTab::Coordinates => self
                     .props
                     .tool_settings
@@ -653,6 +654,7 @@ mod tests {
                 (Tool::Rect, true, true, true),
                 (Tool::Brush, false, false, false),
                 (Tool::TrendLine, false, true, true),
+                (Tool::TrendAngle, false, true, true),
                 (Tool::TextLabel, false, false, true),
                 (Tool::Highlighter, false, false, false),
             ] {
@@ -687,6 +689,39 @@ mod tests {
                 dialog.close();
                 frame(&mut dialog, &mut chart, &ctx, vec![]);
             }
+        }
+    }
+
+    /// A trend angle's Text tab styles its own labels: it has no text to write, align or box.
+    #[test]
+    fn text_tab_rows_follow_the_tool() {
+        let ctx = Context::default();
+        let mut chart = Chart::new(BarData::new());
+        let mut dialog = DrawingPropertiesDialog::new();
+        for (tool, writes, styles, boxed) in [
+            (Tool::TrendAngle, false, true, false),
+            (Tool::TrendLine, true, false, false),
+            (Tool::TextLabel, true, true, true),
+        ] {
+            let mut drawing = Drawing::new(7, tool);
+            drawing.chart_points = vec![ChartPoint::new(1.0, 100.0); 2];
+            chart.drawings_mut().drawings = vec![drawing];
+            dialog.open_for_chart(&chart, DrawingId(7));
+            dialog.active_tab = PropertiesTab::Text;
+            frame(&mut dialog, &mut chart, &ctx, vec![]);
+            let labels = frame(&mut dialog, &mut chart, &ctx, vec![]);
+            let has = |label: &str| labels.iter().any(|(text, _)| text == label);
+            assert!(has("Font size"), "{tool:?}");
+            assert_eq!(has("Label"), writes, "{tool:?}");
+            assert_eq!(
+                has("Horizontal alignment"),
+                tool == Tool::TrendLine,
+                "{tool:?}"
+            );
+            assert_eq!(has("Text style") && has("Text color"), styles, "{tool:?}");
+            assert_eq!(has("Background"), boxed, "{tool:?}");
+            dialog.close();
+            frame(&mut dialog, &mut chart, &ctx, vec![]);
         }
     }
 
@@ -758,6 +793,7 @@ mod tests {
                 settings.time_axis_label = false;
                 settings.italic = true;
                 settings.text_color = Some([1, 2, 3, 255]);
+                settings.line_measurements.price_labels = true;
                 dialog.coordinates.points[1].price = "125".into();
                 frame(&mut dialog, &mut chart, &ctx, vec![]);
                 assert_eq!(
@@ -772,6 +808,7 @@ mod tests {
                 assert!(!preview.price_axis_label && !preview.time_axis_label);
                 assert!(preview.italic);
                 assert_eq!(preview.text_color, Some([1, 2, 3, 255]));
+                assert!(preview.line_measurements.price_labels);
                 assert_eq!(chart.drawings().drawings[2].stroke_width, 6.0);
                 assert!(!chart.can_undo());
                 assert!(chart.can_redo(), "preview must retain existing redo");
@@ -819,6 +856,7 @@ mod tests {
             );
             assert!(!restored.italic, "{finish}");
             assert_eq!(restored.text_color, None, "{finish}");
+            assert_eq!(restored.line_measurements, Default::default(), "{finish}");
             assert_eq!(chart.drawings().drawings[0].stroke_width, 20.0, "{finish}");
             assert_eq!(chart.drawings().drawings[1].stroke_width, 4.0, "{finish}");
             assert_eq!(

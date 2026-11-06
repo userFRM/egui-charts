@@ -3,6 +3,7 @@
 //! Includes: lines, rays, shapes (rect, circle, ellipse, triangle, arc),
 //! arrows, and polylines.
 
+use super::ChartView;
 use super::style::{Acceleration, ellipse_arc, smooth_path};
 use crate::drawings::domain::Drawing;
 use crate::styles::{stroke, typography};
@@ -97,15 +98,15 @@ impl Drawing {
     }
 
     /// Ends from left to right, or in anchor order on a vertical line, extended to the pane edges
-    /// as configured; `None` below two anchors. An info line extends left past its first anchor
-    /// and right past its second, whichever way it was drawn, as vertical rays do; vertical
-    /// extended lines count from the top; other lines extend towards the pane's sides.
+    /// as configured; `None` below two anchors. An info line or a trend angle extends left past
+    /// its first anchor and right past its second, whichever way it was drawn, as vertical rays do;
+    /// vertical extended lines count from the top; other lines extend towards the pane's sides.
     pub(crate) fn trend_line_ends(&self, rect: Rect) -> Option<(Pos2, Pos2)> {
         use crate::drawings::DrawingToolType as T;
         let &[a, b, ..] = self.points.as_slice() else {
             return None;
         };
-        if self.tool_type == T::InfoLine
+        if matches!(self.tool_type, T::InfoLine | T::TrendAngle)
             || (a.x == b.x && matches!(self.tool_type, T::Ray | T::ExtendedLine))
         {
             let (start, end) = if self.tool_type == T::ExtendedLine && b.y < a.y {
@@ -179,7 +180,9 @@ impl Drawing {
         }
     }
 
-    /// Render horizontal line
+    /// Render horizontal line, across the pane whichever bar its anchor is on, with its text placed
+    /// along the pane by the alignment settings. Text written on the line interrupts it, so that
+    /// the line never strikes through the letters.
     pub(crate) fn render_horizontal_line(
         &self,
         painter: &egui::Painter,
@@ -189,8 +192,33 @@ impl Drawing {
         if !self.points.is_empty() {
             let y = self.points[0].y;
             let (left, right) = (Pos2::new(rect.min.x, y), Pos2::new(rect.max.x, y));
-            self.styled_segment(painter, left, right, stroke);
-            self.render_line_text(painter, left, right, true);
+            let anchor = self.line_text_anchor();
+            // The text stays clear of the pane's edges and, on the line, of the line.
+            let margin = DESIGN_TOKENS.spacing.sm;
+            let (start, end) = (
+                left + egui::vec2(margin, 0.0),
+                right - egui::vec2(margin, 0.0),
+            );
+            let gap = self
+                .text_galley(painter)
+                .filter(|_| anchor.y() == Align::Center)
+                .map(|galley| {
+                    anchor
+                        .x()
+                        .align_size_within_range(galley.size().x, start.x..=end.x)
+                        .expand(margin)
+                });
+            if let Some(gap) = gap {
+                if gap.min > left.x {
+                    self.styled_segment(painter, left, Pos2::new(gap.min, y), stroke);
+                }
+                if gap.max < right.x {
+                    self.styled_segment(painter, Pos2::new(gap.max, y), right, stroke);
+                }
+            } else {
+                self.styled_segment(painter, left, right, stroke);
+            }
+            self.render_aligned_line_text(painter, start, end, anchor);
         }
     }
 
@@ -241,13 +269,15 @@ impl Drawing {
         }
     }
 
-    /// Render a signed screen angle with plain text and dotted construction guides.
+    /// Render a signed screen angle with plain text, its readouts and dotted construction guides.
     pub(crate) fn render_trend_angle(
         &self,
         painter: &egui::Painter,
         rect: Rect,
         color: Color32,
         stroke: Stroke,
+        view: &ChartView,
+        selected: bool,
     ) {
         let &[start, end, ..] = self.points.as_slice() else {
             if let Some(&point) = self.points.first() {
@@ -269,18 +299,17 @@ impl Drawing {
             .line_arc_radius
             .min(start.distance(end));
         let label_direction = egui::vec2((angle / 2.0).cos(), -(angle / 2.0).sin());
-        let galley = painter.layout_no_wrap(
-            format!("{:.1}°", angle.to_degrees()),
-            self.annotation_font(),
-            color,
-        );
+        let text_color = self.text_box_colors(painter.ctx()).text;
+        let galley =
+            self.annotation_galley(painter, format!("{:.1}°", angle.to_degrees()), text_color);
         let label_distance =
             radius + DESIGN_TOKENS.spacing.sm + label_direction.abs().dot(galley.size()) / 2.0;
         painter.galley(
             start + label_direction * label_distance - galley.size() / 2.0,
             galley,
-            color,
+            text_color,
         );
+        self.render_line_measurements(painter, view, selected);
         self.finish_style(painter, first_shape, rect);
 
         // Construction guides stay thin and dotted regardless of the main line's style.
@@ -829,7 +858,7 @@ mod tests {
             (T::TrendLine, RISING, -FRAC_PI_4, A::CENTER_BOTTOM, (196.4645, 196.4645)),
             (T::TrendLine, &[(300., 300.), (100., 100.)], FRAC_PI_4, A::CENTER_BOTTOM, (203.5355, 196.4645)),
             (T::Ray, &[(100., 200.), (200., 200.)], 0.0, A::CENTER_BOTTOM, (150., 195.)),
-            (T::HorizontalLine, &[(50., 120.)], 0.0, A::CENTER_BOTTOM, (250., 115.)),
+            (T::HorizontalLine, &[(50., 120.)], 0.0, A::CENTER_CENTER, (250., 120.)),
             (T::HorizontalRay, &[(300., 120.)], 0.0, A::CENTER_BOTTOM, (400., 115.)),
             (T::VerticalLine, &[(150., 50.)], -FRAC_PI_2, A::CENTER_BOTTOM, (145., 200.)),
             (T::CrossLine, &[(150., 120.)], 0.0, A::CENTER_BOTTOM, (250., 115.)),
@@ -852,6 +881,8 @@ mod tests {
             drawing.stroke_width = 2.0;
             drawing.font_size = 20.0;
             drawing.color = [40, 120, 200, 255];
+            // Text without a colour of its own follows the line.
+            drawing.text_color = None;
             // Synthetic bold paints the text twice.
             drawing.font_weight = crate::drawings::FontWeight::Normal;
             let place = |drawing: &mut Drawing, points: &[Pos2]| {
@@ -921,6 +952,82 @@ mod tests {
         assert!(strings(&texts(&ray)).iter().all(|t| t != LABEL));
     }
 
+    /// In a pane from x = 0 to 500, with a margin of 4 pt and a gap of 1 + 4 pt from a line of width
+    /// 2 at y = 120, the text's named point sits at x = 4, 250 or 496 and y = 125, 120 or 115. Only
+    /// text on the line interrupts it, 4 pt clear of the letters on each side.
+    #[test]
+    fn horizontal_line_text_follows_its_settings_and_interrupts_the_line_only_on_it() {
+        use crate::drawings::{
+            DrawingToolType as T, LineTextHorizontalAlign as H, LineTextVerticalAlign as V,
+        };
+        use egui::{Align2 as A, Context, RawInput, Shape, epaint::TextShape};
+
+        let paint = |drawing: &Drawing| {
+            let output = Context::default().run_ui(RawInput::default(), |ui| {
+                let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(500., 400.));
+                drawing.render_horizontal_line(ui.painter(), pane, Stroke::new(2.0, Color32::RED));
+            });
+            let (mut text, mut lines) = (None::<TextShape>, Vec::new());
+            for shape in &output.shapes {
+                match &shape.shape {
+                    Shape::Text(t) => text = Some(t.clone()),
+                    Shape::LineSegment { points, .. } => lines.push((points[0].x, points[1].x)),
+                    _ => {}
+                }
+            }
+            output.drop_without_applying_deltas();
+            (text, lines)
+        };
+        let mut drawing = Drawing::new(1, T::HorizontalLine);
+        drawing.points = vec![Pos2::new(50., 120.)];
+        drawing.stroke_width = 2.0;
+        assert_eq!(
+            paint(&drawing).1,
+            [(0., 500.)],
+            "no text leaves the line whole"
+        );
+        drawing.text = Some("Weekly support".into());
+        drawing.italic = true;
+        drawing.text_color = Some([10, 20, 30, 128]);
+        #[rustfmt::skip]
+        let cases = [
+            (H::Left, V::Top, A::LEFT_TOP, (4., 125.)),
+            (H::Center, V::Top, A::CENTER_TOP, (250., 125.)),
+            (H::Right, V::Top, A::RIGHT_TOP, (496., 125.)),
+            (H::Left, V::Middle, A::LEFT_CENTER, (4., 120.)),
+            (H::Center, V::Middle, A::CENTER_CENTER, (250., 120.)),
+            (H::Right, V::Middle, A::RIGHT_CENTER, (496., 120.)),
+            (H::Left, V::Bottom, A::LEFT_BOTTOM, (4., 115.)),
+            (H::Center, V::Bottom, A::CENTER_BOTTOM, (250., 115.)),
+            (H::Right, V::Bottom, A::RIGHT_BOTTOM, (496., 115.)),
+        ];
+        for (horizontal, vertical, anchor, (x, y)) in cases {
+            drawing.line_measurements.text_horizontal_align = horizontal;
+            drawing.line_measurements.text_vertical_align = vertical;
+            let (text, lines) = paint(&drawing);
+            let text = text.unwrap();
+            let at = text.pos + anchor.pos_in_rect(&text.galley.rect).to_vec2();
+            assert!(at.distance(Pos2::new(x, y)) < 1e-3, "{anchor:?}: at {at:?}");
+            let format = &text.galley.job.sections[0].format;
+            assert!(format.italics, "{anchor:?}");
+            assert_eq!(
+                format.color,
+                Color32::from_rgba_unmultiplied(10, 20, 30, 128),
+                "{anchor:?}"
+            );
+            let width = text.galley.size().x;
+            let want = match (vertical, horizontal) {
+                (V::Middle, H::Left) => vec![(width + 8., 500.)],
+                (V::Middle, H::Center) => {
+                    vec![(0., 250. - width / 2. - 4.), (250. + width / 2. + 4., 500.)]
+                }
+                (V::Middle, H::Right) => vec![(0., 492. - width)],
+                _ => vec![(0., 500.)],
+            };
+            assert_eq!(lines, want, "{anchor:?}");
+        }
+    }
+
     /// Screen y points down: equal rise and run give 45 degrees, and a 3-4-5
     /// triangle gives atan(3/4) = 36.9 degrees. Guides share a radius capped by the leg.
     #[test]
@@ -938,8 +1045,10 @@ mod tests {
             (egui::vec2(100., 0.), "0.0°"),
             (egui::vec2(16., -12.), "36.9°"),
         ] {
-            for (size, width, style) in [(12., 2., LineStyle::Solid), (24., 5., LineStyle::Dashed)]
-            {
+            for (size, width, style, italic, text_color) in [
+                (12., 2., LineStyle::Solid, false, None),
+                (24., 5., LineStyle::Dashed, true, Some([200, 40, 40, 255])),
+            ] {
                 let mut drawing = Drawing::new(1, DrawingToolType::TrendAngle);
                 drawing.points = vec![start, start + delta];
                 drawing.chart_points = drawing
@@ -951,6 +1060,8 @@ mod tests {
                 drawing.stroke_width = width;
                 drawing.line_style = style;
                 drawing.color = [40, 120, 200, 255];
+                drawing.italic = italic;
+                drawing.text_color = text_color;
                 let mut output = egui::Context::default().run_ui(Default::default(), |ui| {
                     let view = ChartView {
                         price_formatter: None,
@@ -982,7 +1093,11 @@ mod tests {
                 assert_eq!(texts[0].galley.job.text, label);
                 let format = &texts[0].galley.job.sections[0].format;
                 assert_eq!(format.font_id.size, size);
-                assert_eq!(format.color, drawing.color32());
+                assert_eq!(
+                    format.color.to_srgba_unmultiplied(),
+                    text_color.unwrap_or(drawing.color)
+                );
+                assert_eq!(format.italics, italic);
                 assert!(
                     !output
                         .shapes
@@ -1071,11 +1186,11 @@ mod tests {
         }
     }
 
-    /// An info line extends left past its first anchor and right past its second, in either
-    /// drawing order and on a vertical line, and selection follows the painted extension.
+    /// An info line or trend angle extends left past its first anchor and right past its second,
+    /// in either drawing order and on a vertical line, and selection follows the painted extension.
     #[test]
-    fn info_line_extends_past_the_anchor_named_in_paint_and_hit_testing() {
-        use crate::drawings::services::DrawingInteraction;
+    fn info_line_and_trend_angle_extend_past_the_anchor_named_in_paint_and_hit_testing() {
+        use crate::drawings::{DrawingToolType as T, services::DrawingInteraction};
         let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(1000.0, 600.0));
         let (low, high) = (Pos2::new(400.0, 100.0), Pos2::new(500.0, 200.0));
         let (top, bottom) = (Pos2::new(300.0, 100.0), Pos2::new(300.0, 400.0));
@@ -1139,8 +1254,11 @@ mod tests {
                 (300.0, 500.0),
             ),
         ];
-        for (first, second, left, right, want, on, off) in cases {
-            let mut drawing = Drawing::new(1, crate::drawings::DrawingToolType::InfoLine);
+        for ((first, second, left, right, want, on, off), tool) in cases
+            .into_iter()
+            .flat_map(|case| [T::InfoLine, T::TrendAngle].map(|tool| (case, tool)))
+        {
+            let mut drawing = Drawing::new(1, tool);
             drawing.points = vec![first, second];
             (drawing.extend_left, drawing.extend_right) = (left, right);
             assert_eq!(drawing.trend_line_ends(rect), Some(want));
