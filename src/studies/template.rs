@@ -253,14 +253,20 @@ impl StudyTemplate {
                         .inputs
                         .push(("band_count".to_owned(), InputValue::Length(0)));
                 }
-                template.settings.fills = vec![
-                    crate::studies::FillStyle {
-                        color: egui::Color32::TRANSPARENT,
+                // Hidden, each fill keeps the colour its band is filled in once shown.
+                template.settings.fills = (0..bands)
+                    .map(|band| crate::studies::FillStyle {
+                        color: self
+                            .settings
+                            .plots
+                            .get(1 + 2 * band)
+                            .map_or(egui::Color32::TRANSPARENT, |plot| {
+                                plot.color.gamma_multiply_u8(13)
+                            }),
                         inverted_color: None,
                         visible: false,
-                    };
-                    bands
-                ];
+                    })
+                    .collect();
             }
             // Profile endpoints were Unix milliseconds before they read as UTC dates and times.
             "Vol Profile FR" | "Vol Profile Anchored"
@@ -716,6 +722,24 @@ mod tests {
                 (vec![40.0, 20.0], (20.0, 40.0), true),
                 (vec![70.0, 30.0], (30.0, 70.0), true),
             ]
+        );
+    }
+
+    /// A VWAP saved with a band before bands were filled restores with its fill hidden; shown
+    /// again, the fill takes the band colour at 5% opacity, as on a VWAP added now.
+    #[test]
+    fn vwap_saved_before_its_fill_shows_the_band_colour_once_the_fill_is_shown() {
+        let mut saved = StudyTemplate::from_study(&VolumeWeightedAvgPrice::default());
+        saved.settings.fills.clear();
+        let mut study = saved.create().unwrap();
+        assert!(study.fills().is_empty());
+        let mut settings = study.settings();
+        settings.fills[0].visible = true;
+        study.apply_settings(&[], settings).unwrap();
+        let colors: Vec<Color32> = study.fills().iter().map(|fill| fill.color).collect();
+        assert_eq!(
+            colors,
+            [crate::studies::palette::GREEN.gamma_multiply_u8(13)]
         );
     }
 
