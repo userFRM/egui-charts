@@ -427,7 +427,6 @@ impl Chart {
             let mut drawing_response = None;
             let mut scale_tags = std::collections::HashMap::<PaneScale, Vec<Option<Rect>>>::new();
             let mut drawn_axes = Vec::new();
-            let mut fixed_axis_labels = Vec::new();
             let hovered = self.last_hover_bar_idx.and_then(|index| {
                 let index = index.round() as usize;
                 (index < self.state.shown().len()).then_some(index)
@@ -617,6 +616,33 @@ impl Chart {
                 panels.push((entry, indicator, panel, legend_row_height, assignment));
             }
             panels.sort_by_key(|(entry, ..)| entry.is_some_and(|(id, _)| Some(id) == on_top));
+            // Each scale's primitive tags go to its first member, as a later member may paint the
+            // crosshair tag or the scale labels.
+            let mut primitive_axis_labels = std::collections::HashMap::<PaneScale, Vec<_>>::new();
+            if !collapsed {
+                for (item, view) in self.pane_primitives(pane_id, &members, &pane_mapping) {
+                    let Some((_, _, panel, _, assignment)) =
+                        panels.iter().find(|(entry, indicator, panel, ..)| {
+                            item.pane.is_none()
+                                && entry.is_some_and(|(id, _)| id == item.series)
+                                && indicator.scale() != crate::studies::StudyScale::None
+                                && panel.axis_rect.is_some()
+                        })
+                    else {
+                        continue;
+                    };
+                    let map = panel.price_map.expect("member mapping");
+                    primitive_axis_labels
+                        .entry(*assignment)
+                        .or_default()
+                        .extend(
+                            item.get()
+                                .price_axis_labels(&view)
+                                .into_iter()
+                                .map(|label| (label, map)),
+                        );
+                }
+            }
             let mut below_grouped = false;
             let mut series_backgrounds = Vec::new();
             for (paint_row, (entry, indicator, mut panel, legend_row_height, assignment)) in
@@ -627,6 +653,11 @@ impl Chart {
                 let key = (pane_id, id);
                 panel.overlay = paint_row > 0;
                 panel.axis_tags = scale_tags.get(&assignment).cloned().unwrap_or_default();
+                if indicator.scale() != crate::studies::StudyScale::None {
+                    panel.primitive_axis_labels = primitive_axis_labels
+                        .remove(&assignment)
+                        .unwrap_or_default();
+                }
                 let axis_owner = series
                     .iter()
                     .map(|at| &self.price_series[*at])
@@ -872,12 +903,6 @@ impl Chart {
                     }
                     self.measured_axis_width =
                         self.measured_axis_width.max(panel.measured_axis_width);
-                    fixed_axis_labels.extend(
-                        panel
-                            .fixed_axis_labels
-                            .drain(..)
-                            .map(|label| (assignment, member_map, label)),
-                    );
                     scale_tags.insert(assignment, panel.axis_tags.clone());
                     let PaneInteraction {
                         panel_rect,
@@ -1359,24 +1384,13 @@ impl Chart {
                 }
             }
             if !collapsed {
-                for (key, axis) in &axes {
-                    let labels = fixed_axis_labels
-                        .iter()
-                        .filter(|(assignment, _, _)| assignment == key)
-                        .map(|(_, map, label)| (label.clone(), *map))
-                        .collect();
-                    let tags = scale_tags.entry(*key).or_default();
-                    crate::chart::rendering::axes::render_primitive_price_labels(
-                        &ui.painter().with_clip_rect(axis.intersect(ui.clip_rect())),
-                        super::super::series::axis_label_rect(pane_plot, *axis),
-                        axis.right(),
-                        labels,
-                        tags,
-                        self.config.price_axis.allow_label_overlap,
-                    );
-                    for tag in tags.iter().flatten() {
-                        self.measured_axis_width = self.measured_axis_width.max(tag.width() + 11.0);
-                    }
+                for tag in axes
+                    .iter()
+                    .filter_map(|(key, _)| scale_tags.get(key))
+                    .flatten()
+                    .flatten()
+                {
+                    self.measured_axis_width = self.measured_axis_width.max(tag.width() + 11.0);
                 }
             }
             if !collapsed && let Some((pane_response, chart_rect, _)) = drawing_response {
