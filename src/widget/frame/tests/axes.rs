@@ -1200,9 +1200,9 @@ fn heikin_last_visible_price_line_without_main_bars() {
         let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
         let plot = chart.get_rendered_price_rect();
         assert!(
-            painted
-                .iter()
-                .any(|shape| matches!(shape, egui::Shape::Rect(r) if plot.contains(r.rect.center()))),
+            painted.iter().any(
+                |shape| matches!(shape, egui::Shape::Rect(r) if plot.contains(r.rect.center()))
+            ),
             "{source:?}: the added series is painted"
         );
     }

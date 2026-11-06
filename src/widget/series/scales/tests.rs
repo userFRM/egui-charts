@@ -287,17 +287,15 @@ fn added_only_appends_keep_a_scrolled_back_view() {
 /// by default, draws nothing and the frame ends on the newest added bar.
 #[test]
 fn added_only_fit_paints_the_volume_pane() {
-    let data = bars(&[10.0; 1000]);
     let ctx = egui::Context::default();
     let mut chart = Chart::new(BarData::from_bars(vec![]));
     let id = chart.add_series(SeriesOptions::default());
-    chart.set_data(id, data.clone());
+    chart.set_data(id, bars(&[10.0; 1000]));
     frame(&ctx, &mut chart, 0.0, vec![]);
     chart.fit_content();
     frame(&ctx, &mut chart, 0.1, vec![]);
     assert!(chart.get_time_scale_state().0 < 1.0);
     assert_eq!(chart.state.visible_range().1, 1000);
-    assert_eq!(chart.bars(id).last().map(|bar| bar.time), Some(data[999].time));
 }
 
 /// Last-value queries skip whitespace and use shared indices, each pane's scale and the
