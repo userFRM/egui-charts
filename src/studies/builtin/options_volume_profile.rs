@@ -1624,4 +1624,114 @@ mod tests {
             assert_eq!(wakes.load(Ordering::Relaxed), before);
         }
     }
+
+    /// The chain, quotes, expiry and two underlying bars of
+    /// `expected_move_tracks_expiry_method_and_snapshot_replacement`, for one expiry. The ATM
+    /// straddle at 95 costs a call mid of 3 and a put mid of 4, so the expected move is 93..107.
+    /// The quotes arrive when the caller pushes them to the returned sink.
+    fn expected_move_chain() -> (
+        OptionChain,
+        OptionChainSink,
+        Vec<OptionQuote>,
+        NaiveDate,
+        Vec<Bar>,
+    ) {
+        let expiry = NaiveDate::from_ymd_opt(2024, 4, 1).unwrap();
+        let end = expiry
+            .succ_opt()
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc();
+        let time = end - chrono::TimeDelta::hours(2190);
+        let rows: Vec<_> = [105.0, 95.0]
+            .into_iter()
+            .flat_map(|strike| {
+                [OptionKind::Call, OptionKind::Put].map(|kind| {
+                    let mut row = OptionQuote::new(
+                        format!("{expiry}-{strike}-{kind:?}"),
+                        expiry,
+                        strike,
+                        kind,
+                        time,
+                    );
+                    row.underlying_price = Some(100.0);
+                    row.bid = Some(if kind == OptionKind::Call { 2.0 } else { 3.0 });
+                    row.ask = row.bid.map(|bid| bid + 2.0);
+                    row.last = Some(999.0);
+                    row.implied_volatility = Some(if kind == OptionKind::Call { 0.1 } else { 0.3 });
+                    if strike == 105.0 {
+                        row.ask = Some(99.0);
+                        row.implied_volatility = Some(0.9);
+                    }
+                    row
+                })
+            })
+            .collect();
+        let feed = ChainFeed::default();
+        let mut query = OptionChainQuery::new("SAMPLE", expiry..=expiry);
+        query.as_of = Some(time);
+        let chain = OptionChain::new(&feed, query, || {}).unwrap();
+        let sink = feed.0.lock().unwrap().clone().unwrap();
+        let bars = vec![Bar::new(time, 100.0, 101.0, 99.0, 100.0, 1.0); 2];
+        (chain, sink, rows, expiry, bars)
+    }
+
+    /// A latest-value line on an option level sits at the value its plot and scale tag show.
+    #[cfg(feature = "widget")]
+    #[test]
+    fn option_levels_draw_their_latest_value_lines() {
+        use crate::scales::{PriceMap, PriceRange, PriceTransform};
+        let (chain, sink, rows, expiry, bars) = expected_move_chain();
+        sink.push(rows).unwrap();
+        let mut profile = OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry]).unwrap();
+        profile
+            .set_input("expected_move", InputValue::Toggle(true))
+            .unwrap();
+        let mut study = crate::studies::ConfiguredStudy::new(Box::new(profile));
+        let mut settings = study.settings();
+        settings.price_line_plots = vec![6];
+        study.apply_settings(&[], settings).unwrap();
+        study.calculate(&bars);
+        // The expected low: 100 less the 95 straddle of 3 + 4.
+        assert!((study.plot_value(6, 1).unwrap() - 93.0).abs() < 1e-10);
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(240.0, 120.0));
+        let map = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(80.0, 120.0),
+            0.0,
+            120.0,
+            false,
+        );
+        let coords = crate::chart::coords::ChartMapping::new(rect, 30.0, 0, 1, 0.0, map);
+        let color = study.plot_style(6).color;
+        let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+            crate::chart::rendering::IndicatorRenderer::render_study(
+                &crate::chart::rendering::RenderContext::new(ui.painter(), rect),
+                &study,
+                &bars,
+                0,
+                &map,
+                &coords,
+            );
+        });
+        let shapes = std::mem::take(&mut output.shapes);
+        output.drop_without_applying_deltas();
+        // One mesh of one-pixel dots across the plot at 120 - (93 - 80) / 40 * 120 = 81.
+        let lines: Vec<f32> = shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Mesh(mesh)
+                    if !mesh.vertices.is_empty()
+                        && mesh.vertices.iter().all(|vertex| vertex.color == color) =>
+                {
+                    let bounds = mesh.calc_bounds();
+                    (bounds.height() <= 1.0 && bounds.width() >= 200.0).then_some(bounds.center().y)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(lines.len(), 1, "latest-value lines at {lines:?}");
+        assert!((lines[0] - 81.0).abs() <= 0.5, "{lines:?}");
+    }
 }
