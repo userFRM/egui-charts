@@ -39,9 +39,7 @@ impl ObjectTreePanel {
                     .filter(|s| s.is_drawing())
                     .map(|s| s.id)
                     .collect();
-                // A folder exists while it holds a drawing, and one above the new folder stays.
-                let mut folders = super::folders::selected_folders(self.state(), sources);
-                folders.retain(|folder| !path.starts_with(folder));
+                let folders = super::folders::selected_folders(self.state(), sources, &path);
                 if ids.is_empty()
                     || self.state().folders.contains(&path)
                     || !chart.drawings_mut().move_to_folder(&ids, &folders, &path)
@@ -596,5 +594,69 @@ mod tests {
             .find(|id| !before.contains(id))
             .unwrap();
         assert_eq!(chart.indicator_inputs(copy), Some("2 close"));
+    }
+
+    /// A new subfolder made inside a fully selected folder takes that folder's subfolders whole.
+    /// Folder A holds one drawing directly, one in A/B and one in A/C; clicking A selects all
+    /// three. Expected by the contract that a new folder keeps the structure of every folder whose
+    /// drawings are all selected, except the folders the new one is created in, in one undo step.
+    #[test]
+    fn new_subfolder_keeps_the_structure_of_a_selected_folder() {
+        let folders = |chart: &Chart| {
+            chart
+                .drawings()
+                .drawings
+                .iter()
+                .map(|d| d.folder.join("/"))
+                .collect::<Vec<_>>()
+        };
+        let mut observed = Vec::new();
+        for parent in [&["A"][..], &["A", "B"]] {
+            let mut chart = crate::widget::ChartBuilder::new().build();
+            for folder in [&["A"][..], &["A", "B"], &["A", "C"]] {
+                let mut drawing = Drawing::new(0, DrawingToolType::TrendLine);
+                drawing.folder = folder.iter().map(|name| (*name).to_owned()).collect();
+                drawing.chart_points =
+                    vec![ChartPoint::new(1.0, 100.0), ChartPoint::new(2.0, 110.0)];
+                drawing.completed = true;
+                chart.drawings_mut().add_synced_drawing(drawing).unwrap();
+            }
+            let mut rows: Vec<_> = chart
+                .drawings()
+                .drawings
+                .iter()
+                .map(|d| {
+                    let mut row = SourceItem::drawing(d.id, d.tool_type, d.color32());
+                    row.folder = d.folder.clone();
+                    row
+                })
+                .collect();
+            let mut tree = ObjectTreePanel::new();
+            // The tree derives its folders from the rows as it shows them.
+            egui::Context::default()
+                .run_ui(egui::RawInput::default(), |ui| {
+                    tree.show(ui, None, &mut rows);
+                })
+                .drop_without_applying_deltas();
+            let ids: Vec<_> = rows.iter().map(|row| row.id).collect();
+            tree.state_mut().select_all(&ids);
+            let parent: Vec<String> = parent.iter().map(|name| (*name).to_owned()).collect();
+            assert!(tree.apply_to_chart(
+                &mut chart,
+                &ObjectTreeAction::CreateFolder(parent, "Sub".into()),
+                &rows,
+            ));
+            observed.push(folders(&chart));
+            assert!(chart.drawings_mut().undo());
+            assert_eq!(folders(&chart), ["A", "A/B", "A/C"]);
+        }
+        assert_eq!(
+            observed,
+            [
+                vec!["A/Sub", "A/Sub/B", "A/Sub/C"],
+                vec!["A/B/Sub", "A/B/Sub", "A/B/Sub/C"],
+            ],
+            "folders after creating Sub under A, then under A/B: {observed:?}"
+        );
     }
 }
