@@ -1250,6 +1250,7 @@ impl<'a> Run<'a> {
                 }
             }
         }?;
+        // A limit that first becomes fillable at a point never traded through its threshold.
         let first_fillable = |(price, pricing): (f64, Pricing)| {
             let market = pricing == Pricing::Verified;
             (price, if market { Pricing::Market } else { pricing })
