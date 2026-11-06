@@ -234,7 +234,7 @@ impl Chart {
                     // Use the renderer's map so independent, shared and volume scales snap
                     // at the painted point rather than interpreting study units as prices.
                     let study_map = self.pane_study_mapping(
-                        pane.unwrap_or(self.main_series_pane()),
+                        pane.unwrap_or(super::PaneId::MAIN),
                         study.as_ref(),
                         &mapping,
                     );
@@ -1486,6 +1486,68 @@ mod tests {
             observed == expected,
             "(main series visible, strong magnet, target, first anchor below the target) \
              observed {observed:?} expected {expected:?}"
+        );
+    }
+
+    /// The price pane's studies snap where the price pane paints them, also after the main
+    /// series moves into the pane of a study.
+    #[test]
+    fn magnet_snaps_price_pane_studies_where_painted_after_main_series_moves() {
+        use crate::studies::{CustomIndicator, IndicatorValue, StudyScale};
+        use crate::widget::SeriesId;
+        use egui::Pos2;
+
+        let mut observed = Vec::new();
+        for (moved, strong) in [(false, false), (false, true), (true, false), (true, true)] {
+            let ctx = Context::default();
+            let mut chart = chart(&[100.0], &[200.0]);
+            chart.config_mut().show_volume = false;
+            let levels = CustomIndicator::new("Three levels", |bars| {
+                bars.iter()
+                    .map(|_| IndicatorValue::Multiple(vec![15.0, 16.0, 17.0]))
+                    .collect()
+            })
+            .with_line_count(3)
+            .with_overlay(!moved)
+            .with_scale(StudyScale::Independent);
+            let id = chart.add_indicator(Box::new(levels));
+            chart.drawings_mut().options.magnet_mode = true;
+            chart.drawings_mut().options.strong_magnet = strong;
+            chart.drawings_mut().update_snap_options();
+            frame(&ctx, &mut chart, 0.1, vec![]);
+            if moved {
+                let pane = chart.series_pane(id).expect("the study's pane");
+                assert!(chart.move_series_to_pane(SeriesId::MAIN, pane));
+            }
+            frame(&ctx, &mut chart, 0.2, vec![]);
+            frame(&ctx, &mut chart, 0.3, vec![]);
+            let map = chart.get_chart_mapping();
+            // The study fits its own scale: 15 and 17 span 14.8..17.2 after 10% padding, so 16
+            // is painted halfway down the price pane.
+            let y = map.rect.center().y;
+            let (first, last) = chart.state.visible_range();
+            let bar = (first + last) / 2;
+            let (price, anchor) = first_anchor(
+                &ctx,
+                &mut chart,
+                Pos2::new(map.idx_to_x(bar) + 2.0, y - 3.0),
+                Pos2::new(map.idx_to_x(bar + 8), y - 60.0),
+            );
+            observed.push((
+                moved,
+                strong,
+                (price * 100.0).round() / 100.0,
+                ((anchor - y) * 100.0).round() / 100.0,
+            ));
+        }
+        // 100..200 with 10% margins spans 87.5..212.5, so the middle of the pane is price 150.
+        assert!(
+            observed
+                .iter()
+                .all(|(_, _, price, below)| *price == 150.0 && *below == 0.0),
+            "(main series moved into the study's pane, strong magnet, first anchor price, \
+             anchor below the painted level) observed {observed:?} expected price 150 and 0 \
+             below in every row"
         );
     }
 
