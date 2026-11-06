@@ -37,10 +37,11 @@ pub(crate) mod validation;
 pub use domain::{
     ArrowStyle, BarsPatternConfig, BarsPatternMode, ChartPoint, Drawing, DrawingInteractionMode,
     DrawingOptions, DrawingTemplate, DrawingToolType, ElliottDegree, FibonacciConfig,
-    FibonacciLevel, FontWeight, GannConfig, GannFanDirection, GannLevel, GhostCandle,
+    FibonacciLevel, FolderSync, FontWeight, GannConfig, GannFanDirection, GannLevel, GhostCandle,
     GhostFeedConfig, HandlePos, ImageConfig, LineMeasurementPosition, LineMeasurements,
-    ParseToolTypeError, PitchforkConfig, PitchforkLevel, PositionSize, PositionSizing,
-    RegressionTrendConfig, TimeframeVisibility, VwapBand, VwapConfig,
+    LineTextHorizontalAlign, LineTextVerticalAlign, ParseToolTypeError, PitchforkConfig,
+    PitchforkLevel, PositionSize, PositionSizing, RegressionTrendConfig, TimeframeVisibility,
+    VwapBand, VwapConfig,
 };
 
 // Re-export manager types

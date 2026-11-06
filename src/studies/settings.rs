@@ -1264,6 +1264,9 @@ impl Indicator for ConfiguredStudy {
             self.study.format_plot_value(line, value)
         }
     }
+    fn legend_lines(&self) -> Vec<usize> {
+        self.study.legend_lines()
+    }
     fn legend_visible(&self, line: usize) -> bool {
         let (shown, own) = (
             self.study.legend_visible(line),
@@ -1952,7 +1955,7 @@ mod tests {
                 .iter()
                 .map(|l| (l.value, l.color, l.pattern, l.visible))
                 .collect::<Vec<_>>(),
-            [(None, palette::MUTED, LineStyle::Dashed, true); 2]
+            [(None, palette::MUTED, LineStyle::Dashed, true); 3]
         );
         assert!(declared.fill_between_levels);
         assert_eq!(
@@ -1965,7 +1968,7 @@ mod tests {
         edited.levels[0].width = 3.0;
         edited.levels[1].visible = false;
         study.apply_settings(&[], edited.clone()).unwrap();
-        assert_eq!(values(&study), [80.0, 30.0]);
+        assert_eq!(values(&study), [80.0, 30.0, 50.0]);
         // Templates, copies and layouts rebuild a fresh study from the saved JSON.
         let saved = serde_json::to_value(&edited).unwrap();
         let mut loaded = ConfiguredStudy::new(Box::new(RSI::default()));
@@ -1989,7 +1992,7 @@ mod tests {
             .unwrap();
         assert_eq!(loaded.settings(), declared);
         study.restore_settings(&before).unwrap();
-        assert_eq!(values(&study), [70.0, 30.0]);
+        assert_eq!(values(&study), [70.0, 30.0, 50.0]);
         let mut invalid = declared.clone();
         invalid.levels[0].value = Some(f64::INFINITY);
         assert!(matches!(

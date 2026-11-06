@@ -31,6 +31,10 @@ pub enum StudyContextMenuAction {
     AddIndicator,
     /// Add the study's catalogue name to the indicators dialog's favorites.
     AddToFavorites(String),
+    /// Add the study to the other charts of the layout, with
+    /// [`LayoutCopy::Study`](crate::widget::LayoutCopy::Study). Offered after
+    /// [`ChartMenus::set_layout_copies`](crate::ui::context_menu::ChartMenus::set_layout_copies).
+    AddToLayout,
     /// Change the study's place in the draw order of its pane.
     VisualOrder(VisualOrder),
     /// Show the study only on the intervals of this range around the chart's interval.
@@ -163,6 +167,8 @@ pub(crate) struct StudyContextMenu {
     /// Other panes by their stable ids, with their titles.
     panes: Vec<(PaneId, String)>,
     has_interval: bool,
+    /// Whether the layout has other charts to copy the study to.
+    pub(crate) layout_copies: bool,
     next_scale: u64,
     shared_scales: Vec<u64>,
     /// Controls the host hid, set through
@@ -284,6 +290,11 @@ impl StudyContextMenu {
                 )
                 .with_icon(&embedded_icons::STAR_EMPTY),
             ),
+        ]);
+        if self.layout_copies {
+            items.push(item("Add to all charts in layout", A::AddToLayout));
+        }
+        items.extend([
             MenuEntry::Separator,
             MenuEntry::Submenu {
                 label: "Visual order".into(),
@@ -425,7 +436,7 @@ impl StudyContextMenu {
             let control = match entry {
                 MenuEntry::Item(item) => match item.action {
                     A::AddAlert(_) => Control::Alerts,
-                    A::AddIndicator | A::AddToFavorites(_) => Control::Indicators,
+                    A::AddIndicator | A::AddToFavorites(_) | A::AddToLayout => Control::Indicators,
                     A::ObjectTree => Control::ObjectTree,
                     A::Settings => Control::Settings,
                     _ => return true,
@@ -515,7 +526,12 @@ pub(crate) fn apply(chart: &mut Chart, id: SeriesId, action: &StudyContextMenuAc
                     });
             chart.indicator_source_request = source;
         }
-        A::AddAlert(_) | A::AddToFavorites(_) | A::Copy | A::ObjectTree | A::Help(_) => {}
+        A::AddAlert(_)
+        | A::AddToFavorites(_)
+        | A::AddToLayout
+        | A::Copy
+        | A::ObjectTree
+        | A::Help(_) => {}
     }
 }
 

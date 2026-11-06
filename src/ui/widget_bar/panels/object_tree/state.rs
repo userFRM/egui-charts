@@ -9,8 +9,8 @@ use super::types::SourceType;
 /// State for the Object Tree panel
 #[derive(Clone, Debug, Default)]
 pub struct ObjectTreeState {
-    /// Known folder paths, including empty folders. Hosts may save and restore this set
-    /// per chart; nonempty folders are also recovered from source rows on each frame.
+    /// Folder paths, rebuilt from the source rows on each frame: a folder exists while it holds
+    /// a drawing, so an emptied one goes away and undo brings it back.
     pub folders: BTreeSet<Vec<String>>,
     /// Collapsed folder paths. Search temporarily expands matching descendants.
     pub collapsed_folders: BTreeSet<Vec<String>>,

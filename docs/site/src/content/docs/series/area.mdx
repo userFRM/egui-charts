@@ -40,12 +40,12 @@ visible line extreme to the pane edge; false uses the whole pane.
 
 For HLC area,
 [`HlcAreaStyle`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.HlcAreaStyle.html)
-controls fill opacity and close-line width; the main chart's bullish and bearish
-colours supply the bands. Added areas use
+sets the colour, width and visibility of the high and low lines, the close line,
+and the colour, opacity and visibility of each band. Added areas use
 [`SeriesOptions::color`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.SeriesOptions.html#structfield.color)
 and `width` with the default downward gradient, unless `area_style` supplies the
-line and gradient settings above. Added HLC areas use `up_color`
-and `down_color` with default HLC style. Both types can be
+line and gradient settings above. Added HLC areas take their high line and upper
+band from `up_color` and their low line and lower band from `down_color`. Both types can be
 [added series](../chart-types.mdx#added-series-restrictions).
 
 For fills on both sides of a reference, use [baseline](/egui-charts/docs/series/baseline/).

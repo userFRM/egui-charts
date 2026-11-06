@@ -1808,13 +1808,13 @@ fn heatmap_appearance_survives_visibility_and_frozen_images() {
             })
             .collect();
         output.textures_delta.clear();
-        // 99 reaches 2/3 intensity: round(255 * 0.75 * 2/3) * 0.5 = 64.
+        // 99 reaches an opaque part of the scale at 2/3 intensity: round(255 * 0.5) = 128.
         assert_eq!(
             alphas,
             if frame == 1 || frame == 4 {
                 vec![]
             } else {
-                vec![[64, 0]]
+                vec![[128, 0]]
             }
         );
     }
@@ -2371,7 +2371,10 @@ fn feed_lifecycle() {
         1,
         "c: catalog notification coalesces"
     );
-    chart.set_volume_bubbles(Some(VolumeBubblesConfig::default()));
+    chart.set_volume_bubbles(Some(VolumeBubblesConfig {
+        grouping: crate::chart::overlays::BubbleGrouping::Automatic,
+        ..VolumeBubblesConfig::default()
+    }));
     chart.set_chart_type(ChartType::VolumeFootprint);
     frames.run(&mut chart);
     let woken = Arc::new(Mutex::new(Vec::new()));

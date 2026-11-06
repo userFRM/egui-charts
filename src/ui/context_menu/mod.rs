@@ -62,6 +62,10 @@ pub enum ContextMenuAction {
     ObjectTree,
     /// Remove all indicators from the chart
     RemoveAllIndicators,
+    /// Apply the chart's indicators to the other charts of the layout, with
+    /// [`LayoutCopy::Studies`](crate::widget::LayoutCopy::Studies). Offered after
+    /// [`ChartMenus::set_layout_copies`].
+    ApplyIndicatorsToLayout,
     /// Open chart settings dialog
     OpenSettings,
     /// Open series settings dialog
@@ -179,6 +183,8 @@ pub struct ChartContextMenu {
     /// The clicked price is a price of the chart symbol, so the alert and order rows can act on
     /// it; [`ChartMenus`] clears it for a click in a pane that does not hold the main series.
     symbol_price: bool,
+    /// Whether the layout has other charts to copy the studies to.
+    pub(crate) layout_copies: bool,
 }
 
 impl Default for ChartContextMenu {
@@ -210,6 +216,7 @@ impl ChartContextMenu {
             hidden: HashSet::new(),
             horizontal_line: false,
             symbol_price: true,
+            layout_copies: false,
         }
     }
 
@@ -416,6 +423,19 @@ impl ChartContextMenu {
                 MenuItem::new("Remove indicators", ContextMenuAction::RemoveAllIndicators)
                     .disabled()
             }),
+        ]);
+        if self.layout_copies {
+            let item = MenuItem::new(
+                "Apply indicators to all charts",
+                ContextMenuAction::ApplyIndicatorsToLayout,
+            );
+            items.push(MenuEntry::Item(if self.indicator_cnt > 0 {
+                item
+            } else {
+                item.disabled()
+            }));
+        }
+        items.extend([
             MenuEntry::Separator,
             // Export data
             MenuEntry::Item(MenuItem::new(
@@ -444,7 +464,8 @@ impl ChartContextMenu {
                     ContextMenuAction::ResetChart => Control::ResetView,
                     ContextMenuAction::CopyPrice(_) => Control::CopyPrice,
                     ContextMenuAction::ObjectTree => Control::ObjectTree,
-                    ContextMenuAction::RemoveAllIndicators => Control::Indicators,
+                    ContextMenuAction::RemoveAllIndicators
+                    | ContextMenuAction::ApplyIndicatorsToLayout => Control::Indicators,
                     ContextMenuAction::OpenDataTable | ContextMenuAction::ExportCsv => {
                         Control::ExportData
                     }

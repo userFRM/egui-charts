@@ -698,6 +698,7 @@ impl Chart {
             chart.volume_setting = self.volume_setting;
         }
         chart.primitives = self.primitives.clone();
+        chart.freeze_custom_points(self.replay_time());
         chart.next_primitive = self.next_primitive;
         chart.settle_primitives();
         chart.study_data = self.study_data.snapshot();

@@ -4,14 +4,14 @@
 
 use crate::scales::PriceMap;
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke};
+use egui::{Painter, Pos2, Rect, Shape, Stroke};
 
 use super::helpers::valued_runs;
 use super::line::{draw_bar_line, draw_point_marker, line_color, with_line_type};
 use super::volume::render_volume_bars;
 use crate::chart::rendering::{RenderContext, StyleColors};
 use crate::model::{
-    AreaStyle, Bar, BaselineLevel, BaselineStyle, HlcAreaStyle, LinePlotStyle, LineStyle,
+    AreaStyle, Bar, BaselineLevel, BaselineStyle, HlcAreaStyle, LinePlotStyle, LineType,
     PriceSource,
 };
 
@@ -76,8 +76,7 @@ pub(super) fn render_area(
     }
 }
 
-/// HLC Area: fills high to close in the bullish colour and close to low in the bearish colour,
-/// with the close line
+/// HLC Area: fills high to close and close to low, with the high, low and close lines on top
 pub(super) fn render_hlc_area(
     painter: &Painter,
     volume_ctx: &RenderContext,
@@ -89,8 +88,6 @@ pub(super) fn render_hlc_area(
     price_scale: &PriceMap,
     chart_rect_min_x: f32,
     idx_to_coord: impl Fn(usize, f32) -> f32,
-    bullish_color: Color32,
-    bearish_color: Color32,
     style: &HlcAreaStyle,
     price_source: PriceSource,
 ) {
@@ -108,22 +105,25 @@ pub(super) fn render_hlc_area(
         price_source,
     );
 
-    draw_hlc_fill(
-        painter,
-        visible_data,
-        &points,
-        bullish_color,
-        bearish_color,
-        style.fill_opacity,
-    );
-    let close_points: Vec<Pos2> = points.iter().map(|p| Pos2::new(p.x, p.y_close)).collect();
-    let close_line = LinePlotStyle {
-        color: bullish_color,
-        width: style.line_width,
-        style: LineStyle::Solid,
-        ..Default::default()
-    };
-    draw_bar_line(painter, visible_data, &close_points, &close_line, false);
+    draw_hlc_fill(painter, visible_data, &points, style);
+    for (visible, line, y) in [
+        (
+            style.high_line_visible,
+            &style.high_line,
+            (|p| p.y_high) as fn(&HlcPoint) -> f32,
+        ),
+        (style.low_line_visible, &style.low_line, |p| p.y_low),
+        (true, &style.close_line, |p| p.y_close),
+    ] {
+        if visible {
+            let line_points: Vec<Pos2> = points.iter().map(|p| Pos2::new(p.x, y(p))).collect();
+            let line = LinePlotStyle {
+                line_type: LineType::Simple,
+                ..line.clone()
+            };
+            draw_bar_line(painter, visible_data, &line_points, &line, false);
+        }
+    }
 
     if show_volume {
         render_volume_bars(
@@ -291,36 +291,36 @@ fn draw_area_fill(painter: &Painter, points: &[Pos2], rect: Rect, style: &AreaSt
     painter.add(mesh);
 }
 
-fn draw_hlc_fill(
-    painter: &Painter,
-    bars: &[Bar],
-    points: &[HlcPoint],
-    bullish: Color32,
-    bearish: Color32,
-    opacity: f32,
-) {
-    // `as u8` saturates and maps NaN to 0.
-    let alpha = (opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
-    let tint = |c: Color32| Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), alpha);
-    let (up, down) = (tint(bullish), tint(bearish));
-
+fn draw_hlc_fill(painter: &Painter, bars: &[Bar], points: &[HlcPoint], style: &HlcAreaStyle) {
     // Both quads are convex: high >= close >= low at both ends of a segment.
     for pair in valued_runs(bars).flat_map(|run| points[run].windows(2)) {
         let (p1, p2) = (&pair[0], &pair[1]);
-        let above = vec![
-            Pos2::new(p1.x, p1.y_high),
-            Pos2::new(p2.x, p2.y_high),
-            Pos2::new(p2.x, p2.y_close),
-            Pos2::new(p1.x, p1.y_close),
-        ];
-        let below = vec![
-            Pos2::new(p1.x, p1.y_close),
-            Pos2::new(p2.x, p2.y_close),
-            Pos2::new(p2.x, p2.y_low),
-            Pos2::new(p1.x, p1.y_low),
-        ];
-        painter.add(Shape::convex_polygon(above, up, Stroke::NONE));
-        painter.add(Shape::convex_polygon(below, down, Stroke::NONE));
+        if style.high_to_close_fill_visible {
+            let quad = vec![
+                Pos2::new(p1.x, p1.y_high),
+                Pos2::new(p2.x, p2.y_high),
+                Pos2::new(p2.x, p2.y_close),
+                Pos2::new(p1.x, p1.y_close),
+            ];
+            painter.add(Shape::convex_polygon(
+                quad,
+                style.high_to_close_fill,
+                Stroke::NONE,
+            ));
+        }
+        if style.close_to_low_fill_visible {
+            let quad = vec![
+                Pos2::new(p1.x, p1.y_close),
+                Pos2::new(p2.x, p2.y_close),
+                Pos2::new(p2.x, p2.y_low),
+                Pos2::new(p1.x, p1.y_low),
+            ];
+            painter.add(Shape::convex_polygon(
+                quad,
+                style.close_to_low_fill,
+                Stroke::NONE,
+            ));
+        }
     }
 }
 
@@ -512,7 +512,7 @@ fn draw_baseline_line_part(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use egui::{Context, LayerId, RawInput, pos2, vec2};
+    use egui::{Color32, Context, LayerId, RawInput, pos2, vec2};
 
     #[test]
     fn baseline_gradients_keep_endpoints_crossings_and_point_overrides() {
@@ -875,11 +875,10 @@ mod tests {
         }
     }
 
-    /// The fills take the style's opacity as an alpha of 0 to 255 and the close line its width;
-    /// opacities outside 0 to 1 are clamped, a non-finite opacity draws no fill, and a
-    /// non-positive width hides the line.
+    /// Every line and fill paints its own price band of an asymmetric bar from its own setting,
+    /// and each can go without the others.
     #[test]
-    fn hlc_area_fill_opacity_and_close_line_width_follow_the_style() {
+    fn hlc_area_paints_each_line_and_fill_from_its_own_setting() {
         use crate::scales::{PriceRange, PriceTransform};
         let rect = Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0));
         let map = PriceMap::new(
@@ -899,19 +898,79 @@ mod tests {
             bearish_wick: None,
             candle_border_width: 0.0,
         };
+        // Close is nearer the high: at price 100 the y is 0, so high 70, close 60, low 20.
         let bars: Vec<_> = (0..2)
-            .map(|_| Bar::new(chrono::DateTime::UNIX_EPOCH, 50.0, 60.0, 40.0, 55.0, 1.0))
+            .map(|_| Bar::new(chrono::DateTime::UNIX_EPOCH, 50.0, 70.0, 20.0, 60.0, 1.0))
             .collect();
-        for (fill_opacity, line_width, alphas, widths) in [
+        let line = |r, width| LinePlotStyle {
+            color: Color32::from_rgb(r, 1, 1),
+            width,
+            line_type: LineType::Curved,
+            ..Default::default()
+        };
+        let (upper, lower) = (
+            Color32::from_rgba_unmultiplied(9, 0, 0, 77),
+            Color32::from_rgba_unmultiplied(0, 9, 0, 128),
+        );
+        let style = HlcAreaStyle {
+            high_line: line(10, 1.0),
+            low_line: line(20, 2.0),
+            close_line: line(30, 3.0),
+            high_to_close_fill: upper,
+            close_to_low_fill: lower,
+            ..Default::default()
+        };
+        let high = (10, 1.0, 30.0);
+        let low = (20, 2.0, 80.0);
+        let close = (30, 3.0, 40.0);
+        let upper_band = (upper, 30.0, 40.0);
+        let lower_band = (lower, 40.0, 80.0);
+        for (style, fills, lines) in [
             (
-                HlcAreaStyle::default().fill_opacity,
-                2.0,
-                vec![30, 30],
-                vec![2.0],
+                style.clone(),
+                vec![upper_band, lower_band],
+                vec![high, low, close],
             ),
-            (0.5, 4.0, vec![128, 128], vec![4.0]),
-            (2.0, 1.0, vec![255, 255], vec![1.0]),
-            (f32::NAN, 0.0, vec![], vec![]),
+            (
+                HlcAreaStyle {
+                    high_line_visible: false,
+                    ..style.clone()
+                },
+                vec![upper_band, lower_band],
+                vec![low, close],
+            ),
+            (
+                HlcAreaStyle {
+                    low_line_visible: false,
+                    ..style.clone()
+                },
+                vec![upper_band, lower_band],
+                vec![high, close],
+            ),
+            (
+                HlcAreaStyle {
+                    high_to_close_fill_visible: false,
+                    ..style.clone()
+                },
+                vec![lower_band],
+                vec![high, low, close],
+            ),
+            (
+                HlcAreaStyle {
+                    close_to_low_fill_visible: false,
+                    ..style.clone()
+                },
+                vec![upper_band],
+                vec![high, low, close],
+            ),
+            (
+                HlcAreaStyle {
+                    close_line: line(30, 0.0),
+                    ..style.clone()
+                },
+                vec![upper_band, lower_band],
+                vec![high, low],
+            ),
         ] {
             let ctx = Context::default();
             let output = ctx.run_ui(RawInput::default(), |_| {
@@ -928,29 +987,37 @@ mod tests {
                     &map,
                     0.0,
                     |i, _| 10.0 + i as f32 * 50.0,
-                    Color32::GREEN,
-                    Color32::RED,
-                    &HlcAreaStyle {
-                        fill_opacity,
-                        line_width,
-                    },
+                    &style,
                     PriceSource::Close,
                 );
             });
-            let mut fills = Vec::new();
-            let mut lines = Vec::new();
+            let mut painted_fills = Vec::new();
+            let mut painted_lines = Vec::new();
             for shape in &output.shapes {
                 if let Shape::Path(path) = &shape.shape {
+                    let ys = || path.points.iter().map(|p| p.y);
                     if path.fill != Color32::TRANSPARENT {
-                        fills.push(path.fill.a());
-                    } else if path.stroke.width > 0.0 {
-                        lines.push(path.stroke.width);
+                        let top = ys().fold(f32::INFINITY, f32::min).round();
+                        let bottom = ys().fold(f32::NEG_INFINITY, f32::max).round();
+                        painted_fills.push((path.fill, top, bottom));
+                    } else {
+                        let stroke = path.stroke.color.clone();
+                        let egui::epaint::ColorMode::Solid(color) = stroke else {
+                            panic!("lines take one colour");
+                        };
+                        // A curve would add points between the two bars.
+                        assert_eq!(path.points.len(), 2);
+                        painted_lines.push((
+                            color.r(),
+                            path.stroke.width,
+                            path.points[0].y.round(),
+                        ));
                     }
                 }
             }
             output.drop_without_applying_deltas();
-            assert_eq!(fills, alphas, "{fill_opacity}");
-            assert_eq!(lines, widths, "{line_width}");
+            assert_eq!(painted_fills, fills);
+            assert_eq!(painted_lines, lines);
         }
     }
 }
