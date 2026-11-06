@@ -801,7 +801,6 @@ impl Chart {
             // Within ~1.5 bars of the right edge. With fix_right_edge the right offset is clamped
             // to <= 0, so near means no farther than 1.5 bars to the left of the edge.
             near_live: self.state.time_scale().is_near_live_edge(),
-            len: bars.len(),
             tail: bars.last().cloned(),
         }
     }
@@ -859,11 +858,12 @@ impl Chart {
     fn follow_live_edge(&mut self, before: Edge, clock: &BarClock) {
         let bars = &self.state.data().bars;
         let tail = before.tail.as_ref().zip(bars.last());
-        // Appended only if the last bar moved forward in time: older bars loaded in front make
+        // Appended only if the last bar moved to a later slot, whatever the length: a rolling
+        // window or a bar limit keeps the series from growing. Older bars loaded in front make
         // the series longer and keep its last bar. They need no change of the right offset
         // either, since the bar indices and the base index both grow by their count.
         let appended =
-            bars.len() > before.len && tail.is_some_and(|(old, new)| new.time > old.time);
+            tail.is_some_and(|(old, new)| clock.bar_open(new.time) > clock.bar_open(old.time));
         let whitespace_replaced =
             tail.is_some_and(|(old, new)| old.is_whitespace() && !new.is_whitespace());
         let options = &self.chart_options.time_scale;
@@ -921,7 +921,6 @@ impl Chart {
 /// The bars and the view before the bars change, for [`Chart::bars_changed`].
 struct Edge {
     near_live: bool,
-    len: usize,
     tail: Option<Bar>,
 }
 

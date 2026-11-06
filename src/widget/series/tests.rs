@@ -301,10 +301,11 @@ fn appended_bars_keep_the_view() {
 
 /// Only filling a whitespace tail may use the whitespace shift policy. Ordinary updates keep
 /// the offset and pending start; appends still follow the new-bar policy. Without following,
-/// one appended bar subtracts one from the offset to keep the same time at the right edge.
+/// one appended bar subtracts one from the offset to keep the same time at the right edge,
+/// also when a window of the same length moves forward by that bar.
 #[test]
 fn bar_updates_obey_live_edge_policies() {
-    for replace in [false, true] {
+    for (replace, rolling) in [(false, false), (true, false), (true, true)] {
         for shift in [false, true] {
             for allow_whitespace in [false, true] {
                 for offset in [19.0, -1.5, -2.0, -30.0] {
@@ -342,6 +343,9 @@ fn bar_updates_obey_live_edge_policies() {
                         }
                         if replace {
                             if append {
+                                if rolling {
+                                    bars.remove(0);
+                                }
                                 bars.push(incoming);
                             } else {
                                 bars[99] = incoming;
@@ -363,7 +367,7 @@ fn bar_updates_obey_live_edge_policies() {
                         assert_eq!(
                             chart.state.time_scale().right_offset(),
                             expected,
-                            "{name}: replace {replace}, shift {shift}, whitespace {allow_whitespace}, offset {offset}"
+                            "{name}: replace {replace}, rolling {rolling}, shift {shift}, whitespace {allow_whitespace}, offset {offset}"
                         );
                         assert_eq!(
                             chart.pending_start_idx,
@@ -373,6 +377,62 @@ fn bar_updates_obey_live_edge_policies() {
                     }
                 }
             }
+        }
+    }
+    // Replacements that bring a newer last bar without growing the series, a frame after each.
+    // The right offset stays at its default of 2.5, which a fixed right edge limits to 0.
+    let window = |start: i64, len: i64| -> Vec<Bar> {
+        (start..start + len).map(|i| bar(i * 60, 10.0)).collect()
+    };
+    for (name, fix_right_edge, limit, replacements, expected) in [
+        (
+            "rolling window",
+            false,
+            None,
+            (1..=5).map(|start| window(start, 100)).collect::<Vec<_>>(),
+            2.5,
+        ),
+        (
+            "rolling window, fixed right edge",
+            true,
+            None,
+            (1..=5).map(|start| window(start, 100)).collect(),
+            0.0,
+        ),
+        (
+            "bar limit fed the whole history",
+            false,
+            NonZeroUsize::new(100),
+            (101..=105).map(|len| window(0, len)).collect(),
+            2.5,
+        ),
+        (
+            "window replaced by a later window",
+            false,
+            None,
+            vec![window(150, 100)],
+            2.5,
+        ),
+    ] {
+        let options = crate::config::ChartOptions {
+            time_scale: crate::config::TimeScaleOptions {
+                fix_right_edge,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut chart = Chart::new(BarData::from_bars(window(0, 100))).with_chart_options(options);
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut chart, 0.0, Vec::new());
+        chart.set_bar_limit(SeriesId::MAIN, limit);
+        for (step, bars) in replacements.into_iter().enumerate() {
+            chart.set_data(SeriesId::MAIN, bars);
+            frame(&ctx, &mut chart, 1.0 + step as f64, Vec::new());
+            assert_eq!(
+                chart.state.time_scale().right_offset(),
+                expected,
+                "{name}: replacement {step}"
+            );
         }
     }
 }
