@@ -1431,6 +1431,7 @@ impl ChartLayout {
         }
         // Before this frame's input selects a chart, so a change is sent from the chart it is in.
         self.sync_state(charts, total);
+        let mut tab = None;
         if self.mode == ChartLayoutMode::Tabs {
             egui::ScrollArea::horizontal().show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -1439,7 +1440,7 @@ impl ChartLayout {
                             .selectable_label(index == self.active, chart.symbol())
                             .clicked()
                         {
-                            self.active = index;
+                            tab = Some(index);
                         }
                     }
                 });
@@ -1741,6 +1742,12 @@ impl ChartLayout {
             {
                 self.previous_ranges[index] = Some(range);
             }
+        }
+        // The chart shown when a tab is clicked handles that click, so a group name typed in
+        // its menu commits as the field loses focus. The clicked tab shows from the next frame.
+        if let Some(index) = tab {
+            self.active = index;
+            ui.ctx().request_repaint();
         }
         response
     }
@@ -3769,6 +3776,52 @@ mod tests {
                 assert!(!charts[slot].can_undo(), "a discarded name records nothing");
             }
         }
+    }
+
+    /// Of a tab layout only the shown chart draws its menu. A click on another tab must still
+    /// commit a group name typed there, as a click on another chart of a grid does.
+    #[test]
+    fn clicking_another_tab_commits_a_typed_group_name() {
+        let ctx = egui::Context::default();
+        let mut layout = ChartLayout {
+            mode: ChartLayoutMode::Tabs,
+            ..Default::default()
+        };
+        let mut charts = [chart(60), chart(60)];
+        charts[1].set_symbol("OTHER");
+        let mut time = 0.0;
+        let mut frame = |layout: &mut ChartLayout, charts: &mut [Chart; 2], events| {
+            time += 0.1;
+            frame_texts(&ctx, layout, charts, vec2(640.0, 900.0), time, events)
+        };
+        frame(&mut layout, &mut charts, vec![]);
+        let texts = frame(
+            &mut layout,
+            &mut charts,
+            vec![Event::PointerMoved(pos2(300.0, 400.0))],
+        );
+        let corner = text_center(&texts, "…");
+        let tab = text_center(&texts, "OTHER");
+        frame(&mut layout, &mut charts, vec![Event::PointerMoved(corner)]);
+        frame(&mut layout, &mut charts, vec![pointer_button(corner, true)]);
+        frame(
+            &mut layout,
+            &mut charts,
+            vec![pointer_button(corner, false)],
+        );
+        frame(&mut layout, &mut charts, vec![]);
+        let texts = frame(&mut layout, &mut charts, vec![]);
+        let input = text_center(&texts, "Sync group") + vec2(0.0, 22.0);
+        frame(&mut layout, &mut charts, vec![Event::PointerMoved(input)]);
+        frame(&mut layout, &mut charts, vec![pointer_button(input, true)]);
+        frame(&mut layout, &mut charts, vec![pointer_button(input, false)]);
+        frame(&mut layout, &mut charts, vec![Event::Text("Desk".into())]);
+        frame(&mut layout, &mut charts, vec![Event::PointerMoved(tab)]);
+        frame(&mut layout, &mut charts, vec![pointer_button(tab, true)]);
+        frame(&mut layout, &mut charts, vec![pointer_button(tab, false)]);
+        frame(&mut layout, &mut charts, vec![]);
+        assert_eq!(layout.active(), 1);
+        assert_eq!(layout.sync_group(0), Some("Desk"));
     }
 
     /// Ctrl+Z reaches the active chart while the layout renders it, as in a host that leaves
