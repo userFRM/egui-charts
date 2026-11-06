@@ -108,18 +108,20 @@ impl TextTab {
                     ui.combo_select(
                         "line_text_vertical_align",
                         &mut measurements.text_vertical_align,
+                        // The dialog names the side of the line the text reads on, the setting the edge
+                        // of the text that rests on it: "Top" is the text's bottom edge on the line.
                         [
-                            LineTextVerticalAlign::Top,
-                            LineTextVerticalAlign::Middle,
                             LineTextVerticalAlign::Bottom,
+                            LineTextVerticalAlign::Middle,
+                            LineTextVerticalAlign::Top,
                         ],
                         |align| {
                             l10n::text(
                                 &ctx,
                                 match align {
-                                    LineTextVerticalAlign::Top => "Top",
+                                    LineTextVerticalAlign::Bottom => "Top",
                                     LineTextVerticalAlign::Middle => "Middle",
-                                    LineTextVerticalAlign::Bottom => "Bottom",
+                                    LineTextVerticalAlign::Top => "Bottom",
                                 },
                             )
                         },
