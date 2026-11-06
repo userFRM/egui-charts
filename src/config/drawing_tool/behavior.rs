@@ -192,6 +192,19 @@ impl DrawingToolType {
         )
     }
 
+    /// Whether the drawing has a line whose width and pattern its settings can change. The arrow
+    /// marker and arrow marks are solid shapes without one.
+    pub fn draws_line(&self) -> bool {
+        !matches!(
+            self,
+            Self::ArrowMarker
+                | Self::ArrowMarkUp
+                | Self::ArrowMarkDown
+                | Self::ArrowMarkLeft
+                | Self::ArrowMarkRight
+        )
+    }
+
     /// Whether a double click edits the drawing's text in place instead of opening its settings.
     pub fn edits_text_inline(&self) -> bool {
         self.is_text_annotation()

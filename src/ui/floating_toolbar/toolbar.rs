@@ -211,7 +211,10 @@ impl FloatingSelectionToolbar {
                 color: drawing.fill_color32().unwrap_or(Color32::TRANSPARENT),
             });
         }
-        self.stroke = Some((drawing.stroke_width, drawing.line_style));
+        self.stroke = drawing
+            .tool_type
+            .draws_line()
+            .then_some((drawing.stroke_width, drawing.line_style));
         // Refresh context without reopening the menu or resetting its dismiss state.
         if !self.menu.is_open() {
             self.menu.open_on(ui.ctx(), chart, self.position, id);
@@ -648,6 +651,8 @@ mod tests {
         for (tool, label) in [
             (Tool::TrendLine, "Line color"),
             (Tool::TextLabel, "Text color"),
+            (Tool::ArrowMarkUp, "Line color"),
+            (Tool::ArrowMarker, "Line color"),
         ] {
             let mut chart = Chart::new(crate::model::BarData::new());
             let mut drawing = Drawing::new(7, tool);
@@ -662,6 +667,7 @@ mod tests {
                 })
                 .drop_without_applying_deltas();
             assert_eq!(toolbar.color_slots[0].label, label, "{tool:?}");
+            assert_eq!(toolbar.stroke.is_some(), tool.draws_line(), "{tool:?}");
         }
     }
 

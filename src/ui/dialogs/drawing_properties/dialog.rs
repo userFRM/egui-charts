@@ -657,6 +657,8 @@ mod tests {
                 (Tool::TrendAngle, false, true, true),
                 (Tool::TextLabel, false, false, true),
                 (Tool::Highlighter, false, false, false),
+                (Tool::ArrowMarker, false, false, true),
+                (Tool::ArrowMarkDown, false, false, true),
             ] {
                 let mut drawing = Drawing::new(7, tool);
                 drawing.chart_points = vec![ChartPoint::new(1.0, 100.0); 3];
@@ -674,6 +676,8 @@ mod tests {
                     ("Fill", fill),
                     ("Extend", extend),
                     ("Text", text),
+                    ("Line width", tool.draws_line()),
+                    ("Line style", tool.draws_line()),
                     ("Coordinates", !freehand),
                     ("Template", true),
                     ("Ok", true),

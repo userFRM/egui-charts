@@ -32,20 +32,22 @@ impl StyleTab {
             }
             ui.end_row();
 
-            ui.label(l10n::text(ui.ctx(), "Line width"));
-            line_width_row(ui, &mut props.line_width);
-            ui.end_row();
+            if tool.is_none_or(|tool| tool.draws_line()) {
+                ui.label(l10n::text(ui.ctx(), "Line width"));
+                line_width_row(ui, &mut props.line_width);
+                ui.end_row();
 
-            let label = ui.label(l10n::text(ui.ctx(), "Line style"));
-            ui.label_inputs_by(label.id, |ui| {
-                ui.combo_select(
-                    "line_style",
-                    &mut props.line_style,
-                    LineStyle::all().iter().copied(),
-                    |v| v.name().to_string(),
-                );
-            });
-            ui.end_row();
+                let label = ui.label(l10n::text(ui.ctx(), "Line style"));
+                ui.label_inputs_by(label.id, |ui| {
+                    ui.combo_select(
+                        "line_style",
+                        &mut props.line_style,
+                        LineStyle::all().iter().copied(),
+                        |v| v.name().to_string(),
+                    );
+                });
+                ui.end_row();
+            }
 
             if let Some(template) = &mut props.tool_settings {
                 let settings = &mut template.settings;
