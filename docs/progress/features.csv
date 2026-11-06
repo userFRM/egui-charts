@@ -806,7 +806,7 @@ Studies,Indicators,Williams Alligator,unverified,library,src/studies/builtin/wil
 Studies,Indicators,Williams Fractal,verified,library,src/studies/builtin/williams_fractals.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Woodies CCI,incomplete,library,src/studies/builtin/woodies_cci.rs,
 Studies,Indicators,Zig Zag,incomplete,library,src/studies/builtin/zigzag.rs;src/chart/rendering/indicator.rs;src/studies/factory/mod.rs;src/chart/indicators/plots.rs,
-Studies,Strategy tester,Backtest engine,incomplete,library,src/strategies/backtest.rs;src/strategies/mod.rs;src/model/trading.rs;src/services/paper.rs;docs/strategy-report.md;,2059
+Studies,Strategy tester,Backtest engine,incomplete,library,src/strategies/backtest.rs;src/strategies/mod.rs;src/model/trading.rs;src/services/paper.rs;docs/strategy-report.md,2059;2285
 Studies,Strategy tester,Built-in Bollinger Bands strategy,unverified,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/bollinger_bands.rs,
 Studies,Strategy tester,Built-in Bollinger Bands strategy Directed,unverified,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/bollinger_bands.rs,
 Studies,Strategy tester,Built-in Consecutive Up/Down strategy,unverified,library,src/strategies/library/price_action.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs,
@@ -833,16 +833,16 @@ Studies,Strategy tester,Commission models,incomplete,library,src/strategies/back
 Studies,Strategy tester,Deep backtesting and bar magnifier,unverified,library,src/strategies/backtest.rs;src/strategies/mod.rs;docs/strategy-report.md;examples/demo/strategy.rs;examples/demo/live.rs;examples/demo/sampledata.rs,1927
 Studies,Strategy tester,Equity curve and drawdown chart,incomplete,library,src/model/strategy.rs;src/ui/strategy_report/mod.rs;src/ui/strategy_report/plot.rs,
 Studies,Strategy tester,Export trades and report,unverified,library,src/model/strategy.rs;src/ui/strategy_report/mod.rs;terminal/src/trading.rs;Cargo.toml,1963
-Studies,Strategy tester,Limit and stop orders,unverified,library,src/strategies/backtest.rs;src/strategies/mod.rs;src/model/trading.rs,
+Studies,Strategy tester,Limit and stop orders,unverified,library,src/strategies/backtest.rs;src/strategies/mod.rs;src/model/trading.rs,2285
 Studies,Strategy tester,List of trades,unverified,library,src/model/strategy.rs;src/ui/strategy_report/mod.rs,
 Studies,Strategy tester,"Long and short positions, margin and leverage",incomplete,library,src/strategies/backtest.rs;src/ui/strategy_report/properties.rs;docs/strategy-report.md,2059
-Studies,Strategy tester,Order fill model,incomplete,library,src/strategies/backtest.rs;src/strategies/live.rs;src/strategies/mod.rs;src/model/trading.rs;src/ui/strategy_report/properties.rs;docs/strategy-report.md,2059
+Studies,Strategy tester,Order fill model,incomplete,library,src/strategies/backtest.rs;src/strategies/live.rs;src/strategies/mod.rs;src/model/trading.rs;src/ui/strategy_report/properties.rs;docs/strategy-report.md,2059;2285
 Studies,Strategy tester,Parameter optimisation,unverified,library,src/ui/strategy_report/tester.rs;src/ui/strategy_report/optimisation.rs;src/strategies/backtest.rs;src/strategies/optimize.rs;src/strategies/mod.rs;src/model/strategy.rs,
 Studies,Strategy tester,Performance summary,incomplete,library,src/model/strategy.rs;src/ui/strategy_report/mod.rs,
 Studies,Strategy tester,Position sizing,unverified,library,src/strategies/backtest.rs;src/strategies/mod.rs;docs/strategy-report.md,
 Studies,Strategy tester,Pyramiding limit,unverified,library,src/strategies/backtest.rs;src/strategies/mod.rs;docs/strategy-report.md,
 Studies,Strategy tester,Slippage models,unverified,library,src/strategies/backtest.rs;src/strategies/mod.rs;docs/strategy-report.md,
-Studies,Strategy tester,Strategy properties,incomplete,library,src/strategies/backtest.rs;src/model/strategy.rs;src/ui/strategy_report/properties.rs;src/ui/strategy_report/tester.rs;src/ui/strategy_report/mod.rs;docs/strategy-report.md,2059
+Studies,Strategy tester,Strategy properties,incomplete,library,src/strategies/backtest.rs;src/model/strategy.rs;src/ui/strategy_report/properties.rs;src/ui/strategy_report/tester.rs;src/ui/strategy_report/mod.rs;docs/strategy-report.md,2059;2285
 Studies,Strategy tester,Strategy tester panel,incomplete,library,src/ui/strategy_report/tester.rs;src/ui/strategy_report/inputs.rs;src/ui/strategy_report/properties.rs;src/ui/strategy_report/mod.rs;examples/demo/strategy.rs,2059
 Studies,Strategy tester,Trade markers on the chart,unverified,library,src/model/strategy.rs;src/ui/strategy_report/tester.rs;src/widget/signals.rs;examples/demo/strategy.rs;src/widget/frame/mod.rs;terminal/src/trading.rs,
 Terminal,Alerts,"Alert editing, pause, resume and duplication",unverified,library,src/ui/widget_bar/panels/alerts_panel.rs;src/ui/dialogs/alert_dialog/dialog.rs;terminal/src/alerts.rs,
