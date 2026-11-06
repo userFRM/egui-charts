@@ -750,6 +750,7 @@ fn draw_session_profile(
             continue;
         }
         let is_poc = config.show_poc && (price - profile.poc_price).abs() < tick_size * 0.5;
+        let single_print = config.show_single_prints && profile.tpo_count_at(price) == 1;
         let dimmed = !is_poc && dims_outside_value_area && !profile.is_in_value_area(price);
         let row_tone = if is_poc {
             Some(poc_color)
@@ -785,6 +786,12 @@ fn draw_session_profile(
                 let left = (x - block_width * 0.5).round_to_pixels(pixels_per_point);
                 let right = (x + block_width * 0.5).round_to_pixels(pixels_per_point);
                 let cell = Rect::from_min_max(Pos2::new(left, top), Pos2::new(right, bottom));
+                // An opaque cell hides the highlight behind it, so a single print tints its own cell.
+                let color = if single_print {
+                    color.blend(render_config.single_print_color)
+                } else {
+                    color
+                };
                 painter.rect_filled(cell, 0.0, color);
                 if letters_in_cells {
                     let letter_tone = cell_letter_color(color, &chart);
@@ -2193,5 +2200,109 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Three half-hour periods on rows of 1: A 98 to 105, B 101 to 107, C 104 to 108, so rows
+    /// 98, 99, 100 and 108 hold one TPO each.
+    fn three_overlapping_periods() -> Vec<Bar> {
+        let start = chrono::DateTime::parse_from_rfc3339("2024-01-02T14:30:00Z")
+            .unwrap()
+            .to_utc();
+        [(98.0, 105.0), (101.0, 107.0), (104.0, 108.0)]
+            .into_iter()
+            .enumerate()
+            .map(|(i, (low, high))| {
+                Bar::new(
+                    start + Duration::minutes(30 * i as i64),
+                    low,
+                    high,
+                    low,
+                    high,
+                    1.0,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn single_print_highlights_show_on_blocks() {
+        let model = TPOConfig {
+            tick_size: 1.0,
+            ..Default::default()
+        };
+        let profile =
+            to_tpo_profiles(&three_overlapping_periods(), &model, &Timeframe::Min30.into()).remove(0);
+        assert_eq!(profile.single_prints, vec![98.0, 99.0, 100.0, 108.0]);
+        let render_config = TpoRenderConfig::default();
+        let rect = Rect::from_x_y_ranges(0.0..=400.0, 0.0..=400.0);
+        // 16 px a point: rows of 16 px, below the 24 px up to which a block fills its row.
+        let coords = PriceMap::new(
+            crate::scales::PriceTransform::default(),
+            crate::scales::PriceRange::new(90.0, 115.0),
+            rect.min.y,
+            rect.max.y,
+            false,
+        );
+        let fills = |display_mode, show_single_prints| {
+            let ctx = egui::Context::default();
+            ctx.begin_pass(egui::RawInput::default());
+            let painter = ctx.layer_painter(egui::LayerId::background());
+            let config = TPOConfig {
+                display_mode,
+                show_single_prints,
+                ..model.clone()
+            };
+            draw_session_profile(
+                &painter,
+                rect,
+                &coords,
+                &profile,
+                &config,
+                &render_config,
+                10.0,
+                20.0,
+                true,
+                Color32::GREEN,
+                Color32::RED,
+            );
+            let mut output = ctx.end_pass();
+            output.textures_delta.clear();
+            output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    Shape::Rect(r) => Some((r.rect, r.fill)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        // The fills that show at a point: the last opaque one and those painted over it.
+        let shown = |fills: &[(Rect, Color32)], p: Pos2| {
+            let over: Vec<_> = fills
+                .iter()
+                .filter(|(r, _)| r.contains(p))
+                .map(|(_, c)| *c)
+                .collect();
+            let from = over.iter().rposition(|c| c.a() == 255).unwrap_or(0);
+            over[from..].to_vec()
+        };
+        // Pixels whose paint changes when single prints are turned on.
+        let marked = |display_mode| {
+            let (on, off) = (fills(display_mode, true), fills(display_mode, false));
+            (0..400)
+                .flat_map(|y| (0..120).map(move |x| Pos2::new(x as f32 + 0.5, y as f32 + 0.5)))
+                .filter(|&p| shown(&on[..], p) != shown(&off[..], p))
+                .count()
+        };
+        // Each single print's cell is one 16 px column of one 16 px row.
+        let half_cells = 4 * 16 * 16 / 2;
+        let letters = marked(TPODisplayMode::Letters);
+        let blocks = marked(TPODisplayMode::Blocks);
+        let both = marked(TPODisplayMode::Both);
+        assert!(
+            blocks >= half_cells && both >= half_cells,
+            "pixels marked by 4 single prints: letters {letters}, blocks {blocks}, \
+             letters and blocks {both}; expected at least {half_cells} on blocks"
+        );
     }
 }
