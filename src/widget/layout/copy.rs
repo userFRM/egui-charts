@@ -155,7 +155,9 @@ impl CopiedStudies {
         if no_bars {
             issues.push(LayoutCopyIssueKind::NoHistory);
         }
-        for (template, source_draws) in self.set.studies.iter().zip(&self.draws) {
+        let mut built: Vec<Box<dyn Indicator>> = Vec::new();
+        let mut ids = Vec::new();
+        for (at, template) in self.set.studies.iter().enumerate() {
             let linked = template.inputs.iter().any(|(_, value)| {
                 matches!(value, InputValue::Source(StudySource::Study { id, .. }) if *id != NO_STUDY)
             });
@@ -168,13 +170,26 @@ impl CopiedStudies {
                     study: template.name.clone(),
                     reason: error.to_string(),
                 }),
-                // A linked study's values follow its parent, which reports its own shortage.
-                Ok(study) if *source_draws && !no_bars && !linked => {
-                    if !draws(chart.prepare_indicator(study).as_ref()) {
-                        issues.push(LayoutCopyIssueKind::ShortHistory(template.name.clone()));
-                    }
+                Ok(study) => {
+                    built.push(chart.configure_indicator(study));
+                    // The set's links name a study by its position in the set.
+                    ids.push(SeriesId(at));
                 }
-                Ok(_) => {}
+            }
+        }
+        let requests = built
+            .iter()
+            .flat_map(|study| study.data_requests())
+            .collect();
+        let sources =
+            chart
+                .study_data
+                .data(requests, &chart.symbol, chart.timeframe, chart.replay_time());
+        crate::widget::studies::calculate(&mut built, &ids, &chart.state.data().bars, &sources);
+        for (study, id) in built.iter().zip(&ids) {
+            if self.draws[id.0] && !no_bars && !draws(study.as_ref()) {
+                let name = self.set.studies[id.0].name.clone();
+                issues.push(LayoutCopyIssueKind::ShortHistory(name));
             }
         }
         issues
@@ -727,5 +742,42 @@ mod tests {
             (Some("BTC"), None, 0.0, 0.0, None, None),
         );
         assert_eq!(flow.heatmap.brightness, 0.5);
+    }
+
+    /// A study that reads another study's output and needs more bars than a chart has is reported,
+    /// as a study reading prices is.
+    #[test]
+    fn short_history_is_reported_for_a_linked_study() {
+        let (mut a, mut short, mut long) = (chart(50), chart(20), chart(50));
+        let rsi = a.add_indicator(Box::new(RSI::new(5)));
+        let mean = a.add_indicator(Box::new(SMA::new(30)));
+        a.set_indicator_source(
+            mean,
+            StudySource::Study {
+                id: rsi.0,
+                plot: 0,
+            },
+        )
+        .unwrap();
+        a.move_indicator_to_pane(mean, rsi);
+        a.recalculate_studies();
+        assert!(a.indicators().all(|(_, study)| draws(study)));
+        let factory = IndicatorFactory::new();
+        let mut layout = layout();
+        let mut charts = [&mut a, &mut short, &mut long];
+        // RSI(5) has values from the sixth bar, so an SMA of 30 of them needs 35 bars.
+        assert_eq!(
+            layout.apply_copy(&mut charts, 0, &LayoutCopy::Studies, &factory),
+            [LayoutCopyIssue {
+                slot: 1,
+                kind: LayoutCopyIssueKind::ShortHistory("SMA".into()),
+            }],
+        );
+        charts[1].recalculate_studies();
+        let drawn: Vec<_> = charts[1]
+            .indicators()
+            .map(|(_, study)| (study.name().to_owned(), draws(study)))
+            .collect();
+        assert_eq!(drawn, [("RSI".to_owned(), true), ("SMA".to_owned(), false)]);
     }
 }
