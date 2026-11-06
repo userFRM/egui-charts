@@ -568,6 +568,44 @@ mod tests {
         assert!(engine.update(&mut strategy, &bars, &[]).is_empty());
     }
 
+    /// A fill carries no study output, so a plot placeholder in a fill message is missing.
+    #[test]
+    #[cfg(feature = "alert-engine")]
+    fn strategy_fill_message_reads_no_study_value() {
+        use crate::model::{Alert, AlertCondition};
+        use crate::services::{AlertEngine, AlertEvent};
+        use std::sync::{Arc, Mutex};
+        let mut alert = Alert::new("SYM", AlertCondition::StrategyFills("run-1".into()));
+        alert.message = "{{value}} rsi {{plot_3_0}}".into();
+        let delivered = Arc::new(Mutex::new(Vec::new()));
+        let sink = delivered.clone();
+        let engine = AlertEngine::new()
+            .with_alerts(vec![alert])
+            .on_trigger(move |_, event| sink.lock().unwrap().push(event.clone()));
+        let fill = StrategyFill {
+            sequence: 1,
+            time: DateTime::UNIX_EPOCH,
+            order_id: "Long".into(),
+            side: OrderSide::Buy,
+            price: 187.5,
+            quantity: 2.0,
+            position: 2.0,
+        };
+        engine.strategy_fills(
+            "run-1",
+            "SYM",
+            None,
+            Timeframe::Min1,
+            &[fill],
+            DateTime::UNIX_EPOCH,
+        );
+        let events = delivered.lock().unwrap();
+        let [AlertEvent::TriggeredForSymbol { message, .. }] = events.as_slice() else {
+            panic!("one fill");
+        };
+        assert_eq!(message, "187.5 rsi NaN");
+    }
+
     #[test]
     #[cfg(feature = "alert-engine")]
     fn strategy_alerts_deliver_each_fill_once_even_at_the_same_timestamp() {

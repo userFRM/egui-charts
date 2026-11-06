@@ -434,7 +434,8 @@ impl AlertEngine {
     /// `now` gates expiry and notification schedules; event times are the source fill times.
     /// Empty messages use the execution side, quantity, price and resulting signed position.
     /// Custom messages expand the usual placeholders using a flat bar at the fill price, with
-    /// its source time and zero volume, and `exchange` as [`Alert::expand_message`] takes it. Strategy-fill alerts need no price-reader subscription.
+    /// its source time and zero volume, and `exchange` as [`Alert::expand_message`] takes it. A
+    /// fill carries no study values, so `{{plot_ID_N}}` reads `NaN`. Strategy-fill alerts need no price-reader subscription.
     /// Delivery callbacks run after unlocking, as they do for price alerts.
     #[cfg(feature = "strategies")]
     pub fn strategy_fills(
@@ -509,8 +510,8 @@ impl AlertEngine {
                     let bar = Bar::new(
                         fill.time, fill.price, fill.price, fill.price, fill.price, 0.0,
                     );
-                    alert.expand_message(symbol, exchange, timeframe, &bar, fill.time, |_| {
-                        Some(fill.price)
+                    alert.expand_message(symbol, exchange, timeframe, &bar, fill.time, |source| {
+                        (*source == AlertSource::Price).then_some(fill.price)
                     })
                 };
                 if alert
