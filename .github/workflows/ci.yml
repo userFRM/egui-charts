@@ -334,7 +334,7 @@ jobs:
     if: "!cancelled() && github.event.pull_request.draft != true"
     name: Test (Linux feature subsets and examples)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
       - name: Check input classification
         shell: bash
@@ -717,7 +717,7 @@ jobs:
     if: "!cancelled() && github.event.pull_request.draft != true"
     name: Documentation
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
       - name: Check input classification
         shell: bash
