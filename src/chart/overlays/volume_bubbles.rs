@@ -56,6 +56,9 @@ pub struct VolumeBubblesConfig {
     pub min_size_filter: Option<f64>,
     /// Which trades share a bubble.
     pub grouping: BubbleGrouping,
+    /// Shades each bubble as a sphere lit from the top left; `false` draws flat discs. Defaults to
+    /// `true`.
+    pub shaded: bool,
 }
 
 // JSON writes infinity as null; retain the supported unclamped setting when loading it.
@@ -79,6 +82,7 @@ impl Default for VolumeBubblesConfig {
             border_color: Color32::from_rgba_unmultiplied(255, 255, 255, 100),
             min_size_filter: None,
             grouping: BubbleGrouping::Ungrouped,
+            shaded: true,
         }
     }
 }
@@ -524,6 +528,7 @@ impl VolumeBubbles {
                     radius,
                     color,
                     border,
+                    self.config.shaded,
                     painter.pixels_per_point(),
                 );
             }
@@ -627,13 +632,16 @@ fn with_opacity(color: Color32, opacity: u8) -> Color32 {
 
 /// Appends a disc of `fill` to `mesh`, ringed outside by a hairline of `border`, with edges
 /// faded over one physical pixel as the tessellator fades them. The polygon has the fewest sides
-/// that keep it within a quarter of a physical pixel of the circle at `pixels_per_point`.
+/// that keep it within a quarter of a physical pixel of the circle at `pixels_per_point`. With
+/// `shaded`, the fan's apex moves towards the top left and takes a lighter colour at the fill's
+/// opacity, at no extra vertex.
 fn add_disc(
     mesh: &mut Mesh,
     center: Pos2,
     radius: f32,
     fill: Color32,
     border: Option<Color32>,
+    shaded: bool,
     pixels_per_point: f32,
 ) {
     let half = 0.5 / pixels_per_point;
@@ -662,7 +670,14 @@ fn add_disc(
     let first = mesh.vertices.len() as u32;
     mesh.reserve_vertices(1 + (sides * per_side) as usize);
     mesh.reserve_triangles((sides * (2 * per_side - 1)) as usize);
-    mesh.colored_vertex(center, fill);
+    if shaded {
+        mesh.colored_vertex(
+            center - Vec2::splat(inner / 3.0),
+            fill.lerp_to_gamma(Color32::from_white_alpha(fill.a()), 0.4),
+        );
+    } else {
+        mesh.colored_vertex(center, fill);
+    }
     let mut direction = Vec2::X;
     for side in 0..sides {
         for &(r, color) in rings {
@@ -773,6 +788,7 @@ mod tests {
                 )
             })
             .collect();
+        let shaded = config.shaded;
         let bubbles = VolumeBubbles::new(config, BarClock::new(Timeframe::Min1), Some(1.0), trades);
         let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
             bubbles.render(
@@ -800,6 +816,7 @@ mod tests {
                 diameter / 2.0,
                 color,
                 border,
+                shaded,
                 1.0,
             );
         }
@@ -868,16 +885,19 @@ mod tests {
     /// Guards the shape of a bubble at 1x and 2x: every side stays within a quarter of a physical
     /// pixel of the circle, the fill ends half a pixel inside the radius, and the edge fades to
     /// nothing half a pixel past the radius, or past the hairline outside it with a border. Too
-    /// few sides, a rotation that drifts or a ring at the wrong radius fails it.
+    /// few sides, a rotation that drifts or a ring at the wrong radius fails it. A shaded bubble
+    /// differs only in the fan's first vertex, a lighter one offset towards the top left.
     #[test]
     fn bubbles_stay_round_and_fade_over_one_pixel() {
         let (fill, border) = (Color32::RED, Color32::WHITE);
-        for (radius, ppp, with_border) in [
-            (2.0, 1.0, false),
-            (2.0, 2.0, true),
-            (12.0, 1.0, true),
-            (20.0, 1.0, false),
-            (20.0, 2.0, true),
+        for (radius, ppp, with_border, shaded) in [
+            (2.0, 1.0, false, false),
+            (2.0, 2.0, true, false),
+            (12.0, 1.0, true, false),
+            (20.0, 1.0, false, false),
+            (20.0, 2.0, true, false),
+            (20.0, 1.0, false, true),
+            (2.0, 2.0, true, true),
         ] {
             let half = 0.5 / ppp;
             let rings = match (with_border, ppp) {
@@ -902,10 +922,21 @@ mod tests {
                 radius,
                 fill,
                 with_border.then_some(border),
+                shaded,
                 ppp,
             );
-            let case = format!("radius {radius} at {ppp}x, border {with_border}");
+            let case = format!("radius {radius} at {ppp}x, border {with_border}, shaded {shaded}");
             assert!(mesh.is_valid(), "{case}");
+            // 0.4 of the way from the red fill to white, a third of the fill's radius up and left.
+            let (apex, color) = match shaded {
+                true => (
+                    center - Vec2::splat((radius - half) / 3.0),
+                    Color32::from_rgb(255, 102, 102),
+                ),
+                false => (center, fill),
+            };
+            assert!((mesh.vertices[0].pos - apex).length() < 1e-3, "{case}");
+            assert_eq!(mesh.vertices[0].color, color, "{case}");
             let sides = (mesh.vertices.len() - 1) / rings.len();
             assert_eq!(
                 mesh.indices.len(),
@@ -924,6 +955,14 @@ mod tests {
                 }
             }
         }
+        // The highlight keeps the opacity: 0.4 from premultiplied (128, 0, 0, 128) to gray 128.
+        let mut mesh = Mesh::default();
+        let fill = Color32::from_rgba_premultiplied(128, 0, 0, 128);
+        add_disc(&mut mesh, Pos2::ZERO, 20.0, fill, None, true, 1.0);
+        assert_eq!(
+            mesh.vertices[0].color,
+            Color32::from_rgba_premultiplied(128, 51, 51, 128)
+        );
     }
 
     /// Guards the clamp of outliers: the sizes span the bubbles drawn together, and a volume
@@ -1211,8 +1250,10 @@ mod tests {
                     1.0,
                 )
             });
+            // Flat, so that a disc's first vertex is its centre.
             let config = VolumeBubblesConfig {
                 grouping,
+                shaded: false,
                 ..VolumeBubblesConfig::default()
             };
             let trades = Vec::from_iter(
