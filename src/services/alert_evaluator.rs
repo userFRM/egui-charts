@@ -305,12 +305,18 @@ impl AlertEvaluator {
                 for timeframe in alert.timeframes() {
                     let key = (id.clone(), symbol.clone(), timeframe);
                     armed.insert(key.clone());
-                    if self.runs.get(&key).is_none_or(|run| run.alert != alert) {
-                        // Replacing an event definition must also replace its subscription.
-                        self.feeds
-                            .retain(|subject, _| subject.owner.as_ref() != Some(&key));
-                        self.runs
-                            .insert(key.clone(), Evaluation::new(&alert, timeframe, factory));
+                    match self.runs.get_mut(&key) {
+                        // A firing or a marker option leaves the studies and streams as they are.
+                        Some(run) if run.alert.same_monitoring(&alert) => {
+                            run.alert.clone_from(&alert)
+                        }
+                        _ => {
+                            // Replacing an event definition must also replace its subscription.
+                            self.feeds
+                                .retain(|subject, _| subject.owner.as_ref() != Some(&key));
+                            self.runs
+                                .insert(key.clone(), Evaluation::new(&alert, timeframe, factory));
+                        }
                     }
                     let run = self.runs.get_mut(&key).unwrap();
                     if let Some(error) = run.error.take() {
@@ -898,5 +904,132 @@ mod tests {
             ),
             ["NASDAQ:AAPL closed at 300"]
         );
+    }
+
+    /// A repeating study alert: one study 7 named `name` on one minute, `Above(100)`.
+    fn repeating_alert(name: &str) -> Alert {
+        let mut alert: Alert = serde_json::from_value(serde_json::json!({
+            "symbol":"SYM", "timeframe":"Min1", "source":{"Study":{"id":"7","output":0}},
+            "condition":{"Above":100.0}, "frequency":"EveryTime"
+        }))
+        .unwrap();
+        alert.inputs = Some(Box::new(AlertInputs {
+            studies: vec![crate::model::AlertStudy {
+                id: 7,
+                name: name.into(),
+                inputs: Vec::new(),
+            }],
+            ..Default::default()
+        }));
+        alert
+    }
+
+    #[test]
+    fn repeating_alert_keeps_its_studies_after_firing() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let feed = Arc::new(Feed::default());
+        let mut evaluator = AlertEvaluator::new(feed.clone());
+        let built = Arc::new(AtomicUsize::new(0));
+        let count = built.clone();
+        let mut factory = IndicatorFactory::new();
+        factory.register("Pair mean", move || {
+            count.fetch_add(1, Ordering::Relaxed);
+            Box::new(crate::studies::SMA::new(2))
+        });
+        // The one-minute mean (200+300)/2=250 is above 100 on the first evaluation.
+        let engine = AlertEngine::new().with_alerts(vec![repeating_alert("Pair mean")]);
+        #[cfg(feature = "ui")]
+        let ctx = egui::Context::default();
+        for _ in 0..4 {
+            evaluator.poll(
+                &engine,
+                &factory,
+                &[],
+                #[cfg(feature = "ui")]
+                &ctx,
+                DateTime::from_timestamp(1000, 0).unwrap(),
+            );
+        }
+        assert!(engine.alerts()[0].last_triggered_at.is_some(), "fired");
+        assert_eq!(engine.alerts()[0].status, crate::model::AlertStatus::Active);
+        // Turning the line across the chart off changes nothing the alert monitors.
+        let mut edited = engine.alerts()[0].clone();
+        edited.extend_line = false;
+        let inbox = Arc::new(crate::data::inbox::Inbox::default());
+        crate::services::Alerts::save(&engine, edited, inbox.reply(0));
+        evaluator.poll(
+            &engine,
+            &factory,
+            &[],
+            #[cfg(feature = "ui")]
+            &ctx,
+            DateTime::from_timestamp(1000, 0).unwrap(),
+        );
+        assert!(!engine.alerts()[0].extend_line);
+        assert_eq!(built.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn display_only_edit_keeps_the_order_flow_stream() {
+        use crate::services::Alerts;
+        let feed = Arc::new(Feed::default());
+        let mut evaluator = AlertEvaluator::new(feed.clone());
+        let mut factory = IndicatorFactory::new();
+        factory.register("Spread", || {
+            Box::new(crate::studies::OrderFlowStudy::new(
+                crate::data::OrderFlowKind::Spread,
+            ))
+        });
+        let engine = AlertEngine::new().with_alerts(vec![repeating_alert("Spread")]);
+        #[cfg(feature = "ui")]
+        let ctx = egui::Context::default();
+        let poll = |evaluator: &mut AlertEvaluator| {
+            evaluator.poll(
+                &engine,
+                &factory,
+                &[],
+                #[cfg(feature = "ui")]
+                &ctx,
+                DateTime::from_timestamp(1000, 0).unwrap(),
+            );
+        };
+        for _ in 0..3 {
+            poll(&mut evaluator);
+        }
+        assert_eq!(feed.requests.lock().unwrap().len(), 1);
+        assert_eq!(feed.subscriptions.lock().unwrap().len(), 1);
+        // Turning the line across the chart off changes no condition.
+        let mut edited = engine.alerts()[0].clone();
+        edited.extend_line = false;
+        let inbox = Arc::new(crate::data::inbox::Inbox::default());
+        engine.save(edited, inbox.reply(0));
+        for _ in 0..3 {
+            poll(&mut evaluator);
+        }
+        assert!(!engine.alerts()[0].extend_line);
+        // Release the locks before asserting: dropping the evaluator unsubscribes through them.
+        let counts = (
+            feed.stopped.lock().unwrap().len(),
+            feed.requests.lock().unwrap().len(),
+            feed.subscriptions.lock().unwrap().len(),
+        );
+        assert_eq!(
+            counts,
+            (0, 1, 1),
+            "(unsubscribed, history requests, subscriptions)"
+        );
+        // A changed condition is a new evaluation with its own stream.
+        let mut edited = engine.alerts()[0].clone();
+        edited.condition = crate::model::AlertCondition::Above(200.0);
+        engine.save(edited, inbox.reply(1));
+        for _ in 0..3 {
+            poll(&mut evaluator);
+        }
+        let counts = (
+            feed.stopped.lock().unwrap().len(),
+            feed.requests.lock().unwrap().len(),
+            feed.subscriptions.lock().unwrap().len(),
+        );
+        assert_eq!(counts, (1, 2, 2));
     }
 }
