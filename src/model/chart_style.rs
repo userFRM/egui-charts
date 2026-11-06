@@ -504,6 +504,42 @@ impl Default for ChartTypeStyles {
     }
 }
 
+impl ChartTypeStyles {
+    /// The rising and falling body, border and wick colours of a chart type that series settings
+    /// offer from its own style, in that order; `None` for a type they keep in the chart
+    /// configuration.
+    pub(crate) fn candle_colors_mut(
+        &mut self,
+        chart_type: super::ChartType,
+    ) -> Option<[&mut Color32; 6]> {
+        match chart_type {
+            super::ChartType::Heikin => {
+                let style = &mut self.heikin;
+                Some([
+                    &mut style.body_up,
+                    &mut style.body_down,
+                    &mut style.border_up,
+                    &mut style.border_down,
+                    &mut style.wick_up,
+                    &mut style.wick_down,
+                ])
+            }
+            super::ChartType::HollowCandles => {
+                let style = &mut self.hollow;
+                Some([
+                    &mut style.body_up,
+                    &mut style.body_down,
+                    &mut style.border_up,
+                    &mut style.border_down,
+                    &mut style.wick_up,
+                    &mut style.wick_down,
+                ])
+            }
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
