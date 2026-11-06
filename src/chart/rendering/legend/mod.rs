@@ -240,7 +240,7 @@ impl<'a> Legend<'a> {
             (first_row_end - theme.spacing.lg).min(bounds.right()),
         );
         #[cfg(feature = "icons")]
-        let title_start = layout.pos;
+        let (title_start, title_end) = (layout.pos, layout.row_end);
         if self.show_title {
             let image = self.badge.clone().or_else(|| {
                 self.instrument
@@ -424,11 +424,12 @@ impl<'a> Legend<'a> {
         #[cfg(feature = "icons")]
         if self.show_title {
             let size = Vec2::new(116.0, 20.0);
-            // On a full row the controls cover its end instead of opening an empty row.
-            let controls = if layout.pos.x + size.x > layout.row_end {
+            // On a full row the controls cover its end instead of opening an empty row. They and
+            // the outline keep to the end of the title's first row on every row the title spans.
+            let controls = if layout.pos.x + size.x > title_end {
                 Rect::from_min_size(
                     Pos2::new(
-                        layout.row_end - size.x,
+                        title_end - size.x,
                         layout.pos.y + (layout.height - size.y) / 2.0,
                     ),
                     size,
@@ -437,9 +438,9 @@ impl<'a> Legend<'a> {
                 layout.reserve(size)
             };
             let row_right = if layout.pos.y > title_start.y {
-                bounds.right()
+                title_end
             } else {
-                controls.right().min(layout.row_end)
+                controls.right()
             };
             let title_rect =
                 Rect::from_min_max(title_start, Pos2::new(row_right, controls.bottom()));
@@ -672,7 +673,7 @@ impl<'a> Legend<'a> {
                 if study.is_volume() && !self.show_volume {
                     continue;
                 }
-                let row_start = layout.pos;
+                let (row_start, row_end) = (layout.pos, layout.row_end);
                 if self.show_indicator_titles {
                     layout.text(
                         if study.is_volume() {
@@ -765,11 +766,15 @@ impl<'a> Legend<'a> {
                         layout.text(text, theme.text.ohlc, color, bounds.width());
                     }
                 }
+                // The row and its outline keep to the end of the row it starts on, which is the
+                // shortened first row when nothing comes before it. Controls past that end take
+                // a row of their own.
+                layout.row_end = layout.row_end.min(row_end);
                 let controls = layout
                     .reserve(Vec2::new(controls_width(study.as_ref()), 20.0))
                     .intersect(bounds);
                 let row_right = if layout.pos.y > row_start.y {
-                    bounds.right()
+                    row_end
                 } else {
                     controls.right()
                 };

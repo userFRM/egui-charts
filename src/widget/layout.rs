@@ -3919,7 +3919,8 @@ mod tests {
     /// Four charts on a 1536 x 864 screen are 768 points wide. Beside the 70 point price axis
     /// the status line keeps 768 - 70 - 48 = 650 points, over the 600 that show open, high, low
     /// and close. The selectors cover x 548..658 of the first row only, so the values still fit,
-    /// and no status text may paint beneath the selectors.
+    /// and nothing of the status line may paint beneath the selectors: no text, and no outline of
+    /// a hovered title or study row that starts on the first row and continues on the next.
     #[test]
     fn link_selectors_keep_open_high_low_in_the_status_line() {
         let ctx = egui::Context::default();
@@ -3974,5 +3975,67 @@ mod tests {
             ["O ", "H ", "L ", "C "],
             "status line values {values:?}"
         );
+        // A long title, then a study row with nothing before it, continues on the next row, and
+        // its outline spans both rows when hovered.
+        let accent = ctx.active_theme().ui.accent;
+        let mut time = 0.2;
+        let mut hover = |layout: &mut ChartLayout, charts: &mut [Chart; 4], row: &str| {
+            let mut outlines = Vec::new();
+            for _ in 0..3 {
+                time += 0.1;
+                let output = ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
+                        time: Some(time),
+                        events: vec![Event::PointerMoved(pos2(100.0, 14.0))],
+                        ..Default::default()
+                    },
+                    |ui| {
+                        layout.show(ui, &mut charts.iter_mut().collect::<Vec<_>>());
+                    },
+                );
+                outlines = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Rect(rect)
+                            if rect.stroke.width == 1.0 && rect.stroke.color == accent =>
+                        {
+                            Some(rect.rect)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                output.drop_without_applying_deltas();
+            }
+            assert!(!outlines.is_empty(), "hovering the {row} outlines it");
+            for outline in outlines {
+                assert!(
+                    !outline.intersects(selectors),
+                    "the {row} outline {outline:?} reaches beneath the selectors"
+                );
+            }
+        };
+        #[cfg(feature = "icons")]
+        {
+            charts[0].set_symbol("LONG_SYMBOL_".repeat(12));
+            hover(&mut layout, &mut charts, "title");
+        }
+        let config = charts[0].config_mut();
+        config.show_symbol_labels = false;
+        config.show_ohlc_info = false;
+        config.show_ohlc_change = false;
+        config.show_ohlc_change_percent = false;
+        config.show_legend_volume = false;
+        charts[0].add_indicator(Box::new(
+            crate::studies::CustomIndicator::new("LONG_STUDY_".repeat(4), |_| Vec::new())
+                .with_line_count(3)
+                .with_line_names(vec![
+                    "Ask levels".into(),
+                    "Bid levels".into(),
+                    "Mid levels".into(),
+                ]),
+        ));
+        hover(&mut layout, &mut charts, "study row");
     }
 }
