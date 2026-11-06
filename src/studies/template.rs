@@ -132,10 +132,21 @@ impl StudyTemplate {
         let study = factory
             .create_registered(&template.name)
             .ok_or_else(|| crate::studies::StudyError::UnknownStudy(template.name.clone()))?;
+        // A host study registered under a built-in's name never had the inputs an upgrade adds
+        // for that built-in.
+        let declared = study.inputs();
+        let template = if template.inputs.iter().all(|(id, _)| {
+            self.inputs.iter().any(|(saved, _)| saved == id)
+                || declared.iter().any(|input| input.id == *id)
+        }) {
+            template
+        } else {
+            self
+        };
         // Automatic drawings saved before their swings could follow volatility used the fixed
         // percentage they were saved with.
         let saved = |id| template.inputs.iter().any(|(saved, _)| saved == id);
-        let percent_swings = (study.inputs().iter().any(|input| input.id == "swing_size")
+        let percent_swings = (declared.iter().any(|input| input.id == "swing_size")
             && !saved("swing_size")
             && saved("deviation_percent"))
         .then(|| ("swing_size".to_owned(), InputValue::Choice(1)));
@@ -625,6 +636,32 @@ mod tests {
         // Saved since then, a filled band stays filled.
         let filled = StudyTemplate::from_study(&bands).create().unwrap();
         assert_eq!(filled.fills().len(), 2);
+    }
+
+    /// A host study registered under a built-in's name replaces it (`IndicatorFactory::register`),
+    /// so its own template, which never had the built-in's inputs, restores through that factory.
+    #[test]
+    fn host_studies_named_like_upgraded_builtins_restore_from_their_templates() {
+        use crate::studies::{CustomIndicator, IndicatorValue};
+        let names = ["RSI", "VWAP", "Trading Sessions"];
+        let mut factory = IndicatorFactory::new();
+        for name in names {
+            factory.register(name, move || {
+                Box::new(CustomIndicator::new(name, |bars| {
+                    bars.iter()
+                        .map(|bar| IndicatorValue::Single(bar.close))
+                        .collect()
+                }))
+            });
+        }
+        for name in names {
+            let saved = StudyTemplate::from_study(factory.create(name).unwrap().as_ref());
+            let restored = saved.create_with(&factory).map_err(|e| e.to_string());
+            assert_eq!(
+                restored.map(|study| study.name().to_owned()),
+                Ok(name.into())
+            );
+        }
     }
 
     /// Templates and layouts saved before the channel studies' inputs changed load and draw the
