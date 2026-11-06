@@ -199,7 +199,19 @@ impl Chart {
                     drawing.pane == Some(pane.id.0)
                         || pane.members.iter().any(|id| drawing.pane == Some(id.0))
                 })
-                .map_or(PaneId::MAIN, |pane| pane.id),
+                .map_or_else(
+                    || {
+                        let panes = self.panes();
+                        let main = self.main_series_pane();
+                        // The original pane may be gone with the main series.
+                        if panes.contains(&main) {
+                            main
+                        } else {
+                            panes.first().copied().unwrap_or(main)
+                        }
+                    },
+                    |pane| pane.id,
+                ),
         )
     }
 
@@ -207,7 +219,8 @@ impl Chart {
     /// anchors' prices are read on the new pane's scale. Returns `false` for an unknown drawing
     /// or pane and for a locked drawing.
     pub fn move_drawing_to_pane(&mut self, id: usize, pane: PaneId) -> bool {
-        let owner = if pane == PaneId::MAIN && self.panes().contains(&pane) {
+        // The pane holding the main series paints the drawings that belong to no pane.
+        let owner = if pane == self.main_series_pane() && self.panes().contains(&pane) {
             None
         } else if let Some(pane) = self
             .pane_layout
@@ -229,9 +242,9 @@ impl Chart {
         true
     }
 
-    /// Adds a horizontal line at `price` in the pane under `pos`, the price pane when no other
-    /// pane is there, with the tool's default style, and selects it. Returns its id, or `None`
-    /// for a price that is not finite or a disabled tool.
+    /// Adds a horizontal line at `price` in the pane under `pos`, the pane holding the main series
+    /// when no other pane is there, with the tool's default style, and selects it. Returns its
+    /// id, or `None` for a price that is not finite or a disabled tool.
     #[cfg(feature = "ui")]
     pub(crate) fn draw_horizontal_line_at(&mut self, pos: egui::Pos2, price: f64) -> Option<usize> {
         if !price.is_finite() {
@@ -239,12 +252,12 @@ impl Chart {
         }
         let tool = crate::drawings::DrawingToolType::HorizontalLine;
         let mut drawing = self.drawings.new_drawing(0, tool);
-        // A study pane's drawings belong to its first member, as in `move_drawing_to_pane`.
+        // Another pane's drawings belong to its first member, as in `move_drawing_to_pane`.
         drawing.pane = self
             .pane_layout
             .panes
             .iter()
-            .find(|pane| pane.id != PaneId::MAIN && pane.rect.contains(pos))
+            .find(|pane| pane.id != self.main_series_pane() && pane.rect.contains(pos))
             .map(|pane| pane.members.first().map_or(pane.id.0, |id| id.0));
         drawing.z_order = self.drawings.top_z_order();
         let bar = self.get_chart_mapping().x_to_idx_f64(pos.x).round() as f32;
@@ -571,5 +584,103 @@ mod tests {
         let volatile = chart.create_drawing(volatile, &points[..1]).unwrap();
         chart.drawings_mut().delete_drawing(volatile);
         assert!(chart.drawings().pending_sync.lock().unwrap().is_empty());
+    }
+
+    /// A drawing moved into, or added in, the pane holding the main series is painted there
+    /// whether or not the original pane exists, and `drawing_pane` reports that pane. A drawing
+    /// saved with the main series as its owner shows there too once the original pane is gone.
+    #[cfg(feature = "ui")]
+    #[test]
+    fn drawing_moved_to_relocated_price_pane_stays_drawn() {
+        use crate::ui::context_menu::drawing::move_targets;
+        use crate::widget::test_frames::{chart, frame, shapes};
+        use crate::widget::{SeriesId, SeriesOptions};
+
+        let blue = egui::Color32::from_rgb(0, 0, 255);
+        let green = egui::Color32::from_rgb(0, 255, 0);
+        let red = egui::Color32::from_rgb(255, 0, 0);
+        for original_kept in [false, true] {
+            let mut chart = chart(&[100.0], &[110.0]);
+            chart.config.show_volume = false;
+            let data = chart.bars(SeriesId::MAIN).to_vec();
+            let price = chart.add_pane();
+            assert!(chart.move_series_to_pane(SeriesId::MAIN, price));
+            let other = chart.add_pane();
+            let series = chart.add_series(SeriesOptions::default());
+            chart.set_data(series, data);
+            assert!(chart.move_series_to_pane(series, other));
+            let mut menu = vec![other];
+            if original_kept {
+                menu.push(PaneId::MAIN);
+            } else {
+                assert!(chart.remove_pane(PaneId::MAIN));
+                assert_eq!(chart.panes(), [price, other]);
+            }
+            let mut line =
+                Drawing::with_color(1, DrawingToolType::HorizontalLine, [0, 0, 255, 255]);
+            line.chart_points = vec![ChartPoint::new(70.0, 105.0)];
+            line.completed = true;
+            chart.drawings_mut().drawings.push(line);
+            let ctx = egui::Context::default();
+            let rect = |chart: &Chart, pane: PaneId| {
+                chart
+                    .pane_layout
+                    .panes
+                    .iter()
+                    .find(|item| item.id == pane)
+                    .unwrap()
+                    .rect
+            };
+            // A drawing paints line segments, or the mesh it kept from the previous pass.
+            let painted_in = |shapes: &[egui::Shape], rect: egui::Rect, color: egui::Color32| {
+                shapes.iter().any(|shape| match shape {
+                    egui::Shape::LineSegment { points, stroke } => {
+                        stroke.color == color && rect.y_range().contains(points[0].y)
+                    }
+                    egui::Shape::Mesh(mesh) => mesh.vertices.iter().any(|vertex| {
+                        vertex.color == color && rect.y_range().contains(vertex.pos.y)
+                    }),
+                    _ => false,
+                })
+            };
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let before = shapes(&ctx, &mut chart, 0.1, vec![]);
+            assert!(
+                painted_in(&before, rect(&chart, price), blue),
+                "a drawing without a pane is drawn over the main series"
+            );
+            let reported = chart.drawing_pane(1);
+            let targets: Vec<_> = move_targets(None, &chart, 1)
+                .into_iter()
+                .map(|(pane, _)| pane)
+                .collect();
+            assert!(chart.move_drawing_to_pane(1, price));
+            let added = chart
+                .draw_horizontal_line_at(rect(&chart, price).center(), 105.0)
+                .unwrap();
+            chart
+                .drawings_mut()
+                .edit_drawing(added, |drawing| drawing.color = [0, 255, 0, 255]);
+            let mut saved =
+                Drawing::with_color(9, DrawingToolType::HorizontalLine, [255, 0, 0, 255]);
+            saved.chart_points = vec![ChartPoint::new(70.0, 105.0)];
+            saved.completed = true;
+            saved.pane = Some(SeriesId::MAIN.0);
+            chart.drawings_mut().drawings.push(saved);
+            frame(&ctx, &mut chart, 0.2, vec![]);
+            let after = shapes(&ctx, &mut chart, 0.3, vec![]);
+            let target = rect(&chart, price);
+            assert_eq!(
+                (
+                    reported,
+                    targets,
+                    painted_in(&after, target, blue),
+                    painted_in(&after, target, green),
+                    painted_in(&after, target, red),
+                ),
+                (Some(price), menu, true, true, !original_kept),
+                "original pane kept: {original_kept}"
+            );
+        }
     }
 }
