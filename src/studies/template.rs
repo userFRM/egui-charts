@@ -683,7 +683,8 @@ mod tests {
 
     /// An RSI saved before it had a middle level draws the lines and band it was saved with. With
     /// its levels edited to 40 and 20 it draws those two and fills from 20 to 40; saved before
-    /// levels were editable it draws 70 and 30 and fills between them.
+    /// levels were editable it draws 70 and 30 and fills between them. Both fill in the RSI's band
+    /// colour.
     #[test]
     fn rsi_saved_before_the_middle_level_draws_its_saved_levels_and_band() {
         let mut edited = ConfiguredStudy::new(Box::new(RSI::new(14)));
@@ -700,9 +701,10 @@ mod tests {
         older.settings.levels.clear();
         older.settings.fill_between_levels = false;
         older.settings.level_fill_color = Color32::default();
-        // The lines drawn, and the band, which a hidden level still bounds.
+        // The lines drawn, the band, which a hidden level still bounds, and its fill.
         let drawn = |template: &StudyTemplate| {
-            let pane = template.create().unwrap().pane();
+            let study = template.create().unwrap();
+            let pane = study.pane();
             let lines: Vec<f64> = pane
                 .levels
                 .iter()
@@ -714,13 +716,19 @@ mod tests {
                 values.clone().fold(f64::INFINITY, f64::min),
                 values.fold(f64::NEG_INFINITY, f64::max),
             );
-            (lines, band, pane.fill_between_levels)
+            (
+                lines,
+                band,
+                pane.fill_between_levels,
+                study.level_fill_color(),
+            )
         };
+        let fill = RSI::new(14).level_fill_color();
         assert_eq!(
             [drawn(&edited), drawn(&older)],
             [
-                (vec![40.0, 20.0], (20.0, 40.0), true),
-                (vec![70.0, 30.0], (30.0, 70.0), true),
+                (vec![40.0, 20.0], (20.0, 40.0), true, fill),
+                (vec![70.0, 30.0], (30.0, 70.0), true, fill),
             ]
         );
     }
