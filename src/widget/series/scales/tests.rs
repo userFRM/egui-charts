@@ -4135,6 +4135,76 @@ fn margin_only_request_keeps_the_main_range_with_no_bar_in_view() {
     assert_eq!(chart.state().price_scale().range(), fitted, "back in view");
 }
 
+/// A request too large for the plot keeps the fit the plot has without it, as the
+/// `AutoscaleMargins` docs promise, and that fit makes room for markers. With zero fractional
+/// margins a circle of size 1 placed above a price reaches 8 + 8 + 2 = 18 points above it (offset,
+/// half size and stroke), so the fit puts the top of the fitted prices 18 points below the top of
+/// the plot. That is the high, 20, in the main series' pane. An added series' pane first pads its
+/// span of 10 by 10% at each side, so there it is 21, and the padding alone leaves 20 only
+/// 150 / 12 = 12.5 points below the top of this pane: too little for the marker.
+#[test]
+fn oversized_margin_request_keeps_the_marker_fit() {
+    use crate::model::{AutoscaleInfo, AutoscaleMargins, AutoscaleProvider, MarkerShape};
+
+    for (placement, ceiling) in [("main", 20.0), ("added", 21.0)] {
+        for request in [None, Some(1e6_f32)] {
+            let ctx = egui::Context::default();
+            let mut chart = crate::widget::test_frames::chart(&[10.0], &[10.0, 20.0]);
+            chart.config.show_volume = false;
+            let last = chart.bars(SeriesId::MAIN)[99].time;
+            let target = if placement == "added" {
+                let id = chart.add_series(SeriesOptions::default());
+                let data = chart.bars(SeriesId::MAIN).to_vec();
+                chart.set_data(id, data);
+                let pane = chart.add_pane();
+                assert!(chart.move_series_to_pane(id, pane));
+                assert!(chart.set_pane_height(pane, 150.0));
+                id
+            } else {
+                SeriesId::MAIN
+            };
+            chart
+                .series_price_scale_mut(target)
+                .unwrap()
+                .options_mut()
+                .scale_margins = crate::scales::PriceScaleMargins {
+                top: 0.0,
+                bottom: 0.0,
+            };
+            chart.set_markers(
+                target,
+                vec![
+                    Marker::new(last)
+                        .at_price(20.0, MarkerPos::AtPriceTop)
+                        .with_shape(MarkerShape::Circle),
+                ],
+            );
+            if let Some(pixels) = request {
+                chart.series_style_mut(target).unwrap().autoscale =
+                    Some(AutoscaleProvider::with_margins(move |_, default| {
+                        Some(AutoscaleInfo {
+                            price_range: default?,
+                            margins: AutoscaleMargins {
+                                top: pixels,
+                                bottom: pixels,
+                            },
+                        })
+                    }));
+            }
+            for step in 0..3 {
+                frame(&ctx, &mut chart, step as f64, vec![]);
+            }
+            let map = chart.series_price_map(target).unwrap();
+            let gap = map.price_to_y(ceiling) - map.extent().0;
+            assert!(
+                (gap - 18.0).abs() < 0.01,
+                "{placement}, request {request:?}: observed {gap}, extent {:?}",
+                map.extent()
+            );
+        }
+    }
+}
+
 /// A margin-only request holds on the scale its contributor shares while that scale is fitted.
 /// The main series' bars fit the main scale here, so with the default 10% margins a request of
 /// 40 points at the top puts the high, 20, 0.1 h + 40 below the top of the plot,
