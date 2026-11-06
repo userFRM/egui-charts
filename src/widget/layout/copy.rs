@@ -46,7 +46,8 @@ pub enum LayoutCopyIssueKind {
     NoHistory,
     /// The chart's bars, or the elements of its price-based chart type, are too few for this study
     /// to draw, though it draws on the source. A study waiting for a history the chart asks for
-    /// once it has the study is not reported. The chart takes the copy.
+    /// once it has the study, and a price-based chart that has not painted yet, are not reported.
+    /// The chart takes the copy.
     ShortHistory(String),
     /// The chart is skipped: this study reads another study's output, which a copy of it alone
     /// would not have. Copy the whole set with [`LayoutCopy::Studies`] instead.
@@ -188,19 +189,32 @@ impl CopiedStudies {
             chart.timeframe,
             chart.replay_time(),
         );
-        let bars: &[Bar] = if chart.chart_type().is_time_independent() {
+        let elements = chart.chart_type().is_time_independent();
+        let bars: &[Bar] = if elements {
             &chart.element_studies.bars
         } else {
             &chart.state.data().bars
         };
         crate::widget::studies::calculate(&mut built, &ids, bars, &sources);
-        for (study, id) in built.iter().zip(&ids) {
-            // The chart asks for the histories it lacks once it has the study.
-            let waiting = study
-                .data_requests()
-                .iter()
-                .any(|request| sources.iter().all(|source| &source.request != request));
-            if self.draws[id.0] && !no_bars && !waiting && !draws(study.as_ref()) {
+        // The elements of a price-based chart are built when it paints, so a chart that has not
+        // painted yet has no elements to count, which is not the same as too few.
+        let unbuilt = elements && chart.element_studies.dirty && bars.is_empty();
+        // The chart asks for the histories it lacks once it has the study, and a study that reads
+        // a waiting study waits with it.
+        let mut waiting = vec![false; built.len()];
+        for at in crate::widget::studies::order(&built, &ids) {
+            let parent = match built[at].source() {
+                Some(StudySource::Study { id, .. }) => ids.iter().position(|item| item.0 == id),
+                _ => None,
+            };
+            waiting[at] = parent.is_some_and(|parent| waiting[parent])
+                || built[at]
+                    .data_requests()
+                    .iter()
+                    .any(|request| sources.iter().all(|source| &source.request != request));
+        }
+        for ((study, id), waiting) in built.iter().zip(&ids).zip(waiting) {
+            if self.draws[id.0] && !no_bars && !unbuilt && !waiting && !draws(study.as_ref()) {
                 let name = self.set.studies[id.0].name.clone();
                 issues.push(LayoutCopyIssueKind::ShortHistory(name));
             }
@@ -802,8 +816,9 @@ mod tests {
         use crate::widget::test_frames::frame;
         let start = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
         // Flat closes make no brick past the first. Closes rising by the default brick of 1 make
-        // one brick per bar after the first, enough for an SMA of 7.
-        for (rise, short) in [(0.0, true), (1.0, false)] {
+        // one brick per bar after the first, enough for an SMA of 7. A chart that has not painted
+        // has built no bricks yet, so it is not reported either.
+        for (rise, painted, short) in [(0.0, true, true), (1.0, true, false), (1.0, false, false)] {
             let mut renko = Chart::new(BarData::from_bars(
                 (0..50)
                     .map(|i| {
@@ -817,7 +832,9 @@ mod tests {
             renko.config_mut().show_volume = false;
             renko.set_chart_type(ChartType::Renko);
             let ctx = egui::Context::default();
-            frame(&ctx, &mut renko, 0.0, vec![]);
+            if painted {
+                frame(&ctx, &mut renko, 0.0, vec![]);
+            }
             let mut a = chart(50);
             let sma = a.add_indicator(Box::new(SMA::new(7)));
             let factory = IndicatorFactory::new();
@@ -827,7 +844,11 @@ mod tests {
                 slot: 1,
                 kind: LayoutCopyIssueKind::ShortHistory("SMA".into()),
             });
-            assert_eq!(issues, Vec::from_iter(expected), "rise {rise}");
+            assert_eq!(
+                issues,
+                Vec::from_iter(expected),
+                "rise {rise}, painted {painted}"
+            );
             frame(&ctx, charts[1], 1.0, vec![]);
             frame(&ctx, charts[1], 2.0, vec![]);
             let shown = charts[1]
@@ -835,12 +856,12 @@ mod tests {
                 .indicators()
                 .iter()
                 .any(|study| draws(study.as_ref()));
-            assert_eq!(shown, !short, "rise {rise}");
+            assert_eq!(shown, !short, "rise {rise}, painted {painted}");
         }
     }
 
     /// A chart asks for the histories a study reads once it has the study, so a study waiting for
-    /// them on a chart with enough bars is not short of history.
+    /// them on a chart with enough bars is not short of history, nor is a study reading it.
     #[test]
     fn study_waiting_for_its_candles_is_not_short_of_history() {
         let (mut a, mut b) = (chart(50), chart(50));
@@ -856,8 +877,24 @@ mod tests {
         a.recalculate_studies();
         assert!(a.indicators().all(|(_, study)| draws(study)));
         let factory = IndicatorFactory::new();
-        let charts = [&mut a, &mut b];
+        let mut charts = [&mut a, &mut b];
         let issues = pair().copy_issues(&charts, 0, &LayoutCopy::Study(delta), &factory);
+        assert_eq!(issues, []);
+
+        // A study that averages the waiting one waits with it.
+        let mean = charts[0].add_indicator(Box::new(SMA::new(3)));
+        charts[0]
+            .set_indicator_source(
+                mean,
+                StudySource::Study {
+                    id: delta.0,
+                    plot: 0,
+                },
+            )
+            .unwrap();
+        charts[0].recalculate_studies();
+        assert!(charts[0].indicators().all(|(_, study)| draws(study)));
+        let issues = pair().copy_issues(&charts, 0, &LayoutCopy::Studies, &factory);
         assert_eq!(issues, []);
     }
 }
