@@ -17,9 +17,15 @@
 //! tag) together with a primitive that draws its points in place of the study's plots and hit
 //! tests them: [`Chart::add_custom_series`](crate::widget::Chart::add_custom_series).
 //!
+//! [`Chart::add_custom_data_series`](crate::widget::Chart::add_custom_data_series) adds a custom
+//! series that owns the host's [`CustomPoint`]s instead of computing values from the bars. Its
+//! renderer reads them through [`PrimitiveView::custom_points`], and the scale, the pointer and
+//! the chart's queries read them by key.
+//!
 //! Every hook has a default that does nothing, so a primitive implements only what it needs.
 //! `examples/primitives.rs` shades the regular session behind the bars with labels on the time
-//! axis, and adds a custom series that draws the range of each bar in a pane of its own.
+//! axis, adds a custom series that draws the range of each bar in a pane of its own, and feeds
+//! another from typed points unrelated to the bars.
 //!
 //! ```rust
 //! use egui::{Color32, Painter};
@@ -63,6 +69,7 @@ use crate::model::{AutoscaleInfo, Bar};
 use crate::studies::Indicator;
 use chrono::{DateTime, Utc};
 use egui::{Color32, CursorIcon, Painter, Pos2, Rect};
+use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -232,6 +239,58 @@ impl PrimitiveHit {
     }
 }
 
+/// A point of a custom series, one host-defined record at one horizontal key.
+///
+/// The chart keeps points ordered by [`time`](Self::time) and never reads anything else from
+/// them but the two other methods, so a point can hold any number of values and payloads.
+///
+/// ```rust
+/// use chrono::{DateTime, Utc};
+/// use egui_charts::widget::CustomPoint;
+///
+/// #[derive(Clone)]
+/// struct Band {
+///     time: DateTime<Utc>,
+///     /// Lower bound, middle and upper bound; `None` leaves the slot empty.
+///     values: Option<[f64; 3]>,
+/// }
+///
+/// impl CustomPoint for Band {
+///     fn time(&self) -> DateTime<Utc> {
+///         self.time
+///     }
+///
+///     fn prices(&self) -> Vec<f64> {
+///         self.values.map_or_else(Vec::new, |[low, middle, high]| vec![low, high, middle])
+///     }
+/// }
+/// ```
+pub trait CustomPoint: Clone + Send + Sync + 'static {
+    /// The horizontal key of the point. A chart on a custom horizontal scale takes it from
+    /// [`CustomHorizontalScale::time`](crate::scales::CustomHorizontalScale::time).
+    fn time(&self) -> DateTime<Utc>;
+
+    /// The prices of the point on the scale of its series: all of them fit the scale, and the
+    /// last is the current value that the legend, last-value tag and crosshair read. Called
+    /// when a point is supplied, not per frame, and not for a whitespace point.
+    fn prices(&self) -> Vec<f64>;
+
+    /// Whether the point only holds its key, without values. Defaults to having no prices.
+    fn is_whitespace(&self) -> bool {
+        self.prices().is_empty()
+    }
+}
+
+/// The points of a custom series as one view sees them.
+#[derive(Clone)]
+pub(crate) struct CustomView<'a> {
+    /// A `Vec` of the series' point type.
+    pub(crate) points: &'a (dyn Any + Send + Sync),
+    /// How many of them are shown, which a replay limits.
+    pub(crate) len: usize,
+    pub(crate) visible: Range<usize>,
+}
+
 /// The pane and scale a primitive draws on in the current frame.
 #[derive(Clone)]
 pub struct PrimitiveView<'a> {
@@ -248,9 +307,31 @@ pub struct PrimitiveView<'a> {
     pub bars: &'a [Bar],
     /// The indices of `bars` in view.
     pub visible: Range<usize>,
+    pub(crate) custom: Option<CustomView<'a>>,
 }
 
 impl PrimitiveView<'_> {
+    /// The points of a series added with
+    /// [`Chart::add_custom_data_series`](crate::widget::Chart::add_custom_data_series), in key
+    /// order and including whitespace, as [`Chart::custom_points`](crate::widget::Chart::custom_points)
+    /// returns them. Place a point with [`time_to_x`](Self::time_to_x). Empty for any other
+    /// series or another point type.
+    pub fn custom_points<P: CustomPoint>(&self) -> &[P] {
+        self.custom
+            .as_ref()
+            .and_then(|custom| Some(&custom.points.downcast_ref::<Vec<P>>()?[..custom.len]))
+            .unwrap_or_default()
+    }
+
+    /// The indices in [`custom_points`](Self::custom_points) of the points in view, whose
+    /// logical positions lie between the plot's edges rounded to whole indices. A renderer that
+    /// joins points can reach one index further on either side.
+    pub fn visible_custom_points(&self) -> Range<usize> {
+        self.custom
+            .as_ref()
+            .map_or(0..0, |custom| custom.visible.clone())
+    }
+
     /// Aligned source ranges for a custom renderer's merge hook. Groups start at multiples
     /// of `factor`, include the visible range's edge groups and never exceed `bars`.
     /// A factor of zero is treated as one. Merge values in source order so open/close and
@@ -477,7 +558,8 @@ pub trait Primitive: Send {
 
     /// Called after [`attached`](Self::attached) and at every frame after the bars of the series
     /// changed, before anything is drawn. `bars` are the series' own bars, oldest first; for a
-    /// study they are the main series bars the study is computed from.
+    /// study they are the main series bars the study is computed from. A custom data series'
+    /// renderer is also called when its points changed; they reach it through the view.
     fn data_changed(&mut self, bars: &[Bar]) {
         let _ = bars;
     }

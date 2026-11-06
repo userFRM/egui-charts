@@ -5,7 +5,7 @@ use crate::studies::{IndicatorFactory, InputValue, StudySource, StudyTemplate, S
 
 /// The position saved for a link to a study the chart no longer has: past the end of any set,
 /// and still a `usize` where that is 32 bits wide.
-const NO_STUDY: usize = u32::MAX as usize;
+pub(super) const NO_STUDY: usize = u32::MAX as usize;
 
 impl Chart {
     /// The chart's studies as a [`StudyTemplateSet`], in the order they were added. A link to
@@ -96,9 +96,25 @@ impl Chart {
         set: &StudyTemplateSet,
         factory: &IndicatorFactory,
     ) -> Result<Vec<SeriesId>, String> {
+        self.place_study_template_set(set, factory, true)
+    }
+
+    /// Adds the studies of `set`, in place of the chart's own when `replace` is true, and fails
+    /// as [`apply_study_template_set_with`](Self::apply_study_template_set_with) does.
+    pub(super) fn place_study_template_set(
+        &mut self,
+        set: &StudyTemplateSet,
+        factory: &IndicatorFactory,
+        replace: bool,
+    ) -> Result<Vec<SeriesId>, String> {
+        let kept = if replace {
+            0
+        } else {
+            self.indicators().count()
+        };
         if self
             .study_limit
-            .is_some_and(|limit| set.studies.len() > limit)
+            .is_some_and(|limit| kept + set.studies.len() > limit)
         {
             return Err("Study limit reached".into());
         }
@@ -118,9 +134,11 @@ impl Chart {
                     .map_err(|error| error.to_string())
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let replaced: Vec<_> = self.indicators().map(|(id, _)| id).collect();
-        for id in replaced {
-            self.remove_series(id);
+        if replace {
+            let replaced: Vec<_> = self.indicators().map(|(id, _)| id).collect();
+            for id in replaced {
+                self.remove_series(id);
+            }
         }
         let ids: Vec<_> = studies
             .into_iter()
@@ -156,9 +174,12 @@ impl Chart {
             .indicators()
             .find(|(_, study)| study.is_volume())
             .map(|(id, _)| id);
-        self.volume_study = volume;
-        self.volume_setting = self.volume_study.is_some();
-        self.config.show_volume = self.volume_setting;
+        // A study added beside the chart's own leaves the setting alone unless it is the volume.
+        if replace || (volume.is_some() && self.volume_study.is_none()) {
+            self.volume_study = volume;
+            self.volume_setting = self.volume_study.is_some();
+            self.config.show_volume = self.volume_setting;
+        }
         self.recalculate_studies();
         Ok(ids)
     }

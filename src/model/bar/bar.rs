@@ -82,7 +82,7 @@ pub struct Bar {
 #[serde(default)]
 pub struct BarColors {
     /// The body of a candle; an OHLC bar, a column or a line's marker; or the line from this bar
-    /// to the next on line, step line, area and HLC area charts.
+    /// to the next on line, step line and area charts, and each line on HLC area charts.
     pub color: Option<Color32>,
     /// The border of a candle's body.
     pub border: Option<Color32>,

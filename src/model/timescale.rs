@@ -235,7 +235,13 @@ impl TimeScale {
 
     /// Set the total number of bars in dataset
     pub fn set_bar_cnt(&mut self, count: usize) {
+        let moved = count.saturating_sub(1) as f64 - self.base_idx() as f64;
         self.bar_cnt = count;
+        // The cached right end stays as far from the last slot until the next refresh, so that
+        // the right offset is not clamped against the last slot of the previous frame.
+        if let Some((_, right)) = &mut self.content_range {
+            *right += moved;
+        }
         // CRITICAL: Changing bar_cnt affects max_offset calculation in constraints
         self.apply_constraints();
     }
