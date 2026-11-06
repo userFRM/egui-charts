@@ -526,8 +526,18 @@ impl StrategyTester {
                     .id_salt("tester_form")
                     .show(ui, |ui| match self.tab {
                         Tab::Inputs => {
+                            let shown: Vec<_> = self
+                                .inputs
+                                .iter()
+                                .map(|input| input.is_shown(&self.inputs))
+                                .collect();
                             crate::ui_kit::FormGrid::new("strategy_inputs").show(ui, |ui| {
-                                for input in &mut self.inputs {
+                                for (input, _) in self
+                                    .inputs
+                                    .iter_mut()
+                                    .zip(shown)
+                                    .filter(|(_, shown)| *shown)
+                                {
                                     edited |= super::inputs::show_input(ui, input, &[]);
                                 }
                             });
