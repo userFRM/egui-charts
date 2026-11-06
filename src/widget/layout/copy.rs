@@ -208,7 +208,7 @@ fn apply_to_other_chart(
     if settings.apply_to_chart(chart).is_ok()
         && matches!(
             settings.chart_type,
-            ChartType::Heikin | ChartType::HollowCandles
+            ChartType::Heikin | ChartType::HollowCandles | ChartType::VolumeCandles
         )
     {
         let to = chart.config_mut();
@@ -574,5 +574,26 @@ mod tests {
         show(&mut layout, &mut charts);
         assert_eq!(charts[1].config().background_color, before);
         assert_eq!(charts[0].config().background_color, before);
+    }
+
+    fn pair() -> ChartLayout {
+        ChartLayout {
+            mode: ChartLayoutMode::TwoHorizontal,
+            ..ChartLayout::default()
+        }
+    }
+
+    /// A volume candles source's settings hold only its volume candle styles, so the other charts
+    /// take its candle colours from its configuration.
+    #[test]
+    fn settings_copy_from_volume_candles_gives_candle_colours() {
+        let (mut a, mut b) = (chart(50), chart(50));
+        a.config_mut().bullish_color = egui::Color32::RED;
+        a.set_chart_type(ChartType::VolumeCandles);
+        let copy = LayoutCopy::Settings(Box::new(ChartSettingsState::from_chart(&a)));
+        let factory = IndicatorFactory::new();
+        let mut charts = [&mut a, &mut b];
+        assert_eq!(pair().apply_copy(&mut charts, 0, &copy, &factory), []);
+        assert_eq!(charts[1].config().bullish_color, egui::Color32::RED);
     }
 }
