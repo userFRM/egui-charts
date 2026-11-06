@@ -713,6 +713,8 @@ pub struct ChartTypeParams {
     // Settings saved before the field existed were drawn as blocks, so a missing field reads false.
     #[serde(default)]
     pub tpo_letters: bool,
+    /// TPO: draw the session statistics table below each profile.
+    pub tpo_statistics: bool,
     /// TPO: sessions combined into one profile, as in
     /// [`TPOConfig::composites`](super::TPOConfig::composites).
     pub tpo_composites: Vec<std::ops::RangeInclusive<chrono::DateTime<chrono::Utc>>>,
@@ -787,6 +789,7 @@ impl Default for ChartTypeParams {
             tpo_single_prints: false,
             tpo_midpoint: false,
             tpo_letters: true,
+            tpo_statistics: false,
             tpo_composites: Vec::new(),
         }
     }
@@ -807,6 +810,7 @@ impl ChartTypeParams {
             split_sessions: self.tpo_split_sessions,
             show_single_prints: self.tpo_single_prints,
             show_midpoint: self.tpo_midpoint,
+            show_statistics: self.tpo_statistics,
             display_mode: if self.tpo_letters {
                 super::TPODisplayMode::Both
             } else {

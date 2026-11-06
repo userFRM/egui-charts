@@ -21,7 +21,7 @@ use crate::painting::span_cache::{SpanCache, SpanFingerprint};
 use crate::scales::PriceMap;
 use egui::emath::GuiRounding as _;
 use egui::text::{LayoutJob, TextFormat};
-use egui::{Color32, FontId, Painter, Pos2, Rect, Shape, Stroke};
+use egui::{Color32, FontId, Painter, Pos2, Rect, Shape, Stroke, Vec2};
 
 use crate::model::{
     Bar, BarClock, ExchangeSessionProvider, SessionProvider, TPOColorMode, TPOConfig,
@@ -393,7 +393,7 @@ pub fn render_live_tpo(
         (base_config, instrument_tick),
         clock,
         (price_map, price_rect, |i| idx_to_coord(i, chart_rect_min_x)),
-        |profile, config, anchor_x, column_width, labels| {
+        |profile, config, anchor_x, column_width, room, labels| {
             draw_session_profile(
                 painter,
                 price_rect,
@@ -403,6 +403,7 @@ pub fn render_live_tpo(
                 &render_config,
                 anchor_x,
                 column_width,
+                room,
                 labels,
                 bullish_color,
                 bearish_color,
@@ -419,7 +420,7 @@ pub(crate) fn visit_profiles(
     (base_config, instrument_tick): (&TPOConfig, Option<f64>),
     clock: &BarClock,
     (price_map, price_rect, idx_to_coord): (&PriceMap, Rect, impl Fn(usize) -> f32),
-    mut visit: impl FnMut(&TPOProfile, &TPOConfig, f32, f32, bool),
+    mut visit: impl FnMut(&TPOProfile, &TPOConfig, f32, f32, f32, bool),
 ) {
     if visible.is_empty() || visible.end > full_data.len() {
         return;
@@ -447,7 +448,9 @@ pub(crate) fn visit_profiles(
         &config,
         &sessions,
         idx_to_coord,
-        |profile, anchor, column, labels| visit(profile, &config, anchor, column, labels),
+        |profile, anchor, column, room, labels| {
+            visit(profile, &config, anchor, column, room, labels)
+        },
     );
 }
 
@@ -478,7 +481,8 @@ fn row_config(
     Some(config)
 }
 
-/// Visit profiles at the same anchors and column widths for painting and hit testing.
+/// Visit profiles at the same anchors and column widths for painting and hit testing, with the
+/// room each has from its anchor to the next session, infinite for the forming one.
 fn place_profiles(
     units: &[(usize, usize, Rc<Vec<TPOProfile>>)],
     full_data: &[Bar],
@@ -486,7 +490,7 @@ fn place_profiles(
     config: &TPOConfig,
     sessions: &ExchangeSessionProvider,
     idx_to_coord: impl Fn(usize) -> f32,
-    mut visit: impl FnMut(&TPOProfile, f32, f32, bool),
+    mut visit: impl FnMut(&TPOProfile, f32, f32, f32, bool),
 ) {
     let balance_room = if config.show_initial_balance_extensions {
         10.0
@@ -571,6 +575,7 @@ fn place_profiles(
             profile,
             anchor_x,
             column.min(fit(width, widest)).max(1.0),
+            width,
             labels,
         );
     }
@@ -611,7 +616,7 @@ pub(crate) fn profile_at(
         &config,
         &sessions,
         |i| mapping.idx_to_x(i),
-        |profile, anchor, column, labels| {
+        |profile, anchor, column, _, labels| {
             let column = column.min(profile_row_height(profile, &mapping.price));
             let price = mapping.y_to_price(pos.y);
             let row = profile.row_price(price);
@@ -631,7 +636,8 @@ pub(crate) fn profile_at(
 }
 
 /// Draw one session's profile anchored at pixel x `anchor_x`, growing rightward in columns of
-/// `column_width` pixels, with its level labels to the left when `labels` is set.
+/// `column_width` pixels, with its level labels to the left when `labels` is set and its
+/// statistics below when they fit the `room` of its session.
 #[allow(clippy::too_many_arguments)]
 fn draw_session_profile(
     painter: &Painter,
@@ -642,6 +648,7 @@ fn draw_session_profile(
     render_config: &TpoRenderConfig,
     anchor_x: f32,
     column_width: f32,
+    room: f32,
     labels: bool,
     bullish_color: Color32,
     bearish_color: Color32,
@@ -1017,6 +1024,97 @@ fn draw_session_profile(
             ));
         }
     }
+
+    if config.show_statistics {
+        draw_statistics(painter, price_rect, coords, profile, anchor_x, room);
+    }
+}
+
+/// Paint the session statistics table with its left edge at `anchor_x`, below the profile's lowest
+/// row or up against the bottom of the plot, unless it is wider than the `room` of its session.
+fn draw_statistics(
+    painter: &Painter,
+    price_rect: Rect,
+    coords: &PriceMap,
+    profile: &TPOProfile,
+    anchor_x: f32,
+    room: f32,
+) {
+    let chart = painter.ctx().active_theme().chart;
+    let decimals = crate::scales::decimals(profile.instrument_tick);
+    let price = |value: f64| format!("{value:.decimals$}");
+    let (below, above) = profile.tpo_counts_around_poc();
+    let rotation = match profile.rotation_factor() {
+        0 => "0".to_owned(),
+        rotation => format!("{rotation:+}"),
+    };
+    let mut rows = vec![
+        ("POC", price(profile.poc_price)),
+        (
+            "VAL / VAH",
+            format!(
+                "{} / {}",
+                price(profile.value_area_low),
+                price(profile.value_area_high)
+            ),
+        ),
+    ];
+    rows.extend(
+        profile
+            .initial_balance_range()
+            .map(|range| ("IB range", price(range))),
+    );
+    rows.push(("TPO below / above", format!("{below} / {above}")));
+    rows.push(("Rotation", rotation));
+    rows.extend(profile.range_extension().map(|(below, above)| {
+        (
+            "IB ext. below / above",
+            format!("{} / {}", price(below), price(above)),
+        )
+    }));
+
+    let font = FontId::proportional(typography::XS);
+    let galleys: Vec<_> = rows
+        .into_iter()
+        .map(|(label, value)| {
+            let label = l10n::text(painter.ctx(), label);
+            (
+                painter.layout_no_wrap(label, font.clone(), chart.axis_text),
+                painter.layout_no_wrap(value, font.clone(), chart.axis_text),
+            )
+        })
+        .collect();
+    let (label_width, value_width, line) = galleys.iter().fold(
+        (0.0_f32, 0.0_f32, 0.0_f32),
+        |(labels, values, line), (label, value)| {
+            (
+                labels.max(label.size().x),
+                values.max(value.size().x),
+                line.max(label.size().y),
+            )
+        },
+    );
+    let (padding, gap) = (Vec2::new(6.0, 4.0), 12.0);
+    let size =
+        Vec2::new(label_width + gap + value_width, line * galleys.len() as f32) + padding * 2.0;
+    if size.x > room {
+        return;
+    }
+
+    let lowest_row = coords
+        .price_to_y(profile.row_span(profile.profile_low).0)
+        .max(coords.price_to_y(profile.row_span(profile.profile_high).1));
+    let top = (lowest_row + 4.0).min(price_rect.bottom() - size.y);
+    let bounds = Rect::from_min_size(Pos2::new(anchor_x, top), size);
+    let painter = painter.with_clip_rect(price_rect);
+    painter.rect_filled(bounds, 4, chart.bg);
+    let inner = bounds.shrink2(padding);
+    for (row, (label, value)) in galleys.into_iter().enumerate() {
+        let y = inner.top() + row as f32 * line;
+        let value_x = inner.right() - value.size().x;
+        painter.galley(Pos2::new(inner.left(), y), label, chart.axis_text);
+        painter.galley(Pos2::new(value_x, y), value, chart.axis_text);
+    }
 }
 
 /// Measure at the POC so logarithmic and inverted scales keep the same geometry.
@@ -1172,6 +1270,7 @@ mod tests {
                 &TpoRenderConfig::default(),
                 40.0,
                 20.0,
+                f32::INFINITY,
                 false,
                 Color32::GREEN,
                 Color32::RED,
@@ -1256,6 +1355,7 @@ mod tests {
                     &TpoRenderConfig::default(),
                     40.0,
                     20.0,
+                    f32::INFINITY,
                     false,
                     Color32::GREEN,
                     Color32::RED,
@@ -1464,6 +1564,7 @@ mod tests {
                                 &render,
                                 10.25,
                                 column,
+                                f32::INFINITY,
                                 false,
                                 Color32::GREEN,
                                 Color32::RED,
@@ -1589,6 +1690,7 @@ mod tests {
                 &render_config,
                 10.0,
                 20.0,
+                f32::INFINITY,
                 true,
                 Color32::GREEN,
                 Color32::RED,
@@ -1634,6 +1736,7 @@ mod tests {
             &render_config,
             10.0,
             20.0,
+            f32::INFINITY,
             false,
             Color32::GREEN,
             Color32::RED,
@@ -1936,7 +2039,7 @@ mod tests {
                 &config,
                 &clock.sessions(),
                 |i| i as f32 * 10.0,
-                |profile, _, _, _| counts.push(profile.tpo_count_at(100.0)),
+                |profile, _, _, _, _| counts.push(profile.tpo_count_at(100.0)),
             );
             assert_eq!(counts, expected, "{range:?}, latest={latest_session_only}");
         }
@@ -2230,8 +2333,12 @@ mod tests {
             tick_size: 1.0,
             ..Default::default()
         };
-        let profile =
-            to_tpo_profiles(&three_overlapping_periods(), &model, &Timeframe::Min30.into()).remove(0);
+        let profile = to_tpo_profiles(
+            &three_overlapping_periods(),
+            &model,
+            &Timeframe::Min30.into(),
+        )
+        .remove(0);
         assert_eq!(profile.single_prints, vec![98.0, 99.0, 100.0, 108.0]);
         let render_config = TpoRenderConfig::default();
         let rect = Rect::from_x_y_ranges(0.0..=400.0, 0.0..=400.0);
@@ -2261,6 +2368,7 @@ mod tests {
                 &render_config,
                 10.0,
                 20.0,
+                f32::INFINITY,
                 true,
                 Color32::GREEN,
                 Color32::RED,
@@ -2412,13 +2520,15 @@ mod tests {
                 // A new tooltip shows from its second pass.
                 draw(vec![egui::Event::PointerMoved(row.center())]);
                 let hovered = draw(vec![egui::Event::PointerMoved(row.center())]);
-                named.extend(hovered.shapes.iter().filter_map(|s| match &s.shape {
-                    Shape::Text(t) => t
-                        .galley
-                        .text()
-                        .strip_prefix("Single print ")
-                        .map(str::to_owned),
-                    _ => None,
+                named.extend(hovered.shapes.iter().filter_map(|s| {
+                    match &s.shape {
+                        Shape::Text(t) => t
+                            .galley
+                            .text()
+                            .strip_prefix("Single print ")
+                            .map(str::to_owned),
+                        _ => None,
+                    }
                 }));
             }
             let read: Vec<f64> = named.iter().map(|text| text.parse().unwrap()).collect();
