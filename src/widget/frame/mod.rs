@@ -884,6 +884,9 @@ impl Chart {
                 self.config.text_color,
             );
             self.paint_empty_pane_primitives(ui, &painter);
+            // This frame paints no marks, and those of the last frame went with its bars.
+            self.mark_hits.get_mut().clear();
+            self.clickable_marks.clear();
             self.record_host_click(ui, &response);
             return response;
         }
@@ -2233,6 +2236,11 @@ impl Chart {
             let drawing = self.drawings.hit_test(pos);
             #[cfg(not(feature = "drawings"))]
             let drawing: Option<usize> = None;
+            // These primitives paint after the series layer. A renderer painted in its place in
+            // the order has already covered what lies under it there.
+            let covers_annotations = primitive_hit
+                .as_ref()
+                .is_some_and(|hit| hit.result.pass == PrimitivePass::Series);
             let hit = primitives::best_hit(
                 primitive_hit,
                 renderer_hit
@@ -2257,10 +2265,7 @@ impl Chart {
                 .map(super::PointerTarget::Drawing)
                 .or(hit.as_ref().map(|hit| hit.target.clone()))
                 .or_else(|| element_at(pos).map(|(id, _)| super::PointerTarget::Element(id)));
-            if hit
-                .as_ref()
-                .is_some_and(|hit| hit.result.pass == PrimitivePass::Series)
-            {
+            if covers_annotations {
                 self.cover_annotation_hit();
             }
             self.host_events.primitive_hit =
@@ -2839,15 +2844,13 @@ impl Chart {
         if !self.hide_foreground {
             self.paint_primitives(&painter, &coords, PrimitivePass::Above);
             if self.host_events.annotation_target.borrow().is_some()
-                && let Some(hit) = pointer
+                && pointer
                     .and_then(|pos| {
                         primitives::primitive_at(self.main_pass_primitives(&coords), pos)
                     })
-                    .filter(|hit| hit.result.pass == PrimitivePass::Above)
+                    .is_some_and(|hit| hit.result.pass == PrimitivePass::Above)
             {
                 self.cover_annotation_hit();
-                self.host_events.target = Some(hit.target);
-                self.host_events.primitive_hit = Some(hit.result);
             }
         }
 
