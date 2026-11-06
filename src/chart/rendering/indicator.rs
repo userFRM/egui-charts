@@ -281,6 +281,12 @@ impl IndicatorRenderer {
                     ..coords.clone()
                 },
             );
+            if let Some(color) = indicator.background() {
+                context
+                    .painter
+                    .with_clip_rect(context.rect)
+                    .rect_filled(context.rect, 0.0, color);
+            }
             Self::render_study(
                 context,
                 indicator.as_ref(),
@@ -292,7 +298,8 @@ impl IndicatorRenderer {
         }
     }
 
-    /// Shared study geometry for overlays and indicator panes.
+    /// Shared study geometry for overlays and indicator panes. Each paints the study's tint first,
+    /// beneath what else it paints there.
     pub(crate) fn render_study(
         context: &RenderContext,
         indicator: &dyn Indicator,
@@ -302,11 +309,7 @@ impl IndicatorRenderer {
         coords: &ChartMapping,
     ) {
         let painter = context.painter.with_clip_rect(context.rect);
-        // A study in its own pane has painted its tint already, beneath its levels.
         if indicator.is_overlay() {
-            if let Some(color) = indicator.background() {
-                painter.rect_filled(context.rect, 0.0, color);
-            }
             crate::chart::indicators::plots::paint_overlay_levels(&painter, indicator, price_scale);
         }
         #[cfg(feature = "drawings")]
@@ -1006,8 +1009,9 @@ mod tests {
             .collect();
         let mut study = ConfiguredStudy::new(Box::new(AwesomeOscillator::new(2, 3)));
         assert_eq!(study.plot_style(0).plot_type, PlotType::Columns);
-        // On the price pane the shared geometry paints the tint too.
+        // On the price pane, where the tint lies beneath the shared geometry.
         study.set_overlay(true);
+        study.set_scale(crate::studies::StudyScale::Main);
         study.calculate(&bars);
         // At bar 5: (1 + 4)/2 - (3 + 1 + 4)/3 = -1/6, rising from -2/3.
         assert!((study.values().value(0, 5).unwrap() + 1.0 / 6.0).abs() < 1e-12);
@@ -1075,11 +1079,10 @@ mod tests {
                     // Latest-value lines span the viewport even while the last bar is offscreen.
                     let coords = ChartMapping::new(rect, 30.0, 0, 2, 0.0, map);
                     let mut output = Context::default().run_ui(RawInput::default(), |ui| {
-                        IndicatorRenderer::render_study(
+                        IndicatorRenderer::render(
                             &RenderContext::new(ui.painter(), rect),
-                            &study,
+                            std::slice::from_ref(&study.clone_box()),
                             &data,
-                            0,
                             &map,
                             &coords,
                         );

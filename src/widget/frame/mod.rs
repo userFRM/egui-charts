@@ -1913,6 +1913,11 @@ impl Chart {
                 );
             } else {
                 let mapping = rendering::study_mapping(study.as_ref(), &coords);
+                if let Some(color) = study.background() {
+                    painter
+                        .with_clip_rect(price_rect)
+                        .rect_filled(price_rect, 0.0, color);
+                }
                 rendering::IndicatorRenderer::render_study(
                     &price_ctx,
                     study.as_ref(),

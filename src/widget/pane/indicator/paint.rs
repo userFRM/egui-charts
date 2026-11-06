@@ -678,6 +678,12 @@ mod tests {
             })
             .expect("the level line is painted");
         assert!(line > tinted, "level painted at {line}, tint at {tinted}");
+
+        // Sharing the pane of the main series, it is painted with the price pane's geometry.
+        let pane = chart.series_pane(id).unwrap();
+        assert!(chart.move_series_to_pane(crate::widget::SeriesId::MAIN, pane));
+        let painted = shapes(&ctx, &mut chart, 2.0, Vec::new());
+        assert_eq!(painted.iter().filter(|shape| is_tint(shape)).count(), 1);
     }
 
     #[test]
