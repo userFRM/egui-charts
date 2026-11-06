@@ -2,10 +2,12 @@
 //!
 //! Ties together all subcomponents into the complete Object Tree panel.
 
+use crate::config::DrawingSort;
 use crate::icons::icons;
 use crate::localization as l10n;
-use crate::ui_kit::{IconButton, PanelHeader, filter::filter_input};
-use egui::{Frame, RichText, Ui, vec2};
+use crate::ui_kit::{IconButton, PanelHeader, buttons::ButtonSize, filter::filter_input};
+use crate::widget::SymbolDrawings;
+use egui::{Frame, RichText, ScrollArea, Ui, vec2};
 
 use super::super::controls::dropdown;
 use super::actions::ObjectTreeAction;
@@ -125,7 +127,7 @@ impl ObjectTreePanel {
         }
 
         // Handle keyboard shortcuts
-        if self.config.enable_keyboard_shortcuts {
+        if self.config.enable_keyboard_shortcuts && !self.state.showing_symbol_drawings {
             let kb_action = handle_keyboard_shortcuts(ui, &mut self.state, sources);
             if !kb_action.is_none() {
                 action = kb_action;
@@ -141,6 +143,11 @@ impl ObjectTreePanel {
             self.show_header(ui, &mut action, can_group);
 
             ui.separator();
+
+            if self.state.showing_symbol_drawings {
+                self.show_symbol_drawings(ui, &mut action);
+                return;
+            }
 
             // Data Window section (collapsible)
             if self.config.show_data_window
@@ -271,6 +278,17 @@ impl ObjectTreePanel {
                     .tooltip("Object actions")
                     .show(ui);
                 egui::Popup::menu(&more).show(|ui| {
+                    if self.state.symbol_drawings.is_some() {
+                        if ui
+                            .button(l10n::text(ui.ctx(), "Drawings by symbol"))
+                            .clicked()
+                        {
+                            self.state.showing_symbol_drawings = true;
+                            *action = ObjectTreeAction::ReadSymbolDrawings;
+                            ui.close();
+                        }
+                        ui.separator();
+                    }
                     if ui.button(l10n::text(ui.ctx(), "Show all")).clicked() {
                         *action = ObjectTreeAction::ShowAll;
                         ui.close();
@@ -297,6 +315,150 @@ impl ObjectTreePanel {
                     }
                 });
             });
+    }
+
+    /// Lists the layout's drawings by symbol in place of the objects.
+    fn show_symbol_drawings(&mut self, ui: &mut Ui, action: &mut ObjectTreeAction) {
+        ui.horizontal(|ui| {
+            if IconButton::new(&icons::CHEVRON_LEFT)
+                .size(ButtonSize::SM)
+                .tooltip(l10n::text(ui.ctx(), "Back to objects"))
+                .show(ui)
+                .clicked()
+            {
+                self.state.showing_symbol_drawings = false;
+            }
+            ui.strong_label(l10n::text(ui.ctx(), "Drawings by symbol"));
+        });
+        ui.space_sm();
+        let inventory = self.state.symbol_drawings.clone().unwrap_or_default();
+        if inventory.is_empty() {
+            ui.vertical_centered(|ui| {
+                ui.label(
+                    RichText::new(l10n::text(ui.ctx(), "No saved drawings"))
+                        .weak()
+                        .italics(),
+                );
+            });
+            return;
+        }
+        ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for mut symbol in inventory {
+                    if let Some(sort) = self.state.drawing_sort {
+                        symbol.sort(sort);
+                    }
+                    ui.push_id(&symbol.symbol, |ui| {
+                        self.show_symbol_row(ui, &symbol, action);
+                    });
+                }
+            });
+    }
+
+    /// One symbol's row and, when expanded, its drawings. The row offers sorting and deleting
+    /// while the pointer is over it, and while expanded for input without a pointer.
+    fn show_symbol_row(
+        &mut self,
+        ui: &mut Ui,
+        symbol: &SymbolDrawings,
+        action: &mut ObjectTreeAction,
+    ) {
+        let name = symbol.symbol.as_str();
+        let expanded = self.state.expanded_symbols.contains(name);
+        let row = egui::Rect::from_min_size(
+            ui.cursor().min,
+            vec2(ui.available_width(), self.config.row_height),
+        );
+        let offered =
+            expanded || ui.rect_contains_pointer(row) || egui::Popup::is_any_open(ui.ctx());
+        ui.horizontal(|ui| {
+            ui.set_min_height(self.config.row_height);
+            let caret = if expanded {
+                &icons::CHEVRON_DOWN
+            } else {
+                &icons::CHEVRON_RIGHT
+            };
+            if IconButton::new(caret)
+                .size(ButtonSize::SM)
+                .tooltip(l10n::format_text(
+                    ui.ctx(),
+                    "Toggle {symbol} drawings",
+                    &[("symbol", name.to_owned())],
+                ))
+                .show(ui)
+                .clicked()
+            {
+                if expanded {
+                    self.state.expanded_symbols.remove(name);
+                } else {
+                    self.state.expanded_symbols.insert(name.to_owned());
+                }
+            }
+            ui.strong_label(name);
+            if self.config.show_item_counts {
+                ui.label(
+                    RichText::new(format!("({})", symbol.drawings.len()))
+                        .size(11.0)
+                        .color(ui.visuals().weak_text_color()),
+                );
+            }
+            if offered {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if IconButton::new(&icons::TRASH)
+                        .size(ButtonSize::SM)
+                        .tooltip(l10n::format_text(
+                            ui.ctx(),
+                            "Delete {symbol} drawings",
+                            &[("symbol", name.to_owned())],
+                        ))
+                        .show(ui)
+                        .clicked()
+                    {
+                        *action = ObjectTreeAction::DeleteSymbolDrawings(name.to_owned());
+                    }
+                    let sort = IconButton::new(&icons::SORT)
+                        .size(ButtonSize::SM)
+                        .tooltip(l10n::format_text(
+                            ui.ctx(),
+                            "Sort {symbol} drawings",
+                            &[("symbol", name.to_owned())],
+                        ))
+                        .show(ui);
+                    egui::Popup::menu(&sort).show(|ui| {
+                        for (order, title) in [
+                            (DrawingSort::Name, "Sort by name"),
+                            (DrawingSort::LastModified, "Sort by last modified"),
+                        ] {
+                            let chosen = self.state.drawing_sort == Some(order);
+                            if ui
+                                .selectable_label(chosen, l10n::text(ui.ctx(), title))
+                                .clicked()
+                            {
+                                self.state.drawing_sort = (!chosen).then_some(order);
+                                ui.close();
+                            }
+                        }
+                    });
+                });
+            }
+        });
+        if expanded {
+            ui.indent("drawings", |ui| {
+                for drawing in &symbol.drawings {
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            crate::ui::drawing_toolbar::icons::get_icon(drawing.tool_type)
+                                .as_image_tinted(
+                                    vec2(16.0, 16.0),
+                                    ui.visuals().widgets.noninteractive.fg_stroke.color,
+                                ),
+                        );
+                        ui.label(drawing.name());
+                    });
+                }
+            });
+        }
     }
 
     /// Render filter controls
@@ -784,6 +946,86 @@ mod tests {
             assert_eq!(folder_of(&h, 1), "All/Levels/Zones/Inner");
             h.get_by_label("All");
         }
+    }
+
+    /// The list of drawings by symbol: reached from the actions menu when the host supplies it,
+    /// sorted from a row's controls, which appear under the pointer or when expanded, and deleting
+    /// one symbol only asks for that symbol.
+    #[test]
+    fn symbol_drawings_list_sorts_and_asks_to_delete_one_symbol() {
+        use crate::drawings::{ChartPoint, Drawing, DrawingToolType};
+        use crate::widget::{Chart, ChartLayout};
+        use egui_kittest::{Harness, kittest::Queryable};
+        type App = (ObjectTreePanel, Vec<ObjectTreeAction>, Chart);
+        let mut chart = crate::widget::ChartBuilder::new().build();
+        chart.set_symbol("AAA");
+        for name in ["beta", "Alpha"] {
+            let mut drawing = Drawing::new(0, DrawingToolType::TrendLine);
+            drawing.label = Some(name.into());
+            drawing.chart_points = vec![ChartPoint::new(1.0, 100.0), ChartPoint::new(2.0, 110.0)];
+            drawing.completed = true;
+            chart.drawings_mut().add_synced_drawing(drawing).unwrap();
+        }
+        let panel = ObjectTreePanel::with_config(ObjectTreeConfig {
+            show_data_window: false,
+            ..Default::default()
+        });
+        let mut h = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(vec2(320.0, 600.0))
+            .build_ui_state(
+                |ui, (panel, actions, chart): &mut App| {
+                    let inventory = ChartLayout::default().drawing_inventory(&[&mut *chart]);
+                    panel.state_mut().symbol_drawings = Some(inventory);
+                    let action = panel.show(ui, None, &mut []);
+                    if !action.is_none() {
+                        actions.push(action);
+                    }
+                },
+                (panel, Vec::new(), chart),
+            );
+        h.run();
+        let offered = |h: &Harness<'_, App>| h.query_by_label("Delete AAA drawings").is_some();
+        let rows = |h: &Harness<'_, App>| {
+            let top = |name: &str| h.get_by_label(name).rect().top();
+            top("beta") < top("Alpha")
+        };
+        h.get_by_label("Object actions").click();
+        h.run();
+        h.get_by_label("Drawings by symbol").click();
+        h.run();
+        assert_eq!(h.state().1, [ObjectTreeAction::ReadSymbolDrawings]);
+        assert!(!offered(&h), "controls wait for the pointer");
+        h.hover_at(h.get_by_label("AAA").rect().center());
+        h.run();
+        assert!(offered(&h), "controls under the pointer");
+        h.hover_at(egui::pos2(160.0, 590.0));
+        h.run();
+        assert!(!offered(&h));
+
+        h.get_by_label("Toggle AAA drawings").click();
+        h.run();
+        assert!(offered(&h), "controls while expanded");
+        assert!(rows(&h), "the order of the chart until sorted");
+        h.get_by_label("Sort AAA drawings").click();
+        h.run();
+        h.get_by_label("Sort by name").click();
+        h.run();
+        assert_eq!(
+            h.state().0.state().drawing_sort,
+            Some(crate::config::DrawingSort::Name)
+        );
+        assert!(!rows(&h), "alphabetical, ignoring case");
+
+        h.get_by_label("Delete AAA drawings").click();
+        h.run();
+        assert_eq!(
+            h.state().1.last(),
+            Some(&ObjectTreeAction::DeleteSymbolDrawings("AAA".into()))
+        );
+        h.get_by_label("Back to objects").click();
+        h.run();
+        assert!(h.query_by_label("AAA").is_none());
     }
 
     #[test]

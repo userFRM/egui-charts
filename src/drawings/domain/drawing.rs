@@ -68,6 +68,11 @@ pub struct Drawing {
     /// from; `None` for a drawing never stored, which is saved with the time of the save
     #[serde(skip)]
     pub created_at: Option<i64>,
+    /// Time of the last edit, in Unix milliseconds: read from the stored record, set by the edits
+    /// of a [`DrawingManager`](crate::drawings::DrawingManager) and put back by their undo.
+    /// `None` for a drawing no edit reached, which is saved with the time of the save.
+    #[serde(skip)]
+    pub modified_at: Option<i64>,
     /// User notes, saved with the drawing and restored from its stored record
     #[serde(skip)]
     pub notes: Option<String>,
@@ -453,6 +458,7 @@ impl Drawing {
             id,
             stored_id: None,
             created_at: None,
+            modified_at: None,
             notes: None,
             label: None,
             selectable: true,

@@ -18,7 +18,7 @@ pub use chart::{
     SessionConfig, WatermarkPos,
 };
 pub use crosshair::{CrosshairMode, CrosshairOptions, CrosshairStyle};
-pub use drawing_tool::{DrawingInteractionMode, DrawingToolType, ParseToolTypeError};
+pub use drawing_tool::{DrawingInteractionMode, DrawingSort, DrawingToolType, ParseToolTypeError};
 pub use interaction::{
     AxisDoubleClickResetOptions, AxisPressedMouseMoveOptions, HandleScaleOptions,
     HandleScrollOptions, TouchTrackingExitMode, TrackingModeExitMode, TrackingModeOptions,

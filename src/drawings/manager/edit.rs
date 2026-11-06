@@ -68,11 +68,22 @@ impl DrawingManager {
 
     /// Deletes the given drawings as one undo step, keeping any locked ones.
     pub fn delete_drawings(&mut self, ids: &[usize]) {
+        let unlocked: Vec<_> = self
+            .drawings
+            .iter()
+            .filter(|d| ids.contains(&d.id) && !d.locked)
+            .map(|d| d.id)
+            .collect();
+        self.remove_drawings(&unlocked);
+    }
+
+    /// Deletes the given drawings as one undo step, locked ones included.
+    pub(crate) fn remove_drawings(&mut self, ids: &[usize]) {
         let before: Vec<_> = self
             .drawings
             .iter()
             .enumerate()
-            .filter(|(_, d)| ids.contains(&d.id) && !d.locked)
+            .filter(|(_, d)| ids.contains(&d.id))
             .map(|(index, d)| (index, d.clone()))
             .collect();
         if before.is_empty() {
@@ -145,6 +156,11 @@ impl DrawingManager {
 
     /// Apply a layer move as one undo step, saving each changed drawing.
     pub fn reorder_drawings(&mut self, id: usize, layers: &[(usize, i32)]) {
+        let edited = self
+            .drawings
+            .iter()
+            .find(|d| d.id == id)
+            .and_then(|d| self.modified_at(d));
         let mut previous = Vec::new();
         for &(id, layer) in layers {
             if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id)
@@ -152,11 +168,13 @@ impl DrawingManager {
             {
                 previous.push((id, drawing.z_order));
                 drawing.z_order = layer;
-                self.queue(DrawingSyncAction::UpdateDrawing(id));
+                // Only the moved drawing is edited; tied layers around it are just renumbered.
+                self.notify(DrawingSyncAction::UpdateDrawing(id));
             }
         }
         if !previous.is_empty() {
-            self.history.push_reorder(id, previous);
+            self.stamp(id);
+            self.history.push_reorder(id, previous, edited);
         }
     }
 
@@ -406,6 +424,7 @@ impl DrawingManager {
         F: Fn(f32) -> f32 + Copy,
         G: Fn(f64) -> f32 + Copy,
     {
+        self.apply_edit_times();
         for drawing in &mut self.drawings {
             drawing.update_screen_coords(bar_to_x, price_to_y);
         }
@@ -444,6 +463,7 @@ impl DrawingManager {
         bar_to_x: impl Fn(f32) -> f32 + Copy,
         price_to_y: impl Fn(f64) -> f32 + Copy,
     ) {
+        self.apply_edit_times();
         for drawing in self
             .drawings
             .iter_mut()

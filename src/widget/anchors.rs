@@ -143,6 +143,10 @@ impl Chart {
                     price,
                 )
             });
+            stored.modified_at = self
+                .drawings
+                .modified_at(drawing)
+                .unwrap_or(stored.modified_at);
             stored.pane = self
                 .drawing_pane(drawing.id)
                 .and_then(|pane| self.stored_pane(pane));

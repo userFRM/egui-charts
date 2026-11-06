@@ -95,6 +95,10 @@ pub use copy::{LayoutCopy, LayoutCopyIssue, LayoutCopyIssueKind};
 mod drawings;
 #[cfg(feature = "drawings")]
 use drawings::DrawingLinks;
+#[cfg(feature = "drawings")]
+pub(super) use drawings::UnshownDeletion;
+#[cfg(feature = "drawings")]
+pub use drawings::{SymbolDrawing, SymbolDrawings};
 
 /// Multi-chart arrangement. Changing presets retains the host's hidden charts. Row arrangements
 /// fill from the top, column arrangements from the left. Independently divided halves fill the
@@ -869,7 +873,7 @@ impl LinkChange {
 #[derive(Default)]
 struct LayoutEdits {
     steps: Arc<Mutex<Vec<(u64, bool)>>>,
-    #[cfg(feature = "studies")]
+    #[cfg(any(feature = "studies", feature = "drawings"))]
     next: u64,
 }
 
@@ -881,7 +885,7 @@ impl Clone for LayoutEdits {
 }
 
 impl LayoutEdits {
-    #[cfg(feature = "studies")]
+    #[cfg(any(feature = "studies", feature = "drawings"))]
     fn start(&mut self) -> LayoutEditLink {
         self.next += 1;
         LayoutEditLink {

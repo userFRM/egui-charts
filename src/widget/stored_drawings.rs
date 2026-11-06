@@ -55,6 +55,10 @@ enum CopyRequest {
     },
     /// Deletes a copy found to hold `symbol`'s drawings.
     Delete { symbol: String, name: String },
+    /// Lists the documents, to read each for the inventory of stored symbols.
+    ListSymbols,
+    /// Reads a document for the inventory of stored symbols.
+    ReadSymbol { name: String },
 }
 
 impl CopyRequest {
@@ -63,6 +67,8 @@ impl CopyRequest {
             Self::List { symbol } | Self::Read { symbol, .. } | Self::Delete { symbol, .. } => {
                 symbol
             }
+            Self::ListSymbols => "",
+            Self::ReadSymbol { name } => name,
         }
     }
 }
@@ -92,6 +98,9 @@ pub(super) struct DrawingStore {
     unshown_panes: HashMap<String, HashMap<String, (i64, StoredPane)>>,
     /// The kept copies of the shown symbol's drawings and the requests about them.
     copies: LocalCopies,
+    /// The stored drawings of each symbol this chart read or wrote, from the first
+    /// [`Chart::read_stored_symbols`] on.
+    symbols: Option<HashMap<String, DrawingStorage>>,
 }
 
 impl DrawingStore {
@@ -128,10 +137,10 @@ impl DrawingStore {
                 let request = self.copies.queued.pop_front().expect("queued request");
                 let inbox = &self.copies.inbox;
                 match &request {
-                    CopyRequest::List { .. } => {
+                    CopyRequest::List { .. } | CopyRequest::ListSymbols => {
                         self.storage.list(StoreKind::Drawings, inbox.reply(0));
                     }
-                    CopyRequest::Read { name, .. } => {
+                    CopyRequest::Read { name, .. } | CopyRequest::ReadSymbol { name } => {
                         self.storage.load(StoreKind::Drawings, name, inbox.reply(0));
                     }
                     CopyRequest::Delete { name, .. } => {
@@ -253,6 +262,73 @@ impl DrawingStore {
                     }
                 }
             }
+            CopyRequest::ListSymbols => {
+                let answer = *answer
+                    .downcast::<Result<Vec<String>, FeedError>>()
+                    .expect("document list");
+                match answer {
+                    Ok(names) => self.copies.queued.extend(
+                        names
+                            .into_iter()
+                            .map(|name| CopyRequest::ReadSymbol { name }),
+                    ),
+                    Err(error) => {
+                        self.error = Some(StorageError::Storage(message(
+                            self.ctx.as_ref(),
+                            "Could not list the stored drawings: {error}",
+                            &[("error", error.to_string().as_str())],
+                        )));
+                    }
+                }
+            }
+            CopyRequest::ReadSymbol { name } => {
+                let answer = *answer
+                    .downcast::<Result<Option<String>, FeedError>>()
+                    .expect("document read");
+                // A write under way is newer than what was read, and is already listed.
+                if self
+                    .documents
+                    .get(&name)
+                    .is_some_and(StoredDocument::saving)
+                {
+                    return;
+                }
+                let symbols = self.symbols.get_or_insert_default();
+                match answer {
+                    Ok(None) => {
+                        symbols.remove(&name);
+                    }
+                    // A kept copy names its symbol, which differs from the document's name.
+                    Ok(Some(json)) => match DrawingStorage::from_json(&json) {
+                        Ok((drawings, _)) if drawings.symbol != name => {}
+                        Ok((drawings, skipped)) if skipped.is_empty() => {
+                            symbols.insert(name, drawings);
+                        }
+                        Ok((_, skipped)) => {
+                            self.error = Some(StorageError::Read {
+                                symbol: name,
+                                error: LoadError::Skipped(skipped),
+                            });
+                        }
+                        Err(error) => {
+                            self.error = Some(StorageError::Read {
+                                symbol: name,
+                                error,
+                            });
+                        }
+                    },
+                    Err(error) => {
+                        self.error = Some(StorageError::Storage(message(
+                            self.ctx.as_ref(),
+                            "Could not read {name}: {error}",
+                            &[
+                                ("name", name.as_str()),
+                                ("error", error.to_string().as_str()),
+                            ],
+                        )));
+                    }
+                }
+            }
         }
     }
 }
@@ -328,6 +404,7 @@ impl Chart {
             changed: HashMap::new(),
             unshown_panes: HashMap::new(),
             copies: LocalCopies::default(),
+            symbols: None,
         });
     }
 
@@ -535,6 +612,64 @@ impl Chart {
         Ok(())
     }
 
+    /// Asks storage for every symbol's drawings, which [`Self::stored_symbol_drawings`] has once
+    /// it answers, on a later frame or [`Self::flush_stored_drawings`]. A document that cannot
+    /// be read in full stays out and is reported through [`Self::take_storage_error`].
+    pub(super) fn read_stored_symbols(&mut self) {
+        let Some(store) = &mut self.drawing_store else {
+            return;
+        };
+        let copies = &mut store.copies;
+        let reading = |request: &CopyRequest| matches!(request, CopyRequest::ListSymbols);
+        store.symbols.get_or_insert_default();
+        if !copies.sent.as_ref().is_some_and(reading) && !copies.queued.iter().any(reading) {
+            copies.queued.push_back(CopyRequest::ListSymbols);
+        }
+    }
+
+    /// The stored drawings of each symbol, as far as they were read.
+    pub(super) fn stored_symbols(&self) -> impl Iterator<Item = (&str, &DrawingStorage)> {
+        self.drawing_store
+            .iter()
+            .flat_map(|store| &store.symbols)
+            .flatten()
+            .map(|(symbol, drawings)| (symbol.as_str(), drawings))
+    }
+
+    /// The stored drawings of `symbol`, if they were read.
+    pub(super) fn stored_symbol_drawings(&self, symbol: &str) -> Option<&DrawingStorage> {
+        self.drawing_store.as_ref()?.symbols.as_ref()?.get(symbol)
+    }
+
+    /// Writes the stored drawings of `symbol`, which this chart does not show, over what storage
+    /// holds, once it is read if the document was not open.
+    pub(super) fn write_unshown_drawings(&mut self, symbol: &str, drawings: DrawingStorage) {
+        let Some(store) = &mut self.drawing_store else {
+            return;
+        };
+        if let Some(symbols) = &mut store.symbols {
+            symbols.insert(symbol.to_owned(), drawings.clone());
+        }
+        store.loaded.remove(symbol);
+        let document = store
+            .documents
+            .entry(symbol.to_owned())
+            .or_insert_with(|| open_drawings(&*store.storage, symbol));
+        if document.reading() {
+            store.pending.insert(symbol.to_owned(), (drawings, false));
+            return;
+        }
+        match drawings.to_json() {
+            Ok(json) => document.save(&*store.storage, json),
+            Err(error) => {
+                store.error = Some(StorageError::Save {
+                    symbol: symbol.to_owned(),
+                    error,
+                })
+            }
+        }
+    }
+
     /// Whether this chart and `other` keep their drawings in the same storage.
     pub(super) fn shares_stored_drawings(&self, other: &Chart) -> bool {
         match (&self.drawing_store, &other.drawing_store) {
@@ -652,6 +787,16 @@ impl Chart {
                                 });
                             }
                             Ok(loaded) => {
+                                if let Some(symbols) = &mut store.symbols {
+                                    match &loaded {
+                                        Some((drawings, _)) => {
+                                            symbols.insert(name.clone(), drawings.clone());
+                                        }
+                                        None => {
+                                            symbols.remove(name);
+                                        }
+                                    }
+                                }
                                 if let Some((mut pending, merge)) = store.pending.remove(name) {
                                     let merged = merge
                                         && loaded.as_ref().is_some_and(|(drawings, _)| {
@@ -666,6 +811,9 @@ impl Chart {
                                             drawings.add_drawing(drawing);
                                         }
                                         pending = drawings;
+                                    }
+                                    if let Some(symbols) = &mut store.symbols {
+                                        symbols.insert(name.clone(), pending.clone());
                                     }
                                     match pending.to_json() {
                                         Ok(json) => {
@@ -794,6 +942,9 @@ impl Chart {
                     record.pane = Some(pane.clone());
                 }
             }
+        }
+        if let (Some(symbols), Ok(drawings)) = (&mut store.symbols, &drawings) {
+            symbols.insert(self.symbol.clone(), drawings.clone());
         }
         let document = store
             .documents
