@@ -704,7 +704,9 @@ pub struct ChartTypeParams {
     pub tpo_split_sessions: bool,
     /// TPO: highlight the rows touched by a single period.
     pub tpo_single_prints: bool,
-    /// TPO: caption and mark the middle of each profile's range.
+    /// TPO: caption and mark the middle of each profile's range. Off for a new chart; settings
+    /// saved without the field show it, as every profile did before the setting.
+    #[serde(default = "tpo_midpoint_drawn")]
     pub tpo_midpoint: bool,
     /// TPO: paint each period's letter inside its block. On for a new chart; settings saved
     /// without the field keep blocks.
@@ -714,6 +716,11 @@ pub struct ChartTypeParams {
     /// TPO: sessions combined into one profile, as in
     /// [`TPOConfig::composites`](super::TPOConfig::composites).
     pub tpo_composites: Vec<std::ops::RangeInclusive<chrono::DateTime<chrono::Utc>>>,
+}
+
+/// What a missing `tpo_midpoint` reads: every profile drew its midpoint before it had a setting.
+fn tpo_midpoint_drawn() -> bool {
+    true
 }
 
 impl Default for ChartTypeParams {
@@ -1044,13 +1051,14 @@ mod tests {
                 1.0,
             ),
         ];
-        for (saved, minutes, high, enabled, marked) in [
+        for (saved, minutes, high, enabled, single_prints, midpoint) in [
             (
                 r#"{"tpo_initial_balance_minutes":30,"tpo_poor_highs_lows":true,"tpo_initial_balance_extensions":true}"#,
                 30,
                 102.0,
                 true,
                 false,
+                true,
             ),
             (
                 r#"{"tpo_period_minutes":30,"tpo_row_ticks":1}"#,
@@ -1058,6 +1066,7 @@ mod tests {
                 104.0,
                 false,
                 false,
+                true,
             ),
             (
                 r#"{"tpo_single_prints":true,"tpo_midpoint":true}"#,
@@ -1065,13 +1074,22 @@ mod tests {
                 104.0,
                 false,
                 true,
+                true,
+            ),
+            (
+                r#"{"tpo_single_prints":true,"tpo_midpoint":false}"#,
+                60,
+                104.0,
+                false,
+                true,
+                false,
             ),
         ] {
             let params: ChartTypeParams = serde_json::from_str(saved).unwrap();
             let config = params.tpo_config(Some(1.0));
             assert_eq!(config.initial_balance_minutes, minutes);
-            assert_eq!(config.show_single_prints, marked);
-            assert_eq!(config.show_midpoint, marked);
+            assert_eq!(config.show_single_prints, single_prints);
+            assert_eq!(config.show_midpoint, midpoint);
             let profiles = to_tpo_profiles(&bars, &config, &Timeframe::Min30.into());
             assert_eq!(
                 (
@@ -1084,8 +1102,8 @@ mod tests {
             assert_eq!(saved["tpo_initial_balance_minutes"], minutes);
             assert_eq!(saved["tpo_poor_highs_lows"], enabled);
             assert_eq!(saved["tpo_initial_balance_extensions"], enabled);
-            assert_eq!(saved["tpo_single_prints"], marked);
-            assert_eq!(saved["tpo_midpoint"], marked);
+            assert_eq!(saved["tpo_single_prints"], single_prints);
+            assert_eq!(saved["tpo_midpoint"], midpoint);
             assert_eq!(
                 serde_json::from_value::<ChartTypeParams>(saved).unwrap(),
                 params
