@@ -267,6 +267,109 @@ mod tests {
         }
     }
 
+    /// The candle bodies as (fill, border) and the wick colours of `chart` in painting order. Fills
+    /// and strokes outside `known` belong to other shapes in the plot.
+    fn painted_candles(
+        chart: &mut crate::Chart,
+        known: &[egui::Color32],
+    ) -> (Vec<(egui::Color32, egui::Color32)>, Vec<egui::Color32>) {
+        use crate::widget::test_frames::{frame, shapes};
+        let ctx = Context::default();
+        frame(&ctx, chart, 0.0, vec![]);
+        let painted = shapes(&ctx, chart, 0.1, vec![]);
+        let plot = chart.get_rendered_price_rect();
+        let (mut bodies, mut wicks) = (Vec::new(), Vec::new());
+        for shape in painted {
+            match shape {
+                egui::Shape::Rect(r)
+                    if plot.contains(r.rect.center())
+                        && (known.contains(&r.fill) || known.contains(&r.stroke.color)) =>
+                {
+                    bodies.push((r.fill, r.stroke.color));
+                }
+                egui::Shape::LineSegment { points, stroke }
+                    if points[0].x == points[1].x && known.contains(&stroke.color) =>
+                {
+                    wicks.push(stroke.color);
+                }
+                _ => {}
+            }
+        }
+        (bodies, wicks)
+    }
+
+    /// The accepted colours of a Heikin-Ashi series reach its candles and come back from
+    /// `series_settings`; the chart keeps its candle colours for the other chart types. The bar
+    /// (10, 18, 8, 14) has the transformed open (10 + 14) / 2 = 12 and close 50 / 4 = 12.5, so it
+    /// rises and takes the rising colours.
+    #[test]
+    fn series_settings_colours_reach_heikin_candles() {
+        use crate::model::{Bar, BarData};
+        let mut chart = crate::Chart::new(BarData::from_bars(vec![Bar::new(
+            chrono::DateTime::UNIX_EPOCH,
+            10.0,
+            18.0,
+            8.0,
+            14.0,
+            0.0,
+        )]));
+        chart.config_mut().show_volume = false;
+        chart.set_chart_type(ChartType::Heikin);
+        let candle = chart.config().bullish_color;
+        let body = egui::Color32::from_rgb(1, 100, 2);
+        let border = egui::Color32::from_rgb(3, 4, 102);
+        let wick = egui::Color32::from_rgb(105, 106, 6);
+        let mut settings = chart.series_settings();
+        settings.bullish_color = body;
+        settings.bullish_border_color = Some(border);
+        settings.bullish_wick_color = Some(wick);
+        chart.apply_series_settings(&settings);
+        assert_eq!(
+            painted_candles(&mut chart, &[body, border, wick]),
+            (vec![(body, border)], vec![wick, wick])
+        );
+        let read = chart.series_settings();
+        assert_eq!(read.bullish_color, body);
+        assert_eq!(read.bullish_border_color, Some(border));
+        assert_eq!(read.bullish_wick_color, Some(wick));
+        chart.set_chart_type(ChartType::Candles);
+        assert_eq!(chart.series_settings().bullish_color, candle);
+    }
+
+    /// The accepted colours of a hollow candles series reach its candles, a border or wick colour
+    /// of `None` meaning the body colour. The first bar closes above its open and is outlined; the
+    /// second closes below its open and is filled.
+    #[test]
+    fn series_settings_colours_reach_hollow_candles() {
+        use crate::model::{Bar, BarData};
+        let time = chrono::DateTime::UNIX_EPOCH;
+        let mut chart = crate::Chart::new(BarData::from_bars(vec![
+            Bar::new(time, 10.0, 18.0, 8.0, 14.0, 0.0),
+            Bar::new(time + chrono::Duration::days(1), 13.0, 17.0, 8.5, 11.0, 0.0),
+        ]));
+        chart.config_mut().show_volume = false;
+        chart.set_chart_type(ChartType::HollowCandles);
+        let candle = chart.config().bullish_color;
+        let up = egui::Color32::from_rgb(1, 100, 2);
+        let down = egui::Color32::from_rgb(101, 2, 3);
+        let mut settings = chart.series_settings();
+        assert_eq!(settings.bullish_border_color, None);
+        assert_eq!(settings.bearish_wick_color, None);
+        settings.bullish_color = up;
+        settings.bearish_color = down;
+        chart.apply_series_settings(&settings);
+        let (bodies, wicks) = painted_candles(&mut chart, &[up, down]);
+        assert_eq!(
+            bodies.iter().map(|body| body.0).collect::<Vec<_>>(),
+            [egui::Color32::TRANSPARENT, down]
+        );
+        assert_eq!(bodies[0].1, up, "the rising candle is outlined");
+        assert_eq!(wicks, [up, up, down, down]);
+        assert_eq!(chart.series_settings().bullish_color, up);
+        chart.set_chart_type(ChartType::Candles);
+        assert_eq!(chart.series_settings().bullish_color, candle);
+    }
+
     #[test]
     fn type_controls_leave_the_footer_inside_short_and_narrow_windows() {
         for dark in [false, true] {

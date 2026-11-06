@@ -1610,7 +1610,7 @@ impl Chart {
         let last = last_at.map(|at| &last_bars[at]);
         let last_color = last_at.map(|at| self.main_value_color(last_bars, at));
         let heikin_style = self.chart_type_params.styles.heikin.clone();
-        let heikin_last = (self.chart_type == ChartType::Heikin)
+        let heikin_last = (self.chart_type == ChartType::Heikin && !self.state.data().is_empty())
             .then(|| {
                 let bars = self
                     .heikin_ashi
@@ -1877,6 +1877,7 @@ impl Chart {
             if study.is_volume()
                 && !matches!(study.scale(), crate::studies::StudyScale::Shared(_))
                 && self.main_series_visible
+                && !self.state.data().is_empty()
             {
                 let rect = super::volume::overlay_rect(price_rect, &self.config);
                 let (min, max) = super::volume::range(

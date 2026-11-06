@@ -282,6 +282,22 @@ fn added_only_appends_keep_a_scrolled_back_view() {
     }
 }
 
+/// A fit of 1000 added bars into 800 points is below one point per bar, so the visible range groups
+/// the slots of the added series while the main series has no groups to read. The volume pane, on
+/// by default, draws nothing and the frame ends on the newest added bar.
+#[test]
+fn added_only_fit_paints_the_volume_pane() {
+    let ctx = egui::Context::default();
+    let mut chart = Chart::new(BarData::from_bars(vec![]));
+    let id = chart.add_series(SeriesOptions::default());
+    chart.set_data(id, bars(&[10.0; 1000]));
+    frame(&ctx, &mut chart, 0.0, vec![]);
+    chart.fit_content();
+    frame(&ctx, &mut chart, 0.1, vec![]);
+    assert!(chart.get_time_scale_state().0 < 1.0);
+    assert_eq!(chart.state.visible_range().1, 1000);
+}
+
 /// Last-value queries skip whitespace and use shared indices, each pane's scale and the
 /// value formatter. From a visible base of 100, 120 is +20% and a loaded 150 is +50%.
 /// A move from 100 to 130 forms three size-10 bricks with the same source timestamp.
