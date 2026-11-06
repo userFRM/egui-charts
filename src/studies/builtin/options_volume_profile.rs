@@ -1849,7 +1849,8 @@ mod tests {
     }
 
     /// A band hidden in a saved template stays hidden when the study is rebuilt before it knows
-    /// its band. Quotes without an underlying price wait for the last close.
+    /// its band, and when its settings are applied again. Quotes without an underlying price
+    /// wait for the last close.
     #[test]
     fn saved_band_style_survives_a_template() {
         let (chain, sink, mut rows, expiry, bars) = expected_move_chain();
@@ -1871,6 +1872,17 @@ mod tests {
             template.settings.fills,
             loaded.settings().fills
         );
+        // The settings dialog applies every input, and the chart's own inputs recalculate the
+        // study without bars, so it declares no band until the chart calculates it again.
+        let inputs: Vec<_> = loaded
+            .inputs()
+            .into_iter()
+            .map(|input| (input.id, input.value))
+            .collect();
+        let settings = loaded.settings();
+        loaded.apply_settings(&inputs, settings).unwrap();
+        loaded.calculate(&bars);
+        assert!(loaded.fills().is_empty(), "{:?}", loaded.settings().fills);
     }
 
     /// A profile saved with chain-dependent inputs restores before its quotes arrive, as a layout

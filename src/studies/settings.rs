@@ -1231,9 +1231,11 @@ impl Indicator for ConfiguredStudy {
                 edited.study.set_color(line, plot.color);
             }
         }
-        // Bands these inputs remove take their styles with them.
+        // Bands these inputs remove take their styles with them. A study left with none keeps
+        // them, since it may declare its bands only once it has data and these inputs can
+        // recalculate it without bars.
         let bands = edited.study.fills().len();
-        if bands < self.study.fills().len() {
+        if bands > 0 && bands < self.study.fills().len() {
             settings.fills.truncate(bands);
         }
         match_declared_styles(edited.study.as_ref(), &mut settings);
