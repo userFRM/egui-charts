@@ -191,28 +191,28 @@ impl Chart {
     /// The pane that draws drawing `id`, or `None` for an unknown drawing.
     pub fn drawing_pane(&self, id: usize) -> Option<PaneId> {
         let drawing = self.drawings().drawings.iter().find(|d| d.id == id)?;
-        Some(
-            self.pane_layout
-                .panes
-                .iter()
-                .find(|pane| {
-                    drawing.pane == Some(pane.id.0)
-                        || pane.members.iter().any(|id| drawing.pane == Some(id.0))
-                })
-                .map_or_else(
-                    || {
-                        let panes = self.panes();
-                        let main = self.main_series_pane();
-                        // The original pane may be gone with the main series.
-                        if panes.contains(&main) {
-                            main
-                        } else {
-                            panes.first().copied().unwrap_or(main)
-                        }
-                    },
-                    |pane| pane.id,
-                ),
-        )
+        Some(self.owner_pane(drawing).unwrap_or_else(|| {
+            let panes = self.panes();
+            let main = self.main_series_pane();
+            // The original pane may be gone with the main series.
+            if panes.contains(&main) {
+                main
+            } else {
+                panes.first().copied().unwrap_or(main)
+            }
+        }))
+    }
+
+    /// The pane that draws the owner of `drawing`: a pane, or a series or study it draws. `None`
+    /// for a drawing without one, which the pane holding the main series draws, or whose owner
+    /// no pane draws.
+    pub(super) fn owner_pane(&self, drawing: &Drawing) -> Option<PaneId> {
+        let owner = drawing.pane?;
+        self.pane_layout
+            .panes
+            .iter()
+            .map(|pane| pane.id)
+            .find(|pane| pane.0 == owner || self.pane_series_iter(*pane).any(|id| id.0 == owner))
     }
 
     /// Moves drawing `id` into `pane` as one undoable edit, keeping its anchors and style; the
@@ -682,5 +682,52 @@ mod tests {
                 "original pane kept: {original_kept}"
             );
         }
+    }
+
+    /// With the price series moved beside a study, a drawing without an owner and one owned by
+    /// an overlay of the original pane report the panes that draw them, also after a save and
+    /// load: the first is saved for the price pane, not for the study beside the price series.
+    #[test]
+    fn saved_drawings_keep_their_panes_beside_a_relocated_price_series() {
+        use crate::widget::SeriesId;
+        use crate::widget::test_frames::chart;
+
+        let study = |overlay| {
+            Box::new(
+                CustomIndicator::new("Study", |bars| {
+                    vec![IndicatorValue::Single(50.0); bars.len()]
+                })
+                .with_overlay(overlay),
+            )
+        };
+        let mut chart = chart(&[100.0], &[110.0]);
+        let overlay = chart.add_indicator(study(true));
+        let price = chart.add_pane();
+        assert!(chart.move_series_to_pane(SeriesId::MAIN, price));
+        let beside = chart.add_indicator(study(false));
+        assert!(chart.move_series_to_pane(beside, price));
+        for (id, owner) in [(1, None), (2, Some(overlay.0))] {
+            let mut line = Drawing::new(id, DrawingToolType::HorizontalLine);
+            line.chart_points = vec![ChartPoint::new(70.0, 105.0)];
+            line.completed = true;
+            line.pane = owner;
+            chart.drawings_mut().drawings.push(line);
+        }
+        let panes = |chart: &Chart| -> Vec<_> {
+            chart
+                .drawings()
+                .drawings
+                .iter()
+                .map(|drawing| chart.drawing_pane(drawing.id))
+                .collect()
+        };
+        let before = panes(&chart);
+        let saved = chart.save_drawings().unwrap().to_json().unwrap();
+        chart.load_drawings(&saved).unwrap();
+        assert_eq!(
+            [before, panes(&chart)],
+            [[Some(price), Some(PaneId::MAIN)]; 2],
+            "before and after the load"
+        );
     }
 }
