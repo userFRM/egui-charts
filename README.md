@@ -100,9 +100,9 @@ This README and the [guide](https://userfrm.github.io/egui-charts/docs/) follow 
       <strong>Rehearse the session</strong><br>
       <a href="docs/images/replay-dark.webp"><picture>
         <source media="(prefers-color-scheme: light)" srcset="docs/images/replay-light.webp">
-        <img src="docs/images/replay-dark.webp" alt="The replay transport advances the chart through historical bars.">
+        <img src="docs/images/replay-dark.webp" alt="Clicking a bar starts replay, and the replay bar steps the chart through historical bars.">
       </picture></a><br>
-      The replay transport advances the chart through historical bars.
+      Clicking a bar starts replay, and the replay bar steps the chart through historical bars.
     </td>
   </tr>
   <tr>

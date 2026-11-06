@@ -1,5 +1,5 @@
 # Durations are milliseconds; coordinates are logical points in the real 1280x720 demo.
-# click <duration> <accessible label>, row selects a symbol, study checks that a study was added.
+# click <duration> <accessible label>, row points at a symbol, study checks that a study was added.
 # move/drag <duration> <x> <y>; line places and checks a magnet-snapped line and moves its handle.
 hold 500
 move 900 440 245
@@ -12,19 +12,22 @@ click 400 1 Left, 3 Right
 hold 300
 click 400 Indicators
 hold 300
-search Bollinger
+search RSI
 hold 400
-study 300 Bollinger Bands
+study 300 Relative Strength Index
 escape
 escape
 hold 500
 click 300 Chart layout
 click 350 Single
 hold 200
-click 250 Volume footprint
+click 250 Candles
+click 250 Bars
+hold 400
+click 250 Bars
 click 250 Candles
 move 250 850 330
-scroll 3000
+scroll 300
 hold 400
 line
 escape
@@ -35,9 +38,10 @@ move 250 1120 260
 scroll -500
 row 300 SAMPLE
 hold 500
+# Replay and its restoration then stay in the active chart's own synchronization group.
+group replay
 click 400 Replay
 hold 400
-click 300 Select a bar on the chart
 bar 500 10
 hold 300
 click 200 Next bar (Right arrow)
@@ -47,8 +51,11 @@ hold 150
 click 200 Next bar (Right arrow)
 hold 150
 play 3000
-click 350 Exit replay
 click 350 Watchlist and details
+undo
+undo
 click 350 Chart layout
 click 350 2x2 Grid
-home 700
+click 300 Exit replay
+group
+home 500

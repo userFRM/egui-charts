@@ -11,56 +11,41 @@ pub(super) fn scenes() -> Vec<Scene> {
             name: "tour",
             steps: vec![
                 ClearStudies,
-                Study(study::<studies::BollingerBands>),
-                Study(|| {
-                    Box::new(
-                        studies::VolumeWeightedAvgPrice::new()
-                            .with_anchor(studies::VwapAnchor::Events)
-                            .with_event_anchors(["2026-10-27T18:30:00Z".parse().unwrap()])
-                            .with_std_dev_bands([1.0, 2.0]),
-                    )
-                }),
-                Study(study::<studies::MARibbon>),
-                Visible(90),
                 Grid(ChartLayoutMode::Four),
                 UnsyncTime,
                 Slot(0),
-                ClearStudies,
-                ChartType(ModelChartType::VolumeFootprint),
-                Visible(12),
-                Study(study::<studies::VolProfileSession>),
+                AddStudy("BB"),
+                // Its twelve averages would fill this pane with their inputs.
+                Study(study::<studies::MARibbon>),
+                AddStudy("Vol Profile VR"),
+                Visible(60),
                 Slot(1),
-                Study(study::<studies::VolProfileVisible>),
-                Visible(50),
+                ChartType(ModelChartType::VolumeFootprint),
+                Visible(7),
                 Slot(2),
-                ClearStudies,
                 ChartType(ModelChartType::TimePriceOpportunity),
-                Visible(390),
+                AddStudy("VWAP"),
+                Visible(1200),
                 Slot(3),
                 Heatmap,
-                Visible(45),
+                Visible(28),
                 Slot(0),
             ],
-            pointer: Some(vec2(0.3, 0.4)),
+            pointer: Some(vec2(0.5, 0.62)),
         },
         Scene {
             name: "liquidity",
-            steps: vec![ClearStudies, Visible(45), Heatmap],
+            steps: vec![ClearStudies, Visible(28), Heatmap],
             pointer: Some(vec2(0.3, 0.4)),
         },
         Scene {
             name: "drawings",
-            steps: vec![ClearStudies, Study(study::<studies::EMA>), Visible(65)],
+            steps: vec![ClearStudies, AddStudy("EMA"), Visible(65)],
             pointer: Some(vec2(0.3, 0.4)),
         },
         Scene {
             name: "replay",
-            steps: vec![
-                ClearStudies,
-                Study(study::<studies::EMA>),
-                Replay(30),
-                Visible(80),
-            ],
+            steps: vec![ClearStudies, AddStudy("EMA"), Visible(80)],
             pointer: Some(vec2(0.3, 0.4)),
         },
     ]
@@ -278,6 +263,27 @@ fn draw_line(t: &mut Timeline) {
     );
 }
 
+/// With the replay button armed, clicks the bar `back` bars before the latest to start replay there.
+fn click_replay_bar(t: &mut Timeline, back: usize, ms: usize) {
+    let chart = &t.h.state().chart;
+    let bars = chart.bars(SeriesId::MAIN);
+    let index = bars.len().checked_sub(back + 1).expect("replay bar exists");
+    let bar = &bars[index];
+    let to = chart
+        .get_chart_mapping()
+        .to_screen(index, (bar.open + bar.close) * 0.5);
+    assert!(
+        chart.get_rendered_price_rect().contains(to),
+        "replay candle must be visible"
+    );
+    t.move_to(to, ms);
+    t.click();
+    assert!(
+        t.h.state().chart.replay_time().is_some(),
+        "clicking the candle must start replay"
+    );
+}
+
 fn wall_time(now: chrono::DateTime<chrono::Utc>, monotonic: Option<i64>) {
     let path = std::env::var("CAPTURE_CLOCK").expect("motion capture needs regenerate.sh's clock");
     std::fs::write(
@@ -307,7 +313,7 @@ pub(super) fn shoot(scene: &Scene, light: bool, out: &Path) {
     let out = out.join(format!("{}-{theme}", scene.name));
     std::fs::create_dir_all(&out).unwrap();
     let rect = h.state().chart.get_rendered_price_rect();
-    let pointer = rect.min + rect.size() * vec2(0.3, 0.4);
+    let pointer = rect.min + rect.size() * scene.pointer.expect("motion scenes set a pointer");
     // Initialization work can take a variable number of passes; settle the UI on a fixed clock.
     for i in 0..60 {
         h.input_mut().time = Some(999.0 + i as f64 / 60.0);
@@ -360,26 +366,7 @@ pub(super) fn shoot(scene: &Scene, light: bool, out: &Path) {
                     }
                     "bar" => {
                         let (ms, back) = label();
-                        let chart = &t.h.state().chart;
-                        let bars = chart.bars(SeriesId::MAIN);
-                        let index = bars
-                            .len()
-                            .checked_sub(back.parse::<usize>().unwrap() + 1)
-                            .expect("replay bar exists");
-                        let bar = &bars[index];
-                        let to = chart
-                            .get_chart_mapping()
-                            .to_screen(index, (bar.open + bar.close) * 0.5);
-                        assert!(
-                            chart.get_rendered_price_rect().contains(to),
-                            "replay candle must be visible"
-                        );
-                        t.move_to(to, ms);
-                        t.click();
-                        assert!(
-                            t.h.state().chart.replay_time().is_some(),
-                            "clicking the candle must start replay"
-                        );
+                        click_replay_bar(&mut t, back.parse().unwrap(), ms);
                     }
                     "row" => {
                         let (ms, text) = label();
@@ -389,10 +376,9 @@ pub(super) fn shoot(scene: &Scene, light: bool, out: &Path) {
                                 .center();
                         assert!(
                             (110.0..380.0).contains(&to.y),
-                            "scroll the symbol into the visible watchlist before selecting it"
+                            "scroll the symbol into the visible watchlist before pointing at it"
                         );
                         t.move_to(to, ms);
-                        t.click();
                     }
                     "study" => {
                         let (ms, text) = label();
@@ -424,6 +410,11 @@ pub(super) fn shoot(scene: &Scene, light: bool, out: &Path) {
                         );
                     }
                     "escape" => t.key(Key::Escape, Modifiers::NONE),
+                    "undo" => t.key(Key::Z, Modifiers::COMMAND),
+                    "group" => {
+                        let group = (!args.is_empty()).then(|| args.to_owned());
+                        t.h.state_mut().layout.set_sync_group(0, group);
+                    }
                     "scroll" => t.scroll(args.parse().unwrap()),
                     "line" => {
                         t.live = false;
@@ -458,18 +449,22 @@ pub(super) fn shoot(scene: &Scene, light: bool, out: &Path) {
             );
         }
         "replay" => {
-            let count = t.h.state().chart.bars(SeriesId::MAIN).len();
-            t.hold(500);
-            for _ in 0..6 {
-                t.label("Next bar (Right arrow)", 300);
-                t.hold(450);
+            t.hold(400);
+            t.label("Replay", 400);
+            // Close to the latest bar, so the loop's dissolve meets almost the same view.
+            click_replay_bar(&mut t, 6, 700);
+            let started = t.h.state().chart.replay_time();
+            t.hold(300);
+            for _ in 0..5 {
+                t.label("Next bar (Right arrow)", 250);
+                t.hold(300);
             }
-            t.move_to(pointer, 600);
-            t.finish(7);
             assert!(
-                t.h.state().chart.bars(SeriesId::MAIN).len() > count,
+                t.h.state().chart.replay_time() > started,
                 "replay must advance"
             );
+            t.move_to(pointer, 700);
+            t.finish(7);
         }
         _ => unreachable!(),
     }

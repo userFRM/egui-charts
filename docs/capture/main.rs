@@ -57,6 +57,8 @@ enum Step {
     ClearStudies,
     /// Add a study with its default parameters.
     Study(fn() -> Box<dyn Indicator>),
+    /// Add a study as the indicators dialog does, with its inputs in the legend.
+    AddStudy(&'static str),
     /// Pick an arrangement in the layout menu.
     Grid(ChartLayoutMode),
     /// Make the chart in this slot of the layout the active one, as clicking it does.
@@ -72,7 +74,6 @@ enum Step {
     Ticket,
     Dom,
     Heatmap,
-    Replay(usize),
 }
 
 struct Scene {
@@ -220,7 +221,10 @@ fn apply(app: &mut DemoApp, ctx: &Context, step: &Step) {
             app.handle_top_toolbar(ctx, TopToolbarAction::ChartStyleSelected(*t));
             app.chart.config_mut().show_volume = !matches!(
                 t,
-                ModelChartType::Renko | ModelChartType::Kagi | ModelChartType::VolumeFootprint
+                ModelChartType::Renko
+                    | ModelChartType::Kagi
+                    | ModelChartType::VolumeFootprint
+                    | ModelChartType::TimePriceOpportunity
             );
         }
         Step::ClearStudies => {
@@ -229,6 +233,15 @@ fn apply(app: &mut DemoApp, ctx: &Context, step: &Step) {
         }
         Step::Study(make) => {
             app.chart.add_indicator(make());
+        }
+        Step::AddStudy(name) => {
+            let count = app.chart.indicators().count();
+            app.handle_top_toolbar(ctx, TopToolbarAction::AddIndicator((*name).into()));
+            assert_eq!(
+                app.chart.indicators().count(),
+                count + 1,
+                "unknown study {name}"
+            );
         }
         Step::Grid(mode) => app.handle_top_toolbar(
             ctx,
@@ -242,7 +255,6 @@ fn apply(app: &mut DemoApp, ctx: &Context, step: &Step) {
         Step::Visible(count) => app.chart.set_visible_bars(*count),
         Step::Indicators => app.handle_top_toolbar(ctx, TopToolbarAction::OpenIndicators),
         Step::Paper => app.connect_paper(),
-        Step::Replay(back) => app.start_replay_at(app.chart.bars(SeriesId::MAIN).len() - back),
         Step::Position | Step::Limit | Step::Ticket | Step::Dom | Step::Heatmap => {}
     }
 }
@@ -342,8 +354,6 @@ fn prepare(
     if animated && scene.name == "tour" {
         app.chart.config_mut().title_as_description = false;
         app.chart.config_mut().show_quote_boxes = false;
-        app.chart.config_mut().show_indicator_inputs = false;
-        app.chart.config_mut().show_indicator_last_val = false;
     }
     if animated {
         app.chart.config_mut().axis_font_size =
@@ -416,10 +426,11 @@ fn prepare(
                         .advance_sample_to(start + chrono::Duration::minutes(minute));
                     h.run_steps(2);
                 }
+                // The sample feed prints about 110 trades a minute with a heavy tail of sizes, so the
+                // default threshold still draws a bubble every few seconds; keep the largest 0.7%.
                 h.state_mut().chart.set_volume_bubbles(Some(
                     egui_charts::chart::overlays::VolumeBubblesConfig {
-                        min_size_filter: Some(80.0),
-                        max_diameter: 20.0,
+                        min_size_filter: Some(120.0),
                         ..Default::default()
                     },
                 ));
@@ -459,6 +470,9 @@ fn prepare(
             );
             h.state_mut().chart.scroll_to_position(0.5, false);
         }
+        // Keep the latest bars of the heatmap pane beside its book strip.
+        h.state_mut().activate_chart_slot(3);
+        h.state_mut().chart.scroll_to_position(6.0, false);
         h.state_mut().activate_chart_slot(0);
         h.run_steps(5);
     }
