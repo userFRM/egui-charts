@@ -1642,6 +1642,25 @@ mod tests {
             ["Fill"]
         );
         assert!(selected.texts[0].visual_bounding_rect().max.y <= 274.0);
+        // The popup is a card in the theme's colours whatever the pin's colour, tied to the pin's
+        // head by a thin line in the pin's colour.
+        let theme = crate::theme::Theme::dark();
+        let [card] = &selected.rects[..] else {
+            panic!("one popup");
+        };
+        assert_eq!(card.fill, theme.ui.panel_bg);
+        assert_eq!(card.stroke, egui::Stroke::new(1.0, theme.ui.border));
+        assert_eq!(
+            selected.texts[0].galley.job.sections[0].format.color,
+            theme.ui.text
+        );
+        assert_eq!(
+            selected.segments,
+            [(
+                [pos(200.0, card.rect.max.y), pos(200.0, 278.0)],
+                egui::Stroke::new(1.0, Color32::from_rgb(0xF2, 0x36, 0x45)),
+            )]
+        );
 
         let comment = draw(DrawingToolType::Comment, &[(100., 300.)], "Hi", false);
         let [bubble] = &comment.rects[..] else {
