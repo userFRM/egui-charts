@@ -380,6 +380,8 @@ fn default_style(tool: DrawingToolType) -> DefaultStyle {
             ..LINE
         },
         T::AnchoredVWAP => DefaultStyle { width: 1.0, ..LINE },
+        // The colour of the range tint, the same cyan as the rows of rising volume.
+        T::FixedRangeVolumeProfile | T::AnchoredVolumeProfile => colored([83, 196, 216, 255]),
         T::XABCDPattern | T::CypherPattern => filled(BLUE, 38),
         T::HeadAndShoulders => filled(TEAL, 38),
         T::ABCDPattern | T::SineLine => colored(TEAL),
