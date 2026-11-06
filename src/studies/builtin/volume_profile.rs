@@ -1883,8 +1883,7 @@ mod rendering_tests {
 
     /// A new session profile paints cyan and pink rows, stronger in the value area, under a 2 px
     /// point of control in the foreground colour of either theme. Saved colours keep theirs. Its
-    /// widest row takes 30% of a session that fills the plot from its first bar on, or the share
-    /// its width input sets.
+    /// widest row takes 30% of a session that fills the plot, or the share its width input sets.
     #[test]
     fn session_profile_paints_its_default_and_saved_colours() {
         let time = |minute| chrono::DateTime::UNIX_EPOCH + TimeDelta::minutes(minute);
@@ -1916,12 +1915,12 @@ mod rendering_tests {
         let light = crate::theme::Theme::light();
         let dark = crate::theme::Theme::dark();
         // Theme, saved colours, the rows outside and inside the value area, the line colour, the
-        // width input and where the widest row ends: the session spans 359 to 400.
+        // width input and where the widest row ends: the session spans the plot, 0 to 400.
         for (theme, colors, rows, poc, width, right_edge) in [
-            (&light, None, defaults, light.ui.text, None, 371.3),
-            (&dark, None, defaults, dark.ui.text, None, 371.3),
-            (&light, Some(saved.clone()), stored, saved[0], None, 371.3),
-            (&light, None, defaults, light.ui.text, Some(90.0), 395.9),
+            (&light, None, defaults, light.ui.text, None, 120.0),
+            (&dark, None, defaults, dark.ui.text, None, 120.0),
+            (&light, Some(saved.clone()), stored, saved[0], None, 120.0),
+            (&light, None, defaults, light.ui.text, Some(90.0), 360.0),
         ] {
             let mut study = VolProfileSession::new(10);
             if let Some(colors) = colors {
@@ -1942,7 +1941,9 @@ mod rendering_tests {
                 200.0,
                 false,
             );
-            let coords = ChartMapping::new(rect, 40.0, 0, 0, 0.0, price);
+            // A view inside the session: its first bar starts at the plot's left edge and its last
+            // ends past the right.
+            let coords = ChartMapping::new(rect, 200.0, 0, 1, 0.0, price);
             let ctx = egui::Context::default();
             crate::theme::apply_to_egui(&ctx, theme);
             let output = ctx.run_ui(egui::RawInput::default(), |ui| {
