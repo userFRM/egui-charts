@@ -683,7 +683,7 @@ fn draw_session_profile(
 
     // Single-print rows are highlighted behind their letter; hovering one names its price.
     if config.show_single_prints {
-        let decimals = (-tick_size.log10()).ceil().clamp(0.0, 8.0) as usize;
+        let decimals = crate::scales::decimals(profile.instrument_tick);
         for &price in &profile.single_prints {
             let (low, high) = profile.row_span(price);
             let top = coords.price_to_y(high);
@@ -2304,5 +2304,131 @@ mod tests {
             "pixels marked by 4 single prints: letters {letters}, blocks {blocks}, \
              letters and blocks {both}; expected at least {half_cells} on blocks"
         );
+    }
+
+    #[test]
+    fn single_print_tooltips_name_the_row_price() {
+        // (instrument tick, row height, two half-hour bars as (low, high), price range, single
+        // prints by hand)
+        type Case<'a> = (f64, f64, [(f64, f64); 2], (f64, f64), &'a [f64]);
+        let cases: [Case; 3] = [
+            // Rows of one 0.25 tick: only A reaches 110.75.
+            (
+                0.25,
+                0.25,
+                [(110.0, 110.75), (110.0, 110.5)],
+                (109.0, 112.0),
+                &[110.75],
+            ),
+            // Rows of ten 0.25 ticks from multiples of 2.5: A spans rows 100, 102.5 and 105,
+            // B only row 100.
+            (
+                0.25,
+                2.5,
+                [(100.0, 105.0), (100.0, 102.0)],
+                (95.0, 110.0),
+                &[102.5, 105.0],
+            ),
+            // Rows of one 1/64 tick: only A reaches 110.03125.
+            (
+                0.015625,
+                0.015625,
+                [(110.0, 110.03125), (110.0, 110.015625)],
+                (109.9, 110.1),
+                &[110.03125],
+            ),
+        ];
+        let rect = Rect::from_x_y_ranges(0.0..=400.0, 0.0..=400.0);
+        let highlight = TpoRenderConfig::default().single_print_color;
+        let mut observed = Vec::new();
+        let mut expected = Vec::new();
+        for (tick, rows, periods, range, prints) in cases {
+            let bars: Vec<_> = periods
+                .iter()
+                .enumerate()
+                .map(|(i, &(low, high))| {
+                    Bar::new(
+                        chrono::DateTime::UNIX_EPOCH + Duration::minutes(30 * i as i64),
+                        low,
+                        high,
+                        low,
+                        high,
+                        1.0,
+                    )
+                })
+                .collect();
+            let config = TPOConfig {
+                tick_size: rows,
+                show_single_prints: true,
+                ..Default::default()
+            };
+            let coords = PriceMap::new(
+                crate::scales::PriceTransform::default(),
+                crate::scales::PriceRange::new(range.0, range.1),
+                rect.min.y,
+                rect.max.y,
+                false,
+            );
+            let ctx = egui::Context::default();
+            let draw = |events| {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(rect),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        ui.allocate_rect(rect, egui::Sense::hover());
+                        render_live_tpo(
+                            ui.painter(),
+                            rect,
+                            &bars,
+                            0..bars.len(),
+                            1,
+                            &coords,
+                            &config,
+                            Some(tick),
+                            &BarClock::new(Timeframe::Min30),
+                            |i, _| i as f32 * 100.0 + 50.0,
+                            0.0,
+                            Color32::GREEN,
+                            Color32::RED,
+                        )
+                    },
+                );
+                output.textures_delta.clear();
+                output
+            };
+            let rows_lit: Vec<_> = draw(vec![])
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    Shape::Rect(r) if r.fill == highlight => Some(r.rect),
+                    _ => None,
+                })
+                .collect();
+            let mut named = Vec::new();
+            for row in rows_lit {
+                // A new tooltip shows from its second pass.
+                draw(vec![egui::Event::PointerMoved(row.center())]);
+                let hovered = draw(vec![egui::Event::PointerMoved(row.center())]);
+                named.extend(hovered.shapes.iter().filter_map(|s| match &s.shape {
+                    Shape::Text(t) => t
+                        .galley
+                        .text()
+                        .strip_prefix("Single print ")
+                        .map(str::to_owned),
+                    _ => None,
+                }));
+            }
+            let read: Vec<f64> = named.iter().map(|text| text.parse().unwrap()).collect();
+            observed.push((tick, rows, named, read));
+            expected.push((tick, rows, prints.to_vec()));
+        }
+        let read: Vec<_> = observed
+            .iter()
+            .map(|(tick, rows, _, read)| (*tick, *rows, read.clone()))
+            .collect();
+        assert_eq!(read, expected, "tooltips {observed:?}");
     }
 }
