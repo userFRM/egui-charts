@@ -1,9 +1,8 @@
 //! Exact bid, ask and delta profiles over host-selected session or composite ranges.
 
-use crate::data::{FeedError, Footprint, FootprintBar, FootprintLevel, NodeSensitivity};
+use crate::data::{FeedError, Footprint, FootprintBar, NodeSensitivity};
 use crate::model::ProfileRows;
 use chrono::{DateTime, Utc};
-use std::borrow::Cow;
 use std::ops::Range;
 
 /// Half-open session ranges. Adjacent sessions can be merged and split again by the user.
@@ -91,7 +90,7 @@ impl TradeProfile {
         let mut volume = FootprintBar::empty(self.range.start);
         flow.complete_bars(self.range.clone())
             .filter_map(|bar| {
-                volume.absorb(&grouped(bar, self.group));
+                volume.absorb_grouped(bar, self.group);
                 volume.value_area(share).map(|area| (bar.time, area))
             })
             .collect()
@@ -201,7 +200,7 @@ pub fn trade_profiles_with_rows(
             let mut volume = FootprintBar::empty(range.start);
             let mut developing_poc = Vec::new();
             for bar in flow.complete_bars(range.clone()) {
-                volume.absorb(&grouped(bar, group));
+                volume.absorb_grouped(bar, group);
                 if let Some(poc) = volume.poc() {
                     developing_poc.push((bar.time, poc));
                 }
@@ -215,34 +214,6 @@ pub fn trade_profiles_with_rows(
             }
         })
         .collect()
-}
-
-/// `bar` with every `group` neighbouring rows summed into the row keyed by their quotient.
-fn grouped(bar: &FootprintBar, group: i64) -> Cow<'_, FootprintBar> {
-    if group == 1 {
-        return Cow::Borrowed(bar);
-    }
-    let mut shown = FootprintBar {
-        time: bar.time,
-        levels: Default::default(),
-        bid: bar.bid,
-        ask: bar.ask,
-        unknown: bar.unknown,
-        min_delta: bar.min_delta,
-        max_delta: bar.max_delta,
-    };
-    for row in bar.levels.values() {
-        let key = row.level.div_euclid(group);
-        shown
-            .levels
-            .entry(key)
-            .or_insert_with(|| FootprintLevel {
-                level: key,
-                ..Default::default()
-            })
-            .absorb(row);
-    }
-    Cow::Owned(shown)
 }
 
 #[cfg(test)]

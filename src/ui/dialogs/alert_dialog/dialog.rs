@@ -443,6 +443,17 @@ impl AlertDialog {
         }
     }
 
+    /// What asks for a shorter text before an edit saves. A stored alert may hold a longer one.
+    fn text_too_long(&self) -> Option<&'static str> {
+        if self.alert.name.chars().count() > Alert::MAX_NAME_CHARS {
+            Some("The name is too long")
+        } else if self.alert.message.chars().count() > Alert::MAX_MESSAGE_CHARS {
+            Some("The message is too long")
+        } else {
+            None
+        }
+    }
+
     /// Poll preset replies and render the modal. Submit `Create` through the host alerts service.
     pub fn show(&mut self, ctx: &Context) -> AlertDialogAction {
         self.poll(ctx);
@@ -486,19 +497,17 @@ impl AlertDialog {
                         expiry = self.expiry(Utc::now());
                         start = self.start(expiry.ok().flatten());
                         schedule = self.schedule();
-                        valid = self.alert.is_valid()
+                        let too_long = self.text_too_long();
+                        valid = too_long.is_none()
+                            && self.alert.is_valid()
                             && expiry.is_ok()
                             && start.is_ok()
                             && schedule.is_ok();
-                        if !self.alert.is_valid() {
+                        if let Some(message) = too_long {
+                            status_message(ui, MessageKind::Error, message);
+                        } else if !self.alert.is_valid() {
                             let intervals = self.alert.timeframes();
-                            let message = if self.alert.name.chars().count() > Alert::MAX_NAME_CHARS
-                            {
-                                "The name is too long"
-                            } else if self.alert.message.chars().count() > Alert::MAX_MESSAGE_CHARS
-                            {
-                                "The message is too long"
-                            } else if !self.alert.delivery.is_valid() {
+                            let message = if !self.alert.delivery.is_valid() {
                                 "Enter the webhook URL, starting with http:// or https://"
                             } else if self.alert.additional_conditions.len() > 4 {
                                 "An alert accepts five conditions"
@@ -914,6 +923,7 @@ impl AlertDialog {
                     .add_enabled(
                         ready
                             && self.alert.is_valid()
+                            && self.text_too_long().is_none()
                             && !self.preset_name.trim().is_empty()
                             && fields.any()
                             && !self.preset_limit_reached()
@@ -1468,6 +1478,46 @@ mod tests {
         // A span captured on the source chart's interval does not describe another interval.
         let inputs = h.state().alert.inputs.as_ref().unwrap();
         assert_eq!((inputs.start, inputs.visible), (None, None));
+    }
+
+    /// The limits count characters, not bytes, and apply where the user edits the text.
+    #[test]
+    fn save_stops_at_the_name_and_message_limits() {
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT, Queryable},
+        };
+        type Edit = fn(&mut Alert);
+        let rows: [(Edit, bool); 4] = [
+            (|a| a.name = "é".repeat(Alert::MAX_NAME_CHARS), true),
+            (|a| a.name = "é".repeat(Alert::MAX_NAME_CHARS + 1), false),
+            (|a| a.message = "€".repeat(Alert::MAX_MESSAGE_CHARS), true),
+            (
+                |a| a.message = "€".repeat(Alert::MAX_MESSAGE_CHARS + 1),
+                false,
+            ),
+        ];
+        for (index, (edit, allowed)) in rows.into_iter().enumerate() {
+            let mut alert = Alert::new("SAMPLE", AlertCondition::Crossing(1.0));
+            edit(&mut alert);
+            let mut dialog = AlertDialog::new();
+            dialog.edit(alert);
+            let mut h = Harness::builder()
+                .allow_missing_glyphs()
+                .with_size(egui::vec2(1440.0, 900.0))
+                .build_ui_state(
+                    |ui, dialog: &mut AlertDialog| {
+                        dialog.show(ui.ctx());
+                    },
+                    dialog,
+                );
+            h.run();
+            assert_eq!(
+                h.get_by_label("Save alert").accesskit_node().is_disabled(),
+                !allowed,
+                "row {index}"
+            );
+        }
     }
 
     #[test]
