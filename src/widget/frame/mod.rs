@@ -2231,6 +2231,11 @@ impl Chart {
             let drawing = self.drawings.hit_test(pos);
             #[cfg(not(feature = "drawings"))]
             let drawing: Option<usize> = None;
+            // These primitives paint after the series layer. A renderer painted in its place in
+            // the order has already covered what lies under it there.
+            let covers_annotations = primitive_hit
+                .as_ref()
+                .is_some_and(|hit| hit.result.pass == PrimitivePass::Series);
             let hit = primitives::best_hit(
                 primitive_hit,
                 renderer_hit
@@ -2255,10 +2260,7 @@ impl Chart {
                 .map(super::PointerTarget::Drawing)
                 .or(hit.as_ref().map(|hit| hit.target.clone()))
                 .or_else(|| element_at(pos).map(|(id, _)| super::PointerTarget::Element(id)));
-            if hit
-                .as_ref()
-                .is_some_and(|hit| hit.result.pass == PrimitivePass::Series)
-            {
+            if covers_annotations {
                 self.cover_annotation_hit();
             }
             self.host_events.primitive_hit =
