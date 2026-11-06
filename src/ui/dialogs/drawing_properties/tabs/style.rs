@@ -9,6 +9,7 @@ use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::dialogs::drawing_properties::actions::DrawingProps;
 use crate::ui_kit::buttons::ButtonSize;
+use crate::ui_kit::color_picker::keep_opacity;
 use crate::ui_kit::ext::UiExt;
 use crate::ui_kit::{ColorPicker, ColorPickerState, FormGrid};
 
@@ -28,24 +29,26 @@ impl StyleTab {
             ui.label(l10n::text(ui.ctx(), "Color"));
             if let Some(color) = color_swatch(ui, color_picker, props.color, "drawing_props_color")
             {
-                props.color = color;
+                props.color = keep_opacity(color, props.color, color_picker.custom_mode);
             }
             ui.end_row();
 
-            ui.label(l10n::text(ui.ctx(), "Line width"));
-            line_width_row(ui, &mut props.line_width);
-            ui.end_row();
+            if tool.is_none_or(|tool| tool.draws_line()) {
+                ui.label(l10n::text(ui.ctx(), "Line width"));
+                line_width_row(ui, &mut props.line_width);
+                ui.end_row();
 
-            let label = ui.label(l10n::text(ui.ctx(), "Line style"));
-            ui.label_inputs_by(label.id, |ui| {
-                ui.combo_select(
-                    "line_style",
-                    &mut props.line_style,
-                    LineStyle::all().iter().copied(),
-                    |v| v.name().to_string(),
-                );
-            });
-            ui.end_row();
+                let label = ui.label(l10n::text(ui.ctx(), "Line style"));
+                ui.label_inputs_by(label.id, |ui| {
+                    ui.combo_select(
+                        "line_style",
+                        &mut props.line_style,
+                        LineStyle::all().iter().copied(),
+                        |v| v.name().to_string(),
+                    );
+                });
+                ui.end_row();
+            }
 
             if let Some(template) = &mut props.tool_settings {
                 let settings = &mut template.settings;
@@ -132,10 +135,8 @@ impl StyleTab {
                     props.fill_color = Some(fill);
                     if let Some(picked) = color_swatch(ui, fill_picker, fill, "drawing_props_fill")
                     {
-                        // Palette swatches are opaque: keep the fill's opacity unless it was edited.
-                        let [r, g, b, a] = picked.to_srgba_unmultiplied();
-                        let a = if fill_picker.custom_mode { a } else { fill.a() };
-                        props.fill_color = Some(Color32::from_rgba_unmultiplied(r, g, b, a));
+                        props.fill_color =
+                            Some(keep_opacity(picked, fill, fill_picker.custom_mode));
                     }
                     ui.end_row();
                 }
@@ -275,4 +276,62 @@ fn line_width_row(ui: &mut Ui, width: &mut f32) {
         )
         .accessible_name(l10n::text(ui.ctx(), "Line width"));
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Chart;
+    use crate::drawings::{Drawing, DrawingToolType};
+    use crate::model::BarData;
+    use crate::ui_kit::color_picker::MAIN_COLORS;
+    use egui::{Context, Event, Modifiers, PointerButton, Pos2, Rect, Shape};
+
+    /// A palette swatch recolours a highlighter without making its stroke opaque.
+    #[test]
+    fn palette_colours_keep_the_line_opacity() {
+        let ctx = Context::default();
+        ctx.global_style_mut(|style| style.animation_time = 0.0);
+        let chart = Chart::new(BarData::new());
+        let drawing = Drawing::new(0, DrawingToolType::Highlighter);
+        let mut props = DrawingProps::from_drawing(&drawing, &chart);
+        let mut pickers: [ColorPickerState; 2] = Default::default();
+        pickers[0].is_open = true;
+        let swatch = MAIN_COLORS[3];
+        let mut frame = |events| {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| StyleTab::show(ui, &mut props, &mut pickers),
+            );
+            let well = output.shapes.iter().find_map(|s| match &s.shape {
+                Shape::Rect(r) if r.fill == swatch => Some(r.rect.center()),
+                _ => None,
+            });
+            output.drop_without_applying_deltas();
+            well
+        };
+        frame(vec![]);
+        let pos = frame(vec![]).expect("the palette shows the swatch");
+        frame(vec![
+            Event::PointerMoved(pos),
+            Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed: true,
+                modifiers: Modifiers::NONE,
+            },
+            Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed: false,
+                modifiers: Modifiers::NONE,
+            },
+        ]);
+        let [r, g, b, _] = swatch.to_srgba_unmultiplied();
+        assert_eq!(props.color, Color32::from_rgba_unmultiplied(r, g, b, 51));
+    }
 }

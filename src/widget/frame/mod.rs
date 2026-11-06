@@ -945,6 +945,10 @@ impl Chart {
                     );
                 }
             }
+            // The data table lists the studies of the source bars, not their copies on elements.
+            if !self.chart_type.is_time_independent() {
+                self.readout_revision = crate::model::next_revision();
+            }
         }
         self.start_idx = start_idx;
 
@@ -1592,14 +1596,19 @@ impl Chart {
         let style = &self.main_series_style;
         // Last price line & label, from the newest bar even when it is scrolled out of view, or
         // from the newest bar in view
-        let last = match style.price_line_source {
-            crate::model::PriceLineSource::LastBar => {
-                crate::model::last_with_value(&self.state.data().bars)
-            }
+        let (last_bars, last_from) = match style.price_line_source {
+            crate::model::PriceLineSource::LastBar => (self.state.data().bars.as_slice(), 0),
             crate::model::PriceLineSource::LastVisible => {
-                crate::model::last_with_value(visible_data)
+                let (from, to) = self.state.visible_range();
+                (&self.state.shown()[..to], from)
             }
         };
+        let last_at = last_bars[last_from..]
+            .iter()
+            .rposition(|bar| !bar.is_whitespace())
+            .map(|at| last_from + at);
+        let last = last_at.map(|at| &last_bars[at]);
+        let last_color = last_at.map(|at| self.main_value_color(last_bars, at));
         let heikin_style = self.chart_type_params.styles.heikin.clone();
         let heikin_last = (self.chart_type == ChartType::Heikin)
             .then(|| {
@@ -1627,32 +1636,35 @@ impl Chart {
         } else {
             heikin_last.as_ref().map(|(bar, _)| bar).or(last)
         };
-        let last_price_line = last.filter(|_| self.main_series_visible).map(|last| {
-            PriceLine::new(
-                last.close,
-                if self.chart_type == ChartType::Heikin && !heikin_style.real_price_only {
-                    let rising = heikin_last.as_ref().is_none_or(|(_, rising)| *rising);
-                    style.price_line_color.unwrap_or(if rising {
-                        heikin_style.body_up
+        let last_price_line = last
+            .zip(last_color)
+            .filter(|_| self.main_series_visible)
+            .map(|(last, color)| {
+                PriceLine::new(
+                    last.close,
+                    if self.chart_type == ChartType::Heikin && !heikin_style.real_price_only {
+                        let rising = heikin_last.as_ref().is_none_or(|(_, rising)| *rising);
+                        style.price_line_color.unwrap_or(if rising {
+                            heikin_style.body_up
+                        } else {
+                            heikin_style.body_down
+                        })
                     } else {
-                        heikin_style.body_down
-                    })
+                        color
+                    },
+                )
+                .with_width(if self.config.show_price_line && style.price_line_visible {
+                    style.price_line_width
                 } else {
-                    self.main_value_color(last)
-                },
-            )
-            .with_width(if self.config.show_price_line && style.price_line_visible {
-                style.price_line_width
-            } else {
-                0.0
-            })
-            .with_style(style.price_line_style)
-            .with_axis_label(
-                (show_right_axis || show_left_axis)
-                    && self.config.show_symbol_last_val
-                    && style.last_value_visible,
-            )
-        });
+                    0.0
+                })
+                .with_style(style.price_line_style)
+                .with_axis_label(
+                    (show_right_axis || show_left_axis)
+                        && self.config.show_symbol_last_val
+                        && style.last_value_visible,
+                )
+            });
         // Footprint fills and glyphs must cover the current-price stroke.
         let price_line_below = !session_profiles
             && executions.is_some_and(|(flow, _, candles)| {
@@ -1872,6 +1884,9 @@ impl Chart {
                     &(start_idx..end_idx),
                     Some(&self.merge_groups),
                 );
+                if let Some(color) = study.background() {
+                    painter.rect_filled(rect, 0.0, color);
+                }
                 super::volume::paint(
                     &painter,
                     rect,
@@ -1924,6 +1939,11 @@ impl Chart {
                 );
             } else {
                 let mapping = rendering::study_mapping(study.as_ref(), &coords);
+                if let Some(color) = study.background() {
+                    painter
+                        .with_clip_rect(price_rect)
+                        .rect_filled(price_rect, 0.0, color);
+                }
                 rendering::IndicatorRenderer::render_study(
                     &price_ctx,
                     study.as_ref(),
@@ -2425,9 +2445,8 @@ impl Chart {
         if self.main_series_visible
             && self.chart_type == ChartType::Heikin
             && !heikin_style.real_price_only
-            && let Some(raw) = original_last
+            && let Some((raw, color)) = original_last.zip(last_color)
         {
-            let color = self.main_value_color(raw);
             let line = PriceLine::new(raw.close, color)
                 .with_width(
                     if self.config.show_price_line && self.main_series_style.price_line_visible {

@@ -53,7 +53,7 @@ pub(crate) struct FeedLink {
     reload_pending: bool,
     pub(super) paused: bool,
     /// The pause last set with [`Chart::set_feed_paused`]. `paused` also holds while the main
-    /// series is removed or a replay runs.
+    /// bars take no data or a replay runs.
     pub(super) host_paused: bool,
     next_key: u64,
     /// Requests not answered yet; an answer under any other key is stale and dropped.
@@ -295,6 +295,7 @@ impl Chart {
     pub(crate) fn attach_feed(&mut self, feed: Arc<dyn Datafeed>, initial_bars: usize) {
         self.set_timeframe(self.timeframe.unwrap_or_default());
         let timeframe = self.timeframe.unwrap_or_default();
+        self.readout_revision = crate::model::next_revision();
         self.feed_link = Some(FeedLink {
             feed,
             inbox: Arc::default(),
@@ -348,12 +349,13 @@ impl Chart {
     /// Resuming reloads the current symbol and interval, including any trades retained by the
     /// host. Bars supplied while paused are matched by exact opening time.
     /// The feed also stays paused while the main series is removed, and follows this setting
-    /// again once undo restores the series.
+    /// again once undo restores the series. On a chart without the original pane it keeps
+    /// following this setting, because the removed series' bars still supply the studies.
     pub fn set_feed_paused(&mut self, paused: bool) {
         if let Some(link) = &mut self.feed_link {
             link.host_paused = paused;
         }
-        let paused = paused || !self.main_series_present || self.replay.is_some();
+        let paused = paused || !self.main_bars_live() || self.replay.is_some();
         if paused {
             self.study_data.pause();
         }
@@ -372,6 +374,12 @@ impl Chart {
                 self.study_data.clear_feed();
             }
         }
+    }
+
+    /// Applies the host's pause again after the main series or the original pane came or went.
+    pub(super) fn follow_feed_pause(&mut self) {
+        let paused = self.feed_link.as_ref().is_some_and(|link| link.host_paused);
+        self.set_feed_paused(paused);
     }
 
     /// Shows `symbol` from the next [`show`](Self::show). With a feed, a changed symbol clears
@@ -566,6 +574,7 @@ impl Chart {
                 link.reload_pending = true;
                 // The headers must not keep the previous choice's currency while loading.
                 link.instrument = None;
+                self.readout_revision = crate::model::next_revision();
             }
         }
     }

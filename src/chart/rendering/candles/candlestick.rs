@@ -79,7 +79,9 @@ pub(super) fn render_ohlc_bars(
 }
 
 /// Hollow candles: coloured by the close versus the previous close, hollow when the close is above
-/// the open and filled otherwise. Body, border and wick have their own visibility and colours.
+/// the open and filled otherwise. Body, border and wick have their own visibility and colours. A
+/// bar's own colours replace them, its body colour also standing in for a border or wick it leaves
+/// unset.
 pub(super) fn render_hollow_candles(
     price_ctx: &RenderContext,
     volume_ctx: &RenderContext,
@@ -107,13 +109,19 @@ pub(super) fn render_hollow_candles(
         }
         let g = start_idx + i;
         let x = idx_to_coord(g, chart_rect_min_x);
-        let (body, border, wick) = match bar.colors.as_ref().and_then(|own| own.color) {
-            Some(own) => (own, own, own),
-            None if bar.close >= prev_close(full_data, g) => {
-                (style.body_up, style.border_up, style.wick_up)
-            }
-            None => (style.body_down, style.border_down, style.wick_down),
+        let (body, border, wick) = if bar.close >= prev_close(full_data, g) {
+            (style.body_up, style.border_up, style.wick_up)
+        } else {
+            (style.body_down, style.border_down, style.wick_down)
         };
+        let own = bar.colors.as_deref();
+        let own_body = own.and_then(|own| own.color);
+        let body = own_body.unwrap_or(body);
+        let border = own
+            .and_then(|own| own.border)
+            .or(own_body)
+            .unwrap_or(border);
+        let wick = own.and_then(|own| own.wick).or(own_body).unwrap_or(wick);
         let y = OhlcYCoords::from_bar(bar, &coords);
 
         if style.wick_visible {
@@ -275,6 +283,7 @@ pub(super) fn render_volume_candles(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::BarColors;
     use crate::scales::{PriceRange, PriceTransform};
     use egui::{Context, LayerId, Painter, Shape, vec2};
 
@@ -504,6 +513,117 @@ mod tests {
                 .collect();
             output.drop_without_applying_deltas();
             assert_eq!(drawn, widths, "{volumes:?} / {max_volume}");
+        }
+    }
+
+    /// A bar's own border and wick colours replace the style's on hollow candles, and its own
+    /// body colour stands in for whichever of the two it does not set.
+    #[test]
+    fn hollow_candles_take_per_bar_border_and_wick_colours() {
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0));
+        let map = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(0.0, 100.0),
+            0.0,
+            100.0,
+            false,
+        );
+        let colors = StyleColors {
+            bullish: Color32::GREEN,
+            bearish: Color32::RED,
+            text: Color32::WHITE,
+            bullish_border: None,
+            bearish_border: None,
+            bullish_wick: None,
+            bearish_wick: None,
+            candle_border_width: 0.0,
+        };
+        let style = HollowStyle::default();
+        let (body, border, wick) = (
+            Color32::from_rgb(7, 8, 9),
+            Color32::from_rgb(3, 4, 102),
+            Color32::from_rgb(105, 106, 6),
+        );
+        let hollow = Color32::TRANSPARENT;
+        for (own, rects, wicks) in [
+            (
+                BarColors {
+                    border: Some(border),
+                    wick: Some(wick),
+                    ..Default::default()
+                },
+                [(hollow, border), (style.body_down, border)],
+                [wick; 4],
+            ),
+            // A fill and border of one colour paint as the fill alone.
+            (
+                BarColors {
+                    color: Some(body),
+                    ..Default::default()
+                },
+                [(hollow, body), (body, hollow)],
+                [body; 4],
+            ),
+            (
+                BarColors {
+                    color: Some(body),
+                    wick: Some(wick),
+                    ..Default::default()
+                },
+                [(hollow, body), (body, hollow)],
+                [wick; 4],
+            ),
+            (
+                BarColors {
+                    color: Some(body),
+                    border: Some(border),
+                    ..Default::default()
+                },
+                [(hollow, border), (body, border)],
+                [body; 4],
+            ),
+        ] {
+            // Rising and hollow, then falling and filled below the first close; both have two
+            // wicks.
+            let mut bars = [
+                Bar::new(chrono::DateTime::UNIX_EPOCH, 10.0, 22.0, 8.0, 20.0, 0.0),
+                Bar::new(chrono::DateTime::UNIX_EPOCH, 30.0, 32.0, 14.0, 16.0, 0.0),
+            ];
+            for bar in &mut bars {
+                bar.colors = Some(Box::new(own.clone()));
+            }
+            let ctx = Context::default();
+            let output = ctx.run_ui(Default::default(), |_| {
+                let painter = Painter::new(ctx.clone(), LayerId::background(), rect);
+                let context = RenderContext::new(&painter, rect);
+                render_hollow_candles(
+                    &context,
+                    &context,
+                    &map,
+                    &colors,
+                    &bars,
+                    &bars,
+                    0,
+                    10.0,
+                    1.0,
+                    false,
+                    0.0,
+                    0.0,
+                    |i, _| 25.0 + i as f32 * 50.0,
+                    &style,
+                );
+            });
+            let (mut painted_rects, mut painted_wicks) = (vec![], vec![]);
+            for shape in &output.shapes {
+                match &shape.shape {
+                    Shape::Rect(body) => painted_rects.push((body.fill, body.stroke.color)),
+                    Shape::LineSegment { stroke, .. } => painted_wicks.push(stroke.color),
+                    _ => {}
+                }
+            }
+            output.drop_without_applying_deltas();
+            assert_eq!(painted_rects, rects, "{own:?}");
+            assert_eq!(painted_wicks, wicks, "{own:?}");
         }
     }
 }

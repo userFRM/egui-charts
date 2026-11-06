@@ -394,6 +394,7 @@ impl Chart {
                         .iter()
                         .any(|other| input.same_source(other))
                     {
+                        self.readout_revision = crate::model::next_revision();
                         let from = input.changed_since(*seen).map_or(0, |time| {
                             self.state
                                 .data()
@@ -555,6 +556,7 @@ impl Chart {
         let timeframe = self.timeframe.unwrap_or_default();
         let withheld = !supports(self.legend_instrument.as_ref(), timeframe);
         link.instrument = Some(instrument);
+        self.readout_revision = crate::model::next_revision();
         link.rebuild_bubbles(&self.state.data().bars);
         if !supports(link.instrument.as_ref(), timeframe) {
             self.rule_out(link);
