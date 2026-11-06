@@ -41,12 +41,31 @@ impl Drawing {
         )
     }
 
+    /// The colour of a border or grid in the drawing's line colour. A tool's default colour takes
+    /// the nearest shade that keeps 4:1 on the theme's chart and panel; a chosen colour is drawn
+    /// as chosen.
+    pub(crate) fn readable_line_color(&self, ctx: &egui::Context) -> Color32 {
+        let color = self.color32();
+        if !self.has_default_color() {
+            return color;
+        }
+        let theme = ctx.active_theme();
+        crate::theme::readable_color(
+            color,
+            theme.ui.text,
+            &[theme.chart.bg, theme.ui.panel_bg],
+            4.0,
+        )
+    }
+
     /// Colours of the box around an annotation's text. Unset colours follow the tool: a card
     /// takes the active theme's panel colour with its text and border in the drawing colour, and
     /// a solid label takes the drawing colour with white or black text, whichever reads on it.
-    /// Text without a background takes the drawing colour.
+    /// Text without a background takes the drawing colour. A pin's popup leaves the drawing colour
+    /// to the pin: its text and border are the theme's.
     pub(crate) fn text_box_colors(&self, ctx: &egui::Context) -> TextBoxColors {
         let rgba = |[r, g, b, a]: [u8; 4]| Color32::from_rgba_unmultiplied(r, g, b, a);
+        let pin = self.tool_type == DrawingToolType::AnchoredNote;
         let (fill, text) = if self.background {
             // The theme is read only for a card without a fill colour.
             let fill = self.fill_color32().unwrap_or_else(|| {
@@ -66,12 +85,20 @@ impl Drawing {
             (Color32::TRANSPARENT, self.color32())
         };
         TextBoxColors {
-            text: self.text_color.map_or(text, rgba),
+            text: match self.text_color {
+                Some(color) => rgba(color),
+                None if pin => ctx.active_theme().ui.text,
+                None => text,
+            },
             fill,
             border: if self.border {
                 Stroke::new(
                     crate::styles::stroke::HAIRLINE,
-                    self.border_color.map_or(self.color32(), rgba),
+                    match self.border_color {
+                        Some(color) => rgba(color),
+                        None if pin => ctx.active_theme().ui.border,
+                        None => self.readable_line_color(ctx),
+                    },
                 )
             } else {
                 Stroke::NONE
@@ -752,8 +779,9 @@ mod tests {
     }
 
     /// Text boxes take the theme's card, or a solid label in the drawing colour, unless their
-    /// text, background and border settings say otherwise. Contrast of white on the red is
-    /// 1.05 / 0.269 = 3.90 and on the yellow 1.05 / 0.860 = 1.22, so black reads on the yellow.
+    /// text, background and border settings say otherwise; a pin's popup leaves the pin's colour
+    /// to the pin. Contrast of white on the red is 1.05 / 0.269 = 3.90 and on the yellow
+    /// 1.05 / 0.860 = 1.22, so black reads on the yellow.
     #[test]
     fn text_boxes_follow_the_theme_and_their_settings() {
         use DrawingToolType::*;
@@ -781,6 +809,9 @@ mod tests {
                 let solid = matches!(tool, Comment | PriceNote | Signpost);
                 let plain = matches!(tool, TextLabel | AnchoredText);
                 let border = |color| vec![Stroke::new(1.0, color)];
+                let pin = tool == AnchoredNote;
+                let text = if pin { theme.ui.text } else { red };
+                let outline = if pin { theme.ui.border } else { red };
                 // Settings, text colour, box fills, box strokes and italics.
                 type Case = (
                     &'static str,
@@ -794,13 +825,13 @@ mod tests {
                     (
                         "defaults",
                         |_| {},
-                        if solid { Color32::WHITE } else { red },
+                        if solid { Color32::WHITE } else { text },
                         if plain {
                             vec![]
                         } else {
                             vec![if solid { red } else { panel }]
                         },
-                        if plain { vec![] } else { border(red) },
+                        if plain { vec![] } else { border(outline) },
                         false,
                     ),
                     (
@@ -821,9 +852,9 @@ mod tests {
                     (
                         "fill only",
                         |d| d.fill_color = Some([255, 235, 59, 255]),
-                        if solid { Color32::BLACK } else { red },
+                        if solid { Color32::BLACK } else { text },
                         if plain { vec![] } else { vec![yellow] },
-                        if plain { vec![] } else { border(red) },
+                        if plain { vec![] } else { border(outline) },
                         false,
                     ),
                     (
@@ -832,7 +863,7 @@ mod tests {
                             d.background = false;
                             d.border = false;
                         },
-                        red,
+                        text,
                         vec![],
                         vec![],
                         false,
@@ -891,6 +922,29 @@ mod tests {
                     assert_eq!(painted_strokes, strokes, "{name}");
                 }
             }
+        }
+    }
+
+    /// A tool's default border colour keeps 4:1 on the theme and a chosen one is drawn as chosen.
+    /// Teal has 3.51:1 on white and (0, 140, 155), its first shade towards black to reach 4:1, has
+    /// 4.02:1; on black it has 5.99:1, and the blue has 4.90:1 on white and 4.29:1 on black.
+    #[test]
+    fn default_box_borders_keep_their_contrast_on_the_theme() {
+        let teal = Color32::from_rgb(0, 151, 167);
+        let blue = Color32::from_rgb(41, 98, 255);
+        for (theme, callout) in [
+            (crate::theme::Theme::light(), Color32::from_rgb(0, 140, 155)),
+            (crate::theme::Theme::dark(), teal),
+            (crate::theme::Theme::high_contrast(), teal),
+        ] {
+            let ctx = egui::Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let border = |drawing: &Drawing| drawing.text_box_colors(&ctx).border.color;
+            let mut drawing = Drawing::new(1, DrawingToolType::Callout);
+            assert_eq!(border(&drawing), callout, "dark {}", theme.dark);
+            drawing.color = [200, 200, 200, 255];
+            assert_eq!(border(&drawing), Color32::from_gray(200));
+            assert_eq!(border(&Drawing::new(1, DrawingToolType::Note)), blue);
         }
     }
 
