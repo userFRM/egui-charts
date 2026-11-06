@@ -87,7 +87,7 @@ Builder API,Widget API and customization,Chart type switching,unverified,library
 Builder API,Widget API and customization,Chart without toolbars,verified,library,Cargo.toml;src/lib.rs;src/widget/builder.rs;src/widget/frame/mod.rs,
 Builder API,Widget API and customization,Context menu customisation,unverified,library,src/ui/context_menu/mod.rs;src/ui/context_menu/chart_menus/mod.rs,
 Builder API,Widget API and customization,Create and edit drawings from code,unverified,library,src/widget/drawing_api.rs;src/widget/anchors.rs;src/drawings/manager/mod.rs;src/widget/mod.rs;src/drawings/manager/edit.rs,
-Builder API,Widget API and customization,Create and remove studies,verified,library,src/widget/series/mod.rs;src/widget/studies.rs;src/studies/settings.rs;src/widget/pane/mod.rs,
+Builder API,Widget API and customization,Create and remove studies,unverified,library,src/widget/series/mod.rs;src/widget/studies.rs;src/studies/settings.rs;src/widget/pane/mod.rs;src/widget/keyboard.rs;src/widget/frame/mod.rs,2247
 Builder API,Widget API and customization,Custom date and time formatters,unverified,library,src/scales/time_formatter.rs;src/widget/format.rs;src/widget/tool_interaction/mod.rs;src/drawings/rendering/trading/forecast.rs,
 Builder API,Widget API and customization,Custom price formatter,unverified,library,src/widget/tool_interaction/mod.rs;src/drawings/rendering/mod.rs;src/widget/format.rs;examples/demo/formatting.rs;src/ui/widget_bar/panels/object_tree/data_window.rs;src/scales/price_formatter.rs;src/chart/rendering/axes/labels.rs;src/chart/rendering/axes/study_scale.rs,1873;1939
 Builder API,Widget API and customization,Data conflation controls and preparation,incomplete,library,src/config/chart.rs;src/widget/merge.rs;src/widget/frame/mod.rs;src/widget/primitives.rs;src/widget/pane/render/mod.rs;src/widget/pane/indicator/mod.rs,
@@ -161,17 +161,17 @@ Chart,Crosshair and interaction,Crosshair across all panes,unverified,library,sr
 Chart,Crosshair and interaction,Crosshair index eligibility,unverified,library,src/config/timescale.rs;src/widget/crosshair.rs;src/widget/events.rs;src/widget/frame/mod.rs;src/widget/pane/render/mod.rs,1880
 Chart,Crosshair and interaction,Crosshair lines and independent axis labels,verified,library,src/chart/rendering/overlays/crosshair.rs;src/scales/time_formatter.rs;src/painting/dashed_line.rs;src/config/crosshair.rs;src/chart/rendering/axes/mod.rs;src/theme/presets.rs;src/widget/pane/indicator/mod.rs;src/widget/pane/render/mod.rs;src/scales/horizontal.rs;src/widget/frame/mod.rs;src/widget/export.rs;src/widget/sync.rs,1883
 Chart,Crosshair and interaction,Cursor types,unverified,library,src/widget/tool_interaction/cursor_modes/mod.rs;src/widget/tool_interaction/cursor_modes/eraser.rs;src/widget/tool_interaction/selection.rs;src/widget/pane/render/mod.rs;src/drawings/manager/interaction.rs;src/widget/frame/mod.rs,
-Chart,Crosshair and interaction,Double-click on axes to reset,unverified,library,src/widget/pan_zoom/mod.rs;src/widget/pane/mod.rs;src/widget/pane/controls.rs;src/widget/frame/mod.rs;src/config/interaction.rs,1888
+Chart,Crosshair and interaction,Double-click on axes to reset,unverified,library,src/widget/pan_zoom/mod.rs;src/widget/pane/mod.rs;src/widget/pane/controls.rs;src/widget/frame/mod.rs;src/config/interaction.rs,1888;2228
 Chart,Crosshair and interaction,Drag on the time axis to zoom,unverified,library,src/widget/pan_zoom/mod.rs;src/widget/frame/mod.rs;src/config/interaction.rs,1888
 Chart,Crosshair and interaction,Drag or wheel on the price axis to zoom,unverified,library,src/widget/pan_zoom/mod.rs;src/widget/frame/mod.rs;src/config/interaction.rs;src/widget/pane/controls.rs;src/widget/series/paint.rs,1888
-Chart,Crosshair and interaction,Drag to pan,verified,library,src/widget/pan_zoom/mod.rs;src/widget/frame/mod.rs;src/config/interaction.rs,1888
+Chart,Crosshair and interaction,Drag to pan,unverified,library,src/widget/pan_zoom/mod.rs;src/widget/frame/mod.rs;src/config/interaction.rs;src/widget/pane/render/mod.rs,1888;2226
 Chart,Crosshair and interaction,Go to date,unverified,library,src/widget/builder.rs;src/widget/pan_zoom/mod.rs;terminal/src/time.rs,
 Chart,Crosshair and interaction,Horizontal scroll,unverified,library,src/widget/pan_zoom/mod.rs;src/widget/frame/mod.rs;src/config/interaction.rs,
 Chart,Crosshair and interaction,Hover tooltip and floating data window,unverified,library,src/chart/rendering/overlays/tooltip.rs;src/widget/readout.rs;src/scales/horizontal.rs;src/scales/time_formatter.rs;src/widget/frame/mod.rs;examples/demo/annotations.rs,1938
 Chart,Crosshair and interaction,Kinetic scroll,unverified,library,src/widget/pan_zoom/mod.rs;src/config/kinetic.rs;src/widget/mod.rs;src/widget/builder.rs;src/config/interaction.rs,
 Chart,Crosshair and interaction,Magnet crosshair,incomplete,library,src/config/crosshair.rs;src/widget/crosshair.rs;src/widget/series/scales/mod.rs;src/widget/frame/mod.rs;src/widget/pane/render/mod.rs;src/widget/events.rs;src/widget/series/options.rs;src/widget/series/paint.rs,
-Chart,Crosshair and interaction,Mouse wheel zoom anchored at the cursor,unverified,library,src/widget/pan_zoom/mod.rs;src/model/timescale.rs;src/widget/frame/mod.rs;src/config/interaction.rs,
-Chart,Crosshair and interaction,Pinch zoom and two-finger pan,unverified,library,src/widget/pan_zoom/mod.rs;src/widget/frame/mod.rs;src/config/interaction.rs,
+Chart,Crosshair and interaction,Mouse wheel zoom anchored at the cursor,unverified,library,src/widget/pan_zoom/mod.rs;src/model/timescale.rs;src/widget/frame/mod.rs;src/config/interaction.rs;src/widget/pane/render/mod.rs,2226
+Chart,Crosshair and interaction,Pinch zoom and two-finger pan,unverified,library,src/widget/pan_zoom/mod.rs;src/widget/frame/mod.rs;src/config/interaction.rs;src/widget/pane/render/mod.rs,2226
 Chart,Crosshair and interaction,Price scale and time scale context menus,unverified,library,src/ui/context_menu/mod.rs;src/ui/context_menu/chart_menus/mod.rs;src/ui/context_menu/axis.rs;src/widget/series/scales/mod.rs;src/widget/pane/controls.rs,2044
 Chart,Crosshair and interaction,Programmatic crosshair positioning,unverified,library,src/widget/sync.rs;src/widget/frame/mod.rs;src/widget/pane/render/mod.rs;src/widget/export.rs,1883
 Chart,Crosshair and interaction,Scroll and scale handler group switches,incomplete,library,src/config/interaction.rs;src/widget/pan_zoom/mod.rs;src/widget/pane/controls.rs;src/widget/series/paint.rs,1888
@@ -217,7 +217,7 @@ Chart,Multi-chart and sync,Sync interval,unverified,host,src/widget/layout.rs;sr
 Chart,Multi-chart and sync,Sync symbol,unverified,host,src/widget/layout.rs;src/widget/feed/mod.rs,
 Chart,Multi-chart and sync,Sync time,incomplete,library,src/widget/layout.rs;src/widget/sync.rs;src/model/timescale.rs,
 Chart,Multi-chart and sync,Up to 16 charts per tab,unverified,library,src/widget/layout.rs,
-Chart,Panes,Collapse pane,unverified,library,src/widget/pane/mod.rs;src/widget/pane/controls.rs;src/widget/pane/render/mod.rs;src/widget/frame/mod.rs;src/widget/keyboard.rs,2028
+Chart,Panes,Collapse pane,unverified,library,src/widget/pane/mod.rs;src/widget/pane/controls.rs;src/widget/pane/render/mod.rs;src/widget/frame/mod.rs;src/widget/keyboard.rs,2028;2226;2227;2228
 Chart,Panes,Maximize pane,unverified,library,src/widget/pane/mod.rs;src/widget/pane/controls.rs;src/widget/pane/render/mod.rs;src/widget/pane/indicator/mod.rs,
 Chart,Panes,"Move indicator to another pane, merge, or new pane",unverified,library,src/widget/pane/mod.rs;src/widget/pane/controls.rs,
 Chart,Panes,Move pane up or down,unverified,library,src/widget/pane/mod.rs;src/widget/pane/controls.rs,
@@ -226,7 +226,7 @@ Chart,Panes,Programmatic pane and series API,unverified,library,src/widget/pane/
 Chart,Panes,Remove pane,unverified,library,src/widget/pane/mod.rs;src/widget/pane/controls.rs;src/widget/pane/render/mod.rs;src/widget/frame/mod.rs;src/widget/primitives.rs;src/widget/snapshot.rs;src/widget/studies.rs;src/widget/series/options.rs,1877;1902
 Chart,Panes,Resize panes by dragging the separator,unverified,library,src/widget/pane/mod.rs;src/widget/pane/controls.rs;src/widget/pane/render/mod.rs,
 Chart,Panes,Separate indicator panes,unverified,library,src/widget/pane/mod.rs;src/widget/pane/render/mod.rs,
-Chart,Panes,Shared time axis across panes,unverified,library,src/widget/pane/render/mod.rs;src/widget/time_scale.rs;src/studies/chart_state.rs;src/widget/series/mod.rs;src/widget/frame/mod.rs,1882
+Chart,Panes,Shared time axis across panes,unverified,library,src/widget/pane/render/mod.rs;src/widget/time_scale.rs;src/studies/chart_state.rs;src/widget/series/mod.rs;src/widget/frame/mod.rs,1882;2226
 Chart,Panes,Volume area in the main pane,unverified,library,src/widget/volume.rs;src/chart/rendering/candles/volume.rs;src/theme/mod.rs;src/theme/presets.rs;src/widget/frame/mod.rs,
 Chart,Scales and axes,Auto-scale,unverified,library,src/studies/chart_state.rs;src/scales/pricescale.rs;src/ui/top_toolbar/components/settings_menu/menu.rs;src/widget/frame/mod.rs;src/widget/series/scales/mod.rs;src/chart/rendering/markers.rs;src/widget/pane/render/mod.rs;src/model/series_style.rs;src/chart/primitives.rs;src/widget/primitives.rs,1875
 Chart,Scales and axes,Bar spacing and time zoom,verified,library,src/model/timescale.rs;src/widget/pan_zoom/mod.rs;src/config/timescale.rs;src/widget/sync.rs;src/widget/mod.rs;src/widget/builder.rs;src/widget/keyboard.rs;src/widget/time_scale.rs;src/studies/chart_state.rs;src/widget/frame/mod.rs,1882
@@ -557,7 +557,7 @@ Studies,Indicator infrastructure,Per-study legend values,unverified,library,src/
 Studies,Indicator infrastructure,Plot offset,incomplete,library,src/studies/indicator_trait.rs;src/studies/custom.rs;src/studies/settings.rs;src/chart/rendering/indicator.rs,
 Studies,Indicator infrastructure,Plot styles,unverified,library,src/studies/settings.rs;src/studies/custom.rs;src/chart/rendering/indicator.rs;src/widget/pane/indicator/mod.rs;src/widget/pane/indicator/paint.rs;src/studies/indicator_trait.rs;src/studies/palette.rs;src/painting/dashed_line.rs;src/ui/dialogs/indicator_dialog/settings.rs;src/chart/indicators/plots.rs,2061
 Studies,Indicator infrastructure,Recalculation on realtime updates,unverified,library,src/widget/series/mod.rs;src/widget/studies.rs;src/studies/settings.rs;src/studies/stepper.rs;src/widget/studies_data.rs,2110
-Studies,Indicator infrastructure,Remove a study,unverified,library,src/widget/series/mod.rs;src/widget/studies.rs;src/widget/pane/render/mod.rs,
+Studies,Indicator infrastructure,Remove a study,unverified,library,src/widget/series/mod.rs;src/widget/studies.rs;src/widget/pane/render/mod.rs;src/widget/keyboard.rs;src/widget/frame/mod.rs,2247
 Studies,Indicator infrastructure,Settings dialog: Inputs tab,unverified,library,src/ui/dialogs/indicator_dialog/settings.rs;src/studies/settings.rs,
 Studies,Indicator infrastructure,Settings dialog: Style tab,unverified,library,src/ui/dialogs/indicator_dialog/settings.rs;src/studies/settings.rs;src/chart/rendering/legend/mod.rs;src/widget/pane/indicator/paint.rs;src/studies/indicator_trait.rs;src/chart/rendering/indicator.rs;src/chart/indicators/plots.rs;src/studies/builtin/awesome_oscillator.rs,2040;2061
 Studies,Indicator infrastructure,Settings dialog: Visibility tab,unverified,library,src/ui/dialogs/indicator_dialog/settings.rs;src/studies/settings.rs,
@@ -866,7 +866,7 @@ Terminal,Alerts,Notification: in-app popup when an alert fires,incomplete,librar
 Terminal,Alerts,Notification: mobile app push,incomplete,host,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs,
 Terminal,Alerts,Notification: webhook,incomplete,host,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs,
 Terminal,Alerts,"Price operators: crossing, crossing up, crossing down, greater than, less than",unverified,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs,
-Terminal,Alerts,Quick alert from the price-scale '+' or the chart context menu,unverified,library,src/ui/context_menu/mod.rs;src/chart/rendering/overlays/crosshair.rs;src/chart/rendering/axes/mod.rs;src/config/chart.rs;src/widget/settings/apply.rs;src/ui/context_menu/chart_menus/mod.rs;src/widget/keyboard.rs;terminal/src/alerts.rs;src/widget/frame/mod.rs;examples/demo/controller.rs,2028
+Terminal,Alerts,Quick alert from the price-scale '+' or the chart context menu,unverified,library,src/ui/context_menu/mod.rs;src/chart/rendering/overlays/crosshair.rs;src/chart/rendering/axes/mod.rs;src/config/chart.rs;src/widget/settings/apply.rs;src/ui/context_menu/chart_menus/mod.rs;src/widget/keyboard.rs;terminal/src/alerts.rs;src/widget/frame/mod.rs;examples/demo/controller.rs,2028;2225
 Terminal,Alerts,Server-side evaluation,unverified,host,src/services/alerts.rs;src/ui/widget_bar/panels/alerts_panel.rs,
 Terminal,Alerts,Trigger frequency,unverified,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs;src/services/alert_engine.rs,
 Terminal,Alerts,Watchlist alerts,incomplete,host,src/ui/dialogs/alert_dialog/dialog.rs;src/services/alert_engine.rs;src/services/alert_evaluator.rs;src/services/alert_feed.rs;terminal/src/alerts.rs,
@@ -959,7 +959,7 @@ Terminal,Trading panel,Execution markers on the chart,unverified,library,src/ui/
 Terminal,Trading panel,Order and position lines on the chart,incomplete,library,src/chart/rendering/trading_lines/mod.rs;src/chart/rendering/trading_lines/position.rs;src/ui/trading/mod.rs;src/ui/trading/view.rs;src/chart/rendering/axes/mod.rs;src/widget/frame/mod.rs,
 Terminal,Trading panel,Order ticket,incomplete,library,src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/view.rs;src/ui/trading/ticket/form.rs;src/ui/trading/mod.rs;src/ui/trading/widgets.rs;terminal/src/trading.rs,
 Terminal,Trading panel,Paper trading account,incomplete,library,src/services/paper.rs;src/model/trading.rs;examples/demo/feeds.rs;examples/demo/controller.rs;examples/demo/live.rs,
-Terminal,Trading panel,Place an order from the chart context menu,unverified,host,src/ui/trading/mod.rs;src/ui/trading/view.rs;src/ui/context_menu/mod.rs;terminal/src/trading.rs;src/ui/context_menu/chart_menus/mod.rs;src/widget/keyboard.rs;examples/demo/controller.rs,2028
+Terminal,Trading panel,Place an order from the chart context menu,unverified,host,src/ui/trading/mod.rs;src/ui/trading/view.rs;src/ui/context_menu/mod.rs;terminal/src/trading.rs;src/ui/context_menu/chart_menus/mod.rs;src/widget/keyboard.rs;examples/demo/controller.rs,2028;2225
 Terminal,Trading panel,"Position line with P&L, close and reverse",incomplete,host,src/chart/rendering/trading_lines/mod.rs;src/chart/rendering/trading_lines/position.rs;src/ui/trading/mod.rs;src/ui/trading/view.rs;src/chart/rendering/axes/mod.rs;src/widget/frame/mod.rs,
 Terminal,Trading panel,Several take-profit levels on one order,incomplete,host,src/ui/trading/ticket/mod.rs;src/ui/trading/ticket/form.rs;src/chart/rendering/trading_lines/mod.rs;src/ui/trading/account_panel/view.rs;src/services/paper.rs,
 Terminal,Trading panel,"Show/hide positions, orders and executions",incomplete,library,src/ui/trading/mod.rs;src/ui/trading/view.rs;terminal/src/trading.rs,
