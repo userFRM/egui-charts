@@ -1296,3 +1296,89 @@ fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
         }
     }
 }
+
+/// The footprint's volume shades are mixed with the background the chart paints. With the light
+/// theme and a black chart background, as the Canvas settings set it, the sell shades must be
+/// those drawn on black: 20, 40, 60 and 80% of rgb(242, 54, 69), hand-worked as (48, 11, 14),
+/// (97, 22, 28), (145, 32, 41) and (194, 43, 55). Sells of 10, 20, 30 and 50 at 102 to 105 fall
+/// in the four quarters of the bar's sell range, 10 to 50; 101 holds the POC.
+#[test]
+fn footprint_shades_follow_the_chart_background() {
+    use crate::chart::overlays::FootprintConfig;
+    use crate::data::Footprint;
+    use crate::model::{BarClock, OrderSide, Tick, Timeframe};
+    let ctx = egui::Context::default();
+    crate::theme::apply_to_egui(&ctx, &crate::theme::Theme::light());
+    let mut chart = chart(&[100.0], &[106.0]);
+    chart.set_symbol("FLOW");
+    chart.apply_synced_time_scale(100.0, 1.0);
+    let time = chart.bars(crate::widget::SeriesId::MAIN)[99].time;
+    let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+    for (price, sell, buy) in [
+        (101.0, 10.0, 200.0),
+        (102.0, 10.0, 1.0),
+        (103.0, 20.0, 1.0),
+        (104.0, 30.0, 1.0),
+        (105.0, 50.0, 1.0),
+    ] {
+        for (size, side) in [(sell, OrderSide::Sell), (buy, OrderSide::Buy)] {
+            flow.push(&Tick::new(time, price, size, Some(side)))
+                .unwrap();
+        }
+    }
+    let config = FootprintConfig {
+        auto_row_height: None,
+        text_color: egui::Color32::WHITE,
+        ..Default::default()
+    };
+    let draw = |chart: &mut crate::widget::Chart| {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+                ..Default::default()
+            },
+            |ui| {
+                chart.show_footprint(ui, &flow, &config);
+            },
+        );
+        output.textures_delta.clear();
+        output.shapes
+    };
+    // The first frame follows the light palette; the edit after it is the user's.
+    draw(&mut chart);
+    chart.config_mut().background_color = egui::Color32::BLACK;
+    let shapes = draw(&mut chart);
+    let map = chart.get_chart_mapping();
+    let quads: Vec<_> = shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            Shape::Mesh(mesh) => Some(
+                mesh.vertices
+                    .chunks(4)
+                    .map(|q| (Rect::from_two_pos(q[0].pos, q[3].pos), q[0].color))
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    let x = map.idx_to_x(99) - map.bar_spacing * 0.46 + 4.0;
+    let shades: Vec<_> = [102.0, 103.0, 104.0, 105.0]
+        .into_iter()
+        .map(|price| {
+            let point = egui::pos2(x, map.price_to_y(price));
+            quads
+                .iter()
+                .rev()
+                .find(|(rect, _)| rect.contains(point))
+                .map(|(_, c)| [c.r(), c.g(), c.b()])
+        })
+        .collect();
+    let expected = [[48, 11, 14], [97, 22, 28], [145, 32, 41], [194, 43, 55]];
+    assert!(
+        shades.iter().zip(expected).all(|(shade, expected)| {
+            shade.is_some_and(|shade| shade.iter().zip(expected).all(|(a, b)| a.abs_diff(b) <= 1))
+        }),
+        "sell shades on a black chart background {shades:?}, expected {expected:?}"
+    );
+}

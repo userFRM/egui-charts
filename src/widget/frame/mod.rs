@@ -1584,7 +1584,15 @@ impl Chart {
             self.config.price_source,
         );
 
-        let host = footprint.filter(|_| time_based);
+        // Both paint paths and the summary box mix their shades with what the chart paints.
+        let plot_background = self.plot_background();
+        let host_config = footprint
+            .filter(|_| time_based)
+            .map(|(_, config)| FootprintConfig {
+                background: config.background.or(plot_background),
+                ..config.clone()
+            });
+        let host = footprint.map(|(flow, _)| flow).zip(host_config.as_ref());
         let feed = self
             .feed_link
             .as_ref()
@@ -1596,8 +1604,9 @@ impl Chart {
                         || (self.chart_type == ChartType::SessionVolumeProfile
                             && cfg!(feature = "studies")))
             });
-        let feed_config = feed.map(|_| {
-            FootprintConfig::from_chart_params(
+        let feed_config = feed.map(|_| FootprintConfig {
+            background: plot_background,
+            ..FootprintConfig::from_chart_params(
                 &self.chart_type_params,
                 [colors.bullish, colors.bearish, colors.text, colors.text],
             )

@@ -41,6 +41,9 @@ pub struct FootprintConfig {
     pub text_color: Color32,
     /// Cell fill for balanced or unclassified executions.
     pub neutral_color: Color32,
+    /// The colour behind the cells, which the volume shades and the patches behind numbers are
+    /// mixed with, or `None`, the default, for the plot background of the painter's active theme.
+    pub background: Option<Color32>,
     /// Group adjacent rows automatically to at least this screen height. `None` keeps the
     /// aggregation's manual grouping. Grouping is an integer multiple of the input step.
     pub auto_row_height: Option<f32>,
@@ -113,6 +116,7 @@ impl Default for FootprintConfig {
             bid_color: crate::tokens::DESIGN_TOKENS.semantic.chart.bearish,
             text_color: Color32::WHITE,
             neutral_color: Color32::GRAY,
+            background: None,
             auto_row_height: Some(16.0),
             row_ticks: 0,
             min_text_height: 12.0,
@@ -269,7 +273,10 @@ pub fn render_footprint(
     let background = painter.add(Shape::Noop);
     let mut mesh = Mesh::default();
     let columns = config.modes.len().min(4);
-    let text_background = painter.ctx().active_theme().chart.bg.to_opaque();
+    let text_background = config
+        .background
+        .unwrap_or_else(|| painter.ctx().active_theme().chart.bg)
+        .to_opaque();
     let steps = config.color_by == FootprintColor::VolumeSteps;
     let spine_drawn = !has_ladder(config);
     // Use the existing half-gap so price markers do not shrink execution columns.
@@ -1097,7 +1104,10 @@ fn render_info_box(
             return;
         }
     }
-    let background = painter.ctx().active_theme().chart.bg.to_opaque();
+    let background = config
+        .background
+        .unwrap_or_else(|| painter.ctx().active_theme().chart.bg)
+        .to_opaque();
     painter.rect_filled(bounds, 4, background);
     painter.rect_stroke(
         bounds,
