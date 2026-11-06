@@ -160,7 +160,7 @@ impl ChartSettingsState {
         if chart.chart_type() == crate::model::ChartType::HollowCandles {
             let style = &chart.chart_type_params().styles.hollow;
             settings.candle_colors = super::CandleColorConfig {
-                color_by_previous_close: true,
+                color_by_previous_close: candles.color_by_previous_close,
                 show_body: style.body_visible,
                 show_border: style.border_visible,
                 show_wick: style.wick_visible,
@@ -1218,7 +1218,8 @@ mod tests {
                 c.show_body = flags & 1 != 0;
                 c.show_border = flags & 2 != 0;
                 c.show_wick = flags & 4 != 0;
-                c.color_by_previous_close = by_previous;
+                // Hollow candles colour by the previous close whatever the candles' hidden switch holds.
+                c.color_by_previous_close = by_previous && kind != ChartType::HollowCandles;
                 [
                     c.body_up,
                     c.body_down,
@@ -1295,6 +1296,30 @@ mod tests {
                 assert_eq!(ChartSettingsState::from_chart(&chart).candle_colors, c);
             }
         }
+    }
+
+    /// Hollow candles always colour by the previous close and hide that switch. A template saved
+    /// from one and loaded on a candles chart, under the open chart's type, keeps the candles'
+    /// colouring by the open.
+    #[test]
+    fn hollow_template_keeps_the_candles_colour_rule() {
+        use crate::model::ChartType;
+        let bars = vec![Bar::new(
+            chrono::DateTime::UNIX_EPOCH,
+            10.0,
+            18.0,
+            8.0,
+            14.0,
+            0.0,
+        )];
+        let mut hollow = Chart::new(BarData::from_bars(bars.clone()));
+        hollow.set_chart_type(ChartType::HollowCandles);
+        let mut template = ChartSettingsState::from_chart(&hollow);
+        let mut candles = Chart::new(BarData::from_bars(bars));
+        template.chart_type = candles.chart_type();
+        template.apply_to_chart(&mut candles).unwrap();
+        let styles = &candles.chart_type_params().styles;
+        assert!(!styles.candles.color_by_previous_close);
     }
 
     /// A Heikin-Ashi layout without the chart type's style tagged only the source close on its
