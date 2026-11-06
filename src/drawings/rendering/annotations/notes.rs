@@ -12,8 +12,8 @@ use std::sync::Arc;
 const PIN_HEAD_RADIUS: f32 = 6.0;
 /// Height of a pin's head centre above its tip, in egui logical points.
 const PIN_HEAD_HEIGHT: f32 = 16.0;
-/// Height of a pin's popup above its tip: the top of the head and a 4 px gap.
-const PIN_POPUP_OFFSET: f32 = PIN_HEAD_HEIGHT + PIN_HEAD_RADIUS + 4.0;
+/// Height of a pin's popup above its tip: the top of the head and an 8 px leader line.
+const PIN_POPUP_OFFSET: f32 = PIN_HEAD_HEIGHT + PIN_HEAD_RADIUS + 8.0;
 
 impl Drawing {
     /// Paints a card holding `galley` in the colours of [`Drawing::text_box_colors`].
@@ -46,7 +46,7 @@ impl Drawing {
     }
 
     /// Renders a pin: a map-pin marker with its tip on the anchor, and its text in a popup above
-    /// it while selected.
+    /// it while selected, tied to the head by a thin line.
     pub(crate) fn render_anchored_note(&self, painter: &egui::Painter, selected: bool) {
         let Some(&tip) = self.points.first() else {
             return;
@@ -75,6 +75,13 @@ impl Drawing {
             let popup = Rect::from_min_size(
                 Pos2::new(tip.x - size.x / 2.0, tip.y - PIN_POPUP_OFFSET - size.y),
                 size,
+            );
+            painter.line_segment(
+                [
+                    popup.center_bottom(),
+                    head - egui::vec2(0.0, PIN_HEAD_RADIUS),
+                ],
+                Stroke::new(stroke::HAIRLINE, color),
             );
             self.paint_card(painter, popup, galley);
         }
