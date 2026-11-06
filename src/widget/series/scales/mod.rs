@@ -1290,6 +1290,8 @@ impl Chart {
         (main, pixel_margins)
     }
 
+    /// Supplies each study the mapping the chart owns: that of its shared scale, or for a study
+    /// in the price pane on its own scale or no scale, its fit with the prices of its primitives.
     pub(in crate::widget) fn update_shared_study_maps(&mut self, rect: Rect) {
         let maps: Vec<_> = self
             .study_ids
