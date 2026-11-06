@@ -148,11 +148,13 @@ impl DrawingLinks {
                 } else if let Some(id) = linked {
                     changed = true;
                     unlock(charts[slot], id);
-                    if charts[slot]
-                        .drawings()
-                        .drawings
-                        .iter()
-                        .any(|d| d.id == id && d.saveable)
+                    // Charts on one storage read the change; a write here would replace it.
+                    if !charts[slot].shares_stored_drawings(charts[key.0])
+                        && charts[slot]
+                            .drawings()
+                            .drawings
+                            .iter()
+                            .any(|d| d.id == id && d.saveable)
                     {
                         saveable = true;
                         charts[slot].history.drawing_edits += 1;
