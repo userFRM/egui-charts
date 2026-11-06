@@ -748,8 +748,6 @@ impl Chart {
         self.primitives = primitives;
     }
 
-    /// Marks primitives as current for an image export, avoiding repeated attachment and
-    /// series data hooks. Pane update hooks still refresh their drawing state for the frame.
     /// Limits the custom points of a frozen copy of a chart to those shown at `cutoff`.
     pub(super) fn freeze_custom_points(&mut self, cutoff: Option<DateTime<Utc>>) {
         for item in &mut self.primitives {
@@ -759,7 +757,12 @@ impl Chart {
         }
     }
 
+    /// Marks primitives as current for an image export, avoiding repeated attachment and
+    /// series data hooks. Pane update hooks still refresh their drawing state for the frame, so
+    /// a pane primitive whose `attached` hook has not run is left out of the export.
     pub(super) fn settle_primitives(&mut self) {
+        self.primitives
+            .retain(|item| item.pane.is_none() || item.seen.is_some());
         for at in 0..self.primitives.len() {
             let current = self
                 .attachment_source(&self.primitives[at])
@@ -3051,5 +3054,35 @@ mod tests {
             covered.iter().all(|(_, labels)| labels.is_empty()),
             "{covered:?}"
         );
+    }
+
+    #[test]
+    fn image_export_refreshes_no_pane_primitive_before_it_is_attached() {
+        struct Stamp(Log);
+        impl PanePrimitive for Stamp {
+            fn attached(&mut self, _: &egui::Context, _: PaneId) {
+                self.0.lock().unwrap().push("attached".into());
+            }
+            fn update(&mut self) {
+                self.0.lock().unwrap().push("update".into());
+            }
+        }
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[10.0], &[20.0]);
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let log = Log::default();
+        // Attached between two frames, so its `attached` hook has not run.
+        let id = chart
+            .attach_pane_primitive(PaneId::MAIN, Stamp(log.clone()))
+            .unwrap();
+        let mut image = chart
+            .export_image(&ctx, &crate::widget::ImageExportOptions::default())
+            .unwrap();
+        image.textures_delta.clear();
+        assert_eq!(*log.lock().unwrap(), Vec::<String>::new());
+        // The next frame attaches it, and only then refreshes it.
+        frame(&ctx, &mut chart, 1.0, vec![]);
+        assert_eq!(*log.lock().unwrap(), ["attached", "update"]);
+        assert!(chart.detach_primitive(id));
     }
 }
