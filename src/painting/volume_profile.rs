@@ -76,25 +76,59 @@ pub(crate) fn paint_profile(
         );
         if right_aligned {
             row_right = painter.clip_rect().right();
-            // A distant anchor must not let the rows cover the entire pane.
-            width = width.min(painter.clip_rect().width());
+            // Rows at the pane's edge scale with the pane, wherever the anchor is.
+            width = painter.clip_rect().width();
         }
     }
     let max_width = width
         * if drawing {
-            1.0 / 3.0
+            0.3
         } else if spans_view {
             1.0
         } else {
             0.9
         };
     let max_volume = profile.volume[poc];
+    let poc_y = (y_at_row(poc) + y_at_row(poc + 1)) / 2.0;
+    let line_rect = Rect::from_min_max(rect.min, Pos2::new(row_right, rect.max.y));
+    let draw_lines = || {
+        draw_volume_profile_lines(
+            painter,
+            &line_rect,
+            color,
+            poc_y,
+            // An anchored drawing marks the price for the whole pane, its rows being far from
+            // the bars they measure.
+            if spans_view || (drawing && right_aligned) {
+                painter.clip_rect().x_range()
+            } else {
+                line_rect.x_range()
+            },
+            if options {
+                stroke::HAIRLINE
+            } else {
+                stroke::THICK
+            },
+            [y_at_row(va_high + 1), y_at_row(va_low)],
+            config.show_value_area_lines,
+            drawing,
+        );
+    };
+    // A drawing's rows lie over its lines, as they do over the bars.
+    if drawing {
+        draw_lines();
+    }
 
     for (row, &volume) in profile.volume.iter().enumerate() {
         // Ordered on screen: the upper row edge is lower down on an inverted scale.
         let (upper, lower) = (y_at_row(row + 1), y_at_row(row));
         let (top, bottom) = (upper.min(lower), upper.max(lower));
-        let gap = ((bottom - top) * 0.5).min(1.0);
+        // A drawing's rows are parted by one physical pixel.
+        let gap = ((bottom - top) * 0.5).min(if drawing {
+            1.0 / painter.pixels_per_point()
+        } else {
+            1.0
+        });
         let width = (volume / max_volume) as f32 * max_width;
 
         let in_value_area = (va_low..=va_high).contains(&row);
@@ -129,7 +163,7 @@ pub(crate) fn paint_profile(
         };
         let rgba = |c: [u8; 4]| {
             let alpha = if drawing && !in_value_area {
-                c[3] / 2
+                (u16::from(c[3]) * 2 / 3) as u8
             } else if drawing || options {
                 c[3]
             } else {
@@ -150,8 +184,10 @@ pub(crate) fn paint_profile(
                 paint(
                     left,
                     width,
-                    if drawing || options {
+                    if options {
                         bar_color
+                    } else if drawing {
+                        rgba([color[0], color[1], color[2], 191])
                     } else {
                         rgba(up)
                     },
@@ -169,7 +205,8 @@ pub(crate) fn paint_profile(
                         left + up_width + down_width,
                         unknown,
                         if drawing {
-                            rgba([color[0], color[1], color[2], 180])
+                            // A neutral grey, read as neither side.
+                            rgba([128, 128, 128, 191])
                         } else {
                             Color32::from_rgba_unmultiplied(color[0], color[1], color[2], 80)
                         },
@@ -188,31 +225,19 @@ pub(crate) fn paint_profile(
         }
     }
 
-    let poc_y = (y_at_row(poc) + y_at_row(poc + 1)) / 2.0;
-    let line_rect = Rect::from_min_max(rect.min, Pos2::new(row_right, rect.max.y));
-    draw_volume_profile_lines(
-        painter,
-        &line_rect,
-        color,
-        poc_y,
-        if spans_view {
-            painter.clip_rect().x_range()
-        } else {
-            line_rect.x_range()
-        },
-        if options {
-            stroke::HAIRLINE
-        } else {
-            stroke::THICK
-        },
-        [y_at_row(va_high + 1), y_at_row(va_low)],
-        config.show_value_area_lines,
-        drawing,
-    );
+    if !drawing {
+        draw_lines();
+    }
     // A study's span often starts at the pane's left edge, under the chart legend, so a study whose
     // rows start at the left notes its source at the right.
     let note_right = !drawing && !right_aligned;
-    paint_source_note(painter, profile.source(), rect, note_right, color);
+    // A drawing's colour tints its range: too faint for text.
+    let note_color = if drawing {
+        painter.ctx().active_theme().ui.text.to_srgba_unmultiplied()
+    } else {
+        color
+    };
+    paint_source_note(painter, profile.source(), rect, note_right, note_color);
 }
 
 // Both painting and selection use these signed rectangles, including inverted price scales.
@@ -534,12 +559,12 @@ mod tests {
             assert!(!rows.is_empty());
             if !drawing {
                 assert!(rows.iter().all(|row| row.fill.a() <= 163), "{display:?}");
-            } else {
+            } else if display != ProfileDisplay::Total {
                 assert!(rows.iter().any(|row| row.fill.a() == 255), "{display:?}");
             }
             if display != ProfileDisplay::Total {
-                // Studies limit the opaque value area; drawings only halve outside rows.
-                for alpha in if drawing { [44, 255] } else { [89, 163] } {
+                // Studies limit the opaque value area; drawings only thin outside rows.
+                for alpha in if drawing { [59, 255] } else { [89, 163] } {
                     assert!(
                         rows.iter().any(|row| row.fill.a() == alpha),
                         "{display:?}: {alpha}"
@@ -547,7 +572,7 @@ mod tests {
                 }
             }
             // Each row holds 3 up and 1 down: 3/4 and 1/4 widths, or a delta of 2/4.
-            let max_width = if drawing { 100.0 } else { 270.0 };
+            let max_width = if drawing { 90.0 } else { 270.0 };
             let widths = match display {
                 ProfileDisplay::Total => vec![max_width],
                 ProfileDisplay::UpDown => vec![max_width * 0.75, max_width * 0.25],

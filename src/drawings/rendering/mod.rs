@@ -373,7 +373,11 @@ impl Drawing {
                 | T::Sticker
                 | T::Image
         );
-        if !bounded || self.extend_left || self.extend_right {
+        if !bounded
+            || self.extend_left
+            || self.extend_right
+            || self.volume_profile.is_some_and(|c| c.extend_right)
+        {
             return None;
         }
         if matches!(
