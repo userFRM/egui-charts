@@ -289,6 +289,16 @@ impl Default for HeikinStyle {
     }
 }
 
+impl HeikinStyle {
+    /// How a Heikin-Ashi chart drew before it had this style: only the original close was tagged.
+    fn saved_without_style() -> Self {
+        Self {
+            real_price_only: true,
+            ..Self::default()
+        }
+    }
+}
+
 /// Independent candle components for the hollow candles chart.
 ///
 /// A bar is coloured by its close against the previous close and is hollow, an outline without
@@ -455,7 +465,9 @@ pub struct ChartTypeStyles {
     pub hollow: HollowStyle,
     /// Volume candles chart.
     pub volume_candles: VolumeCandlesStyle,
-    /// Heikin-Ashi chart.
+    /// Heikin-Ashi chart. Documents saved before this style restore with their original close
+    /// alone on the scale, as they were drawn.
+    #[serde(default = "HeikinStyle::saved_without_style")]
     pub heikin: HeikinStyle,
     /// Bars chart.
     pub bars: BarsStyle,
@@ -505,6 +517,14 @@ impl Default for ChartTypeStyles {
 }
 
 impl ChartTypeStyles {
+    /// The styles of a document saved before chart types had styles of their own.
+    pub(super) fn saved_without_styles() -> Self {
+        Self {
+            heikin: HeikinStyle::saved_without_style(),
+            ..Self::default()
+        }
+    }
+
     /// The rising and falling body, border and wick colours of a chart type that series settings
     /// offer from its own style, in that order; `None` for a type they keep in the chart
     /// configuration.

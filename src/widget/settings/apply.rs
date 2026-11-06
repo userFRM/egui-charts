@@ -1297,6 +1297,73 @@ mod tests {
         }
     }
 
+    /// A Heikin-Ashi layout without the chart type's style tagged only the source close on its
+    /// scale and restores that way; one saved with the style keeps the pair. The source (10, 18,
+    /// 8, 14) closes at 14 and its transformed close is (10 + 18 + 8 + 14) / 4 = 12.5.
+    #[test]
+    #[cfg(feature = "drawings")]
+    fn heikin_layout_saved_before_the_style_restores_its_scale() {
+        use crate::model::ChartType;
+        use crate::widget::ChartSnapshot;
+        use crate::widget::test_frames::{frame, shapes};
+        let bars = || {
+            BarData::from_bars(vec![Bar::new(
+                chrono::DateTime::UNIX_EPOCH,
+                10.0,
+                18.0,
+                8.0,
+                14.0,
+                0.0,
+            )])
+        };
+        for (saved_with_style, expected) in [(false, &[14.0][..]), (true, &[14.0, 12.5][..])] {
+            let mut chart = Chart::new(bars());
+            chart.set_chart_type(ChartType::Heikin);
+            chart.config_mut().show_volume = false;
+            let mut saved = serde_json::to_value(chart.snapshot().unwrap()).unwrap();
+            if !saved_with_style {
+                for path in [
+                    "/chart_type_params/styles",
+                    "/settings/chart_type_params/styles",
+                ] {
+                    let styles = saved.pointer_mut(path).unwrap().as_object_mut().unwrap();
+                    assert!(styles.remove("heikin").is_some());
+                }
+            }
+            let saved: ChartSnapshot = serde_json::from_value(saved).unwrap();
+            let ctx = Context::default();
+            let mut restored = Chart::new(bars());
+            restored.restore(&saved).unwrap();
+            frame(&ctx, &mut restored, 0.0, vec![]);
+            let painted = shapes(&ctx, &mut restored, 0.1, vec![]);
+            let plot = restored.get_rendered_price_rect();
+            let up = restored.chart_type_params().styles.heikin.body_up;
+            let tagged: Vec<f64> = [14.0, 12.5]
+                .into_iter()
+                .filter(|&price| {
+                    let y = restored.last_price_map.price_to_y(price);
+                    painted.iter().any(|shape| {
+                        matches!(shape, Shape::Rect(r)
+                        if r.fill == up
+                        && (r.rect.right() <= plot.left() || r.rect.left() >= plot.right())
+                        && r.rect.y_range().contains(y))
+                    })
+                })
+                .collect();
+            assert_eq!(tagged, expected);
+            let settings = ChartSettingsState::from_chart(&restored);
+            assert_eq!(
+                settings
+                    .chart_type_params
+                    .unwrap()
+                    .styles
+                    .heikin
+                    .real_price_only,
+                !saved_with_style
+            );
+        }
+    }
+
     /// A shape with both stops its fill at the middle of the stroke and shrinks it for a
     /// transparent stroke, so a border that is not opaque must leave the body a shape of its own.
     /// A distinct opaque border is painted; one in the colour of an opaque body is not.
