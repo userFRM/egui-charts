@@ -335,7 +335,8 @@ impl Chart {
 
     /// Renders an isolated image frame using the same chart, studies, primitives, drawings and
     /// scales as the widget. Does not poll feeds, change live viewport state, call the lifecycle
-    /// hooks of primitives or capture host panels/dialogs.
+    /// hooks of primitives or capture host panels/dialogs. A pane primitive attached since the
+    /// last frame is left out, as it draws only after its `attached` hook.
     /// `ctx` supplies the host's fonts and style after its first frame. Images use one pixel per point and dimensions
     /// between 100 and 7680 on each axis, with at most 33,177,600 pixels.
     /// Pass the returned frame to an egui renderer; see [`ChartImage`] for delivery responsibilities.

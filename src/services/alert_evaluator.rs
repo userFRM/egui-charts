@@ -59,33 +59,42 @@ impl Evaluation {
             inputs.start = None;
             inputs.visible = None;
         }
-        let mut required: HashSet<_> = alert
-            .rules()
-            .filter(|(_, _, interval)| *interval == timeframe)
-            .flat_map(|(source, condition, _)| {
-                std::iter::once(source).chain(condition.partners().into_iter().flatten())
-            })
-            .filter_map(|source| match source {
-                AlertSource::Study { id, .. } => id.parse::<usize>().ok(),
-                _ => None,
-            })
-            .collect();
-        loop {
-            let before = required.len();
+        // `ids` with the saved studies they take as input, transitively.
+        let with_inputs = |mut ids: HashSet<usize>| loop {
+            let before = ids.len();
             for study in &inputs.studies {
-                if !required.contains(&study.id) {
+                if !ids.contains(&study.id) {
                     continue;
                 }
                 for (_, input) in &study.inputs {
                     if let crate::model::InputValue::Source(StudySource::Study { id, .. }) = input {
-                        required.insert(*id);
+                        ids.insert(*id);
                     }
                 }
             }
-            if required.len() == before {
-                break;
+            if ids.len() == before {
+                break ids;
             }
-        }
+        };
+        let tested = with_inputs(
+            alert
+                .rules()
+                .filter(|(_, _, interval)| *interval == timeframe)
+                .flat_map(|(source, condition, _)| {
+                    std::iter::once(source).chain(condition.partners().into_iter().flatten())
+                })
+                .filter_map(|source| match source {
+                    AlertSource::Study { id, .. } => id.parse::<usize>().ok(),
+                    _ => None,
+                })
+                .collect(),
+        );
+        // The fired message comes from the first interval.
+        let required = if timeframe == alert.timeframe.unwrap_or_default() {
+            with_inputs(tested.iter().copied().chain(alert.plot_studies()).collect())
+        } else {
+            tested.clone()
+        };
         let mut result = Self {
             alert: alert.clone(),
             timeframe,
@@ -118,7 +127,10 @@ impl Evaluation {
             })();
             match restored {
                 Ok(study) => result.studies.push(study),
-                Err(error) => result.error = Some(error),
+                Err(error) if tested.contains(&id) => result.error = Some(error),
+                // A study only the message reads and that cannot be made reads `NaN`, instead of
+                // stopping the alert's other studies.
+                Err(_) => {}
             }
         }
         result
@@ -295,12 +307,20 @@ impl AlertEvaluator {
                 for timeframe in alert.timeframes() {
                     let key = (id.clone(), symbol.clone(), timeframe);
                     armed.insert(key.clone());
-                    if self.runs.get(&key).is_none_or(|run| run.alert != alert) {
-                        // Replacing an event definition must also replace its subscription.
-                        self.feeds
-                            .retain(|subject, _| subject.owner.as_ref() != Some(&key));
-                        self.runs
-                            .insert(key.clone(), Evaluation::new(&alert, timeframe, factory));
+                    match self.runs.get_mut(&key) {
+                        // Most polls find the alert unchanged; comparing it copies nothing.
+                        Some(run) if run.alert == alert => {}
+                        // A firing or a marker option leaves the studies and streams as they are.
+                        Some(run) if run.alert.same_monitoring(&alert) => {
+                            run.alert.clone_from(&alert)
+                        }
+                        _ => {
+                            // Replacing an event definition must also replace its subscription.
+                            self.feeds
+                                .retain(|subject, _| subject.owner.as_ref() != Some(&key));
+                            self.runs
+                                .insert(key.clone(), Evaluation::new(&alert, timeframe, factory));
+                        }
                     }
                     let run = self.runs.get_mut(&key).unwrap();
                     if let Some(error) = run.error.take() {
@@ -438,7 +458,10 @@ impl AlertEvaluator {
                     )
                 })
                 .collect();
-            engine.update_matching(Some(id), symbol, &inputs, now, |timeframe, source, at| {
+            let exchange = contexts
+                .iter()
+                .find_map(|(_, reader, _)| reader.instrument()?.exchange.as_deref());
+            let value = |timeframe: Timeframe, source: &AlertSource, at: usize| {
                 let (run, reader, from) = contexts
                     .iter()
                     .find(|(run, _, _)| run.timeframe == timeframe)?;
@@ -490,7 +513,8 @@ impl AlertEvaluator {
                     }
                     _ => None,
                 }
-            });
+            };
+            engine.update_matching(Some(id), symbol, exchange, &inputs, now, value);
         }
         // Once alerts and removed watchlist members release their readers in the same frame.
         self.runs
@@ -785,5 +809,240 @@ mod tests {
         assert!(
             matches!(&delivered[0].1, crate::services::AlertEvent::TriggeredForSymbol { message, .. } if message == "100 on 5min")
         );
+    }
+
+    /// Polls `alert` on `feed` until it settles and returns the messages it fired with.
+    fn fired_messages(
+        feed: Arc<dyn Datafeed>,
+        factory: &IndicatorFactory,
+        alert: Alert,
+    ) -> Vec<String> {
+        let mut evaluator = AlertEvaluator::new(feed);
+        let delivered = Arc::new(Mutex::new(Vec::new()));
+        let sink = delivered.clone();
+        let engine = AlertEngine::new()
+            .with_alerts(vec![alert])
+            .on_trigger(move |_, event| {
+                if let crate::services::AlertEvent::TriggeredForSymbol { message, .. } = event {
+                    sink.lock().unwrap().push(message.clone());
+                }
+            });
+        #[cfg(feature = "ui")]
+        let ctx = egui::Context::default();
+        for _ in 0..6 {
+            let errors = evaluator.poll(
+                &engine,
+                factory,
+                &[],
+                #[cfg(feature = "ui")]
+                &ctx,
+                DateTime::from_timestamp(1000, 0).unwrap(),
+            );
+            assert!(errors.is_empty(), "{errors:?}");
+        }
+        delivered.lock().unwrap().clone()
+    }
+
+    /// `prepare_alert` saves every study of the chart with the alert; a price alert's message
+    /// names study 7, which no condition tests. One-minute closes 200 and 300: the mean is 250.
+    /// Study 8 is not saved, the factory does not know study 9, study 11 reads study 12, which
+    /// the factory does not know either, and nothing names study 10.
+    #[test]
+    fn plot_placeholder_reads_a_saved_study_no_condition_tests() {
+        let mut factory = IndicatorFactory::new();
+        factory.register("Pair mean", || Box::new(crate::studies::SMA::new(2)));
+        factory.register("Unused", || panic!("a study nothing names is not built"));
+        let saved = |id, name: &str| crate::model::AlertStudy {
+            id,
+            name: name.into(),
+            inputs: Vec::new(),
+        };
+        let mut alert = Alert::new("SYM", crate::model::AlertCondition::Above(250.0));
+        alert.timeframe = Some(Timeframe::Min1);
+        let mut on_study_12 = saved(11, "Pair mean");
+        on_study_12.inputs.push((
+            "source".into(),
+            crate::model::InputValue::Source(StudySource::Study { id: 12, plot: 0 }),
+        ));
+        alert.message =
+            "{{close}} mean {{plot_7_0}} {{plot_8_0}} {{plot_9_0}} {{plot_11_0}}".into();
+        alert.inputs = Some(Box::new(AlertInputs {
+            studies: vec![
+                saved(7, "Pair mean"),
+                saved(9, "Unregistered"),
+                saved(10, "Unused"),
+                on_study_12,
+                saved(12, "Unregistered"),
+            ],
+            ..Default::default()
+        }));
+        assert_eq!(
+            fired_messages(Arc::new(Feed::default()), &factory, alert),
+            ["300 mean 250 NaN NaN NaN"]
+        );
+    }
+
+    /// A feed that keys symbols without a venue prefix and reports the exchange when it
+    /// resolves them, as the `SymbolSearch` example and the demo do.
+    struct Listed(Feed);
+
+    impl Datafeed for Listed {
+        fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {
+            reply.send(Ok(Instrument::new(symbol).with_exchange("NASDAQ")));
+        }
+
+        fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
+            self.0.history(request, reply);
+        }
+
+        fn subscribe(&self, subscription: Subscription) {
+            self.0.subscribe(subscription);
+        }
+
+        fn unsubscribe(&self, id: SubscriptionId) {
+            self.0.unsubscribe(id);
+        }
+    }
+
+    #[test]
+    fn exchange_placeholder_reads_the_resolved_instrument_exchange() {
+        let mut alert = Alert::new("AAPL", crate::model::AlertCondition::Above(250.0));
+        alert.timeframe = Some(Timeframe::Min1);
+        alert.message = "{{exchange}}:{{ticker}} closed at {{close}}".into();
+        assert_eq!(
+            fired_messages(
+                Arc::new(Listed(Feed::default())),
+                &IndicatorFactory::new(),
+                alert
+            ),
+            ["NASDAQ:AAPL closed at 300"]
+        );
+    }
+
+    /// A repeating study alert: one study 7 named `name` on one minute, `Above(100)`.
+    fn repeating_alert(name: &str) -> Alert {
+        let mut alert: Alert = serde_json::from_value(serde_json::json!({
+            "symbol":"SYM", "timeframe":"Min1", "source":{"Study":{"id":"7","output":0}},
+            "condition":{"Above":100.0}, "frequency":"EveryTime"
+        }))
+        .unwrap();
+        alert.inputs = Some(Box::new(AlertInputs {
+            studies: vec![crate::model::AlertStudy {
+                id: 7,
+                name: name.into(),
+                inputs: Vec::new(),
+            }],
+            ..Default::default()
+        }));
+        alert
+    }
+
+    #[test]
+    fn repeating_alert_keeps_its_studies_after_firing() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let feed = Arc::new(Feed::default());
+        let mut evaluator = AlertEvaluator::new(feed.clone());
+        let built = Arc::new(AtomicUsize::new(0));
+        let count = built.clone();
+        let mut factory = IndicatorFactory::new();
+        factory.register("Pair mean", move || {
+            count.fetch_add(1, Ordering::Relaxed);
+            Box::new(crate::studies::SMA::new(2))
+        });
+        // The one-minute mean (200+300)/2=250 is above 100 on the first evaluation.
+        let engine = AlertEngine::new().with_alerts(vec![repeating_alert("Pair mean")]);
+        #[cfg(feature = "ui")]
+        let ctx = egui::Context::default();
+        for _ in 0..4 {
+            evaluator.poll(
+                &engine,
+                &factory,
+                &[],
+                #[cfg(feature = "ui")]
+                &ctx,
+                DateTime::from_timestamp(1000, 0).unwrap(),
+            );
+        }
+        assert!(engine.alerts()[0].last_triggered_at.is_some(), "fired");
+        assert_eq!(engine.alerts()[0].status, crate::model::AlertStatus::Active);
+        // Turning the line across the chart off changes nothing the alert monitors.
+        let mut edited = engine.alerts()[0].clone();
+        edited.extend_line = false;
+        let inbox = Arc::new(crate::data::inbox::Inbox::default());
+        crate::services::Alerts::save(&engine, edited, inbox.reply(0));
+        evaluator.poll(
+            &engine,
+            &factory,
+            &[],
+            #[cfg(feature = "ui")]
+            &ctx,
+            DateTime::from_timestamp(1000, 0).unwrap(),
+        );
+        assert!(!engine.alerts()[0].extend_line);
+        assert_eq!(built.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn display_only_edit_keeps_the_order_flow_stream() {
+        use crate::services::Alerts;
+        let feed = Arc::new(Feed::default());
+        let mut evaluator = AlertEvaluator::new(feed.clone());
+        let mut factory = IndicatorFactory::new();
+        factory.register("Spread", || {
+            Box::new(crate::studies::OrderFlowStudy::new(
+                crate::data::OrderFlowKind::Spread,
+            ))
+        });
+        let engine = AlertEngine::new().with_alerts(vec![repeating_alert("Spread")]);
+        #[cfg(feature = "ui")]
+        let ctx = egui::Context::default();
+        let poll = |evaluator: &mut AlertEvaluator| {
+            evaluator.poll(
+                &engine,
+                &factory,
+                &[],
+                #[cfg(feature = "ui")]
+                &ctx,
+                DateTime::from_timestamp(1000, 0).unwrap(),
+            );
+        };
+        for _ in 0..3 {
+            poll(&mut evaluator);
+        }
+        assert_eq!(feed.requests.lock().unwrap().len(), 1);
+        assert_eq!(feed.subscriptions.lock().unwrap().len(), 1);
+        // Turning the line across the chart off changes no condition.
+        let mut edited = engine.alerts()[0].clone();
+        edited.extend_line = false;
+        let inbox = Arc::new(crate::data::inbox::Inbox::default());
+        engine.save(edited, inbox.reply(0));
+        for _ in 0..3 {
+            poll(&mut evaluator);
+        }
+        assert!(!engine.alerts()[0].extend_line);
+        // Release the locks before asserting: dropping the evaluator unsubscribes through them.
+        let counts = (
+            feed.stopped.lock().unwrap().len(),
+            feed.requests.lock().unwrap().len(),
+            feed.subscriptions.lock().unwrap().len(),
+        );
+        assert_eq!(
+            counts,
+            (0, 1, 1),
+            "(unsubscribed, history requests, subscriptions)"
+        );
+        // A changed condition is a new evaluation with its own stream.
+        let mut edited = engine.alerts()[0].clone();
+        edited.condition = crate::model::AlertCondition::Above(200.0);
+        engine.save(edited, inbox.reply(1));
+        for _ in 0..3 {
+            poll(&mut evaluator);
+        }
+        let counts = (
+            feed.stopped.lock().unwrap().len(),
+            feed.requests.lock().unwrap().len(),
+            feed.subscriptions.lock().unwrap().len(),
+        );
+        assert_eq!(counts, (1, 2, 2));
     }
 }
