@@ -576,6 +576,30 @@ mod tests {
         assert_eq!(charts[0].config().background_color, before);
     }
 
+    /// The steps taken on one chart before the layout's next frame leave every chart in the state
+    /// of the last one.
+    #[test]
+    fn undo_and_redo_before_the_next_frame_keep_the_copy() {
+        let cases: [(&[bool], [usize; 3]); 2] = [
+            (&[false, true], [1, 1, 1]),
+            (&[false, true, false], [1, 0, 0]),
+        ];
+        for (steps, expected) in cases {
+            let (mut a, mut b, mut c) = (chart(50), chart(50), chart(50));
+            let sma = a.add_indicator(Box::new(SMA::new(7)));
+            let factory = IndicatorFactory::new();
+            let mut layout = layout();
+            let mut charts = [&mut a, &mut b, &mut c];
+            layout.apply_copy(&mut charts, 0, &LayoutCopy::Study(sma), &factory);
+            for redo in steps {
+                assert!(if *redo { charts[1].redo() } else { charts[1].undo() });
+            }
+            show(&mut layout, &mut charts);
+            let counts = charts.each_ref().map(|chart| chart.indicators().count());
+            assert_eq!(counts, expected, "steps {steps:?}");
+        }
+    }
+
     /// Undoing a settings copy restores the precision, event markers and price line colour it
     /// changed, on the source and on the other chart, and redo applies them again.
     #[test]

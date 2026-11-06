@@ -907,7 +907,12 @@ pub(super) struct LayoutEditLink {
 impl LayoutEditLink {
     /// Asks the other charts of the edit to take the same step.
     pub(super) fn request(&self, redo: bool) {
-        self.steps.lock().unwrap().push((self.id, redo));
+        let mut steps = self.steps.lock().unwrap();
+        // The other charts follow the last step asked for this edit.
+        match steps.iter_mut().find(|(id, _)| *id == self.id) {
+            Some(step) => step.1 = redo,
+            None => steps.push((self.id, redo)),
+        }
     }
 }
 
