@@ -1257,6 +1257,7 @@ mod tests {
                     for len in [16, 17, 17] {
                         engine.update(
                             "SYM",
+                            None,
                             Timeframe::Min1,
                             &data[..len],
                             data[len - 1].time,
