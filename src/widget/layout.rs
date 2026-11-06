@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 
 /// Narrowest chart that shows the field selectors in its header.
 const LINK_CONTROLS_MIN_WIDTH: f32 = 320.0;
-/// Space the selectors reserve at the right end of the status line.
+/// Distance of the selectors from the chart's right edge, which ends the status line's first row.
 pub(super) const LINK_CONTROLS_INSET: f32 = 220.0;
 
 const LINK_MARKERS: [(&str, egui::Color32); 5] = [
@@ -974,10 +974,14 @@ pub struct ChartLayout {
     /// The chart slot Alt+Enter shows alone in place of the preset.
     maximized: Option<usize>,
     focus_active: bool,
+    /// The slot whose corner menu is open. It stays shown when a click selects another chart, so
+    /// a name being edited in it can still be committed.
+    corner_menu: Option<usize>,
     groups: [Option<String>; 16],
     links: LinkState,
     detached: [bool; 16],
     previous: [Option<(String, Option<Timeframe>)>; 16],
+    previous_charts: [u64; 16],
     previous_ranges: [Option<VisibleTimeRange>; 16],
     previous_bars: [BarsKey; 16],
     pending_ranges: [Option<PendingRange>; 16],
@@ -996,6 +1000,34 @@ fn bars_key(chart: &Chart) -> BarsKey {
         chart.state.revision(),
         chart.state.shown().first().map(|bar| bar.time),
     )
+}
+
+/// A group name field that returns an edited name once, when it loses focus or on Enter, so
+/// nothing joins a group while typing. Escape discards the edit.
+fn group_name_edit(ui: &mut Ui, current: &str) -> Option<String> {
+    let id = ui.scope_id().with("group_name");
+    let mut name = ui
+        .data(|data| data.get_temp::<String>(id))
+        .unwrap_or_else(|| current.to_owned());
+    let response = ui.add(
+        egui::TextEdit::singleline(&mut name)
+            .id(id)
+            .desired_width(140.0),
+    );
+    if response.has_focus() {
+        ui.data_mut(|data| data.insert_temp(id, name));
+        return None;
+    }
+    // An idle field has no outline of its own, and its fill can match the menu's.
+    ui.painter().rect_stroke(
+        response.rect,
+        ui.visuals().widgets.inactive.corner_radius,
+        Stroke::new(1.0, ui.active_theme().ui.border_control),
+        StrokeKind::Inside,
+    );
+    ui.data_mut(|data| data.remove_temp::<String>(id));
+    (response.lost_focus() && name != current && !ui.input(|i| i.key_pressed(egui::Key::Escape)))
+        .then_some(name)
 }
 
 /// A range a chart fits once bars of its new interval replace those it held at the switch.
@@ -1142,21 +1174,25 @@ impl ChartLayout {
     }
 
     /// Assigns the legacy group used by view/drawing links and layout-wide field switches.
+    /// `Some` keeps both memberships: a field in an individual group or unlinked stays so, and a
+    /// field following the layout setting follows it within the new group.
     /// `None` restores the unnamed view group and unlinks both symbol and interval.
     /// Prefer [`Self::set_link_groups`] for independent field memberships.
     pub fn set_sync_group(&mut self, index: usize, group: Option<String>) {
         let group = group.filter(|name| !name.trim().is_empty());
         if let Some(slot) = self.groups.get_mut(index) {
-            *slot = group.clone();
-            let link = group.map_or(ChartLink::Unlinked, |_| ChartLink::Layout);
-            self.set_link_groups(
-                index,
-                ChartLinkGroups {
-                    symbol: link.clone(),
-                    interval: link,
-                },
-                true,
-            );
+            let unnamed = group.is_none();
+            *slot = group;
+            if unnamed {
+                self.set_link_groups(
+                    index,
+                    ChartLinkGroups {
+                        symbol: ChartLink::Unlinked,
+                        interval: ChartLink::Unlinked,
+                    },
+                    true,
+                );
+            }
         }
     }
 
@@ -1252,14 +1288,14 @@ impl ChartLayout {
                 };
                 let menu = ui.menu_button(caption, |ui| {
                     ui.label(&label);
-                    if ui
+                    let unlink = ui
                         .selectable_label(
                             *field == ChartLink::Unlinked
                                 || *field == ChartLink::Layout && !enabled,
                             l10n::text(ui.ctx(), "Unlinked"),
                         )
-                        .clicked()
-                    {
+                        .clicked();
+                    if unlink {
                         *field = ChartLink::Unlinked;
                         ui.close();
                     }
@@ -1298,11 +1334,14 @@ impl ChartLayout {
                     }
                     if self.text_sync_groups {
                         ui.separator();
-                        let mut name = match field {
-                            ChartLink::Group(name) => name.clone(),
-                            _ => String::new(),
+                        let name = match field {
+                            ChartLink::Group(name) => name.as_str(),
+                            _ => "",
                         };
-                        if ui.text_edit_singleline(&mut name).changed() {
+                        // The click on "Unlinked" also ends the edit; the click wins.
+                        if let Some(name) = group_name_edit(ui, name)
+                            && !unlink
+                        {
                             *field = if name.trim().is_empty() {
                                 ChartLink::Unlinked
                             } else {
@@ -1419,7 +1458,7 @@ impl ChartLayout {
 
     /// Shows the preset and synchronizes its charts. Click or scroll a panel to activate it.
     /// Its header and corner menu offer independent symbol and interval groups; the corner menu
-    /// also offers detachment. The active border is painted
+    /// also offers detachment and the synchronization group. The active border is painted
     /// inside the chart; stacked charts have a two-point gap and side-by-side charts meet at their
     /// edge.
     /// Dragging a border resizes its neighbours and Shift also moves the borders aligned with it; a
@@ -1439,6 +1478,18 @@ impl ChartLayout {
         if let Some(index) = self.maximized {
             self.active = index;
         }
+        // A chart supplied or restored in a slot starts a new baseline: nothing changed in it.
+        for (index, chart) in charts.iter().enumerate() {
+            if self.previous_charts[index] != chart.layout_identity {
+                self.previous_charts[index] = chart.layout_identity;
+                self.previous[index] = None;
+                self.previous_ranges[index] = None;
+                self.pending_ranges[index] = None;
+            }
+        }
+        // Before this frame's input selects a chart, so a change is sent from the chart it is in.
+        self.sync_state(charts, total);
+        let mut tab = None;
         if self.mode == ChartLayoutMode::Tabs {
             egui::ScrollArea::horizontal().show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -1447,7 +1498,7 @@ impl ChartLayout {
                             .selectable_label(index == self.active, chart.symbol())
                             .clicked()
                         {
-                            self.active = index;
+                            tab = Some(index);
                         }
                     }
                 });
@@ -1492,7 +1543,6 @@ impl ChartLayout {
         {
             self.active = index;
         }
-        self.sync_state(charts, total);
         for (index, chart) in charts.iter().enumerate() {
             if !self.sync.sync_time_axis || total == 1 {
                 self.pending_ranges[index] = None;
@@ -1507,6 +1557,7 @@ impl ChartLayout {
                 });
                 self.pending_ranges[index] = self.pending_ranges[index].or(own);
             }
+            self.record_state(index, chart);
         }
         for chart in charts.iter_mut() {
             chart.last_hover_bar_idx = None;
@@ -1610,14 +1661,15 @@ impl ChartLayout {
                             },
                         );
                     }
-                    if index == self.active
-                        && (ui.rect_contains_pointer(rect)
-                            || egui::Popup::is_any_open(ui.ctx())
-                            || total > 1 && rect.width() < LINK_CONTROLS_MIN_WIDTH)
-                        && charts[index]
-                            .pane_layout
-                            .maximized
-                            .is_none_or(|pane| pane == super::PaneId::MAIN)
+                    if self.corner_menu == Some(index)
+                        || index == self.active
+                            && (ui.rect_contains_pointer(rect)
+                                || egui::Popup::is_any_open(ui.ctx())
+                                || total > 1 && rect.width() < LINK_CONTROLS_MIN_WIDTH)
+                            && charts[index]
+                                .pane_layout
+                                .maximized
+                                .is_none_or(|pane| pane == super::PaneId::MAIN)
                     {
                         let button = ui.put(
                             Rect::from_min_size(
@@ -1632,7 +1684,7 @@ impl ChartLayout {
                             ),
                             egui::Button::new("…").frame(false),
                         );
-                        egui::Popup::menu(&button)
+                        let menu = egui::Popup::menu(&button)
                             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                             .show(|ui| {
                                 if ui.button(l10n::text(ui.ctx(), "Detach chart")).clicked() {
@@ -1640,7 +1692,21 @@ impl ChartLayout {
                                     ui.close();
                                 }
                                 self.show_link_groups(ui, index);
+                                ui.label(l10n::text(ui.ctx(), "Sync group"));
+                                let group = self.groups[index].as_deref().unwrap_or_default();
+                                if let Some(name) = group_name_edit(ui, group) {
+                                    if name.trim().is_empty() {
+                                        // `set_sync_group(None)` would unlink both fields.
+                                        self.groups[index] = None;
+                                    } else {
+                                        self.set_sync_group(index, Some(name));
+                                    }
+                                }
                             });
+                        // Another slot's closed menu must not end this one's.
+                        if menu.is_some() || self.corner_menu == Some(index) {
+                            self.corner_menu = menu.map(|_| index);
+                        }
                     }
                 },
             );
@@ -1722,13 +1788,25 @@ impl ChartLayout {
             ui.ctx().request_repaint();
         }
         for (index, chart) in charts.iter().enumerate() {
-            self.previous[index] = Some((chart.symbol().to_owned(), chart.timeframe()));
+            // A change the active chart made while rendering, such as keyboard undo, stays
+            // unrecorded, so the next frame sends it like one made between frames.
+            if index != self.active {
+                self.record_state(index, chart);
+            } else if !self.state_recorded(index, chart) {
+                ui.ctx().request_repaint();
+            }
             self.previous_bars[index] = bars_key(chart);
             if self.pending_ranges[index].is_none()
                 && let Some(range) = chart.visible_time_range()
             {
                 self.previous_ranges[index] = Some(range);
             }
+        }
+        // The chart shown when a tab is clicked handles that click, so a group name typed in
+        // its menu commits as the field loses focus. The clicked tab shows from the next frame.
+        if let Some(index) = tab {
+            self.active = index;
+            ui.ctx().request_repaint();
         }
         response
     }
@@ -1746,13 +1824,30 @@ impl ChartLayout {
         }
     }
 
+    fn state_recorded(&self, index: usize, chart: &Chart) -> bool {
+        self.previous[index]
+            .as_ref()
+            .is_some_and(|p| p.0 == chart.symbol() && p.1 == chart.timeframe())
+    }
+
+    fn record_state(&mut self, index: usize, chart: &Chart) {
+        if !self.state_recorded(index, chart) {
+            self.previous[index] = Some((chart.symbol().to_owned(), chart.timeframe()));
+        }
+    }
+
     fn sync_state(&mut self, charts: &mut [&mut Chart], count: usize) {
         let source = &charts[self.active];
+        let Some(previous) = &self.previous[self.active] else {
+            return;
+        };
+        let symbol_changed = previous.0 != source.symbol();
+        let timeframe_changed = previous.1 != source.timeframe();
+        if !symbol_changed && !timeframe_changed {
+            return;
+        }
         let symbol = source.symbol().to_owned();
         let timeframe = source.timeframe();
-        let previous = self.previous[self.active].as_ref();
-        let symbol_changed = previous.is_some_and(|p| p.0 != symbol);
-        let timeframe_changed = previous.is_some_and(|p| p.1 != timeframe);
         for (index, chart) in charts.iter_mut().take(count).enumerate() {
             if index == self.active {
                 continue;
@@ -3504,5 +3599,555 @@ mod tests {
         let (edited, same) = allocations(|| layout.visible_chart_rects(rect, 4));
         assert_eq!(same, cells);
         assert_eq!(edited, unedited, "with {} other presets", others.len());
+    }
+
+    /// Naming a synchronization group decides which charts a field following the layout setting
+    /// links to; it never changes a membership, so restoring works in either order.
+    #[test]
+    fn set_sync_group_keeps_individual_field_groups() {
+        for memberships in [
+            ChartLinkGroups {
+                symbol: ChartLink::Group("🔶".into()),
+                interval: ChartLink::Group("💧".into()),
+            },
+            ChartLinkGroups {
+                symbol: ChartLink::Unlinked,
+                interval: ChartLink::Layout,
+            },
+        ] {
+            let mut layout = ChartLayout::default();
+            layout.set_link_groups(0, memberships.clone(), true);
+            layout.set_sync_group(0, Some("Desk".into()));
+            assert_eq!(layout.sync_group(0), Some("Desk"));
+            assert_eq!(layout.link_groups(0), Some(memberships));
+        }
+    }
+
+    /// One frame and each text shape it painted: text, painted rect inside its clip, centre.
+    fn frame_texts(
+        ctx: &egui::Context,
+        layout: &mut ChartLayout,
+        charts: &mut [Chart],
+        size: Vec2,
+        time: f64,
+        events: Vec<Event>,
+    ) -> Vec<(String, Rect, Pos2)> {
+        let output = ctx.run_ui(
+            RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
+                time: Some(time),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                layout.show(ui, &mut charts.iter_mut().collect::<Vec<_>>());
+            },
+        );
+        let mut texts = Vec::new();
+        for shape in &output.shapes {
+            if let egui::Shape::Text(text) = &shape.shape {
+                texts.push((
+                    text.galley.text().to_owned(),
+                    text.galley
+                        .rect
+                        .translate(text.pos.to_vec2())
+                        .intersect(shape.clip_rect),
+                    text.pos + text.galley.size() / 2.0,
+                ));
+            }
+        }
+        output.drop_without_applying_deltas();
+        texts
+    }
+
+    fn pointer_button(pos: Pos2, pressed: bool) -> Event {
+        Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        }
+    }
+
+    fn key(key: egui::Key) -> Event {
+        Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        }
+    }
+
+    fn text_center(texts: &[(String, Rect, Pos2)], label: &str) -> Pos2 {
+        texts
+            .iter()
+            .find(|(text, ..)| text == label)
+            .map(|(.., center)| *center)
+            .unwrap_or_else(|| {
+                panic!(
+                    "no {label:?} among {:?}",
+                    texts.iter().map(|t| &t.0).collect::<Vec<_>>()
+                )
+            })
+    }
+
+    /// The chart menu names the chart's synchronization group, which decides its scrolling,
+    /// crosshair, drawing, date range and replay links, and leaves its field memberships alone.
+    #[test]
+    fn chart_menu_still_assigns_the_synchronization_group() {
+        let ctx = egui::Context::default();
+        let mut layout = ChartLayout {
+            mode: ChartLayoutMode::TwoHorizontal,
+            ..Default::default()
+        };
+        let memberships = ChartLinkGroups {
+            symbol: ChartLink::Group("🔶".into()),
+            interval: ChartLink::Group("💧".into()),
+        };
+        layout.set_link_groups(0, memberships.clone(), true);
+        let mut charts = [chart(60), chart(60)];
+        let mut time = 0.0;
+        let mut frame = |layout: &mut ChartLayout, charts: &mut [Chart; 2], events| {
+            time += 0.1;
+            frame_texts(&ctx, layout, charts, vec2(640.0, 900.0), time, events)
+        };
+        frame(&mut layout, &mut charts, vec![]);
+        let corner = pos2(308.0, 12.0);
+        frame(&mut layout, &mut charts, vec![Event::PointerMoved(corner)]);
+        frame(&mut layout, &mut charts, vec![pointer_button(corner, true)]);
+        frame(
+            &mut layout,
+            &mut charts,
+            vec![pointer_button(corner, false)],
+        );
+        frame(&mut layout, &mut charts, vec![]);
+        let texts = frame(&mut layout, &mut charts, vec![]);
+        let input = text_center(&texts, "Sync group") + vec2(0.0, 22.0);
+        frame(&mut layout, &mut charts, vec![Event::PointerMoved(input)]);
+        frame(&mut layout, &mut charts, vec![pointer_button(input, true)]);
+        frame(&mut layout, &mut charts, vec![pointer_button(input, false)]);
+        frame(&mut layout, &mut charts, vec![Event::Text("Desk".into())]);
+        assert_eq!(layout.sync_group(0), None, "typing joins no group");
+        frame(&mut layout, &mut charts, vec![key(egui::Key::Enter)]);
+        assert_eq!(layout.sync_group(0), Some("Desk"));
+        assert_eq!(layout.link_groups(0).as_ref(), Some(&memberships));
+        frame(&mut layout, &mut charts, vec![pointer_button(input, true)]);
+        frame(&mut layout, &mut charts, vec![pointer_button(input, false)]);
+        for _ in 0.."Desk".len() {
+            frame(&mut layout, &mut charts, vec![key(egui::Key::Backspace)]);
+        }
+        frame(&mut layout, &mut charts, vec![key(egui::Key::Enter)]);
+        assert_eq!(layout.sync_group(0), None, "clearing returns it to unnamed");
+        assert_eq!(layout.link_groups(0), Some(memberships));
+    }
+
+    /// Naming a group by typing is one membership edit, however it ends: Enter and a click on
+    /// another chart, which selects it, commit it as one undo step, Escape discards it. The menu
+    /// of the second chart is edited too, so the click selects a chart before it.
+    #[test]
+    fn typing_a_group_name_is_one_undo_step() {
+        let first = pos2(100.0, 500.0);
+        let second = pos2(500.0, 500.0);
+        for (slot, commit, committed) in [
+            (0, vec![key(egui::Key::Enter)], true),
+            (
+                0,
+                vec![pointer_button(second, true), pointer_button(second, false)],
+                true,
+            ),
+            (
+                1,
+                vec![pointer_button(first, true), pointer_button(first, false)],
+                true,
+            ),
+            (0, vec![key(egui::Key::Escape)], false),
+        ] {
+            let ctx = egui::Context::default();
+            let mut layout = ChartLayout {
+                mode: ChartLayoutMode::TwoHorizontal,
+                text_sync_groups: true,
+                ..Default::default()
+            };
+            let mut charts = [chart(60), chart(60)];
+            let mut time = 0.0;
+            let mut frame = |layout: &mut ChartLayout, charts: &mut [Chart; 2], events| {
+                time += 0.1;
+                frame_texts(&ctx, layout, charts, vec2(640.0, 900.0), time, events)
+            };
+            frame(&mut layout, &mut charts, vec![]);
+            if slot == 1 {
+                frame(&mut layout, &mut charts, vec![pointer_button(second, true)]);
+                frame(
+                    &mut layout,
+                    &mut charts,
+                    vec![pointer_button(second, false)],
+                );
+            }
+            let corner = pos2(308.0 + 320.0 * slot as f32, 12.0);
+            frame(&mut layout, &mut charts, vec![Event::PointerMoved(corner)]);
+            frame(&mut layout, &mut charts, vec![pointer_button(corner, true)]);
+            frame(
+                &mut layout,
+                &mut charts,
+                vec![pointer_button(corner, false)],
+            );
+            frame(&mut layout, &mut charts, vec![]);
+            let texts = frame(&mut layout, &mut charts, vec![]);
+            let picker = text_center(&texts, "Symbol group  ○");
+            frame(&mut layout, &mut charts, vec![Event::PointerMoved(picker)]);
+            frame(&mut layout, &mut charts, vec![pointer_button(picker, true)]);
+            frame(
+                &mut layout,
+                &mut charts,
+                vec![pointer_button(picker, false)],
+            );
+            frame(&mut layout, &mut charts, vec![]);
+            let texts = frame(&mut layout, &mut charts, vec![]);
+            let unlinked = text_center(&texts, "Unlinked");
+            let follow = text_center(&texts, "Follow layout setting");
+            // The name field sits between the two rows, each one separator away.
+            let field = pos2(unlinked.x, (unlinked.y + follow.y) / 2.0);
+            frame(&mut layout, &mut charts, vec![Event::PointerMoved(field)]);
+            frame(&mut layout, &mut charts, vec![pointer_button(field, true)]);
+            frame(&mut layout, &mut charts, vec![pointer_button(field, false)]);
+            for letter in ["D", "e", "s", "k"] {
+                frame(&mut layout, &mut charts, vec![Event::Text(letter.into())]);
+                assert_eq!(
+                    layout.link_groups(slot).unwrap().symbol,
+                    ChartLink::Layout,
+                    "typing joins no group"
+                );
+            }
+            frame(&mut layout, &mut charts, commit);
+            frame(&mut layout, &mut charts, vec![]);
+            frame(&mut layout, &mut charts, vec![]);
+            let symbol = || layout.link_groups(slot).unwrap().symbol;
+            if committed {
+                assert_eq!(symbol(), ChartLink::Group("Desk".into()));
+                let active = layout.active();
+                assert!(charts[active].undo());
+                assert_eq!(symbol(), ChartLink::Layout, "one name, one undo step");
+                assert!(charts[active].redo());
+                assert_eq!(symbol(), ChartLink::Group("Desk".into()));
+            } else {
+                assert_eq!(symbol(), ChartLink::Layout);
+                assert!(!charts[slot].can_undo(), "a discarded name records nothing");
+            }
+        }
+    }
+
+    /// Of a tab layout only the shown chart draws its menu. A click on another tab must still
+    /// commit a group name typed there, as a click on another chart of a grid does.
+    #[test]
+    fn clicking_another_tab_commits_a_typed_group_name() {
+        let ctx = egui::Context::default();
+        let mut layout = ChartLayout {
+            mode: ChartLayoutMode::Tabs,
+            ..Default::default()
+        };
+        let mut charts = [chart(60), chart(60)];
+        charts[1].set_symbol("OTHER");
+        let mut time = 0.0;
+        let mut frame = |layout: &mut ChartLayout, charts: &mut [Chart; 2], events| {
+            time += 0.1;
+            frame_texts(&ctx, layout, charts, vec2(640.0, 900.0), time, events)
+        };
+        frame(&mut layout, &mut charts, vec![]);
+        let texts = frame(
+            &mut layout,
+            &mut charts,
+            vec![Event::PointerMoved(pos2(300.0, 400.0))],
+        );
+        let corner = text_center(&texts, "…");
+        let tab = text_center(&texts, "OTHER");
+        frame(&mut layout, &mut charts, vec![Event::PointerMoved(corner)]);
+        frame(&mut layout, &mut charts, vec![pointer_button(corner, true)]);
+        frame(
+            &mut layout,
+            &mut charts,
+            vec![pointer_button(corner, false)],
+        );
+        frame(&mut layout, &mut charts, vec![]);
+        let texts = frame(&mut layout, &mut charts, vec![]);
+        let input = text_center(&texts, "Sync group") + vec2(0.0, 22.0);
+        frame(&mut layout, &mut charts, vec![Event::PointerMoved(input)]);
+        frame(&mut layout, &mut charts, vec![pointer_button(input, true)]);
+        frame(&mut layout, &mut charts, vec![pointer_button(input, false)]);
+        frame(&mut layout, &mut charts, vec![Event::Text("Desk".into())]);
+        frame(&mut layout, &mut charts, vec![Event::PointerMoved(tab)]);
+        frame(&mut layout, &mut charts, vec![pointer_button(tab, true)]);
+        frame(&mut layout, &mut charts, vec![pointer_button(tab, false)]);
+        frame(&mut layout, &mut charts, vec![]);
+        assert_eq!(layout.active(), 1);
+        assert_eq!(layout.sync_group(0), Some("Desk"));
+    }
+
+    /// Ctrl+Z reaches the active chart while the layout renders it, as in a host that leaves
+    /// shortcut dispatch to `show`. The undone symbol or interval must reach its linked chart
+    /// as the edit did.
+    #[test]
+    fn keyboard_undo_of_a_linked_change_reaches_the_group() {
+        let command = egui::Modifiers {
+            ctrl: true,
+            command: true,
+            ..Default::default()
+        };
+        let state = |chart: &Chart| (chart.symbol().to_owned(), chart.timeframe());
+        let original = ("SAMPLE".to_owned(), Some(Timeframe::Min1));
+        let mut received = Vec::new();
+        for interval in [false, true] {
+            let ctx = egui::Context::default();
+            let mut layout = ChartLayout {
+                mode: ChartLayoutMode::TwoHorizontal,
+                ..Default::default()
+            };
+            let link = ChartLinkGroups {
+                symbol: ChartLink::Group("🔶".into()),
+                interval: ChartLink::Group("💧".into()),
+            };
+            layout.set_link_groups(0, link.clone(), true);
+            layout.set_link_groups(1, link, true);
+            let mut charts = [chart(60), chart(60)];
+            let mut time = 0.0;
+            let mut frame = |layout: &mut ChartLayout, charts: &mut [Chart; 2], events| {
+                time += 0.1;
+                frame_texts(&ctx, layout, charts, vec2(1440.0, 900.0), time, events);
+            };
+            frame(&mut layout, &mut charts, vec![]);
+            // A toolbar edit between frames reaches the linked chart.
+            charts[0].user_action(|chart| {
+                if interval {
+                    chart.set_timeframe(Timeframe::Hour1);
+                } else {
+                    chart.set_symbol("OTHER");
+                }
+            });
+            frame(&mut layout, &mut charts, vec![]);
+            let edited = if interval {
+                ("SAMPLE".to_owned(), Some(Timeframe::Hour1))
+            } else {
+                ("OTHER".to_owned(), Some(Timeframe::Min1))
+            };
+            assert_eq!(
+                state(&charts[1]),
+                edited,
+                "the edit reaches the linked chart"
+            );
+            frame(
+                &mut layout,
+                &mut charts,
+                vec![
+                    Event::ModifiersChanged(command),
+                    Event::Key {
+                        key: egui::Key::Z,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: command,
+                    },
+                ],
+            );
+            assert_eq!(
+                state(&charts[0]),
+                original,
+                "keyboard undo restores the active chart"
+            );
+            frame(
+                &mut layout,
+                &mut charts,
+                vec![Event::ModifiersChanged(egui::Modifiers::NONE)],
+            );
+            frame(&mut layout, &mut charts, vec![]);
+            received.push(state(&charts[1]));
+        }
+        assert_eq!(
+            received,
+            [original.clone(), original],
+            "the undone symbol, then the undone interval, reaches the linked chart"
+        );
+    }
+
+    /// A host opens a saved layout by supplying its charts in the same slots or restoring
+    /// snapshots into them. Nobody changed a symbol or interval, so each opened chart keeps its
+    /// own, also in slots that share a symbol and an interval group; the next change is sent.
+    #[test]
+    fn charts_opened_into_linked_slots_keep_their_symbols() {
+        let ctx = egui::Context::default();
+        let mut layout = ChartLayout {
+            mode: ChartLayoutMode::TwoHorizontal,
+            ..Default::default()
+        };
+        let link = ChartLinkGroups {
+            symbol: ChartLink::Group("🔶".into()),
+            interval: ChartLink::Group("💧".into()),
+        };
+        layout.set_link_groups(0, link.clone(), true);
+        layout.set_link_groups(1, link, true);
+        let mut charts = vec![chart(60), chart(60)];
+        let mut time = 0.0;
+        let mut frames = |layout: &mut ChartLayout, charts: &mut Vec<Chart>| {
+            for _ in 0..2 {
+                time += 0.1;
+                frame_texts(&ctx, layout, charts, vec2(1440.0, 900.0), time, vec![]);
+            }
+        };
+        let state = |charts: &[Chart]| {
+            charts
+                .iter()
+                .map(|chart| (chart.symbol().to_owned(), chart.timeframe()))
+                .collect::<Vec<_>>()
+        };
+        let opened = [
+            ("AAPL".to_owned(), Some(Timeframe::Hour1)),
+            ("MSFT".to_owned(), Some(Timeframe::Day1)),
+        ];
+        frames(&mut layout, &mut charts);
+        // Assigned in place, so a new chart can sit at the address of the one it replaces.
+        charts[0] = chart(3600);
+        charts[0].set_symbol("AAPL");
+        charts[0].set_timeframe(Timeframe::Hour1);
+        charts[1] = chart(86_400);
+        charts[1].set_symbol("MSFT");
+        charts[1].set_timeframe(Timeframe::Day1);
+        frames(&mut layout, &mut charts);
+        assert_eq!(state(&charts), opened, "supplied charts");
+
+        #[cfg(feature = "ui")]
+        let saved = charts[0].snapshot().unwrap();
+        charts[0].set_symbol("TSLA");
+        frames(&mut layout, &mut charts);
+        assert_eq!(charts[1].symbol(), "TSLA", "the next change is sent");
+        #[cfg(feature = "ui")]
+        {
+            charts[1].set_symbol("MSFT");
+            frames(&mut layout, &mut charts);
+            charts[0].restore(&saved).unwrap();
+            frames(&mut layout, &mut charts);
+            assert_eq!(state(&charts), opened, "a restored chart");
+        }
+    }
+
+    /// Four charts on a 1536 x 864 screen are 768 points wide. Beside the 70 point price axis
+    /// the status line keeps 768 - 70 - 48 = 650 points, over the 600 that show open, high, low
+    /// and close. The selectors cover x 548..658 of the first row only, so the values still fit,
+    /// and nothing of the status line may paint beneath the selectors: no text, and no outline of
+    /// a hovered title or study row that starts on the first row and continues on the next.
+    #[test]
+    fn link_selectors_keep_open_high_low_in_the_status_line() {
+        let ctx = egui::Context::default();
+        let mut layout = ChartLayout {
+            mode: ChartLayoutMode::Four,
+            ..Default::default()
+        };
+        let mut charts = [chart(60), chart(60), chart(60), chart(60)];
+        let size = vec2(1536.0, 864.0);
+        let mut texts = Vec::new();
+        for frame in 0..3 {
+            texts = frame_texts(
+                &ctx,
+                &mut layout,
+                &mut charts,
+                size,
+                frame as f64 * 0.1,
+                vec![],
+            );
+        }
+        let slot = layout.rects(Rect::from_min_size(Pos2::ZERO, size), 4)[0];
+        let price = charts[0].get_rendered_price_rect();
+        assert!(price.width() - 48.0 >= 600.0, "{slot:?} {price:?}");
+        let own: Vec<_> = texts
+            .iter()
+            .filter(|(_, rect, _)| rect.is_positive() && slot.contains_rect(*rect))
+            .collect();
+        let selectors = Rect::from_min_max(
+            pos2(slot.right() - 220.0, slot.top() + 2.0),
+            pos2(slot.right() - 110.0, slot.top() + 24.0),
+        );
+        for (text, rect, _) in &own {
+            if !text.starts_with("S ") && !text.starts_with("I ") {
+                assert!(
+                    !rect.intersect(selectors).is_positive(),
+                    "{text:?} paints beneath the selectors"
+                );
+            }
+        }
+        let values: Vec<_> = own
+            .iter()
+            .map(|(text, ..)| text.as_str())
+            .filter(|text| {
+                ["O ", "H ", "L ", "C "]
+                    .iter()
+                    .any(|field| text.starts_with(field))
+            })
+            .collect();
+        let fields: Vec<_> = values.iter().map(|text| &text[..2]).collect();
+        assert_eq!(
+            fields,
+            ["O ", "H ", "L ", "C "],
+            "status line values {values:?}"
+        );
+        // A long title, then a study row with nothing before it, continues on the next row, and
+        // its outline spans both rows when hovered.
+        let accent = ctx.active_theme().ui.accent;
+        let mut time = 0.2;
+        let mut hover = |layout: &mut ChartLayout, charts: &mut [Chart; 4], row: &str| {
+            let mut outlines = Vec::new();
+            for _ in 0..3 {
+                time += 0.1;
+                let output = ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
+                        time: Some(time),
+                        events: vec![Event::PointerMoved(pos2(100.0, 14.0))],
+                        ..Default::default()
+                    },
+                    |ui| {
+                        layout.show(ui, &mut charts.iter_mut().collect::<Vec<_>>());
+                    },
+                );
+                outlines = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Rect(rect)
+                            if rect.stroke.width == 1.0 && rect.stroke.color == accent =>
+                        {
+                            Some(rect.rect)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                output.drop_without_applying_deltas();
+            }
+            assert!(!outlines.is_empty(), "hovering the {row} outlines it");
+            for outline in outlines {
+                assert!(
+                    !outline.intersects(selectors),
+                    "the {row} outline {outline:?} reaches beneath the selectors"
+                );
+            }
+        };
+        #[cfg(feature = "icons")]
+        {
+            charts[0].set_symbol("LONG_SYMBOL_".repeat(12));
+            hover(&mut layout, &mut charts, "title");
+        }
+        let config = charts[0].config_mut();
+        config.show_symbol_labels = false;
+        config.show_ohlc_info = false;
+        config.show_ohlc_change = false;
+        config.show_ohlc_change_percent = false;
+        config.show_legend_volume = false;
+        charts[0].add_indicator(Box::new(
+            crate::studies::CustomIndicator::new("LONG_STUDY_".repeat(4), |_| Vec::new())
+                .with_line_count(3)
+                .with_line_names(vec![
+                    "Ask levels".into(),
+                    "Bid levels".into(),
+                    "Mid levels".into(),
+                ]),
+        ));
+        hover(&mut layout, &mut charts, "study row");
     }
 }
