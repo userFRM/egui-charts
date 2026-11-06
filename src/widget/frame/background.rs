@@ -4,6 +4,25 @@ use crate::config::{BackgroundStyle, WatermarkPos};
 use egui::{Rect, Ui};
 
 impl Chart {
+    /// The colour [`Self::draw_background`] paints the plot with, the midpoint of a gradient, or
+    /// `None` when something else paints it.
+    pub(super) fn plot_background(&self) -> Option<egui::Color32> {
+        if self.config.skip_background {
+            return None;
+        }
+        Some(match self.config.background_style {
+            BackgroundStyle::Solid => self.config.background_color,
+            BackgroundStyle::VerticalGradient {
+                top_color: first,
+                bottom_color: second,
+            }
+            | BackgroundStyle::HorizontalGradient {
+                left_color: first,
+                right_color: second,
+            } => first.lerp_to_gamma(second, 0.5),
+        })
+    }
+
     /// Draw the chart background (solid or gradient)
     pub(super) fn draw_background(&self, painter: &egui::Painter, rect: Rect) {
         // Skip background when chart is inside a container that handles its own background
