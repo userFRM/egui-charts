@@ -478,7 +478,7 @@ impl FibonacciConfig {
 
     /// Initial levels for a tool as ratio, colour and visibility, with the background on at 20%
     /// except on time zones. Hidden levels are listed so they can be switched on without typing.
-    /// Drawings saved without a config keep [`Self::legacy`]; new tools store this table when
+    /// Drawings saved without a config keep their old levels; new tools store this table when
     /// constructed.
     pub fn for_tool(tool: super::DrawingToolType) -> Self {
         use super::DrawingToolType as T;
