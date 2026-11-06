@@ -1100,7 +1100,10 @@ mod tests {
                         && t.galley.text() == "18.00")));
                 // The falling and flat bars share the bar colour on the last-price label too.
                 let last = chart.state.data().bars.clone();
-                assert_eq!(chart.main_value_color(&last, last.len() - 1), style.bar_color);
+                assert_eq!(
+                    chart.main_value_color(&last, last.len() - 1),
+                    style.bar_color
+                );
 
                 // Labels that do not fit the bar spacing go together; the bars stay visible.
                 chart.state.time_scale_mut().set_bar_spacing(2.0);
