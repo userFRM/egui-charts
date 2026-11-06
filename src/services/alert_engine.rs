@@ -38,10 +38,10 @@ use crate::model::{
 /// is evaluated once after compatible observations arrive. The shortest interval supplies the
 /// occurrence bar. Other observations must cover its open, wherever inside its period the feed
 /// stamped their bar. A longer bar closes together with the last shorter bar of its period, so
-/// that bar joins it even when the next longer bar has arrived, a session has ended or trading
-/// has paused. For that, each other interval also keeps the bar before its newest. Observations
-/// from later windows cannot satisfy an earlier event, nor can expired observations satisfy a
-/// newer one. Each direct update evaluates the latest overlapping
+/// for `OncePerBarClose` each other interval also keeps the bar before its newest, which that
+/// shorter bar joins when the next longer bar has arrived, a session has ended or trading has
+/// paused. Observations from later windows cannot satisfy an earlier event, nor can expired
+/// observations satisfy a newer one. Each direct update evaluates the latest overlapping
 /// observations; `AlertEvaluator` gathers a complete poll before evaluating. Missing or non-finite
 /// sources make their conditions false. Price and volume come from each interval's own bars.
 /// Messages are filled when the alert fires, with its firing time and the first condition's
