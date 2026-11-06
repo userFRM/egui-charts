@@ -610,6 +610,7 @@ mod tests {
             alerts.strategy_fills(
                 "other-run",
                 "SYM",
+                None,
                 Timeframe::Min1,
                 &fills,
                 bars[count - 1].time,
@@ -617,6 +618,7 @@ mod tests {
             alerts.strategy_fills(
                 "run-1",
                 "OTHER",
+                None,
                 Timeframe::Min1,
                 &fills,
                 bars[count - 1].time,
@@ -624,6 +626,7 @@ mod tests {
             alerts.strategy_fills(
                 "run-1",
                 "SYM",
+                None,
                 Timeframe::Hour1,
                 &fills,
                 bars[count - 1].time,
@@ -636,6 +639,7 @@ mod tests {
             alerts.strategy_fills(
                 "run-1",
                 "SYM",
+                None,
                 Timeframe::Min1,
                 &fills,
                 bars[count - 1].time,
@@ -643,6 +647,7 @@ mod tests {
             alerts.strategy_fills(
                 "run-1",
                 "SYM",
+                None,
                 Timeframe::Min1,
                 &fills,
                 bars[count - 1].time,
@@ -692,12 +697,12 @@ mod tests {
             edited.name = "Renamed".into();
             edited.status = status;
             alerts.save(edited, inbox.reply(0));
-            alerts.strategy_fills("run-1", "SYM", Timeframe::Min1, &all, bars[4].time);
+            alerts.strategy_fills("run-1", "SYM", None, Timeframe::Min1, &all, bars[4].time);
             assert_eq!(delivered.lock().unwrap().len(), 4);
         }
         let mut next = all[0].clone();
         next.sequence = 5;
-        alerts.strategy_fills("run-1", "SYM", Timeframe::Min1, &[next], bars[4].time);
+        alerts.strategy_fills("run-1", "SYM", None, Timeframe::Min1, &[next], bars[4].time);
         assert_eq!(delivered.lock().unwrap().len(), 5);
         // Fill alerts obey the same lifecycle rules, without needing a price subscription.
         use crate::model::{
@@ -739,12 +744,13 @@ mod tests {
                     .subjects(engine.alerts()[0].id.as_ref().unwrap())
                     .is_empty()
             );
-            engine.strategy_fills("run-1", "SYM", Timeframe::Min1, &all, bars[4].time);
+            engine.strategy_fills("run-1", "SYM", None, Timeframe::Min1, &all, bars[4].time);
             assert_eq!(delivered.lock().unwrap().len(), count);
             // Opening the schedule must not repeat fills observed outside it.
             engine.strategy_fills(
                 "run-1",
                 "SYM",
+                None,
                 Timeframe::Min1,
                 &all,
                 DateTime::UNIX_EPOCH + TimeDelta::hours(12),
@@ -766,7 +772,7 @@ mod tests {
                 });
             let mut fill = all[0].clone();
             fill.price = 0.00025;
-            engine.strategy_fills("run-1", "SYM", Timeframe::Min1, &[fill], bars[4].time);
+            engine.strategy_fills("run-1", "SYM", None, Timeframe::Min1, &[fill], bars[4].time);
             let events = delivered.lock().unwrap();
             let [AlertEvent::TriggeredForSymbol { message, .. }] = events.as_slice() else {
                 panic!("one fill");

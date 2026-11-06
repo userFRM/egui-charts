@@ -448,7 +448,10 @@ impl AlertEvaluator {
                     )
                 })
                 .collect();
-            engine.update_matching(Some(id), symbol, &inputs, now, |timeframe, source, at| {
+            let exchange = contexts
+                .iter()
+                .find_map(|(_, reader, _)| reader.instrument()?.exchange.as_deref());
+            let value = |timeframe: Timeframe, source: &AlertSource, at: usize| {
                 let (run, reader, from) = contexts
                     .iter()
                     .find(|(run, _, _)| run.timeframe == timeframe)?;
@@ -500,7 +503,8 @@ impl AlertEvaluator {
                     }
                     _ => None,
                 }
-            });
+            };
+            engine.update_matching(Some(id), symbol, exchange, &inputs, now, value);
         }
         // Once alerts and removed watchlist members release their readers in the same frame.
         self.runs
@@ -856,6 +860,43 @@ mod tests {
         assert_eq!(
             fired_messages(Arc::new(Feed::default()), &factory, alert),
             ["300 mean 250 NaN NaN"]
+        );
+    }
+
+    /// A feed that keys symbols without a venue prefix and reports the exchange when it
+    /// resolves them, as the `SymbolSearch` example and the demo do.
+    struct Listed(Feed);
+
+    impl Datafeed for Listed {
+        fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {
+            reply.send(Ok(Instrument::new(symbol).with_exchange("NASDAQ")));
+        }
+
+        fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
+            self.0.history(request, reply);
+        }
+
+        fn subscribe(&self, subscription: Subscription) {
+            self.0.subscribe(subscription);
+        }
+
+        fn unsubscribe(&self, id: SubscriptionId) {
+            self.0.unsubscribe(id);
+        }
+    }
+
+    #[test]
+    fn exchange_placeholder_reads_the_resolved_instrument_exchange() {
+        let mut alert = Alert::new("AAPL", crate::model::AlertCondition::Above(250.0));
+        alert.timeframe = Some(Timeframe::Min1);
+        alert.message = "{{exchange}}:{{ticker}} closed at {{close}}".into();
+        assert_eq!(
+            fired_messages(
+                Arc::new(Listed(Feed::default())),
+                &IndicatorFactory::new(),
+                alert
+            ),
+            ["NASDAQ:AAPL closed at 300"]
         );
     }
 }

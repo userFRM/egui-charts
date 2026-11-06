@@ -91,6 +91,9 @@ impl DemoApp {
         self.alert_host.engine().strategy_fills(
             id,
             &run.symbol,
+            self.chart
+                .instrument()
+                .and_then(|instrument| instrument.exchange.as_deref()),
             run.timeframe,
             &fills,
             chrono::Utc::now(),

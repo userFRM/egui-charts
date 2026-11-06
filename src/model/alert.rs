@@ -327,8 +327,10 @@ impl Alert {
     pub const MAX_MESSAGE_CHARS: usize = 4000;
 
     /// The message with its placeholders filled in from the trigger: `{{symbol}}` and
-    /// `{{timeframe}}` (also `{{interval}}`) as given, `{{exchange}}` the text before the first
-    /// `:` of the symbol and `{{ticker}}` the text after it (the whole symbol without a `:`),
+    /// `{{timeframe}}` (also `{{interval}}`) as given, `{{exchange}}` the `exchange` the feed
+    /// reports for the symbol ([`Instrument::exchange`](super::Instrument::exchange)), or without
+    /// one the text before the first `:` of the symbol, and `{{ticker}}` the text after that `:`
+    /// (the whole symbol without one),
     /// `{{time}}` the open time of `bar` and `{{trigger_time}}` the instant `trigger` the alert
     /// fired, both in RFC 3339, `{{open}}`, `{{high}}`, `{{low}}`, `{{close}}` and `{{volume}}` of
     /// `bar`, `{{value}}` the value of the alert's source, `{{output_N}}` the value of output `N`
@@ -349,13 +351,14 @@ impl Alert {
     /// let time = chrono::DateTime::from_timestamp(0, 0).unwrap();
     /// let bar = Bar::new(time, 99.0, 102.0, 98.0, 101.5, 1000.0);
     /// assert_eq!(
-    ///     alert.expand_message("NYSE:IBM", Timeframe::Min5, &bar, time, |_| None),
+    ///     alert.expand_message("NYSE:IBM", None, Timeframe::Min5, &bar, time, |_| None),
     ///     "IBM on NYSE closed at 101.5 on 5min"
     /// );
     /// ```
     pub fn expand_message(
         &self,
         symbol: &str,
+        exchange: Option<&str>,
         timeframe: Timeframe,
         bar: &Bar,
         trigger: DateTime<Utc>,
@@ -366,7 +369,8 @@ impl Alert {
                 .filter(|number| number.is_finite())
                 .map_or_else(|| "NaN".to_owned(), |number| number.to_string())
         };
-        let (exchange, ticker) = symbol.split_once(':').unwrap_or(("", symbol));
+        let (prefix, ticker) = symbol.split_once(':').unwrap_or(("", symbol));
+        let exchange = exchange.filter(|name| !name.is_empty()).unwrap_or(prefix);
         let study = |id: &str, output| {
             number(value(&AlertSource::Study {
                 id: id.to_owned(),
@@ -937,9 +941,29 @@ mod tests {
                 ..AlertInputs::default()
             }));
             assert_eq!(
-                alert.expand_message("NASDAQ:AAPL", Timeframe::Min5, &bar, trigger, value),
+                alert.expand_message("NASDAQ:AAPL", None, Timeframe::Min5, &bar, trigger, value),
                 expected,
                 "{message}"
+            );
+        }
+    }
+
+    #[test]
+    fn exchange_placeholder_prefers_the_reported_exchange_over_the_symbol_prefix() {
+        let time = DateTime::from_timestamp(0, 0).unwrap();
+        let bar = Bar::new(time, 1.0, 1.0, 1.0, 1.0, 1.0);
+        let mut alert = Alert::new("SAMPLE", AlertCondition::Above(0.0));
+        alert.message = "{{exchange}}/{{ticker}}".into();
+        for (symbol, exchange, expected) in [
+            ("NYSE:IBM", None, "NYSE/IBM"),
+            ("NYSE:IBM", Some(""), "NYSE/IBM"),
+            ("NYSE:IBM", Some("ARCA"), "ARCA/IBM"),
+            ("AAPL", Some("NASDAQ"), "NASDAQ/AAPL"),
+            ("AAPL", None, "/AAPL"),
+        ] {
+            assert_eq!(
+                alert.expand_message(symbol, exchange, Timeframe::Min1, &bar, time, |_| None),
+                expected
             );
         }
     }
@@ -985,7 +1009,7 @@ mod tests {
             }));
             alert.message = "{{ticker}} crossed {{level}}".into();
             assert_eq!(
-                alert.expand_message("SAMPLE", Timeframe::Min1, &bar, time, |_| Some(123.6)),
+                alert.expand_message("SAMPLE", None, Timeframe::Min1, &bar, time, |_| Some(123.6)),
                 expected
             );
         }
