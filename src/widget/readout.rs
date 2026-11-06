@@ -4,10 +4,18 @@ use super::{Chart, CursorDataPolicy, SeriesId};
 use crate::chart::rendering::StudyValue;
 
 impl Chart {
-    /// History identity and study changes, including host-fed study data and mutable edits.
+    /// The table is current while this is unchanged: the history revision and a revision moved
+    /// by edits of the last bar, study edits, host-fed study data and the instrument.
     #[cfg(feature = "ui")]
     pub(crate) fn data_table_revision(&self) -> (u64, u64) {
         (self.state.revision(), self.readout_revision)
+    }
+
+    /// Tells this chart from the others a host shows one data table over, through a restore of
+    /// its saved state, which adds its studies again under new ids.
+    #[cfg(feature = "ui")]
+    pub(crate) fn data_table_identity(&self) -> u64 {
+        self.data_table_identity
     }
 
     /// Takes the source preselection requested by a study menu's Add indicator action.

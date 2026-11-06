@@ -8,14 +8,13 @@
 //! the table stays open while a watchlist or search changes the chart's symbol.
 
 use crate::localization as l10n;
-use crate::model::{Bar, Timeframe};
-use crate::studies::StudySettingsSnapshot;
+use crate::model::Timeframe;
 use crate::ui_kit::buttons::Button;
 use crate::ui_kit::dialog::{DialogFrame, dialog_header};
-use crate::widget::{Chart, DataTable, SeriesId};
+use crate::widget::{Chart, ColumnId, DataTable, SeriesId};
 use chrono::{DateTime, Utc};
 use egui::{Align2, Context, FontId, Rect, ScrollArea, Sense, Ui, vec2};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 /// Width of the time column in logical points.
 const TIME_WIDTH: f32 = 210.0;
@@ -38,37 +37,26 @@ pub enum DataTableAction {
     SearchSymbol(String),
 }
 
-/// Inputs to the table, without copying historical bars or calculated study values.
+/// Inputs to the table, without copying bars, study settings or the instrument, whose changes
+/// move the chart's table revision.
 #[derive(PartialEq)]
 struct Source {
     revision: (u64, u64),
     symbol: String,
     timeframe: Option<Timeframe>,
     len: usize,
-    first: Option<Bar>,
-    last: Option<Bar>,
     replay: Option<DateTime<Utc>>,
-    studies: Vec<(SeriesId, bool, StudySettingsSnapshot)>,
-    instrument: Option<crate::model::Instrument>,
     timezone: crate::scales::TimezoneMode,
 }
 
 impl Source {
     fn of(chart: &Chart) -> Self {
-        let bars = chart.bars(SeriesId::MAIN);
         Self {
             revision: chart.data_table_revision(),
             symbol: chart.symbol().to_owned(),
             timeframe: chart.timeframe(),
-            len: bars.len(),
-            first: bars.first().cloned(),
-            last: bars.last().cloned(),
+            len: chart.bars(SeriesId::MAIN).len(),
             replay: chart.replay_time(),
-            studies: chart
-                .indicators()
-                .map(|(id, study)| (id, study.is_visible(), study.snapshot_settings()))
-                .collect(),
-            instrument: chart.instrument().cloned(),
             timezone: chart.chart_options().time_scale.timezone.clone(),
         }
     }
@@ -78,10 +66,11 @@ impl Source {
 pub struct DataTableDialog {
     /// Whether the dialog is currently visible.
     pub is_open: bool,
-    /// Stable series and plot identities keep choices through renames and symbol changes.
-    hidden: BTreeSet<(usize, usize)>,
+    /// The columns turned off on each chart. Studies are known by title, so the choices last
+    /// through symbol changes and through a restore, which gives the studies new ids.
+    hidden: HashMap<u64, BTreeSet<ColumnId>>,
     cached: Option<(Source, DataTable)>,
-    column_ids: Vec<(usize, usize)>,
+    column_ids: Vec<ColumnId>,
 }
 
 impl Default for DataTableDialog {
@@ -95,7 +84,7 @@ impl DataTableDialog {
     pub fn new() -> Self {
         Self {
             is_open: false,
-            hidden: BTreeSet::new(),
+            hidden: HashMap::new(),
             cached: None,
             column_ids: Vec::new(),
         }
@@ -130,7 +119,7 @@ impl DataTableDialog {
             self.cached = Some((source, table));
         }
         let table = &self.cached.as_ref().expect("table was just built").1;
-        let hidden = &mut self.hidden;
+        let hidden = self.hidden.entry(chart.data_table_identity()).or_default();
         let mut action = DataTableAction::None;
         let mut open = true;
         DialogFrame::new("Chart data", vec2(804.0, 472.0)).show(ctx, |ui| {
@@ -200,8 +189,8 @@ impl DataTableDialog {
     fn contents(
         ui: &mut Ui,
         table: &DataTable,
-        hidden: &mut BTreeSet<(usize, usize)>,
-        columns: &[(usize, usize)],
+        hidden: &mut BTreeSet<ColumnId>,
+        columns: &[ColumnId],
     ) -> DataTableAction {
         let mut action = DataTableAction::None;
         let shown: Vec<usize> = (0..table.headers.len())
@@ -216,7 +205,7 @@ impl DataTableDialog {
                         if visible {
                             hidden.remove(column);
                         } else {
-                            hidden.insert(*column);
+                            hidden.insert(column.clone());
                         }
                     }
                 }
@@ -321,7 +310,7 @@ impl DataTableDialog {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Bar, BarData};
+    use crate::model::{Bar, BarData, PriceSource};
     use chrono::DateTime;
 
     #[test]
@@ -439,20 +428,38 @@ mod tests {
             .into_iter()
             .find(|request| request.symbol == "DENOM")
             .unwrap();
-        for (step, denominator, expected) in [(0, 41.0, "1.00"), (10, 82.0, "0.50")] {
+        for (denominator, expected) in [(41.0, "1.00"), (82.0, "0.50")] {
             let history = chart
                 .bars(SeriesId::MAIN)
                 .iter()
                 .map(|bar| Bar::from_value(bar.time, denominator))
                 .collect();
             chart.set_study_data(request.clone(), history, None);
-            for frame in step..step + 4 {
-                crate::widget::test_frames::frame(&ctx, &mut chart, f64::from(frame), vec![]);
-            }
             show(&mut dialog, &chart);
             // A host-fed denominator changes with no edit to the chart bars or study settings.
             assert_eq!(cached_value(&dialog, 5000, "Ratio"), expected);
         }
+        chart.set_instrument(Some(
+            crate::model::Instrument::new("A").with_tick_size(0.001),
+        ));
+        show(&mut dialog, &chart);
+        assert_eq!(dialog.cached.as_ref().unwrap().1.rows[0][1], "31.000");
+        chart
+            .set_indicator_source(study, crate::studies::StudySource::Price(PriceSource::High))
+            .unwrap();
+        show(&mut dialog, &chart);
+        assert_eq!(cached_value(&dialog, 5000, "SMA"), "28.667"); // (12 + 32 + 42) / 3
+        let headers = |dialog: &DataTableDialog| dialog.cached.as_ref().unwrap().1.headers.clone();
+        chart.set_indicator_visible(ratio, false);
+        show(&mut dialog, &chart);
+        assert!(
+            !headers(&dialog)
+                .iter()
+                .any(|name| name.starts_with("Ratio"))
+        );
+        chart.remove_series(study);
+        show(&mut dialog, &chart);
+        assert!(!headers(&dialog).iter().any(|name| name.starts_with("SMA")));
     }
 
     /// Watchlist picks and symbol search remain usable while the table keeps column choices.
@@ -592,5 +599,244 @@ mod tests {
         let (_, texts, _) = frame(&mut dialog, &mut chart, vec![]);
         let (action, _, _) = click(&mut dialog, &mut chart, find(&texts, "Symbol"));
         assert_eq!(format!("{action:?}"), "SearchSymbol(\"\")");
+    }
+
+    /// One frame of `dialog` over `chart`: the address of its rows, which move when the table is
+    /// rebuilt, as the new rows are allocated while the old ones are alive.
+    fn shown_rows(
+        ctx: &Context,
+        dialog: &mut DataTableDialog,
+        chart: &Chart,
+    ) -> *const Vec<String> {
+        ctx.run_ui(Default::default(), |ui| {
+            dialog.show(ui.ctx(), chart);
+        })
+        .drop_without_applying_deltas();
+        dialog.cached.as_ref().unwrap().1.rows.as_ptr()
+    }
+
+    /// A column turned off on one chart stays off on that chart, also after it restores its saved
+    /// state, and leaves the columns of another chart the dialog follows.
+    #[test]
+    fn column_choice_on_one_chart_hides_no_column_of_another() {
+        use egui::{Event, Modifiers, PointerButton, Pos2};
+
+        let start = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let bars: Vec<_> = (0..30)
+            .map(|i| Bar::from_value(start + chrono::Duration::days(i), 10.0 + i as f64))
+            .collect();
+        let mut first = Chart::new(BarData::from_bars(bars.clone()));
+        let mut second = Chart::new(BarData::from_bars(bars));
+        first.add_indicator(Box::new(crate::studies::SMA::new(3)));
+        second.add_indicator(Box::new(crate::studies::RSI::new(14)));
+        let ctx = Context::default();
+        let mut dialog = DataTableDialog::new();
+        dialog.open();
+        let frame = |dialog: &mut DataTableDialog, chart: &Chart, events| {
+            let mut action = DataTableAction::None;
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| action = dialog.show(ui.ctx(), chart),
+            );
+            let texts: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some((
+                        text.galley.text().to_owned(),
+                        text.pos + text.galley.size() / 2.0,
+                    )),
+                    _ => None,
+                })
+                .collect();
+            let commands = output.platform_output.commands.clone();
+            output.drop_without_applying_deltas();
+            (action, texts, commands)
+        };
+        let click = |dialog: &mut DataTableDialog, chart: &Chart, at| {
+            frame(dialog, chart, vec![Event::PointerMoved(at)]);
+            frame(
+                dialog,
+                chart,
+                [true, false]
+                    .map(|pressed| Event::PointerButton {
+                        pos: at,
+                        button: PointerButton::Primary,
+                        pressed,
+                        modifiers: Modifiers::NONE,
+                    })
+                    .to_vec(),
+            )
+        };
+        let find = |texts: &[(String, Pos2)], label: &str| {
+            texts.iter().rfind(|(text, _)| text == label).unwrap().1
+        };
+        let headers = |dialog: &mut DataTableDialog, chart: &Chart| {
+            let names = chart.data_table().headers;
+            let (_, texts, _) = frame(dialog, chart, vec![]);
+            let painted: Vec<_> = texts
+                .into_iter()
+                .map(|(text, _)| text)
+                .filter(|text| names.contains(text))
+                .collect();
+            painted
+        };
+        frame(&mut dialog, &first, vec![]);
+        let (_, texts, _) = frame(&mut dialog, &first, vec![]);
+        click(&mut dialog, &first, find(&texts, "Columns"));
+        let (_, texts, _) = frame(&mut dialog, &first, vec![]);
+        // The last label of that name is the box in the Columns menu.
+        click(&mut dialog, &first, find(&texts, "SMA: SMA(3)"));
+        egui::Popup::close_all(&ctx);
+        let without_sma = ["time", "open", "high", "low", "close", "volume"];
+        assert_eq!(headers(&mut dialog, &first), without_sma);
+
+        assert_eq!(
+            headers(&mut dialog, &second),
+            second.data_table().headers,
+            "the other chart keeps its first study's column"
+        );
+        let (_, texts, _) = frame(&mut dialog, &second, vec![]);
+        let (_, _, commands) = click(&mut dialog, &second, find(&texts, "Copy"));
+        assert!(commands.iter().any(|command| matches!(
+            command,
+            egui::OutputCommand::CopyText(text) if text.contains("RSI: RSI(14)")
+        )));
+        let (action, _, _) = click(&mut dialog, &second, find(&texts, "Export CSV"));
+        assert!(matches!(action, DataTableAction::Export(csv) if csv.contains("RSI: RSI(14)")));
+
+        assert_eq!(headers(&mut dialog, &first), without_sma);
+        first.restore(&first.snapshot().unwrap()).unwrap();
+        assert_eq!(first.data_table().headers.len(), 7);
+        assert_eq!(headers(&mut dialog, &first), without_sma);
+    }
+
+    /// Frames over an unchanged chart reuse its table while an edge bar is whitespace, whose NaN
+    /// fields differ from themselves, until a bar of values replaces it.
+    #[test]
+    fn unchanged_chart_with_a_whitespace_edge_reuses_its_table() {
+        let start = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        for edge in [49, 0] {
+            let mut bars: Vec<_> = (0..50)
+                .map(|i| {
+                    let time = start + chrono::Duration::days(i);
+                    Bar::new(time, 10.0, 12.0, 9.0, 11.0, 100.0)
+                })
+                .collect();
+            let time = bars[edge].time;
+            bars[edge] = Bar::whitespace(time);
+            let mut chart = Chart::new(BarData::from_bars(bars));
+            let ctx = Context::default();
+            let mut dialog = DataTableDialog::new();
+            dialog.open();
+            let built = shown_rows(&ctx, &mut dialog, &chart);
+            assert_eq!(shown_rows(&ctx, &mut dialog, &chart), built, "bar {edge}");
+
+            chart.update(SeriesId::MAIN, Bar::new(time, 10.0, 99.0, 9.0, 99.0, 100.0));
+            assert_ne!(shown_rows(&ctx, &mut dialog, &chart), built, "bar {edge}");
+            let table = &dialog.cached.as_ref().unwrap().1;
+            let row = table.rows.iter().find(|row| row[0] == time.to_rfc3339());
+            assert_eq!(row.unwrap()[4], "99.00", "bar {edge}");
+        }
+    }
+
+    /// Older bars in front change the table once, so it is built once with its final values, not
+    /// once for each study the chart then recalculates on its own frames.
+    #[test]
+    fn history_load_builds_the_table_once() {
+        let start = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let bars: Vec<_> = (0..2000)
+            .map(|i| {
+                let close = 10.0 + (i % 7) as f64;
+                let time = start + chrono::Duration::days(i);
+                Bar::new(time, close, close + 1.0, close - 1.0, close, 100.0)
+            })
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars[1000..].to_vec()));
+        for period in [2, 3, 5, 8, 13] {
+            chart.add_indicator(Box::new(crate::studies::SMA::new(period)));
+        }
+        let chart_ctx = Context::default();
+        let ctx = Context::default();
+        let mut dialog = DataTableDialog::new();
+        dialog.open();
+        let mut time = 0.0;
+        // One host frame: the chart, then the dialog over it.
+        let mut step = |chart: &mut Chart, dialog: &mut DataTableDialog| {
+            time += 1.0;
+            crate::widget::test_frames::frame(&chart_ctx, chart, time, vec![]);
+            shown_rows(&ctx, dialog, chart)
+        };
+        let mut previous = std::ptr::null();
+        for _ in 0..12 {
+            previous = step(&mut chart, &mut dialog);
+        }
+        // A scroll-back page: the same bars with 1000 older ones in front.
+        chart.set_data(SeriesId::MAIN, bars);
+        let mut builds = 0;
+        for _ in 0..12 {
+            let rows = step(&mut chart, &mut dialog);
+            builds += usize::from(rows != previous);
+            previous = rows;
+        }
+        assert_eq!(builds, 1);
+        let mut expected = chart.data_table().rows;
+        expected.reverse();
+        assert!(dialog.cached.as_ref().unwrap().1.rows == expected);
+    }
+
+    /// A study of the bars in view changes in the table as the chart pans; other studies leave the
+    /// table as it is.
+    #[test]
+    fn view_dependent_study_column_follows_a_pan() {
+        let start = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        // Closes of 10 for the first 200 days and of 30 for the last 200.
+        let bars: Vec<_> = (0..400)
+            .map(|i| {
+                let close = if i < 200 { 10.0 } else { 30.0 };
+                let time = start + chrono::Duration::days(i);
+                Bar::new(time, close, close, close, close, 1.0)
+            })
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+        chart.add_indicator(Box::new(crate::studies::VisibleAveragePrice::new()));
+        let mut other = Chart::new(BarData::from_bars(bars));
+        other.add_indicator(Box::new(crate::studies::SMA::new(3)));
+        let chart_ctx = Context::default();
+        let ctx = Context::default();
+        let mut dialog = DataTableDialog::new();
+        dialog.open();
+        let newest = |dialog: &DataTableDialog| {
+            let table = &dialog.cached.as_ref().unwrap().1;
+            let column = table
+                .headers
+                .iter()
+                .position(|header| header.starts_with("Visible Average Price"))
+                .unwrap();
+            table.rows[0][column].clone()
+        };
+        let frames = |chart: &mut Chart, frames: std::ops::Range<i32>| {
+            for frame in frames {
+                crate::widget::test_frames::frame(&chart_ctx, chart, f64::from(frame), vec![]);
+            }
+        };
+        frames(&mut chart, 0..3);
+        shown_rows(&ctx, &mut dialog, &chart);
+        assert_eq!(newest(&dialog), "30.00");
+        // Show bars 0 to 50, all closing at 10.
+        assert!(chart.set_visible_logical_range(crate::model::LogicalRange::new(0.0, 50.0)));
+        frames(&mut chart, 3..6);
+        shown_rows(&ctx, &mut dialog, &chart);
+        assert_eq!(newest(&dialog), "10.00");
+
+        frames(&mut other, 0..3);
+        let built = shown_rows(&ctx, &mut dialog, &other);
+        assert!(other.set_visible_logical_range(crate::model::LogicalRange::new(0.0, 50.0)));
+        frames(&mut other, 3..6);
+        assert_eq!(shown_rows(&ctx, &mut dialog, &other), built);
     }
 }
