@@ -652,7 +652,7 @@ mod tests {
             for (tool, fill, extend, text) in [
                 (Tool::HorizontalLine, false, false, true),
                 (Tool::Rect, true, true, true),
-                (Tool::Brush, false, false, false),
+                (Tool::Brush, true, false, false),
                 (Tool::TrendLine, false, true, true),
                 (Tool::TrendAngle, false, true, true),
                 (Tool::TextLabel, false, false, true),

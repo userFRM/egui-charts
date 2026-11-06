@@ -69,7 +69,6 @@ impl DrawingToolType {
                 | Self::AnchoredVWAP
                 | Self::FixedRangeVolumeProfile
                 | Self::AnchoredVolumeProfile
-                | Self::Brush
                 | Self::Highlighter
                 | Self::ArrowMarker
                 | Self::Arrow

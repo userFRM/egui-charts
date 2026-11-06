@@ -1397,6 +1397,21 @@ mod tests {
                 vec![(163.4, 230.), (336.6, 170.)],
                 vec![(163.4, 170.), (250., 240.)],
             ),
+            // Samples round the same semicircle, closed by the chord between the stroke's ends.
+            (
+                T::Brush,
+                (0..=12)
+                    .map(|i| {
+                        let (sin, cos) = (i as f32 * std::f32::consts::PI / 12.).sin_cos();
+                        (200. - 100. * cos, 200. - 100. * sin)
+                    })
+                    .collect(),
+                false,
+                std::f32::consts::PI * 5000.,
+                80.,
+                vec![(200., 150.)],
+                vec![(200., 250.)],
+            ),
         ] {
             let mut drawing = Drawing::new(1, tool);
             drawing.points = points.into_iter().map(Pos2::from).collect();
