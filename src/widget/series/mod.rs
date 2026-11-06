@@ -117,6 +117,7 @@ impl Chart {
     /// last is kept. Drawings retain their timestamps across replacements and interval changes.
     /// The studies are updated from the first bar that changed on the next [`show`](Self::show),
     /// and near the live edge the view follows a new last bar, as with [`update`](Self::update).
+    /// A view scrolled back stays on its bars when older or newer bars arrive.
     ///
     /// Bar series accept data; unknown ids and study ids are ignored with a warning.
     /// See [`set_data_operation_notifications`](Self::set_data_operation_notifications) to
@@ -151,7 +152,8 @@ impl Chart {
     }
 
     pub(super) fn replace_main_data(&mut self, bars: Vec<Bar>) {
-        let (mut bars, rejected) = clean(bars, &self.clock());
+        let clock = self.clock();
+        let (mut bars, rejected) = clean(bars, &clock);
         retain_bars(&mut bars, self.bar_limit(SeriesId::MAIN));
         self.feed.rejected_bars += rejected;
         self.from_ticks.clear();
@@ -168,7 +170,7 @@ impl Chart {
         let first_changed = self.state.set_data(BarData::from_bars(bars));
         #[cfg(feature = "drawings")]
         self.project_drawing_points();
-        self.bars_changed(before, first_changed);
+        self.bars_changed(before, first_changed, &clock);
     }
 
     /// Merges `bar` into the bars of `series` as [`Sink::push_bar`](crate::data::Sink::push_bar)
@@ -176,8 +178,10 @@ impl Chart {
     /// a bar that matches a stored bar replaces it, a newer one is appended and an older one is
     /// inserted in order. An invalid bar is dropped and counted in
     /// [`feed_state`](Self::feed_state). Drawings move with their bars, studies follow them on the
-    /// next [`show`](Self::show), and near the live edge the view follows a new last bar. A merged
-    /// bar is reported by [`ChartEvent::DataUpdated`](super::ChartEvent::DataUpdated).
+    /// next [`show`](Self::show), and near the live edge the view follows a new last bar. A view
+    /// scrolled back stays on its bars, also when the bars of an added series lay out the time
+    /// scale of a chart without main bars, from the next [`show`](Self::show). A merged bar is
+    /// reported by [`ChartEvent::DataUpdated`](super::ChartEvent::DataUpdated).
     ///
     /// Bar series accept data; unknown ids and study ids are ignored with a warning.
     /// See [`set_data_operation_notifications`](Self::set_data_operation_notifications) to
@@ -267,7 +271,7 @@ impl Chart {
             }
             #[cfg(feature = "drawings")]
             self.project_drawing_points();
-            self.bars_changed(before, first_changed);
+            self.bars_changed(before, first_changed, &self.clock());
             removed
         } else {
             return Vec::new();
@@ -686,7 +690,6 @@ impl Chart {
     /// [`apply`](Self::apply) with the slots of `clock`, the chart's.
     pub(super) fn apply_by(&mut self, clock: &BarClock, incoming: Vec<(Bar, Origin)>) -> Merged {
         let before = self.edge();
-        let tail = before.tail.as_ref().map(|bar| bar.time);
         #[cfg(feature = "drawings")]
         self.anchor_drawing_points();
         let from_ticks = &mut self.from_ticks;
@@ -705,20 +708,7 @@ impl Chart {
         self.feed.rejected_bars += merged.rejected;
         #[cfg(feature = "drawings")]
         self.project_drawing_points();
-        if !self.bars_changed(before, merged.first_changed)
-            && !self.state.shows_elements()
-            && let Some(tail) = tail
-        {
-            // The right edge is the last bar plus the right offset: without this a view scrolled
-            // back would move one bar left per appended bar. A bar stamped later in the slot of
-            // the last bar replaces it and appends nothing.
-            let bars = &self.state.data().bars;
-            let tail = clock.bar_open(tail);
-            let appended =
-                bars.len() - bars.partition_point(|bar| clock.bar_open(bar.time) <= tail);
-            let time_scale = self.state.time_scale_mut();
-            time_scale.set_right_offset(time_scale.right_offset_precise() - appended as f64);
-        }
+        self.bars_changed(before, merged.first_changed, clock);
         if self.enforce_bar_limit(SeriesId::MAIN) > 0 {
             merged.first_changed = Some(0);
         }
@@ -778,15 +768,14 @@ impl Chart {
 
     /// Keeps studies and the view in step after the main bars changed. `first_changed` is the
     /// index of the first bar inserted, changed or removed. The studies are updated once on the
-    /// next frame, for all changes since the previous one. Returns whether the view followed the
-    /// live edge.
-    fn bars_changed(&mut self, before: Edge, first_changed: Option<usize>) -> bool {
+    /// next frame, for all changes since the previous one.
+    fn bars_changed(&mut self, before: Edge, first_changed: Option<usize>, clock: &BarClock) {
         if let Some(from) = first_changed {
             for pending in &mut self.pending_from {
                 *pending = Some(pending.map_or(from, |pending| pending.min(from)));
             }
         }
-        self.follow_live_edge(before)
+        self.follow_live_edge(before, clock);
     }
 
     fn edge(&self) -> Edge {
@@ -849,8 +838,8 @@ impl Chart {
 
     /// Scrolls to the live edge when the view was near it and a bar was appended, or a
     /// whitespace tail gained a value while the options allow shifting on whitespace
-    /// replacement. Returns whether it did.
-    fn follow_live_edge(&mut self, before: Edge) -> bool {
+    /// replacement. Any other view stays on its bars.
+    fn follow_live_edge(&mut self, before: Edge, clock: &BarClock) {
         let bars = &self.state.data().bars;
         let tail = before.tail.as_ref().zip(bars.last());
         // Appended only if the last bar moved forward in time: older bars loaded in front make
@@ -868,11 +857,47 @@ impl Chart {
             && before.near_live
             && (appended || shift_for_whitespace);
         if follow {
-            self.state.time_scale_mut().scroll_to_realtime();
-            // A pending start index would move the view away from the edge again.
-            self.pending_start_idx = None;
+            self.scroll_to_live_edge();
+        } else if !self.state.shows_elements()
+            && let Some(tail) = before.tail
+        {
+            self.keep_bars_in_view(clock, tail.time);
         }
-        follow
+    }
+
+    /// [`follow_live_edge`](Self::follow_live_edge) for the slots an added series gave a chart
+    /// without main bars after `tail`, the last slot before the refresh.
+    pub(super) fn added_slots_arrived(&mut self, tail: DateTime<Utc>) {
+        if !self.state.shows_fallback()
+            || self.state.shown().last().is_none_or(|bar| bar.time <= tail)
+        {
+            return;
+        }
+        if self.chart_options.time_scale.shift_visible_range_on_new_bar
+            && self.state.time_scale().is_near_live_edge()
+        {
+            self.scroll_to_live_edge();
+        } else {
+            self.keep_bars_in_view(&self.clock(), tail);
+        }
+    }
+
+    fn scroll_to_live_edge(&mut self) {
+        self.state.time_scale_mut().scroll_to_realtime();
+        // A pending start index would move the view away from the edge again.
+        self.pending_start_idx = None;
+    }
+
+    /// Moves the right offset against the slots after the one of `tail`. The right edge is the
+    /// last slot plus the right offset: without this a view scrolled back would move one bar
+    /// forward per appended bar. A bar stamped later in the slot of the last bar replaces it
+    /// and appends nothing.
+    fn keep_bars_in_view(&mut self, clock: &BarClock, tail: DateTime<Utc>) {
+        let tail = clock.bar_open(tail);
+        let shown = self.state.shown();
+        let appended = shown.len() - shown.partition_point(|bar| clock.bar_open(bar.time) <= tail);
+        let time_scale = self.state.time_scale_mut();
+        time_scale.set_right_offset(time_scale.right_offset_precise() - appended as f64);
     }
 }
 

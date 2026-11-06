@@ -198,8 +198,8 @@ pub struct Drawing {
     pub time_axis_label: bool,
 
     // === Tool-specific configuration (None uses the defaults) ===
-    /// Readouts, midpoint, price labels and text placement of a trend line, ray, extended line or
-    /// info line. Other tools ignore these settings.
+    /// Readouts, midpoint, price labels and text placement of a trend line, ray, extended line,
+    /// info line or trend angle. Other tools ignore these settings.
     #[serde(default = "LineMeasurements::left_out")]
     pub line_measurements: LineMeasurements,
     /// Quantity of the long and short position tools

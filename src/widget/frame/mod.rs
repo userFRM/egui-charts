@@ -449,13 +449,6 @@ impl Chart {
         let show_right_axis = primary_side == Some(crate::model::AxisSide::Right);
         let main_pane = self.main_series_pane();
         let order = self.main_series_order().to_vec();
-        let study_indices: Vec<_> = self
-            .study_ids
-            .iter()
-            .enumerate()
-            .filter(|(_, id)| self.series_pane(**id) == Some(main_pane))
-            .map(|(idx, _)| idx)
-            .collect();
         // Register the icon loader once per context, and the general SVG loader for UI images.
         #[cfg(feature = "icons")]
         {
@@ -727,6 +720,15 @@ impl Chart {
         // Handle keyboard shortcuts
         self.handle_keyboard_shortcuts(ui, &time_response, chart_width, chart_rect.min.x);
 
+        // Taken after the shortcuts: a key can remove a study and shift the ones after it.
+        let study_indices: Vec<_> = self
+            .study_ids
+            .iter()
+            .enumerate()
+            .filter(|(_, id)| self.series_pane(**id) == Some(main_pane))
+            .map(|(idx, _)| idx)
+            .collect();
+
         // Calculate visible bars
         let logical_range = self.state.time_scale().visible_logical_range();
         let visible_bars = logical_range.length().ceil() as usize;
@@ -882,6 +884,9 @@ impl Chart {
                 self.config.text_color,
             );
             self.paint_empty_pane_primitives(ui, &painter);
+            // This frame paints no marks, and those of the last frame went with its bars.
+            self.mark_hits.get_mut().clear();
+            self.clickable_marks.clear();
             self.record_host_click(ui, &response);
             return response;
         }
@@ -1126,6 +1131,10 @@ impl Chart {
                 .entry(self.main_series_scale)
                 .or_default()
                 .merge(primitive_margins);
+        }
+        // With nothing to fit the scale keeps its range, which already holds its margins.
+        if !data_range.0.is_finite() {
+            margins.remove(&self.main_series_scale);
         }
         if self.main_series_visible
             && footprint.is_none()
@@ -1482,6 +1491,7 @@ impl Chart {
             tick_size: self
                 .instrument()
                 .and_then(|instrument| instrument.tick_size),
+            price_formatter: price_formatter.as_deref(),
         };
 
         let render_params = rendering::ChartTypeParams::new(
@@ -2231,6 +2241,11 @@ impl Chart {
             let drawing = self.drawings.hit_test(pos);
             #[cfg(not(feature = "drawings"))]
             let drawing: Option<usize> = None;
+            // These primitives paint after the series layer. A renderer painted in its place in
+            // the order has already covered what lies under it there.
+            let covers_annotations = primitive_hit
+                .as_ref()
+                .is_some_and(|hit| hit.result.pass == PrimitivePass::Series);
             let hit = primitives::best_hit(
                 primitive_hit,
                 renderer_hit
@@ -2255,10 +2270,7 @@ impl Chart {
                 .map(super::PointerTarget::Drawing)
                 .or(hit.as_ref().map(|hit| hit.target.clone()))
                 .or_else(|| element_at(pos).map(|(id, _)| super::PointerTarget::Element(id)));
-            if hit
-                .as_ref()
-                .is_some_and(|hit| hit.result.pass == PrimitivePass::Series)
-            {
+            if covers_annotations {
                 self.cover_annotation_hit();
             }
             self.host_events.primitive_hit =
@@ -2837,15 +2849,13 @@ impl Chart {
         if !self.hide_foreground {
             self.paint_primitives(&painter, &coords, PrimitivePass::Above);
             if self.host_events.annotation_target.borrow().is_some()
-                && let Some(hit) = pointer
+                && pointer
                     .and_then(|pos| {
                         primitives::primitive_at(self.main_pass_primitives(&coords), pos)
                     })
-                    .filter(|hit| hit.result.pass == PrimitivePass::Above)
+                    .is_some_and(|hit| hit.result.pass == PrimitivePass::Above)
             {
                 self.cover_annotation_hit();
-                self.host_events.target = Some(hit.target);
-                self.host_events.primitive_hit = Some(hit.result);
             }
         }
 
@@ -3028,6 +3038,7 @@ impl Chart {
                     .filter(|_| self.main_series_visible && self.config.show_quote_boxes);
                 legend.show_title = self.main_series_present && self.config.show_symbol_labels;
                 legend.show_market_status = self.config.show_market_status;
+                legend.replaying = self.replay_time().is_some();
                 if legend.show_title && legend.show_market_status {
                     // The quote's time is not a clock: it stops when quotes stop.
                     let now = self.chart_time().unwrap_or_else(chrono::Utc::now);

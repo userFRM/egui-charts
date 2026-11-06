@@ -97,9 +97,9 @@ impl Drawing {
         self.range_card(painter, rect, view);
     }
 
-    /// Readout card beside a trend line, ray, extended line or info line, which writes it in its
-    /// text settings; the midpoint and price labels are independent of selection and readout
-    /// visibility. Its screen midpoint remains on the line on logarithmic scales.
+    /// Readout card beside a trend line, ray, extended line, trend angle or info line, which writes
+    /// it in its text settings; the midpoint and price labels are independent of selection and
+    /// readout visibility. Its screen midpoint remains on the line on logarithmic scales.
     pub(super) fn render_line_measurements(
         &self,
         painter: &egui::Painter,
@@ -145,7 +145,7 @@ impl Drawing {
         let gap = DESIGN_TOKENS.spacing.sm + self.stroke_width / 2.0;
         // Side readouts sit away from the line's continuation, including horizontal lines.
         let rising = right.y < left.y;
-        let (pos, align) = match settings.position {
+        let place = |position| match position {
             P::Left => (
                 left + egui::vec2(-gap, if rising { -gap } else { gap }),
                 if rising {
@@ -154,7 +154,7 @@ impl Drawing {
                     Align2::RIGHT_TOP
                 },
             ),
-            P::Center => {
+            P::Center | P::Auto => {
                 let direction = right - left;
                 let normal = if direction.length_sq() == 0.0 {
                     egui::Vec2::UP
@@ -196,6 +196,18 @@ impl Drawing {
                 },
             ),
         };
+        let position = if settings.position == P::Auto {
+            [P::Right, P::Left]
+                .into_iter()
+                .find(|&side| {
+                    let (pos, align) = place(side);
+                    clip.contains_rect(align.anchor_size(pos, size))
+                })
+                .unwrap_or(P::Center)
+        } else {
+            settings.position
+        };
+        let (pos, align) = place(position);
         paint_stats_card(painter, align, pos, galley, size);
     }
 
@@ -791,6 +803,7 @@ mod tests {
             DrawingToolType::ExtendedLine,
             DrawingToolType::Ray,
             DrawingToolType::InfoLine,
+            DrawingToolType::TrendAngle,
         ];
         for ((reverse, pip, time_axis, want), tool) in cases
             .into_iter()
@@ -969,6 +982,80 @@ mod tests {
             }
             drawing.line_measurements = Default::default();
         }
+    }
+
+    /// Automatic placement takes the first of right, left and centre where the card fits the
+    /// 500 x 400 pane; a trend angle also paints its price labels, unselected, away from the line.
+    #[test]
+    fn automatic_placement_and_trend_angle_price_labels() {
+        use crate::drawings::LineMeasurementPosition as P;
+        let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 400.0));
+        let x = |bar: f32| bar;
+        let y = |price: f64| 400.0 - price as f32;
+        let inverse = |y: f32| f64::from(400.0 - y);
+        let view = ChartView {
+            instrument: None,
+            price_formatter: None,
+            time_formatter: None,
+            bar_seconds: 0,
+            bars: &[],
+            revision: 0,
+            bar_to_x: &x,
+            price_to_y: &y,
+            y_to_price: &inverse,
+            time_axis: false,
+            executions: None,
+            timeframe: None,
+            finer: &[],
+        };
+        let texts = |drawing: &Drawing, selected: bool| {
+            let mut output = egui::Context::default().run_ui(Default::default(), |ui| {
+                drawing.render_with_selection(ui.painter(), pane, &view, selected);
+            });
+            let texts: Vec<_> = (output.shapes.iter())
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some((
+                        text.galley.job.text.clone(),
+                        Rect::from_min_size(text.pos, text.galley.size()),
+                    )),
+                    _ => None,
+                })
+                .collect();
+            output.textures_delta.clear();
+            texts
+        };
+        let line = |tool, from: (f32, f64), to: (f32, f64)| {
+            let mut drawing = Drawing::new(1, tool);
+            drawing.completed = true;
+            drawing.chart_points =
+                vec![ChartPoint::new(from.0, from.1), ChartPoint::new(to.0, to.1)];
+            drawing.update_screen_coords(x, y);
+            drawing
+        };
+        for tool in [DrawingToolType::TrendAngle, DrawingToolType::TrendLine] {
+            for (from, to, want) in [
+                ((100.0, 100.0), (200.0, 150.0), P::Right),
+                ((400.0, 100.0), (497.0, 150.0), P::Left),
+                ((3.0, 100.0), (497.0, 150.0), P::Center),
+            ] {
+                let mut drawing = line(tool, from, to);
+                drawing.line_measurements.bar_count = true;
+                let mut card = |position| {
+                    drawing.line_measurements.position = position;
+                    (texts(&drawing, true).into_iter())
+                        .find(|(text, _)| text.ends_with("bars"))
+                        .unwrap()
+                        .1
+                };
+                assert_eq!(card(P::Auto), card(want), "{tool:?} {from:?}");
+            }
+        }
+        let mut angle = line(DrawingToolType::TrendAngle, (100.0, 100.0), (200.0, 150.0));
+        angle.line_measurements.price_labels = true;
+        let painted = texts(&angle, false);
+        let bounds = |price: &str| painted.iter().find(|(text, _)| text == price).unwrap().1;
+        assert!(bounds("100.00").right() < 100.0, "{painted:?}");
+        assert!(bounds("150.00").left() > 200.0, "{painted:?}");
     }
 
     #[test]
