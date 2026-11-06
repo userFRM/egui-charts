@@ -62,7 +62,8 @@ pub struct FootprintConfig {
     /// Compare to the opposite side one price away instead of at the same price.
     pub diagonal: bool,
     /// Put a strip along the outer edge of a side that dominates under the imbalance settings,
-    /// under [`FootprintColor::VolumeSteps`].
+    /// under [`FootprintColor::VolumeSteps`]: in the side's colour, or its strongest shade next to
+    /// a cell of that colour.
     pub show_imbalance: bool,
     /// Outline the highest-volume row when its cells are large enough for the stroke, or fill it
     /// under [`FootprintColor::VolumeSteps`].
@@ -454,19 +455,32 @@ pub fn render_footprint(
                     let half_gap = mapping.bar_spacing * 0.04;
                     let clear = (half_gap - 3.0).clamp(0.0, 1.0);
                     let strip_width = half_gap.clamp(1.0, 3.0);
-                    for (imbalanced, edge, side) in [
-                        (imbalances.0 && column == 0, rect.left(), -1.0),
-                        (imbalances.1 && column + 1 == columns, rect.right(), 1.0),
+                    for (imbalanced, edge, side, color, shade) in [
+                        (
+                            imbalances.0 && column == 0,
+                            rect.left(),
+                            -1.0,
+                            config.bid_color,
+                            shades[0],
+                        ),
+                        (
+                            imbalances.1 && column + 1 == columns,
+                            rect.right(),
+                            1.0,
+                            config.ask_color,
+                            shades[1],
+                        ),
                     ] {
                         if imbalanced {
                             let strip = Rect::from_two_pos(
                                 pos2(edge + side * clear, rect.top()),
                                 pos2(edge + side * (clear + strip_width), rect.bottom()),
                             );
-                            let color = if side < 0.0 {
-                                config.bid_color
+                            // A strip of its cell's colour would only make the cell look wider.
+                            let color = if color == shade {
+                                step_color(color, 3, text_background)
                             } else {
-                                config.ask_color
+                                color
                             };
                             mesh.add_colored_rect(strip.intersect(mapping.rect), color);
                         }
@@ -3238,5 +3252,123 @@ mod tests {
             details |= output.shapes.iter().any(|s| matches!(&s.shape, Shape::Text(t) if t.galley.text().starts_with("Single: 100 to 100")));
         }
         assert!(details, "compact annotations retain hover details");
+    }
+
+    /// One bar of (price, sell, buy) rows at `spacing` points per bar over 98 to 110 on a plot
+    /// 480 by 320 points, painted with `config` under `theme`.
+    fn paint_themed(
+        rows: &[(f64, f64, f64)],
+        spacing: f32,
+        theme: &crate::theme::Theme,
+        config: &FootprintConfig,
+    ) -> (Vec<egui::epaint::ClippedShape>, ChartMapping) {
+        let time = "2026-01-05T10:00:00Z".parse().unwrap();
+        // Open and close match so the candle takes the text colour, not a side's.
+        let bars = [Bar::new(time, 102.0, 104.0, 100.0, 102.0, 1.0)];
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(480.0, 320.0));
+        let map = ChartMapping::new(
+            rect,
+            spacing,
+            0,
+            0,
+            0.0,
+            PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(98.0, 110.0),
+                0.0,
+                320.0,
+                false,
+            ),
+        );
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        for &(price, sell, buy) in rows {
+            for (size, side) in [(sell, OrderSide::Sell), (buy, OrderSide::Buy)] {
+                flow.push(&Tick::new(time, price, size, Some(side)))
+                    .unwrap();
+            }
+        }
+        let ctx = egui::Context::default();
+        crate::theme::apply_to_egui(&ctx, theme);
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(rect),
+                ..Default::default()
+            },
+            |ui| render_footprint(ui.painter(), &map, &bars, &flow, config),
+        );
+        output.textures_delta.clear();
+        (output.shapes, map)
+    }
+
+    /// Every quad of the meshes in `shapes`, in paint order.
+    fn quads(shapes: &[egui::epaint::ClippedShape]) -> Vec<(Rect, Color32)> {
+        shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                Shape::Mesh(mesh) => Some(
+                    mesh.vertices
+                        .chunks(4)
+                        .map(|q| (Rect::from_two_pos(q[0].pos, q[3].pos), q[0].color))
+                        .collect::<Vec<_>>(),
+                ),
+                _ => None,
+            })
+            .flatten()
+            .collect()
+    }
+
+    /// The colour painted last at `point`.
+    fn color_at(quads: &[(Rect, Color32)], point: egui::Pos2) -> Option<Color32> {
+        quads
+            .iter()
+            .rev()
+            .find(|(rect, _)| rect.contains(point))
+            .map(|(_, color)| *color)
+    }
+
+    /// An imbalance strip has to stand apart from the cell it marks. On a light chart the second
+    /// shade is the side colour itself, and below 100 points per bar the strip is less than a
+    /// point clear of its cell. Rows (sell, buy) 104: 10, 10; 103: 20, 40; 102: 10, 90 (POC);
+    /// 101: 60, 20; 100: 30, 10. The buy range is 10 to 90, so 40 is in its second quarter, and
+    /// 40 bought at 103 is four times the 10 sold one row below, the bar's only imbalance.
+    #[test]
+    fn light_imbalance_strip_stands_apart_from_its_cell() {
+        let rows = [
+            (104.0, 10.0, 10.0),
+            (103.0, 20.0, 40.0),
+            (102.0, 10.0, 90.0),
+            (101.0, 60.0, 20.0),
+            (100.0, 30.0, 10.0),
+        ];
+        let config = FootprintConfig {
+            auto_row_height: None,
+            text_color: Color32::BLACK,
+            ..Default::default()
+        };
+        let mut marks = Vec::new();
+        for spacing in [60.0, 90.0, 120.0] {
+            let (shapes, map) =
+                paint_themed(&rows, spacing, &crate::theme::Theme::light(), &config);
+            let quads = quads(&shapes);
+            let y = map.price_to_y(103.0);
+            // The buy cell ends at the outer edge of the bar's only column.
+            let edge = map.idx_to_x(0) - spacing * 0.46 + spacing * 0.92 - 0.5;
+            let cell = color_at(&quads, pos2(edge - 1.0, y));
+            let strip = quads.iter().find(|(rect, _)| {
+                rect.width() <= 3.01 && rect.left() >= edge - 0.01 && rect.y_range().contains(y)
+            });
+            marks.push((
+                spacing,
+                strip.map(|(rect, _)| rect.left() - edge),
+                strip.map(|s| s.1),
+                cell,
+            ));
+        }
+        assert!(
+            marks.iter().all(|&(_, gap, strip, cell)| {
+                gap.is_some_and(|gap| gap >= 0.99) || (strip.is_some() && strip != cell)
+            }),
+            "(spacing, strip gap from its cell, strip colour, cell colour): {marks:?}"
+        );
     }
 }
