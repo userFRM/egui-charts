@@ -49,10 +49,11 @@ impl ObjectTreePanel {
                 }
                 self.state_mut().folders.insert(path.clone());
                 self.state_mut().expanded_groups.insert("Drawings".into());
-                // Folders that moved whole show expanded at their new place.
-                self.state_mut()
-                    .collapsed_folders
-                    .retain(|p| !folders.iter().any(|folder| p.starts_with(folder)));
+                // Everything under the new folder shows expanded, as under a dragged folder, and
+                // the folders moved into it whole leave no collapsed state at their old paths.
+                self.state_mut().collapsed_folders.retain(|p| {
+                    !p.starts_with(&path) && !folders.iter().any(|folder| p.starts_with(folder))
+                });
                 for depth in 1..=path.len() {
                     self.state_mut().collapsed_folders.remove(&path[..depth]);
                 }

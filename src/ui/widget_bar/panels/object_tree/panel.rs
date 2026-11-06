@@ -911,7 +911,12 @@ mod tests {
             [ids[0], ids[1]]
         );
 
-        // Grouping the selected folders keeps their structure.
+        // Grouping the selected folders keeps their structure. The folders it takes leave no
+        // collapsed state behind and show expanded at their new place, as a dragged folder does.
+        for path in [&["Zones"][..], &["All", "Levels"]] {
+            let path = path.iter().map(|name| (*name).to_owned()).collect();
+            h.state_mut().0.state_mut().collapsed_folders.insert(path);
+        }
         h.get_by_label("New folder with selected drawings").click();
         h.run();
         h.event(egui::Event::Text("All".into()));
@@ -920,6 +925,7 @@ mod tests {
         assert_eq!(folder_of(&h, 0), "All/Levels");
         assert_eq!(folder_of(&h, 1), "All/Zones/Inner");
         assert_eq!(folder_of(&h, 2), "");
+        assert!(h.state().0.state().collapsed_folders.is_empty());
 
         // A folder drags out to the root and into another; never into its own descendant.
         // Moving it clears its collapsed state.
