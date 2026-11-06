@@ -39,14 +39,21 @@ pub(super) struct CustomKey {
     pub(super) time: DateTime<Utc>,
     /// Lowest, highest and current price; `None` for whitespace.
     prices: Option<(f64, f64, f64)>,
+    /// Renewed each time the host supplies the point, whose type has no equality of its own.
+    revision: u64,
 }
 
 impl CustomKey {
     /// `None` for an invalid point: not whitespace, with no prices or a non-finite one.
     fn of<P: CustomPoint>(point: &P) -> Option<Self> {
         let time = point.time();
+        let revision = crate::model::next_revision();
         if point.is_whitespace() {
-            return Some(Self { time, prices: None });
+            return Some(Self {
+                time,
+                prices: None,
+                revision,
+            });
         }
         let prices = point.prices();
         let current = *prices.last()?;
@@ -57,6 +64,7 @@ impl CustomKey {
                 prices.iter().copied().fold(f64::NEG_INFINITY, f64::max),
                 current,
             )),
+            revision,
         })
     }
 }
@@ -651,19 +659,23 @@ impl Chart {
         })
     }
 
-    /// Each custom data series' point at `time`, with its id and data revision.
+    /// Each custom data series' point at `time`, with its id and revision and a way to copy it.
     pub(super) fn custom_points_at(
         &self,
         time: DateTime<Utc>,
-    ) -> impl Iterator<Item = (SeriesId, u64, Arc<dyn Any + Send + Sync>)> + '_ {
+    ) -> impl Iterator<
+        Item = (
+            SeriesId,
+            u64,
+            impl FnOnce() -> Arc<dyn Any + Send + Sync> + '_,
+        ),
+    > + '_ {
         self.primitives.iter().filter_map(move |item| {
             let custom = item.custom.as_ref()?;
             let at = custom.at(time)?;
-            Some((
-                item.series,
-                custom.revision,
-                (custom.clone_point)(custom.points.as_ref(), at),
-            ))
+            Some((item.series, custom.keys()[at].revision, move || {
+                (custom.clone_point)(custom.points.as_ref(), at)
+            }))
         })
     }
 
@@ -3129,5 +3141,96 @@ mod tests {
             .collect();
         let kept = (bars, points);
         assert_eq!(kept, (vec![at(45)], vec!["00:45"]), "{kept:?}");
+    }
+
+    /// A point that counts its clones.
+    #[derive(Debug)]
+    struct Counted {
+        time: DateTime<Utc>,
+        clones: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl Clone for Counted {
+        fn clone(&self) -> Self {
+            self.clones
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Self {
+                time: self.time,
+                clones: Arc::clone(&self.clones),
+            }
+        }
+    }
+
+    impl CustomPoint for Counted {
+        fn time(&self) -> DateTime<Utc> {
+            self.time
+        }
+        fn prices(&self) -> Vec<f64> {
+            vec![15.0]
+        }
+    }
+
+    /// While the pointer rests and nothing changes, the chart reports nothing and copies no
+    /// point; another key of the series changing leaves the point under the pointer the same,
+    /// and supplying that point again reports it.
+    #[test]
+    fn stationary_pointer_over_custom_points() {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[10.0], &[20.0]);
+        let main = chart.bars(SeriesId::MAIN).to_vec();
+        let clones = Arc::<std::sync::atomic::AtomicUsize>::default();
+        let id = chart.add_custom_data_series::<Counted>(
+            "Counted",
+            |study| study.with_overlay(false),
+            Probe("counted", Log::default()),
+        );
+        let point = |bar: usize| Counted {
+            time: main[bar].time,
+            clones: Arc::clone(&clones),
+        };
+        assert!(chart.set_custom_data(id, (0..100).map(point).collect()));
+        chart.set_visible_bars(12);
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        frame(&ctx, &mut chart, 0.1, vec![]);
+        let pane = chart
+            .pane_layout
+            .panes
+            .iter()
+            .find(|pane| pane.members.contains(&id))
+            .unwrap()
+            .rect;
+        let pos = Pos2::new(chart.get_chart_mapping().index_to_x(92.0), pane.center().y);
+        frame(&ctx, &mut chart, 1.0, vec![Event::PointerMoved(pos)]);
+        frame(&ctx, &mut chart, 1.1, vec![]);
+        let hovered = chart
+            .drain_events()
+            .filter_map(|event| match event {
+                ChartEvent::CrosshairMoved(Some(pointer)) => Some(pointer),
+                _ => None,
+            })
+            .last()
+            .expect("the pointer moved inside the pane");
+        let at = hovered.custom_point::<Counted>(id).map(|point| point.time);
+        assert_eq!(at, Some(main[92].time));
+        let before = clones.load(std::sync::atomic::Ordering::Relaxed);
+        for step in 0..10 {
+            frame(&ctx, &mut chart, 2.0 + f64::from(step) * 0.1, vec![]);
+        }
+        let copied = clones.load(std::sync::atomic::Ordering::Relaxed) - before;
+        let moved_after = |chart: &mut Chart, time: f64| {
+            frame(&ctx, chart, time, vec![]);
+            frame(&ctx, chart, time + 0.1, vec![]);
+            chart
+                .drain_events()
+                .filter(|event| matches!(event, ChartEvent::CrosshairMoved(_)))
+                .count()
+        };
+        // A point out of view changes; the one under the pointer stays as it was.
+        assert!(chart.update_custom_data(id, point(10)));
+        let moved = moved_after(&mut chart, 4.0);
+        assert!(chart.update_custom_data(id, point(92)));
+        let replaced = moved_after(&mut chart, 5.0);
+        let seen = (copied, moved, replaced);
+        assert_eq!(seen, (0, 0, 1), "{seen:?}");
     }
 }
