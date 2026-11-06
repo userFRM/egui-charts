@@ -32,6 +32,58 @@ fn legend_marks_a_chart_only_while_it_replays() {
     );
 }
 
+/// The price fit leaves room for the delta and total box below the bar with the lowest low, or the
+/// 10% bottom margin leaves it about 44 points of the 48 it needs and the box is dropped.
+#[test]
+fn footprint_summary_of_the_lowest_bar_stays_in_the_plot() {
+    use crate::chart::overlays::FootprintConfig;
+    use crate::data::Footprint;
+    use crate::model::{BarClock, OrderSide, Tick, Timeframe};
+    let ctx = egui::Context::default();
+    let mut chart = chart(&[100.0, 104.0], &[106.0, 110.0]);
+    chart.set_symbol("FLOW");
+    chart.apply_synced_time_scale(160.0, 1.0);
+    let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+    for bar in chart.bars(crate::widget::SeriesId::MAIN) {
+        for price in bar.low as i32..=bar.high as i32 {
+            flow.push(&Tick::new(
+                bar.time,
+                f64::from(price),
+                2.0,
+                Some(OrderSide::Buy),
+            ))
+            .unwrap();
+        }
+    }
+    let config = FootprintConfig {
+        auto_row_height: None,
+        ..Default::default()
+    };
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 500.0))),
+            ..Default::default()
+        },
+        |ui| {
+            chart.show_footprint(ui, &flow, &config);
+        },
+    );
+    output.textures_delta.clear();
+    let map = chart.get_chart_mapping();
+    let plot = chart.get_rendered_price_rect();
+    let low = map.price_to_y(100.0);
+    assert!(
+        output.shapes.iter().any(|shape| match &shape.shape {
+            Shape::Text(text) => {
+                let rect = Rect::from_min_size(text.pos, text.galley.size());
+                text.galley.text() == "Delta" && rect.top() > low && plot.contains_rect(rect)
+            }
+            _ => false,
+        }),
+        "the box of a bar with the lowest low"
+    );
+}
+
 #[test]
 fn footprint_stays_below_legend_at_wide_and_narrow_sizes() {
     use crate::chart::overlays::{FootprintColor, FootprintConfig};
@@ -314,8 +366,13 @@ fn footprint_annotations_and_statistics_follow_executions() {
                 "missing {expected}, revisited={revisited}"
             );
         }
+        // The summary below the bar writes the volume too; the table's is the lowest.
+        let table = shapes.iter().filter_map(|s| match &s.shape {
+            Shape::Text(t) if t.galley.text() == "16" => Some(t.pos.y),
+            _ => None,
+        });
         assert!(
-            text("16").unwrap().pos.y >= map.rect.bottom(),
+            table.fold(f32::MIN, f32::max) >= map.rect.bottom(),
             "table overlaps prices"
         );
         assert!(

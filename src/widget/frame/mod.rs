@@ -1132,6 +1132,36 @@ impl Chart {
         drop(heikin_ashi);
         let data_range = fit.price_range;
         primitive_margins.merge(fit.margins);
+        if self.main_series_visible && time_based {
+            // The summary below the lowest ladder bar is drawn whole or not at all; bars left to
+            // candles keep the range candles fit.
+            let room = |flow: &Footprint, config: &FootprintConfig| {
+                let spacing = self.state.time_scale().bar_spacing();
+                if flow.complete_from().is_some()
+                    && crate::chart::overlays::footprint_column_width(spacing, config).is_some()
+                {
+                    crate::chart::overlays::summary_room(config)
+                } else {
+                    0.0
+                }
+            };
+            let bottom = match footprint {
+                Some((flow, config)) => room(flow, config),
+                None if self.replay.is_none() && self.chart_type == ChartType::VolumeFootprint => {
+                    self.feed_link
+                        .as_ref()
+                        .and_then(|link| link.footprint.as_ref())
+                        .map_or(0.0, |flow| {
+                            // The room does not depend on the colours.
+                            let colors = [egui::Color32::TRANSPARENT; 4];
+                            let params = &self.chart_type_params;
+                            room(flow, &FootprintConfig::from_chart_params(params, colors))
+                        })
+                }
+                None => 0.0,
+            };
+            primitive_margins.merge(AutoscaleMargins { top: 0.0, bottom });
+        }
         if primitive_margins != AutoscaleMargins::default() {
             margins
                 .entry(self.main_series_scale)

@@ -16,7 +16,6 @@ const FONT_LIMITS: [f32; 2] = [8.0, 24.0];
 /// The share of a ladder column each of its side cells takes.
 const LADDER_CELL_SHARE: f32 = 0.39;
 /// The height of a ladder bar's totals and box, three rows of the 10 point font and their margins.
-#[cfg(feature = "studies")]
 const INFO_BOX_HEIGHT: f32 = 46.0;
 
 pub use crate::model::{FootprintColor, FootprintMode};
@@ -963,6 +962,15 @@ fn info_box_offset(config: &FootprintConfig) -> f32 {
     }
 }
 
+/// The room a bar's summary takes below its lowest row, in points; zero when none is drawn.
+pub(crate) fn summary_room(config: &FootprintConfig) -> f32 {
+    if config.info_box && has_ladder(config) {
+        info_box_offset(config) + INFO_BOX_HEIGHT
+    } else {
+        0.0
+    }
+}
+
 /// The sell and buy cells of a ladder column; the candle body takes the gap between them.
 fn ladder_sides(column: Rect) -> [Rect; 2] {
     let width = column.width() * LADDER_CELL_SHARE;
@@ -1011,7 +1019,8 @@ fn contrasting_text(fill: Color32) -> Color32 {
 }
 
 /// Writes a bar's sell and buy totals below their ladder cells, and its delta and total volume in
-/// a box below them. Each part is drawn whole or not at all.
+/// a box below them: beside their labels, or as values alone, compact if need be, where the labels
+/// do not fit. Each part is drawn whole or not at all.
 fn render_info_box(
     painter: &Painter,
     mapping: &ChartMapping,
@@ -1060,20 +1069,33 @@ fn render_info_box(
     } else {
         config.text_color
     };
-    let lines = [
-        ("Delta", text(delta, delta_color)),
-        ("Total", text(shown.volume(), config.text_color)),
-    ]
-    .map(|(label, value)| {
-        let label = painter.layout_no_wrap(label.to_owned(), font.clone(), config.text_color);
-        (label, value)
-    });
-    let line = lines[0].0.size().y;
-    let labels = lines[0].0.size().x.max(lines[1].0.size().x) + 6.0;
-    let values = lines[0].1.size().x.max(lines[1].1.size().x);
+    let labels = ["Delta", "Total"]
+        .map(|label| painter.layout_no_wrap(label.to_owned(), font.clone(), config.text_color));
+    let line = labels[0].size().y;
+    let labels_width = labels[0].size().x.max(labels[1].size().x) + 6.0;
     let bounds = Rect::from_x_y_ranges(block.x_range(), top + line + 3.0..=top + line * 3.0 + 9.0);
-    if labels + values + 8.0 > bounds.width() || !mapping.rect.contains_rect(bounds) {
+    if !mapping.rect.contains_rect(bounds) {
         return;
+    }
+    let values_width = |values: &[Arc<Galley>; 2]| values[0].size().x.max(values[1].size().x);
+    let room = bounds.width() - 8.0;
+    let mut values = [
+        text(delta, delta_color),
+        text(shown.volume(), config.text_color),
+    ];
+    let labelled = labels_width + values_width(&values) <= room;
+    if values_width(&values) > room {
+        values =
+            [(delta, delta_color), (shown.volume(), config.text_color)].map(|(value, color)| {
+                painter.layout_no_wrap(
+                    ladder_text(value, config, true),
+                    FontId::monospace(FONT_LIMITS[0]),
+                    color,
+                )
+            });
+        if values_width(&values) > room {
+            return;
+        }
     }
     let background = painter.ctx().active_theme().chart.bg.to_opaque();
     painter.rect_filled(bounds, 4, background);
@@ -1083,11 +1105,18 @@ fn render_info_box(
         Stroke::new(1.0, config.neutral_color.gamma_multiply(0.25)),
         StrokeKind::Inside,
     );
-    let x = bounds.center().x - (labels + values) * 0.5;
-    for (i, (label, value)) in lines.into_iter().enumerate() {
+    let x = bounds.center().x - (labels_width + values_width(&values)) * 0.5;
+    for (i, (label, value)) in labels.into_iter().zip(values).enumerate() {
         let y = bounds.top() + 3.0 + i as f32 * line;
-        painter.galley(pos2(x, y), label, config.text_color);
-        painter.galley(pos2(x + labels, y), value, config.text_color);
+        if labelled {
+            painter.galley(pos2(x, y), label, config.text_color);
+            painter.galley(pos2(x + labels_width, y), value, config.text_color);
+        } else {
+            // Delta above total, in the order of the labels they stand without.
+            let center = pos2(bounds.center().x, y + line * 0.5);
+            let at = Align2::CENTER_CENTER.anchor_size(center, value.size());
+            painter.galley(at.min, value, config.text_color);
+        }
     }
 }
 
@@ -1434,8 +1463,9 @@ pub fn render_footprint_studies(
             // The two threshold-marker rows extend up to 18 points beyond either extreme, and a
             // ladder's summary below the bar takes the same space or more.
             let mut reserved = rect.expand2(vec2(0.0, 18.0));
-            if config.info_box && has_ladder(config) {
-                reserved.max.y = rect.max.y + info_box_offset(config) + INFO_BOX_HEIGHT;
+            let summary = summary_room(config);
+            if summary > 0.0 {
+                reserved.max.y = rect.max.y + summary;
             }
             rect.intersects(mapping.rect).then_some((index, reserved))
         })
@@ -1993,7 +2023,8 @@ mod tests {
     }
 
     /// Both sides of a ladder keep their numbers or lose them together, and the summary below the
-    /// bar leaves room for the extreme ratio written in the same place.
+    /// bar leaves room for the extreme ratio written in the same place. Where the numbers fit but
+    /// the labels of the summary do not, its delta and total stay as values alone.
     #[test]
     fn ladder_numbers_and_summary_do_not_vanish_alone_or_collide() {
         let config = FootprintConfig {
@@ -2035,6 +2066,25 @@ mod tests {
                 .find(|(label, _)| label == total)
                 .unwrap_or_else(|| panic!("{total} missing from {text:?}"));
             assert!(!rect.intersects(below), "{total} over the extreme ratio");
+        }
+        // At 80 points per bar the labelled summary needs 80 points in a block of 73.1.
+        let rows = [(106.0, 2_340.0, 2_510.0), (105.0, 3_201.0, 1_200.0)];
+        let (shapes, _) = paint_ladder(&rows, 80.0, false, &config);
+        let text = painted_text(&shapes);
+        let at = |wanted: &str| {
+            text.iter()
+                .find(|(label, _)| label == wanted)
+                .unwrap_or_else(|| panic!("{wanted} missing from {text:?}"))
+                .1
+        };
+        // Totals of 5,541 and 3,710, written compactly in their 28.5 point cells.
+        for total in ["5.5K", "3.7K"] {
+            for value in ["-1.83K", "9.25K"] {
+                assert!(
+                    at(value).top() >= at(total).bottom(),
+                    "{value} over {total}"
+                );
+            }
         }
         // A side cell needs a point: 3.3 points per bar leave it 0.99, 3.4 leave it 1.02.
         assert!(paint_ladder(&rows, 3.3, false, &config).0.is_empty());
