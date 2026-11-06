@@ -66,6 +66,8 @@ pub(crate) enum DrawingCommand {
         id: usize,
         /// Previous layers of every affected drawing.
         layers: Vec<(usize, i32)>,
+        /// Previous edit time of the drawing the user moved.
+        modified_at: Option<i64>,
     },
     /// A drawing was modified
     Modify {
@@ -230,8 +232,17 @@ impl HistoryService {
     }
 
     /// Record a layer move, including the neighbours whose layers changed.
-    pub(crate) fn push_reorder(&mut self, id: usize, layers: Vec<(usize, i32)>) {
-        self.push_command(DrawingCommand::Reorder { id, layers });
+    pub(crate) fn push_reorder(
+        &mut self,
+        id: usize,
+        layers: Vec<(usize, i32)>,
+        modified_at: Option<i64>,
+    ) {
+        self.push_command(DrawingCommand::Reorder {
+            id,
+            layers,
+            modified_at,
+        });
     }
 
     /// Push a command to the undo stack
@@ -266,13 +277,17 @@ impl HistoryService {
                     ids,
                 });
             }
-            DrawingCommand::Reorder { id, mut layers } => {
-                for (id, layer) in &mut layers {
-                    if let Some(drawing) = drawings.iter_mut().find(|d| d.id == *id) {
-                        std::mem::swap(&mut drawing.z_order, layer);
-                    }
-                }
-                self.redo_stack.push(DrawingCommand::Reorder { id, layers });
+            DrawingCommand::Reorder {
+                id,
+                mut layers,
+                mut modified_at,
+            } => {
+                swap_layers(drawings, id, &mut layers, &mut modified_at);
+                self.redo_stack.push(DrawingCommand::Reorder {
+                    id,
+                    layers,
+                    modified_at,
+                });
             }
             DrawingCommand::Add(drawing) => {
                 // Undo add = remove the drawing
@@ -320,13 +335,17 @@ impl HistoryService {
                     ids,
                 });
             }
-            DrawingCommand::Reorder { id, mut layers } => {
-                for (id, layer) in &mut layers {
-                    if let Some(drawing) = drawings.iter_mut().find(|d| d.id == *id) {
-                        std::mem::swap(&mut drawing.z_order, layer);
-                    }
-                }
-                self.undo_stack.push(DrawingCommand::Reorder { id, layers });
+            DrawingCommand::Reorder {
+                id,
+                mut layers,
+                mut modified_at,
+            } => {
+                swap_layers(drawings, id, &mut layers, &mut modified_at);
+                self.undo_stack.push(DrawingCommand::Reorder {
+                    id,
+                    layers,
+                    modified_at,
+                });
             }
             DrawingCommand::Add(drawing) => {
                 // Redo add = add the drawing back
@@ -439,6 +458,24 @@ impl HistoryService {
     }
 }
 
+/// Takes a layer move through an undo or redo: each drawing's layer and the moved drawing's edit
+/// time change places with those recorded.
+fn swap_layers(
+    drawings: &mut [Drawing],
+    moved: usize,
+    layers: &mut [(usize, i32)],
+    modified_at: &mut Option<i64>,
+) {
+    for (id, layer) in layers {
+        if let Some(drawing) = drawings.iter_mut().find(|d| d.id == *id) {
+            std::mem::swap(&mut drawing.z_order, layer);
+        }
+    }
+    if let Some(drawing) = drawings.iter_mut().find(|d| d.id == moved) {
+        std::mem::swap(&mut drawing.modified_at, modified_at);
+    }
+}
+
 // Keep independent drawings and their list positions outside the bulk command's history.
 // Owned drawings still listed are restored in place; the others go back to their recorded
 // list index, clamped, and the drawings taken out keep theirs for the inverse command.
@@ -533,7 +570,7 @@ mod tests {
                         ..drawing(2, 1.0)
                     },
                 ],
-                |h| h.push_reorder(1, vec![(1, 0), (2, 0)]),
+                |h| h.push_reorder(1, vec![(1, 0), (2, 0)], None),
             ),
             (
                 "add",

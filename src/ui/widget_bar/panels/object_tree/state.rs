@@ -2,9 +2,11 @@
 //!
 //! Tracks selection, expansion, filtering, and other UI state.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use super::types::SourceType;
+use crate::config::DrawingSort;
+use crate::widget::SymbolDrawings;
 
 /// State for the Object Tree panel
 #[derive(Clone, Debug, Default)]
@@ -12,10 +14,23 @@ pub struct ObjectTreeState {
     /// Folder paths, rebuilt from the source rows on each frame: a folder exists while it holds
     /// a drawing, so an emptied one goes away and undo brings it back.
     pub folders: BTreeSet<Vec<String>>,
-    /// Collapsed folder paths. Search temporarily expands matching descendants.
+    /// Collapsed folder paths. Search temporarily expands matching descendants. A path stays while
+    /// the rows do not hold its folder, as when one panel follows the active chart, and is cleared
+    /// when the folder is deleted or moved from the panel.
     pub collapsed_folders: BTreeSet<Vec<String>>,
     /// Parent of the folder being created by the name prompt.
     pub creating_folder: Option<Vec<String>>,
+
+    // === Drawings by symbol ===
+    /// The layout's drawings by symbol, set by the host; `None` leaves their list out.
+    pub symbol_drawings: Option<Vec<SymbolDrawings>>,
+    /// Whether the panel lists [`Self::symbol_drawings`] in place of its objects.
+    pub showing_symbol_drawings: bool,
+    /// The symbols whose drawings are expanded.
+    pub expanded_symbols: BTreeSet<String>,
+    /// The order of each symbol's listed drawings; a symbol without one keeps the order of the
+    /// charts.
+    pub drawing_sort: BTreeMap<String, DrawingSort>,
 
     // === Selection ===
     /// Drawing and source ids in the rendered order, used for range selection.

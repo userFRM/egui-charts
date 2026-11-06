@@ -41,6 +41,9 @@ pub struct StudyInput {
     pub default: InputValue,
     /// Accepted values, used to build the editor.
     pub kind: InputKind,
+    /// The choice input this one applies with and the choices it applies to. An editor hides it
+    /// under the other choices and keeps its value. `None` always shows it.
+    pub shown_when: Option<(String, Vec<usize>)>,
 }
 
 impl StudyInput {
@@ -57,6 +60,7 @@ impl StudyInput {
             default: value.clone(),
             value,
             kind,
+            shown_when: None,
         }
     }
 
@@ -64,6 +68,22 @@ impl StudyInput {
     pub fn with_default(mut self, value: InputValue) -> Self {
         self.default = value;
         self
+    }
+
+    /// Show this input only while the choice input `id` holds one of `choices`.
+    pub fn shown_when(mut self, id: impl Into<String>, choices: impl Into<Vec<usize>>) -> Self {
+        self.shown_when = Some((id.into(), choices.into()));
+        self
+    }
+
+    /// Whether an editor listing `inputs`, this one among them, shows this input.
+    pub fn is_shown(&self, inputs: &[StudyInput]) -> bool {
+        self.shown_when.as_ref().is_none_or(|(id, choices)| {
+            inputs.iter().any(|input| {
+                input.id == *id
+                    && matches!(input.value, InputValue::Choice(choice) if choices.contains(&choice))
+            })
+        })
     }
 
     /// Check a value against this input's schema. Setters must also validate values.
@@ -188,11 +208,12 @@ macro_rules! input_assign {
 
 #[cfg(feature = "studies")]
 macro_rules! study_inputs {
-    ($this:ident; $($field:ident $([$index:literal])? : $kind:ident($($args:expr),*)),+ $(,)? ; $($changed:ident =>)? $after:block) => {
+    ($this:ident; $($field:ident $([$index:literal])? : $kind:ident($($args:expr),*) $(if $choice:ident in $shown:expr)?),+ $(,)? ; $($changed:ident =>)? $after:block) => {
         fn inputs(&$this) -> Vec<crate::studies::StudyInput> {
             let defaults = Self::default();
             vec![$(crate::studies::inputs::input_spec!(stringify!($field $([$index])?), $this.$field $([$index])?, $kind($($args),*))
-                .with_default(crate::studies::inputs::input_spec!(stringify!($field $([$index])?), defaults.$field $([$index])?, $kind($($args),*)).value)),+]
+                .with_default(crate::studies::inputs::input_spec!(stringify!($field $([$index])?), defaults.$field $([$index])?, $kind($($args),*)).value)
+                $(.shown_when(stringify!($choice), $shown))?),+]
         }
 
         fn set_input(&mut $this, id: &str, value: crate::studies::InputValue) -> Result<(), crate::studies::StudyError> {

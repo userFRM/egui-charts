@@ -2718,8 +2718,11 @@ impl DemoApp {
         // Build the source list from live chart state each frame.
         let mut sources = self.build_source_items();
         let data_window = self.build_data_window();
+        self.refresh_symbol_drawings();
         let action = self.object_tree.show(ui, Some(&data_window), &mut sources);
-        self.handle_object_tree(action, &sources);
+        if !self.handle_symbol_drawings(&action) {
+            self.handle_object_tree(action, &sources);
+        }
     }
 
     fn build_source_items(&self) -> Vec<SourceItem> {
