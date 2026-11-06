@@ -149,11 +149,12 @@ impl Chart {
                 .any(|pane| pane.id == main_pane && pane.collapsed == Some(true));
         let main_expanded = main_present && !main_collapsed;
         let main_minimum = if main_expanded { 40.0 } else { 0.0 };
-        let auto_collapse = usable_height
-            / (if main_present { 3.0 } else { 0.0 } + pane_count as f32).max(1.0)
-            < 40.0;
         let row_count = pane_count + usize::from(main_collapsed);
         let row_height = 24.0_f32.min(usable_height / row_count.max(1) as f32);
+        // A collapsed price pane is one header row and takes no share of the rest.
+        let auto_collapse = (usable_height - if main_collapsed { row_height } else { 0.0 })
+            / (if main_expanded { 3.0 } else { 0.0 } + pane_count as f32).max(1.0)
+            < 40.0;
         let mut expanded_budget = ((usable_height - row_height * row_count as f32 - main_minimum)
             / (40.0 - row_height))
             .max(0.0) as usize;
@@ -261,17 +262,19 @@ impl Chart {
             Pos2::new(plot.left(), available.bottom() - axis_height),
             Pos2::new(plot.right(), available.bottom()),
         );
+        // The price frame has no height for time navigation in these layouts.
         let shared_plot =
-            (main_at.is_none() || maximized.is_some_and(|id| id != main_pane)).then(|| {
-                ui.interact(
-                    Rect::from_min_max(
-                        Pos2::new(plot.left(), available.top()),
-                        Pos2::new(plot.right(), time_axis.top()),
-                    ),
-                    ui.scope_id().with((maximized, "plot")),
-                    Sense::click_and_drag(),
-                )
-            });
+            (main_at.is_none() || main_collapsed || maximized.is_some_and(|id| id != main_pane))
+                .then(|| {
+                    ui.interact(
+                        Rect::from_min_max(
+                            Pos2::new(plot.left(), available.top()),
+                            Pos2::new(plot.right(), time_axis.top()),
+                        ),
+                        ui.scope_id().with((maximized, "plot")),
+                        Sense::click_and_drag(),
+                    )
+                });
         let price_frame = if main_collapsed {
             Rect::from_min_size(main_rect.min, egui::vec2(main_rect.width(), 0.0))
         } else {
@@ -286,6 +289,21 @@ impl Chart {
             )
             .inner;
         let touch_readout = crate::widget::interaction::touch_crosshair(ui, response.id);
+
+        // A key handled by the price frame can remove a pane and shift the ones after it.
+        let recorded = panes.len();
+        let mut kept = 0;
+        for at in 0..recorded {
+            let (_, id, collapsed) = panes[at];
+            if let Some(idx) = self.pane_layout.panes.iter().position(|pane| pane.id == id) {
+                panes[kept] = (idx, id, collapsed);
+                rects[kept] = rects[at];
+                kept += 1;
+            }
+        }
+        panes.truncate(kept);
+        rects.truncate(kept);
+        let main_at = panes.iter().position(|(_, id, _)| *id == main_pane);
 
         let horizontal = self.get_chart_mapping().with_rect(plot);
         let displayed =
@@ -1463,7 +1481,7 @@ impl Chart {
                         self.merge_groups.factor(),
                     );
                     if self.host_events.annotation_target.borrow().is_some()
-                        && let Some(hit) = ui
+                        && ui
                             .input(|input| input.pointer.interact_pos())
                             .filter(|pos| chart_rect.contains(*pos))
                             .and_then(|pos| {
@@ -1472,11 +1490,11 @@ impl Chart {
                                     pos,
                                 )
                             })
-                            .filter(|hit| hit.result.pass == crate::widget::PrimitivePass::Above)
+                            .is_some_and(|hit| {
+                                hit.result.pass == crate::widget::PrimitivePass::Above
+                            })
                     {
                         self.cover_annotation_hit();
-                        self.host_events.target = Some(hit.target);
-                        self.host_events.primitive_hit = Some(hit.result);
                     }
                 }
             }
@@ -1509,7 +1527,10 @@ impl Chart {
             .zip(&rects)
             .map(|((idx, _, collapsed), rect)| (*idx, *rect, *collapsed))
             .collect();
-        self.pane_separators(ui, &drawn);
+        // Until the panes reflow on the next frame, a separator would span a removed pane.
+        if panes.len() == recorded {
+            self.pane_separators(ui, &drawn);
+        }
         for ((_, id, collapsed), rect) in panes.iter().copied().zip(rects) {
             if id == main_pane {
                 continue;

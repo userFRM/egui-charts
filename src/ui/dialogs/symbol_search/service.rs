@@ -25,7 +25,7 @@ pub(super) struct Recent {
 impl Recent {
     fn symbol(&self) -> Instrument {
         let mut symbol = Instrument::new(&self.name).with_description(&self.description);
-        symbol.exchange = Some(self.exchange.clone());
+        symbol.exchange = (!self.exchange.is_empty()).then(|| self.exchange.clone());
         symbol.symbol_type = self.kind;
         symbol.logo = self.logo.clone();
         symbol.exchange_logo = self.exchange_logo.clone();
@@ -34,6 +34,23 @@ impl Recent {
         symbol.sector = self.sector.clone();
         symbol.source = self.source.clone();
         symbol
+    }
+
+    /// A record that names no provider belongs to the listing of any provider.
+    fn same_listing(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.exchange == other.exchange
+            && (self.source == other.source || self.source.is_none() || other.source.is_none())
+    }
+
+    /// Takes the provider of the newest earlier entry of this listing when this record has none,
+    /// so that only that entry merges with it. `earlier` runs from newest to oldest.
+    fn keep_source<'a>(&mut self, mut earlier: impl Iterator<Item = &'a Self>) {
+        if self.source.is_none() {
+            self.source = earlier
+                .find(|old| self.same_listing(old))
+                .and_then(|old| old.source.clone());
+        }
     }
 }
 
@@ -108,17 +125,13 @@ impl Search {
     }
 
     pub(super) fn record(&mut self, symbol: &Instrument) {
-        let exchange = symbol.exchange.clone().unwrap_or_default();
-        self.opened.retain(|row| {
-            row.name != symbol.symbol || row.exchange != exchange || row.source != symbol.source
-        });
-        self.opened.push(Recent {
+        let mut recent = Recent {
             name: symbol.symbol.clone(),
             description: symbol
                 .description
                 .clone()
                 .unwrap_or_else(|| symbol.symbol.clone()),
-            exchange,
+            exchange: symbol.exchange.clone().unwrap_or_default(),
             kind: symbol.symbol_type,
             logo: symbol.logo.clone(),
             exchange_logo: symbol.exchange_logo.clone(),
@@ -126,7 +139,10 @@ impl Search {
             root: symbol.root.clone(),
             sector: symbol.sector.clone(),
             source: symbol.source.clone(),
-        });
+        };
+        recent.keep_source(self.opened.iter().rev());
+        self.opened.retain(|row| !recent.same_listing(row));
+        self.opened.push(recent);
     }
 
     pub(super) fn poll(&mut self, ctx: &egui::Context) {
@@ -138,10 +154,9 @@ impl Search {
                 .get("recent")
                 .cloned()
                 .unwrap_or_default();
-            for row in self.opened.drain(..) {
-                recent.retain(|old| {
-                    old.name != row.name || old.exchange != row.exchange || old.source != row.source
-                });
+            for mut row in self.opened.drain(..) {
+                row.keep_source(recent.iter());
+                recent.retain(|old| !row.same_listing(old));
                 recent.insert(0, row);
             }
             recent.truncate(20);
@@ -484,7 +499,10 @@ mod tests {
     fn listings_keep_their_exchange_in_results_and_recents() {
         let ctx = egui::Context::default();
         let listings = vec![
-            Instrument::new("ABC").with_exchange("X").with_root("ABC"),
+            Instrument::new("ABC")
+                .with_exchange("X")
+                .with_root("ABC")
+                .with_source("Primary"),
             Instrument::new("ABC").with_exchange("Y").with_root("ABC"),
             Instrument::new("ABC")
                 .with_exchange("X")
@@ -610,6 +628,46 @@ mod tests {
                 ),
                 (kind, exchange, country, sector, provider)
             );
+        }
+    }
+
+    /// The dialog records the chosen row and the host records the chart's instrument, which a
+    /// feed reports without the provider; distinct providers still keep their own entries.
+    #[test]
+    fn recording_a_listing_with_and_without_its_provider_keeps_one_recent() {
+        let ctx = egui::Context::default();
+        let listing = |source: &Option<&str>| {
+            let symbol = Instrument::new("MSFT").with_exchange("NASDAQ");
+            match source {
+                Some(source) => symbol.with_source(*source),
+                None => symbol,
+            }
+        };
+        for (records, expected) in [
+            (vec![Some("Synthetic"), None], vec![Some("Synthetic")]),
+            (vec![None, Some("Synthetic")], vec![Some("Synthetic")]),
+            (vec![Some("A"), Some("B")], vec![Some("B"), Some("A")]),
+            // A record without a provider belongs to the listing opened last, not to every one.
+            (vec![Some("A"), Some("B"), None], vec![Some("B"), Some("A")]),
+        ] {
+            // One poll for all records merges them in `record`; one per record, in `poll`.
+            for poll_each in [false, true] {
+                let mut search = Search::default();
+                for source in &records {
+                    search.record(&listing(source));
+                    if poll_each {
+                        search.poll(&ctx);
+                    }
+                }
+                search.poll(&ctx);
+                let sources: Vec<_> = search
+                    .recent_results()
+                    .into_iter()
+                    .map(|row| row.source)
+                    .collect();
+                let expected: Vec<_> = expected.iter().map(|s| s.map(str::to_owned)).collect();
+                assert_eq!(sources, expected, "{records:?}, poll each {poll_each}");
+            }
         }
     }
 }
