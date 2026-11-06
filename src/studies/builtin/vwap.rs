@@ -1337,6 +1337,7 @@ mod tests {
         let mut edited = study.clone();
         let mut settings = edited.settings();
         settings.plots[0].width = 3.0;
+        settings.fills[0].visible = false;
         edited
             .apply_settings(&[("band_count".into(), Length(3))], settings)
             .unwrap();
@@ -1344,6 +1345,17 @@ mod tests {
         let plots = edited.settings().plots;
         assert_eq!(plots.len(), 7);
         assert_eq!(plots[0].width, 3.0);
+        // Added bands keep the styles of the others, and removed bands take theirs away.
+        let fills = |study: &ConfiguredStudy| study.settings().fills;
+        assert_eq!(fills(&edited).len(), 3);
+        assert!(!fills(&edited)[0].visible);
+        let mut fewer = edited.clone();
+        let settings = fewer.settings();
+        fewer
+            .apply_settings(&[("band_count".into(), Length(1))], settings)
+            .unwrap();
+        assert_eq!(fills(&fewer).len(), 1);
+        assert!(!fills(&fewer)[0].visible);
         let bands: Vec<_> = edited
             .inputs()
             .into_iter()
