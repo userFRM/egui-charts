@@ -75,11 +75,17 @@ impl ObjectTreePanel {
                 {
                     return false;
                 }
-                return chart.drawings_mut().move_to_folder(
-                    &[],
-                    std::slice::from_ref(folder),
-                    parent,
-                );
+                let moved =
+                    chart
+                        .drawings_mut()
+                        .move_to_folder(&[], std::slice::from_ref(folder), parent);
+                if moved {
+                    let target = [parent.as_slice(), &folder[folder.len() - 1..]].concat();
+                    self.state_mut()
+                        .collapsed_folders
+                        .retain(|p| !p.starts_with(folder) && !p.starts_with(&target));
+                }
+                return moved;
             }
             ObjectTreeAction::DeleteFolder(path) => {
                 if !self.state().folders.contains(path) {
@@ -92,6 +98,15 @@ impl ObjectTreePanel {
                     .collect();
                 chart.drawings_mut().delete_drawings(&ids);
                 self.state_mut().selected_ids.retain(|id| !ids.contains(id));
+                // A folder kept by its locked drawings stays collapsed.
+                self.state_mut().collapsed_folders.retain(|p| {
+                    !p.starts_with(path)
+                        || chart
+                            .drawings()
+                            .drawings
+                            .iter()
+                            .any(|d| d.folder.starts_with(p))
+                });
             }
             ObjectTreeAction::SetFolderSync(path, sync) => {
                 return chart.drawings_mut().set_folder_sync(path, *sync);

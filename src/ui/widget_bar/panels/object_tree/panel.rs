@@ -105,10 +105,6 @@ impl ObjectTreePanel {
             .filter(|s| s.is_drawing())
             .flat_map(|s| (1..=s.folder.len()).map(|depth| s.folder[..depth].to_vec()))
             .collect();
-        let folders = &self.state.folders;
-        self.state
-            .collapsed_folders
-            .retain(|path| folders.contains(path));
 
         if self.config.group_by_type {
             sources.sort_by_key(|s| {
@@ -747,8 +743,12 @@ mod tests {
         assert_eq!(folder_of(&h, 2), "");
 
         // A folder drags out to the root and into another; never into its own descendant.
+        // Moving it clears its collapsed state.
+        let path = vec!["All".to_owned(), "Zones".to_owned()];
+        h.state_mut().0.state_mut().collapsed_folders.insert(path);
         drag(&mut h, "Zones", "Levels");
         assert_eq!(folder_of(&h, 1), "All/Levels/Zones/Inner");
+        assert!(h.state().0.state().collapsed_folders.is_empty());
         drag(&mut h, "Levels", "Inner");
         assert_eq!(folder_of(&h, 1), "All/Levels/Zones/Inner");
         drag(&mut h, "Inner", "Move to root");
@@ -764,8 +764,12 @@ mod tests {
             |h| {
                 h.get_by_label("All").click_secondary();
                 h.run();
+                // Deleting a folder clears the collapsed state of what it held.
+                let path = vec!["All".to_owned(), "Levels".to_owned()];
+                h.state_mut().0.state_mut().collapsed_folders.insert(path);
                 h.get_by_label("Delete folder").click();
                 h.run();
+                assert!(h.state().0.state().collapsed_folders.is_empty());
             },
             |h| {
                 h.get_by_label("All").click();
@@ -884,5 +888,38 @@ mod tests {
                 output.drop_without_applying_deltas();
             }
         }
+    }
+
+    /// A collapsed folder is still collapsed after the tree showed rows without it for a frame,
+    /// as when one panel follows the active chart of a layout and the user selects another chart
+    /// and then comes back.
+    #[test]
+    fn collapsed_folder_survives_rows_of_another_chart() {
+        use crate::drawings::DrawingToolType;
+        let ctx = egui::Context::default();
+        let show = |panel: &mut ObjectTreePanel, rows: &mut [SourceItem]| {
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                panel.show(ui, None, rows);
+            })
+            .drop_without_applying_deltas();
+        };
+        let mut panel = ObjectTreePanel::new();
+        let mut level = SourceItem::drawing(1, DrawingToolType::HorizontalLine, egui::Color32::RED);
+        level.folder = vec!["Levels".into()];
+        let other = SourceItem::drawing(2, DrawingToolType::TrendLine, egui::Color32::RED);
+        show(&mut panel, &mut [level.clone()][..]);
+        // What the folder row's toggle does.
+        panel
+            .state_mut()
+            .collapsed_folders
+            .insert(vec!["Levels".into()]);
+        show(&mut panel, &mut [other][..]);
+        show(&mut panel, &mut [level][..]);
+        let collapsed: Vec<_> = panel.state().collapsed_folders.iter().collect();
+        assert_eq!(
+            collapsed,
+            [&vec!["Levels".to_owned()]],
+            "collapsed folders after showing another chart's rows: {collapsed:?}"
+        );
     }
 }
