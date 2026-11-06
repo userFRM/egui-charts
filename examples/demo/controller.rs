@@ -146,11 +146,18 @@ fn study_input_summary(study: &dyn egui_charts::studies::Indicator) -> String {
         })
         .collect();
     // An anchor or session choice identifies the study, which names its price only once edited.
-    let anchored = matches!(inputs.first().map(|input| &input.kind), Some(InputKind::Choice(_)));
+    let anchored = matches!(
+        inputs.first().map(|input| &input.kind),
+        Some(InputKind::Choice(_))
+    );
     let edited = inputs
         .iter()
         .any(|input| matches!(input.kind, InputKind::Source) && input.value != input.default);
-    if let Some(source) = source.as_ref().filter(|_| !anchored || edited).and_then(price) {
+    if let Some(source) = source
+        .as_ref()
+        .filter(|_| !anchored || edited)
+        .and_then(price)
+    {
         caption.insert(caption.len().min(1), source);
     }
     caption.join(" ")
@@ -9703,7 +9710,8 @@ mod tests {
     #[test]
     fn legend_inputs_leave_out_flags() {
         let factory = egui_charts::studies::IndicatorFactory::new();
-        let caption = |name: &str| super::study_input_summary(factory.create(name).unwrap().as_ref());
+        let caption =
+            |name: &str| super::study_input_summary(factory.create(name).unwrap().as_ref());
         for (name, expected) in [
             ("RSI", "14 close SMA 14"),
             ("VWAP", "Session 1"),
@@ -9733,9 +9741,9 @@ mod tests {
         study
             .set_input(
                 "source",
-                egui_charts::studies::InputValue::Source(
-                    egui_charts::studies::StudySource::Price(egui_charts::model::PriceSource::Close),
-                ),
+                egui_charts::studies::InputValue::Source(egui_charts::studies::StudySource::Price(
+                    egui_charts::model::PriceSource::Close,
+                )),
             )
             .unwrap();
         assert_eq!(super::study_input_summary(study), "Session close 1");

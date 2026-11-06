@@ -867,8 +867,8 @@ impl DemoApp {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::tests::settle;
+    use super::*;
     use egui_charts::widget::{ChartLink, ChartLinkGroups};
 
     #[test]
@@ -1354,8 +1354,10 @@ mod tests {
         app.ensure_chart_slots(ChartLayoutMode::Four);
         settle(&mut app, &ctx);
         let line = |price: f64| {
-            let mut drawing =
-                egui_charts::drawings::Drawing::new(0, egui_charts::drawings::DrawingToolType::HorizontalLine);
+            let mut drawing = egui_charts::drawings::Drawing::new(
+                0,
+                egui_charts::drawings::DrawingToolType::HorizontalLine,
+            );
             drawing
                 .chart_points
                 .push(egui_charts::drawings::ChartPoint::new(10.0, price));
@@ -1370,7 +1372,10 @@ mod tests {
             app.activate_chart_slot(slot);
             app.switch_symbol(symbol);
             app.switch_timeframe(interval);
-            app.chart.drawings_mut().add_drawing(line(slot as f64)).unwrap();
+            app.chart
+                .drawings_mut()
+                .add_drawing(line(slot as f64))
+                .unwrap();
             settle(&mut app, &ctx);
         }
         app.layout.set_sync_group(2, Some("Kept".into()));
