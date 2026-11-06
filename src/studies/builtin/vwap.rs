@@ -167,7 +167,8 @@ pub(super) fn trading_day(
 }
 
 /// Volume Weighted Average Price, restarted at each anchor period, with optional
-/// standard deviation bands.
+/// standard deviation bands. [`default`](Self::default) opens with the filled band at one
+/// standard deviation; [`new`](Self::new) opens without bands.
 ///
 /// [`new`](Self::new) restarts at each UTC day until a time zone is set with
 /// [`with_time_zone`](Self::with_time_zone). Pass the instrument's
@@ -257,8 +258,8 @@ impl VolumeWeightedAvgPrice {
 
     /// Adds an upper and a lower band at each multiple of the volume-weighted
     /// standard deviation of the typical price over the period. Multipliers clamp
-    /// to 0 or more, NaN to 0, and at most ten are kept. The bands are drawn in the VWAP
-    /// colour at half intensity.
+    /// to 0 or more, NaN to 0, and at most ten are kept. Each pair is green, olive or dark teal
+    /// and filled between its lines in that colour at 5% opacity.
     pub fn with_std_dev_bands(mut self, multipliers: impl IntoIterator<Item = f64>) -> Self {
         self.percentage_bands = false;
         self.bands = multipliers
@@ -312,9 +313,10 @@ impl VolumeWeightedAvgPrice {
     }
 }
 
+/// A VWAP with one filled band at one standard deviation.
 impl Default for VolumeWeightedAvgPrice {
     fn default() -> Self {
-        Self::new()
+        Self::new().with_std_dev_bands([1.0])
     }
 }
 
@@ -367,7 +369,7 @@ impl Indicator for VolumeWeightedAvgPrice {
                 InputValue::Length(self.bands.len()),
                 InputKind::Length(0, MAX_BANDS),
             )
-            .with_default(InputValue::Length(0)),
+            .with_default(InputValue::Length(1)),
         ];
         inputs.extend(self.bands.iter().enumerate().map(|(i, k)| {
             StudyInput::new(
@@ -668,6 +670,18 @@ impl Indicator for VolumeWeightedAvgPrice {
         for (line, color) in self.colors.iter_mut().zip(colors) {
             *line = color;
         }
+    }
+
+    /// One band between the upper and lower line of each multiplier.
+    fn fills(&self) -> Vec<crate::studies::StudyFill> {
+        (0..self.bands.len())
+            .map(|band| crate::studies::StudyFill {
+                first: crate::studies::FillBoundary::Plot(1 + 2 * band),
+                second: crate::studies::FillBoundary::Plot(2 + 2 * band),
+                color: self.colors[1 + 2 * band].gamma_multiply_u8(13),
+                inverted_color: None,
+            })
+            .collect()
     }
 
     fn is_overlay(&self) -> bool {
@@ -1337,5 +1351,33 @@ mod tests {
             .map(|i| i.value)
             .collect();
         assert_eq!(bands, [0.5, 2.5, 3.0].map(InputValue::Number));
+    }
+
+    /// A study from the factory, as the indicators dialog adds it, has one band of multiplier 1,
+    /// filled in its line colour, and a study built without bands has no fill.
+    #[test]
+    fn the_default_study_opens_with_one_filled_band() {
+        let study = crate::studies::IndicatorFactory::new()
+            .create("VWAP")
+            .unwrap();
+        let input = |id: &str| {
+            let inputs = study.inputs();
+            inputs.into_iter().find(|input| input.id == id).unwrap()
+        };
+        assert_eq!(input("band_count").value, InputValue::Length(1));
+        assert_eq!(input("band_0").value, InputValue::Number(1.0));
+        assert_eq!(study.line_count(), 3);
+        assert_eq!(study.colors()[1], palette::GREEN);
+        let fills = study.fills();
+        assert_eq!(fills.len(), 1);
+        assert!(matches!(
+            (fills[0].first, fills[0].second),
+            (
+                crate::studies::FillBoundary::Plot(1),
+                crate::studies::FillBoundary::Plot(2)
+            )
+        ));
+        assert_eq!(fills[0].color, palette::GREEN.gamma_multiply_u8(13));
+        assert!(VolumeWeightedAvgPrice::new().fills().is_empty());
     }
 }

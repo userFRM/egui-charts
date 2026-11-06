@@ -9,6 +9,7 @@
 
 use crate::model::{Timeframe, TimeframeUnit};
 use serde::{Deserialize, Serialize};
+use std::cell::Cell;
 use std::collections::{BTreeMap, HashSet};
 use std::ops::RangeInclusive;
 
@@ -756,7 +757,7 @@ impl PositionSizing {
     }
 }
 
-/// Placement of a trend line's, ray's or extended line's measurement text relative to its anchors.
+/// Placement of a line tool's measurement text relative to its anchors.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LineMeasurementPosition {
     /// Before the left anchor.
@@ -766,10 +767,38 @@ pub enum LineMeasurementPosition {
     /// After the right anchor.
     #[default]
     Right,
+    /// After the right anchor if the text fits in the pane there, else before the left anchor if
+    /// it fits there, else above the middle of the anchors.
+    Auto,
 }
 
-/// Independent readouts for a trend line, ray or extended line. All start hidden, including on
-/// older saves.
+/// Which part of a line's text sits at which point of the line, reading left to right.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LineTextHorizontalAlign {
+    /// The text starts at the line's left end.
+    Left,
+    /// The text is centred on the line's middle.
+    #[default]
+    Center,
+    /// The text ends at the line's right end.
+    Right,
+}
+
+/// Which edge of a line's text rests on the line.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LineTextVerticalAlign {
+    /// The text's top edge, so that it reads below the line.
+    Top,
+    /// The text's middle, so that it reads on the line.
+    Middle,
+    /// The text's bottom edge, so that it reads above the line.
+    #[default]
+    Bottom,
+}
+
+/// Independent readouts of a trend line, ray, extended line, info line or trend angle, and the
+/// placement of a line's text. Readouts start hidden except on an info line, see
+/// [`Self::for_tool`]; saves from before these settings read the same way.
 /// Price changes follow anchor order; lengths and elapsed time are unsigned.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -792,8 +821,60 @@ pub struct LineMeasurements {
     pub inclination: bool,
     /// Show a movable marker halfway along the displayed line segment.
     pub midpoint: bool,
+    /// Show the price of each anchor beside it, whether or not the line is selected.
+    pub price_labels: bool,
     /// Where to place the readouts; right of the anchors by default.
     pub position: LineMeasurementPosition,
+    /// Where the line's custom text sits along the line.
+    pub text_horizontal_align: LineTextHorizontalAlign,
+    /// Which edge of the line's custom text rests on the line.
+    pub text_vertical_align: LineTextVerticalAlign,
+}
+
+thread_local! {
+    /// Whether the last drawing read on this thread left out its line measurements.
+    static LINE_MEASUREMENTS_LEFT_OUT: Cell<bool> = const { Cell::new(false) };
+}
+
+impl LineMeasurements {
+    /// The settings a new drawing of `tool` starts with: an info line keeps every readout visible
+    /// in the middle of the line, other tools keep them hidden.
+    pub fn for_tool(tool: super::DrawingToolType) -> Self {
+        if tool != super::DrawingToolType::InfoLine {
+            return Self::default();
+        }
+        Self {
+            persistent: true,
+            price_change: true,
+            percent_change: true,
+            pip_change: true,
+            bar_count: true,
+            elapsed_time: true,
+            length: true,
+            inclination: true,
+            position: LineMeasurementPosition::Center,
+            ..Self::default()
+        }
+    }
+
+    /// Notes that the drawing being read has no line measurements, and gives the [`Default`] ones.
+    pub(crate) fn left_out() -> Self {
+        LINE_MEASUREMENTS_LEFT_OUT.set(true);
+        Self::default()
+    }
+
+    /// Clears the note of [`Self::left_out`], before a drawing is read.
+    pub(crate) fn forget_left_out() {
+        LINE_MEASUREMENTS_LEFT_OUT.set(false);
+    }
+
+    /// Takes [`Self::for_tool`] of `tool` when the drawing just read left its settings out, so an
+    /// info line saved before they existed keeps the readouts it always showed.
+    pub(crate) fn fill_left_out(&mut self, tool: super::DrawingToolType) {
+        if LINE_MEASUREMENTS_LEFT_OUT.replace(false) {
+            *self = Self::for_tool(tool);
+        }
+    }
 }
 
 /// How a long or short position drawing sizes its quantity.

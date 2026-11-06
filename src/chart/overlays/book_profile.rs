@@ -74,9 +74,10 @@ impl OrderBookView {
 /// order at the price reaches a tier of the view, drawn in [`OrderBookView::tier_color`] with the
 /// painter's active theme. Fails, drawing nothing, when the view needs
 /// individual orders and the feed has none, so that the host can say the filtering is
-/// unavailable. A key identifies the measure, quantity unit and maximum across all supplied
-/// levels, including offscreen ones, after filtering. Hovering a row anywhere in the 60-point
-/// strip shows its exact price, side and measured resting size, without abbreviating quantities.
+/// unavailable. Nothing is drawn outside the strip unless the pointer is over it: then a key
+/// identifies the measure, quantity unit and maximum across all supplied levels, including
+/// offscreen ones, after filtering, and the row under the pointer, anywhere in the 60-point strip,
+/// shows its exact price, side and measured resting size, without abbreviating quantities.
 pub fn render_book_profile(
     painter: &Painter,
     mapping: &ChartMapping,
@@ -164,6 +165,9 @@ pub fn render_book_profile(
             }
         }
     }
+    if pointer.is_none() {
+        return Ok(());
+    }
     let ctx = painter.ctx();
     let unit = view
         .quantity_unit
@@ -230,7 +234,10 @@ pub fn render_book_profile(
                     "side",
                     crate::localization::text(ctx, if bid { "Bid" } else { "Ask" }),
                 ),
-                ("price", price.to_string()),
+                (
+                    "price",
+                    format!("{price:.*}", crate::scales::decimals(tick)),
+                ),
                 ("measure", measure),
                 ("size", size.to_string()),
                 ("unit", unit),
@@ -353,9 +360,68 @@ mod tests {
         );
     }
 
+    /// A price built by multiplying a tick reads at the tick's decimals, without the rounding
+    /// error of the multiplication.
+    #[test]
+    fn readout_writes_the_price_at_the_decimals_of_the_tick() {
+        let price = 78_517.0 * 0.01;
+        assert_ne!(price.to_string(), "785.17");
+        let book = OrderBook {
+            ts: "2026-01-05T10:00:00Z".parse().unwrap(),
+            symbol: "A".into(),
+            bids: vec![OrderBookLevel {
+                price,
+                size: 45.0,
+                order_cnt: None,
+            }],
+            asks: vec![],
+        };
+        let rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(400.0, 200.0));
+        let map = ChartMapping::new(
+            rect,
+            10.0,
+            0,
+            0,
+            0.0,
+            PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(785.0, 785.4),
+                0.0,
+                200.0,
+                false,
+            ),
+        );
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(rect),
+                events: vec![egui::Event::PointerMoved(pos2(
+                    390.0,
+                    map.price_to_y(price),
+                ))],
+                ..Default::default()
+            },
+            |ui| {
+                render_book_profile(
+                    ui.painter(),
+                    &map,
+                    Some(&book),
+                    None,
+                    0.01,
+                    &OrderBookView::default(),
+                    [Color32::GREEN, Color32::RED],
+                )
+                .unwrap();
+            },
+        );
+        output.textures_delta.clear();
+        assert!(output.shapes.iter().any(|s| matches!(&s.shape,
+            Shape::Text(t) if t.galley.text().starts_with("Bid · Price 785.17\n"))));
+    }
+
     /// The maximum includes offscreen levels and uses the same filtered measure as the bars;
     /// hover reads the whole strip, even where a small bar does not reach the pointer.
-    /// Captions fit beside the strip in narrow panes.
+    /// Captions fit beside the strip in narrow panes and appear only over the strip.
     #[test]
     fn readout_quantifies_the_full_book_and_the_hovered_row() {
         let time = "2026-01-05T10:00:00Z".parse().unwrap();
@@ -514,7 +580,18 @@ mod tests {
                     let unit = unit
                         .filter(|unit| !unit.trim().is_empty())
                         .unwrap_or("feed units");
-                    assert!(texts.contains(&format!("{measure} ({unit})\nFull width = 2000 {unit}\nAll supplied levels, after filtering").as_str()), "{texts:?}");
+                    assert_eq!(
+                        texts.contains(&format!("{measure} ({unit})\nFull width = 2000 {unit}\nAll supplied levels, after filtering").as_str()),
+                        from_right <= 60.0,
+                        "{texts:?}"
+                    );
+                    if from_right > 60.0 {
+                        assert!(
+                            output.shapes.iter().all(|s| matches!(&s.shape,
+                                Shape::Rect(r) if r.rect.left() >= rect.right() - 60.0)),
+                            "paints outside the strip"
+                        );
+                    }
                     let hover = format!("{side} · Price {price}\n{measure}: {size} {unit}");
                     assert_eq!(
                         texts.contains(&hover.as_str()),

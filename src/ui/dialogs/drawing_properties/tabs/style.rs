@@ -157,6 +157,7 @@ impl StyleTab {
                 let measurements = &mut template.settings.line_measurements;
                 for (label, value) in [
                     ("Middle point", &mut measurements.midpoint),
+                    ("Price labels", &mut measurements.price_labels),
                     ("Keep statistics visible", &mut measurements.persistent),
                     ("Price change", &mut measurements.price_change),
                     ("Percentage change", &mut measurements.percent_change),
@@ -181,6 +182,7 @@ impl StyleTab {
                             LineMeasurementPosition::Left,
                             LineMeasurementPosition::Center,
                             LineMeasurementPosition::Right,
+                            LineMeasurementPosition::Auto,
                         ],
                         |position| {
                             l10n::text(
@@ -189,6 +191,7 @@ impl StyleTab {
                                     LineMeasurementPosition::Left => "Left",
                                     LineMeasurementPosition::Center => "Center",
                                     LineMeasurementPosition::Right => "Right",
+                                    LineMeasurementPosition::Auto => "Auto",
                                 },
                             )
                         },

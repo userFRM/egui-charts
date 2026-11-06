@@ -159,7 +159,7 @@ impl Drawing {
         match self.tool_type {
             // Simple Lines (9 tools)
             DrawingToolType::TrendLine => self.render_trend_line(painter, rect, color, stroke),
-            DrawingToolType::Ray | DrawingToolType::ExtendedLine => {
+            DrawingToolType::Ray | DrawingToolType::ExtendedLine | DrawingToolType::InfoLine => {
                 self.render_trend_line(painter, rect, color, stroke)
             }
             DrawingToolType::HorizontalLine => self.render_horizontal_line(painter, rect, stroke),
@@ -167,9 +167,8 @@ impl Drawing {
             DrawingToolType::VerticalLine => self.render_vertical_line(painter, rect, stroke),
             DrawingToolType::CrossLine => self.render_cross_line(painter, rect, stroke),
             DrawingToolType::TrendAngle => {
-                return self.render_trend_angle(painter, rect, color, stroke);
+                return self.render_trend_angle(painter, rect, color, stroke, view, selected);
             }
-            DrawingToolType::InfoLine => self.render_info_line(painter, view),
 
             // Shapes (8 tools)
             DrawingToolType::Rect => self.render_rect(painter, rect, color, stroke),
@@ -577,7 +576,6 @@ mod tests {
             T::PriceRange,
             T::DateRange,
             T::DateAndPriceRange,
-            T::InfoLine,
         ] {
             for (first, second) in [
                 ((300., 100.), (100., 300.)),
@@ -610,18 +608,6 @@ mod tests {
                         && s.format.font_id.size == crate::styles::typography::SM_MD))),
                     "{tool:?}: card text"
                 );
-                if tool == T::InfoLine {
-                    assert!(card.min.x >= bounds.center().x && card.min.y >= bounds.center().y);
-                    assert_eq!(
-                        shapes
-                            .iter()
-                            .filter(|s| matches!(s, Shape::LineSegment { .. }))
-                            .count(),
-                        1,
-                        "info line has no connector"
-                    );
-                    continue;
-                }
                 if second.1 <= first.1 {
                     assert!(card.max.y < bounds.min.y, "{tool:?}: card above");
                 } else {

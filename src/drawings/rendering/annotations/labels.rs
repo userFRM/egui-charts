@@ -85,6 +85,21 @@ pub(super) fn paint_anchor_line(
     }
 }
 
+/// `price` in the chart's price formatter, else the instrument's precision, else by magnitude.
+pub(in crate::drawings::rendering) fn price_text(price: f64, view: &ChartView) -> Option<String> {
+    if !price.is_finite() {
+        return None;
+    }
+    if let Some(formatter) = view.price_formatter {
+        return Some(formatter.format(price));
+    }
+    let precision = view
+        .instrument
+        .and_then(instrument_price_precision)
+        .map_or_else(|| price_decimals(price), usize::from);
+    Some(DefaultPriceFormatter::with_precision(precision).format(price))
+}
+
 impl Drawing {
     /// The first anchor's price in the chart's price format, else in the instrument's precision,
     /// else by its magnitude; `None` when the price is not finite.
@@ -93,17 +108,7 @@ impl Drawing {
             Some(point) => point.price,
             None => (view.y_to_price)(self.points.first()?.y),
         };
-        if !price.is_finite() {
-            return None;
-        }
-        if let Some(formatter) = view.price_formatter {
-            return Some(formatter.format(price));
-        }
-        let precision = view
-            .instrument
-            .and_then(instrument_price_precision)
-            .map_or_else(|| price_decimals(price), usize::from);
-        Some(DefaultPriceFormatter::with_precision(precision).format(price))
+        price_text(price, view)
     }
 
     /// Renders a price label: the anchor's price in a badge up and to the right of the point, with

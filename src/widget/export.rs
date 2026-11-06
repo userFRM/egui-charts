@@ -602,6 +602,7 @@ impl Chart {
         chart.main_series_visible = self.main_series_visible;
         chart.main_series_present = self.main_series_present;
         chart.main_series_scale = self.main_series_scale;
+        chart.main_series_style = self.main_series_style.clone();
         chart.price_series = self
             .price_series
             .iter()
@@ -698,6 +699,7 @@ impl Chart {
             chart.volume_setting = self.volume_setting;
         }
         chart.primitives = self.primitives.clone();
+        chart.freeze_custom_points(self.replay_time());
         chart.next_primitive = self.next_primitive;
         chart.settle_primitives();
         chart.study_data = self.study_data.snapshot();
@@ -1616,5 +1618,58 @@ mod tests {
             chart.drawings.deselect();
         }
         assert_eq!(decode(&chart, false, false), images[0]);
+    }
+
+    /// An export uses the same scales as the widget, so a main series that reserves 60 and 70
+    /// points keeps them: on the 10% margins of the default scale its high, 20, sits
+    /// 0.1 h + 60 below the top of the plot and its low, 10, 0.1 h + 70 above the bottom.
+    /// The style the host set on the main series is the one the snapshot reports.
+    #[test]
+    fn export_snapshot_keeps_the_main_series_style() {
+        use crate::model::{AutoscaleInfo, AutoscaleMargins, AutoscaleProvider};
+
+        let gaps = |chart: &Chart| {
+            let map = chart.series_price_map(SeriesId::MAIN).unwrap();
+            let (top, bottom) = map.extent();
+            let height = bottom - top;
+            (
+                map.price_to_y(20.0) - top - (0.1 * height + 60.0),
+                bottom - map.price_to_y(10.0) - (0.1 * height + 70.0),
+            )
+        };
+        let ctx = egui::Context::default();
+        let mut chart = crate::widget::test_frames::chart(&[10.0], &[20.0]);
+        let style = chart.series_style_mut(SeriesId::MAIN).unwrap();
+        style.price_line_visible = false;
+        style.autoscale = Some(AutoscaleProvider::with_margins(|_, default| {
+            Some(AutoscaleInfo {
+                price_range: default?,
+                margins: AutoscaleMargins {
+                    top: 60.0,
+                    bottom: 70.0,
+                },
+            })
+        }));
+        for step in 0..2 {
+            crate::widget::test_frames::frame(&ctx, &mut chart, step as f64, vec![]);
+        }
+        let live = gaps(&chart);
+        let mut snapshot = chart.export_snapshot(&ctx, &ImageExportOptions::default());
+        let offscreen = egui::Context::default();
+        for step in 0..2 {
+            crate::widget::test_frames::frame(&offscreen, &mut snapshot, step as f64, vec![]);
+        }
+        let exported = gaps(&snapshot);
+        let hidden = snapshot
+            .series_style(SeriesId::MAIN)
+            .map(|style| style.price_line_visible);
+        assert!(
+            live.0.abs() < 0.01 && live.1.abs() < 0.01,
+            "live view reserves the request: {live:?}"
+        );
+        assert!(
+            exported.0.abs() < 0.01 && exported.1.abs() < 0.01 && hidden == Some(false),
+            "observed gaps {exported:?}, price line visible {hidden:?}"
+        );
     }
 }

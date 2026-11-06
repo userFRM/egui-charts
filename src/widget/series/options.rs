@@ -55,8 +55,8 @@ pub struct SeriesOptions {
     /// (range bars, Renko, Kagi, Line Break, Point and Figure) and TPO profiles are drawn as
     /// [`ChartType::Line`] and read back as such.
     pub chart_type: ChartType,
-    /// Colour of the line, step, marker and area types, the legend and the last-value tag of
-    /// the types drawn from the close.
+    /// Colour of the line, step, marker, area and high-low types, the legend and the last-value
+    /// tag of the types drawn from the close.
     pub color: Color32,
     /// Rising bars of the OHLC and column types, and the baseline type above its base.
     pub up_color: Color32,
@@ -227,6 +227,7 @@ impl SeriesOptions {
                     wick_down: self.down_color,
                     ..Default::default()
                 },
+                hlc_area: crate::model::HlcAreaStyle::with_colors(self.up_color, self.down_color),
                 heikin: crate::model::HeikinStyle {
                     body_up: self.up_color,
                     body_down: self.down_color,
@@ -238,6 +239,12 @@ impl SeriesOptions {
                     ..Default::default()
                 },
                 bars: self.bars_style.clone(),
+                high_low: crate::model::HighLowStyle {
+                    bar_color: self.color,
+                    labels_visible: false,
+                    label_color: self.color,
+                    ..Default::default()
+                },
                 last_price_animation: self.last_price_animation,
                 baseline,
                 crosshair_marker_radius: self.crosshair_marker_radius,

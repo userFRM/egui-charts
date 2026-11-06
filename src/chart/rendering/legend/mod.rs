@@ -99,6 +99,9 @@ pub struct Legend<'a> {
     /// State of the instrument's session at the chart's clock. Only a chart knows its clock, so a
     /// standalone legend shows the data status alone.
     pub(crate) session: Option<MarketSession>,
+    /// Show the replay mark after the title in place of the market status, which describes the
+    /// present rather than the replayed time.
+    pub replaying: bool,
     /// Optional host-owned status marks.
     pub statuses: &'a [LegendStatus<'a>],
     /// Studies on the chart. Overlay studies retain a row while hidden so they can be shown again.
@@ -157,6 +160,7 @@ impl<'a> Legend<'a> {
             show_logo: true,
             show_market_status: true,
             session: None,
+            replaying: false,
             statuses: &[],
             studies: &[],
             study_inputs: &[],
@@ -261,7 +265,10 @@ impl<'a> Legend<'a> {
             let small = FontId::proportional(theme.text.small);
             // The market status pill: the session's state, then delayed or end-of-day data.
             let mut pill: Vec<(StatusGlyph, &'static str, Color32, f32)> = Vec::new();
-            if self.show_market_status {
+            if self.replaying {
+                let ink = theme.ui.accent_text;
+                pill.push((StatusGlyph::Replay(ink), "Replay", theme.ui.accent, 20.0));
+            } else if self.show_market_status {
                 if let Some(session) = self.session {
                     let (label, color) = session_status(session, &theme);
                     pill.push((StatusGlyph::Session(session), label, color, 20.0));
@@ -330,7 +337,10 @@ impl<'a> Legend<'a> {
                     if index < last {
                         (corners.ne, corners.se) = (0, 0);
                     }
-                    painter.rect_filled(rect, corners, fill);
+                    // The replay mark is its own disc.
+                    if !matches!(glyph, StatusGlyph::Replay(_)) {
+                        painter.rect_filled(rect, corners, fill);
+                    }
                     paint_status_glyph(&painter, rect.center(), glyph, color, fill);
                     let name = l10n::text(ui.ctx(), label);
                     let response = ui
@@ -730,12 +740,11 @@ impl<'a> Legend<'a> {
                         );
                     }
                     let study_colors = study.colors();
-                    let names = study.line_names();
                     let precision = study.precision().or_else(|| {
                         (study.value_format() == crate::scales::StudyFormat::Price)
                             .then_some(precision)
                     });
-                    for index in (0..study.line_count()).filter(|index| {
+                    for index in study.legend_lines().into_iter().filter(|index| {
                         self.show_indicator_values
                             && study.is_visible()
                             && study.legend_visible(*index)
@@ -754,15 +763,11 @@ impl<'a> Legend<'a> {
                             "∅".to_owned()
                         };
                         // A fully transparent colour holds no RGB, so it has no opaque form.
-                        let color = study_colors
-                            .get(index)
+                        let color = study
+                            .plot_color(index, self.bar_index)
+                            .or_else(|| study_colors.get(index).copied())
                             .filter(|color| color.a() != 0)
                             .map_or(colors.text, |color| color.to_opaque());
-                        let text = if study.line_count() > 1 {
-                            format!("{}: {text}", names.get(index).map_or("", String::as_str))
-                        } else {
-                            text
-                        };
                         layout.text(text, theme.text.ohlc, color, bounds.width());
                     }
                 }
@@ -887,6 +892,8 @@ impl<'a> Legend<'a> {
 enum StatusGlyph {
     Session(MarketSession),
     Text(Arc<egui::Galley>),
+    /// A rewind mark in this ink on a disc of the segment's colour.
+    Replay(Color32),
 }
 
 /// The tooltip and accessible name of a session state, and the colour of its glyph.
@@ -932,6 +939,15 @@ fn paint_status_glyph(
         }
         StatusGlyph::Text(galley) => {
             painter.galley(center - galley.size() / 2.0, galley, color);
+        }
+        StatusGlyph::Replay(ink) => {
+            painter.circle_filled(center, 8.0, color);
+            for tip in [-4.5, 0.0] {
+                let points = [(tip, 0.0), (tip + 4.5, -3.5), (tip + 4.5, 3.5)]
+                    .map(|(x, y)| center + Vec2::new(x, y))
+                    .to_vec();
+                painter.add(egui::Shape::convex_polygon(points, ink, Stroke::NONE));
+            }
         }
     }
 }
@@ -1480,7 +1496,7 @@ mod layout_tests {
 
     #[cfg(feature = "studies")]
     #[test]
-    fn overlay_values_keep_their_output_names_when_rows_wrap() {
+    fn overlay_values_stay_inside_the_plot_when_rows_wrap() {
         use crate::chart::rendering::Legend;
         use crate::studies::{CustomIndicator, Indicator, IndicatorValue};
         let mut study = CustomIndicator::new("Levels", |_| {
@@ -1521,15 +1537,11 @@ mod layout_tests {
                     }
                 })
                 .collect();
-            for (index, name) in ["Ask levels", "Bid levels", "Total levels"]
-                .iter()
-                .enumerate()
-            {
-                let expected = format!("{name}: {:.2}", (index + 1) as f64);
+            for expected in ["1.00", "2.00", "3.00"] {
                 let text = texts
                     .iter()
                     .find(|text| text.galley.text() == expected)
-                    .expect(&expected);
+                    .expect(expected);
                 assert!(text.pos.x + text.galley.size().x <= width);
             }
             output.drop_without_applying_deltas();

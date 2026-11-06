@@ -4,7 +4,10 @@ use super::{DemoApp, live::LiveFeed};
 use chrono::{DateTime, Utc};
 use egui_charts::data::{MarketEvent, RecordingWriter, ReplayDriver, ReplayEvent};
 use egui_charts::model::{Bar, BarClock, Timeframe};
-use egui_charts::ui::replay::{ReplayAction, ReplayController, ReplayStartAction};
+use egui_charts::ui::floating_replay_control::ReplayControlAction;
+use egui_charts::ui::replay::{
+    ReplayAction, ReplayController, ReplayStartAction, paint_start_line,
+};
 use egui_charts::widget::{ChartLinkGroups, SeriesId};
 use std::collections::VecDeque;
 use std::num::NonZeroU64;
@@ -656,12 +659,27 @@ impl DemoApp {
     pub(super) fn toggle_replay(&mut self) {
         if self.replay.is_some() && self.replay_control.is_user_dismissed() {
             self.replay_control.show_control();
-        } else if self.replay.is_some() {
+        } else if self.replay.is_some() || self.replay_selecting {
             self.stop_replay();
         } else {
-            self.replay_start
-                .open(self.chart.bars(SeriesId::MAIN).first().map(|bar| bar.time));
+            self.select_replay_start();
         }
+    }
+
+    /// Opens the replay bar and waits for a click on a bar, keeping any running replay paused
+    /// until the click restarts it.
+    fn select_replay_start(&mut self) {
+        self.handle_replay_control(ReplayControlAction::Pause);
+        self.replay_selecting = true;
+        self.state.replay_active = true;
+        self.chart.drawings_mut().set_active_tool(None);
+        self.chart.drain_events().for_each(drop);
+        if self.replay.is_none() {
+            self.replay_interval = self.state.timeframe;
+            self.configure_replay_intervals();
+        }
+        self.replay_control.set_symbol(&self.state.symbol);
+        self.replay_control.show_control();
     }
 
     pub(super) fn start_replay(&mut self) {
@@ -675,6 +693,7 @@ impl DemoApp {
         let mut replay = ReplayController::new(self.bars.clone(), Vec::new())
             .with_symbol(self.state.symbol.clone());
         replay.handle_action(ReplayAction::EnterReplayMode);
+        replay.handle_action(ReplayAction::SetSpeed(self.replay_control.state.speed));
         self.replay = Some(replay);
         self.state.replay_active = true;
         self.replay_control.set_symbol(&self.state.symbol);
@@ -728,13 +747,13 @@ impl DemoApp {
             self.replay_slots.clear();
             self.chart.set_feed_paused(false);
             self.live.set_paused(self.live_was_paused);
-            self.state.replay_active = false;
             self.recording_files.opened = false;
-            self.replay_control.hide_control();
             if market {
                 self.refresh_strategy_signals();
             }
         }
+        self.state.replay_active = false;
+        self.replay_control.hide_control();
     }
 
     pub(super) fn push_replay_window_to_chart(&mut self) {
@@ -985,19 +1004,67 @@ impl DemoApp {
     }
 
     pub(super) fn show_replay_start(&mut self, ctx: &egui::Context) {
-        let action = self.replay_start.show(ctx, self.replay_session.is_some());
+        let dialog = self.replay_start.is_open;
+        let action = self.replay_start.show(ctx);
         if action != ReplayStartAction::None {
             ctx.request_repaint();
         }
+        self.apply_replay_start(action);
+        if !self.replay_selecting || dialog {
+            return;
+        }
+        if ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            self.cancel_replay_selection();
+            ctx.request_repaint();
+        } else if !egui::Popup::is_any_open(ctx)
+            && let Some(pointer) = ctx.pointer_hover_pos()
+        {
+            let plot = self.chart.get_rendered_price_rect();
+            let shown = self.chart.state().shown().len();
+            if plot.contains(pointer) && shown > 0 {
+                let map = self.chart.get_chart_mapping();
+                let x = map.idx_to_x(map.x_to_idx(pointer.x).min(shown - 1));
+                let layer = egui::LayerId::new(
+                    egui::Order::Foreground,
+                    egui::Id::NULL.with("replay_start_line"),
+                );
+                paint_start_line(
+                    &ctx.layer_painter(layer).with_clip_rect(plot),
+                    plot,
+                    egui::pos2(x, pointer.y),
+                );
+            }
+        }
+    }
+
+    fn cancel_replay_selection(&mut self) {
+        if self.replay.is_some() {
+            self.replay_selecting = false;
+        } else {
+            self.stop_replay();
+        }
+    }
+
+    /// Carries out a choice of the replay bar's start control or the date dialog. A running replay
+    /// restarts from it, keeping its update interval.
+    pub(super) fn apply_replay_start(&mut self, action: ReplayStartAction) {
         match action {
             ReplayStartAction::None => {}
-            ReplayStartAction::SelectBar => {
-                self.replay_selecting = true;
-                self.chart.drawings_mut().set_active_tool(None);
-                self.chart.drain_events().for_each(drop);
+            ReplayStartAction::SelectBar if self.replay_selecting => {
+                self.cancel_replay_selection();
+            }
+            ReplayStartAction::SelectBar => self.select_replay_start(),
+            ReplayStartAction::SelectDate => {
+                let bars = if self.replay.is_some() {
+                    &self.bars
+                } else {
+                    self.chart.bars(SeriesId::MAIN)
+                };
+                self.replay_start.open(bars.first().map(|bar| bar.time));
             }
             ReplayStartAction::Resume => {
                 if let Some((session, interval)) = self.replay_session.clone() {
+                    self.replay_selecting = false;
                     if session.symbol != self.state.symbol {
                         self.switch_symbol(&session.symbol);
                     }
@@ -1009,6 +1076,7 @@ impl DemoApp {
                         .with_symbol(self.state.symbol.clone());
                     if !replay.restore_session(&session) {
                         self.replay_session = Some((session, interval));
+                        self.cancel_replay_selection();
                         self.notify(
                             "Saved replay needs source history that is no longer available",
                         );
@@ -1022,7 +1090,12 @@ impl DemoApp {
                 }
             }
             choice => {
-                let bars = self.chart.bars(SeriesId::MAIN);
+                // A running replay hides the history after its cursor from the chart.
+                let bars = if self.replay.is_some() {
+                    &self.bars
+                } else {
+                    self.chart.bars(SeriesId::MAIN)
+                };
                 let index = match choice {
                     ReplayStartAction::Date(time) => bars.partition_point(|bar| bar.time < time),
                     ReplayStartAction::Random => {
@@ -1039,26 +1112,6 @@ impl DemoApp {
                 }
                 self.start_replay_at(index);
             }
-        }
-        if self.replay_selecting {
-            let plot = self.chart.get_rendered_price_rect();
-            egui::Area::new(egui::Id::unique("replay_select_bar"))
-                .fixed_pos(plot.min + egui::vec2(12.0, 36.0))
-                .show(ctx, |ui| {
-                    egui::Frame::popup(ui.style()).show(ui, |ui| {
-                        ui.label("Click a bar to start replay");
-                        if egui_charts::ui_kit::buttons::Button::new("Cancel")
-                            .secondary()
-                            .show(ui)
-                            .clicked()
-                            || ctx.input_mut(|input| {
-                                input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
-                            })
-                        {
-                            self.replay_selecting = false;
-                        }
-                    });
-                });
         }
     }
 
@@ -1079,16 +1132,25 @@ impl DemoApp {
             return;
         }
         self.replay_selecting = false;
+        // The click picked a bar, not the series under it.
+        self.chart.clear_selection();
         self.start_replay_at(index);
     }
 
-    /// Starts replay at bar `index` of the main series, as picking that bar does.
+    /// Starts replay at bar `index` of the main series, as picking that bar does, ending a replay
+    /// already running but keeping its update interval.
     pub(crate) fn start_replay_at(&mut self, index: usize) {
+        let interval =
+            (self.replay.is_some() && !self.recording_files.opened).then_some(self.replay_interval);
+        self.stop_replay();
         self.start_replay();
         if let Some(replay) = &mut self.replay {
             replay.handle_action(ReplayAction::JumpToBar(index));
         }
         self.push_replay_window_to_chart();
+        if let Some(interval) = interval {
+            self.set_replay_interval(interval);
+        }
     }
 }
 
