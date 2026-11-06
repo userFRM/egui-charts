@@ -132,8 +132,8 @@ Chart,Chart types,Baseline,unverified,library,src/chart/rendering/candles/mod.rs
 Chart,Chart types,Candlestick chart,unverified,library,src/widget/builder.rs;src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/candle.rs;src/widget/frame/mod.rs;src/widget/series/options.rs;src/widget/series/paint.rs,1859
 Chart,Chart types,Chart type selector,incomplete,library,src/ui/top_toolbar/components/chart_type_selector.rs;src/ui/top_toolbar/toolbar.rs;src/widget/builder.rs,
 Chart,Chart types,Columns,unverified,library,src/model/chart_type.rs;src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/candlestick.rs;src/widget/series/paint.rs,1876
-Chart,Chart types,HLC area,unverified,library,src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/area.rs;src/model/chart_style.rs;src/ui/dialogs/chart_settings/tabs/symbol.rs;src/ui/dialogs/series_settings/tabs/symbol.rs;src/widget/series/options.rs;src/widget/palette.rs,2107
-Chart,Chart types,Heikin Ashi,unverified,library,src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/heikin_ashi.rs;src/chart/rendering/candles/candle.rs;src/widget/frame/mod.rs;src/model/chart_style.rs;src/ui/dialogs/chart_settings/tabs/symbol.rs;src/widget/settings/apply.rs;src/widget/series/options.rs;src/widget/series/scales/mod.rs,2103
+Chart,Chart types,HLC area,unverified,library,src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/area.rs;src/model/chart_style.rs;src/ui/dialogs/chart_settings/tabs/symbol.rs;src/ui/dialogs/series_settings/tabs/symbol.rs;src/widget/series/options.rs;src/widget/palette.rs,
+Chart,Chart types,Heikin Ashi,unverified,library,src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/heikin_ashi.rs;src/model/bar/bar_data.rs;src/chart/rendering/candles/candle.rs;src/widget/frame/mod.rs;src/model/chart_style.rs;src/ui/dialogs/chart_settings/tabs/symbol.rs;src/widget/settings/apply.rs;src/widget/series/options.rs;src/widget/series/scales/mod.rs,2103
 Chart,Chart types,High-low,incomplete,library,src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/range.rs,
 Chart,Chart types,Hollow candles,unverified,library,src/chart/rendering/candles/mod.rs;src/chart/rendering/candles/candlestick.rs;src/chart/rendering/candles/helpers.rs;src/model/chart_style.rs;src/ui/dialogs/chart_settings/tabs/symbol.rs;src/widget/settings/apply.rs;src/widget/series/options.rs;src/widget/series/scales/mod.rs;src/widget/frame/mod.rs,
 Chart,Chart types,Kagi,unverified,library,src/chart/rendering/candles/price_based.rs;src/model/kagi.rs;src/chart/rendering/candles/japanese.rs;src/model/chart_style.rs;src/ui/dialogs/series_settings/tabs/symbol.rs,
@@ -810,16 +810,16 @@ Studies,Strategy tester,Built-in Bollinger Bands strategy,unverified,library,src
 Studies,Strategy tester,Built-in Bollinger Bands strategy Directed,unverified,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/bollinger_bands.rs,
 Studies,Strategy tester,Built-in Consecutive Up/Down strategy,unverified,library,src/strategies/library/price_action.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs,
 Studies,Strategy tester,Built-in gap continuation strategy,unverified,library,src/strategies/library/price_action.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs,
-Studies,Strategy tester,Built-in Keltner Channels strategy,verified,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/keltner.rs,
+Studies,Strategy tester,Built-in Keltner Channels strategy,unverified,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/keltner.rs,
 Studies,Strategy tester,Built-in MACD strategy,incomplete,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/macd.rs,
 Studies,Strategy tester,Built-in Momentum strategy,unverified,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/momentum.rs,
-Studies,Strategy tester,Built-in Parabolic SAR strategy,verified,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/parabolic_sar.rs,
+Studies,Strategy tester,Built-in Parabolic SAR strategy,unverified,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/parabolic_sar.rs,
 Studies,Strategy tester,Built-in Pivot Extension strategy,unverified,library,src/strategies/library/price_action.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs,
 Studies,Strategy tester,Built-in Pivot Reversal strategy,incomplete,library,src/strategies/library/price_action.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs,
 Studies,Strategy tester,Built-in Price Channel strategy,unverified,library,src/strategies/library/price_action.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs,
 Studies,Strategy tester,Built-in RSI strategy,unverified,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/rsi.rs,
 Studies,Strategy tester,Built-in Stochastic Slow strategy,unverified,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/stochastic.rs,
-Studies,Strategy tester,Built-in Supertrend strategy,verified,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/supertrend.rs,
+Studies,Strategy tester,Built-in Supertrend strategy,unverified,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/supertrend.rs,
 Studies,Strategy tester,Built-in Technical Ratings strategy,incomplete,library,src/strategies/library/studies.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs;src/studies/builtin/technical_ratings.rs,
 Studies,Strategy tester,Built-in channel breakout strategy,incomplete,library,src/strategies/library/price_action.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs,
 Studies,Strategy tester,Built-in inside bar strategy,unverified,library,src/strategies/library/price_action.rs;src/strategies/library/mod.rs;src/strategies/backtest.rs,
@@ -832,7 +832,7 @@ Studies,Strategy tester,Commission models,incomplete,library,src/strategies/back
 Studies,Strategy tester,Deep backtesting and bar magnifier,unverified,library,src/strategies/backtest.rs;src/strategies/mod.rs;docs/strategy-report.md;examples/demo/strategy.rs;examples/demo/live.rs;examples/demo/sampledata.rs,1927
 Studies,Strategy tester,Equity curve and drawdown chart,incomplete,library,src/model/strategy.rs;src/ui/strategy_report/mod.rs;src/ui/strategy_report/plot.rs,
 Studies,Strategy tester,Export trades and report,unverified,library,src/model/strategy.rs;src/ui/strategy_report/mod.rs;terminal/src/trading.rs;Cargo.toml,1963
-Studies,Strategy tester,Limit and stop orders,verified,library,src/strategies/backtest.rs;src/strategies/mod.rs;src/model/trading.rs,
+Studies,Strategy tester,Limit and stop orders,unverified,library,src/strategies/backtest.rs;src/strategies/mod.rs;src/model/trading.rs,
 Studies,Strategy tester,List of trades,unverified,library,src/model/strategy.rs;src/ui/strategy_report/mod.rs,
 Studies,Strategy tester,"Long and short positions, margin and leverage",incomplete,library,src/strategies/backtest.rs;src/ui/strategy_report/properties.rs;docs/strategy-report.md,2059
 Studies,Strategy tester,Order fill model,incomplete,library,src/strategies/backtest.rs;src/strategies/live.rs;src/strategies/mod.rs;src/model/trading.rs;src/ui/strategy_report/properties.rs;docs/strategy-report.md,2059
