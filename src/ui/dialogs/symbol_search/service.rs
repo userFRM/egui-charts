@@ -25,7 +25,7 @@ pub(super) struct Recent {
 impl Recent {
     fn symbol(&self) -> Instrument {
         let mut symbol = Instrument::new(&self.name).with_description(&self.description);
-        symbol.exchange = Some(self.exchange.clone());
+        symbol.exchange = (!self.exchange.is_empty()).then(|| self.exchange.clone());
         symbol.symbol_type = self.kind;
         symbol.logo = self.logo.clone();
         symbol.exchange_logo = self.exchange_logo.clone();

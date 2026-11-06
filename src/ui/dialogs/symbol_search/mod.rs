@@ -1751,4 +1751,54 @@ mod tests {
             "listed {names:?}"
         );
     }
+
+    /// A recent symbol whose host gave no exchange is labelled with its provider alone, as the
+    /// same instrument is when the service returns it.
+    #[test]
+    fn recent_symbol_without_an_exchange_shows_its_provider_alone() {
+        let ctx = Context::default();
+        let symbol = Instrument::new("BINANCE:BTCUSDT").with_source("Provider");
+        let mut dialog = SymbolSearchDialog::new();
+        dialog.set_search_service(Some(Arc::new(vec![symbol.clone()])));
+        let labels = |dialog: &mut SymbolSearchDialog| {
+            let mut texts = Vec::new();
+            for _ in 0..3 {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            Pos2::ZERO,
+                            Vec2::new(1440.0, 900.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let _ = dialog.show(ui.ctx(), &[]);
+                    },
+                );
+                texts = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text().contains("Provider") => {
+                            Some(text.galley.text().to_owned())
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                output.drop_without_applying_deltas();
+            }
+            texts
+        };
+        dialog.open_with_query("btc".into());
+        let found = labels(&mut dialog);
+        dialog.record_symbol(&symbol);
+        dialog.open();
+        let recent = labels(&mut dialog);
+        let observed = (found, recent);
+        assert_eq!(
+            observed,
+            (vec!["Provider".to_owned()], vec!["Provider".to_owned()]),
+            "found and recent labels {observed:?}"
+        );
+    }
 }
