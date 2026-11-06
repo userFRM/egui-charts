@@ -406,6 +406,10 @@ impl StudySettingsSnapshot {
             study.apply_settings(&inputs, self.settings.clone())?;
         }
         study.set_colors(self.colors.clone());
+        // A palette recolours the bands of a wrapped study, and the saved band styles win.
+        if study.settings().fills != self.settings.fills {
+            study.apply_settings(&[], self.settings.clone())?;
+        }
         study.set_visible(self.visible);
         if let Some(overlay) = self.overlay {
             study.set_overlay(overlay);
@@ -929,6 +933,10 @@ impl Indicator for ConfiguredStudy {
             for (variant, declared) in variants.iter_mut().zip(self.study.plot_variants(line)) {
                 variant.color = declared.color;
             }
+        }
+        for (style, declared) in self.settings.fills.iter_mut().zip(self.study.fills()) {
+            style.color = declared.color;
+            style.inverted_color = declared.inverted_color;
         }
     }
     fn set_color(&mut self, line: usize, color: Color32) {
@@ -2014,5 +2022,41 @@ mod tests {
         adx.apply_settings(&[("threshold".into(), InputValue::Length(25))], settings)
             .unwrap();
         assert_eq!(values(&adx), [25.0]);
+    }
+
+    /// A palette set on a chart study recolours its band, as it recolours its plots.
+    #[test]
+    fn set_colors_recolours_the_band() {
+        let band = Color32::from_rgba_unmultiplied(1, 2, 3, 40);
+        let palette = vec![Color32::RED, Color32::GREEN, Color32::BLUE, band];
+        let mut own = BollingerBands::default();
+        own.set_colors(palette.clone());
+        // Bollinger Bands fill the band in the fourth palette colour.
+        assert_eq!(own.fills()[0].color, band);
+        let mut study = ConfiguredStudy::new(Box::new(BollingerBands::default()));
+        study.set_colors(palette);
+        assert_eq!(study.plot_style(0).color, Color32::RED);
+        assert_eq!(study.fills()[0].color, band);
+
+        // A hidden band stays hidden through a palette, and a template keeps its colour.
+        let mut settings = study.settings();
+        settings.fills[0].visible = false;
+        study.apply_settings(&[], settings).unwrap();
+        study.set_colors(vec![Color32::RED, Color32::GREEN, Color32::BLUE, band]);
+        assert!(study.fills().is_empty());
+        let restored = crate::studies::StudyTemplate::from_study(&study)
+            .create()
+            .unwrap();
+        assert_eq!(restored.settings().fills[0].color, band);
+        assert!(restored.fills().is_empty());
+
+        // Restoring a snapshot through the trait reapplies the palette after the saved styles,
+        // which keep a band colour of their own.
+        let own = Color32::from_rgba_unmultiplied(9, 8, 7, 60);
+        let mut settings = study.settings();
+        settings.fills[0] = FillStyle::new(own);
+        study.apply_settings(&[], settings).unwrap();
+        study.snapshot_settings().restore(&mut study).unwrap();
+        assert_eq!(study.fills()[0].color, own);
     }
 }
