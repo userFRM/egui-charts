@@ -9,6 +9,7 @@ use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::dialogs::drawing_properties::actions::DrawingProps;
 use crate::ui_kit::buttons::ButtonSize;
+use crate::ui_kit::color_picker::keep_opacity;
 use crate::ui_kit::ext::UiExt;
 use crate::ui_kit::{ColorPicker, ColorPickerState, FormGrid};
 
@@ -201,18 +202,6 @@ impl StyleTab {
             }
         });
     }
-}
-
-/// `picked`, at the opacity of `current` unless the custom editor set it or `current` is invisible:
-/// palette swatches are opaque, and a highlighter or fill stays translucent when recoloured.
-fn keep_opacity(picked: Color32, current: Color32, custom: bool) -> Color32 {
-    let [r, g, b, a] = picked.to_srgba_unmultiplied();
-    let a = if custom || current.a() == 0 {
-        a
-    } else {
-        current.a()
-    };
-    Color32::from_rgba_unmultiplied(r, g, b, a)
 }
 
 /// Kit colour swatch for `color`; returns the colour picked this frame.

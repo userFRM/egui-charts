@@ -9,6 +9,7 @@ use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::context_menu::drawing::{DrawingContextMenu, DrawingContextMenuAction};
 use crate::ui_kit::buttons::{ButtonSize, IconButton};
+use crate::ui_kit::color_picker::keep_opacity;
 use crate::ui_kit::ext::UiExt;
 use crate::ui_kit::{ColorPicker, ColorPickerState};
 use crate::widget::Chart;
@@ -339,17 +340,12 @@ impl FloatingSelectionToolbar {
                                         picked
                                             .response
                                             .on_hover_text(l10n::text(ui.ctx(), slot.label));
-                                        if let Some(mut color) = picked.inner {
-                                            if !custom && !picker.custom_mode && slot.color.a() > 0
-                                            {
-                                                let [r, g, b, _] = color.to_srgba_unmultiplied();
-                                                color = Color32::from_rgba_unmultiplied(
-                                                    r,
-                                                    g,
-                                                    b,
-                                                    slot.color.a(),
-                                                );
-                                            }
+                                        if let Some(color) = picked.inner {
+                                            let color = keep_opacity(
+                                                color,
+                                                slot.color,
+                                                custom || picker.custom_mode,
+                                            );
                                             if color != slot.color {
                                                 slot.color = color;
                                                 action = Some(FloatingToolbarAction::ChangeColor(
