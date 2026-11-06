@@ -2188,11 +2188,12 @@ mod tests {
 
     #[test]
     fn trigger_time_of_a_mixed_interval_message_is_the_firing_time() {
-        // The one-minute study rises through 100 while the five-minute bar stays as it was.
+        // The one-minute study rises through 100 while the five-minute bar stays as it was. The
+        // other placeholders read the first condition's interval and bar, not the firing one.
         let host = Host::new(vec![
             serde_json::from_value(serde_json::json!({
                 "symbol":"SYM", "timeframe":"Min5", "condition":{"Above":50.0},
-                "message":"{{trigger_time}}", "frequency":"OncePerBar",
+                "message":"{{trigger_time}} {{interval}} {{close}}", "frequency":"OncePerBar",
                 "additional_timeframes":["Min1"],
                 "additional_conditions":[{
                     "source":{"Study":{"id":"s","output":0}}, "condition":{"Above":100.0}
@@ -2205,7 +2206,7 @@ mod tests {
             BarClock::new(Timeframe::Min5),
             BarClock::new(Timeframe::Min1),
         );
-        let (slow, fast) = ([bar(0, 99.0, 10.0)], [bar(2, 99.0, 5.0)]);
+        let (slow, fast) = ([bar(0, 99.0, 10.0)], [bar(2, 98.0, 5.0)]);
         for (now, study) in [(150, 99.0), (170, 101.0)] {
             host.engine.update_matching(
                 None,
@@ -2225,7 +2226,7 @@ mod tests {
             .collect();
         assert_eq!(
             fired,
-            [(time(170), "1970-01-01T00:02:50+00:00".to_owned())],
+            [(time(170), "1970-01-01T00:02:50+00:00 5min 99".to_owned())],
             "the alert fires at 00:02:50"
         );
     }
