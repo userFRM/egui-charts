@@ -3885,15 +3885,19 @@ mod tests {
         frames(&mut layout, &mut charts);
         assert_eq!(state(&charts), opened, "supplied charts");
 
+        #[cfg(feature = "ui")]
         let saved = charts[0].snapshot().unwrap();
         charts[0].set_symbol("TSLA");
         frames(&mut layout, &mut charts);
         assert_eq!(charts[1].symbol(), "TSLA", "the next change is sent");
-        charts[1].set_symbol("MSFT");
-        frames(&mut layout, &mut charts);
-        charts[0].restore(&saved).unwrap();
-        frames(&mut layout, &mut charts);
-        assert_eq!(state(&charts), opened, "a restored chart");
+        #[cfg(feature = "ui")]
+        {
+            charts[1].set_symbol("MSFT");
+            frames(&mut layout, &mut charts);
+            charts[0].restore(&saved).unwrap();
+            frames(&mut layout, &mut charts);
+            assert_eq!(state(&charts), opened, "a restored chart");
+        }
     }
 
     /// Four charts on a 1536 x 864 screen are 768 points wide. Beside the 70 point price axis
