@@ -3000,7 +3000,11 @@ fn secondary_pane_scale_follows_price_axis_visibility() {
         let sides: Vec<_> = painted
             .iter()
             .filter_map(|shape| match shape {
-                egui::Shape::Text(text) if text.galley.text().starts_with("pane:") => {
+                // The labels beside the plot, not the pane legend's value inside it.
+                egui::Shape::Text(text)
+                    if text.galley.text().starts_with("pane:")
+                        && !(plot.left()..=plot.right()).contains(&text.pos.x) =>
+                {
                     Some(text.pos.x < plot.left())
                 }
                 _ => None,

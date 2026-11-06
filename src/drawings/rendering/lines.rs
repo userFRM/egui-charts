@@ -8,7 +8,7 @@ use crate::drawings::domain::Drawing;
 use crate::styles::{stroke, typography};
 use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
-use egui::{Align2, Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
+use egui::{Align, Align2, Color32, Pos2, Rect, Stroke, epaint::StrokeKind};
 
 impl Drawing {
     /// Draws the straight segment from `a` to `b` in the drawing's line style.
@@ -22,9 +22,15 @@ impl Drawing {
     }
 
     /// The drawing's text laid out in its colour and font, or `None` when it has no visible text.
-    fn text_galley(&self, painter: &egui::Painter) -> Option<std::sync::Arc<egui::Galley>> {
+    pub(super) fn text_galley(
+        &self,
+        painter: &egui::Painter,
+    ) -> Option<std::sync::Arc<egui::Galley>> {
         let text = self.text.as_deref().filter(|t| !t.trim().is_empty())?;
-        Some(painter.layout_no_wrap(text.to_owned(), self.annotation_font(), self.color32()))
+        let color = self.text_color.map_or(self.color32(), |[r, g, b, a]| {
+            Color32::from_rgba_unmultiplied(r, g, b, a)
+        });
+        Some(self.annotation_galley(painter, text.to_owned(), color))
     }
 
     /// Paints the drawing's text along the segment from `a` to `b`, centred on its midpoint and
@@ -32,6 +38,19 @@ impl Drawing {
     /// to top. The text clears a line of the drawing's width on its top side when `above`, else on
     /// its bottom side. Nothing without text or with a non-finite end.
     pub(super) fn render_line_text(&self, painter: &egui::Painter, a: Pos2, b: Pos2, above: bool) {
+        let anchor = if above {
+            Align2::CENTER_BOTTOM
+        } else {
+            Align2::CENTER_TOP
+        };
+        self.render_aligned_line_text(painter, a, b, anchor);
+    }
+
+    /// Paints the drawing's text as [`Self::render_line_text`] does, with the point of the text
+    /// that `anchor` names on the segment: its left, middle or right at the end of the segment
+    /// that reads first, the middle or the end that reads last, and its top below the line, its
+    /// middle on the line or its bottom above the line.
+    fn render_aligned_line_text(&self, painter: &egui::Painter, a: Pos2, b: Pos2, anchor: Align2) {
         let Some(galley) = self.text_galley(painter) else {
             return;
         };
@@ -42,12 +61,22 @@ impl Drawing {
         // The side the text's top faces once it is turned by `angle`.
         let up = egui::vec2(angle.sin(), -angle.cos());
         let gap = self.stroke_width.max(0.0) / 2.0 + DESIGN_TOKENS.spacing.sm;
-        let (side, anchor) = if above {
-            (1.0, Align2::CENTER_BOTTOM)
+        let (first, last) = if (b - a).dot(egui::Vec2::angled(angle)) >= 0.0 {
+            (a, b)
         } else {
-            (-1.0, Align2::CENTER_TOP)
+            (b, a)
         };
-        let target = a.lerp(b, 0.5) + up * gap * side;
+        let along = match anchor.x() {
+            Align::Min => first,
+            Align::Center => a.lerp(b, 0.5),
+            Align::Max => last,
+        };
+        let side = match anchor.y() {
+            Align::Min => -gap,
+            Align::Center => 0.0,
+            Align::Max => gap,
+        };
+        let target = along + up * side;
         let offset = anchor.pos_in_rect(&galley.rect).to_vec2();
         painter.add(
             egui::epaint::TextShape::new(target - offset, galley, self.color32())
@@ -67,33 +96,38 @@ impl Drawing {
         }
     }
 
-    /// Ends from left to right, extended to the pane edges as configured; `None` below two
-    /// anchors. Vertical rays extend in anchor order, vertical extended lines top to bottom.
+    /// Ends from left to right, or in anchor order on a vertical line, extended to the pane edges
+    /// as configured; `None` below two anchors. An info line extends left past its first anchor
+    /// and right past its second, whichever way it was drawn, as vertical rays do; vertical
+    /// extended lines count from the top; other lines extend towards the pane's sides.
     pub(crate) fn trend_line_ends(&self, rect: Rect) -> Option<(Pos2, Pos2)> {
+        use crate::drawings::DrawingToolType as T;
         let &[a, b, ..] = self.points.as_slice() else {
             return None;
         };
-        if a.x == b.x {
-            use crate::drawings::DrawingToolType as T;
-            if matches!(self.tool_type, T::Ray | T::ExtendedLine) {
-                let (start, end) = if self.tool_type == T::ExtendedLine && b.y < a.y {
-                    (b, a)
-                } else {
-                    (a, b)
-                };
-                return Some((
-                    if self.extend_left {
-                        ray_end(end, start, rect)
-                    } else {
-                        start
-                    },
-                    if self.extend_right {
-                        ray_end(start, end, rect)
-                    } else {
-                        end
-                    },
-                ));
-            }
+        if self.tool_type == T::InfoLine
+            || (a.x == b.x && matches!(self.tool_type, T::Ray | T::ExtendedLine))
+        {
+            let (start, end) = if self.tool_type == T::ExtendedLine && b.y < a.y {
+                (b, a)
+            } else {
+                (a, b)
+            };
+            let first = if self.extend_left {
+                ray_end(end, start, rect)
+            } else {
+                start
+            };
+            let second = if self.extend_right {
+                ray_end(start, end, rect)
+            } else {
+                end
+            };
+            return Some(if start.x <= end.x {
+                (first, second)
+            } else {
+                (second, first)
+            });
         }
         let (mut left, mut right) = if a.x <= b.x { (a, b) } else { (b, a) };
         let slope = (right.y - left.y) / (right.x - left.x);
@@ -108,6 +142,24 @@ impl Drawing {
         Some((left, right))
     }
 
+    /// The point of its custom text that a line tool's alignment settings put on the line.
+    fn line_text_anchor(&self) -> Align2 {
+        use crate::drawings::{LineTextHorizontalAlign as H, LineTextVerticalAlign as V};
+        let settings = self.line_measurements;
+        Align2([
+            match settings.text_horizontal_align {
+                H::Left => Align::Min,
+                H::Center => Align::Center,
+                H::Right => Align::Max,
+            },
+            match settings.text_vertical_align {
+                V::Top => Align::Min,
+                V::Middle => Align::Center,
+                V::Bottom => Align::Max,
+            },
+        ])
+    }
+
     /// Render trend line - a line between two points, extended to the left or right edge of
     /// `rect` when the drawing asks for it
     pub(crate) fn render_trend_line(
@@ -120,7 +172,7 @@ impl Drawing {
         if let Some((left, right)) = self.trend_line_ends(rect) {
             self.styled_segment(painter, left, right, stroke);
             if let &[a, b, ..] = self.points.as_slice() {
-                self.render_line_text(painter, a, b, true);
+                self.render_aligned_line_text(painter, a, b, self.line_text_anchor());
             }
         } else if self.points.len() == 1 {
             painter.circle_filled(self.points[0], DESIGN_TOKENS.rounding.sm, color);
@@ -1016,6 +1068,91 @@ mod tests {
             output.drop_without_applying_deltas();
             assert_eq!(labels, vec![theme.chart.axis_text; 2]);
             assert_eq!(fills, 2);
+        }
+    }
+
+    /// An info line extends left past its first anchor and right past its second, in either
+    /// drawing order and on a vertical line, and selection follows the painted extension.
+    #[test]
+    fn info_line_extends_past_the_anchor_named_in_paint_and_hit_testing() {
+        use crate::drawings::services::DrawingInteraction;
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(1000.0, 600.0));
+        let (low, high) = (Pos2::new(400.0, 100.0), Pos2::new(500.0, 200.0));
+        let (top, bottom) = (Pos2::new(300.0, 100.0), Pos2::new(300.0, 400.0));
+        // With slope 1 the line through `low` and `high` meets x = 1000 at y = 700 and x = 0 at
+        // y = -300.
+        let (right_edge, left_edge) = (Pos2::new(1000.0, 700.0), Pos2::new(0.0, -300.0));
+        let cases = [
+            // (first, second, left, right, ends left to right, on the line, off it)
+            (
+                low,
+                high,
+                false,
+                true,
+                (low, right_edge),
+                (700.0, 400.0),
+                (300.0, 0.0),
+            ),
+            (
+                low,
+                high,
+                true,
+                false,
+                (left_edge, high),
+                (300.0, 0.0),
+                (700.0, 400.0),
+            ),
+            (
+                high,
+                low,
+                false,
+                true,
+                (left_edge, high),
+                (300.0, 0.0),
+                (700.0, 400.0),
+            ),
+            (
+                high,
+                low,
+                true,
+                false,
+                (low, right_edge),
+                (700.0, 400.0),
+                (300.0, 0.0),
+            ),
+            (
+                top,
+                bottom,
+                false,
+                true,
+                (top, Pos2::new(300.0, 600.0)),
+                (300.0, 500.0),
+                (300.0, 50.0),
+            ),
+            (
+                bottom,
+                top,
+                false,
+                true,
+                (bottom, Pos2::new(300.0, 0.0)),
+                (300.0, 50.0),
+                (300.0, 500.0),
+            ),
+        ];
+        for (first, second, left, right, want, on, off) in cases {
+            let mut drawing = Drawing::new(1, crate::drawings::DrawingToolType::InfoLine);
+            drawing.points = vec![first, second];
+            (drawing.extend_left, drawing.extend_right) = (left, right);
+            assert_eq!(drawing.trend_line_ends(rect), Some(want));
+            let hit = |(x, y)| {
+                DrawingInteraction::new().hit_test(
+                    Pos2::new(x, y),
+                    std::slice::from_ref(&drawing),
+                    "1D",
+                )
+            };
+            assert_eq!(hit(on), Some(1), "{first:?} {second:?}");
+            assert_eq!(hit(off), None, "{first:?} {second:?}");
         }
     }
 

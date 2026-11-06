@@ -27,14 +27,24 @@ pub(super) fn index_at_time(
     time: DateTime<Utc>,
     direction: MismatchDirection,
 ) -> Option<usize> {
-    let at = bars.partition_point(|bar| bar.time < time);
-    if bars.get(at).is_some_and(|bar| bar.time == time) {
+    index_of_key(bars, |bar| bar.time, time, direction)
+}
+
+/// [`index_at_time`] over any items in time order.
+pub(super) fn index_of_key<T>(
+    items: &[T],
+    key: impl Fn(&T) -> DateTime<Utc>,
+    time: DateTime<Utc>,
+    direction: MismatchDirection,
+) -> Option<usize> {
+    let at = items.partition_point(|item| key(item) < time);
+    if items.get(at).is_some_and(|item| key(item) == time) {
         return Some(at);
     }
     match direction {
         MismatchDirection::Exact => None,
         MismatchDirection::NearestLeft => at.checked_sub(1),
-        MismatchDirection::NearestRight => (at < bars.len()).then_some(at),
+        MismatchDirection::NearestRight => (at < items.len()).then_some(at),
     }
 }
 
@@ -53,10 +63,12 @@ pub enum MismatchDirection {
 }
 
 /// The bars of a series inside a range of logical indices, from
-/// [`Chart::bars_in_logical_range`].
+/// [`Chart::bars_in_logical_range`], or the points of a custom series, from
+/// [`Chart::custom_points_in_logical_range`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct BarsInRange {
-    /// Indices into [`Chart::bars`] of the bars inside the range, empty when none is.
+    /// Indices into [`Chart::bars`] or [`Chart::custom_points`] of the items inside the range,
+    /// empty when none is.
     pub bars: std::ops::Range<usize>,
     /// The logical distance from the series' first bar to the first selected bar. If no bars
     /// are selected, or the series' first bar is selected, measured to the unrounded left
@@ -441,18 +453,29 @@ impl Chart {
         index: f64,
         direction: MismatchDirection,
     ) -> Option<&Bar> {
+        let bars = self.bars(series);
+        bars.get(self.key_at_index(bars, |bar| bar.time, index, direction)?)
+    }
+
+    /// The position in `items`, in time order, at a logical position on the shared scale.
+    pub(super) fn key_at_index<T>(
+        &self,
+        items: &[T],
+        key: impl Fn(&T) -> DateTime<Utc>,
+        index: f64,
+        direction: MismatchDirection,
+    ) -> Option<usize> {
         if !index.is_finite() {
             return None;
         }
         self.state.shown().first()?;
-        let bars = self.bars(series);
         if let Some(time) = self.index_to_time(index) {
-            return bars.get(self.bar_index_at(series, time, direction)?);
+            return index_of_key(items, key, time, direction);
         }
         // Extrapolation beyond the timestamp domain still has a neighbour on one side.
         match direction {
-            MismatchDirection::NearestLeft if index > 0.0 => bars.last(),
-            MismatchDirection::NearestRight if index < 0.0 => bars.first(),
+            MismatchDirection::NearestLeft if index > 0.0 => items.len().checked_sub(1),
+            MismatchDirection::NearestRight if index < 0.0 => (!items.is_empty()).then_some(0),
             _ => None,
         }
     }
@@ -471,23 +494,32 @@ impl Chart {
         series: SeriesId,
         range: LogicalRange,
     ) -> Option<BarsInRange> {
-        let bars = self.bars(series);
+        self.keys_in_logical_range(self.bars(series), |bar| bar.time, range)
+    }
+
+    /// [`bars_in_logical_range`](Self::bars_in_logical_range) over any items in time order.
+    pub(super) fn keys_in_logical_range<T>(
+        &self,
+        items: &[T],
+        key: impl Fn(&T) -> DateTime<Utc>,
+        range: LogicalRange,
+    ) -> Option<BarsInRange> {
         let shown = self.state.shown();
-        let (first, last) = (bars.first()?, bars.last()?);
-        let index = |bar: &Bar| crate::model::index_at(shown, bar.time).unwrap_or(f64::NAN);
+        let (first, last) = (items.first()?, items.last()?);
+        let index = |item: &T| crate::model::index_at(shown, key(item)).unwrap_or(f64::NAN);
         let (left, right) = (f64::from(range.left), f64::from(range.right));
         shown.first()?;
-        let start = bars.partition_point(|bar| index(bar) < left.round());
-        let end = bars
-            .partition_point(|bar| index(bar) <= right.round())
+        let start = items.partition_point(|item| index(item) < left.round());
+        let end = items
+            .partition_point(|item| index(item) <= right.round())
             .max(start);
         let from = if start > 0 && start < end {
-            index(&bars[start])
+            index(&items[start])
         } else {
             left
         };
-        let to = if end < bars.len() && start < end {
-            index(&bars[end - 1])
+        let to = if end < items.len() && start < end {
+            index(&items[end - 1])
         } else {
             right
         };
@@ -634,7 +666,8 @@ impl Chart {
     }
 
     /// What the chart knows about the feed of `series`, such as the bars dropped as invalid.
-    /// `Some` for every present bar series.
+    /// `Some` for every present bar series and custom data series, whose invalid points count
+    /// as `rejected_bars`.
     pub fn feed_state(&self, series: SeriesId) -> Option<&FeedState> {
         if series == SeriesId::MAIN && self.main_series_present {
             Some(&self.feed)
@@ -643,6 +676,7 @@ impl Chart {
                 .iter()
                 .find(|item| item.id == series)
                 .map(|item| &item.feed)
+                .or_else(|| self.custom_feed_state(series))
         }
     }
 
