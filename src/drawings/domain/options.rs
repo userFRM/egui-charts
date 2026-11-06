@@ -797,8 +797,8 @@ pub enum LineTextVerticalAlign {
 }
 
 /// Independent readouts of a trend line, ray, extended line, info line or trend angle, and the
-/// placement of a line's text. Readouts start hidden except on an info line, see [`Self::for_tool`]; saves from
-/// before these settings read the same way.
+/// placement of a line's text. Readouts start hidden except on an info line, see
+/// [`Self::for_tool`]; saves from before these settings read the same way.
 /// Price changes follow anchor order; lengths and elapsed time are unsigned.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
