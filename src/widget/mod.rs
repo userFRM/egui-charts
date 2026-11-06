@@ -760,18 +760,10 @@ impl Chart {
         {
             *body_up = settings.bullish_color;
             *body_down = settings.bearish_color;
-            *border_up = settings
-                .bullish_border_color
-                .unwrap_or(settings.bullish_color);
-            *border_down = settings
-                .bearish_border_color
-                .unwrap_or(settings.bearish_color);
-            *wick_up = settings
-                .bullish_wick_color
-                .unwrap_or(settings.bullish_color);
-            *wick_down = settings
-                .bearish_wick_color
-                .unwrap_or(settings.bearish_color);
+            *border_up = settings.effective_bullish_border();
+            *border_down = settings.effective_bearish_border();
+            *wick_up = settings.effective_bullish_wick();
+            *wick_down = settings.effective_bearish_wick();
         } else {
             self.config.bullish_color = settings.bullish_color;
             self.config.bearish_color = settings.bearish_color;
