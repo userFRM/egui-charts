@@ -1704,4 +1704,101 @@ mod tests {
             output.drop_without_applying_deltas();
         }
     }
+
+    /// The comparison chooser lists a local catalog flat, so a contract the text names must not
+    /// follow other contracts of its root that do not match the text.
+    #[test]
+    fn compare_lists_a_typed_contract_before_the_rest_of_its_root() {
+        let contract = |name: &str, description: &str| {
+            Instrument::new(name)
+                .with_description(description)
+                .with_root("ES")
+                .with_exchange("CME")
+                .with_symbol_type(SymbolType::Futures)
+        };
+        let symbols = vec![
+            contract("ES1!", "E-mini S&P 500 continuous"),
+            contract("ESH2027", "E-mini S&P 500 March 2027"),
+            contract("ESZ2026", "E-mini S&P 500 December 2026"),
+        ];
+        let ctx = Context::default();
+        let mut compare = CompareSymbolsDialog::new();
+        // Lowercase, so the search field's own text is not taken for a listed symbol.
+        compare.search_query = "esz2026".into();
+        let config = compare.config.resolved(&ctx.global_style().visuals);
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            compare.draw_content(ui, &symbols, &config);
+        });
+        let names: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text)
+                    if symbols
+                        .iter()
+                        .any(|symbol| symbol.symbol == text.galley.text()) =>
+                {
+                    Some(text.galley.text().to_owned())
+                }
+                _ => None,
+            })
+            .collect();
+        output.textures_delta.clear();
+        output.drop_without_applying_deltas();
+        assert_eq!(
+            names.first().map(String::as_str),
+            Some("ESZ2026"),
+            "listed {names:?}"
+        );
+    }
+
+    /// A recent symbol whose host gave no exchange is labelled with its provider alone, as the
+    /// same instrument is when the service returns it.
+    #[test]
+    fn recent_symbol_without_an_exchange_shows_its_provider_alone() {
+        let ctx = Context::default();
+        let symbol = Instrument::new("BINANCE:BTCUSDT").with_source("Provider");
+        let mut dialog = SymbolSearchDialog::new();
+        dialog.set_search_service(Some(Arc::new(vec![symbol.clone()])));
+        let labels = |dialog: &mut SymbolSearchDialog| {
+            let mut texts = Vec::new();
+            for _ in 0..3 {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            Pos2::ZERO,
+                            Vec2::new(1440.0, 900.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let _ = dialog.show(ui.ctx(), &[]);
+                    },
+                );
+                texts = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text().contains("Provider") => {
+                            Some(text.galley.text().to_owned())
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                output.drop_without_applying_deltas();
+            }
+            texts
+        };
+        dialog.open_with_query("btc".into());
+        let found = labels(&mut dialog);
+        dialog.record_symbol(&symbol);
+        dialog.open();
+        let recent = labels(&mut dialog);
+        let observed = (found, recent);
+        assert_eq!(
+            observed,
+            (vec!["Provider".to_owned()], vec!["Provider".to_owned()]),
+            "found and recent labels {observed:?}"
+        );
+    }
 }

@@ -387,11 +387,10 @@ impl CompareSymbolsDialog {
                 let listed: Vec<_> = if self.search.connected() {
                     symbols.iter().collect()
                 } else {
-                    crate::services::SymbolQuery::new(&self.search_query)
-                        .ranked(symbols)
-                        .into_iter()
-                        .map(|(_, symbol)| symbol)
-                        .collect()
+                    let mut ranked =
+                        crate::services::SymbolQuery::new(&self.search_query).ranked(symbols);
+                    ranked.sort_by_key(|&(rank, _)| rank);
+                    ranked.into_iter().map(|(_, symbol)| symbol).collect()
                 };
                 for symbol in listed {
                     next_page |= ui.clip_rect().contains(ui.cursor().min)

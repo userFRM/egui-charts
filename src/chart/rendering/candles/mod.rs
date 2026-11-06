@@ -140,6 +140,7 @@ pub fn render_chart_type(
                 ctx.price_scale,
                 ctx.colors,
                 ctx.visible_data,
+                ctx.full_data,
                 ctx.start_idx,
                 params.bar_width(),
                 params.wick_width(),
@@ -288,6 +289,7 @@ pub fn render_chart_type(
                 params.bullish_color(),
                 params.bearish_color(),
                 params.type_params.columns_base,
+                params.type_params.styles.columns.price_source,
             );
         }
         ChartType::Baseline => {
@@ -321,10 +323,10 @@ pub fn render_chart_type(
                 params.max_volume(),
                 ctx.colors,
                 ctx.price_scale,
+                ctx.price_formatter,
                 params.chart_rect_min_x(),
                 &idx_to_coord,
-                params.bullish_color(),
-                params.bearish_color(),
+                &params.type_params.styles.high_low,
             );
         }
         ChartType::Range => {

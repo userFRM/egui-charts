@@ -585,7 +585,13 @@ impl Chart {
     /// The main series' last-value colour for `bar`: the price line colour, the bar's own
     /// colour, or its direction.
     pub(in crate::widget) fn main_value_color(&self, bar: &Bar) -> Color32 {
-        let (up, down) = self.main_body_colors();
+        let (up, down) = match self.chart_type {
+            ChartType::HighLow => {
+                let color = self.chart_type_params.styles.high_low.bar_color;
+                (color, color)
+            }
+            _ => self.main_body_colors(),
+        };
         self.main_series_style
             .price_line_color
             .or_else(|| bar.colors.as_ref().and_then(|own| own.color))
@@ -758,8 +764,8 @@ impl Chart {
     }
 
     /// Fits provider margins and marker extents together in screen space. Without provider
-    /// margins, retains the ordinary marker fit. Manual ranges and panes too short for the
-    /// requested space keep their range.
+    /// margins, or in a pane too short for them, retains the ordinary marker fit. Manual ranges
+    /// keep their range.
     pub(in crate::widget) fn fit_marker_bounds(
         scale: &mut PriceScale,
         rect: Rect,
@@ -769,6 +775,7 @@ impl Chart {
         if scale.is_manual() || rect.height() <= 0.0 {
             return;
         }
+        let bounds: Vec<_> = bounds.into_iter().collect();
         if margins != AutoscaleMargins::default() {
             let options = scale.options().scale_margins;
             let (mut top, mut bottom) =
@@ -787,31 +794,31 @@ impl Chart {
                 top * height + f64::from(margins.top),
                 bottom * height + f64::from(margins.bottom),
             );
-            for (anchor, above, below) in bounds {
+            for &(anchor, above, below) in &bounds {
                 low = low.min(anchor);
                 high = high.max(anchor);
                 top = top.max(f64::from(above));
                 bottom = bottom.max(f64::from(below));
             }
-            if top + bottom >= height {
+            if top + bottom < height {
+                if low == high {
+                    let half = scale.min_span() * 0.5;
+                    low -= half;
+                    high += half;
+                }
+                // Fit once with both requests, so fitting one edge cannot consume the other's
+                // space.
+                if scale.options().invert_scale {
+                    std::mem::swap(&mut top, &mut bottom);
+                }
+                scale.options_mut().scale_margins = crate::scales::PriceScaleMargins {
+                    top: top / height,
+                    bottom: bottom / height,
+                };
+                scale.autoscale(low, high);
+                scale.options_mut().scale_margins = options;
                 return;
             }
-            if low == high {
-                let half = scale.min_span() * 0.5;
-                low -= half;
-                high += half;
-            }
-            // Fit once with both requests, so fitting one edge cannot consume the other's space.
-            if scale.options().invert_scale {
-                std::mem::swap(&mut top, &mut bottom);
-            }
-            scale.options_mut().scale_margins = crate::scales::PriceScaleMargins {
-                top: top / height,
-                bottom: bottom / height,
-            };
-            scale.autoscale(low, high);
-            scale.options_mut().scale_margins = options;
-            return;
         }
         let map = scale.map(scale.transform(), rect.top(), rect.bottom());
         let range = scale.range();
@@ -1240,11 +1247,14 @@ impl Chart {
         let mut main = Vec::new();
         let mut pixel_margins = std::collections::HashMap::new();
         for (key, (transform, min, max, margins)) in values {
+            // The main series also fits its scale, so the frame decides on those margins.
+            if margins != AutoscaleMargins::default()
+                && (min.is_finite() || key == self.main_series_scale)
+            {
+                pixel_margins.insert(key, margins);
+            }
             if !min.is_finite() {
                 continue;
-            }
-            if margins != AutoscaleMargins::default() {
-                pixel_margins.insert(key, margins);
             }
             if key == self.main_series_scale {
                 main.extend([min, max]);

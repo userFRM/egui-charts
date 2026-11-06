@@ -186,6 +186,7 @@ impl Chart {
                 start_idx: start,
                 clock: &clock,
                 tick_size: None,
+                price_formatter: None,
             },
             &rendering::ChartTypeParams::new(
                 rendering::BarDimensions::new(

@@ -157,6 +157,13 @@ impl ChartSettingsState {
         settings.candle_colors.show_border = config.candle_border_width > 0.0;
         settings.candle_colors.show_wick = candles.wick_visible;
         settings.candle_colors.color_by_previous_close = candles.color_by_previous_close;
+        if chart.chart_type() == crate::model::ChartType::Bars {
+            settings.candle_colors.color_by_previous_close = chart
+                .chart_type_params()
+                .styles
+                .bars
+                .color_by_previous_close;
+        }
         if chart.chart_type() == crate::model::ChartType::HollowCandles {
             let style = &chart.chart_type_params().styles.hollow;
             settings.candle_colors = super::CandleColorConfig {
@@ -668,6 +675,12 @@ impl ChartSettingsState {
             if chart.chart_type_params() != &params {
                 chart.set_chart_type_params(params);
             }
+        } else if self.chart_type == crate::model::ChartType::Bars {
+            let mut params = chart.chart_type_params().clone();
+            params.styles.bars.color_by_previous_close = self.candle_colors.color_by_previous_close;
+            if chart.chart_type_params() != &params {
+                chart.set_chart_type_params(params);
+            }
         } else {
             let candles = CandlesStyle {
                 body_visible: self.candle_colors.show_body,
@@ -984,6 +997,174 @@ mod tests {
                     chart.set_chart_type(ChartType::Heikin);
                     assert_eq!(ChartSettingsState::from_chart(&chart).candle_colors, c);
                 }
+            }
+        }
+    }
+
+    /// Every high-low bar takes one colour whatever its direction, and each end prints its own
+    /// price outside the bar in the label colour and size, also on an inverted scale and on a
+    /// flat bar. Saved styles and undo keep these apart from the candle settings.
+    #[test]
+    #[cfg(feature = "drawings")]
+    fn high_low_style_paints_bars_and_labels_and_keeps_saved_values() {
+        use crate::model::{ChartType, HighLowStyle};
+        use crate::widget::ChartSnapshot;
+        use crate::widget::test_frames::{frame, shapes};
+        use egui::Color32;
+
+        let style = HighLowStyle {
+            bar_color: Color32::from_rgb(1, 2, 101),
+            labels_visible: true,
+            label_color: Color32::from_rgb(3, 4, 103),
+            label_font_size: 12.0,
+        };
+        // Rising, falling and flat bars, with the prices the labels print.
+        let bars = [
+            ((10.0, 18.0, 8.0, 14.0), "18.00", "8.00"),
+            ((13.0, 17.0, 8.5, 11.0), "17.00", "8.50"),
+            ((12.0, 12.0, 12.0, 12.0), "12.00", "12.00"),
+        ];
+        for theme in [Theme::light(), Theme::dark()] {
+            for inverted in [false, true] {
+                let ctx = Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let mut chart = Chart::new(BarData::from_bars(
+                    bars.iter()
+                        .enumerate()
+                        .map(|(i, ((o, h, l, c), ..))| {
+                            Bar::new(
+                                chrono::DateTime::UNIX_EPOCH + chrono::Duration::days(i as i64),
+                                *o,
+                                *h,
+                                *l,
+                                *c,
+                                0.0,
+                            )
+                        })
+                        .collect(),
+                ));
+                chart.set_chart_type(ChartType::HighLow);
+                chart.config_mut().show_volume = false;
+                let before = ChartSettingsState::from_chart(&chart);
+                let mut settings = before.clone();
+                settings.scales_and_lines.invert_scale = inverted;
+                settings.chart_type_params.as_mut().unwrap().styles.high_low = style;
+                chart.begin_user_action();
+                settings.apply_to_chart(&mut chart).unwrap();
+                chart.end_user_action();
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                chart.state.time_scale_mut().set_bar_spacing(80.0);
+
+                let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+                let plot = chart.get_rendered_price_rect();
+                let map = chart.get_chart_mapping().price;
+                let rects = |painted: &[Shape]| {
+                    let mut rects: Vec<_> = painted
+                        .iter()
+                        .filter_map(|shape| match shape {
+                            Shape::Rect(r)
+                                if r.fill == style.bar_color && plot.contains(r.rect.center()) =>
+                            {
+                                Some(r.rect)
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    rects.sort_by(|a, b| a.left().total_cmp(&b.left()));
+                    rects
+                };
+                let labels = |painted: &[Shape]| -> Vec<_> {
+                    painted
+                        .iter()
+                        .filter_map(|shape| match shape {
+                            Shape::Text(t)
+                                if t.galley.job.sections[0].format.color == style.label_color =>
+                            {
+                                Some((t.galley.text().to_owned(), t.visual_bounding_rect()))
+                            }
+                            _ => None,
+                        })
+                        .collect()
+                };
+                let shown = rects(&painted);
+                assert_eq!(shown.len(), bars.len());
+                let printed = labels(&painted);
+                assert_eq!(printed.len(), 2 * bars.len());
+                for (rect, ((_, high, low, _), high_text, low_text)) in shown.iter().zip(bars) {
+                    let (y_high, y_low) = (map.price_to_y(high), map.price_to_y(low));
+                    assert_eq!(rect.top(), y_high.min(y_low));
+                    assert_eq!(rect.bottom(), y_high.max(y_low).max(rect.top() + 1.0));
+                    let at_end = |above: bool, text: &str| {
+                        printed.iter().any(|(label, bounds)| {
+                            label == text
+                                && (bounds.center().x - rect.center().x).abs() < 1.0
+                                && if above {
+                                    bounds.bottom() <= rect.top()
+                                } else {
+                                    bounds.top() >= rect.bottom()
+                                }
+                        })
+                    };
+                    assert!(at_end(!inverted, high_text), "{high_text} {inverted}");
+                    assert!(at_end(inverted, low_text), "{low_text} {inverted}");
+                }
+                assert!(painted.iter().any(|shape| matches!(shape, Shape::Text(t)
+                    if t.galley.job.sections[0].format.font_id.size == 12.0
+                        && t.galley.text() == "18.00")));
+                // The falling and flat bars share the bar colour on the last-price label too.
+                let last = chart.state.data().bars.last().unwrap().clone();
+                assert_eq!(chart.main_value_color(&last), style.bar_color);
+
+                // Labels that do not fit the bar spacing go together; the bars stay visible.
+                chart.state.time_scale_mut().set_bar_spacing(2.0);
+                let dense = shapes(&ctx, &mut chart, 0.2, vec![]);
+                assert!(labels(&dense).is_empty());
+                let dense_rects = rects(&dense);
+                assert_eq!(dense_rects.len(), bars.len());
+                assert!(
+                    dense_rects
+                        .iter()
+                        .all(|r| r.width() >= 1.0 && r.height() >= 1.0)
+                );
+                chart.state.time_scale_mut().set_bar_spacing(80.0);
+
+                for hidden in [
+                    HighLowStyle {
+                        labels_visible: false,
+                        ..style
+                    },
+                    HighLowStyle {
+                        label_font_size: 0.0,
+                        ..style
+                    },
+                ] {
+                    let mut params = chart.chart_type_params().clone();
+                    params.styles.high_low = hidden;
+                    chart.set_chart_type_params(params);
+                    let painted = shapes(&ctx, &mut chart, 0.3, vec![]);
+                    assert!(labels(&painted).is_empty());
+                    assert_eq!(rects(&painted).len(), bars.len());
+                }
+                let mut params = chart.chart_type_params().clone();
+                params.styles.high_low = style;
+                chart.set_chart_type_params(params);
+
+                assert_eq!(chart.config().bullish_color, before.candle_colors.body_up);
+                let saved: ChartSnapshot = serde_json::from_str(
+                    &serde_json::to_string(&chart.snapshot().unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert!(chart.undo());
+                assert_eq!(
+                    chart.chart_type_params().styles.high_low,
+                    HighLowStyle::default()
+                );
+                assert!(chart.redo());
+                chart.restore(&saved).unwrap();
+                assert_eq!(chart.chart_type_params().styles.high_low, style);
+                chart.set_chart_type(ChartType::Candles);
+                chart.set_chart_type(ChartType::HighLow);
+                assert_eq!(chart.chart_type_params().styles.high_low, style);
             }
         }
     }

@@ -86,7 +86,9 @@ pub struct IndicatorPane {
     pub(super) pane_controls: bool,
     pub(super) axis_rect: Option<Rect>,
     pub(super) axis_tags: Vec<Option<Rect>>,
-    pub(super) fixed_axis_labels: Vec<crate::chart::primitives::PriceAxisLabel>,
+    /// The primitive tags of this member's scale, for all of the pane's members on it. Painted
+    /// before the crosshair tag and the scale labels, which leave out the labels under them.
+    pub(super) primitive_axis_labels: Vec<(crate::chart::primitives::PriceAxisLabel, PriceMap)>,
     pub(super) axis_options: crate::config::PriceAxisOptions,
     pub(super) legend_backdrop: f32,
 }
@@ -110,7 +112,7 @@ impl IndicatorPane {
             pane_controls: false,
             axis_rect: None,
             axis_tags: Vec::new(),
-            fixed_axis_labels: Vec::new(),
+            primitive_axis_labels: Vec::new(),
             axis_options,
             legend_backdrop: 0.6,
         }
@@ -361,7 +363,6 @@ impl IndicatorPane {
         bar_series: bool,
         mut draw_primitives: impl FnMut(&egui::Painter, crate::chart::primitives::PrimitivePass),
     ) -> Option<PaneInteraction> {
-        self.fixed_axis_labels.clear();
         if !indicator.is_visible() {
             return None;
         }
@@ -518,7 +519,7 @@ impl IndicatorPane {
             let label_rect = self.axis_rect.map_or(chart_rect, |axis| {
                 crate::widget::series::axis_label_rect(chart_rect, axis)
             });
-            if let (Some(view), Some(side)) = (&view, axis)
+            if let Some(side) = axis
                 && indicator.scale() != crate::studies::StudyScale::None
             {
                 let (axis_rect, axis_edge) = if side == crate::scales::PriceScaleId::Left {
@@ -535,22 +536,21 @@ impl IndicatorPane {
                 let axis_rect = self.axis_rect.unwrap_or(axis_rect);
                 let axis_edge = self.axis_rect.map_or(axis_edge, |axis| axis.right());
                 let axis_painter = painter.with_clip_rect(painter.clip_rect().intersect(axis_rect));
-                for item in primitives {
-                    let primitive = item.get();
-                    primitive.draw_price_axis(&axis_painter, axis_rect, view);
-                    let (fixed, automatic): (Vec<_>, Vec<_>) = primitive
-                        .price_axis_labels(view)
+                if let Some(view) = &view {
+                    for item in primitives {
+                        item.get().draw_price_axis(&axis_painter, axis_rect, view);
+                    }
+                }
+                let (fixed, automatic): (Vec<_>, Vec<_>) =
+                    std::mem::take(&mut self.primitive_axis_labels)
                         .into_iter()
-                        .partition(|label| label.fixed_coordinate.is_some());
-                    self.fixed_axis_labels.extend(fixed);
+                        .partition(|(label, _)| label.fixed_coordinate.is_some());
+                for (painter, labels) in [(painter, automatic), (&axis_painter, fixed)] {
                     crate::chart::rendering::axes::render_primitive_price_labels(
                         painter,
                         label_rect,
                         axis_edge,
-                        automatic
-                            .into_iter()
-                            .map(|label| (label, mapping.price))
-                            .collect(),
+                        labels,
                         &mut self.axis_tags,
                         self.axis_options.allow_label_overlap,
                     );

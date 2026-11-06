@@ -29,7 +29,8 @@ impl SettingsDialog {
                     || !kind.uses_ohlc()
                     || matches!(
                         kind,
-                        crate::model::ChartType::HlcArea
+                        crate::model::ChartType::HighLow
+                            | crate::model::ChartType::HlcArea
                             | crate::model::ChartType::TimePriceOpportunity
                             | crate::model::ChartType::VolumeFootprint
                             | crate::model::ChartType::SessionVolumeProfile
@@ -57,6 +58,7 @@ impl SettingsDialog {
                     let heikin = kind == crate::model::ChartType::Heikin;
                     let hollow = kind == crate::model::ChartType::HollowCandles;
                     let volume = kind == crate::model::ChartType::VolumeCandles;
+                    let bars = kind == crate::model::ChartType::Bars;
                     let candles =
                         kind == crate::model::ChartType::Candles || heikin || hollow || volume;
                     self.draw_section_header(
@@ -67,6 +69,8 @@ impl SettingsDialog {
                             "HOLLOW CANDLES"
                         } else if volume {
                             "VOLUME CANDLES"
+                        } else if bars {
+                            "BARS"
                         } else if candles {
                             "CANDLES"
                         } else {
@@ -89,11 +93,25 @@ impl SettingsDialog {
                         );
                     }
                     // Hollow candles always compare the close with the previous close.
-                    if candles && !hollow {
+                    if (candles && !hollow) || bars {
                         styled_checkbox(
                             ui,
                             &mut self.settings.candle_colors.color_by_previous_close,
                             "Color bars based on previous close",
+                            theme.ui.text,
+                        );
+                    }
+                    if bars {
+                        styled_checkbox(
+                            ui,
+                            &mut self
+                                .settings
+                                .chart_type_params
+                                .get_or_insert_with(Default::default)
+                                .styles
+                                .bars
+                                .open_visible,
+                            "Show open",
                             theme.ui.text,
                         );
                     }
@@ -102,7 +120,7 @@ impl SettingsDialog {
                     let pickers = &mut self.color_picker_states;
                     for (label, shown, [up, down], [up_picker, down_picker], [up_id, down_id]) in [
                         (
-                            "Body",
+                            if bars { "Up and down colors" } else { "Body" },
                             &mut colors.show_body,
                             [&mut colors.body_up, &mut colors.body_down],
                             [&mut pickers.body_up, &mut pickers.body_down],
@@ -122,7 +140,11 @@ impl SettingsDialog {
                             [&mut pickers.wick_up, &mut pickers.wick_down],
                             ["wick_up", "wick_down"],
                         ),
-                    ] {
+                    ]
+                    .into_iter()
+                    // A bar is one stroke, so it has no separate border or wick colours.
+                    .take(if bars { 1 } else { 3 })
+                    {
                         ui.horizontal(|ui| {
                             let checkbox = ui
                                 .allocate_ui_with_layout(
@@ -159,6 +181,20 @@ impl SettingsDialog {
                             });
                         });
                         ui.add_space(theme.spacing.sm);
+                    }
+                    if bars {
+                        styled_checkbox(
+                            ui,
+                            &mut self
+                                .settings
+                                .chart_type_params
+                                .get_or_insert_with(Default::default)
+                                .styles
+                                .bars
+                                .thin_bars,
+                            "Thin bars",
+                            theme.ui.text,
+                        );
                     }
 
                     ui.add_space(ui.active_theme().spacing.xxl);
@@ -655,6 +691,320 @@ mod tests {
                         chart.restore(&saved).unwrap();
                         assert_eq!(chart.chart_type_params().styles.hlc_area, expected);
                     }
+                }
+            }
+        }
+    }
+
+    /// Bars colour by their own open or the previous close, and columns reach the selected price
+    /// while their colour still compares closes, through the dialog and the painter after
+    /// acceptance only, in both themes. Undo and saved charts keep these values apart from the
+    /// candle and line settings.
+    #[test]
+    fn bars_and_columns_dialog_edits_reach_the_painter_and_keep_independent_saved_values() {
+        use crate::model::{BarsStyle, ColumnsStyle, PriceSource};
+        use crate::widget::ChartSnapshot;
+        use egui::Color32;
+
+        let (up, down) = (Color32::from_rgb(1, 100, 2), Color32::from_rgb(101, 2, 3));
+        let chart_of = |kind, bars: &[(f64, f64, f64, f64)]| {
+            let mut chart = Chart::new(BarData::from_bars(
+                bars.iter()
+                    .enumerate()
+                    .map(|(i, &(o, h, l, c))| {
+                        Bar::new(
+                            chrono::DateTime::UNIX_EPOCH + chrono::Duration::days(i as i64),
+                            o,
+                            h,
+                            l,
+                            c,
+                            0.0,
+                        )
+                    })
+                    .collect(),
+            ));
+            chart.set_chart_type(kind);
+            let config = chart.config_mut();
+            config.show_volume = false;
+            config.show_price_line = false;
+            config.bullish_color = up;
+            config.bearish_color = down;
+            // Line charts keep their own source, which the Columns control must leave alone.
+            config.price_source = PriceSource::OHLC4;
+            chart
+        };
+        let edit = |ctx: &Context, chart: &mut Chart, theme: &Theme, clicks: &[&str], ok: bool| {
+            let mut dialog = SettingsDialog::new();
+            dialog.set_control_visible(crate::ui::Control::Templates, false);
+            dialog.open(ChartSettingsState::from_chart(chart));
+            for _ in 0..3 {
+                frame(ctx, chart, &mut dialog, theme, vec![], &[]);
+            }
+            for control in clicks {
+                click(ctx, chart, &mut dialog, theme, control);
+            }
+            click(
+                ctx,
+                chart,
+                &mut dialog,
+                theme,
+                if ok { "Ok" } else { "Cancel" },
+            );
+            assert!(!dialog.is_open);
+        };
+
+        // Against the bar's own open the last two colours swap: 12.5 is below its open of 13 but
+        // above the last close of 12, and 10 is above its open of 9 but below the last close.
+        let bars = [
+            (10.0, 18.0, 8.0, 14.0),
+            (13.0, 17.0, 8.5, 11.0),
+            (11.0, 14.0, 6.0, 12.0),
+            (13.0, 15.0, 10.0, 12.5),
+            (9.0, 13.0, 8.0, 10.0),
+        ];
+        type BarsEdit = fn(&mut BarsStyle);
+        let bars_cases: [(&str, BarsEdit); 3] = [
+            ("Color bars based on previous close", |s| {
+                s.color_by_previous_close = true
+            }),
+            ("Show open", |s| s.open_visible = false),
+            ("Thin bars", |s| s.thin_bars = false),
+        ];
+        // The first close is above the second, whose every other price is above the first's.
+        let columns = [(10.0, 18.0, 8.0, 14.0), (15.0, 20.0, 9.0, 12.0)];
+        let sources = [
+            (PriceSource::Open, [10.0, 15.0]),
+            (PriceSource::High, [18.0, 20.0]),
+            (PriceSource::Low, [8.0, 9.0]),
+            (PriceSource::HL2, [13.0, 14.5]),
+            (PriceSource::HLC3, [40.0 / 3.0, 41.0 / 3.0]),
+            (PriceSource::OHLC4, [12.5, 14.0]),
+        ];
+        for theme in [Theme::light(), Theme::dark()] {
+            for accept in [false, true] {
+                for (label, change) in bars_cases {
+                    let ctx = Context::default();
+                    crate::theme::apply_to_egui(&ctx, &theme);
+                    let mut chart = chart_of(ChartType::Bars, &bars);
+                    edit(&ctx, &mut chart, &theme, &[label], accept);
+                    let mut expected = BarsStyle::default();
+                    if accept {
+                        change(&mut expected);
+                    }
+                    let params = chart.chart_type_params().clone();
+                    assert_eq!(params.styles.bars, expected, "{label}");
+                    assert!(!params.styles.candles.color_by_previous_close);
+                    let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 1.0, vec![]);
+                    let plot = chart.get_rendered_price_rect();
+                    let segments: Vec<_> = painted
+                        .iter()
+                        .filter_map(|s| match s {
+                            Shape::LineSegment { points, stroke }
+                                if plot.contains(points[0])
+                                    && [up, down].contains(&stroke.color) =>
+                            {
+                                Some((points[0].x == points[1].x, *stroke))
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    let colours: Vec<_> = segments
+                        .iter()
+                        .filter(|(vertical, _)| *vertical)
+                        .map(|(_, stroke)| stroke.color)
+                        .collect();
+                    assert_eq!(
+                        colours,
+                        if expected.color_by_previous_close {
+                            [up, down, up, up, down]
+                        } else {
+                            [up, down, up, down, up]
+                        }
+                    );
+                    let ticks = segments.len() - colours.len();
+                    assert_eq!(ticks, if expected.open_visible { 10 } else { 5 });
+                    let wick = chart.config().wick_width;
+                    assert_eq!(
+                        segments.iter().all(|(_, stroke)| stroke.width == wick),
+                        expected.thin_bars
+                    );
+                    if accept {
+                        let saved: ChartSnapshot = serde_json::from_str(
+                            &serde_json::to_string(&chart.snapshot().unwrap()).unwrap(),
+                        )
+                        .unwrap();
+                        assert!(chart.undo());
+                        assert_eq!(chart.chart_type_params().styles.bars, BarsStyle::default());
+                        assert!(chart.redo());
+                        chart.restore(&saved).unwrap();
+                        assert_eq!(chart.chart_type_params().styles.bars, expected);
+                    }
+                }
+                for (source, prices) in sources {
+                    let ctx = Context::default();
+                    crate::theme::apply_to_egui(&ctx, &theme);
+                    let mut chart = chart_of(ChartType::Columns, &columns);
+                    edit(&ctx, &mut chart, &theme, &["Close", source.label()], accept);
+                    let expected = ColumnsStyle {
+                        price_source: if accept { source } else { PriceSource::Close },
+                    };
+                    let prices = if accept { prices } else { [14.0, 12.0] };
+                    assert_eq!(chart.chart_type_params().styles.columns, expected);
+                    assert_eq!(chart.config().price_source, PriceSource::OHLC4);
+                    let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 1.0, vec![]);
+                    let plot = chart.get_rendered_price_rect();
+                    let mapping = chart.get_chart_mapping();
+                    let drawn: Vec<_> = painted
+                        .iter()
+                        .filter_map(|s| match s {
+                            Shape::Rect(r)
+                                if plot.contains(r.rect.center())
+                                    && [up, down].contains(&r.fill) =>
+                            {
+                                Some((r.fill, r.rect.top()))
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(drawn.len(), 2, "{source:?}");
+                    for ((fill, top), (colour, price)) in
+                        drawn.into_iter().zip([up, down].into_iter().zip(prices))
+                    {
+                        assert_eq!(fill, colour);
+                        assert!((top - mapping.price_to_y(price)).abs() < 0.01, "{source:?}");
+                    }
+                    if accept {
+                        let saved: ChartSnapshot = serde_json::from_str(
+                            &serde_json::to_string(&chart.snapshot().unwrap()).unwrap(),
+                        )
+                        .unwrap();
+                        assert!(chart.undo());
+                        assert_eq!(
+                            chart.chart_type_params().styles.columns,
+                            ColumnsStyle::default()
+                        );
+                        assert!(chart.redo());
+                        chart.restore(&saved).unwrap();
+                        assert_eq!(chart.chart_type_params().styles.columns, expected);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Pointer edits of each high-low control reach the painter only after acceptance, and
+    /// Reset to defaults restores the single colour with its labels.
+    #[test]
+    fn high_low_dialog_edits_reach_the_painter_only_when_accepted() {
+        use crate::model::{ChartTypeParams, HighLowStyle};
+        use crate::widget::test_frames::shapes;
+        use egui::accesskit::Role;
+        use egui::{Color32, Vec2};
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let seeded = HighLowStyle {
+            bar_color: Color32::from_rgb(3, 4, 102),
+            labels_visible: true,
+            label_color: Color32::from_rgb(5, 6, 104),
+            label_font_size: 9.0,
+        };
+        let white = Color32::from_rgb(255, 255, 255);
+        for theme in [Theme::light(), Theme::dark()] {
+            for accept in [false, true] {
+                for edit in ["Bar", "Label", "Price labels", "Label size", "Reset"] {
+                    let mut chart = Chart::new(BarData::from_bars(vec![Bar::new(
+                        chrono::DateTime::UNIX_EPOCH,
+                        10.0,
+                        18.0,
+                        8.0,
+                        14.0,
+                        0.0,
+                    )]));
+                    chart.set_chart_type(ChartType::HighLow);
+                    chart.config_mut().show_volume = false;
+                    let mut params = ChartTypeParams::default();
+                    params.styles.high_low = seeded;
+                    chart.set_chart_type_params(params);
+                    let mut dialog = SettingsDialog::new();
+                    dialog.set_control_visible(crate::ui::Control::Templates, false);
+                    dialog.open(ChartSettingsState::from_chart(&chart));
+                    let harness_theme = theme.clone();
+                    let setup_theme = theme.clone();
+                    let mut harness = Harness::builder()
+                        .with_context_setup(move |ctx| {
+                            egui_extras::install_image_loaders(ctx);
+                            crate::theme::apply_to_egui(ctx, &setup_theme);
+                        })
+                        .with_size(Vec2::new(1440.0, 900.0))
+                        .build_ui_state(
+                            move |ui, (dialog, accepted): &mut (SettingsDialog, _)| {
+                                if let SettingsAction::Apply(settings) =
+                                    dialog.show(ui.ctx(), &harness_theme)
+                                {
+                                    *accepted = Some(settings);
+                                }
+                            },
+                            (dialog, None),
+                        );
+                    harness.run();
+                    match edit {
+                        "Bar" | "Label" => {
+                            let color = if edit == "Bar" { "#030466" } else { "#050668" };
+                            harness
+                                .get_by_role_and_label(Role::ColorWell, color)
+                                .click();
+                            harness.run();
+                            harness
+                                .get_by_role_and_label(Role::ColorWell, "#FFFFFF")
+                                .click();
+                        }
+                        "Price labels" => {
+                            harness.get_by_role_and_label(Role::CheckBox, edit).click();
+                        }
+                        "Label size" => {
+                            harness.get_by_role_and_label(Role::ComboBox, edit).click();
+                            harness.run();
+                            harness.get_by_role_and_label(Role::Button, "12").click();
+                        }
+                        _ => harness.get_by_label("Reset to defaults").click(),
+                    }
+                    harness.run();
+                    harness
+                        .get_by_label(if accept { "Ok" } else { "Cancel" })
+                        .click();
+                    harness.run();
+                    let (dialog, accepted) = harness.state();
+                    assert!(!dialog.is_open);
+                    if let Some(settings) = accepted {
+                        settings.apply_to_chart(&mut chart).unwrap();
+                    }
+                    assert_eq!(accepted.is_some(), accept);
+
+                    let mut expected = seeded;
+                    if accept {
+                        match edit {
+                            "Bar" => expected.bar_color = white,
+                            "Label" => expected.label_color = white,
+                            "Price labels" => expected.labels_visible = false,
+                            "Label size" => expected.label_font_size = 12.0,
+                            _ => expected = HighLowStyle::default(),
+                        }
+                    }
+                    assert_eq!(chart.chart_type_params().styles.high_low, expected);
+                    let ctx = Context::default();
+                    crate::theme::apply_to_egui(&ctx, &theme);
+                    let painted = shapes(&ctx, &mut chart, 1.0, vec![]);
+                    let plot = chart.get_rendered_price_rect();
+                    assert!(painted.iter().any(|s| matches!(s, Shape::Rect(r)
+                        if plot.contains(r.rect.center()) && r.fill == expected.bar_color)));
+                    let label = painted.iter().any(|s| {
+                        matches!(s, Shape::Text(t)
+                        if t.galley.text() == "18.00"
+                            && t.galley.job.sections[0].format.color == expected.label_color
+                            && t.galley.job.sections[0].format.font_id.size
+                                == expected.label_font_size)
+                    });
+                    assert_eq!(label, expected.labels_visible);
                 }
             }
         }
