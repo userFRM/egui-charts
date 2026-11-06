@@ -182,10 +182,12 @@ impl CopiedStudies {
             .iter()
             .flat_map(|study| study.data_requests())
             .collect();
-        let sources =
-            chart
-                .study_data
-                .data(requests, &chart.symbol, chart.timeframe, chart.replay_time());
+        let sources = chart.study_data.data(
+            requests,
+            &chart.symbol,
+            chart.timeframe,
+            chart.replay_time(),
+        );
         let bars: &[Bar] = if chart.chart_type().is_time_independent() {
             &chart.element_studies.bars
         } else {
@@ -194,9 +196,10 @@ impl CopiedStudies {
         crate::widget::studies::calculate(&mut built, &ids, bars, &sources);
         for (study, id) in built.iter().zip(&ids) {
             // The chart asks for the histories it lacks once it has the study.
-            let waiting = study.data_requests().iter().any(|request| {
-                sources.iter().all(|source| &source.request != request)
-            });
+            let waiting = study
+                .data_requests()
+                .iter()
+                .any(|request| sources.iter().all(|source| &source.request != request));
             if self.draws[id.0] && !no_bars && !waiting && !draws(study.as_ref()) {
                 let name = self.set.studies[id.0].name.clone();
                 issues.push(LayoutCopyIssueKind::ShortHistory(name));
@@ -652,7 +655,14 @@ mod tests {
             (0..50)
                 .map(|i| {
                     let close = (10.0 + (i % 5) as f64) / 1000.0;
-                    Bar::new(start + Duration::minutes(i), close, 0.016, 0.009, close, 1.0)
+                    Bar::new(
+                        start + Duration::minutes(i),
+                        close,
+                        0.016,
+                        0.009,
+                        close,
+                        1.0,
+                    )
                 })
                 .collect(),
         ));
@@ -761,14 +771,8 @@ mod tests {
         let (mut a, mut short, mut long) = (chart(50), chart(20), chart(50));
         let rsi = a.add_indicator(Box::new(RSI::new(5)));
         let mean = a.add_indicator(Box::new(SMA::new(30)));
-        a.set_indicator_source(
-            mean,
-            StudySource::Study {
-                id: rsi.0,
-                plot: 0,
-            },
-        )
-        .unwrap();
+        a.set_indicator_source(mean, StudySource::Study { id: rsi.0, plot: 0 })
+            .unwrap();
         a.move_indicator_to_pane(mean, rsi);
         a.recalculate_studies();
         assert!(a.indicators().all(|(_, study)| draws(study)));
