@@ -219,14 +219,25 @@ impl StudyTemplate {
                 }
             }
             // An RSI drew no average and no middle line before it opened with both; the hidden
-            // level keeps the styles saved for the other two.
+            // level keeps the styles saved for the other two and stays within their band.
             "RSI" if !has("ma_type") => {
                 template
                     .inputs
                     .push(("ma_type".to_owned(), InputValue::Choice(0)));
-                if template.settings.levels.len() == 2 {
+                let declared = crate::studies::RSI::new(14);
+                if template.settings.levels.is_empty() {
+                    let (levels, fill, color) = super::settings::declared_levels(&declared);
+                    template.settings.levels = levels.into_iter().take(2).collect();
+                    template.settings.fill_between_levels = fill;
+                    template.settings.level_fill_color = color;
+                }
+                if let [upper, lower] = template.settings.levels[..] {
+                    let pane = declared.pane();
+                    let upper = upper.value.unwrap_or(pane.levels[0].0);
+                    let lower = lower.value.unwrap_or(pane.levels[1].0);
+                    let band = upper.min(lower)..=upper.max(lower);
                     template.settings.levels.push(crate::studies::LevelStyle {
-                        value: None,
+                        value: (!band.contains(&pane.levels[2].0)).then_some(upper),
                         color: crate::studies::palette::MUTED,
                         pattern: crate::model::LineStyle::Dashed,
                         width: 1.0,
@@ -662,6 +673,50 @@ mod tests {
                 Ok(name.into())
             );
         }
+    }
+
+    /// An RSI saved before it had a middle level draws the lines and band it was saved with. With
+    /// its levels edited to 40 and 20 it draws those two and fills from 20 to 40; saved before
+    /// levels were editable it draws 70 and 30 and fills between them.
+    #[test]
+    fn rsi_saved_before_the_middle_level_draws_its_saved_levels_and_band() {
+        let mut edited = ConfiguredStudy::new(Box::new(RSI::new(14)));
+        let mut settings = edited.settings();
+        settings.levels[0].value = Some(40.0);
+        settings.levels[1].value = Some(20.0);
+        edited.apply_settings(&[], settings).unwrap();
+        let mut edited = StudyTemplate::from_study(&edited);
+        edited.inputs.retain(|(id, _)| !id.starts_with("ma_"));
+        edited.settings.levels.truncate(2);
+        // Settings of that age had no level fields, which read as their serde defaults.
+        let mut older = StudyTemplate::from_study(&RSI::new(14));
+        older.inputs.retain(|(id, _)| !id.starts_with("ma_"));
+        older.settings.levels.clear();
+        older.settings.fill_between_levels = false;
+        older.settings.level_fill_color = Color32::default();
+        // The lines drawn, and the band, which a hidden level still bounds.
+        let drawn = |template: &StudyTemplate| {
+            let pane = template.create().unwrap().pane();
+            let lines: Vec<f64> = pane
+                .levels
+                .iter()
+                .filter(|level| level.1 != Color32::TRANSPARENT)
+                .map(|level| level.0)
+                .collect();
+            let values = pane.levels.iter().map(|level| level.0);
+            let band = (
+                values.clone().fold(f64::INFINITY, f64::min),
+                values.fold(f64::NEG_INFINITY, f64::max),
+            );
+            (lines, band, pane.fill_between_levels)
+        };
+        assert_eq!(
+            [drawn(&edited), drawn(&older)],
+            [
+                (vec![40.0, 20.0], (20.0, 40.0), true),
+                (vec![70.0, 30.0], (30.0, 70.0), true),
+            ]
+        );
     }
 
     /// Templates and layouts saved before the channel studies' inputs changed load and draw the
