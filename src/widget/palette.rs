@@ -2,6 +2,7 @@
 
 use super::Chart;
 use crate::config::ChartConfig;
+use crate::model::HlcAreaStyle;
 use crate::theme::Theme;
 
 impl Chart {
@@ -29,6 +30,31 @@ impl Chart {
         ] {
             if old.iter().any(|old| *color == old.bearish_color) {
                 *color = new.bearish_color;
+            }
+        }
+        // So do the HLC area's high and low lines and fills; a fill keeps its opacity.
+        let style = &mut self.chart_type_params.styles.hlc_area;
+        for (line, fill, side) in [
+            (
+                &mut style.high_line.color,
+                &mut style.high_to_close_fill,
+                (|config| config.bullish_color) as fn(&ChartConfig) -> egui::Color32,
+            ),
+            (
+                &mut style.low_line.color,
+                &mut style.close_to_low_fill,
+                |config| config.bearish_color,
+            ),
+        ] {
+            if old.iter().any(|old| *line == side(old)) {
+                *line = side(&new);
+            }
+            let alpha = fill.a();
+            if old
+                .iter()
+                .any(|old| *fill == HlcAreaStyle::fill_tint(side(old), alpha))
+            {
+                *fill = HlcAreaStyle::fill_tint(side(&new), alpha);
             }
         }
         self.inherited_theme = Some(theme.clone());
@@ -162,6 +188,7 @@ mod tests {
         let mut local = chart(&[100.0], &[110.0]);
         shared.config_mut().bearish_color = egui::Color32::RED;
         shared.chart_type_params.styles.volume_candles.wick_down = egui::Color32::RED;
+        shared.chart_type_params.styles.hlc_area.low_line.color = egui::Color32::RED;
         local.set_theme_override(Some(Theme::high_contrast()));
         for (step, (theme, watermark)) in [
             (Theme::light(), egui::Color32::from_rgb(211, 212, 215)),
@@ -188,6 +215,13 @@ mod tests {
             assert_eq!(volume_candles.border_up, theme.chart.candle_up);
             assert_eq!(volume_candles.body_down, theme.chart.candle_down);
             assert_eq!(volume_candles.wick_down, egui::Color32::RED);
+            let hlc_area = &shared.chart_type_params.styles.hlc_area;
+            assert_eq!(hlc_area.high_line.color, theme.chart.candle_up);
+            assert_eq!(hlc_area.low_line.color, egui::Color32::RED);
+            assert_eq!(
+                hlc_area.close_to_low_fill,
+                crate::model::HlcAreaStyle::fill_tint(theme.chart.candle_down, 51)
+            );
             assert_eq!(
                 local.config().background_color,
                 Theme::high_contrast().chart.bg

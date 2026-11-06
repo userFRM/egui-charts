@@ -28,8 +28,8 @@ pub use ghost_feed::{GhostCandle, GhostFeedConfig, MAX_GHOST_CANDLES};
 pub use image::ImageConfig;
 pub use options::{
     ArrowStyle, DrawingOptions, FibonacciConfig, FibonacciLevel, FontWeight, HandlePos,
-    LineMeasurementPosition, LineMeasurements, PositionSize, PositionSizing, RegressionTrendConfig,
-    TimeframeVisibility,
+    LineMeasurementPosition, LineMeasurements, LineTextHorizontalAlign, LineTextVerticalAlign,
+    PositionSize, PositionSizing, RegressionTrendConfig, TimeframeVisibility,
 };
 pub use pitchfork::{PitchforkConfig, PitchforkLevel};
 pub use template::DrawingTemplate;

@@ -103,7 +103,7 @@ use egui_charts::ui::widget_bar::{
 use egui_charts::ui::widget_bar::{RightBarIcon, WidgetBar, WidgetBarAction};
 use egui_charts::ui_kit::notifications::{NotificationPanel, Toasts};
 use egui_charts::widget::settings::ChartSettingsState;
-use egui_charts::widget::{ChartLayoutMode, SeriesId};
+use egui_charts::widget::{ChartLayoutMode, LayoutCopy, SeriesId};
 use live::LiveFeed;
 use std::sync::Arc;
 
@@ -415,6 +415,8 @@ pub struct DemoApp {
     copied_drawing: Option<String>,
     // A study copied in this session, kept across symbols and intervals.
     copied_study: Option<String>,
+    /// A copy across the layout waiting for the user to accept what its charts lack.
+    layout_copy_prompt: Option<(LayoutCopy, String)>,
     export_dialog: ExportDialog,
     export_arrangement: bool,
     date_picker: DatePicker,
@@ -713,6 +715,7 @@ impl DemoApp {
             open_layout: false,
             copied_drawing: None,
             copied_study: None,
+            layout_copy_prompt: None,
             export_dialog: ExportDialog::new().with_formats(EXPORT_FORMATS),
             export_arrangement: false,
             date_picker: DatePicker::new(),
@@ -1183,6 +1186,8 @@ impl DemoApp {
         self.settings_state.trading = trading;
         self.settings_state.adjust_for_dividends =
             self.timeframe_toolbar.state.adjust_for_dividends;
+        self.settings_dialog
+            .offer_apply_to_all(self.layout_has_other_charts());
         self.settings_dialog.open(self.settings_state.clone());
     }
 
@@ -1251,12 +1256,16 @@ impl DemoApp {
         // Chart settings.
         match self.settings_dialog.show(ctx, &self.theme) {
             SettingsAction::Apply(state) => self.apply_chart_settings(*state),
+            SettingsAction::ApplyToAll(state) => {
+                self.request_layout_copy(LayoutCopy::Settings(state))
+            }
             SettingsAction::PreviewSound { name, volume } => {
                 self.play_sound(ctx, &name, volume, true)
             }
             SettingsAction::Cancel => {}
             _ => {}
         }
+        self.show_layout_copy_prompt(ctx);
 
         let symbols = DemoSymbol::symbols();
         self.sync_comparisons();
@@ -1357,6 +1366,94 @@ impl DemoApp {
             self.timeframe_toolbar.state.adjust_for_dividends = state.adjust_for_dividends;
             self.stop_replay();
             self.apply_session();
+        }
+    }
+
+    /// Whether the current preset shows other charts to copy to.
+    fn layout_has_other_charts(&self) -> bool {
+        !self.extra_charts.is_empty() && self.layout.mode.chart_count() > 1
+    }
+
+    /// Applies `copy` when every chart can take it, and otherwise first lists what they lack.
+    fn request_layout_copy(&mut self, copy: LayoutCopy) {
+        let mut charts: Vec<_> = self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
+        charts.insert(self.layout_slot, &mut self.chart);
+        let issues = self.layout.copy_issues(
+            &charts,
+            self.layout_slot,
+            &copy,
+            self.indicator_dialog.factory(),
+        );
+        if issues.is_empty() {
+            self.apply_layout_copy(copy);
+            return;
+        }
+        let any_reached = (0..self.layout.mode.chart_count().min(charts.len()))
+            .filter(|slot| *slot != self.layout_slot)
+            .any(|slot| {
+                !issues
+                    .iter()
+                    .any(|issue| issue.slot == slot && issue.kind.skips_chart())
+            });
+        let mut lines: Vec<_> = issues
+            .iter()
+            .map(|issue| {
+                let (slot, symbol) = (issue.slot + 1, charts[issue.slot].symbol());
+                format!("Chart {slot} ({symbol}): {}", issue.kind)
+            })
+            .collect();
+        if !any_reached {
+            self.toasts.error(lines.join("\n"));
+            return;
+        }
+        // The dialog does not scroll: its buttons stay on screen with many charts and studies.
+        if lines.len() > 12 {
+            let more = lines.len() - 12;
+            lines.truncate(12);
+            lines.push(format!("and {more} more"));
+        }
+        self.layout_copy_prompt = Some((copy, lines.join("\n")));
+    }
+
+    fn apply_layout_copy(&mut self, copy: LayoutCopy) {
+        self.chart.begin_user_action();
+        if let LayoutCopy::Settings(state) = &copy {
+            self.apply_chart_settings((**state).clone());
+        }
+        let mut charts: Vec<_> = self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
+        charts.insert(self.layout_slot, &mut self.chart);
+        self.layout.apply_copy(
+            &mut charts,
+            self.layout_slot,
+            &copy,
+            self.indicator_dialog.factory(),
+        );
+        self.chart.end_user_action();
+    }
+
+    fn show_layout_copy_prompt(&mut self, ctx: &egui::Context) {
+        let Some((_, message)) = &self.layout_copy_prompt else {
+            return;
+        };
+        let mut open = true;
+        let result = egui_charts::ui_kit::modal::dialogs::ConfirmDialog::new(
+            "layout_copy",
+            "Apply to all charts",
+            message,
+        )
+        .confirm_text("Apply")
+        .show(ctx, &mut open);
+        if result.is_open() {
+            return;
+        }
+        let Some((copy, _)) = self.layout_copy_prompt.take() else {
+            return;
+        };
+        if result.is_confirmed() {
+            self.apply_layout_copy(copy);
+        } else if let LayoutCopy::Settings(state) = copy {
+            // The edits came from the dialog, which closed for this prompt; hand them back.
+            self.settings_dialog.open(*state);
         }
     }
 
@@ -1670,6 +1767,7 @@ impl eframe::App for DemoApp {
         self.show_strategy_report(ui, panel_bg);
         self.show_sample_study(ui);
         self.show_bottom_toolbar(ui, panel_bg);
+        self.reserve_replay_strip(ui, panel_bg);
         let groups = self.layout_groups();
         self.show_chart(ui, panel_bg);
         if self.layout_groups() != groups {
@@ -3328,7 +3426,6 @@ impl DemoApp {
                 points,
                 self.theme.ui.border,
             )));
-        self.replay_control.set_dock_rect(chart.response.rect);
         if !self.replay_selecting && self.replay.is_none() {
             self.activate_chart_slot(self.layout.active());
         }
@@ -3352,6 +3449,7 @@ impl DemoApp {
             .set_order_entries(self.trading.quantity, self.trading.capabilities());
         self.menus
             .set_watchlists(self.watchlist.lists().iter().map(|list| list.name.as_str()));
+        self.menus.set_layout_copies(self.layout_has_other_charts());
         if let Some(action) = self.menus.show(ui.ctx(), &mut self.chart) {
             self.handle_context_action(ui.ctx(), action);
         }
@@ -3520,6 +3618,7 @@ impl DemoApp {
             StudyContextMenuAction::AddToFavorites(name) => {
                 self.indicator_dialog.favorites.insert(name);
             }
+            StudyContextMenuAction::AddToLayout => self.request_layout_copy(LayoutCopy::Study(id)),
             StudyContextMenuAction::Help(url) => ctx.open_url(egui::OpenUrl::new_tab(url)),
             StudyContextMenuAction::Copy => self.copy_study(ctx, id),
             StudyContextMenuAction::ObjectTree => {
@@ -3550,6 +3649,9 @@ impl DemoApp {
             ContextMenuAction::OpenSeriesSettings => self.open_chart_settings_dialog(),
             ContextMenuAction::ObjectTree => self.open_panel = Some(SidePanel::ObjectTree),
             ContextMenuAction::RemoveAllIndicators => self.remove_all_indicators(),
+            ContextMenuAction::ApplyIndicatorsToLayout => {
+                self.request_layout_copy(LayoutCopy::Studies)
+            }
             ContextMenuAction::AddAlert { symbol, price } => self.quick_price_alert(symbol, price),
             ContextMenuAction::AddToWatchlist { list, symbol } => {
                 if !self.watchlist.add_symbol_to(list, &symbol) {
@@ -3642,17 +3744,44 @@ impl DemoApp {
         }
     }
 
-    fn show_replay_control(&mut self, ctx: &egui::Context) {
-        let Some(replay) = self.replay.as_ref() else {
+    /// Keeps the replay bar out of the chart's way: between its time axis and the bottom bar.
+    fn reserve_replay_strip(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
+        if !self.replay_control.is_visible() {
             return;
-        };
-        self.replay_control.sync_from(
-            replay.state.is_active(),
-            replay.state.is_playing(),
-            replay.state.speed.multiplier(),
-            replay.state.curr_bar,
-            replay.state.total_bars,
-        );
+        }
+        let strip = egui::Panel::bottom("replay_bar")
+            .exact_size(FloatingReplayControl::STRIP_HEIGHT)
+            .show_separator_line(false)
+            .frame(panel_frame(bg).corner_radius(4).outer_margin(egui::Margin {
+                top: 1,
+                ..egui::Margin::ZERO
+            }))
+            .show(ui, |_| {})
+            .response
+            .rect;
+        self.replay_control.set_dock_strip(strip);
+    }
+
+    fn show_replay_control(&mut self, ctx: &egui::Context) {
+        if self.replay.is_none() && !self.replay_selecting {
+            return;
+        }
+        self.replay_control.set_selecting(self.replay_selecting);
+        self.replay_control
+            .set_can_resume(self.replay.is_none() && self.replay_session.is_some());
+        match self.replay.as_ref() {
+            Some(replay) => self.replay_control.sync_from(
+                replay.state.is_active(),
+                replay.state.is_playing(),
+                replay.state.speed.multiplier(),
+                replay.state.curr_bar,
+                replay.state.total_bars,
+            ),
+            None => {
+                let speed = self.replay_control.state.speed;
+                self.replay_control.sync_from(false, false, speed, 0, 0);
+            }
+        }
         let action = self.replay_control.show(ctx);
         if action != ReplayControlAction::None {
             ctx.request_repaint();
@@ -3661,6 +3790,17 @@ impl DemoApp {
     }
 
     fn handle_replay_control(&mut self, action: ReplayControlAction) {
+        match action {
+            ReplayControlAction::Start(start) => return self.apply_replay_start(start),
+            // Without a replay the bar is only there to select its start.
+            ReplayControlAction::Stop | ReplayControlAction::Close if self.replay.is_none() => {
+                return self.stop_replay();
+            }
+            ReplayControlAction::SetSpeed(speed) if self.replay.is_none() => {
+                return self.replay_control.set_speed(speed);
+            }
+            _ => {}
+        }
         let play = matches!(action, ReplayControlAction::Play);
         let endpoint = match action {
             ReplayControlAction::GoToStart => Some(false),
@@ -3695,6 +3835,7 @@ impl DemoApp {
             ReplayControlAction::SetUpdateInterval(interval) => self.set_replay_interval(interval),
             ReplayControlAction::Stop => self.stop_replay(),
             ReplayControlAction::Close => {
+                self.replay_selecting = false;
                 self.replay_control.dismiss();
                 return;
             }
@@ -3737,6 +3878,7 @@ impl DemoApp {
             || self.comparison_settings.is_some()
             || self.indicator_dialog.is_open()
             || self.settings_dialog.is_open
+            || self.layout_copy_prompt.is_some()
             || self.drawing_toolbar.state.pending_removal.is_some()
             || self.drawing_props.is_open
             || self.export_dialog.is_open()
@@ -4078,6 +4220,46 @@ mod tests {
     use egui_charts::model::{AlertSource, LineStyle};
     use egui_charts::ui::dialogs::DrawingProps;
     use egui_charts::ui::timeframe_toolbar::DateRange;
+
+    /// The menu actions reach the other chart, which lacks nothing, without a prompt; a chart
+    /// without bars is named first, and the copy waits for the answer.
+    #[test]
+    fn layout_copy_actions_reach_other_charts_and_prompt_for_what_they_lack() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.ensure_chart_slots(egui_charts::widget::ChartLayoutMode::TwoHorizontal);
+        let id = app
+            .chart
+            .add_indicator(Box::new(egui_charts::studies::SMA::new(5)));
+        let studies = |chart: &Chart| chart.indicators().count();
+        let before = studies(&app.extra_charts[0].chart);
+
+        app.handle_study_context(&ctx, id, StudyContextMenuAction::AddToLayout);
+        assert_eq!(studies(&app.extra_charts[0].chart), before + 1);
+        assert!(app.layout_copy_prompt.is_none());
+
+        app.handle_chart_context(ContextMenuAction::ApplyIndicatorsToLayout);
+        assert_eq!(studies(&app.extra_charts[0].chart), studies(&app.chart));
+
+        app.extra_charts[0]
+            .chart
+            .set_data(SeriesId::MAIN, Vec::new());
+        app.handle_study_context(&ctx, id, StudyContextMenuAction::AddToLayout);
+        let (_, message) = app.layout_copy_prompt.as_ref().expect("prompt");
+        assert!(message.starts_with("Chart 2 ("), "{message}");
+        assert_eq!(studies(&app.extra_charts[0].chart), studies(&app.chart));
+
+        // Nothing could take this one, so there is no Apply to offer.
+        app.layout_copy_prompt = None;
+        let linked = app
+            .chart
+            .add_indicator(Box::new(egui_charts::studies::SMA::new(3)));
+        let source = egui_charts::model::StudySource::Study { id: id.0, plot: 0 };
+        app.chart.set_indicator_source(linked, source).unwrap();
+        app.handle_study_context(&ctx, linked, StudyContextMenuAction::AddToLayout);
+        assert!(app.layout_copy_prompt.is_none());
+    }
 
     pub(super) fn ui_frame(
         ctx: &egui::Context,
@@ -5081,8 +5263,12 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| {
+                    if app.keyboard_dialog_open() {
+                        app.chart.suppress_shortcuts(ui.ctx());
+                    }
                     app.show_top_toolbar(ui, app.theme.ui.panel_bg);
                     app.show_chart(ui, app.theme.ui.panel_bg);
+                    app.show_replay_start(ui.ctx());
                 },
             );
             let shapes = std::mem::take(&mut output.shapes);
@@ -5118,7 +5304,22 @@ mod tests {
             message.contains(&format!("price: {:.4}", map.y_to_price(pos.y))),
             "{message}"
         );
-        app.replay_selecting = true;
+        // One click on Replay waits for a bar with no dialog in between, and Escape cancels.
+        app.toggle_replay();
+        assert!(app.replay_selecting && !app.replay_start.is_open);
+        frame(
+            &mut app,
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert!(!app.replay_selecting && !app.state.replay_active);
+        assert!(!app.replay_control.is_visible());
+        app.toggle_replay();
         let index = index - 3;
         let time = app.chart.state().shown()[index].time;
         let pos = egui::pos2(map.idx_to_x(index), map.rect.center().y);
@@ -5204,6 +5405,91 @@ mod tests {
     }
 
     #[test]
+    fn replay_bar_sits_below_the_time_axis() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.start_replay();
+        for pass in 0..3 {
+            let mut chart = egui::Rect::NOTHING;
+            let mut bottom_bar = 0.0;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    app.show_bottom_toolbar(ui, app.theme.ui.panel_bg);
+                    bottom_bar = ui.available_rect_before_wrap().bottom();
+                    app.reserve_replay_strip(ui, app.theme.ui.panel_bg);
+                    chart = ui.available_rect_before_wrap();
+                    app.show_chart(ui, app.theme.ui.panel_bg);
+                    app.show_replay_control(ui.ctx());
+                },
+            );
+            if pass == 2 {
+                let exit = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == "Exit replay" => {
+                            Some(text.pos.y)
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                // The chart's time axis ends at its bottom, above the strip and the bottom bar.
+                let strip = chart.bottom()..bottom_bar;
+                assert!(strip.contains(&exit), "{exit} outside {strip:?}");
+            }
+            output.textures_delta.clear();
+            output.drop_without_applying_deltas();
+        }
+    }
+
+    /// A choice of the bar's start control restarts a running replay over the whole history.
+    #[test]
+    fn replay_bar_starts_restart_from_the_whole_history() {
+        use egui_charts::ui::replay::ReplayStartAction as Start;
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.switch_timeframe(Timeframe::Hour1);
+        let count = app.chart.bars(SeriesId::MAIN).len();
+        let date = app.chart.bars(SeriesId::MAIN)[count / 2].time;
+        for (start, expected) in [
+            (Start::First, Some(0)),
+            (Start::Date(date), Some(count / 2)),
+            (Start::Random, None),
+        ] {
+            // Near the first bar, so most of the history is hidden from the chart.
+            app.start_replay_at(1);
+            app.apply_replay_start(start);
+            let replay = app.replay.as_ref().unwrap();
+            assert_eq!(replay.state.total_bars, count, "{start:?}");
+            assert!(replay.state.curr_bar < count);
+            if let Some(expected) = expected {
+                assert_eq!(replay.state.curr_bar, expected, "{start:?}");
+            }
+            assert!(app.state.replay_active && app.replay_control.is_visible());
+        }
+        // A date past the history leaves the running replay alone.
+        let late = app.bars.last().unwrap().time + chrono::TimeDelta::days(1);
+        let curr = app.replay.as_ref().unwrap().state.curr_bar;
+        app.apply_replay_start(Start::Date(late));
+        assert_eq!(app.replay.as_ref().unwrap().state.curr_bar, curr);
+        // A restart keeps the update interval.
+        app.set_replay_interval(Timeframe::Min1);
+        app.apply_replay_start(Start::First);
+        assert_eq!(app.replay_interval, Timeframe::Min1);
+        app.apply_replay_start(Start::SelectDate);
+        assert!(app.replay_start.is_open);
+    }
+
+    #[test]
     fn replay_finer_source_and_saved_position_keep_the_shared_cutoff() {
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
@@ -5270,48 +5556,7 @@ mod tests {
             restored.replay_session,
             Some((saved.clone(), Timeframe::Hour1))
         );
-        restored.replay_start.open(None);
-        let mut resume = egui::Pos2::ZERO;
-        for pass in 0..5 {
-            let events = if pass >= 3 {
-                vec![
-                    egui::Event::PointerMoved(resume),
-                    egui::Event::PointerButton {
-                        pos: resume,
-                        button: egui::PointerButton::Primary,
-                        pressed: pass == 3,
-                        modifiers: egui::Modifiers::NONE,
-                    },
-                ]
-            } else {
-                vec![]
-            };
-            let output = ctx.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(320.0, 600.0),
-                    )),
-                    events,
-                    ..Default::default()
-                },
-                |ui| restored.show_replay_start(ui.ctx()),
-            );
-            if pass == 2 {
-                resume = output
-                    .shapes
-                    .iter()
-                    .find_map(|shape| match &shape.shape {
-                        egui::Shape::Text(text) if text.galley.text() == "Resume saved session" => {
-                            Some(text.pos + text.galley.size() / 2.0)
-                        }
-                        _ => None,
-                    })
-                    .unwrap();
-                assert!(ctx.content_rect().contains(resume));
-            }
-            output.drop_without_applying_deltas();
-        }
+        restored.apply_replay_start(egui_charts::ui::replay::ReplayStartAction::Resume);
         assert_eq!(restored.chart.replay_time(), Some(cutoff));
         assert!(!restored.replay.as_ref().unwrap().state.is_playing());
     }

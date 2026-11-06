@@ -238,6 +238,50 @@ fn fit_content_includes_added_series_across_panes() {
     }
 }
 
+/// A bar appended to the series of a chart without main bars keeps a view scrolled 30 bars
+/// back on the same times, as a bar appended to the main series does; one or two per frame.
+/// A view near the live edge returns to it. The slots are rebuilt on the next frame.
+#[test]
+fn added_only_appends_keep_a_scrolled_back_view() {
+    let data = bars(&[10.0; 202]);
+    for added_only in [false, true] {
+        let ctx = egui::Context::default();
+        let mut chart = Chart::new(BarData::from_bars(if added_only {
+            vec![]
+        } else {
+            data[..199].to_vec()
+        }));
+        let id = if added_only {
+            let id = chart.add_series(SeriesOptions::default());
+            chart.set_data(id, data[..199].to_vec());
+            id
+        } else {
+            SeriesId::MAIN
+        };
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        chart.scroll_to_position(-30.0, false);
+        frame(&ctx, &mut chart, 0.1, vec![]);
+        let before = chart.visible_time_range();
+        assert!(before.is_some());
+        chart.update(id, data[199].clone());
+        frame(&ctx, &mut chart, 0.2, vec![]);
+        assert_eq!(chart.visible_time_range(), before, "{added_only}");
+        assert_eq!(chart.get_time_scale_state().1, -31.0, "{added_only}");
+        chart.update(id, data[200].clone());
+        chart.update(id, data[201].clone());
+        frame(&ctx, &mut chart, 0.3, vec![]);
+        assert_eq!(chart.visible_time_range(), before, "{added_only}");
+        assert_eq!(chart.get_time_scale_state().1, -33.0, "{added_only}");
+
+        chart.scroll_to_position(-1.0, false);
+        frame(&ctx, &mut chart, 0.4, vec![]);
+        let next = data[201].time + TimeDelta::minutes(1);
+        chart.update(id, Bar::new(next, 10.0, 10.0, 10.0, 10.0, 1.0));
+        frame(&ctx, &mut chart, 0.5, vec![]);
+        assert_eq!(chart.get_time_scale_state().1, 2.5, "{added_only}");
+    }
+}
+
 /// Last-value queries skip whitespace and use shared indices, each pane's scale and the
 /// value formatter. From a visible base of 100, 120 is +20% and a loaded 150 is +50%.
 /// A move from 100 to 130 forms three size-10 bricks with the same source timestamp.
@@ -2956,7 +3000,11 @@ fn secondary_pane_scale_follows_price_axis_visibility() {
         let sides: Vec<_> = painted
             .iter()
             .filter_map(|shape| match shape {
-                egui::Shape::Text(text) if text.galley.text().starts_with("pane:") => {
+                // The labels beside the plot, not the pane legend's value inside it.
+                egui::Shape::Text(text)
+                    if text.galley.text().starts_with("pane:")
+                        && !(plot.left()..=plot.right()).contains(&text.pos.x) =>
+                {
                     Some(text.pos.x < plot.left())
                 }
                 _ => None,
