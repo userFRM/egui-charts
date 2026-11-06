@@ -293,7 +293,8 @@ impl AlertEngine {
     }
 
     /// Updates one interval of an alert with its retained source definitions. Other alerts may
-    /// refer to different study instances with the same chart-local identifiers.
+    /// refer to different study instances with the same chart-local identifiers. `exchange` is
+    /// the exchange of `symbol`, as [`AlertEngine::update`] takes it.
     pub fn update_alert(
         &self,
         id: &AlertId,
