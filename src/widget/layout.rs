@@ -1643,7 +1643,10 @@ impl ChartLayout {
                                     }
                                 }
                             });
-                        self.corner_menu = menu.map(|_| index);
+                        // Another slot's closed menu must not end this one's.
+                        if menu.is_some() || self.corner_menu == Some(index) {
+                            self.corner_menu = menu.map(|_| index);
+                        }
                     }
                 },
             );
@@ -3674,20 +3677,25 @@ mod tests {
     }
 
     /// Naming a group by typing is one membership edit, however it ends: Enter and a click on
-    /// another chart, which selects it, commit it as one undo step, Escape discards it.
+    /// another chart, which selects it, commit it as one undo step, Escape discards it. The menu
+    /// of the second chart is edited too, so the click selects a chart before it.
     #[test]
     fn typing_a_group_name_is_one_undo_step() {
-        let outside = pos2(500.0, 500.0);
-        for (commit, committed) in [
-            (vec![key(egui::Key::Enter)], true),
+        let first = pos2(100.0, 500.0);
+        let second = pos2(500.0, 500.0);
+        for (slot, commit, committed) in [
+            (0, vec![key(egui::Key::Enter)], true),
             (
-                vec![
-                    pointer_button(outside, true),
-                    pointer_button(outside, false),
-                ],
+                0,
+                vec![pointer_button(second, true), pointer_button(second, false)],
                 true,
             ),
-            (vec![key(egui::Key::Escape)], false),
+            (
+                1,
+                vec![pointer_button(first, true), pointer_button(first, false)],
+                true,
+            ),
+            (0, vec![key(egui::Key::Escape)], false),
         ] {
             let ctx = egui::Context::default();
             let mut layout = ChartLayout {
@@ -3702,7 +3710,15 @@ mod tests {
                 frame_texts(&ctx, layout, charts, vec2(640.0, 900.0), time, events)
             };
             frame(&mut layout, &mut charts, vec![]);
-            let corner = pos2(308.0, 12.0);
+            if slot == 1 {
+                frame(&mut layout, &mut charts, vec![pointer_button(second, true)]);
+                frame(
+                    &mut layout,
+                    &mut charts,
+                    vec![pointer_button(second, false)],
+                );
+            }
+            let corner = pos2(308.0 + 320.0 * slot as f32, 12.0);
             frame(&mut layout, &mut charts, vec![Event::PointerMoved(corner)]);
             frame(&mut layout, &mut charts, vec![pointer_button(corner, true)]);
             frame(
@@ -3732,7 +3748,7 @@ mod tests {
             for letter in ["D", "e", "s", "k"] {
                 frame(&mut layout, &mut charts, vec![Event::Text(letter.into())]);
                 assert_eq!(
-                    layout.link_groups(0).unwrap().symbol,
+                    layout.link_groups(slot).unwrap().symbol,
                     ChartLink::Layout,
                     "typing joins no group"
                 );
@@ -3740,7 +3756,7 @@ mod tests {
             frame(&mut layout, &mut charts, commit);
             frame(&mut layout, &mut charts, vec![]);
             frame(&mut layout, &mut charts, vec![]);
-            let symbol = || layout.link_groups(0).unwrap().symbol;
+            let symbol = || layout.link_groups(slot).unwrap().symbol;
             if committed {
                 assert_eq!(symbol(), ChartLink::Group("Desk".into()));
                 let active = layout.active();
@@ -3750,7 +3766,7 @@ mod tests {
                 assert_eq!(symbol(), ChartLink::Group("Desk".into()));
             } else {
                 assert_eq!(symbol(), ChartLink::Layout);
-                assert!(!charts[0].can_undo(), "a discarded name records nothing");
+                assert!(!charts[slot].can_undo(), "a discarded name records nothing");
             }
         }
     }
