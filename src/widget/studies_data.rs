@@ -2230,4 +2230,104 @@ pub(super) mod tests {
                 .push((subscription.timeframe, subscription.sink));
         }
     }
+
+    /// Sessions before the footprint's first complete bar never extend, so the candle history
+    /// before them must not add work to a frame that extends prior levels. The sessions that can
+    /// extend still do, also when their histogram is left of the view.
+    #[test]
+    fn profile_extensions_do_not_scale_with_history_before_the_executions() {
+        use crate::data::{TradePage, TradeRequest};
+        use crate::model::{ChartType, OrderSide, Tick, TradeProfileSettings};
+        fn open(day: i64, minute: i64) -> DateTime<chrono::Utc> {
+            "2026-01-07T10:00:00Z"
+                .parse::<DateTime<chrono::Utc>>()
+                .unwrap()
+                + Duration::days(day)
+                + Duration::minutes(minute)
+        }
+        // Each day trades in a row of its own, so no later candle ends a level.
+        fn price(day: i64) -> f64 {
+            1000.0 + 10.0 * day as f64
+        }
+        // Sixty one-minute candles a day from 10:00 UTC on `0` days without executions and on
+        // four days with one execution per candle, from the middle of the first of them.
+        struct Executions(i64);
+        impl Datafeed for Executions {
+            fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {
+                reply.send(Ok(Instrument::new(symbol).with_tick_size(1.0)));
+            }
+            fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
+                let bars = (-self.0..4)
+                    .flat_map(|day| (0..60).map(move |m| (day, m)))
+                    .map(|(day, m)| {
+                        let p = price(day);
+                        Bar::new(open(day, m), p, p, p, p, 1.0)
+                    })
+                    .collect();
+                reply.send(Ok(HistoryPage::new(bars, true)));
+            }
+            fn trades(&self, _: TradeRequest, reply: Reply<TradePage>) {
+                let trades = (0..4)
+                    .flat_map(|day| (0..60).map(move |m| (day, m)))
+                    .filter(|&(day, m)| day > 0 || m >= 30)
+                    .map(|(day, m)| Tick::new(open(day, m), price(day), 1.0, Some(OrderSide::Buy)))
+                    .collect();
+                reply.send(Ok(TradePage::new(trades, true)));
+            }
+        }
+        let frame = |ctx: &egui::Context, chart: &mut Chart| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    chart.show(ui);
+                },
+            );
+            output.textures_delta.clear();
+            output.shapes.len()
+        };
+        let run = |extend_poc: bool, earlier: i64| {
+            let ctx = egui::Context::default();
+            let mut chart = ChartBuilder::new()
+                .with_feed(Arc::new(Executions(earlier)))
+                .with_symbol("PROFILE")
+                .with_timeframe(Timeframe::Min1)
+                .with_chart_type(ChartType::SessionVolumeProfile)
+                .build();
+            chart.set_visible_bars(120);
+            chart.set_trade_profile_settings(TradeProfileSettings {
+                extend_poc,
+                ..Default::default()
+            });
+            for _ in 0..5 {
+                frame(&ctx, &mut chart);
+            }
+            let bars = chart.bars(crate::widget::SeriesId::MAIN);
+            assert_eq!(bars.len() as i64, (earlier + 4) * 60);
+            // The histogram of the first complete session, the second day, is left of the view.
+            let second_day_end = bars.partition_point(|bar| bar.time < open(2, 0));
+            let mapping = chart.get_chart_mapping();
+            assert!(mapping.idx_to_x(second_day_end - 1) < mapping.rect.left());
+            allocations(|| frame(&ctx, &mut chart))
+        };
+        let (plain_few, plain_shapes) = run(false, 10);
+        let (plain_many, _) = run(false, 1000);
+        let (extended_few, extended_shapes) = run(true, 10);
+        let (extended_many, extended_many_shapes) = run(true, 1000);
+        assert!(
+            extended_many.saturating_sub(extended_few) <= plain_many.saturating_sub(plain_few),
+            "990 earlier days add {} allocations with an extension, from {extended_few}, and {} \
+             without, from {plain_few}",
+            extended_many as i64 - extended_few as i64,
+            plain_many as i64 - plain_few as i64,
+        );
+        // The second and third days extend; the partial first and the unfinished last do not.
+        assert_eq!(extended_shapes, plain_shapes + 2);
+        assert_eq!(extended_many_shapes, extended_shapes);
+    }
 }
