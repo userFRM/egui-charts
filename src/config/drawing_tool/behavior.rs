@@ -69,7 +69,6 @@ impl DrawingToolType {
                 | Self::AnchoredVWAP
                 | Self::FixedRangeVolumeProfile
                 | Self::AnchoredVolumeProfile
-                | Self::Brush
                 | Self::Highlighter
                 | Self::ArrowMarker
                 | Self::Arrow
@@ -190,6 +189,19 @@ impl DrawingToolType {
         matches!(
             self,
             Self::TrendLine | Self::Ray | Self::ExtendedLine | Self::InfoLine | Self::TrendAngle
+        )
+    }
+
+    /// Whether the drawing has a line whose width and pattern its settings can change. The arrow
+    /// marker and arrow marks are solid shapes without one.
+    pub fn draws_line(&self) -> bool {
+        !matches!(
+            self,
+            Self::ArrowMarker
+                | Self::ArrowMarkUp
+                | Self::ArrowMarkDown
+                | Self::ArrowMarkLeft
+                | Self::ArrowMarkRight
         )
     }
 

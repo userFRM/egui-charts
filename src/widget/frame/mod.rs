@@ -945,6 +945,10 @@ impl Chart {
                     );
                 }
             }
+            // The data table lists the studies of the source bars, not their copies on elements.
+            if !self.chart_type.is_time_independent() {
+                self.readout_revision = crate::model::next_revision();
+            }
         }
         self.start_idx = start_idx;
 
