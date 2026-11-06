@@ -45,7 +45,8 @@ pub enum LayoutCopyIssueKind {
     /// The chart holds no bars yet. It takes the copy, and its studies draw once bars arrive.
     NoHistory,
     /// The chart's bars, or the elements of its price-based chart type, are too few for this study
-    /// to draw, though it draws on the source. The chart takes the copy.
+    /// to draw, though it draws on the source. A study waiting for a history the chart asks for
+    /// once it has the study is not reported. The chart takes the copy.
     ShortHistory(String),
     /// The chart is skipped: this study reads another study's output, which a copy of it alone
     /// would not have. Copy the whole set with [`LayoutCopy::Studies`] instead.
@@ -192,7 +193,11 @@ impl CopiedStudies {
         };
         crate::widget::studies::calculate(&mut built, &ids, bars, &sources);
         for (study, id) in built.iter().zip(&ids) {
-            if self.draws[id.0] && !no_bars && !draws(study.as_ref()) {
+            // The chart asks for the histories it lacks once it has the study.
+            let waiting = study.data_requests().iter().any(|request| {
+                sources.iter().all(|source| &source.request != request)
+            });
+            if self.draws[id.0] && !no_bars && !waiting && !draws(study.as_ref()) {
                 let name = self.set.studies[id.0].name.clone();
                 issues.push(LayoutCopyIssueKind::ShortHistory(name));
             }
@@ -828,5 +833,27 @@ mod tests {
                 .any(|study| draws(study.as_ref()));
             assert_eq!(shown, !short, "rise {rise}");
         }
+    }
+
+    /// A chart asks for the histories a study reads once it has the study, so a study waiting for
+    /// them on a chart with enough bars is not short of history.
+    #[test]
+    fn study_waiting_for_its_candles_is_not_short_of_history() {
+        let (mut a, mut b) = (chart(50), chart(50));
+        let delta = a.add_indicator(Box::new(crate::studies::VolumeDelta::new()));
+        let requests = a.study_data_requests();
+        assert_eq!(requests.len(), 1, "{requests:?}");
+        // One rising one-minute candle in each bar.
+        let start = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let candles = (0..50)
+            .map(|i| Bar::new(start + Duration::minutes(i), 10.0, 16.0, 9.0, 11.0, 1.0))
+            .collect();
+        a.set_study_data(requests[0].clone(), candles, None);
+        a.recalculate_studies();
+        assert!(a.indicators().all(|(_, study)| draws(study)));
+        let factory = IndicatorFactory::new();
+        let charts = [&mut a, &mut b];
+        let issues = pair().copy_issues(&charts, 0, &LayoutCopy::Study(delta), &factory);
+        assert_eq!(issues, []);
     }
 }
