@@ -774,4 +774,55 @@ mod tests {
         expected.reverse();
         assert!(dialog.cached.as_ref().unwrap().1.rows == expected);
     }
+
+    /// A study of the bars in view changes in the table as the chart pans; other studies leave the
+    /// table as it is.
+    #[test]
+    fn view_dependent_study_column_follows_a_pan() {
+        let start = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        // Closes of 10 for the first 200 days and of 30 for the last 200.
+        let bars: Vec<_> = (0..400)
+            .map(|i| {
+                let close = if i < 200 { 10.0 } else { 30.0 };
+                let time = start + chrono::Duration::days(i);
+                Bar::new(time, close, close, close, close, 1.0)
+            })
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+        chart.add_indicator(Box::new(crate::studies::VisibleAveragePrice::new()));
+        let mut other = Chart::new(BarData::from_bars(bars));
+        other.add_indicator(Box::new(crate::studies::SMA::new(3)));
+        let chart_ctx = Context::default();
+        let ctx = Context::default();
+        let mut dialog = DataTableDialog::new();
+        dialog.open();
+        let newest = |dialog: &DataTableDialog| {
+            let table = &dialog.cached.as_ref().unwrap().1;
+            let column = table
+                .headers
+                .iter()
+                .position(|header| header.starts_with("Visible Average Price"))
+                .unwrap();
+            table.rows[0][column].clone()
+        };
+        let frames = |chart: &mut Chart, frames: std::ops::Range<i32>| {
+            for frame in frames {
+                crate::widget::test_frames::frame(&chart_ctx, chart, f64::from(frame), vec![]);
+            }
+        };
+        frames(&mut chart, 0..3);
+        shown_rows(&ctx, &mut dialog, &chart);
+        assert_eq!(newest(&dialog), "30.00");
+        // Show bars 0 to 50, all closing at 10.
+        assert!(chart.set_visible_logical_range(crate::model::LogicalRange::new(0.0, 50.0)));
+        frames(&mut chart, 3..6);
+        shown_rows(&ctx, &mut dialog, &chart);
+        assert_eq!(newest(&dialog), "10.00");
+
+        frames(&mut other, 0..3);
+        let built = shown_rows(&ctx, &mut dialog, &other);
+        assert!(other.set_visible_logical_range(crate::model::LogicalRange::new(0.0, 50.0)));
+        frames(&mut other, 3..6);
+        assert_eq!(shown_rows(&ctx, &mut dialog, &other), built);
+    }
 }
