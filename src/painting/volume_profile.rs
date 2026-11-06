@@ -21,11 +21,11 @@ pub(crate) fn measures_view(profile: &VolumeProfile, right_aligned: bool) -> boo
 pub(crate) enum ProfileStyle {
     Study {
         right_aligned: bool,
+        /// Share of the span that the row with the most volume takes.
+        width: f32,
     },
     #[cfg(feature = "drawings")]
-    Drawing {
-        anchored: bool,
-    },
+    Drawing { anchored: bool },
 }
 
 pub(crate) fn paint_profile(
@@ -55,10 +55,13 @@ pub(crate) fn paint_profile(
     } else {
         color
     };
-    let (drawing, right_aligned) = match style {
-        ProfileStyle::Study { right_aligned } => (false, right_aligned),
+    let (drawing, right_aligned, share) = match style {
+        ProfileStyle::Study {
+            right_aligned,
+            width,
+        } => (false, right_aligned, width),
         #[cfg(feature = "drawings")]
-        ProfileStyle::Drawing { anchored } => (true, anchored),
+        ProfileStyle::Drawing { anchored } => (true, anchored, 0.3),
     };
     let options = profile.source() == ProfileSource::Options;
     let spans_view = !drawing && measures_view(profile, right_aligned);
@@ -80,14 +83,7 @@ pub(crate) fn paint_profile(
             width = painter.clip_rect().width();
         }
     }
-    let max_width = width
-        * if drawing {
-            0.3
-        } else if spans_view {
-            1.0
-        } else {
-            0.9
-        };
+    let max_width = width * share;
     let max_volume = profile.volume[poc];
     let poc_y = (y_at_row(poc) + y_at_row(poc + 1)) / 2.0;
     let line_rect = Rect::from_min_max(rect.min, Pos2::new(row_right, rect.max.y));
@@ -540,6 +536,7 @@ mod tests {
                     } else {
                         ProfileStyle::Study {
                             right_aligned: false,
+                            width: 0.9,
                         }
                     },
                     &|price| (price - 100.0) as f32 * 10.0,
@@ -631,7 +628,10 @@ mod tests {
                     config,
                     [51, 74, 212, 255],
                     span.clone(),
-                    ProfileStyle::Study { right_aligned },
+                    ProfileStyle::Study {
+                        right_aligned,
+                        width: if right_aligned { 1.0 } else { 0.9 },
+                    },
                     &|price| (price - 100.0) as f32 * 10.0,
                 );
             });
