@@ -1138,6 +1138,10 @@ fn study_menu_entries_act_on_the_study() {
 fn pointer_button_opens_price_actions_in_each_pane_and_keeps_the_original_price() {
     for pane in ["price", "study", "series", "empty"] {
         for pick in ["line", "alert", "order"] {
+            // Only a value in the pane of the main series is a price of the chart symbol.
+            if pane != "price" && pick != "line" {
+                continue;
+            }
             for command in [
                 Modifiers::CTRL.plus(Modifiers::COMMAND),
                 Modifiers::MAC_CMD.plus(Modifiers::COMMAND),
@@ -1377,5 +1381,149 @@ fn pointer_button_opens_price_actions_in_each_pane_and_keeps_the_original_price(
         }
         assert!(menus.context.is_none(), "{owner} retains the gesture");
         assert_eq!(text, "draft");
+    }
+}
+
+#[test]
+fn study_and_series_panes_offer_no_main_symbol_alerts_or_orders() {
+    // y 250 lies in the upper pane and y 530 in the lower one.
+    for (pane, secondary, y, trading) in [
+        ("price", false, 250.0, true),
+        ("study", false, 530.0, false),
+        ("study", true, 530.0, false),
+        ("series", false, 530.0, false),
+        ("empty", false, 530.0, false),
+        ("moved main series", false, 530.0, true),
+    ] {
+        let ctx = Context::default();
+        // TEST trades between 100 and 110; OTHER, in its own pane, between 400 and 410.
+        let mut chart = crate::widget::test_frames::chart(&[100.0; 100], &[110.0; 100]);
+        chart.set_symbol("TEST");
+        match pane {
+            "study" => {
+                chart.add_indicator(Box::new(crate::studies::RSI::new(14)));
+            }
+            "series" => {
+                let id = chart.add_series(crate::widget::SeriesOptions {
+                    name: "OTHER".into(),
+                    ..Default::default()
+                });
+                let bars: Vec<_> = chart
+                    .bars(SeriesId::MAIN)
+                    .iter()
+                    .map(|bar| {
+                        crate::model::Bar::new(
+                            bar.time,
+                            bar.open + 300.0,
+                            bar.high + 300.0,
+                            bar.low + 300.0,
+                            bar.close + 300.0,
+                            bar.volume,
+                        )
+                    })
+                    .collect();
+                chart.set_data(id, bars);
+                let target = chart.add_pane();
+                chart.move_series_to_pane(id, target);
+            }
+            "empty" => {
+                let target = chart.add_pane();
+                chart.set_preserve_empty_pane(target, true);
+            }
+            "moved main series" => {
+                let target = chart.add_pane();
+                chart.move_series_to_pane(SeriesId::MAIN, target);
+            }
+            _ => {}
+        }
+        let mut menus = ChartMenus::default();
+        menus.chart.watchlists = vec!["Tech".into()];
+        let mut frame = |chart: &mut Chart, events| {
+            ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    chart.show(ui);
+                    menus.show(ui.ctx(), chart);
+                },
+            )
+        };
+        for _ in 0..3 {
+            frame(&mut chart, vec![]).drop_without_applying_deltas();
+        }
+        let pos = egui::pos2(350.0, y);
+        let modifiers = if secondary {
+            Modifiers::NONE
+        } else {
+            // Alt and the command modifier reveal the price button at the pointer.
+            Modifiers::CTRL
+                .plus(Modifiers::COMMAND)
+                .plus(Modifiers::ALT)
+        };
+        for _ in 0..3 {
+            frame(
+                &mut chart,
+                vec![Event::ModifiersChanged(modifiers), Event::PointerMoved(pos)],
+            )
+            .drop_without_applying_deltas();
+        }
+        for pressed in [true, false] {
+            frame(
+                &mut chart,
+                vec![Event::PointerButton {
+                    pos,
+                    pressed,
+                    button: if secondary {
+                        PointerButton::Secondary
+                    } else {
+                        PointerButton::Primary
+                    },
+                    modifiers,
+                }],
+            )
+            .drop_without_applying_deltas();
+        }
+        let output = frame(
+            &mut chart,
+            vec![
+                Event::ModifiersChanged(Modifiers::NONE),
+                Event::PointerMoved(egui::pos2(20.0, 20.0)),
+            ],
+        );
+        fn collect(shape: &egui::Shape, labels: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(text) => labels.push(text.galley.text().to_owned()),
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect(shape, labels)),
+                _ => {}
+            }
+        }
+        let mut labels = Vec::new();
+        for shape in &output.shapes {
+            collect(&shape.shape, &mut labels);
+        }
+        output.drop_without_applying_deltas();
+        let count = |prefix: &str| {
+            labels
+                .iter()
+                .filter(|label| label.starts_with(prefix))
+                .count()
+        };
+        let case = format!("{pane}, right-click {secondary}: {labels:?}");
+        assert_eq!(count("Draw horizontal line"), 1, "{case}");
+        // The right-click menu lists the watchlist row, right in any pane.
+        assert_eq!(
+            count("Add TEST to watchlist"),
+            usize::from(secondary),
+            "{case}"
+        );
+        assert_eq!(count("Add alert on"), usize::from(trading), "{case}");
+        assert_eq!(
+            count("Buy ") + count("Sell "),
+            2 * usize::from(trading),
+            "{case}"
+        );
     }
 }

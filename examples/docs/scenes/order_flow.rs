@@ -5,6 +5,7 @@ use egui_charts::{
     chart::overlays::FootprintConfig,
     data::{Footprint, OrderFlowInput},
     model::{Bar, BarClock, BarData, OrderBook, OrderBookLevel, OrderSide, Tick, Timeframe},
+    theme::ThemeExt,
 };
 
 /// Compare complete executions with a shorter retained history and a lost book.
@@ -129,7 +130,11 @@ impl ExecutionDepth {
         } else {
             ui.label("Latest depth unavailable until a synchronized snapshot arrives.");
         }
-        chart.show_footprint(ui, &self.flow, &FootprintConfig::default());
+        let config = FootprintConfig {
+            text_color: ui.active_theme().chart.axis_text,
+            ..Default::default()
+        };
+        chart.show_footprint(ui, &self.flow, &config);
     }
 }
 

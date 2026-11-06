@@ -195,17 +195,17 @@ jobs:
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}
         run: test "$CHANGES_RESULT" = success
-      # The library compiles twice here (test harness, then as the demo dependency). Debug info is
-      # a large share of each Windows compile and link, and the tests never read it; panics still
-      # report their source line without it. Set through the file because Cargo rejects an empty value.
+      # Debug info is a large share of each Windows compile and link, and the tests never read it;
+      # panics still report their source line without it. Set through the file because Cargo rejects
+      # an empty value.
       - name: Skip debug info on Windows
         if: matrix.os == 'windows-latest'
         shell: bash
         run: echo CARGO_PROFILE_DEV_DEBUG=0 >> "$GITHUB_ENV"
       - uses: actions/checkout@v7
-        if: needs.changes.outputs.docs == 'true' || (matrix.os != 'macos-latest' && needs.changes.outputs.native == 'true')
+        if: needs.changes.outputs.docs == 'true' || (matrix.os == 'ubuntu-latest' && needs.changes.outputs.native == 'true')
       - uses: dtolnay/rust-toolchain@master
-        if: needs.changes.outputs.docs == 'true' || (matrix.os != 'macos-latest' && needs.changes.outputs.native == 'true')
+        if: needs.changes.outputs.docs == 'true' || (matrix.os == 'ubuntu-latest' && needs.changes.outputs.native == 'true')
         id: toolchain
         with:
           toolchain: ${{ matrix.rust }}
@@ -213,18 +213,18 @@ jobs:
         if: needs.changes.outputs.docs == 'true' && matrix.os == 'macos-latest'
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      # Keep both dependency graphs; per-workspace cleanup would prune the other's artifacts. Exact
-      # key only: a prefix fallback would carry stale artifacts into every new entry and grow it
-      # without bound, since nothing prunes this target.
+      # Linux keeps both dependency graphs; per-workspace cleanup would prune the other's artifacts.
+      # Exact key only: a prefix fallback would carry stale artifacts into every new entry and grow
+      # it without bound, since nothing prunes this target.
       - uses: actions/cache/restore@v5
-        if: matrix.os == 'windows-latest' && (needs.changes.outputs.docs == 'true' || needs.changes.outputs.native == 'true')
+        if: matrix.os == 'windows-latest' && needs.changes.outputs.docs == 'true'
         id: windows-cache
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: windows-native-v1-${{ runner.arch }}-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'examples/demo/Cargo.toml', 'examples/demo/Cargo.lock', '.github/workflows/ci.yml') }}
+          key: windows-test-v1-${{ runner.arch }}-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.github/workflows/ci.yml') }}
       - uses: actions/cache/restore@v5
         if: matrix.os == 'ubuntu-latest' && (needs.changes.outputs.docs == 'true' || needs.changes.outputs.native == 'true')
         id: linux-cache
@@ -244,12 +244,12 @@ jobs:
         if: matrix.os == 'ubuntu-latest' && needs.changes.outputs.native == 'true'
         run: sudo apt-get update && sudo apt-get install -y xvfb xdotool mesa-vulkan-drivers libxkbcommon-x11-0
       - name: Build native demo
-        if: matrix.os != 'macos-latest' && needs.changes.outputs.native == 'true'
+        if: matrix.os == 'ubuntu-latest' && needs.changes.outputs.native == 'true'
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/target
         run: cargo build --locked --manifest-path examples/demo/Cargo.toml
       - name: Test demo controller
-        if: matrix.os != 'macos-latest' && needs.changes.outputs.native == 'true'
+        if: matrix.os == 'ubuntu-latest' && needs.changes.outputs.native == 'true'
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/target
         run: cargo test --locked --manifest-path examples/demo/Cargo.toml
@@ -275,6 +275,59 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ steps.linux-cache.outputs.cache-primary-key }}
+
+  # The demo recompiles the library with its own features and profile, so on Windows it shares only
+  # the dependency cache with the test job, and its own job keeps both under ten minutes.
+  native-demo:
+    needs: changes
+    if: "!cancelled() && github.event.pull_request.draft != true"
+    name: Native demo (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+    steps:
+      - name: Check input classification
+        shell: bash
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+        run: test "$CHANGES_RESULT" = success
+      - uses: actions/checkout@v7
+        if: needs.changes.outputs.native == 'true'
+      - uses: dtolnay/rust-toolchain@master
+        if: needs.changes.outputs.native == 'true'
+        id: toolchain
+        with:
+          toolchain: stable
+      # Exact key only, like the test job's cache.
+      - uses: actions/cache/restore@v5
+        if: needs.changes.outputs.native == 'true'
+        id: windows-cache
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: windows-demo-v1-${{ runner.arch }}-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.toml', 'examples/demo/Cargo.toml', 'examples/demo/Cargo.lock', '.github/workflows/ci.yml') }}
+      - name: Build native demo
+        if: needs.changes.outputs.native == 'true'
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
+        run: cargo build --locked --manifest-path examples/demo/Cargo.toml
+      - name: Test demo controller
+        if: needs.changes.outputs.native == 'true'
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
+        run: cargo test --locked --manifest-path examples/demo/Cargo.toml
+      - uses: actions/cache/save@v5
+        if: github.ref == 'refs/heads/main' && steps.windows-cache.outputs.cache-primary-key != '' && steps.windows-cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ steps.windows-cache.outputs.cache-primary-key }}
 
   test-features:
     needs: changes
