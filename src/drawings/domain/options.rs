@@ -575,6 +575,7 @@ impl FibonacciConfig {
                 .collect(),
             show_background: tool != T::FibonacciTimeZones,
             background_opacity: 51,
+            show_levels: (tool == T::FibonacciWedge).then_some(true),
             labels_on_left: !matches!(tool, T::FibonacciTimeZones | T::TrendBasedFibTime),
             ..Self::legacy()
         }
@@ -957,9 +958,6 @@ mod tests {
     use crate::data::VolumeProfileConfig;
     use crate::model::Timeframe;
 
-    /// Reference: quantity = risked amount / |entry - stop| (reference.py);
-    /// none when a size from the risk has its stop at the entry, or a setting
-    /// is out of bounds.
     #[test]
     fn new_fibonacci_tools_start_from_their_level_tables() {
         use crate::drawings::DrawingToolType as T;
@@ -1035,6 +1033,9 @@ mod tests {
         }
     }
 
+    /// Reference: quantity = risked amount / |entry - stop| (reference.py);
+    /// none when a size from the risk has its stop at the entry, or a setting
+    /// is out of bounds.
     #[test]
     fn position_size_quantity() {
         let percent = |account_size, percent| PositionSize::RiskPercent {
