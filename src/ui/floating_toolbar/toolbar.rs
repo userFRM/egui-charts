@@ -2,6 +2,7 @@
 //!
 //! Floating toolbar for object customization.
 
+use crate::drawings::{ChartPoint, LineMeasurements};
 use crate::icons::icons;
 use crate::localization as l10n;
 use crate::model::LineStyle;
@@ -66,6 +67,9 @@ pub struct FloatingSelectionToolbar {
     stroke: Option<(f32, LineStyle)>,
     /// Symbol and id of the drawing the toolbar follows
     selected: Option<(String, usize)>,
+    /// What the toolbar last stayed clear of the readout card for: the drawing's readouts and
+    /// anchors, and the toolbar's size
+    placed_for: Option<(LineMeasurements, Vec<ChartPoint>, Vec2)>,
     /// Whether a custom colour gesture is still open as one undo step
     colour_drag: bool,
     /// The "More" menu
@@ -99,6 +103,7 @@ impl FloatingSelectionToolbar {
             pickers: Vec::new(),
             stroke: None,
             selected: None,
+            placed_for: None,
             colour_drag: false,
             menu: DrawingContextMenu::new(),
             is_locked: false,
@@ -118,6 +123,7 @@ impl FloatingSelectionToolbar {
     pub fn hide(&mut self) {
         self.visible = false;
         self.selected = None;
+        self.placed_for = None;
         self.pickers.clear();
         self.menu.close();
     }
@@ -195,6 +201,37 @@ impl FloatingSelectionToolbar {
             self.show_at(anchor + Vec2::new(12.0, -52.0));
             self.selected = Some(selected);
         }
+        // Waits for the pointer so that the toolbar holds still while anchors are dragged; only
+        // edits of the drawing and the measured size move it, and only off the card.
+        // shortcut: panning or zooming can still slide the card under the toolbar, which does not
+        // follow the view; compare the anchors' screen points if that proves to matter.
+        let size = self.size();
+        if !ui.input(|i| i.pointer.any_down())
+            && self
+                .placed_for
+                .as_ref()
+                .is_none_or(|(readouts, points, placed)| {
+                    *readouts != drawing.line_measurements
+                        || points.as_slice() != drawing.chart_points.as_slice()
+                        || *placed != size
+                })
+        {
+            if let Some(card) = chart.line_measurement_card_rect(ui, drawing) {
+                self.position = clear_of_card(
+                    self.position,
+                    size,
+                    card,
+                    &drawing.points,
+                    drawing.trend_line_ends(ui.ctx().content_rect()),
+                    ui.ctx().content_rect(),
+                );
+            }
+            self.placed_for = Some((
+                drawing.line_measurements,
+                drawing.chart_points.clone(),
+                size,
+            ));
+        }
         self.set_locked(drawing.locked);
         self.set_object_visible(drawing.visible);
         self.set_colors(vec![ColorSlot {
@@ -270,6 +307,16 @@ impl FloatingSelectionToolbar {
         None
     }
 
+    /// The toolbar's measured size, or its typical size before its first frame.
+    fn size(&self) -> Vec2 {
+        if self.last_rect.is_finite() {
+            self.last_rect.size()
+        } else {
+            // A line drawing's width until egui has measured the bar once.
+            Vec2::new(332.0, DESIGN_TOKENS.sizing.floating_toolbar.height)
+        }
+    }
+
     /// Render the toolbar.
     pub fn show(&mut self, ui: &mut Ui) -> Option<FloatingToolbarAction> {
         self.show_with_shortcuts(ui, &crate::widget::ShortcutMap::default())
@@ -284,12 +331,7 @@ impl FloatingSelectionToolbar {
             return None;
         }
         let bounds = ui.ctx().content_rect();
-        let size = if self.last_rect.is_finite() {
-            self.last_rect.size()
-        } else {
-            // Typical width until egui has measured the bar once.
-            Vec2::new(240.0, DESIGN_TOKENS.sizing.floating_toolbar.height)
-        };
+        let size = self.size();
         self.position.x = self
             .position
             .x
@@ -510,6 +552,53 @@ impl FloatingSelectionToolbar {
     }
 }
 
+/// Where a toolbar of `size` at `position` goes so that it does not cover a drawing's readout
+/// `card`: where it is when clear of it, else above the card and `anchors`, below them, above or
+/// below the card alone, or beside it, preferring a place off the drawing's `line`. Unmoved when
+/// `bounds` has no such place.
+fn clear_of_card(
+    position: Pos2,
+    size: Vec2,
+    card: Rect,
+    anchors: &[Pos2],
+    line: Option<(Pos2, Pos2)>,
+    bounds: Rect,
+) -> Pos2 {
+    let within = |position: Pos2| position.clamp(bounds.min, (bounds.max - size).max(bounds.min));
+    let covers = |position: Pos2| Rect::from_min_size(position, size).intersects(card);
+    if !covers(within(position)) {
+        return position;
+    }
+    let gap = DESIGN_TOKENS.spacing.md;
+    let drawing = anchors
+        .iter()
+        .fold(card, |rect, anchor| rect.union(Rect::from_pos(*anchor)));
+    let Pos2 { x, y } = within(position);
+    let places = [
+        Pos2::new(x, drawing.top() - gap - size.y),
+        Pos2::new(x, drawing.bottom() + gap),
+        Pos2::new(x, card.top() - gap - size.y),
+        Pos2::new(x, card.bottom() + gap),
+        Pos2::new(card.left() - gap - size.x, y),
+        Pos2::new(card.right() + gap, y),
+    ];
+    let free =
+        |&place: &Pos2| bounds.contains_rect(Rect::from_min_size(place, size)) && !covers(place);
+    let on_line = |place: Pos2| {
+        line.is_some_and(|(a, b)| {
+            crate::painting::dashed_line::clip_segment(a, b, Rect::from_min_size(place, size))
+                .is_some()
+        })
+    };
+    places
+        .iter()
+        .copied()
+        .filter(|place| free(place))
+        .find(|&place| !on_line(place))
+        .or_else(|| places.iter().copied().find(|place| free(place)))
+        .unwrap_or(position)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -673,6 +762,126 @@ mod tests {
             .textures_delta
             .clear();
             assert_eq!(toolbar.position, expected, "viewport {w}x{h}");
+        }
+    }
+
+    /// The toolbar leaves the readout card of a selected line readable at every placement,
+    /// including readouts enabled after selection, and stays where it is when already clear.
+    #[test]
+    fn toolbar_stays_clear_of_the_readout_card() {
+        use crate::drawings::{Drawing, DrawingToolType, LineMeasurementPosition as P};
+        let bounds = Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0));
+        for (position, a, b, enabled_later, stays) in [
+            (P::Right, (200.0, 300.0), (240.0, 310.0), false, false),
+            (P::Right, (200.0, 300.0), (240.0, 310.0), true, false),
+            // Beside the right edge the window pushes the toolbar left, over a card on the left.
+            (P::Left, (640.0, 300.0), (680.0, 290.0), false, false),
+            (P::Center, (200.0, 300.0), (240.0, 290.0), false, false),
+            // No room above a drawing at the window's top edge.
+            (P::Right, (200.0, 45.0), (240.0, 50.0), false, false),
+            (P::Right, (100.0, 300.0), (500.0, 290.0), false, true),
+        ] {
+            let case = format!("{position:?} {a:?} {b:?} later {enabled_later}");
+            let ctx = egui::Context::default();
+            let mut chart = crate::widget::test_frames::chart(&[100.0], &[200.0]);
+            let mut toolbar = FloatingSelectionToolbar::new();
+            let raw = egui::RawInput {
+                screen_rect: Some(bounds),
+                ..Default::default()
+            };
+            let frame = |chart: &mut Chart, toolbar: &mut FloatingSelectionToolbar| {
+                let mut output = ctx.run_ui(raw.clone(), |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        chart.show(ui);
+                    });
+                    toolbar.show_and_apply(ui, chart);
+                });
+                let shapes = std::mem::take(&mut output.shapes);
+                output.drop_without_applying_deltas();
+                shapes
+            };
+            frame(&mut chart, &mut toolbar);
+            let point = |chart: &Chart, (x, y): (f32, f32)| {
+                let pane = chart.get_rendered_price_rect();
+                crate::drawings::ChartPoint::new(
+                    chart
+                        .state
+                        .time_scale()
+                        .coord_to_idx_precise(x, pane.min.x, pane.width())
+                        as f32,
+                    chart.last_price_map.y_to_price(y),
+                )
+            };
+            let mut drawing = Drawing::new(7, DrawingToolType::ExtendedLine);
+            drawing.completed = true;
+            drawing.chart_points = vec![point(&chart, a), point(&chart, b)];
+            let readouts = crate::drawings::LineMeasurements {
+                position,
+                price_change: true,
+                percent_change: true,
+                bar_count: true,
+                length: true,
+                inclination: true,
+                ..Default::default()
+            };
+            if !enabled_later {
+                drawing.line_measurements = readouts;
+            }
+            chart.drawings_mut().drawings = vec![drawing];
+            chart.drawings_mut().select(7);
+            for _ in 0..3 {
+                frame(&mut chart, &mut toolbar);
+            }
+            if enabled_later {
+                chart.drawings_mut().drawings[0].line_measurements = readouts;
+            }
+            let shapes = (0..3)
+                .map(|_| frame(&mut chart, &mut toolbar))
+                .last()
+                .unwrap();
+            fn card_text(shape: &egui::Shape) -> Option<Rect> {
+                match shape {
+                    egui::Shape::Vec(shapes) => shapes.iter().find_map(card_text),
+                    egui::Shape::Text(text) if text.galley.text().contains("periods") => {
+                        Some(text.visual_bounding_rect())
+                    }
+                    _ => None,
+                }
+            }
+            let text = shapes
+                .iter()
+                .find_map(|shape| card_text(&shape.shape))
+                .unwrap_or_else(|| panic!("{case}: no card"));
+            assert!(
+                !toolbar.last_rect.intersects(text),
+                "{case}: toolbar {:?} covers card {text:?}",
+                toolbar.last_rect,
+            );
+            // egui rounds the measured width, so an edge can land a fraction past the window.
+            assert!(
+                bounds.expand(1.0).contains_rect(toolbar.last_rect),
+                "{case}"
+            );
+            let drawing = &chart.drawings().drawings[0];
+            let anchor = drawing.points[0];
+            if stays {
+                assert_eq!(toolbar.position, anchor + Vec2::new(12.0, -52.0), "{case}");
+            } else {
+                let (from, to) = drawing.trend_line_ends(bounds).unwrap();
+                assert!(
+                    crate::painting::dashed_line::clip_segment(from, to, toolbar.last_rect)
+                        .is_none(),
+                    "{case}: toolbar {:?} covers the line",
+                    toolbar.last_rect,
+                );
+            }
+            // The rectangle the toolbar avoids is the one painted.
+            let mut card = None;
+            ctx.run_ui(raw.clone(), |ui| {
+                card = chart.line_measurement_card_rect(ui, &chart.drawings().drawings[0]);
+            })
+            .drop_without_applying_deltas();
+            assert!(card.is_some_and(|card| card.contains_rect(text)), "{case}");
         }
     }
 }

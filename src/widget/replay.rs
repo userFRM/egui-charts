@@ -311,13 +311,16 @@ impl Chart {
             .timeframe
             .map_or_else(BarClock::exact, |_| self.bar_clock());
         let market = self.market_replay.is_some();
+        let main_live = self.main_bars_live();
         let Some(replay) =
             (self.replay.as_mut()).or(self.market_replay.as_mut().map(|replay| &mut replay.window))
         else {
             return;
         };
         replay.time = time;
-        for (&id, &limit) in &self.bar_limits {
+        // A removed main series keeps its limit unread, as in `Chart::bar_limit`.
+        let limits = (self.bar_limits.iter()).filter(|(id, _)| **id != SeriesId::MAIN || main_live);
+        for (&id, &limit) in limits {
             let count = replay
                 .bars
                 .get(&id)

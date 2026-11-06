@@ -651,6 +651,65 @@ mod tests {
         assert!(vertical <= 30, "{vertical} vertical lines");
     }
 
+    /// A study's levels in its own pane are painted over its pane tint, as on the price pane.
+    #[test]
+    fn pane_tint_stays_beneath_the_study_levels() {
+        use crate::widget::test_frames::{chart, shapes};
+        let mut chart = chart(&[40.0], &[60.0]);
+        let id = chart.add_indicator(Box::new(crate::studies::RSI::default()));
+        let tint = Color32::from_rgb(20, 30, 40);
+        let level = Color32::from_rgb(250, 10, 10);
+        let study = chart.indicator_mut(id).unwrap();
+        let mut settings = study.settings();
+        settings.background = Some(tint);
+        settings.levels[0].color = level;
+        settings.levels[0].pattern = crate::model::LineStyle::Solid;
+        study.apply_settings(&[], settings).unwrap();
+        let ctx = egui::Context::default();
+        shapes(&ctx, &mut chart, 0.0, Vec::new());
+        let painted = shapes(&ctx, &mut chart, 1.0, Vec::new());
+        let is_tint = |shape: &egui::Shape| matches!(shape, egui::Shape::Rect(r) if r.fill == tint);
+        assert_eq!(painted.iter().filter(|shape| is_tint(shape)).count(), 1);
+        let tinted = painted.iter().position(is_tint).unwrap();
+        let line = painted
+            .iter()
+            .position(|shape| {
+                matches!(shape, egui::Shape::LineSegment { stroke, .. } if stroke.color == level)
+            })
+            .expect("the level line is painted");
+        assert!(line > tinted, "level painted at {line}, tint at {tinted}");
+
+        // Sharing the pane of the main series, it is painted with the price pane's geometry.
+        let pane = chart.series_pane(id).unwrap();
+        assert!(chart.move_series_to_pane(crate::widget::SeriesId::MAIN, pane));
+        let painted = shapes(&ctx, &mut chart, 2.0, Vec::new());
+        assert_eq!(painted.iter().filter(|shape| is_tint(shape)).count(), 1);
+
+        // A volume study shown in a pane of its own is tinted once too.
+        let bars = chart.bars(crate::widget::SeriesId::MAIN).to_vec();
+        let mut volume =
+            crate::studies::ConfiguredStudy::new(Box::new(crate::studies::Volume::default()));
+        let mut settings = volume.settings();
+        settings.background = Some(tint);
+        volume.apply_settings(&[], settings).unwrap();
+        volume.calculate(&bars);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            IndicatorPane::with_config(IndicatorPaneConfig::default()).show(
+                ui,
+                &volume,
+                &bars,
+                0..bars.len(),
+            );
+        });
+        let painted = std::mem::take(&mut output.shapes);
+        output.drop_without_applying_deltas();
+        let tints = painted
+            .iter()
+            .filter(|clipped| is_tint(&clipped.shape))
+            .count();
+        assert_eq!(tints, 1);
+    }
+
     #[test]
     fn rsi_paints_the_band_and_guides_of_its_preset_and_its_level_settings() {
         let config = IndicatorPaneConfig::rsi();
