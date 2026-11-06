@@ -435,16 +435,13 @@ mod tests {
             .into_iter()
             .find(|request| request.symbol == "DENOM")
             .unwrap();
-        for (step, denominator, expected) in [(0, 41.0, "1.00"), (10, 82.0, "0.50")] {
+        for (denominator, expected) in [(41.0, "1.00"), (82.0, "0.50")] {
             let history = chart
                 .bars(SeriesId::MAIN)
                 .iter()
                 .map(|bar| Bar::from_value(bar.time, denominator))
                 .collect();
             chart.set_study_data(request.clone(), history, None);
-            for frame in step..step + 4 {
-                crate::widget::test_frames::frame(&ctx, &mut chart, f64::from(frame), vec![]);
-            }
             show(&mut dialog, &chart);
             // A host-fed denominator changes with no edit to the chart bars or study settings.
             assert_eq!(cached_value(&dialog, 5000, "Ratio"), expected);
@@ -731,5 +728,50 @@ mod tests {
             let row = table.rows.iter().find(|row| row[0] == time.to_rfc3339());
             assert_eq!(row.unwrap()[4], "99.00", "bar {edge}");
         }
+    }
+
+    /// Older bars in front change the table once, so it is built once with its final values, not
+    /// once for each study the chart then recalculates on its own frames.
+    #[test]
+    fn history_load_builds_the_table_once() {
+        let start = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let bars: Vec<_> = (0..2000)
+            .map(|i| {
+                let close = 10.0 + (i % 7) as f64;
+                let time = start + chrono::Duration::days(i);
+                Bar::new(time, close, close + 1.0, close - 1.0, close, 100.0)
+            })
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars[1000..].to_vec()));
+        for period in [2, 3, 5, 8, 13] {
+            chart.add_indicator(Box::new(crate::studies::SMA::new(period)));
+        }
+        let chart_ctx = Context::default();
+        let ctx = Context::default();
+        let mut dialog = DataTableDialog::new();
+        dialog.open();
+        let mut time = 0.0;
+        // One host frame: the chart, then the dialog over it.
+        let mut step = |chart: &mut Chart, dialog: &mut DataTableDialog| {
+            time += 1.0;
+            crate::widget::test_frames::frame(&chart_ctx, chart, time, vec![]);
+            shown_rows(&ctx, dialog, chart)
+        };
+        let mut previous = std::ptr::null();
+        for _ in 0..12 {
+            previous = step(&mut chart, &mut dialog);
+        }
+        // A scroll-back page: the same bars with 1000 older ones in front.
+        chart.set_data(SeriesId::MAIN, bars);
+        let mut builds = 0;
+        for _ in 0..12 {
+            let rows = step(&mut chart, &mut dialog);
+            builds += usize::from(rows != previous);
+            previous = rows;
+        }
+        assert_eq!(builds, 1);
+        let mut expected = chart.data_table().rows;
+        expected.reverse();
+        assert!(dialog.cached.as_ref().unwrap().1.rows == expected);
     }
 }

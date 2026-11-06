@@ -636,6 +636,9 @@ impl Chart {
                     read = Some(read.unwrap_or(false) || *hard);
                 }
             }
+            if read.is_some() {
+                self.readout_revision = crate::model::next_revision();
+            }
             match read {
                 Some(true) => {
                     self.pending_from[at] = Some(0);

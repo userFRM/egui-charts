@@ -394,6 +394,7 @@ impl Chart {
                         .iter()
                         .any(|other| input.same_source(other))
                     {
+                        self.readout_revision = crate::model::next_revision();
                         let from = input.changed_since(*seen).map_or(0, |time| {
                             self.state
                                 .data()

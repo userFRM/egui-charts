@@ -267,6 +267,7 @@ impl Chart {
             if instrument_changed || clock_changed || events_changed {
                 self.pending_from[at] = Some(0);
                 self.element_studies.dirty = true;
+                self.readout_revision = crate::model::next_revision();
             }
         }
         let requests = self
@@ -278,7 +279,7 @@ impl Chart {
         let sources =
             self.study_data
                 .data(requests, &self.symbol, self.timeframe, self.replay_time());
-        let (wait, changed) = refresh_values(
+        refresh_values(
             self.studies.indicators_mut(),
             &self.study_ids,
             bars,
@@ -287,11 +288,7 @@ impl Chart {
             &mut self.next_refresh,
             now,
             &sources,
-        );
-        if changed {
-            self.readout_revision = crate::model::next_revision();
-        }
-        wait
+        )
     }
 
     pub(super) fn refresh_element_studies(&mut self, now: f64) -> Option<f64> {
@@ -316,7 +313,6 @@ impl Chart {
             now,
             &sources,
         )
-        .0
     }
 
     pub(super) fn rendered_studies(&self) -> &crate::studies::IndicatorRegistry {
@@ -485,12 +481,10 @@ pub(super) fn refresh_values(
     next_refresh: &mut [f64],
     now: f64,
     sources: &[crate::studies::StudyData<'_>],
-) -> (Option<f64>, bool) {
-    let mut changed = false;
+) -> Option<f64> {
     let order = super::studies::order(studies, ids);
     for at in 0..studies.len() {
         if !order.contains(&at) {
-            changed |= pending(pending_from, stale, at).is_some();
             studies[at].update_source(bars, 0, &[]);
             pending_from[at] = None;
             stale[at] = false;
@@ -562,7 +556,6 @@ pub(super) fn refresh_values(
         // The consumers of values kept for a full recompute keep theirs until their own turn.
         let kept = stale[at] && pending_from[at] != Some(0);
         super::studies::update(studies, ids, at, bars, from, sources);
-        changed = true;
         pending_from[at] = None;
         stale[at] = false;
         if !incremental {
@@ -602,7 +595,6 @@ pub(super) fn refresh_values(
         let left = if pending_from[at] == Some(0) {
             if !study.values().is_empty() {
                 study.update(&[], 0);
-                changed = true;
             }
             0.0
         } else {
@@ -610,7 +602,7 @@ pub(super) fn refresh_values(
         };
         wait = Some(wait.map_or(left, |wait| wait.min(left)));
     }
-    (wait, changed)
+    wait
 }
 
 /// The first bar study `at` must be updated from: the first one while it draws values kept for

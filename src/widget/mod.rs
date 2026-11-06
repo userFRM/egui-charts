@@ -287,7 +287,8 @@ pub struct Chart {
     bar_limits: std::collections::HashMap<SeriesId, std::num::NonZeroUsize>,
     /// The chart's studies, in the order they were added.
     pub(crate) studies: IndicatorRegistry,
-    /// Changes when bars, study edits or completed calculations can affect table cells.
+    /// Changes when what the data table calculates from changes, unlike the steps of the chart's
+    /// own refresh, whose results the table does not read.
     readout_revision: u64,
     /// See [`Self::data_table_identity`].
     #[cfg(feature = "ui")]
