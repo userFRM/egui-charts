@@ -567,16 +567,18 @@ impl SymbolTab {
             ]
         };
         ui.label_inputs_by(label.id, |ui| {
-            let options = std::iter::once(None)
+            let mut options: Vec<_> = std::iter::once(None)
                 .chain(
                     zones
                         .iter()
                         .filter_map(|zone| TimezoneId::named(zone))
                         .map(Some),
                 )
-                .chain(custom.zone.clone().map(Some));
-            let mut options: Vec<_> = options.collect();
-            options.dedup();
+                .collect();
+            // A saved zone outside the list stays selectable.
+            if !options.contains(&custom.zone) {
+                options.push(custom.zone.clone());
+            }
             ui.combo_select("profile_zone", &mut custom.zone, options, |zone| {
                 zone.as_ref()
                     .map_or("Exchange", |zone| zone.name())
