@@ -57,7 +57,8 @@ pub enum ChartType {
     HlcArea,
     /// Baseline comparison chart with colored fill
     Baseline,
-    /// One column per bar, colored by close versus the previous close.
+    /// One column per bar up to the price of `ChartTypeStyles::columns`, colored by close versus
+    /// the previous close.
     /// The base is the pane bottom unless `ChartTypeParams::columns_base` is set.
     Columns,
 
@@ -210,7 +211,7 @@ impl ChartType {
             ChartType::Area => "Filled area chart",
             ChartType::HlcArea => "High-Low-Close area",
             ChartType::Baseline => "Baseline comparison",
-            ChartType::Columns => "Columns up to the close",
+            ChartType::Columns => "Columns up to the selected price",
             ChartType::HighLow => "High-Low range",
             ChartType::TimePriceOpportunity => "TPO / Market Profile",
             ChartType::LineBreak => "Three line break",

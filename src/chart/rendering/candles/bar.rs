@@ -4,12 +4,13 @@ use crate::scales::PriceMap;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Pos2, Stroke};
 
-/// Renders a single OHLC bar
+/// Renders a single OHLC bar in its rising or falling colour unless it has its own.
 /// Vertical line with left tick for open, right tick for close. Thin bars use the wick width;
 /// other bars a stroke of half the bar width, at least 1.5 points.
 pub fn render_ohlc_bar(
     context: &RenderContext,
     bar: &Bar,
+    rising: bool,
     price_scale: &PriceMap,
     colors: &StyleColors,
     params: &BarRenderParams,
@@ -22,7 +23,7 @@ pub fn render_ohlc_bar(
         .colors
         .as_ref()
         .and_then(|own| own.color)
-        .unwrap_or_else(|| colors.bar_color(bar.is_bullish()));
+        .unwrap_or_else(|| colors.bar_color(rising));
 
     // Convert prices to screen coords
     let high_y = price_scale.price_to_y(bar.high);
@@ -107,12 +108,14 @@ mod tests {
                 render_ohlc_bar(
                     &RenderContext::new(&painter, rect),
                     &bar,
+                    true,
                     &map,
                     &colors,
                     &BarRenderParams::new(50.0, 12.0, 1.0),
                     &BarsStyle {
                         open_visible,
                         thin_bars,
+                        ..Default::default()
                     },
                 );
             });

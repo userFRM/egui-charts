@@ -874,7 +874,7 @@ mod tests {
                 ChartType::VolumeCandles,
                 "Color bars based on previous close",
             ),
-            (ChartType::Bars, "Body"),
+            (ChartType::Bars, "Up and down colors"),
             (ChartType::Line, "Line width"),
             (ChartType::Baseline, "Base level"),
             (ChartType::Renko, "Size method"),

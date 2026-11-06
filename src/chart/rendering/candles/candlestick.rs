@@ -5,7 +5,7 @@
 use super::helpers::{OhlcYCoords, body_rect, prev_close, push_body, push_wicks};
 use super::volume::render_volume_bars;
 use crate::chart::rendering::{self, BarRenderParams, RenderContext, StyleColors};
-use crate::model::{Bar, BarsStyle, CandlesStyle, HollowStyle, VolumeCandlesStyle};
+use crate::model::{Bar, BarsStyle, CandlesStyle, HollowStyle, PriceSource, VolumeCandlesStyle};
 use crate::scales::PriceMap;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke};
@@ -50,6 +50,7 @@ pub(super) fn render_ohlc_bars(
     price_scale: &PriceMap,
     colors: &StyleColors,
     visible_data: &[Bar],
+    full_data: &[Bar],
     start_idx: usize,
     bar_width: f32,
     wick_width: f32,
@@ -62,7 +63,12 @@ pub(super) fn render_ohlc_bars(
     for (i, bar) in visible_data.iter().enumerate() {
         let x = idx_to_coord(start_idx + i, chart_rect_min_x);
         let params = BarRenderParams::new(x, bar_width, wick_width);
-        rendering::render_ohlc_bar(price_ctx, bar, price_scale, colors, &params, style);
+        let rising = if style.color_by_previous_close {
+            !bar.is_whitespace() && bar.close >= prev_close(full_data, start_idx + i)
+        } else {
+            bar.is_bullish()
+        };
+        rendering::render_ohlc_bar(price_ctx, bar, rising, price_scale, colors, &params, style);
 
         if show_volume {
             let pitch = (idx_to_coord(start_idx + i + 1, chart_rect_min_x) - x).abs();
@@ -134,8 +140,9 @@ pub(super) fn render_hollow_candles(
     }
 }
 
-/// Columns: one solid column per bar from the pane bottom, or from `base` when set, to the close,
-/// coloured by the close versus the previous close. Columns are at least one pixel tall.
+/// Columns: one solid column per bar from the pane bottom, or from `base` when set, to the `source`
+/// price, coloured by the close versus the previous close whatever the source. Columns are at least
+/// one pixel tall.
 pub(super) fn render_columns(
     price_ctx: &RenderContext,
     volume_ctx: &RenderContext,
@@ -152,6 +159,7 @@ pub(super) fn render_columns(
     bullish_color: Color32,
     bearish_color: Color32,
     base: Option<f64>,
+    source: PriceSource,
 ) {
     let bottom = price_ctx.rect.max.y;
     let base_y = base.map(|price| price_scale.price_to_y(price));
@@ -168,11 +176,12 @@ pub(super) fn render_columns(
                 bearish_color
             },
         );
-        let close = price_scale.price_to_y(bar.close);
+        let value = source.compute(bar.open, bar.high, bar.low, bar.close);
+        let value = price_scale.price_to_y(value);
         let (top, bottom) = match base_y {
-            None => (close.min(bottom - 1.0), bottom),
-            Some(base) if close <= base => (close.min(base - 1.0), base),
-            Some(base) => (base, close.max(base + 1.0)),
+            None => (value.min(bottom - 1.0), bottom),
+            Some(base) if value <= base => (value.min(base - 1.0), base),
+            Some(base) => (base, value.max(base + 1.0)),
         };
         let rect = Rect::from_min_max(
             Pos2::new(x - bar_width / 2.0, top),
@@ -327,6 +336,7 @@ mod tests {
                     Color32::GREEN,
                     Color32::RED,
                     base,
+                    PriceSource::Close,
                 );
             });
             let columns: Vec<_> = output
