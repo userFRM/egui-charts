@@ -494,6 +494,82 @@ fn last_value_queries_select_loaded_or_visible_on_the_series_scale() {
     assert_eq!((last.value, last.index), (130.0, 2.0));
 }
 
+/// Columns, hollow candles, and candles coloured by the previous close, take their direction from
+/// the close before them. The last bar opens at 13 and closes at 12.5, above the previous close of
+/// 12, so it is painted in the rising colour, and its price line, label and last value take that
+/// colour too. Candles compared with their open stay falling, and the bar before the first in
+/// view still counts when only the last bar is in view.
+#[test]
+fn last_value_colour_follows_the_previous_close_rule() {
+    use crate::widget::test_frames::shapes;
+    let (up, down) = (Color32::from_rgb(1, 100, 2), Color32::from_rgb(101, 2, 3));
+    let start = "2024-01-01T00:00:00Z"
+        .parse::<chrono::DateTime<Utc>>()
+        .unwrap();
+    let data = vec![
+        Bar::new(start, 10.0, 12.5, 9.0, 12.0, 1.0),
+        Bar::new(start + TimeDelta::days(1), 13.0, 13.5, 12.0, 12.5, 1.0),
+    ];
+    for (kind, by_previous_close, expected) in [
+        (ChartType::HollowCandles, false, up),
+        (ChartType::Columns, false, up),
+        (ChartType::Candles, true, up),
+        (ChartType::Candles, false, down),
+        (ChartType::VolumeCandles, true, up),
+        (ChartType::VolumeCandles, false, down),
+    ] {
+        for source in [PriceLineSource::LastBar, PriceLineSource::LastVisible] {
+            let ctx = egui::Context::default();
+            let mut chart = Chart::new(BarData::from_bars(data.clone()));
+            chart.set_chart_type(kind);
+            chart.config_mut().show_volume = false;
+            chart.config_mut().bullish_color = up;
+            chart.config_mut().bearish_color = down;
+            let mut params = chart.chart_type_params().clone();
+            params.styles.hollow.body_up = up;
+            params.styles.hollow.body_down = down;
+            params.styles.volume_candles.body_up = up;
+            params.styles.volume_candles.body_down = down;
+            params.styles.candles.color_by_previous_close = by_previous_close;
+            params.styles.volume_candles.color_by_previous_close = by_previous_close;
+            chart.set_chart_type_params(params);
+            chart.main_series_style.price_line_source = source;
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            if source == PriceLineSource::LastVisible {
+                assert!(chart.set_visible_logical_range(crate::model::LogicalRange::new(1.0, 1.4)));
+            }
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+            let plot = chart.get_rendered_price_rect();
+            assert_eq!(
+                chart.state.visible_range(),
+                (usize::from(source == PriceLineSource::LastVisible), 2,)
+            );
+            let label = painted.iter().find_map(|shape| match shape {
+                egui::Shape::Rect(r)
+                    if !plot.contains(r.rect.center()) && [up, down].contains(&r.fill) =>
+                {
+                    Some(r.fill)
+                }
+                _ => None,
+            });
+            let line = painted.iter().find_map(|shape| match shape {
+                egui::Shape::LineSegment { points, stroke }
+                    if points[0].y == points[1].y && [up, down].contains(&stroke.color) =>
+                {
+                    Some(stroke.color)
+                }
+                _ => None,
+            });
+            let value = chart.series_last_value(SeriesId::MAIN, source).unwrap();
+            assert_eq!(
+                (label, line, value.color),
+                (Some(expected), Some(expected), expected),
+                "{kind:?} {by_previous_close} {source:?}"
+            );
+        }
+    }
+}
+
 /// Tick hooks see each axis separately in displayed units, while value labels keep
 /// using the individual hook. A move from 100 to 200 or 1000 to 2000 is +100%, index 200.
 #[test]
