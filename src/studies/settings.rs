@@ -213,11 +213,13 @@ fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
     // a band only once it has data. Bands beyond them start with the study's own style.
     let fills = study.fills();
     let saved = settings.fills.len().min(fills.len());
-    settings.fills.extend(fills[saved..].iter().map(|fill| FillStyle {
-        color: fill.color,
-        inverted_color: fill.inverted_color,
-        visible: true,
-    }));
+    settings
+        .fills
+        .extend(fills[saved..].iter().map(|fill| FillStyle {
+            color: fill.color,
+            inverted_color: fill.inverted_color,
+            visible: true,
+        }));
 }
 
 /// Interval visibility evaluated for every interval, including custom and trade-based ones.

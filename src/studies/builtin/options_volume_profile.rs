@@ -469,8 +469,8 @@ impl OptionsVolumeProfile {
                     cache.day = Some(day);
                     return;
                 }
-                let interest =
-                    cache.interest_available && (self.open_interest.get() || !cache.volume_available);
+                let interest = cache.interest_available
+                    && (self.open_interest.get() || !cache.volume_available);
                 let values: Arc<[OptionsVolume]> = if interest || cache.volume_available {
                     selected
                         .iter()
@@ -1838,10 +1838,7 @@ mod tests {
     }
 
     /// A factory that builds the profile over `chain`, as the indicator dialog registers it.
-    fn profile_factory(
-        chain: OptionChain,
-        expiry: NaiveDate,
-    ) -> crate::studies::IndicatorFactory {
+    fn profile_factory(chain: OptionChain, expiry: NaiveDate) -> crate::studies::IndicatorFactory {
         let mut factory = crate::studies::IndicatorFactory::new();
         factory.register("Options Volume Profile", move || {
             Box::new(
