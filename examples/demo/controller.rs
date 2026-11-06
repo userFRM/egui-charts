@@ -126,7 +126,8 @@ fn study_input_summary(study: &dyn egui_charts::studies::Indicator) -> String {
         .iter()
         // List sizes and minutes after midnight mean nothing alone; the study's source goes below.
         .filter(|input| {
-            !matches!(input.id.as_str(), "band_count" | "event_count")
+            input.is_shown(&inputs)
+                && !matches!(input.id.as_str(), "band_count" | "event_count")
                 && !matches!(input.kind, InputKind::Length(0, 1439))
                 && (source.is_none() || input.id != "source")
         })
