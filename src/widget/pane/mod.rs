@@ -479,7 +479,8 @@ impl Chart {
         for id in members.into_iter().filter(|id| *id != SeriesId::MAIN) {
             self.remove_series(id);
         }
-        if removes_main {
+        // Undo of a recorded removal brings the markers back with the series.
+        if removes_main && !self.history.recording() {
             self.marks = Default::default();
             self.change_marks = None;
         }
@@ -1501,7 +1502,7 @@ mod tests {
             assert!(chart.price_line(survivor_line).is_some());
             assert_eq!(chart.markers(series).len(), 1);
             assert_eq!(chart.bars(series), data);
-            assert!(chart.marks.is_empty());
+            assert!(chart.markers(SeriesId::MAIN).is_empty());
             frame(&ctx, &mut chart, 0.2, vec![]);
             assert_eq!(detached.load(Ordering::Relaxed), 2);
             assert_eq!(survivor_detached.load(Ordering::Relaxed), 0);
@@ -1746,5 +1747,42 @@ mod tests {
             }
         }
         assert!(!chart.remove_pane(survivor));
+    }
+
+    /// Undo of a user action that removed the original price pane with the main series
+    /// in it brings back the main series' markers and change markers, as undo of the series'
+    /// own removal does.
+    #[test]
+    fn undo_of_price_pane_removal_restores_main_markers() {
+        use crate::model::{ChangeMarkers, Marker};
+        use crate::widget::{PaneId, SeriesId};
+
+        let removals: [fn(&mut crate::widget::Chart) -> bool; 2] = [
+            |chart| chart.remove_series(SeriesId::MAIN),
+            |chart| chart.remove_pane(PaneId::MAIN),
+        ];
+        let undone: Vec<_> = removals
+            .into_iter()
+            .map(|remove| {
+                let mut chart = chart(&[100.0], &[110.0]);
+                chart.add_indicator(Box::new(crate::studies::RSI::new(3)));
+                let time = chart.bars(SeriesId::MAIN)[70].time;
+                chart.set_markers(SeriesId::MAIN, vec![Marker::new(time)]);
+                chart.set_change_markers(SeriesId::MAIN, Some(ChangeMarkers::default()));
+                let state = |chart: &crate::widget::Chart| {
+                    (
+                        chart.markers(SeriesId::MAIN).len(),
+                        chart.change_markers(SeriesId::MAIN).is_some(),
+                    )
+                };
+                assert!(chart.user_action(remove));
+                assert!(chart.undo());
+                let undone = state(&chart);
+                assert!(chart.redo());
+                assert_eq!(state(&chart), (0, false), "redo removes them again");
+                undone
+            })
+            .collect();
+        assert_eq!(undone, [(1, true), (1, true)]);
     }
 }
