@@ -1880,6 +1880,9 @@ impl Chart {
                     &(start_idx..end_idx),
                     Some(&self.merge_groups),
                 );
+                if let Some(color) = study.background() {
+                    painter.rect_filled(rect, 0.0, color);
+                }
                 super::volume::paint(
                     &painter,
                     rect,
@@ -1932,6 +1935,11 @@ impl Chart {
                 );
             } else {
                 let mapping = rendering::study_mapping(study.as_ref(), &coords);
+                if let Some(color) = study.background() {
+                    painter
+                        .with_clip_rect(price_rect)
+                        .rect_filled(price_rect, 0.0, color);
+                }
                 rendering::IndicatorRenderer::render_study(
                     &price_ctx,
                     study.as_ref(),
