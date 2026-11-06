@@ -253,8 +253,9 @@ impl StudyTemplate {
                         .inputs
                         .push(("band_count".to_owned(), InputValue::Length(0)));
                 }
-                // Hidden, each fill keeps the colour its band is filled in once shown.
-                template.settings.fills = (0..bands)
+                // Hidden, each fill keeps the colour its band is filled in once shown. Each band
+                // draws two of the saved lines, so their number also bounds a corrupt band count.
+                template.settings.fills = (0..bands.min(self.settings.plots.len()))
                     .map(|band| crate::studies::FillStyle {
                         color: self
                             .settings
@@ -749,6 +750,23 @@ mod tests {
             colors,
             [crate::studies::palette::GREEN.gamma_multiply_u8(13)]
         );
+    }
+
+    /// A VWAP template with a band count no VWAP accepts fails to restore like any invalid input,
+    /// instead of sizing its band styles by that count.
+    #[test]
+    fn vwap_templates_with_a_corrupt_band_count_fail_to_restore() {
+        let mut saved = StudyTemplate::from_study(&VolumeWeightedAvgPrice::default());
+        saved.settings.fills.clear();
+        for (id, value) in &mut saved.inputs {
+            if id == "band_count" {
+                *value = InputValue::Length(usize::MAX);
+            }
+        }
+        assert!(matches!(
+            saved.create(),
+            Err(crate::studies::StudyError::InvalidInput { id, .. }) if id == "band_count"
+        ));
     }
 
     /// Templates and layouts saved before the channel studies' inputs changed load and draw the
