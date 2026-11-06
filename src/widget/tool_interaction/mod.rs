@@ -26,6 +26,42 @@ use crate::widget::tool_interaction::cursor_modes::CursorModeState;
 use egui::{Painter, Pos2, Rect, Response, Ui};
 
 impl Chart {
+    /// The rectangle of `drawing`'s readout card at its last painted anchors, with the card's text
+    /// and pane clip as painted, or `None` without a card or before its pane has been drawn.
+    #[cfg(feature = "ui")]
+    pub(crate) fn line_measurement_card_rect(
+        &self,
+        ui: &Ui,
+        drawing: &crate::drawings::Drawing,
+    ) -> Option<Rect> {
+        if !drawing.tool_type.supports_line_measurements() {
+            return None;
+        }
+        let clip = *self.drawings.pane_clips.get(&drawing.pane)?;
+        let timescale = self.state.time_scale();
+        drawing.line_measurement_card_rect(
+            &ui.painter().with_clip_rect(clip),
+            &ChartView {
+                price_formatter: self.series_price_formatter(
+                    drawing.pane.map_or(super::SeriesId::MAIN, super::SeriesId),
+                ),
+                time_formatter: None,
+                bar_seconds: 0,
+                instrument: self.instrument(),
+                bars: self.state.shown(),
+                revision: self.state.revision(),
+                bar_to_x: &|bar| timescale.idx_to_coord_precise(bar, clip.min.x, clip.width()),
+                // The card's text and place read the anchors' screen points, not these.
+                price_to_y: &|_| 0.0,
+                y_to_price: &|_| 0.0,
+                time_axis: self.horizontal_scale.is_none(),
+                executions: None,
+                timeframe: None,
+                finer: &[],
+            },
+        )
+    }
+
     /// The interval drawings measure on time-based charts with a time axis.
     pub(super) fn drawing_timeframe(&self) -> Option<crate::model::Timeframe> {
         let timeframe = self.timeframe.unwrap_or_default();

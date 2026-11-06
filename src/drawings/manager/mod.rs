@@ -225,7 +225,7 @@ pub struct DrawingManager {
     pane_rect: Rect,
     pane: Option<usize>,
     pane_members: Vec<Option<usize>>,
-    pane_clips: std::collections::HashMap<Option<usize>, Rect>,
+    pub(crate) pane_clips: std::collections::HashMap<Option<usize>, Rect>,
     pub(crate) text_editor: Option<TextEditState>,
     /// A completed text placement whose add command may already be in chart history.
     pub(crate) finished_text_placement: Option<usize>,
