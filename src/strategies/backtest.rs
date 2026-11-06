@@ -306,8 +306,8 @@ pub trait Strategy {
 ///
 /// An order placed with the id of a working order replaces it, keeping its original place
 /// among orders reached at the same point; an identical request leaves the working order as it
-/// is. Working orders stay until they fill or are cancelled. A
-/// quantity must be positive and finite and a price finite; an order with any other is ignored.
+/// is. Working orders stay until they fill or are cancelled. A quantity must be positive and
+/// finite and a price finite; an order with any other is ignored.
 pub struct StrategyContext<'a> {
     bars: &'a [Bar],
     position: f64,
