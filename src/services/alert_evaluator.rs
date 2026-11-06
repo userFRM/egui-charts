@@ -308,6 +308,8 @@ impl AlertEvaluator {
                     let key = (id.clone(), symbol.clone(), timeframe);
                     armed.insert(key.clone());
                     match self.runs.get_mut(&key) {
+                        // Most polls find the alert unchanged; comparing it copies nothing.
+                        Some(run) if run.alert == alert => {}
                         // A firing or a marker option leaves the studies and streams as they are.
                         Some(run) if run.alert.same_monitoring(&alert) => {
                             run.alert.clone_from(&alert)
