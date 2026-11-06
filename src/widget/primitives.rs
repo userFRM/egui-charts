@@ -2930,6 +2930,58 @@ mod tests {
     }
 
     #[test]
+    fn primitive_time_axis_stays_below_footprint_statistics() {
+        struct Tags(Arc<Mutex<Option<f32>>>);
+        impl Primitive for Tags {
+            fn time_axis_labels(&self, view: &PrimitiveView<'_>) -> Vec<TimeAxisLabel> {
+                let mut fixed = TimeAxisLabel::new(view.bars[0].time, "Fixed", Color32::WHITE);
+                fixed.fixed_coordinate = Some(100.0);
+                vec![
+                    TimeAxisLabel::new(view.bars[90].time, "Automatic", Color32::WHITE),
+                    fixed,
+                ]
+            }
+            fn draw_time_axis(&self, _: &Painter, axis: egui::Rect, _: &PrimitiveView<'_>) {
+                *self.0.lock().unwrap() = Some(axis.top());
+            }
+        }
+        let tops = [false, true].map(|statistics| {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[10.0], &[20.0]);
+            chart.set_chart_type(crate::model::ChartType::VolumeFootprint);
+            chart.set_chart_type_params(crate::model::ChartTypeParams {
+                footprint_statistics: statistics,
+                footprint_statistics_rows: vec![
+                    crate::model::FootprintStatistic::Volume,
+                    crate::model::FootprintStatistic::Delta,
+                ],
+                ..Default::default()
+            });
+            let axis = Arc::new(Mutex::new(None));
+            chart
+                .attach_primitive(SeriesId::MAIN, Tags(axis.clone()))
+                .unwrap();
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let painted = shapes(&ctx, &mut chart, 1.0, vec![]);
+            let tags = ["Automatic", "Fixed"].map(|label| {
+                painted.iter().find_map(|shape| match shape {
+                    Shape::Text(text) if text.galley.text() == label => Some(text_rect(text).top()),
+                    _ => None,
+                })
+            });
+            (tags, *axis.lock().unwrap())
+        });
+        // Statistics rows are taken from the bottom of the price plot; the time axis below them
+        // keeps its place, and so do the tags on it and the axis handed to the primitive.
+        assert!(
+            tops[1] == tops[0],
+            "tag tops and axis top without statistics {:?}, with statistics {:?}",
+            tops[0],
+            tops[1]
+        );
+    }
+
+    #[test]
     fn pinned_price_tags_hide_the_axis_labels_they_cover_in_every_pane() {
         struct Pinned(Arc<Mutex<f32>>);
         impl Primitive for Pinned {

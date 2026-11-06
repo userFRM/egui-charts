@@ -750,11 +750,13 @@ impl Chart {
                 Pos2::new(chart_rect.max.x, rect.max.y),
             )
         });
+        // Below any footprint statistics rows, which the interaction rect above includes.
         self.time_axis_rect = Rect::from_min_size(
-            time_axis_rect.min,
+            Pos2::new(time_axis_rect.left(), time_axis_top),
             Vec2::new(
                 time_axis_rect.width(),
-                self.time_axis_height().min(time_axis_rect.height()),
+                self.time_axis_height()
+                    .min(time_axis_rect.bottom() - time_axis_top),
             ),
         );
 
