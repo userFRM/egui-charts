@@ -1132,7 +1132,7 @@ mod tests {
                 };
                 let newer = |count| (1..=count).map(|day| flat(last + Duration::days(day), 1.5));
                 if case == "renko" {
-                    // Each bar after the first rises by 1000: a hundred bricks of 10.
+                    // Each bar after the first rises by 1000, which makes 100 bricks of 10 per step.
                     chart.set_data(
                         SeriesId::MAIN,
                         bars.iter()
