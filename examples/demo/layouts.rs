@@ -694,6 +694,7 @@ impl DemoApp {
         for (slot, snapshot) in layout.charts.iter().enumerate() {
             if slot == self.layout_slot {
                 // The demo's feed and toolbars follow the active chart's symbol and interval.
+                self.stop_replay();
                 self.switch_symbol(&snapshot.symbol);
                 if let Some(interval) = snapshot.interval {
                     self.switch_timeframe(interval);

@@ -1005,8 +1005,13 @@ impl DemoApp {
         {
             self.symbol_search.record_symbol(&row);
         }
+        let symbol = DemoSymbol::find(symbol).symbol;
+        // A reload would clear the bars and the heatmap and stop a replay of the shown symbol.
+        if symbol == self.chart.symbol() {
+            return;
+        }
         self.user_action(|app| {
-            app.chart.set_symbol(DemoSymbol::find(symbol).symbol);
+            app.chart.set_symbol(symbol);
             app.sync_symbol();
             app.regenerate_bars();
             // A symbol change invalidates an in-flight replay.
@@ -9625,5 +9630,46 @@ mod tests {
             app.alerts.poll(&ctx, &mut app.toasts);
             assert_eq!(app.alerts.log().len(), 2, "period {period}");
         }
+    }
+
+    /// Selecting the shown symbol changes nothing; selecting another still loads it.
+    #[test]
+    fn reselecting_the_active_symbol_keeps_its_bars() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        settle(&mut app, &ctx);
+        app.live.set_paused(true);
+        let before = app.chart.bars(SeriesId::MAIN).to_vec();
+        assert!(!before.is_empty());
+        let symbol = app.chart.symbol().to_owned();
+        app.switch_symbol(&symbol);
+        for frame in 0..3 {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| eframe::App::ui(&mut *app, ui, &mut eframe::Frame::_new_kittest()),
+            )
+            .drop_without_applying_deltas();
+            let now = app.chart.bars(SeriesId::MAIN);
+            assert_eq!(
+                (now.len(), now.last().map(|bar| bar.time)),
+                (before.len(), before.last().map(|bar| bar.time)),
+                "frame {frame}"
+            );
+        }
+        assert!(!app.live.loading(), "the feed restarted its bootstrap");
+        app.start_replay_at(before.len() / 2);
+        app.switch_symbol(&symbol);
+        assert!(app.replay.is_some(), "the replay of the shown symbol stops");
+        app.switch_symbol("BTCUSD");
+        assert!(app.replay.is_none(), "another symbol stops the replay");
+        settle(&mut app, &ctx);
+        assert_eq!(app.chart.symbol(), "BTCUSD");
+        assert!(!app.chart.bars(SeriesId::MAIN).is_empty());
     }
 }
