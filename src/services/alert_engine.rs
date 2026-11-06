@@ -1649,6 +1649,27 @@ mod tests {
         assert!(host.events().is_empty());
     }
 
+    /// An alert stored before names and messages had limits, here with a 4001-character
+    /// message, loads with `with_alerts` and keeps working.
+    #[test]
+    fn an_alert_stored_with_a_long_message_keeps_firing_and_can_be_paused() {
+        let mut stored = alert(AlertCondition::Above(100.0), AlertFrequency::EveryTime);
+        stored.message = "é".repeat(Alert::MAX_MESSAGE_CHARS + 1);
+        let host = Host::new(vec![stored]);
+        host.events();
+        let id = host.engine.alerts()[0].id.clone().unwrap();
+        let subjects = host.engine.subjects(&id);
+        feed(&host, &[bar(0, 99.0, 1.0), bar(1, 101.0, 1.0)], &[], 61);
+        let fired = host.fired();
+        let mut paused = host.engine.alerts()[0].clone();
+        paused.status = AlertStatus::Disabled;
+        let pause = host.save(paused);
+        assert_eq!(
+            (subjects, fired, pause),
+            (vec!["SYM".to_owned()], vec![101.0], Ok(()))
+        );
+    }
+
     #[cfg(all(feature = "ui", not(target_arch = "wasm32")))]
     #[test]
     fn dropping_a_feed_under_the_context_lock_does_not_wake_cancelled_replies() {

@@ -41,7 +41,7 @@ pub struct Alert {
     pub blink_on_trigger: bool,
     /// The symbol whose bars supply the sources, unless `watchlist` names the subject.
     pub symbol: String,
-    /// User-facing name, independent of the notification message, at most
+    /// User-facing name, independent of the notification message. The alert dialog takes at most
     /// [`Alert::MAX_NAME_CHARS`] characters.
     #[serde(default)]
     pub name: String,
@@ -89,9 +89,9 @@ pub struct Alert {
     /// Where a firing is delivered.
     #[serde(default)]
     pub delivery: AlertDelivery,
-    /// Text the host shows or sends when the alert fires, at most [`Alert::MAX_MESSAGE_CHARS`]
-    /// characters. [`Alert::expand_message`] fills in the placeholders `{{symbol}}`, `{{close}}`
-    /// and so on when it fires.
+    /// Text the host shows or sends when the alert fires. The alert dialog takes at most
+    /// [`Alert::MAX_MESSAGE_CHARS`] characters. [`Alert::expand_message`] fills in the placeholders
+    /// `{{symbol}}`, `{{close}}` and so on when it fires.
     #[serde(default)]
     pub message: String,
     /// Where the alert stands, as the host reports it.
@@ -321,9 +321,9 @@ impl Alert {
             })
     }
 
-    /// The most characters, counted as Unicode scalar values, a name may have.
+    /// The most characters, counted as Unicode scalar values, an edited name may have.
     pub const MAX_NAME_CHARS: usize = 300;
-    /// The most characters, counted as Unicode scalar values, a message may have.
+    /// The most characters, counted as Unicode scalar values, an edited message may have.
     pub const MAX_MESSAGE_CHARS: usize = 4000;
 
     /// The message with its placeholders filled in from the trigger: `{{symbol}}` and
@@ -709,15 +709,15 @@ impl std::fmt::Display for AlertCondition {
 }
 
 impl Alert {
-    /// Validate user input before handing it to host storage or evaluation.
+    /// Validate user input before handing it to host storage or evaluation. The length limits of
+    /// the name and the message are not part of it: they bind whoever edits the text, as the
+    /// alert dialog does, and an alert stored with a longer text keeps working.
     pub fn is_valid(&self) -> bool {
-        self.name.chars().count() <= Self::MAX_NAME_CHARS
-            && self.message.chars().count() <= Self::MAX_MESSAGE_CHARS
-            && (!self.symbol.trim().is_empty()
-                || self
-                    .watchlist
-                    .as_ref()
-                    .is_some_and(|id| !id.trim().is_empty()))
+        (!self.symbol.trim().is_empty()
+            || self
+                .watchlist
+                .as_ref()
+                .is_some_and(|id| !id.trim().is_empty()))
             && self
                 .watchlist
                 .as_ref()
@@ -1018,7 +1018,7 @@ mod tests {
     #[test]
     fn saved_alerts_require_finite_levels_ordered_channels_and_positive_lookbacks() {
         type Edit = fn(&mut Alert);
-        let rows: [(Edit, bool); 33] = [
+        let rows: [(Edit, bool); 29] = [
             (
                 |a| a.condition = AlertCondition::StrategyFills("run".into()),
                 true,
@@ -1232,14 +1232,6 @@ mod tests {
                 true,
             ),
             (|a| a.watchlist = Some(" ".into()), false),
-            // Limits count characters, not bytes.
-            (|a| a.name = "é".repeat(Alert::MAX_NAME_CHARS), true),
-            (|a| a.name = "é".repeat(Alert::MAX_NAME_CHARS + 1), false),
-            (|a| a.message = "€".repeat(Alert::MAX_MESSAGE_CHARS), true),
-            (
-                |a| a.message = "€".repeat(Alert::MAX_MESSAGE_CHARS + 1),
-                false,
-            ),
             (
                 |a| {
                     a.additional_conditions.push(AlertRule {
