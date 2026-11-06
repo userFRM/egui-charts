@@ -420,8 +420,21 @@ fn percent_levels() -> bool {
 }
 
 impl Default for FibonacciConfig {
-    /// Default Fibonacci retracement levels
+    /// The levels a new Fibonacci retracement starts with.
     fn default() -> Self {
+        Self::for_tool(super::DrawingToolType::FibonacciRetracement)
+    }
+}
+
+impl FibonacciConfig {
+    /// The levels a new trend-based Fibonacci extension starts with.
+    pub fn extension_default() -> Self {
+        Self::for_tool(super::DrawingToolType::FibonacciExtension)
+    }
+
+    /// The presentation of retracements and channels saved without a config: seven levels with
+    /// the background off.
+    pub(crate) fn legacy() -> Self {
         Self {
             levels: vec![
                 FibonacciLevel::new(0.0, "0%", [120, 123, 134, 255]),
@@ -446,11 +459,9 @@ impl Default for FibonacciConfig {
             labels_on_left: true,
         }
     }
-}
 
-impl FibonacciConfig {
-    /// Extension levels (beyond 100%)
-    pub fn extension_default() -> Self {
+    /// The levels of extensions saved without a config.
+    pub(crate) fn legacy_extension() -> Self {
         Self {
             levels: vec![
                 FibonacciLevel::new(0.0, "0%", [120, 123, 134, 255]),
@@ -461,134 +472,112 @@ impl FibonacciConfig {
                 FibonacciLevel::new(2.0, "200%", [76, 175, 80, 255]),
                 FibonacciLevel::new(2.618, "261.8%", [156, 39, 176, 255]),
             ],
-            level_width: fib_level_width(),
-            level_style: crate::model::LineStyle::Solid,
-            show_background: false,
-            background_opacity: 30,
-            extend_left: false,
-            extend_right: false,
-            reverse: false,
-            logarithmic: false,
-            show_prices: None,
-            show_levels: None,
-            levels_as_percent: false,
-            labels_on_left: true,
+            ..Self::legacy()
         }
     }
 
-    /// Initial levels for a tool, each in its own colour, with the background on at 20%.
-    /// Retracements, extensions and channels list further ratios hidden. Existing drawings
-    /// without a stored config keep their original renderer defaults; new tools store this
-    /// table when constructed.
+    /// Initial levels for a tool as ratio, colour and visibility, with the background on at 20%
+    /// except on time zones. Hidden levels are listed so they can be switched on without typing.
+    /// Drawings saved without a config keep their old levels; new tools store this table when
+    /// constructed.
     pub fn for_tool(tool: super::DrawingToolType) -> Self {
         use super::DrawingToolType as T;
-        use super::drawing::{BLUE, CYAN, GREEN, GREY, ORANGE, PINK, PURPLE, RED, TEAL};
-        let table = match tool {
+        use super::drawing::{
+            BLUE, CYAN, DEEP_PURPLE, GREEN, GREY, ORANGE, PINK, PURPLE, RED, TEAL,
+        };
+        let levels: Vec<(f32, [u8; 4], bool)> = match tool {
             T::FibonacciTimeZones => [0.0, 1.0, 2.0, 3.0, 5.0, 8.0, 13.0, 21.0, 34.0, 55.0, 89.0]
-                .map(|value| (value, if value == 0.0 { GREY } else { BLUE }))
+                .map(|value| (value, if value == 0.0 { GREY } else { BLUE }, true))
                 .to_vec(),
             T::TrendBasedFibTime => vec![
-                (0.0, GREY),
-                (0.382, RED),
-                (0.5, [129, 199, 132, 255]),
-                (0.618, GREEN),
-                (1.0, TEAL),
-                (1.382, CYAN),
-                (1.618, GREY),
-                (2.0, BLUE),
-                (2.382, PINK),
-                (2.618, PURPLE),
-                (3.0, [103, 58, 183, 255]),
+                (0.0, GREY, true),
+                (0.382, RED, true),
+                (0.5, [129, 199, 132, 255], false),
+                (0.618, GREEN, true),
+                (1.0, TEAL, true),
+                (1.382, CYAN, true),
+                (1.618, GREY, true),
+                (2.0, BLUE, true),
+                (2.382, PINK, true),
+                (2.618, PURPLE, true),
+                (3.0, DEEP_PURPLE, true),
             ],
             T::FibonacciSpeedFan => vec![
-                (0.0, GREY),
-                (0.25, ORANGE),
-                (0.382, CYAN),
-                (0.5, GREEN),
-                (0.618, TEAL),
-                (0.75, BLUE),
-                (1.0, GREY),
+                (0.0, GREY, true),
+                (0.25, ORANGE, true),
+                (0.382, CYAN, true),
+                (0.5, GREEN, true),
+                (0.618, TEAL, true),
+                (0.75, BLUE, true),
+                (1.0, GREY, true),
             ],
             T::FibonacciCircles | T::FibonacciSpeedResistanceArcs => vec![
-                (0.236, RED),
-                (0.382, ORANGE),
-                (0.5, TEAL),
-                (0.618, GREEN),
-                (0.786, CYAN),
-                (1.0, GREY),
-                (1.618, BLUE),
-                (2.618, PINK),
-                (3.618, BLUE),
-                (4.236, PINK),
-                (4.618, RED),
+                (0.236, RED, true),
+                (0.382, ORANGE, true),
+                (0.5, TEAL, true),
+                (0.618, GREEN, true),
+                (0.786, CYAN, true),
+                (1.0, GREY, true),
+                (1.618, BLUE, true),
+                (2.618, PINK, true),
+                (3.618, BLUE, true),
+                (4.236, PINK, true),
+                (4.618, RED, true),
             ],
-            T::FibonacciRetracement
-            | T::FibonacciExtension
-            | T::FibonacciChannel
-            | T::FibonacciWedge => {
-                let mut levels: Vec<(f32, _, _)> = [
-                    (0.0, GREY),
-                    (0.236, RED),
-                    (0.382, ORANGE),
-                    (0.5, GREEN),
-                    (0.618, TEAL),
-                    (0.786, CYAN),
-                    (1.0, GREY),
-                    (1.618, BLUE),
-                    (2.618, RED),
-                    (3.618, PURPLE),
-                    (4.236, PINK),
-                ]
-                .map(|(value, color)| (value, color, true))
-                .to_vec();
-                if tool == T::FibonacciWedge {
-                    levels.retain(|level| level.0 != 0.0);
-                    levels.push((4.618, RED, true));
-                    for level in &mut levels {
-                        level.2 = level.0 <= 1.0;
-                    }
-                } else {
-                    // Further ratios, listed hidden so they can be switched on without typing.
-                    let spare = [
-                        1.272, 1.414, 2.0, 2.272, 2.414, 3.0, 3.272, 3.414, 4.0, 4.272, 4.414,
-                        4.618, 4.764,
-                    ];
-                    let colors = [RED, ORANGE, GREEN, TEAL, CYAN, BLUE, PURPLE, PINK];
-                    levels.extend(
-                        (spare.into_iter().zip(colors.into_iter().cycle()))
-                            .map(|(value, color)| (value, color, false)),
-                    );
-                    levels.sort_by(|a, b| a.0.total_cmp(&b.0));
-                }
-                return Self {
-                    levels: levels
-                        .into_iter()
-                        .map(|(value, color, visible)| FibonacciLevel {
-                            visible,
-                            ..FibonacciLevel::new(value, "", color)
-                        })
-                        .collect(),
-                    show_background: true,
-                    background_opacity: 51,
-                    show_levels: (tool == T::FibonacciWedge).then_some(true),
-                    ..Self::default()
-                };
-            }
+            T::FibonacciWedge => vec![
+                (0.236, RED, true),
+                (0.382, ORANGE, true),
+                (0.5, GREEN, true),
+                (0.618, TEAL, true),
+                (0.786, CYAN, true),
+                (1.0, GREY, true),
+                (1.618, BLUE, false),
+                (2.618, RED, false),
+                (3.618, DEEP_PURPLE, false),
+                (4.236, PINK, false),
+                (4.618, PINK, false),
+            ],
+            T::FibonacciRetracement | T::FibonacciExtension | T::FibonacciChannel => vec![
+                (0.0, GREY, true),
+                (0.236, RED, true),
+                (0.382, ORANGE, true),
+                (0.5, GREEN, true),
+                (0.618, TEAL, true),
+                (0.786, CYAN, true),
+                (1.0, GREY, true),
+                (1.618, BLUE, true),
+                (2.618, RED, true),
+                (3.618, PURPLE, true),
+                (4.236, PINK, true),
+                (1.272, ORANGE, false),
+                (1.414, RED, false),
+                (2.272, ORANGE, false),
+                (2.414, GREEN, false),
+                (2.0, TEAL, false),
+                (3.0, CYAN, false),
+                (3.272, GREY, false),
+                (3.414, BLUE, false),
+                (4.0, RED, false),
+                (4.272, PURPLE, false),
+                (4.414, PINK, false),
+                (4.618, ORANGE, false),
+                (4.764, TEAL, false),
+            ],
             _ => return Self::default(),
         };
         Self {
-            levels: table
+            levels: levels
                 .into_iter()
-                .map(|(value, color)| {
-                    let mut level = FibonacciLevel::new(value, "", color);
-                    level.visible = tool != T::TrendBasedFibTime || value != 0.5;
-                    level
+                .map(|(value, color, visible)| FibonacciLevel {
+                    visible,
+                    ..FibonacciLevel::new(value, "", color)
                 })
                 .collect(),
             show_background: tool != T::FibonacciTimeZones,
             background_opacity: 51,
-            levels_as_percent: false,
-            ..Self::default()
+            show_levels: (tool == T::FibonacciWedge).then_some(true),
+            labels_on_left: !matches!(tool, T::FibonacciTimeZones | T::TrendBasedFibTime),
+            ..Self::legacy()
         }
     }
 
@@ -968,6 +957,81 @@ mod tests {
     use super::*;
     use crate::data::VolumeProfileConfig;
     use crate::model::Timeframe;
+
+    #[test]
+    fn new_fibonacci_tools_start_from_their_level_tables() {
+        use crate::drawings::DrawingToolType as T;
+        // Length, label side and (position, ratio, colour, shown) of sample rows.
+        let spares = [
+            (0, 0.0, [0x80, 0x80, 0x80], true),
+            (10, 4.236, [0xE9, 0x1E, 0x63], true),
+            (11, 1.272, [0xFF, 0x98, 0x00], false),
+            (15, 2.0, [0x08, 0x99, 0x81], false),
+            (23, 4.764, [0x08, 0x99, 0x81], false),
+        ];
+        let wedge = [
+            (0, 0.236, [0xF2, 0x36, 0x45], true),
+            (8, 3.618, [0x67, 0x3A, 0xB7], false),
+            (10, 4.618, [0xE9, 0x1E, 0x63], false),
+        ];
+        let zones = [
+            (0, 0.0, [0x80, 0x80, 0x80], true),
+            (10, 89.0, [0x29, 0x62, 0xFF], true),
+        ];
+        let time = [
+            (2, 0.5, [0x81, 0xC7, 0x84], false),
+            (10, 3.0, [0x67, 0x3A, 0xB7], true),
+        ];
+        for (name, config, len, left, rows) in [
+            ("default", FibonacciConfig::default(), 24, true, &spares[..]),
+            (
+                "extension",
+                FibonacciConfig::extension_default(),
+                24,
+                true,
+                &spares,
+            ),
+            (
+                "channel",
+                FibonacciConfig::for_tool(T::FibonacciChannel),
+                24,
+                true,
+                &spares,
+            ),
+            (
+                "wedge",
+                FibonacciConfig::for_tool(T::FibonacciWedge),
+                11,
+                true,
+                &wedge,
+            ),
+            (
+                "zones",
+                FibonacciConfig::for_tool(T::FibonacciTimeZones),
+                11,
+                false,
+                &zones,
+            ),
+            (
+                "time",
+                FibonacciConfig::for_tool(T::TrendBasedFibTime),
+                11,
+                false,
+                &time,
+            ),
+        ] {
+            assert_eq!(config.levels.len(), len, "{name}");
+            assert_eq!(config.labels_on_left, left, "{name}");
+            for &(index, value, [r, g, b], visible) in rows {
+                let level = &config.levels[index];
+                assert_eq!(
+                    (level.value, level.color, level.visible),
+                    (value, [r, g, b, 255], visible),
+                    "{name}, level {index}"
+                );
+            }
+        }
+    }
 
     /// Reference: quantity = risked amount / |entry - stop| (reference.py);
     /// none when a size from the risk has its stop at the entry, or a setting
