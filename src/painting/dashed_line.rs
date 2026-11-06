@@ -372,7 +372,17 @@ fn append_dashed_segment(
             ));
         });
     }
-    let width = stroke.width;
+    // A quad thinner than a device pixel can miss every pixel centre, so it fills one pixel at the
+    // opacity egui gives a line that thin.
+    let device_width = stroke.width * pixels_per_point;
+    let (width, color) = if device_width < 1.0 {
+        (
+            pixels_per_point.recip(),
+            stroke.color.gamma_multiply(device_width),
+        )
+    } else {
+        (stroke.width, stroke.color)
+    };
     let edge = ((across - width * 0.5) * pixels_per_point).round() / pixels_per_point;
     for &(min, len) in &spans.spans {
         let rect = if vertical {
@@ -380,7 +390,7 @@ fn append_dashed_segment(
         } else {
             Rect::from_min_size(Pos2::new(min, edge), egui::vec2(len, width))
         };
-        dots.add_colored_rect(rect, stroke.color);
+        dots.add_colored_rect(rect, color);
     }
 }
 
@@ -657,6 +667,57 @@ mod tests {
                     assert_eq!(batched.vertices, individual.vertices);
                     assert_eq!(batched.indices, individual.indices);
                 }
+            }
+        }
+    }
+
+    /// A dot thinner than a device pixel fills the pixel row holding its centre line, at the
+    /// opacity of a feathered line that thin: 255 * 0.5 + 0.5 and 255 * 0.4 + 0.5, truncated.
+    #[test]
+    fn sub_pixel_dotted_line_covers_its_pixel_row() {
+        let screen = Rect::from_min_size(Pos2::ZERO, egui::vec2(200.0, 100.0));
+        let ctx = Context::default();
+        for (scale, width, alpha, rows) in [
+            (1.0, 0.5, 128, [40.0; 4]),
+            (1.0, 0.4, 102, [40.0; 4]),
+            (2.0, 0.25, 128, [80.0, 80.0, 81.0, 81.0]),
+        ] {
+            ctx.set_pixels_per_point(scale);
+            for (y, row) in [40.0, 40.25, 40.5, 40.75].into_iter().zip(rows) {
+                let output = ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(screen),
+                        ..Default::default()
+                    },
+                    |_| {
+                        draw_dashed_line(
+                            &Painter::new(ctx.clone(), LayerId::background(), screen),
+                            Pos2::new(10.0, y),
+                            Pos2::new(110.0, y),
+                            Stroke::new(width, Color32::WHITE),
+                            1.0,
+                            3.0,
+                        );
+                    },
+                );
+                let [shape] = output.shapes.as_slice() else {
+                    panic!("the dots are not one shape: {} shapes", output.shapes.len());
+                };
+                let egui::Shape::Mesh(mesh) = &shape.shape else {
+                    panic!("the dots are not a mesh");
+                };
+                let dots = mesh.vertices.as_chunks::<4>().0;
+                assert_eq!(dots.len(), 25);
+                for dot in dots {
+                    let rect = Rect::from_points(&dot.map(|vertex| vertex.pos));
+                    assert_eq!(
+                        [rect.top() * scale, rect.bottom() * scale],
+                        [row, row + 1.0],
+                        "scale {scale}, width {width}, y {y}"
+                    );
+                    assert!(dot.iter().all(|vertex| vertex.color.a() == alpha));
+                }
+                output.drop_without_applying_deltas();
             }
         }
     }
