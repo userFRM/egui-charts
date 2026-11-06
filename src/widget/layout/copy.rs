@@ -575,4 +575,45 @@ mod tests {
         assert_eq!(charts[1].config().background_color, before);
         assert_eq!(charts[0].config().background_color, before);
     }
+
+    /// Undoing a settings copy restores the precision, event markers and price line colour it
+    /// changed, on the source and on the other chart, and redo applies them again.
+    #[test]
+    fn settings_copy_undo_restores_precision_events_and_price_line() {
+        let (mut a, mut b) = (chart(50), chart(50));
+        for chart in [&mut a, &mut b] {
+            chart.set_instrument(Some(Instrument::new("SAMPLE").with_tick_size(0.01)));
+        }
+        let mut settings = ChartSettingsState::from_chart(&a);
+        settings.precision = PrecisionMode::Decimals4;
+        settings.events.show_earnings = true;
+        settings.scales_and_lines.symbol_price_color = Some(egui::Color32::GOLD);
+        let state = |chart: &Chart| {
+            (
+                ChartSettingsState::from_chart(chart).precision,
+                chart.event_visibility().show_earnings,
+                chart
+                    .series_style(SeriesId::MAIN)
+                    .and_then(|style| style.price_line_color),
+            )
+        };
+        let before = (PrecisionMode::Decimals2, false, None);
+        let applied = (PrecisionMode::Decimals4, true, Some(egui::Color32::GOLD));
+        assert_eq!([state(&a), state(&b)], [before, before]);
+        let factory = IndicatorFactory::new();
+        let mut layout = ChartLayout {
+            mode: ChartLayoutMode::TwoHorizontal,
+            ..ChartLayout::default()
+        };
+        let mut charts = [&mut a, &mut b];
+        let copy = LayoutCopy::Settings(Box::new(settings));
+        assert_eq!(layout.apply_copy(&mut charts, 0, &copy, &factory), []);
+        assert_eq!([state(charts[0]), state(charts[1])], [applied, applied]);
+        assert!(charts[0].undo());
+        show(&mut layout, &mut charts);
+        assert_eq!([state(charts[0]), state(charts[1])], [before, before]);
+        assert!(charts[0].redo());
+        show(&mut layout, &mut charts);
+        assert_eq!([state(charts[0]), state(charts[1])], [applied, applied]);
+    }
 }

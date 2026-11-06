@@ -292,6 +292,11 @@ impl PriceScale {
         self.price_precision = decimals;
     }
 
+    /// The decimals [`Self::set_price_precision`] set, whatever the scale's mode shows.
+    pub(crate) fn price_precision(&self) -> Option<u8> {
+        self.price_precision
+    }
+
     /// The instrument's default price grid, separate from the host's tick-mark override.
     #[cfg(feature = "widget")]
     pub(crate) fn set_tick_size(&mut self, tick_size: Option<f64>) {
