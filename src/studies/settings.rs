@@ -201,6 +201,12 @@ fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
         let declared = study.plot_variants(line);
         if variants.len() != declared.len() {
             *variants = declared;
+            // Saved before this plot had alternate states, all its bars used the plot's width.
+            if let Some(plot) = settings.plots.get(line) {
+                for variant in variants.iter_mut() {
+                    variant.width = plot.width;
+                }
+            }
         }
     }
     let fills = study.fills();

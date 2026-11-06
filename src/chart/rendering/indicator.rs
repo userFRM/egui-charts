@@ -1531,4 +1531,62 @@ mod tests {
             }
         }
     }
+
+    /// An AO saved as a 4 px histogram before falling bars had a width of their own draws its
+    /// falling bars as it did then, at the plot width.
+    #[test]
+    fn older_ao_histogram_keeps_its_falling_bar_width() {
+        use crate::studies::{AwesomeOscillator, ConfiguredStudy, StudyTemplate};
+        let bars: Vec<_> = [1.0, 2.0, 4.0, 3.0, 1.0, 4.0]
+            .into_iter()
+            .map(|p| Bar::new(Utc.timestamp_opt(0, 0).unwrap(), p, p, p, p, 1.0))
+            .collect();
+        let study = ConfiguredStudy::new(Box::new(AwesomeOscillator::new(2, 3)));
+        let mut saved = serde_json::to_value(StudyTemplate::from_study(&study)).unwrap();
+        for key in [
+            "price_line_plots",
+            "plot_variants",
+            "background",
+            "background_visible",
+            "fills",
+        ] {
+            saved["settings"].as_object_mut().unwrap().remove(key);
+        }
+        saved["settings"]["plots"][0]["plot_type"] = serde_json::json!("Histogram");
+        saved["settings"]["plots"][0]["width"] = 4.0.into();
+        let template: StudyTemplate = serde_json::from_value(saved).unwrap();
+        let mut loaded = template.create().unwrap();
+        loaded.calculate(&bars);
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(240.0, 120.0));
+        let map = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(-1.0, 1.0),
+            0.0,
+            120.0,
+            false,
+        );
+        let coords = ChartMapping::new(rect, 30.0, 0, 5, 0.0, map);
+        let mut output = Context::default().run_ui(RawInput::default(), |ui| {
+            IndicatorRenderer::render_study(
+                &RenderContext::new(ui.painter(), rect),
+                loaded.as_ref(),
+                &bars,
+                0,
+                &map,
+                &coords,
+            );
+        });
+        let shapes = std::mem::take(&mut output.shapes);
+        output.drop_without_applying_deltas();
+        // AO(2, 3) is 2/3, 1/2, -2/3 and -1/6 from bar 2, so bars 3 and 4 fall.
+        let falling = AwesomeOscillator::new(2, 3).colors()[1];
+        let widths: Vec<f32> = shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                Shape::Rect(r) if r.fill == falling => Some(r.rect.width()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(widths, [4.0, 4.0], "falling bar widths {widths:?}");
+    }
 }
