@@ -57,7 +57,9 @@ also removes the series, studies, markers, price lines and drawings it contains
 (locked drawings included); move them out first to keep them. This applies to
 the original price pane too, as long as another pane remains: the surviving
 panes keep their IDs, order, data and the shared time mapping, and snapshots
-save and restore the layout without it. Removing the final pane returns `false`
+save and restore the layout without it. The main series stays out of the panes
+and is not drawn, but its bars keep taking `set_data`, `update` and the feed for
+the studies and the time axis, also after such a layout is restored. Removing the final pane returns `false`
 and keeps its content. To clear only the secondary panes, skip `PaneId::MAIN`.
 
 ## Set pane sizes
