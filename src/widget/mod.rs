@@ -700,6 +700,40 @@ impl Chart {
         self.chart_options.tooltip.enabled = enabled;
     }
 
+    /// The rising and falling body, border and wick colors of a chart type that series settings
+    /// offer from its own style, in that order; `None` for a type they keep in the chart
+    /// configuration.
+    fn candle_style_colors(
+        styles: &mut crate::model::ChartTypeStyles,
+        chart_type: ChartType,
+    ) -> Option<[&mut egui::Color32; 6]> {
+        match chart_type {
+            ChartType::Heikin => {
+                let style = &mut styles.heikin;
+                Some([
+                    &mut style.body_up,
+                    &mut style.body_down,
+                    &mut style.border_up,
+                    &mut style.border_down,
+                    &mut style.wick_up,
+                    &mut style.wick_down,
+                ])
+            }
+            ChartType::HollowCandles => {
+                let style = &mut styles.hollow;
+                Some([
+                    &mut style.body_up,
+                    &mut style.body_down,
+                    &mut style.border_up,
+                    &mut style.border_down,
+                    &mut style.wick_up,
+                    &mut style.wick_down,
+                ])
+            }
+            _ => None,
+        }
+    }
+
     /// Apply series settings to chart colors, price source and price scale.
     ///
     /// Copies candlestick colors (bullish/bearish fill, border, wick) and the
@@ -722,7 +756,7 @@ impl Chart {
                 wick_up,
                 wick_down,
             ],
-        ) = params.styles.candle_colors_mut(settings.chart_type)
+        ) = Self::candle_style_colors(&mut params.styles, settings.chart_type)
         {
             *body_up = settings.bullish_color;
             *body_down = settings.bearish_color;
@@ -791,10 +825,7 @@ impl Chart {
                 wick_up,
                 wick_down,
             ],
-        ) = settings
-            .chart_type_params
-            .styles
-            .candle_colors_mut(self.chart_type)
+        ) = Self::candle_style_colors(&mut settings.chart_type_params.styles, self.chart_type)
         {
             settings.bullish_color = *body_up;
             settings.bearish_color = *body_down;
