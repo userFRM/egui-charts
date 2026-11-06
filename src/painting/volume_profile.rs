@@ -11,8 +11,8 @@ use std::ops::Range;
 /// opaque colours also leave the price bars beneath them readable.
 const STUDY_ROW_ALPHA: u8 = 163;
 
-/// Whether a study's profile measures the bars in view, not a span of its own, so that its rows fill
-/// their strip and its point of control crosses the plot. An options profile measures strikes.
+/// Whether a study's profile measures the bars in view, not a span of its own, so that its point
+/// of control crosses the plot. An options profile measures strikes.
 pub(crate) fn measures_view(profile: &VolumeProfile, right_aligned: bool) -> bool {
     right_aligned && profile.source() != ProfileSource::Options
 }
