@@ -4,8 +4,8 @@ use crate::chart::series::SeriesSettings;
 use crate::localization as l10n;
 use crate::model::{
     BaselineLevel, BoxSizeMethod, ChartType, ChartTypeParams, FootprintColor, FootprintMode,
-    FootprintStatistic, LinePlotStyle, LineStyle, PriceBasedSource, PriceSource, ProfileRows,
-    ProfileSession, TimezoneId,
+    FootprintStatistic, HighLowStyle, LinePlotStyle, LineStyle, PriceBasedSource, PriceSource,
+    ProfileRows, ProfileSession, TimezoneId,
 };
 use crate::theme::ThemeExt;
 use crate::ui_kit::ext::UiExt;
@@ -105,6 +105,7 @@ impl SymbolTab {
                     Self::fill_row(ui, "Below fill", &mut styles.baseline.below_fill);
                     Self::marker_radius_row(ui, &mut styles.baseline.marker_radius);
                 }
+                ChartType::HighLow => Self::high_low(ui, &mut styles.high_low),
                 ChartType::Kagi => {
                     for (name, width) in [
                         ("Thick line width", &mut styles.kagi.thick_width),
@@ -855,6 +856,22 @@ impl SymbolTab {
         ui.combo_select("price_source", source, PriceSource::all(), |v| {
             v.label().to_string()
         });
+    }
+
+    fn high_low(ui: &mut Ui, style: &mut HighLowStyle) {
+        Self::fill_row(ui, "Bar colour", &mut style.bar_color);
+        Self::switch(ui, "Price labels", &mut style.labels_visible);
+        Self::fill_row(ui, "Label colour", &mut style.label_color);
+        let label = ui.label(l10n::text(ui.ctx(), "Label size"));
+        ui.label_inputs_by(label.id, |ui| {
+            ui.combo_select(
+                "high_low_label_size",
+                &mut style.label_font_size,
+                [7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 14.0, 16.0, 20.0, 24.0],
+                |size| size.to_string(),
+            );
+        });
+        ui.end_row();
     }
 
     fn line_style(ui: &mut Ui, style: &mut LinePlotStyle, id: &str) {

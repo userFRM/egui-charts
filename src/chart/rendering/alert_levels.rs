@@ -102,14 +102,18 @@ pub fn render_alert_levels<'a>(
                 if let Some(galley) = &galley {
                     hit = hit.union(label_bounds(y, galley.size()).intersect(mapping.rect));
                 }
-                let mut response = ui.interact(hit, key, Sense::click_and_drag());
+                // A widget sensing both only starts dragging past the click distance, so they split.
+                // The click widgets go on top, or the drag widgets would hide them from hit tests.
+                let mut response = ui.interact(hit, key, Sense::drag());
+                let mut menu = ui.interact(hit, key.with("menu"), Sense::click());
                 if alert.extend_line {
                     let line = Rect::from_min_max(
                         pos2(mapping.rect.left(), y - 6.0),
                         pos2(mapping.rect.right(), y + 6.0),
                     )
                     .intersect(mapping.rect);
-                    response |= ui.interact(line, key.with("line"), Sense::click_and_drag());
+                    response |= ui.interact(line, key.with("line"), Sense::drag());
+                    menu |= ui.interact(line, key.with("line_menu"), Sense::click());
                 }
                 let response = response.on_hover_ui(|ui| {
                     ui.label(&alert.symbol);
@@ -119,7 +123,7 @@ pub fn render_alert_levels<'a>(
                     ui.label(crate::localization::text(ui.ctx(), condition.to_string()));
                     ui.label(crate::localization::text(ui.ctx(), "Drag alert level"));
                 });
-                response.context_menu(|ui| {
+                menu.context_menu(|ui| {
                     let mut updated = alert.clone();
                     let line = ui
                         .checkbox(
@@ -138,16 +142,25 @@ pub fn render_alert_levels<'a>(
                     }
                 });
                 let mut value = staged;
-                if response.dragged()
+                if response.dragged_by(egui::PointerButton::Primary)
                     && let Some(pointer) = response.interact_pointer_pos()
+                    && let Some(origin) = ui.input(|input| input.pointer.press_origin())
                 {
-                    value = mapping
-                        .y_to_price(pointer.y.clamp(mapping.rect.top(), mapping.rect.bottom()));
+                    // Move by the pointer's travel, so a press beside the level does not change it.
+                    let moved = pointer.y - origin.y;
+                    value = if moved == 0.0 {
+                        level
+                    } else {
+                        mapping.y_to_price(
+                            (mapping.price_to_y(level) + moved)
+                                .clamp(mapping.rect.top(), mapping.rect.bottom()),
+                        )
+                    };
                     if value.is_finite() {
                         ui.ctx().data_mut(|data| data.insert_temp(key, value));
                     }
                 }
-                if response.drag_stopped() {
+                if response.drag_stopped_by(egui::PointerButton::Primary) {
                     ui.ctx().data_mut(|data| data.remove::<f64>(key));
                     if value.is_finite() && value != level {
                         let mut updated = alert.clone();
@@ -467,6 +480,82 @@ mod tests {
                     assert_eq!(label, visible);
                 }
             }
+        }
+    }
+
+    #[test]
+    fn short_quick_drag_moves_the_level() {
+        use egui::PointerButton::{Primary, Secondary};
+        let rect = Rect::from_min_size(pos2(20.0, 20.0), vec2(400.0, 200.0));
+        // One point is 0.1 on this 200-point pane from 110 to 90, so level 100 sits at y = 120.
+        let mapping = ChartMapping::new(
+            rect,
+            6.0,
+            0,
+            0,
+            0.0,
+            PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(90.0, 110.0),
+                rect.top(),
+                rect.bottom(),
+                false,
+            ),
+        );
+        let mut alert = Alert::new("SYM", AlertCondition::Above(100.0));
+        alert.id = Some(AlertId("1".into()));
+        alert.extend_line = true;
+        // x = 408 is the marker and x = 100 the line.
+        for (button, x, from, to, level, menu) in [
+            (Primary, 408.0, 120.0, 124.0, Some(99.6), false),
+            (Primary, 100.0, 120.0, 124.0, Some(99.6), false),
+            // A press beside the level keeps its distance from the pointer, without a jump.
+            (Primary, 408.0, 123.0, 127.0, Some(99.6), false),
+            (Primary, 408.0, 123.0, 123.0, None, false),
+            (Secondary, 408.0, 120.0, 120.0, None, true),
+            (Secondary, 100.0, 120.0, 120.0, None, true),
+            // A hand moving during a secondary click opens the menu and leaves the level.
+            (Secondary, 408.0, 120.0, 123.0, None, true),
+        ] {
+            let ctx = egui::Context::default();
+            let (start, end) = (pos2(x, from), pos2(x, to));
+            let press = |pos, pressed| egui::Event::PointerButton {
+                pos,
+                button,
+                pressed,
+                modifiers: Default::default(),
+            };
+            let steps = [
+                vec![egui::Event::PointerMoved(start)],
+                vec![press(start, true)],
+                vec![egui::Event::PointerMoved(end)],
+                vec![press(end, false)],
+                vec![],
+            ];
+            let mut changed = None;
+            for (step, events) in steps.into_iter().enumerate() {
+                let input = egui::RawInput {
+                    time: Some(step as f64 * 0.05),
+                    events,
+                    ..Default::default()
+                };
+                ctx.run_ui(input, |ui| {
+                    changed = changed.take().or(render_alert_levels(
+                        ui,
+                        &mapping,
+                        [&alert],
+                        Color32::GOLD,
+                        false,
+                        false,
+                        |p| p.to_string(),
+                    ));
+                })
+                .drop_without_applying_deltas();
+            }
+            let case = format!("{button:?} at {x} from {from} to {to}");
+            let moved = changed.and_then(|alert| alert.condition.level());
+            assert_eq!(moved.map(|v| (v * 10.0).round() / 10.0), level, "{case}");
+            assert_eq!(egui::Popup::is_any_open(&ctx), menu, "{case}");
         }
     }
 }
