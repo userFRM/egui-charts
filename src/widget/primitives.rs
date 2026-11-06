@@ -3291,4 +3291,49 @@ mod tests {
         // (1, 4), whose current price is its high.
         assert_eq!(chart.indicator_value_at(id, 5), Some((0, 4.0)));
     }
+
+    /// Every price of the points in view fits the scale a custom data series is drawn on in the
+    /// main pane: after the study menu moves it there from its own pane, pinned to no scale, and
+    /// with every point in view between two bars.
+    #[test]
+    fn custom_points_fit_their_scale_in_the_main_pane() {
+        let mut ranges = Vec::new();
+        for (pin, on_bar) in [
+            (None, true),
+            (Some(crate::studies::StudyScale::None), true),
+            (None, false),
+        ] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[10.0], &[20.0]);
+            let main = chart.bars(SeriesId::MAIN).to_vec();
+            let (id, _) = band_series(&mut chart);
+            let mut points = vec![Band {
+                time: main[92].time + chrono::TimeDelta::hours(12),
+                values: Some((1400.0, 1500.0)),
+                note: "between two bars",
+            }];
+            if on_bar {
+                points.push(Band {
+                    time: main[90].time,
+                    values: Some((1000.0, 1100.0)),
+                    note: "on a bar",
+                });
+            }
+            assert!(chart.set_custom_data(id, points));
+            chart.set_visible_bars(12);
+            assert!(chart.move_series_to_pane(id, crate::widget::PaneId::MAIN));
+            if let Some(scale) = pin {
+                assert!(chart.set_indicator_scale(id, scale));
+            }
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            frame(&ctx, &mut chart, 0.1, vec![]);
+            let range = chart.series_price_map(id).unwrap().range();
+            ranges.push((range.min, range.max));
+        }
+        let lowest = [1000.0, 1000.0, 1400.0];
+        assert!(
+            (ranges.iter().zip(lowest)).all(|(&(min, max), low)| min <= low && max >= 1500.0),
+            "{ranges:?}"
+        );
+    }
 }
