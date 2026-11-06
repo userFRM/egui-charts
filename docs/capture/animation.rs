@@ -284,6 +284,97 @@ fn click_replay_bar(t: &mut Timeline, back: usize, ms: usize) {
     );
 }
 
+/// The tour, in milliseconds and logical points of the 1280x720 demo.
+fn tour(t: &mut Timeline, home: Pos2) {
+    t.hold(500);
+    t.move_to(pos2(440.0, 245.0), 900);
+    t.scroll(-500.0);
+    t.drag(pos2(490.0, 245.0), 650);
+    t.move_to(pos2(800.0, 530.0), 900);
+    t.label("Chart layout", 350);
+    t.hold(400);
+    t.label("1 Left, 3 Right", 400);
+    t.hold(300);
+    t.label("Indicators", 400);
+    t.hold(300);
+    let input =
+        t.h.get_by_role(egui::accesskit::Role::TextInput)
+            .rect()
+            .center();
+    t.move_to(input, 300);
+    t.click();
+    t.type_text("RSI");
+    t.hold(400);
+    let count = t.h.state().chart.indicators().count();
+    t.label("Relative Strength Index", 300);
+    assert_eq!(
+        t.h.state().chart.indicators().count(),
+        count + 1,
+        "study row must add the study"
+    );
+    t.key(Key::Escape, Modifiers::NONE);
+    t.key(Key::Escape, Modifiers::NONE);
+    t.hold(500);
+    t.label("Chart layout", 300);
+    t.label("Single", 350);
+    t.hold(200);
+    t.label("Candles", 250);
+    t.label("Bars", 250);
+    t.hold(400);
+    t.label("Bars", 250);
+    t.label("Candles", 250);
+    t.move_to(pos2(850.0, 330.0), 250);
+    t.scroll(300.0);
+    t.hold(400);
+    t.live = false;
+    draw_line(t);
+    t.key(Key::Escape, Modifiers::NONE);
+    t.label("Watchlist and details", 400);
+    t.hold(300);
+    // Accessible row bounds can be outside the list's clip; reveal the last symbol first.
+    t.move_to(pos2(1120.0, 260.0), 250);
+    t.scroll(-500.0);
+    let row =
+        t.h.get_by_role_and_label(egui::accesskit::Role::ListBoxOption, "SAMPLE")
+            .rect()
+            .center();
+    assert!(
+        (110.0..380.0).contains(&row.y),
+        "scroll the symbol into the visible watchlist before pointing at it"
+    );
+    t.move_to(row, 300);
+    t.hold(500);
+    // Replay and its restoration then stay in the active chart's own synchronization group.
+    t.h.state_mut()
+        .layout
+        .set_sync_group(0, Some("replay".to_owned()));
+    t.label("Replay", 400);
+    t.hold(400);
+    click_replay_bar(t, 10, 500);
+    t.hold(300);
+    for _ in 0..3 {
+        t.label("Next bar (Right arrow)", 200);
+        t.hold(150);
+    }
+    let before = t.h.state().chart.replay_time().expect("replay is active");
+    t.label("Play (Space)", 250);
+    t.hold(3000);
+    t.label("Pause (Space)", 250);
+    assert!(
+        t.h.state().chart.replay_time().unwrap() > before,
+        "automatic playback must advance the historical bars"
+    );
+    t.label("Watchlist and details", 350);
+    t.key(Key::Z, Modifiers::COMMAND);
+    t.key(Key::Z, Modifiers::COMMAND);
+    t.label("Chart layout", 350);
+    t.label("2x2 Grid", 350);
+    t.label("Exit replay", 300);
+    t.h.state_mut().layout.set_sync_group(0, None);
+    t.move_to(home, 500);
+    t.finish(30);
+}
+
 fn wall_time(now: chrono::DateTime<chrono::Utc>, monotonic: Option<i64>) {
     let path = std::env::var("CAPTURE_CLOCK").expect("motion capture needs regenerate.sh's clock");
     std::fs::write(
@@ -329,103 +420,7 @@ pub(super) fn shoot(scene: &Scene, light: bool, out: &Path) {
         start,
     };
     match scene.name {
-        "tour" => {
-            let script =
-                std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tour.txt"))
-                    .expect("read the tour timeline");
-            for (index, line) in script.lines().enumerate() {
-                let line = line.split('#').next().unwrap().trim();
-                if line.is_empty() {
-                    continue;
-                }
-                eprintln!("tour step {}: {line}", index + 1);
-                let (verb, args) = line.split_once(' ').unwrap_or((line, ""));
-                let numbers = || {
-                    args.split_whitespace()
-                        .map(|v| v.parse::<f32>().expect("timeline number"))
-                        .collect::<Vec<_>>()
-                };
-                let label = || {
-                    let (ms, label) = args.split_once(' ').expect("duration and label");
-                    (ms.parse::<usize>().expect("timeline duration"), label)
-                };
-                match verb {
-                    "hold" => t.hold(args.parse().unwrap()),
-                    "move" | "drag" => {
-                        let n = numbers();
-                        assert_eq!(n.len(), 3);
-                        if verb == "move" {
-                            t.move_to(pos2(n[1], n[2]), n[0] as usize);
-                        } else {
-                            t.drag(pos2(n[1], n[2]), n[0] as usize);
-                        }
-                    }
-                    "click" => {
-                        let (ms, text) = label();
-                        t.label(text, ms);
-                    }
-                    "bar" => {
-                        let (ms, back) = label();
-                        click_replay_bar(&mut t, back.parse().unwrap(), ms);
-                    }
-                    "row" => {
-                        let (ms, text) = label();
-                        let to =
-                            t.h.get_by_role_and_label(egui::accesskit::Role::ListBoxOption, text)
-                                .rect()
-                                .center();
-                        assert!(
-                            (110.0..380.0).contains(&to.y),
-                            "scroll the symbol into the visible watchlist before pointing at it"
-                        );
-                        t.move_to(to, ms);
-                    }
-                    "study" => {
-                        let (ms, text) = label();
-                        let count = t.h.state().chart.indicators().count();
-                        t.label(text, ms);
-                        assert_eq!(
-                            t.h.state().chart.indicators().count(),
-                            count + 1,
-                            "study row must add the study"
-                        );
-                    }
-                    "search" => {
-                        let input =
-                            t.h.get_by_role(egui::accesskit::Role::TextInput)
-                                .rect()
-                                .center();
-                        t.move_to(input, 300);
-                        t.click();
-                        t.type_text(args);
-                    }
-                    "play" => {
-                        let before = t.h.state().chart.replay_time().expect("replay is active");
-                        t.label("Play (Space)", 250);
-                        t.hold(args.parse().unwrap());
-                        t.label("Pause (Space)", 250);
-                        assert!(
-                            t.h.state().chart.replay_time().unwrap() > before,
-                            "automatic playback must advance the historical bars"
-                        );
-                    }
-                    "escape" => t.key(Key::Escape, Modifiers::NONE),
-                    "undo" => t.key(Key::Z, Modifiers::COMMAND),
-                    "group" => {
-                        let group = (!args.is_empty()).then(|| args.to_owned());
-                        t.h.state_mut().layout.set_sync_group(0, group);
-                    }
-                    "scroll" => t.scroll(args.parse().unwrap()),
-                    "line" => {
-                        t.live = false;
-                        draw_line(&mut t);
-                    }
-                    "home" => t.move_to(pointer, args.parse().unwrap()),
-                    other => panic!("unknown tour command {other} at line {}", index + 1),
-                }
-            }
-            t.finish(30);
-        }
+        "tour" => tour(&mut t, pointer),
         "drawings" => {
             t.hold(500);
             draw_line(&mut t);

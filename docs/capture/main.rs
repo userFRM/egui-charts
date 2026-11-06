@@ -355,12 +355,9 @@ fn prepare(
         app.chart.config_mut().title_as_description = false;
         app.chart.config_mut().show_quote_boxes = false;
     }
-    if animated {
-        app.chart.config_mut().axis_font_size =
-            Some(if scene.name == "tour" { 12.0 } else { 28.0 });
-        if scene.name != "tour" {
-            app.chart.config_mut().right_axis_width = 140.0;
-        }
+    if animated && scene.name != "tour" {
+        app.chart.config_mut().axis_font_size = Some(28.0);
+        app.chart.config_mut().right_axis_width = 140.0;
     }
     app.trading.display.notifications = egui_charts::widget::settings::TradingNotifications::Off;
     app.timeframe_toolbar
