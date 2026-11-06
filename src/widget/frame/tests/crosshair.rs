@@ -1569,3 +1569,66 @@ fn crosshair_time_label_names_the_nearest_bar() {
         assert_eq!(chart.format_time(time), expected, "host readout: {case:?}");
     }
 }
+
+/// Dragging a drawing raises no value readout in either tooltip mode, so the area around the
+/// drawing stays visible, and the readout returns on the next hover or hold.
+#[cfg(feature = "drawings")]
+#[test]
+fn drawing_drag_hides_the_value_readout() {
+    use crate::drawings::{Drawing, DrawingToolType};
+    for on_long_press in [false, true] {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[120.0]);
+        chart.config.show_ohlc_info = true;
+        chart.chart_options.tooltip.on_long_press = on_long_press;
+        chart.chart_options.tooltip.show_time = false;
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let time = chart.state.shown()[50].time;
+        let id = chart
+            .create_drawing(
+                Drawing::new(0, DrawingToolType::HorizontalLine),
+                &[(time, 110.0)],
+            )
+            .unwrap();
+        frame(&ctx, &mut chart, 0.1, vec![]);
+        let map = chart.get_chart_mapping();
+        let start = Pos2::new(map.idx_to_x(50), chart.last_price_map.price_to_y(110.0));
+        let end = start + egui::vec2(0.0, 20.0);
+        let button = |pos, pressed| Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        let shows_readout = |painted: &[Shape]| {
+            painted
+                .iter()
+                .any(|shape| matches!(shape, Shape::Text(text) if text.galley.text() == "Open"))
+        };
+
+        frame(
+            &ctx,
+            &mut chart,
+            0.2,
+            vec![Event::PointerMoved(start), button(start, true)],
+        );
+        let dragged = shapes(&ctx, &mut chart, 0.3, vec![Event::PointerMoved(end)]);
+        assert_eq!(
+            chart.drawings.dragging_handle().map(|(drawing, _)| drawing),
+            Some(id),
+            "on_long_press {on_long_press}: the drag started"
+        );
+        assert!(
+            !shows_readout(&dragged),
+            "on_long_press {on_long_press}: readout painted during the drag"
+        );
+
+        frame(&ctx, &mut chart, 0.4, vec![button(end, false)]);
+        assert_eq!(chart.drawings.dragging_handle(), None);
+        let after = shapes(&ctx, &mut chart, 0.5, vec![button(end, true)]);
+        assert!(
+            shows_readout(&after),
+            "on_long_press {on_long_press}: readout returns after the drag"
+        );
+    }
+}

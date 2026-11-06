@@ -2974,8 +2974,12 @@ impl Chart {
         // the menu closes.
         #[cfg(feature = "drawings")]
         let eraser_mode = self.drawings.eraser_mode;
+        // A handle or body drag runs without an active tool and keeps the readout off the drawing.
         #[cfg(feature = "drawings")]
-        let drawing_tool_active = self.drawings.active_tool.is_some();
+        let drawing_interaction_active =
+            self.drawings.active_tool.is_some() || self.drawings.dragging_handle.is_some();
+        #[cfg(not(feature = "drawings"))]
+        let drawing_interaction_active = false;
         let menu_open = self.menu_open || response.secondary_clicked();
         self.menu_open = menu_open;
         let mut crosshair_tags = [None; 2];
@@ -3286,7 +3290,7 @@ impl Chart {
                     && tooltip_options.on_long_press
                     && held
                     && !eraser_mode
-                    && !drawing_tool_active;
+                    && !drawing_interaction_active;
                 let mut crosshair_options = self.chart_options.crosshair;
                 // Arrow keeps the axis labels, which a hidden crosshair never shows.
                 if (held_values || eraser_mode)
@@ -3409,7 +3413,7 @@ impl Chart {
                 if tooltip_options.enabled
                     && (!tooltip_options.on_long_press || held)
                     && !eraser_mode
-                    && !drawing_tool_active
+                    && !drawing_interaction_active
                     && let Some(local_idx) = coords.local_idx_at_x(hover_pos.x, visible_data.len())
                     && !visible_data[local_idx].is_whitespace()
                 {
