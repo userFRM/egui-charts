@@ -929,6 +929,104 @@ mod tests {
         }
     }
 
+    /// A top marker covered by an above-pass primitive leaves the drawing as the target.
+    #[cfg(feature = "drawings")]
+    #[test]
+    fn covered_top_marker_keeps_the_drawing_target() {
+        use crate::model::MarkerOptions;
+        use crate::widget::{
+            PointerTarget, Primitive, PrimitiveHit, PrimitivePass, PrimitiveView, SeriesOptions,
+        };
+        use egui::{Event, Pos2};
+
+        struct Foreground;
+        impl Primitive for Foreground {
+            fn hit_test_result(&self, pos: Pos2, view: &PrimitiveView<'_>) -> Option<PrimitiveHit> {
+                (view.mapping.rect.contains(pos)
+                    && (pos.y - view.mapping.price_to_y(100.0)).abs() <= 3.0)
+                    .then(|| {
+                        let mut hit = PrimitiveHit::new(egui::CursorIcon::PointingHand);
+                        hit.pass = PrimitivePass::Above;
+                        hit
+                    })
+            }
+        }
+        for secondary in [false, true] {
+            let ctx = Context::default();
+            let mut chart = test_frames::chart(&[95.0], &[105.0]);
+            chart.config_mut().show_volume = false;
+            let series = if secondary {
+                let id = chart.add_series(SeriesOptions {
+                    chart_type: crate::model::ChartType::Candles,
+                    ..Default::default()
+                });
+                chart.set_data(id, chart.bars(SeriesId::MAIN).to_vec());
+                let pane = chart.add_pane();
+                assert!(chart.move_series_to_pane(id, pane));
+                id
+            } else {
+                SeriesId::MAIN
+            };
+            chart.set_marker_options(
+                series,
+                MarkerOptions {
+                    auto_scale: false,
+                    z_order: MarkerZOrder::Top,
+                },
+            );
+            let mut drawing = crate::drawings::Drawing::with_color(
+                77,
+                crate::drawings::DrawingToolType::HorizontalLine,
+                [0, 0, 255, 255],
+            );
+            drawing.chart_points = vec![crate::drawings::ChartPoint::new(70.0, 100.0)];
+            drawing.pane = secondary.then_some(series.0);
+            chart.drawings_mut().drawings.push(drawing);
+            assert!(chart.attach_primitive(series, Foreground).is_some());
+            let time = chart.bars(series)[70].time;
+            let mut tick = 0.0;
+            test_frames::frame(&ctx, &mut chart, tick, vec![]);
+            let pos = Pos2::new(
+                chart.get_chart_mapping().idx_to_x(70),
+                chart.series_price_map(series).unwrap().price_to_y(100.0),
+            );
+            for marked in [false, true] {
+                let marks = if marked {
+                    vec![
+                        Marker::new(time)
+                            .at_price(100.0, MarkerPos::AtPriceMiddle)
+                            .with_id("top"),
+                    ]
+                } else {
+                    Vec::new()
+                };
+                chart.set_markers(series, marks);
+                tick += 0.1;
+                test_frames::frame(
+                    &ctx,
+                    &mut chart,
+                    tick,
+                    vec![Event::PointerMoved(Pos2::ZERO)],
+                );
+                chart.drain_events().for_each(drop);
+                tick += 0.1;
+                test_frames::frame(&ctx, &mut chart, tick, vec![Event::PointerMoved(pos)]);
+                let point = chart
+                    .drain_events()
+                    .find_map(|event| match event {
+                        ChartEvent::CrosshairMoved(Some(point)) => Some(point),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("pointer in plot at {pos:?}"));
+                assert_eq!(
+                    (point.target, point.primitive_hit),
+                    (Some(PointerTarget::Drawing(77)), None),
+                    "secondary {secondary}, marked {marked}"
+                );
+            }
+        }
+    }
+
     #[derive(Default)]
     struct Source(Mutex<Vec<(MarksRequest, Reply<MarksPage>)>>);
 

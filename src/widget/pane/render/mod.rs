@@ -1463,7 +1463,7 @@ impl Chart {
                         self.merge_groups.factor(),
                     );
                     if self.host_events.annotation_target.borrow().is_some()
-                        && let Some(hit) = ui
+                        && ui
                             .input(|input| input.pointer.interact_pos())
                             .filter(|pos| chart_rect.contains(*pos))
                             .and_then(|pos| {
@@ -1472,11 +1472,11 @@ impl Chart {
                                     pos,
                                 )
                             })
-                            .filter(|hit| hit.result.pass == crate::widget::PrimitivePass::Above)
+                            .is_some_and(|hit| {
+                                hit.result.pass == crate::widget::PrimitivePass::Above
+                            })
                     {
                         self.cover_annotation_hit();
-                        self.host_events.target = Some(hit.target);
-                        self.host_events.primitive_hit = Some(hit.result);
                     }
                 }
             }

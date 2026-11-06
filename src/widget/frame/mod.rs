@@ -2839,15 +2839,13 @@ impl Chart {
         if !self.hide_foreground {
             self.paint_primitives(&painter, &coords, PrimitivePass::Above);
             if self.host_events.annotation_target.borrow().is_some()
-                && let Some(hit) = pointer
+                && pointer
                     .and_then(|pos| {
                         primitives::primitive_at(self.main_pass_primitives(&coords), pos)
                     })
-                    .filter(|hit| hit.result.pass == PrimitivePass::Above)
+                    .is_some_and(|hit| hit.result.pass == PrimitivePass::Above)
             {
                 self.cover_annotation_hit();
-                self.host_events.target = Some(hit.target);
-                self.host_events.primitive_hit = Some(hit.result);
             }
         }
 
