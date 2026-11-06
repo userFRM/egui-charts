@@ -59,6 +59,8 @@ pub struct VolumeProfileConfig {
     pub value_area_colors: Option<[[u8; 4]; 2]>,
     /// Draw the high and low boundaries of the value area.
     pub show_value_area_lines: bool,
+    /// Keep a fixed range drawing growing to the last bar, past its second anchor.
+    pub extend_right: bool,
 }
 
 /// Stored settings of a volume profile, checked by [`VolumeProfileConfig::new`] on load.
@@ -78,6 +80,8 @@ struct VolumeProfileFields {
     value_area_colors: Option<[[u8; 4]; 2]>,
     #[serde(default)]
     show_value_area_lines: bool,
+    #[serde(default)]
+    extend_right: bool,
 }
 
 impl TryFrom<VolumeProfileFields> for VolumeProfileConfig {
@@ -91,6 +95,7 @@ impl TryFrom<VolumeProfileFields> for VolumeProfileConfig {
         config.down_color = fields.down_color;
         config.value_area_colors = fields.value_area_colors;
         config.show_value_area_lines = fields.show_value_area_lines;
+        config.extend_right = fields.extend_right;
         config
             .with_row_size(fields.row_size)
             .ok_or("volume profile row height must be finite and positive")
@@ -138,14 +143,14 @@ impl VolumeProfileConfig {
         self.value_area
     }
 
-    /// Settings a new volume profile drawing starts with: up and down volume side by side in
-    /// cyan and pink, drawn at half opacity outside the value area. Studies keep
-    /// [`Self::default`].
+    /// Settings a new volume profile drawing starts with: up and down volume side by side, which
+    /// on a white chart show as cyan `#7CD2E1` and pink `#DE779B` inside the value area, with the
+    /// bars still visible through them, and paler outside it. Studies keep [`Self::default`].
     pub fn drawing_default() -> Self {
         Self {
             display: ProfileDisplay::UpDown,
-            up_color: [124, 210, 225, 180],
-            down_color: [222, 119, 155, 180],
+            up_color: [83, 196, 216, 191],
+            down_color: [214, 74, 122, 191],
             ..Self::default()
         }
     }
@@ -163,6 +168,7 @@ impl Default for VolumeProfileConfig {
             down_color: profile_down_color(),
             value_area_colors: None,
             show_value_area_lines: false,
+            extend_right: false,
         }
     }
 }

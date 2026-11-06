@@ -10,7 +10,9 @@ use egui::Color32;
 /// Settings for chart series appearance
 #[derive(Clone, Debug)]
 pub struct SeriesSettings {
-    /// Active chart type, used by the dialog to choose the controls to show.
+    /// Active chart type, used by the dialog to choose the controls to show and by
+    /// [`Chart::apply_series_settings`](crate::widget::Chart::apply_series_settings) to keep
+    /// the candle colours where that type reads them.
     /// Applying settings keeps the chart's currently selected type.
     pub chart_type: crate::model::ChartType,
     /// Retained styles and chart type parameters.

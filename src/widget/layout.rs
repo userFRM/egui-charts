@@ -9,8 +9,10 @@ use crate::theme::ThemeExt;
 use egui::{Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2};
 use std::sync::{Arc, Mutex};
 
-/// Narrowest chart that shows the field selectors in its header.
-const LINK_CONTROLS_MIN_WIDTH: f32 = 320.0;
+/// Narrowest chart that shows the field selectors in its header. The title controls need 8 points
+/// of status line inset, 116 of their own and 228 from the chart's right edge to the end of the
+/// first row; a narrower chart leaves the selectors to its corner menu.
+const LINK_CONTROLS_MIN_WIDTH: f32 = 352.0;
 /// Distance of the selectors from the chart's right edge, which ends the status line's first row.
 pub(super) const LINK_CONTROLS_INSET: f32 = 220.0;
 
@@ -95,6 +97,10 @@ pub use copy::{LayoutCopy, LayoutCopyIssue, LayoutCopyIssueKind};
 mod drawings;
 #[cfg(feature = "drawings")]
 use drawings::DrawingLinks;
+#[cfg(feature = "drawings")]
+pub(super) use drawings::UnshownDeletion;
+#[cfg(feature = "drawings")]
+pub use drawings::{SymbolDrawing, SymbolDrawings};
 
 /// Multi-chart arrangement. Changing presets retains the host's hidden charts. Row arrangements
 /// fill from the top, column arrangements from the left. Independently divided halves fill the
@@ -869,7 +875,7 @@ impl LinkChange {
 #[derive(Default)]
 struct LayoutEdits {
     steps: Arc<Mutex<Vec<(u64, bool)>>>,
-    #[cfg(feature = "studies")]
+    #[cfg(any(feature = "studies", feature = "drawings"))]
     next: u64,
 }
 
@@ -881,7 +887,7 @@ impl Clone for LayoutEdits {
 }
 
 impl LayoutEdits {
-    #[cfg(feature = "studies")]
+    #[cfg(any(feature = "studies", feature = "drawings"))]
     fn start(&mut self) -> LayoutEditLink {
         self.next += 1;
         LayoutEditLink {
@@ -4149,5 +4155,80 @@ mod tests {
                 ]),
         ));
         hover(&mut layout, &mut charts, "study row");
+    }
+
+    /// In a linked slot the title controls end where the first row before the selectors ends, 228
+    /// points left of the slot's right edge, so their flag button stays inside the status line,
+    /// which starts 8 points right of the slot's left edge, only from 8 + 116 + 228 = 352 points.
+    /// Narrower slots leave the selectors to the corner menu; the slot of exactly 352 keeps them.
+    #[cfg(feature = "icons")]
+    #[test]
+    fn title_controls_fit_in_narrow_linked_slots() {
+        for (target, shows_selectors) in [
+            (320.0_f32, false),
+            (336.0, false),
+            (351.0, false),
+            (352.0, true),
+        ] {
+            let ctx = egui::Context::default();
+            let mut layout = ChartLayout {
+                mode: ChartLayoutMode::TwoHorizontal,
+                ..Default::default()
+            };
+            let mut charts = [chart(60), chart(60)];
+            let mut size = vec2(2.0 * target, 600.0);
+            let slot = layout.rects(Rect::from_min_size(Pos2::ZERO, size), 2)[0];
+            size.x += 2.0 * (target - slot.width());
+            let slot = layout.rects(Rect::from_min_size(Pos2::ZERO, size), 2)[0];
+            assert_eq!(slot.width(), target, "{size:?}");
+            let bg = ctx.active_theme().chart.bg;
+            let mut controls = None;
+            let mut selectors = false;
+            for frame in 0..4 {
+                let output = ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
+                        time: Some(frame as f64 * 0.1),
+                        events: vec![Event::PointerMoved(pos2(
+                            slot.left() + 40.0,
+                            slot.top() + 14.0,
+                        ))],
+                        ..Default::default()
+                    },
+                    |ui| {
+                        layout.show(ui, &mut charts.iter_mut().collect::<Vec<_>>());
+                    },
+                );
+                for shape in &output.shapes {
+                    match &shape.shape {
+                        egui::Shape::Rect(rect)
+                            if rect.fill == bg
+                                && rect.rect.size() == vec2(116.0, 20.0)
+                                && slot.intersects(rect.rect) =>
+                        {
+                            controls = Some(rect.rect);
+                        }
+                        egui::Shape::Text(text) if text.galley.text().starts_with("S ") => {
+                            selectors |= slot.contains(text.pos);
+                        }
+                        _ => {}
+                    }
+                }
+                output.drop_without_applying_deltas();
+            }
+            let controls = controls.expect("the hovered title shows its controls");
+            let flag = Rect::from_min_size(controls.min, Vec2::splat(20.0));
+            assert!(
+                flag.left() >= slot.left() + 8.0 && slot.contains_rect(flag),
+                "slot {target}: flag {flag:?} leaves the status line"
+            );
+            assert_eq!(selectors, shows_selectors, "slot {target}");
+            if shows_selectors {
+                assert!(
+                    controls.right() <= slot.right() - LINK_CONTROLS_INSET,
+                    "slot {target}: controls {controls:?} reach the selectors"
+                );
+            }
+        }
     }
 }

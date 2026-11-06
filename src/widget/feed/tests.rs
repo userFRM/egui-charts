@@ -417,6 +417,30 @@ fn conversion_reloads_and_ignores_replies_to_the_previous_choice() {
     assert_eq!(trades.conversion.as_deref(), Some("EUR"));
 }
 
+/// An interval change empties the main series until its history arrives, while the added series
+/// keep their bars, so a zoomed-out chart lays out their slots with no main bars behind them.
+#[test]
+fn interval_change_with_an_added_series_paints_while_history_loads() {
+    let feed = Arc::new(Script::default());
+    let mut chart = fed(&feed, Some("A"));
+    let mut frames = Frames::new();
+    frames.run(&mut chart);
+    feed.page().send(page(bars(1000), true));
+    let added = chart.add_series(crate::widget::SeriesOptions::default());
+    chart.set_data(added, bars(1000));
+    frames.run(&mut chart);
+    chart.fit_content();
+    frames.run(&mut chart);
+    chart.set_timeframe(Timeframe::Min5);
+    frames.run(&mut chart);
+    frames.run(&mut chart);
+    assert!(chart.bars(SeriesId::MAIN).is_empty(), "history is loading");
+    // 200 one-minute bars fall into 200 / 5 = 40 five-minute bars.
+    feed.page().send(page(bars(200), true));
+    frames.run(&mut chart);
+    assert_eq!(chart.bars(SeriesId::MAIN).len(), 40);
+}
+
 /// Scanners retain no empty managers; marked symbols survive revisits until forgotten.
 #[test]
 fn inactive_symbol_state_can_be_forgotten() {

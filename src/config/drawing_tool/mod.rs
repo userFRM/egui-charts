@@ -13,6 +13,15 @@ use serde::{Deserialize, Serialize};
 pub use display::ParseToolTypeError;
 pub use interaction_mode::DrawingInteractionMode;
 
+/// The order of a list of drawings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DrawingSort {
+    /// Alphabetically by name, ignoring case.
+    Name,
+    /// By the time of the last edit, newest first.
+    LastModified,
+}
+
 /// Enumeration of all drawing tool types available in the charting engine.
 ///
 /// Identifies a drawing's rendering behavior, interaction mode, required point

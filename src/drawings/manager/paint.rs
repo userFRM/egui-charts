@@ -87,16 +87,27 @@ fn is_plain(shape: &Shape) -> bool {
 impl DrawingManager {
     /// Uses the fitted endpoints kept with the last paint for data-driven handles.
     pub(super) fn handle_drawing<'a>(&self, drawing: &'a Drawing) -> Cow<'a, Drawing> {
-        if drawing.tool_type != DrawingToolType::RegressionTrend || drawing.custom_tool.is_some() {
+        let regression = drawing.tool_type == DrawingToolType::RegressionTrend;
+        let volume_tool = matches!(
+            drawing.tool_type,
+            DrawingToolType::AnchoredVWAP
+                | DrawingToolType::FixedRangeVolumeProfile
+                | DrawingToolType::AnchoredVolumeProfile
+        );
+        if !(regression || volume_tool) || drawing.custom_tool.is_some() {
             return Cow::Borrowed(drawing);
         }
         let painted = self.painted.lock().unwrap_or_else(|e| e.into_inner());
-        let ends = painted
+        let points = painted
             .iter()
             .find(|p| p.id == drawing.id && p.points == drawing.points)
-            .and_then(|p| p.regression_ends);
+            .and_then(|p| p.handle_points.clone());
+        // A volume tool with nothing drawn keeps its handles on its anchors, to be dragged to bars.
+        if points.is_none() && !regression {
+            return Cow::Borrowed(drawing);
+        }
         let mut projected = drawing.clone();
-        projected.points = ends.map(Vec::from).unwrap_or_default();
+        projected.points = points.unwrap_or_default();
         Cow::Owned(projected)
     }
 
@@ -283,9 +294,17 @@ impl DrawingManager {
                 painted.push(PaintedDrawing {
                     id: drawing.id,
                     points: drawing.points.clone(),
-                    regression_ends: (drawing.tool_type == DrawingToolType::RegressionTrend)
-                        .then(|| drawing.regression_ends(view))
-                        .flatten(),
+                    handle_points: match drawing.tool_type {
+                        DrawingToolType::RegressionTrend => {
+                            drawing.regression_ends(view).map(Vec::from)
+                        }
+                        DrawingToolType::AnchoredVWAP
+                        | DrawingToolType::FixedRangeVolumeProfile
+                        | DrawingToolType::AnchoredVolumeProfile => {
+                            drawing.volume_tool_handles(view)
+                        }
+                        _ => None,
+                    },
                     shapes,
                     tessellated,
                 });

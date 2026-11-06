@@ -648,6 +648,7 @@ pub struct ChartTypeParams {
     /// Execution-based session profile display settings.
     pub profile: TradeProfileSettings,
     /// Independent line, area and baseline styles, retained across chart type changes.
+    #[serde(default = "super::ChartTypeStyles::saved_without_styles")]
     pub styles: super::ChartTypeStyles,
     /// Renko: method resolved once from loaded history, then frozen while bars stream.
     pub renko_size_method: super::BoxSizeMethod,

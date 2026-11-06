@@ -10,6 +10,7 @@ use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::ui::context_menu::drawing::{DrawingContextMenu, DrawingContextMenuAction};
 use crate::ui_kit::buttons::{ButtonSize, IconButton};
+use crate::ui_kit::color_picker::keep_opacity;
 use crate::ui_kit::ext::UiExt;
 use crate::ui_kit::{ColorPicker, ColorPickerState};
 use crate::widget::Chart;
@@ -248,7 +249,10 @@ impl FloatingSelectionToolbar {
                 color: drawing.fill_color32().unwrap_or(Color32::TRANSPARENT),
             });
         }
-        self.stroke = Some((drawing.stroke_width, drawing.line_style));
+        self.stroke = drawing
+            .tool_type
+            .draws_line()
+            .then_some((drawing.stroke_width, drawing.line_style));
         // Refresh context without reopening the menu or resetting its dismiss state.
         if !self.menu.is_open() {
             self.menu.open_on(ui.ctx(), chart, self.position, id);
@@ -378,20 +382,12 @@ impl FloatingSelectionToolbar {
                                         picked
                                             .response
                                             .on_hover_text(l10n::text(ui.ctx(), slot.label));
-                                        if let Some(mut color) = picked.inner {
-                                            if idx > 0
-                                                && !custom
-                                                && !picker.custom_mode
-                                                && slot.color.a() > 0
-                                            {
-                                                let [r, g, b, _] = color.to_srgba_unmultiplied();
-                                                color = Color32::from_rgba_unmultiplied(
-                                                    r,
-                                                    g,
-                                                    b,
-                                                    slot.color.a(),
-                                                );
-                                            }
+                                        if let Some(color) = picked.inner {
+                                            let color = keep_opacity(
+                                                color,
+                                                slot.color,
+                                                custom || picker.custom_mode,
+                                            );
                                             if color != slot.color {
                                                 slot.color = color;
                                                 action = Some(FloatingToolbarAction::ChangeColor(
@@ -603,6 +599,76 @@ fn clear_of_card(
 mod tests {
     use super::*;
 
+    /// A palette swatch keeps the opacity of a translucent line, such as a highlighter's, and of
+    /// a fill.
+    #[test]
+    fn palette_colours_keep_each_slot_opacity() {
+        use crate::ui_kit::color_picker::MAIN_COLORS;
+        let swatch = MAIN_COLORS[3];
+        let [r, g, b, _] = swatch.to_srgba_unmultiplied();
+        for slot in 0..2 {
+            let ctx = egui::Context::default();
+            ctx.global_style_mut(|style| style.animation_time = 0.0);
+            let mut toolbar = FloatingSelectionToolbar::new();
+            toolbar.show_at(Pos2::new(100.0, 100.0));
+            toolbar.set_colors(vec![
+                ColorSlot {
+                    label: "Line color",
+                    color: Color32::from_rgba_unmultiplied(242, 54, 69, 51),
+                },
+                ColorSlot {
+                    label: "Fill color",
+                    color: Color32::from_rgba_unmultiplied(0, 188, 212, 51),
+                },
+            ]);
+            let mut pickers = vec![ColorPickerState::default(); 2];
+            pickers[slot].is_open = true;
+            toolbar.pickers = pickers;
+            let mut frame = |events| {
+                let mut action = None;
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            Pos2::ZERO,
+                            egui::vec2(800.0, 600.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| action = toolbar.show(ui),
+                );
+                let well = output.shapes.iter().find_map(|s| match &s.shape {
+                    egui::Shape::Rect(r) if r.fill == swatch => Some(r.rect.center()),
+                    _ => None,
+                });
+                output.drop_without_applying_deltas();
+                (well, action)
+            };
+            frame(vec![]);
+            let pos = frame(vec![]).0.expect("the palette shows the swatch");
+            let (_, action) = frame(vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]);
+            let Some(FloatingToolbarAction::ChangeColor(picked, color)) = action else {
+                panic!("slot {slot}: {action:?}");
+            };
+            assert_eq!(picked, slot);
+            assert_eq!(color, Color32::from_rgba_unmultiplied(r, g, b, 51));
+        }
+    }
+
     /// Keyboard navigation announces each action, including the current lock and visibility state
     /// and the alert when it is available.
     #[test]
@@ -670,6 +736,8 @@ mod tests {
         for (tool, label) in [
             (Tool::TrendLine, "Line color"),
             (Tool::TextLabel, "Text color"),
+            (Tool::ArrowMarkUp, "Line color"),
+            (Tool::ArrowMarker, "Line color"),
         ] {
             let mut chart = Chart::new(crate::model::BarData::new());
             let mut drawing = Drawing::new(7, tool);
@@ -684,6 +752,7 @@ mod tests {
                 })
                 .drop_without_applying_deltas();
             assert_eq!(toolbar.color_slots[0].label, label, "{tool:?}");
+            assert_eq!(toolbar.stroke.is_some(), tool.draws_line(), "{tool:?}");
         }
     }
 
