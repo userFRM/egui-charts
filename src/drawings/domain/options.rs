@@ -767,6 +767,9 @@ pub enum LineMeasurementPosition {
     /// After the right anchor.
     #[default]
     Right,
+    /// After the right anchor if the text fits in the pane there, else before the left anchor if
+    /// it fits there, else above the middle of the anchors.
+    Auto,
 }
 
 /// Which part of a line's text sits at which point of the line, reading left to right.
@@ -793,9 +796,9 @@ pub enum LineTextVerticalAlign {
     Bottom,
 }
 
-/// Independent readouts of a trend line, ray, extended line or info line, and the placement of
-/// its text. Readouts start hidden except on an info line, see [`Self::for_tool`]; saves from
-/// before these settings read the same way.
+/// Independent readouts of a trend line, ray, extended line, info line or trend angle, and the
+/// placement of a line's text. Readouts start hidden except on an info line, see
+/// [`Self::for_tool`]; saves from before these settings read the same way.
 /// Price changes follow anchor order; lengths and elapsed time are unsigned.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]

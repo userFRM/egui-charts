@@ -65,12 +65,11 @@ impl Drawing {
         }
         let &second = p.get(1)?;
         match self.tool_type {
-            T::TrendLine | T::Ray | T::ExtendedLine | T::InfoLine => {
+            T::TrendLine | T::Ray | T::ExtendedLine | T::InfoLine | T::TrendAngle => {
                 let (left, right) = self.trend_line_ends(rect)?;
                 outline.lines = vec![[left, right]];
             }
-            T::TrendAngle
-            | T::Arrow
+            T::Arrow
             | T::Path
             | T::XABCDPattern
             | T::CypherPattern
