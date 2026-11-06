@@ -684,6 +684,30 @@ mod tests {
         assert!(chart.move_series_to_pane(crate::widget::SeriesId::MAIN, pane));
         let painted = shapes(&ctx, &mut chart, 2.0, Vec::new());
         assert_eq!(painted.iter().filter(|shape| is_tint(shape)).count(), 1);
+
+        // A volume study shown in a pane of its own is tinted once too.
+        let bars = chart.bars(crate::widget::SeriesId::MAIN).to_vec();
+        let mut volume =
+            crate::studies::ConfiguredStudy::new(Box::new(crate::studies::Volume::default()));
+        let mut settings = volume.settings();
+        settings.background = Some(tint);
+        volume.apply_settings(&[], settings).unwrap();
+        volume.calculate(&bars);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            IndicatorPane::with_config(IndicatorPaneConfig::default()).show(
+                ui,
+                &volume,
+                &bars,
+                0..bars.len(),
+            );
+        });
+        let painted = std::mem::take(&mut output.shapes);
+        output.drop_without_applying_deltas();
+        let tints = painted
+            .iter()
+            .filter(|clipped| is_tint(&clipped.shape))
+            .count();
+        assert_eq!(tints, 1);
     }
 
     #[test]

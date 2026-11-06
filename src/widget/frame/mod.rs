@@ -1861,6 +1861,9 @@ impl Chart {
                     &(start_idx..end_idx),
                     Some(&self.merge_groups),
                 );
+                if let Some(color) = study.background() {
+                    painter.rect_filled(rect, 0.0, color);
+                }
                 super::volume::paint(
                     &painter,
                     rect,
