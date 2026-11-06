@@ -972,6 +972,13 @@ fn group_name_edit(ui: &mut Ui, current: &str) -> Option<String> {
         ui.data_mut(|data| data.insert_temp(id, name));
         return None;
     }
+    // An idle field has no outline of its own, and its fill can match the menu's.
+    ui.painter().rect_stroke(
+        response.rect,
+        ui.visuals().widgets.inactive.corner_radius,
+        Stroke::new(1.0, ui.active_theme().ui.border_control),
+        StrokeKind::Inside,
+    );
     ui.data_mut(|data| data.remove_temp::<String>(id));
     (response.lost_focus() && name != current && !ui.input(|i| i.key_pressed(egui::Key::Escape)))
         .then_some(name)
