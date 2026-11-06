@@ -1166,3 +1166,44 @@ fn plot_uses_the_interior_and_configured_axis_widths() {
         );
     }
 }
+
+/// A Heikin-Ashi chart whose main series has no bars lays out the slots of its added series. Its
+/// price line has no transformed bar to read, whichever bar it follows, and the frame still
+/// paints the added series.
+#[test]
+fn heikin_last_visible_price_line_without_main_bars() {
+    use crate::model::{Bar, BarData, ChartType, PriceLineSource};
+    use crate::widget::{Chart, SeriesId, SeriesOptions};
+    let start = chrono::DateTime::UNIX_EPOCH;
+    for source in [PriceLineSource::LastBar, PriceLineSource::LastVisible] {
+        let ctx = egui::Context::default();
+        let mut chart = Chart::new(BarData::new());
+        chart.config_mut().show_volume = false;
+        chart.set_chart_type(ChartType::Heikin);
+        chart
+            .series_style_mut(SeriesId::MAIN)
+            .unwrap()
+            .price_line_source = source;
+        let id = chart.add_series(SeriesOptions::default());
+        chart.set_data(
+            id,
+            (0..3)
+                .map(|i| {
+                    let time = start + chrono::Duration::minutes(15 * i);
+                    Bar::new(time, 10.0, 11.0, 9.0, 10.5, 1.0)
+                })
+                .collect(),
+        );
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        frame(&ctx, &mut chart, 0.05, vec![]);
+        chart.fit_content();
+        let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+        let plot = chart.get_rendered_price_rect();
+        assert!(
+            painted
+                .iter()
+                .any(|shape| matches!(shape, egui::Shape::Rect(r) if plot.contains(r.rect.center()))),
+            "{source:?}: the added series is painted"
+        );
+    }
+}
