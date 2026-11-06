@@ -29,6 +29,11 @@ impl Chart {
 
     /// Keep fitting and edge limits on the same mapping used to paint added series.
     pub(super) fn refresh_time_scale_content(&mut self) {
+        let tail = self
+            .state
+            .shows_fallback()
+            .then(|| self.state.shown().last().map(|bar| bar.time))
+            .flatten();
         self.state.set_fallback_series(
             self.price_series
                 .iter()
@@ -48,6 +53,9 @@ impl Chart {
                 )
         });
         self.state.time_scale_mut().set_content_range(range);
+        if let Some(tail) = tail {
+            self.added_slots_arrived(tail);
+        }
     }
 
     /// Restores the configured bar spacing and right offset, leaving the price scale unchanged.
@@ -1100,6 +1108,136 @@ mod tests {
                     .map(|(key, _)| key),
                 Some("4400")
             );
+        }
+    }
+
+    /// Bars loaded between frames keep a view at the live edge there: a history page or older
+    /// bars in front, newer bars it follows, and a chart type switch to many more bricks.
+    #[test]
+    fn bars_loaded_between_frames_keep_the_live_edge() {
+        use crate::data::merge::Origin;
+        use crate::model::{ChartType, ChartTypeParams};
+        let flat = |time, close| Bar::new(time, close, close, close, close, 1.0);
+        for (fix_right_edge, offset) in [(false, 2.5), (true, 0.0)] {
+            for case in ["history page", "older bars", "newer bars", "both", "renko"] {
+                let ctx = egui::Context::default();
+                let mut chart = chart(&[1.0], &[2.0]);
+                let bars = chart.bars(SeriesId::MAIN).to_vec();
+                let (first, last) = (bars[0].time, bars[99].time);
+                let older = |count| -> Vec<Bar> {
+                    (1..=count)
+                        .rev()
+                        .map(|day| flat(first - Duration::days(day), 1.5))
+                        .collect()
+                };
+                let newer = |count| (1..=count).map(|day| flat(last + Duration::days(day), 1.5));
+                if case == "renko" {
+                    // Each bar after the first rises by 1000, which makes 100 bricks of 10 per step.
+                    chart.set_data(
+                        SeriesId::MAIN,
+                        bars.iter()
+                            .enumerate()
+                            .map(|(i, bar)| flat(bar.time, 100.0 + 1000.0 * i as f64))
+                            .collect(),
+                    );
+                }
+                let mut options = chart.chart_options().clone();
+                options.time_scale.fix_right_edge = fix_right_edge;
+                chart.set_chart_options(options);
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                match case {
+                    "history page" => {
+                        let page = older(1500).into_iter().map(|bar| (bar, Origin::History));
+                        chart.apply(page.collect());
+                    }
+                    "older bars" => {
+                        let all = older(5000).into_iter().chain(bars).collect();
+                        chart.set_data(SeriesId::MAIN, all);
+                    }
+                    "newer bars" => {
+                        let all = bars.into_iter().chain(newer(3000)).collect();
+                        chart.set_data(SeriesId::MAIN, all);
+                    }
+                    "both" => {
+                        let all = older(5000).into_iter().chain(bars).chain(newer(3000));
+                        chart.set_data(SeriesId::MAIN, all.collect());
+                    }
+                    _ => {
+                        chart.set_chart_type(ChartType::Renko);
+                        chart.set_chart_type_params(ChartTypeParams {
+                            renko_brick_size: 10.0,
+                            ..Default::default()
+                        });
+                    }
+                }
+                frame(&ctx, &mut chart, 0.1, vec![]);
+                frame(&ctx, &mut chart, 0.2, vec![]);
+                assert_eq!(
+                    chart.get_time_scale_state().1,
+                    offset,
+                    "{case}, fix_right_edge {fix_right_edge}"
+                );
+            }
+        }
+    }
+
+    /// With a fixed right edge, every frame ends at the newest bar, one or two per frame.
+    #[test]
+    fn fixed_right_edge_keeps_streamed_bars_at_the_edge() {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[1.0], &[2.0]);
+        let first = chart.bars(SeriesId::MAIN)[0].time;
+        let day = |day: i64| Bar::new(first + Duration::days(day), 1.0, 2.0, 1.0, 2.0, 1.0);
+        let mut options = chart.chart_options().clone();
+        options.time_scale.fix_right_edge = true;
+        chart.set_chart_options(options);
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let mut observed = vec![chart.get_time_scale_state().1];
+        for (time, days) in [(0.1, 100..101), (0.2, 101..103), (0.3, 103..104)] {
+            for index in days {
+                chart.update(SeriesId::MAIN, day(index));
+            }
+            frame(&ctx, &mut chart, time, vec![]);
+            observed.push(chart.get_time_scale_state().1);
+        }
+        assert_eq!(observed, [0.0; 4]);
+    }
+
+    /// A view 30 bars back keeps its times when older, newer or both kinds of bars arrive in
+    /// one replacement, with a fixed right edge or without one.
+    #[test]
+    fn bars_loaded_between_frames_keep_a_scrolled_back_view() {
+        for fix_right_edge in [false, true] {
+            for (older, newer) in [(5000, 0), (0, 3000), (5000, 3000)] {
+                let ctx = egui::Context::default();
+                let mut chart = chart(&[1.0], &[2.0]);
+                let bars = chart.bars(SeriesId::MAIN).to_vec();
+                let (first, last) = (bars[0].time, bars[99].time);
+                let flat = |time| Bar::new(time, 1.5, 1.5, 1.5, 1.5, 1.0);
+                let mut options = chart.chart_options().clone();
+                options.time_scale.fix_right_edge = fix_right_edge;
+                options.time_scale.bar_spacing = 20.0;
+                chart.set_chart_options(options);
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                chart.scroll_to_position(-30.0, false);
+                frame(&ctx, &mut chart, 0.1, vec![]);
+                let before = chart.visible_time_range().unwrap();
+                let all = (1..=older)
+                    .rev()
+                    .map(|day| flat(first - Duration::days(day)))
+                    .chain(bars)
+                    .chain((1..=newer).map(|day| flat(last + Duration::days(day))));
+                chart.set_data(SeriesId::MAIN, all.collect());
+                frame(&ctx, &mut chart, 0.2, vec![]);
+                // The logical range is narrowed to f32, which rounds below a second here.
+                let after = chart.visible_time_range().unwrap();
+                assert!(
+                    (after.from - before.from).abs() < Duration::seconds(1)
+                        && (after.to - before.to).abs() < Duration::seconds(1),
+                    "{older} older, {newer} newer, fix_right_edge {fix_right_edge}: \
+                     {before:?} became {after:?}"
+                );
+            }
         }
     }
 }

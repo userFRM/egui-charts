@@ -132,24 +132,66 @@ impl Default for BaselineStyle {
     }
 }
 
-/// The HLC area chart's fill and close line. The fills take the chart's bullish and bearish
-/// colours and the close line its bullish colour.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+/// The HLC area chart's high, low and close lines and the fills between them. Lines join their
+/// points with straight segments like the fills, whatever their `line_type`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HlcAreaStyle {
-    /// Opacity of the high-to-close and close-to-low fills, 0 to 1. Values outside the range
-    /// are clamped; a non-finite opacity draws no fill.
-    pub fill_opacity: f32,
-    /// Close line width in logical points. Non-positive or non-finite widths hide the line.
-    pub line_width: f32,
+    /// Draw the line through the highs.
+    pub high_line_visible: bool,
+    /// Line through the highs.
+    pub high_line: LinePlotStyle,
+    /// Draw the line through the lows.
+    pub low_line_visible: bool,
+    /// Line through the lows.
+    pub low_line: LinePlotStyle,
+    /// Line through the closes. A non-positive or non-finite width hides it.
+    pub close_line: LinePlotStyle,
+    /// Draw the fill between the high and close lines.
+    pub high_to_close_fill_visible: bool,
+    /// Fill between the high and close lines, including opacity.
+    pub high_to_close_fill: Color32,
+    /// Draw the fill between the close and low lines.
+    pub close_to_low_fill_visible: bool,
+    /// Fill between the close and low lines, including opacity.
+    pub close_to_low_fill: Color32,
+}
+
+impl HlcAreaStyle {
+    /// The default style with its high line and upper fill in `up` and its low line and lower
+    /// fill in `down`.
+    pub(crate) fn with_colors(up: Color32, down: Color32) -> Self {
+        let line = |color| LinePlotStyle {
+            color,
+            ..Default::default()
+        };
+        // Fills default to 20% opacity.
+        let fill = |color| Self::fill_tint(color, 51);
+        Self {
+            high_line_visible: true,
+            high_line: line(up),
+            low_line_visible: true,
+            low_line: line(down),
+            close_line: line(Color32::from_rgb(134, 137, 147)),
+            high_to_close_fill_visible: true,
+            high_to_close_fill: fill(up),
+            close_to_low_fill_visible: true,
+            close_to_low_fill: fill(down),
+        }
+    }
+
+    /// `color` at the fill opacity `alpha`.
+    pub(crate) fn fill_tint(color: Color32, alpha: u8) -> Color32 {
+        Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha)
+    }
 }
 
 impl Default for HlcAreaStyle {
     fn default() -> Self {
-        Self {
-            fill_opacity: 30.0 / 255.0,
-            line_width: DESIGN_TOKENS.stroke.thick,
-        }
+        Self::with_colors(
+            DESIGN_TOKENS.semantic.extended.bullish,
+            DESIGN_TOKENS.semantic.extended.bearish,
+        )
     }
 }
 

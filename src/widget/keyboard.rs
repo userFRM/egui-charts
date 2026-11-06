@@ -1183,4 +1183,117 @@ mod tests {
             "opening a host dialog hands the remaining text to it"
         );
     }
+
+    /// Delete and Backspace remove the selected study, and the pane it leaves empty, in the
+    /// frame that handles the key, and that frame reads only what remains and draws no
+    /// separator across the removed pane. Undo and Redo then bring the removal back and repeat
+    /// it as one step each.
+    #[cfg(all(feature = "studies", feature = "drawings"))]
+    #[test]
+    fn deleting_a_selected_study_by_key_keeps_the_frame() {
+        use crate::studies::{RSI, SMA};
+        use crate::widget::test_frames::{frame, shapes};
+        use crate::widget::{ChartElementId, SeriesId};
+        let press = |key, modifiers| Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        };
+        let separator = egui::Color32::from_rgb(1, 2, 3);
+        let mut failures = Vec::new();
+        for (name, own_pane, beside_a_pane, maximized) in [
+            ("RSI pane", true, false, false),
+            ("SMA overlay", false, false, false),
+            ("SMA overlay listed before an RSI pane", false, true, false),
+            ("first of two RSI panes", true, true, false),
+            ("maximised RSI pane above another", true, true, true),
+        ] {
+            for volume in [true, false] {
+                for key in [Key::Delete, Key::Backspace] {
+                    let name = format!("{name}, volume {volume}, {key:?}");
+                    let ctx = egui::Context::default();
+                    let mut chart = chart(&[100.0, 105.0], &[110.0, 115.0]);
+                    chart.config.show_volume = volume;
+                    chart.pane_options_mut().separator_color = Some(separator);
+                    let study = if own_pane {
+                        chart.add_indicator(Box::new(RSI::new(14)))
+                    } else {
+                        chart.add_indicator(Box::new(SMA::new(3)))
+                    };
+                    if beside_a_pane {
+                        chart.add_indicator(Box::new(RSI::new(14)));
+                    }
+                    frame(&ctx, &mut chart, 0.0, vec![]);
+                    let pane = chart.series_pane(study).expect("the study has a pane");
+                    assert_eq!(
+                        pane == chart.series_pane(SeriesId::MAIN).unwrap(),
+                        !own_pane
+                    );
+                    chart.pane_layout.maximized = maximized.then_some(pane);
+                    frame(&ctx, &mut chart, 0.1, vec![]);
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        chart
+                            .selection
+                            .select(ChartElementId::Indicator(study), None);
+                        let painted =
+                            shapes(&ctx, &mut chart, 0.2, vec![press(key, Modifiers::NONE)]);
+                        // Separators are hairlines; a taller one covers the removed pane.
+                        let spanned = painted.iter().any(|shape| {
+                            matches!(shape, egui::Shape::Rect(rect)
+                                if rect.fill == separator && rect.rect.height() > 2.0)
+                        });
+                        let removed = chart.get_chart_mapping().price.range();
+                        let gone = !chart.indicators().any(|(id, _)| id == study)
+                            && (!own_pane || !chart.panes().contains(&pane));
+                        frame(&ctx, &mut chart, 0.3, vec![]);
+                        let settled = chart.get_chart_mapping().price.range();
+                        frame(
+                            &ctx,
+                            &mut chart,
+                            0.4,
+                            vec![press(Key::Z, Modifiers::COMMAND)],
+                        );
+                        let restored = chart.indicators().any(|(id, _)| id == study)
+                            && chart.panes().contains(&pane);
+                        frame(&ctx, &mut chart, 0.5, vec![]);
+                        frame(
+                            &ctx,
+                            &mut chart,
+                            0.6,
+                            vec![press(Key::Y, Modifiers::COMMAND)],
+                        );
+                        let gone_again = !chart.indicators().any(|(id, _)| id == study);
+                        frame(&ctx, &mut chart, 0.7, vec![]);
+                        (gone, spanned, removed, settled, restored, gone_again)
+                    }));
+                    match result {
+                        Err(_) => failures.push(format!("{name}: the frame panicked")),
+                        Ok((gone, spanned, removed, settled, restored, gone_again)) => {
+                            if !gone {
+                                failures.push(format!("{name}: the key left the study"));
+                            }
+                            if spanned {
+                                failures
+                                    .push(format!("{name}: a separator covers the removed pane"));
+                            }
+                            // The pane heights only settle a frame later when a pane goes.
+                            if !own_pane && removed != settled {
+                                failures.push(format!(
+                                    "{name}: price scale {removed:?}, next frame {settled:?}"
+                                ));
+                            }
+                            if !restored || !gone_again {
+                                failures.push(format!(
+                                    "{name}: undo restored {restored}, redo removed {gone_again}"
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
 }

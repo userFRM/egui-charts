@@ -63,24 +63,36 @@ impl SymbolTab {
                     Self::marker_radius_row(ui, &mut styles.area.marker_radius);
                 }
                 ChartType::HlcArea => {
-                    let label = ui.label(l10n::text(ui.ctx(), "Fill opacity"));
-                    ui.add(
-                        egui::DragValue::new(&mut styles.hlc_area.fill_opacity)
-                            .range(0.0..=1.0)
-                            .speed(0.01),
-                    )
-                    .labelled_by(label.id);
-                    ui.end_row();
-                    let label = ui.label(l10n::text(ui.ctx(), "Line width"));
-                    ui.add(
-                        egui::DragValue::new(&mut styles.hlc_area.line_width)
-                            .range(0.0..=10.0)
-                            .speed(0.1)
-                            .suffix(l10n::text(ui.ctx(), " pt")),
-                    )
-                    .labelled_by(label.id);
-                    ui.end_row();
-                    Self::candle_colors_section(ui, settings);
+                    let style = &mut styles.hlc_area;
+                    Self::hlc_line_row(
+                        ui,
+                        "High line",
+                        Some(&mut style.high_line_visible),
+                        &mut style.high_line,
+                    );
+                    Self::hlc_line_row(
+                        ui,
+                        "Low line",
+                        Some(&mut style.low_line_visible),
+                        &mut style.low_line,
+                    );
+                    Self::hlc_line_row(ui, "Close line", None, &mut style.close_line);
+                    for (label, visible, color) in [
+                        (
+                            "High to close fill",
+                            &mut style.high_to_close_fill_visible,
+                            &mut style.high_to_close_fill,
+                        ),
+                        (
+                            "Close to low fill",
+                            &mut style.close_to_low_fill_visible,
+                            &mut style.close_to_low_fill,
+                        ),
+                    ] {
+                        ui.checkbox(visible, l10n::text(ui.ctx(), label));
+                        ui.add_enabled_ui(*visible, |ui| Self::color_picker(ui, color));
+                        ui.end_row();
+                    }
                 }
                 ChartType::Baseline => {
                     ui.label(l10n::text(ui.ctx(), "Above base"));
@@ -167,6 +179,7 @@ impl SymbolTab {
             FootprintMode::BidAskTrades => "Sell × buy trades",
             FootprintMode::Trades => "Trades",
             FootprintMode::AverageSize => "Average size",
+            FootprintMode::Ladder => "Sell and buy around the candle",
         }
         .to_owned()
     }
@@ -192,6 +205,7 @@ impl SymbolTab {
                         ("footprint_column", i),
                         mode,
                         [
+                            FootprintMode::Ladder,
                             FootprintMode::BidAsk,
                             FootprintMode::Volume,
                             FootprintMode::Delta,
@@ -207,12 +221,14 @@ impl SymbolTab {
                 ui.end_row();
             }
             Self::switch(ui, "Profile in bar", &mut params.footprint_profile);
+            Self::switch(ui, "Summary below bars", &mut params.footprint_info_box);
             let label = ui.label(l10n::text(ui.ctx(), "Colouring"));
             ui.label_inputs_by(label.id, |ui| {
                 ui.combo_select(
                     "footprint_colour",
                     &mut params.footprint_color_by,
                     [
+                        FootprintColor::VolumeSteps,
                         FootprintColor::Volume,
                         FootprintColor::Delta,
                         FootprintColor::Imbalance,
@@ -221,6 +237,7 @@ impl SymbolTab {
                     ],
                     |color| {
                         match color {
+                            FootprintColor::VolumeSteps => "Volume steps",
                             FootprintColor::Volume => "Volume",
                             FootprintColor::Delta => "Delta",
                             FootprintColor::Imbalance => "Imbalance",
@@ -290,6 +307,7 @@ impl SymbolTab {
             Self::value_area(ui, &mut params.footprint_value_area);
         });
         Self::section(ui, "Imbalance", true, |ui| {
+            Self::switch(ui, "Edge strips", &mut params.footprint_imbalance);
             let label = ui.label(l10n::text(ui.ctx(), "Ratio"));
             ui.add(
                 egui::DragValue::new(&mut params.footprint_imbalance_ratio)
@@ -873,6 +891,41 @@ impl SymbolTab {
                 LineStyle::all().iter().copied(),
                 |s| s.name().to_owned(),
             );
+        });
+        ui.end_row();
+    }
+
+    /// A line of the HLC area on one row, so that the three lines and two fills fit the dialog.
+    fn hlc_line_row(
+        ui: &mut Ui,
+        label: &str,
+        visible: Option<&mut bool>,
+        style: &mut LinePlotStyle,
+    ) {
+        let text = l10n::text(ui.ctx(), label);
+        let enabled = visible.as_deref().is_none_or(|visible| *visible);
+        let label_id = match visible {
+            Some(visible) => ui.checkbox(visible, text).id,
+            None => ui.label(text).id,
+        };
+        ui.add_enabled_ui(enabled, |ui| {
+            ui.horizontal(|ui| {
+                ui.label_inputs_by(label_id, |ui| {
+                    Self::color_picker(ui, &mut style.color);
+                    ui.add(
+                        egui::DragValue::new(&mut style.width)
+                            .range(0.0..=10.0)
+                            .speed(0.1)
+                            .suffix(l10n::text(ui.ctx(), " pt")),
+                    );
+                    ui.combo_select(
+                        label,
+                        &mut style.style,
+                        LineStyle::all().iter().copied(),
+                        |s| s.name().to_owned(),
+                    );
+                });
+            });
         });
         ui.end_row();
     }

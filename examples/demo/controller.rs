@@ -1767,6 +1767,7 @@ impl eframe::App for DemoApp {
         self.show_strategy_report(ui, panel_bg);
         self.show_sample_study(ui);
         self.show_bottom_toolbar(ui, panel_bg);
+        self.reserve_replay_strip(ui, panel_bg);
         let groups = self.layout_groups();
         self.show_chart(ui, panel_bg);
         if self.layout_groups() != groups {
@@ -3425,7 +3426,6 @@ impl DemoApp {
                 points,
                 self.theme.ui.border,
             )));
-        self.replay_control.set_dock_rect(chart.response.rect);
         if !self.replay_selecting && self.replay.is_none() {
             self.activate_chart_slot(self.layout.active());
         }
@@ -3744,17 +3744,44 @@ impl DemoApp {
         }
     }
 
-    fn show_replay_control(&mut self, ctx: &egui::Context) {
-        let Some(replay) = self.replay.as_ref() else {
+    /// Keeps the replay bar out of the chart's way: between its time axis and the bottom bar.
+    fn reserve_replay_strip(&mut self, ui: &mut egui::Ui, bg: egui::Color32) {
+        if !self.replay_control.is_visible() {
             return;
-        };
-        self.replay_control.sync_from(
-            replay.state.is_active(),
-            replay.state.is_playing(),
-            replay.state.speed.multiplier(),
-            replay.state.curr_bar,
-            replay.state.total_bars,
-        );
+        }
+        let strip = egui::Panel::bottom("replay_bar")
+            .exact_size(FloatingReplayControl::STRIP_HEIGHT)
+            .show_separator_line(false)
+            .frame(panel_frame(bg).corner_radius(4).outer_margin(egui::Margin {
+                top: 1,
+                ..egui::Margin::ZERO
+            }))
+            .show(ui, |_| {})
+            .response
+            .rect;
+        self.replay_control.set_dock_strip(strip);
+    }
+
+    fn show_replay_control(&mut self, ctx: &egui::Context) {
+        if self.replay.is_none() && !self.replay_selecting {
+            return;
+        }
+        self.replay_control.set_selecting(self.replay_selecting);
+        self.replay_control
+            .set_can_resume(self.replay.is_none() && self.replay_session.is_some());
+        match self.replay.as_ref() {
+            Some(replay) => self.replay_control.sync_from(
+                replay.state.is_active(),
+                replay.state.is_playing(),
+                replay.state.speed.multiplier(),
+                replay.state.curr_bar,
+                replay.state.total_bars,
+            ),
+            None => {
+                let speed = self.replay_control.state.speed;
+                self.replay_control.sync_from(false, false, speed, 0, 0);
+            }
+        }
         let action = self.replay_control.show(ctx);
         if action != ReplayControlAction::None {
             ctx.request_repaint();
@@ -3763,6 +3790,17 @@ impl DemoApp {
     }
 
     fn handle_replay_control(&mut self, action: ReplayControlAction) {
+        match action {
+            ReplayControlAction::Start(start) => return self.apply_replay_start(start),
+            // Without a replay the bar is only there to select its start.
+            ReplayControlAction::Stop | ReplayControlAction::Close if self.replay.is_none() => {
+                return self.stop_replay();
+            }
+            ReplayControlAction::SetSpeed(speed) if self.replay.is_none() => {
+                return self.replay_control.set_speed(speed);
+            }
+            _ => {}
+        }
         let play = matches!(action, ReplayControlAction::Play);
         let endpoint = match action {
             ReplayControlAction::GoToStart => Some(false),
@@ -3797,6 +3835,7 @@ impl DemoApp {
             ReplayControlAction::SetUpdateInterval(interval) => self.set_replay_interval(interval),
             ReplayControlAction::Stop => self.stop_replay(),
             ReplayControlAction::Close => {
+                self.replay_selecting = false;
                 self.replay_control.dismiss();
                 return;
             }
@@ -5224,8 +5263,12 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| {
+                    if app.keyboard_dialog_open() {
+                        app.chart.suppress_shortcuts(ui.ctx());
+                    }
                     app.show_top_toolbar(ui, app.theme.ui.panel_bg);
                     app.show_chart(ui, app.theme.ui.panel_bg);
+                    app.show_replay_start(ui.ctx());
                 },
             );
             let shapes = std::mem::take(&mut output.shapes);
@@ -5261,7 +5304,22 @@ mod tests {
             message.contains(&format!("price: {:.4}", map.y_to_price(pos.y))),
             "{message}"
         );
-        app.replay_selecting = true;
+        // One click on Replay waits for a bar with no dialog in between, and Escape cancels.
+        app.toggle_replay();
+        assert!(app.replay_selecting && !app.replay_start.is_open);
+        frame(
+            &mut app,
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert!(!app.replay_selecting && !app.state.replay_active);
+        assert!(!app.replay_control.is_visible());
+        app.toggle_replay();
         let index = index - 3;
         let time = app.chart.state().shown()[index].time;
         let pos = egui::pos2(map.idx_to_x(index), map.rect.center().y);
@@ -5347,6 +5405,91 @@ mod tests {
     }
 
     #[test]
+    fn replay_bar_sits_below_the_time_axis() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.start_replay();
+        for pass in 0..3 {
+            let mut chart = egui::Rect::NOTHING;
+            let mut bottom_bar = 0.0;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    app.show_bottom_toolbar(ui, app.theme.ui.panel_bg);
+                    bottom_bar = ui.available_rect_before_wrap().bottom();
+                    app.reserve_replay_strip(ui, app.theme.ui.panel_bg);
+                    chart = ui.available_rect_before_wrap();
+                    app.show_chart(ui, app.theme.ui.panel_bg);
+                    app.show_replay_control(ui.ctx());
+                },
+            );
+            if pass == 2 {
+                let exit = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == "Exit replay" => {
+                            Some(text.pos.y)
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                // The chart's time axis ends at its bottom, above the strip and the bottom bar.
+                let strip = chart.bottom()..bottom_bar;
+                assert!(strip.contains(&exit), "{exit} outside {strip:?}");
+            }
+            output.textures_delta.clear();
+            output.drop_without_applying_deltas();
+        }
+    }
+
+    /// A choice of the bar's start control restarts a running replay over the whole history.
+    #[test]
+    fn replay_bar_starts_restart_from_the_whole_history() {
+        use egui_charts::ui::replay::ReplayStartAction as Start;
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.live.set_paused(true);
+        app.switch_timeframe(Timeframe::Hour1);
+        let count = app.chart.bars(SeriesId::MAIN).len();
+        let date = app.chart.bars(SeriesId::MAIN)[count / 2].time;
+        for (start, expected) in [
+            (Start::First, Some(0)),
+            (Start::Date(date), Some(count / 2)),
+            (Start::Random, None),
+        ] {
+            // Near the first bar, so most of the history is hidden from the chart.
+            app.start_replay_at(1);
+            app.apply_replay_start(start);
+            let replay = app.replay.as_ref().unwrap();
+            assert_eq!(replay.state.total_bars, count, "{start:?}");
+            assert!(replay.state.curr_bar < count);
+            if let Some(expected) = expected {
+                assert_eq!(replay.state.curr_bar, expected, "{start:?}");
+            }
+            assert!(app.state.replay_active && app.replay_control.is_visible());
+        }
+        // A date past the history leaves the running replay alone.
+        let late = app.bars.last().unwrap().time + chrono::TimeDelta::days(1);
+        let curr = app.replay.as_ref().unwrap().state.curr_bar;
+        app.apply_replay_start(Start::Date(late));
+        assert_eq!(app.replay.as_ref().unwrap().state.curr_bar, curr);
+        // A restart keeps the update interval.
+        app.set_replay_interval(Timeframe::Min1);
+        app.apply_replay_start(Start::First);
+        assert_eq!(app.replay_interval, Timeframe::Min1);
+        app.apply_replay_start(Start::SelectDate);
+        assert!(app.replay_start.is_open);
+    }
+
+    #[test]
     fn replay_finer_source_and_saved_position_keep_the_shared_cutoff() {
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
@@ -5413,48 +5556,7 @@ mod tests {
             restored.replay_session,
             Some((saved.clone(), Timeframe::Hour1))
         );
-        restored.replay_start.open(None);
-        let mut resume = egui::Pos2::ZERO;
-        for pass in 0..5 {
-            let events = if pass >= 3 {
-                vec![
-                    egui::Event::PointerMoved(resume),
-                    egui::Event::PointerButton {
-                        pos: resume,
-                        button: egui::PointerButton::Primary,
-                        pressed: pass == 3,
-                        modifiers: egui::Modifiers::NONE,
-                    },
-                ]
-            } else {
-                vec![]
-            };
-            let output = ctx.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(320.0, 600.0),
-                    )),
-                    events,
-                    ..Default::default()
-                },
-                |ui| restored.show_replay_start(ui.ctx()),
-            );
-            if pass == 2 {
-                resume = output
-                    .shapes
-                    .iter()
-                    .find_map(|shape| match &shape.shape {
-                        egui::Shape::Text(text) if text.galley.text() == "Resume saved session" => {
-                            Some(text.pos + text.galley.size() / 2.0)
-                        }
-                        _ => None,
-                    })
-                    .unwrap();
-                assert!(ctx.content_rect().contains(resume));
-            }
-            output.drop_without_applying_deltas();
-        }
+        restored.apply_replay_start(egui_charts::ui::replay::ReplayStartAction::Resume);
         assert_eq!(restored.chart.replay_time(), Some(cutoff));
         assert!(!restored.replay.as_ref().unwrap().state.is_playing());
     }
