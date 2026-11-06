@@ -404,9 +404,8 @@ impl Alert {
                     labels.join(", ")
                 }
                 _ => {
-                    if let Some(rest) = name.strip_prefix("plot_") {
-                        let (id, output) = rest.rsplit_once('_')?;
-                        return Some(study(id, output.parse().ok()?));
+                    if let Some((id, output)) = plot_placeholder(name) {
+                        return Some(study(id, output));
                     }
                     let output = name.strip_prefix("output_")?.parse().ok()?;
                     match &self.source {
@@ -416,22 +415,45 @@ impl Alert {
                 }
             })
         };
-        let mut text = String::new();
-        let mut rest = self.message.as_str();
-        while let Some(start) = rest.find("{{")
-            && let Some(length) = rest[start + 2..].find("}}")
-        {
-            let end = start + 2 + length;
-            text.push_str(&rest[..start]);
-            match field(&rest[start + 2..end]) {
-                Some(filled) => text.push_str(&filled),
-                None => text.push_str(&rest[start..end + 2]),
-            }
-            rest = &rest[end + 2..];
-        }
-        text.push_str(rest);
-        text
+        fill_placeholders(&self.message, field)
     }
+
+    /// The study identifiers that `{{plot_ID_N}}` placeholders of the message name.
+    #[cfg(all(feature = "alert-engine", feature = "studies"))]
+    pub(crate) fn plot_studies(&self) -> Vec<usize> {
+        let mut ids = Vec::new();
+        fill_placeholders(&self.message, |name| {
+            ids.extend(plot_placeholder(name).and_then(|(id, _)| id.parse::<usize>().ok()));
+            None
+        });
+        ids
+    }
+}
+
+/// The study identifier and output number of the placeholder `plot_ID_N`.
+fn plot_placeholder(name: &str) -> Option<(&str, usize)> {
+    let (id, output) = name.strip_prefix("plot_")?.rsplit_once('_')?;
+    Some((id, output.parse().ok()?))
+}
+
+/// `message` with each `{{name}}` replaced by what `field` gives for it, or left as written if
+/// `field` gives nothing.
+fn fill_placeholders(message: &str, mut field: impl FnMut(&str) -> Option<String>) -> String {
+    let mut text = String::new();
+    let mut rest = message;
+    while let Some(start) = rest.find("{{")
+        && let Some(length) = rest[start + 2..].find("}}")
+    {
+        let end = start + 2 + length;
+        text.push_str(&rest[..start]);
+        match field(&rest[start + 2..end]) {
+            Some(filled) => text.push_str(&filled),
+            None => text.push_str(&rest[start..end + 2]),
+        }
+        rest = &rest[end + 2..];
+    }
+    text.push_str(rest);
+    text
 }
 
 /// When an alert fires, judged on its source for each subject symbol.

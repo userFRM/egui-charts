@@ -70,6 +70,16 @@ impl Evaluation {
                 _ => None,
             })
             .collect();
+        // The fired message comes from the first interval. A study only the message reads and
+        // the factory cannot make reads `NaN`, instead of stopping the alert's other studies.
+        if timeframe == alert.timeframe.unwrap_or_default() {
+            required.extend(alert.plot_studies().into_iter().filter(|id| {
+                inputs
+                    .studies
+                    .iter()
+                    .any(|study| study.id == *id && factory.has(&study.name))
+            }));
+        }
         loop {
             let before = required.len();
             for study in &inputs.studies {
@@ -784,6 +794,68 @@ mod tests {
         );
         assert!(
             matches!(&delivered[0].1, crate::services::AlertEvent::TriggeredForSymbol { message, .. } if message == "100 on 5min")
+        );
+    }
+
+    /// Polls `alert` on `feed` until it settles and returns the messages it fired with.
+    fn fired_messages(
+        feed: Arc<dyn Datafeed>,
+        factory: &IndicatorFactory,
+        alert: Alert,
+    ) -> Vec<String> {
+        let mut evaluator = AlertEvaluator::new(feed);
+        let delivered = Arc::new(Mutex::new(Vec::new()));
+        let sink = delivered.clone();
+        let engine = AlertEngine::new()
+            .with_alerts(vec![alert])
+            .on_trigger(move |_, event| {
+                if let crate::services::AlertEvent::TriggeredForSymbol { message, .. } = event {
+                    sink.lock().unwrap().push(message.clone());
+                }
+            });
+        #[cfg(feature = "ui")]
+        let ctx = egui::Context::default();
+        for _ in 0..6 {
+            let errors = evaluator.poll(
+                &engine,
+                factory,
+                &[],
+                #[cfg(feature = "ui")]
+                &ctx,
+                DateTime::from_timestamp(1000, 0).unwrap(),
+            );
+            assert!(errors.is_empty(), "{errors:?}");
+        }
+        delivered.lock().unwrap().clone()
+    }
+
+    /// `prepare_alert` saves every study of the chart with the alert; a price alert's message
+    /// names study 7, which no condition tests. One-minute closes 200 and 300: the mean is 250.
+    /// Study 8 is not saved, the factory does not know study 9 and nothing names study 10.
+    #[test]
+    fn plot_placeholder_reads_a_saved_study_no_condition_tests() {
+        let mut factory = IndicatorFactory::new();
+        factory.register("Pair mean", || Box::new(crate::studies::SMA::new(2)));
+        factory.register("Unused", || panic!("a study nothing names is not built"));
+        let saved = |id, name: &str| crate::model::AlertStudy {
+            id,
+            name: name.into(),
+            inputs: Vec::new(),
+        };
+        let mut alert = Alert::new("SYM", crate::model::AlertCondition::Above(250.0));
+        alert.timeframe = Some(Timeframe::Min1);
+        alert.message = "{{close}} mean {{plot_7_0}} {{plot_8_0}} {{plot_9_0}}".into();
+        alert.inputs = Some(Box::new(AlertInputs {
+            studies: vec![
+                saved(7, "Pair mean"),
+                saved(9, "Unregistered"),
+                saved(10, "Unused"),
+            ],
+            ..Default::default()
+        }));
+        assert_eq!(
+            fired_messages(Arc::new(Feed::default()), &factory, alert),
+            ["300 mean 250 NaN NaN"]
         );
     }
 }
