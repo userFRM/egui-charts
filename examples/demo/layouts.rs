@@ -106,7 +106,7 @@ impl DemoApp {
         }
         self.layout.mode = mode;
         if self.layout_slot >= count {
-            self.activate_chart_slot(0);
+            self.move_active_chart_to_first_slot();
         }
         self.top_toolbar.chart_grid_selector.set_layout(mode);
         self.refresh_strategy_signals();
@@ -198,6 +198,24 @@ impl DemoApp {
             comparisons: copied_comparisons,
             spreads: copied_spreads,
         }
+    }
+
+    /// Exchanges the active chart with the first one, which keeps the slot the other had, so a
+    /// preset too small for the active slot still shows the chart being worked on.
+    fn move_active_chart_to_first_slot(&mut self) {
+        let slot = self.layout_slot;
+        let first = self.extra_charts.remove(0);
+        self.extra_charts.insert(slot - 1, first);
+        self.layout.swap_slots(0, slot);
+        for replayed in &mut self.replay_slots {
+            if *replayed == 0 {
+                *replayed = slot;
+            } else if *replayed == slot {
+                *replayed = 0;
+            }
+        }
+        self.layout_slot = 0;
+        self.layout.set_active(0);
     }
 
     pub(crate) fn activate_chart_slot(&mut self, slot: usize) {
@@ -849,6 +867,7 @@ impl DemoApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::tests::settle;
     use egui_charts::widget::{ChartLink, ChartLinkGroups};
 
     #[test]
@@ -1323,5 +1342,113 @@ mod tests {
             Some(copied_pane.0),
             "layout copies remap pane ownership after series ids change"
         );
+    }
+
+    /// Fewer charts keep the active one on screen, and going back restores the others.
+    #[test]
+    fn single_layout_keeps_the_active_chart() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        settle(&mut app, &ctx);
+        app.ensure_chart_slots(ChartLayoutMode::Four);
+        settle(&mut app, &ctx);
+        let line = |price: f64| {
+            let mut drawing =
+                egui_charts::drawings::Drawing::new(0, egui_charts::drawings::DrawingToolType::HorizontalLine);
+            drawing
+                .chart_points
+                .push(egui_charts::drawings::ChartPoint::new(10.0, price));
+            drawing
+        };
+        for (slot, symbol, interval) in [
+            (1, "MSFT", Timeframe::Hour1),
+            (3, "BTCUSD", Timeframe::Min5),
+            (0, "EURUSD", Timeframe::Min15),
+            (2, "ETHUSD", Timeframe::Day1),
+        ] {
+            app.activate_chart_slot(slot);
+            app.switch_symbol(symbol);
+            app.switch_timeframe(interval);
+            app.chart.drawings_mut().add_drawing(line(slot as f64)).unwrap();
+            settle(&mut app, &ctx);
+        }
+        app.layout.set_sync_group(2, Some("Kept".into()));
+        app.layout.set_detached(2, true);
+        app.layout.set_sync_group(0, Some("First".into()));
+        let assert_charts = |app: &DemoApp| {
+            for (slot, symbol, interval, price) in [
+                (0, "ETHUSD", Timeframe::Day1, 2.0),
+                (1, "MSFT", Timeframe::Hour1, 1.0),
+                (2, "EURUSD", Timeframe::Min15, 0.0),
+                (3, "BTCUSD", Timeframe::Min5, 3.0),
+            ] {
+                let chart = if slot == app.layout_slot {
+                    &app.chart
+                } else {
+                    &app.extra_charts[slot - usize::from(slot > app.layout_slot)].chart
+                };
+                assert_eq!(chart.symbol(), symbol, "slot {slot}");
+                assert_eq!(chart.timeframe(), Some(interval), "slot {slot}");
+                let drawings = &chart.drawings().drawings;
+                assert_eq!(drawings.len(), 1, "slot {slot}");
+                assert_eq!(drawings[0].chart_points[0].price, price, "slot {slot}");
+            }
+        };
+        app.start_replay_at(app.chart.bars(SeriesId::MAIN).len() / 2);
+        assert_eq!(app.replay_slots, [2]);
+        app.handle_layout_action(LayoutAction::SelectGrid(ChartLayoutMode::Single));
+        assert!(app.replay.is_some(), "the replayed chart stays on screen");
+        assert_eq!(app.replay_slots, [0]);
+        assert_eq!((app.layout_slot, app.layout.active()), (0, 0));
+        assert_eq!(app.chart.symbol(), "ETHUSD");
+        assert_eq!(app.state.symbol, "ETHUSD");
+        assert_eq!(
+            (app.layout.sync_group(0), app.layout.sync_group(2)),
+            (Some("Kept"), Some("First"))
+        );
+        assert!(app.layout.is_detached(0) && !app.layout.is_detached(2));
+        app.layout.set_detached(0, false);
+        settle(&mut app, &ctx);
+        assert_charts(&app);
+        app.handle_layout_action(LayoutAction::SelectGrid(ChartLayoutMode::Four));
+        settle(&mut app, &ctx);
+        assert_eq!(app.layout_slot, 0);
+        assert_charts(&app);
+    }
+
+    /// Copies of a mirrored drawing stay single when their charts exchange slots.
+    #[test]
+    fn single_layout_keeps_mirrored_drawings_single() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        settle(&mut app, &ctx);
+        app.ensure_chart_slots(ChartLayoutMode::Four);
+        settle(&mut app, &ctx);
+        app.activate_chart_slot(2);
+        let mut line = egui_charts::drawings::Drawing::new(
+            0,
+            egui_charts::drawings::DrawingToolType::HorizontalLine,
+        );
+        line.chart_points
+            .push(egui_charts::drawings::ChartPoint::new(10.0, 100.0));
+        // Saved drawings reach charts on one storage through it, not through mirroring.
+        line.saveable = false;
+        // The copies get other ids than the drawing, as on charts with different histories.
+        let used = app.chart.drawings_mut().add_drawing(line.clone()).unwrap();
+        app.chart.drawings_mut().delete_drawing(used);
+        app.top_toolbar.chart_grid_selector.sync.sync_drawings = true;
+        settle(&mut app, &ctx);
+        app.chart.drawings_mut().add_drawing(line).unwrap();
+        settle(&mut app, &ctx);
+        let counts = |app: &DemoApp| {
+            std::iter::once(&app.chart)
+                .chain(app.extra_charts.iter().map(|extra| &extra.chart))
+                .map(|chart| chart.drawings().drawings.len())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(counts(&app), [1, 1, 1, 1]);
+        app.handle_layout_action(LayoutAction::SelectGrid(ChartLayoutMode::Single));
+        settle(&mut app, &ctx);
+        assert_eq!(counts(&app), [1, 1, 1, 1]);
     }
 }

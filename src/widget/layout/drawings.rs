@@ -47,6 +47,24 @@ pub(super) struct DrawingLinks {
 }
 
 impl DrawingLinks {
+    pub(super) fn swap_slots(&mut self, a: usize, b: usize) {
+        let moved = |(slot, id): Key| {
+            let slot = match slot {
+                slot if slot == a => b,
+                slot if slot == b => a,
+                slot => slot,
+            };
+            (slot, id)
+        };
+        self.previous = self.previous.drain().map(|(k, v)| (moved(k), v)).collect();
+        self.origins = self
+            .origins
+            .drain()
+            .map(|(k, v)| (moved(k), moved(v)))
+            .collect();
+        self.retry = self.retry.drain().map(moved).collect();
+    }
+
     pub(super) fn sync(
         &mut self,
         charts: &mut [&mut Chart],
