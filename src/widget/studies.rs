@@ -38,8 +38,8 @@ impl Chart {
         Ok(self.add_indicator(indicator))
     }
 
-    /// `indicator` set to this chart's interval, instrument and events and computed from its bars.
-    pub(super) fn prepare_indicator(
+    /// `indicator` set to this chart's interval, instrument and events, not yet computed.
+    pub(super) fn configure_indicator(
         &self,
         mut indicator: Box<dyn Indicator>,
     ) -> Box<dyn Indicator> {
@@ -58,6 +58,12 @@ impl Chart {
             self.frozen_source_events,
         ));
         indicator.set_bar_clock(&self.bar_clock());
+        indicator
+    }
+
+    /// `indicator` set to this chart's interval, instrument and events and computed from its bars.
+    pub(super) fn prepare_indicator(&self, indicator: Box<dyn Indicator>) -> Box<dyn Indicator> {
+        let mut indicator = self.configure_indicator(indicator);
         if let Some(crate::studies::StudySource::Study { id, plot }) = indicator.source() {
             let source = self
                 .study_ids
