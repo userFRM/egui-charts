@@ -301,7 +301,7 @@ fn appended_bars_keep_the_view() {
 
 /// Only filling a whitespace tail may use the whitespace shift policy. Ordinary updates keep
 /// the offset and pending start; appends still follow the new-bar policy. Without following,
-/// one merged append subtracts one from the offset to keep the same time at the right edge.
+/// one appended bar subtracts one from the offset to keep the same time at the right edge.
 #[test]
 fn bar_updates_obey_live_edge_policies() {
     for replace in [false, true] {
@@ -355,7 +355,7 @@ fn bar_updates_obey_live_edge_policies() {
                             && (append || old_whitespace && !new_whitespace && allow_whitespace);
                         let expected = if follow {
                             20.0
-                        } else if append && !replace {
+                        } else if append {
                             offset - 1.0
                         } else {
                             offset
