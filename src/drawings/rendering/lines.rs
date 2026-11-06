@@ -98,33 +98,30 @@ impl Drawing {
     }
 
     /// Ends from left to right, or in anchor order on a vertical line, extended to the pane edges
-    /// as configured; `None` below two anchors. An info line or a trend angle extends left past
-    /// its first anchor and right past its second, whichever way it was drawn, as vertical rays do;
-    /// vertical extended lines count from the top; other lines extend towards the pane's sides.
+    /// as configured; `None` below two anchors. An extended line, info line or trend angle extends
+    /// left past its first anchor and right past its second, whichever way it was drawn, as
+    /// vertical rays do; other lines extend towards the pane's sides.
     pub(crate) fn trend_line_ends(&self, rect: Rect) -> Option<(Pos2, Pos2)> {
         use crate::drawings::DrawingToolType as T;
         let &[a, b, ..] = self.points.as_slice() else {
             return None;
         };
-        if matches!(self.tool_type, T::InfoLine | T::TrendAngle)
-            || (a.x == b.x && matches!(self.tool_type, T::Ray | T::ExtendedLine))
+        if matches!(
+            self.tool_type,
+            T::ExtendedLine | T::InfoLine | T::TrendAngle
+        ) || (a.x == b.x && self.tool_type == T::Ray)
         {
-            let (start, end) = if self.tool_type == T::ExtendedLine && b.y < a.y {
-                (b, a)
-            } else {
-                (a, b)
-            };
             let first = if self.extend_left {
-                ray_end(end, start, rect)
+                ray_end(b, a, rect)
             } else {
-                start
+                a
             };
             let second = if self.extend_right {
-                ray_end(start, end, rect)
+                ray_end(a, b, rect)
             } else {
-                end
+                b
             };
-            return Some(if start.x <= end.x {
+            return Some(if a.x <= b.x {
                 (first, second)
             } else {
                 (second, first)
@@ -1186,10 +1183,32 @@ mod tests {
         }
     }
 
-    /// An info line or trend angle extends left past its first anchor and right past its second,
-    /// in either drawing order and on a vertical line, and selection follows the painted extension.
+    /// A new extended line's text starts in its own blue, which a change of line colour leaves
+    /// alone, and draws the slant it is given.
     #[test]
-    fn info_line_and_trend_angle_extend_past_the_anchor_named_in_paint_and_hit_testing() {
+    fn extended_line_text_keeps_its_own_colour_and_slant() {
+        let mut drawing = Drawing::new(1, crate::drawings::DrawingToolType::ExtendedLine);
+        drawing.points = vec![Pos2::new(100., 200.), Pos2::new(300., 100.)];
+        drawing.color = [200, 0, 0, 255];
+        drawing.italic = true;
+        drawing.text = Some("note".into());
+        let shapes = super::super::tests::paint(&drawing);
+        let format = shapes
+            .iter()
+            .find_map(|shape| match shape {
+                egui::Shape::Text(text) => Some(text.galley.job.sections[0].format.clone()),
+                _ => None,
+            })
+            .expect("text");
+        assert_eq!(format.color, Color32::from_rgb(41, 98, 255));
+        assert!(format.italics);
+    }
+
+    /// An extended line, info line or trend angle extends left past its first anchor and right past
+    /// its second, in either drawing order and on a vertical line, and selection follows the
+    /// painted extension.
+    #[test]
+    fn anchor_ordered_lines_extend_past_the_anchor_named_in_paint_and_hit_testing() {
         use crate::drawings::{DrawingToolType as T, services::DrawingInteraction};
         let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(1000.0, 600.0));
         let (low, high) = (Pos2::new(400.0, 100.0), Pos2::new(500.0, 200.0));
@@ -1256,7 +1275,7 @@ mod tests {
         ];
         for ((first, second, left, right, want, on, off), tool) in cases
             .into_iter()
-            .flat_map(|case| [T::InfoLine, T::TrendAngle].map(|tool| (case, tool)))
+            .flat_map(|case| [T::ExtendedLine, T::InfoLine, T::TrendAngle].map(|tool| (case, tool)))
         {
             let mut drawing = Drawing::new(1, tool);
             drawing.points = vec![first, second];
@@ -1346,8 +1365,13 @@ mod tests {
                     if reversed {
                         drawing.points.reverse();
                     }
-                    drawing.extend_left = left;
-                    drawing.extend_right = right;
+                    // An extended line names its anchors, so the same reach swaps its switches.
+                    (drawing.extend_left, drawing.extend_right) =
+                        if reversed && tool == DrawingToolType::ExtendedLine {
+                            (right, left)
+                        } else {
+                            (left, right)
+                        };
                     drawing.arrow_start_style = ArrowStyle::Square;
                     drawing.arrow_end_style = ArrowStyle::Square;
                     let expected = ends.map(|(x, y)| Pos2::new(x, y));

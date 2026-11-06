@@ -359,7 +359,7 @@ impl Drawing {
             if matches!(
                 self.tool_type,
                 T::TrendLine | T::InfoLine | T::TrendAngle | T::ExtendedLine | T::Ray | T::Arrow
-            ) && (b.x < a.x || (self.tool_type == T::ExtendedLine && b.x == a.x && b.y < a.y))
+            ) && b.x < a.x
             {
                 ends.swap(0, 1);
             }
