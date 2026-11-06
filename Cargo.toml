@@ -196,6 +196,12 @@ opt-level = "s"
 lto = "fat"
 codegen-units = 1
 
+# The library tests run about four times faster with optimised dependencies, which more than repays
+# the longer first build. The library itself stays unoptimised because it is rebuilt on every change.
+# Only this workspace reads this setting: a crate that depends on this one keeps its own.
+[profile.dev.package."*"]
+opt-level = 2
+
 [dev-dependencies]
 # The bundled examples are standalone `eframe` apps; they need a windowing
 # backend to run natively.  `glow` keeps the default-feature build buildable on

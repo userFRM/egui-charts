@@ -55,6 +55,8 @@ use crate::studies::IndicatorRegistry;
 pub use builder::ChartBuilder;
 use chrono::{DateTime, Utc};
 use egui::{Pos2, Rect, Vec2};
+#[cfg(feature = "ui")]
+pub(crate) use export::ColumnId;
 pub use export::{ChartImage, DataTable, ExportError, ImageExportOptions};
 pub use pane::{IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneInteraction};
 use std::collections::BTreeMap;
@@ -285,8 +287,12 @@ pub struct Chart {
     bar_limits: std::collections::HashMap<SeriesId, std::num::NonZeroUsize>,
     /// The chart's studies, in the order they were added.
     pub(crate) studies: IndicatorRegistry,
-    /// Changes when study edits or completed calculations can affect table cells.
+    /// Changes when what the data table calculates from changes, unlike the steps of the chart's
+    /// own refresh, whose results the table does not read.
     readout_revision: u64,
+    /// See [`Self::data_table_identity`].
+    #[cfg(feature = "ui")]
+    data_table_identity: u64,
     study_data: studies_data::StudyDataCache,
     pub(crate) element_studies: crate::chart::rendering::candles::price_based::ElementStudies,
     /// Range bars built from the held trades, while the chart type is Range.
@@ -541,6 +547,9 @@ impl Chart {
     /// and the default tick-mark grid. An explicit `tick_marks.min_price_step` takes precedence.
     /// Pass `None` to clear the metadata. Feed metadata takes precedence when available.
     pub fn set_instrument(&mut self, instrument: Option<crate::model::Instrument>) {
+        if self.legend_instrument != instrument {
+            self.readout_revision = crate::model::next_revision();
+        }
         self.legend_instrument = instrument;
         let precision = self
             .instrument()
@@ -700,26 +709,83 @@ impl Chart {
         self.chart_options.tooltip.enabled = enabled;
     }
 
+    /// The rising and falling body, border and wick colors of a chart type that series settings
+    /// offer from its own style, in that order; `None` for a type they keep in the chart
+    /// configuration.
+    fn candle_style_colors(
+        styles: &mut crate::model::ChartTypeStyles,
+        chart_type: ChartType,
+    ) -> Option<[&mut egui::Color32; 6]> {
+        match chart_type {
+            ChartType::Heikin => {
+                let style = &mut styles.heikin;
+                Some([
+                    &mut style.body_up,
+                    &mut style.body_down,
+                    &mut style.border_up,
+                    &mut style.border_down,
+                    &mut style.wick_up,
+                    &mut style.wick_down,
+                ])
+            }
+            ChartType::HollowCandles => {
+                let style = &mut styles.hollow;
+                Some([
+                    &mut style.body_up,
+                    &mut style.body_down,
+                    &mut style.border_up,
+                    &mut style.border_down,
+                    &mut style.wick_up,
+                    &mut style.wick_down,
+                ])
+            }
+            _ => None,
+        }
+    }
+
     /// Apply series settings to chart colors, price source and price scale.
     ///
     /// Copies candlestick colors (bullish/bearish fill, border, wick) and the
     /// price source field from the given [`SeriesSettings`] into the chart's
     /// [`ChartConfig`], and its scale mode and inversion into the main price
-    /// scale. A new scale mode returns the scale to auto-scaling and clears the
-    /// zoom history, whose ranges are in the old mode's units. Call this when
-    /// the user changes series appearance in a settings dialog.
+    /// scale. Settings of a Heikin-Ashi or hollow candles chart keep their candle colors
+    /// in that chart type's style instead, a `None` border or wick meaning the body color,
+    /// and these colors win over the same colors in `chart_type_params`. A new scale mode
+    /// returns the scale to auto-scaling and clears the zoom history, whose ranges are in
+    /// the old mode's units. Call this when the user changes series appearance in a
+    /// settings dialog.
     pub fn apply_series_settings(&mut self, settings: &SeriesSettings) {
-        self.config.bullish_color = settings.bullish_color;
-        self.config.bearish_color = settings.bearish_color;
-        self.config.bullish_border_color = settings.bullish_border_color;
-        self.config.bearish_border_color = settings.bearish_border_color;
-        self.config.bullish_wick_color = settings.bullish_wick_color;
-        self.config.bearish_wick_color = settings.bearish_wick_color;
+        let mut params = settings.chart_type_params.clone();
+        if let Some(
+            [
+                body_up,
+                body_down,
+                border_up,
+                border_down,
+                wick_up,
+                wick_down,
+            ],
+        ) = Self::candle_style_colors(&mut params.styles, settings.chart_type)
+        {
+            *body_up = settings.bullish_color;
+            *body_down = settings.bearish_color;
+            *border_up = settings.effective_bullish_border();
+            *border_down = settings.effective_bearish_border();
+            *wick_up = settings.effective_bullish_wick();
+            *wick_down = settings.effective_bearish_wick();
+        } else {
+            self.config.bullish_color = settings.bullish_color;
+            self.config.bearish_color = settings.bearish_color;
+            self.config.bullish_border_color = settings.bullish_border_color;
+            self.config.bearish_border_color = settings.bearish_border_color;
+            self.config.bullish_wick_color = settings.bullish_wick_color;
+            self.config.bearish_wick_color = settings.bearish_wick_color;
+        }
         self.config.price_source = settings.price_source;
         self.config.show_price_line = settings.show_price_line;
         self.config.show_prev_close_line = settings.show_prev_close_line;
         self.main_series_style.alerts = settings.alerts;
-        self.set_chart_type_params(settings.chart_type_params.clone());
+        self.set_chart_type_params(params);
         if self.state.price_scale().options().mode != settings.price_scale_mode {
             self.state.price_scale_mut().reset();
             self.state.clear_zoom_history();
@@ -731,9 +797,10 @@ impl Chart {
 
     /// Read the current appearance and chart type parameters for the series settings dialog.
     /// Pass the result to `SeriesSettingsDialog::open`, then apply its accepted settings with
-    /// [`Self::apply_series_settings`]. The active chart type is dialog context only.
+    /// [`Self::apply_series_settings`]. The active chart type selects the dialog's controls and
+    /// where the candle colors are read from and written to; applying keeps the chart's type.
     pub fn series_settings(&self) -> SeriesSettings {
-        SeriesSettings {
+        let mut settings = SeriesSettings {
             chart_type: self.chart_type,
             chart_type_params: self.chart_type_params.clone(),
             bullish_color: self.config.bullish_color,
@@ -749,7 +816,26 @@ impl Chart {
             price_scale_mode: self.state.price_scale().options().mode,
             invert_scale: self.state.price_scale().options().invert_scale,
             ..Default::default()
+        };
+        if let Some(
+            [
+                body_up,
+                body_down,
+                border_up,
+                border_down,
+                wick_up,
+                wick_down,
+            ],
+        ) = Self::candle_style_colors(&mut settings.chart_type_params.styles, self.chart_type)
+        {
+            settings.bullish_color = *body_up;
+            settings.bearish_color = *body_down;
+            settings.bullish_border_color = (*border_up != *body_up).then_some(*border_up);
+            settings.bearish_border_color = (*border_down != *body_down).then_some(*border_down);
+            settings.bullish_wick_color = (*wick_up != *body_up).then_some(*wick_up);
+            settings.bearish_wick_color = (*wick_down != *body_down).then_some(*wick_down);
         }
+        settings
     }
 
     /// Get a [`ChartMapping`] for coordinate conversions.

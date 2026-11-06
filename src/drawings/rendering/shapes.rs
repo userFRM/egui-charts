@@ -121,9 +121,11 @@ impl Drawing {
     }
 
     /// Brush and highlighter strokes: one path through the samples at the drawing's width and
-    /// colour, so a translucent stroke does not darken where its segments meet.
+    /// colour, so a translucent stroke does not darken where its segments meet, over a brush's
+    /// fill.
     pub(crate) fn render_brush(&self, painter: &egui::Painter) {
         if self.points.len() >= 2 {
+            self.paint_enclosed_fill(painter);
             painter.add(Shape::line(
                 self.brush_points(
                     painter.clip_rect().expand(self.stroke_width + 2.0),
@@ -249,8 +251,8 @@ impl Drawing {
         }
     }
 
-    /// The polygon whose even-odd inside the fill colour fills: a polyline's anchors, and an arc
-    /// or curve closed by the chord between its ends. `None` for other tools.
+    /// The polygon whose even-odd inside the fill colour fills: a polyline's anchors, and an arc,
+    /// curve or brush stroke closed by the chord between its ends. `None` for other tools.
     pub(super) fn enclosed_area(&self, clip: Rect, ppp: f32) -> Option<Vec<Pos2>> {
         match self.tool_type {
             DrawingToolType::Polyline => Some(self.points.clone()),
@@ -259,6 +261,9 @@ impl Drawing {
                 .curve_controls()
                 .map(|[a, b, c]| curve_points(a, b, c, clip, ppp)),
             DrawingToolType::DoubleCurve => self.double_curve_points(clip, ppp),
+            // shortcut: the fill costs quadratic time in the stroke's samples, about 170 ms per
+            // frame for 3000 in a debug build; simplify the samples if long filled strokes lag.
+            DrawingToolType::Brush => Some(self.brush_points(clip, ppp)),
             _ => None,
         }
     }

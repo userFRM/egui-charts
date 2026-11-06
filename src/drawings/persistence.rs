@@ -1173,6 +1173,7 @@ mod tests {
         let mut vwap = VwapConfig::default();
         vwap.bands[0].enabled = false;
         vwap.bands[1] = VwapBand::new(true, 2.5).unwrap();
+        vwap.bands[2].color = [21, 22, 23, 24];
         d.vwap = Some(vwap);
         if tool == DrawingToolType::DoubleCurve {
             d.chart_points.push(ChartPoint::new(12.0, 115.0));
