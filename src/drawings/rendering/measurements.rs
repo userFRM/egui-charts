@@ -990,7 +990,7 @@ mod tests {
     fn automatic_placement_and_trend_angle_price_labels() {
         use crate::drawings::LineMeasurementPosition as P;
         let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 400.0));
-        let x = |bar| bar as f32;
+        let x = |bar: f32| bar;
         let y = |price: f64| 400.0 - price as f32;
         let inverse = |y: f32| f64::from(400.0 - y);
         let view = ChartView {
