@@ -361,6 +361,12 @@ impl Chart {
     /// [`restored_series_id`](Self::restored_series_id) and supply its bars with
     /// [`set_data`](Self::set_data). Feed-backed series reconnect automatically.
     ///
+    /// A snapshot of another symbol than the one the chart shows drops the chart's bars before
+    /// its studies are computed; a chart with no symbol keeps the bars it holds. Supply the new
+    /// bars with [`set_data`](Self::set_data) or let the feed load them. In a layout saved
+    /// without the main series and the original pane the series stays out of the panes and is
+    /// not drawn, and its bars come the same way, for the studies and the time axis.
+    ///
     /// Errors distinguish a saved [`RestoreError::Study`], invalid [`RestoreError::Settings`],
     /// [`RestoreError::Layout`] geometry and unreadable [`RestoreError::Drawings`].
     pub fn restore(
@@ -387,10 +393,15 @@ impl Chart {
             self.remove_series(super::SeriesId::MAIN);
         } else if !self.main_series_present {
             self.main_series_present = true;
-            let paused = self.feed_link.as_ref().is_some_and(|link| link.host_paused);
-            self.set_feed_paused(paused);
+            self.follow_feed_pause();
         }
+        let other_symbol = !self.symbol.is_empty() && snapshot.symbol != self.symbol;
         self.set_symbol(snapshot.symbol.clone());
+        // The studies below must not read the previous symbol's bars. With a feed its reload
+        // would clear them only on the next frame, and without one nothing would.
+        if other_symbol {
+            self.replace_main_data(Vec::new());
+        }
         if let Some(interval) = snapshot.interval {
             self.set_timeframe(interval);
         } else {
@@ -587,6 +598,8 @@ impl Chart {
             }
             None => Vec::new(),
         };
+        // A layout without the original pane has just left it: the main bars are live again.
+        self.follow_feed_pause();
         self.history.clear();
         Ok(skipped)
     }
@@ -1390,5 +1403,108 @@ mod tests {
                 "{case}: one scale"
             );
         }
+    }
+
+    /// A layout saved after the original price pane was removed with the main series in
+    /// it restores with the bars the host supplies for its symbol, into a new chart and into a
+    /// chart showing another symbol. The SMA(3) of bar 70 where every close is `c` is
+    /// (c + c + c) / 3 = c.
+    #[test]
+    fn layout_without_price_pane_reads_the_supplied_bars() {
+        use crate::widget::SeriesId;
+        use crate::widget::test_frames::{chart, frame};
+
+        let bars = |close: f64| {
+            chart(&[close - 10.0], &[close])
+                .bars(SeriesId::MAIN)
+                .to_vec()
+        };
+        let sma_at_70 = |chart: &Chart, id: SeriesId| {
+            chart
+                .indicators()
+                .find(|(study, _)| *study == id)?
+                .1
+                .plot_value(0, 70)
+        };
+        let mut saved = Chart::new(BarData::from_bars(bars(200.0)));
+        saved.set_symbol("BBB");
+        let sma = saved.add_indicator(Box::new(SMA::new(3)));
+        assert!(saved.move_indicator_to_pane(sma, sma));
+        assert!(saved.remove_pane(PaneId::MAIN));
+        assert_eq!(
+            sma_at_70(&saved, sma),
+            Some(200.0),
+            "the saved chart reads its bars"
+        );
+        saved.set_data(SeriesId::MAIN, bars(300.0));
+        frame(&egui::Context::default(), &mut saved, 0.0, vec![]);
+        assert_eq!(
+            sma_at_70(&saved, sma),
+            Some(300.0),
+            "the chart that lost the pane still takes bars"
+        );
+        let snapshot = saved.snapshot().unwrap();
+
+        let mut other = Chart::new(BarData::from_bars(bars(100.0)));
+        other.set_symbol("AAA");
+        let mut observed = Vec::new();
+        for mut restored in [Chart::new(BarData::new()), other] {
+            restored.restore(&snapshot).unwrap();
+            let id = restored.restored_series_id(sma.0).unwrap();
+            assert_eq!(sma_at_70(&restored, id), None, "no bars before the host's");
+            restored.set_data(SeriesId::MAIN, bars(200.0));
+            frame(&egui::Context::default(), &mut restored, 0.0, vec![]);
+            assert_eq!(restored.series_pane(SeriesId::MAIN), None);
+            assert!(!restored.is_main_series_visible());
+            observed.push(sma_at_70(&restored, id));
+        }
+        assert_eq!(observed, [Some(200.0), Some(200.0)]);
+    }
+
+    /// A chart built with a feed from a layout saved without the original price pane
+    /// requests its symbol's history, as one built from the same layout before the removal does.
+    #[test]
+    fn layout_without_price_pane_loads_its_feed() {
+        use crate::data::{Datafeed, HistoryPage, HistoryRequest, Reply};
+        use crate::widget::test_frames::{chart, frame};
+        use std::sync::{Arc, Mutex};
+
+        struct Requests(Mutex<Vec<String>>);
+        impl Datafeed for Requests {
+            fn history(&self, request: HistoryRequest, _: Reply<HistoryPage>) {
+                self.0.lock().unwrap().push(request.symbol);
+            }
+        }
+        let mut saved = chart(&[100.0], &[110.0]);
+        saved.set_symbol("BBB");
+        saved.add_indicator(Box::new(RSI::new(3)));
+        let with_price_pane = saved.snapshot().unwrap();
+        assert!(saved.remove_pane(PaneId::MAIN));
+        let without_price_pane = saved.snapshot().unwrap();
+        let requested = |snapshot: &ChartSnapshot| {
+            let feed = Arc::new(Requests(Mutex::default()));
+            let (mut chart, _) = crate::widget::ChartBuilder::new()
+                .with_feed(feed.clone())
+                .build_restored(snapshot)
+                .unwrap();
+            let ctx = egui::Context::default();
+            for step in 0..3 {
+                frame(&ctx, &mut chart, f64::from(step), vec![]);
+            }
+            feed.0.lock().unwrap().first().cloned()
+        };
+        assert_eq!(
+            [requested(&with_price_pane), requested(&without_price_pane)],
+            [Some("BBB".to_owned()), Some("BBB".to_owned())]
+        );
+        let (mut live, _) = crate::widget::ChartBuilder::new()
+            .with_feed(Arc::new(Requests(Mutex::default())))
+            .build_restored(&with_price_pane)
+            .unwrap();
+        assert!(live.remove_pane(PaneId::MAIN));
+        assert!(
+            !live.feed_link.as_ref().unwrap().paused,
+            "the removal leaves the feed running"
+        );
     }
 }

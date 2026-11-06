@@ -434,6 +434,8 @@ impl Chart {
     /// Removes a pane, its series, studies, markers, price lines and drawings, including locked
     /// drawings. Attached primitives detach on the next frame. The original price pane can be
     /// removed; its retained data still supplies the shared horizontal mapping and study inputs.
+    /// A main series removed with it stays out of the layout and is not drawn, while its bars
+    /// keep taking [`set_data`](Self::set_data), [`update`](Self::update) and the feed.
     /// Surviving panes keep their ids, order and data. Without the original pane, new bar series
     /// and overlay studies join the surviving main series. When that series is absent, new
     /// bar series use the first pane and studies start in their own panes.
@@ -472,9 +474,9 @@ impl Chart {
                 self.drawings.delete_drawing(id);
             }
         }
-        let removes_main = members.contains(&SeriesId::MAIN)
-            || (pane == PaneId::MAIN && !self.main_series_present);
-        for id in members {
+        let holds_main = members.contains(&SeriesId::MAIN);
+        let removes_main = holds_main || (pane == PaneId::MAIN && !self.main_series_present);
+        for id in members.into_iter().filter(|id| *id != SeriesId::MAIN) {
             self.remove_series(id);
         }
         if removes_main {
@@ -482,6 +484,11 @@ impl Chart {
             self.change_marks = None;
         }
         self.pane_layout.panes.retain(|item| item.id != pane);
+        // After the pane: without the original pane the feed keeps running, with no reload.
+        if holds_main {
+            self.remove_series(SeriesId::MAIN);
+        }
+        self.follow_feed_pause();
         self.sync_panes();
         true
     }

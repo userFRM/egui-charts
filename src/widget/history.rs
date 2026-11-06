@@ -164,8 +164,8 @@ struct HeldSeries {
 
 /// Whether the main series is present in one state of the chart, with the price lines, price
 /// formatter and bar limit that the state without it lacks. Its bars and markers stay in the
-/// chart, which reads them only while the series is present; the bars also give the remaining
-/// series their time axis while it is absent.
+/// chart, which reads the markers only while the series is present; the bars also give the
+/// remaining series their time axis while it is absent.
 #[derive(Default)]
 struct MainSeries {
     present: bool,
@@ -601,8 +601,7 @@ impl Chart {
         std::mem::swap(&mut self.main_series_present, &mut main.present);
         std::mem::swap(&mut self.price_lines, &mut main.price_lines);
         self.swap_series_settings(SeriesId::MAIN, &mut main.formatter, &mut main.bar_limit);
-        let paused = self.feed_link.as_ref().is_some_and(|link| link.host_paused);
-        self.set_feed_paused(paused);
+        self.follow_feed_pause();
         if self.main_series_present {
             // The resumed feed's reload empties the bars until its page arrives.
             if self.feed_link.as_ref().is_some_and(|link| !link.paused) {
@@ -971,6 +970,8 @@ impl Chart {
                     std::mem::swap(&mut pane.watermark, &mut current.watermark);
                 }
             }
+            // The original pane coming or going decides whether a removed main series is fed.
+            self.follow_feed_pause();
         }
         self.sync_panes();
         if let Some(ChartElementId::Indicator(id)) = self.selection.selected_id()
