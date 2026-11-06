@@ -661,6 +661,8 @@ mod tests {
         // Settings saved before the option existed keep the blocks they were saved with.
         let saved = serde_json::from_str::<ChartTypeParams>("{}").unwrap();
         assert_eq!(draw(saved.clone()), (String::new(), 0, 0));
+        // A new chart letters its blocks.
+        assert_eq!(draw(ChartTypeParams::default()).0, "ABCDEFGH");
         // Eight half-hour bars of one session are the periods A to H.
         let lettered = ChartTypeParams {
             tpo_letters: true,

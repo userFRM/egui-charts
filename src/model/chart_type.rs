@@ -706,7 +706,10 @@ pub struct ChartTypeParams {
     pub tpo_single_prints: bool,
     /// TPO: caption and mark the middle of each profile's range.
     pub tpo_midpoint: bool,
-    /// TPO: paint each period's letter inside its block.
+    /// TPO: paint each period's letter inside its block. On for a new chart; settings saved
+    /// without the field keep blocks.
+    // Settings saved before the field existed were drawn as blocks, so a missing field reads false.
+    #[serde(default)]
     pub tpo_letters: bool,
     /// TPO: sessions combined into one profile, as in
     /// [`TPOConfig::composites`](super::TPOConfig::composites).
@@ -776,7 +779,7 @@ impl Default for ChartTypeParams {
             tpo_split_sessions: false,
             tpo_single_prints: false,
             tpo_midpoint: false,
-            tpo_letters: false,
+            tpo_letters: true,
             tpo_composites: Vec::new(),
         }
     }
@@ -890,6 +893,7 @@ mod tests {
             "footprint_value_area": 0.010003969988090037,
             "footprint_statistics": true, "footprint_statistics_rows": ["Volume", "Delta", "Trades", "AverageSize"],
             "footprint_colors": [[12, 34, 56, 255], null, null, null],
+            "tpo_letters": false,
             "profile": {"mode": "Volume", "value_area": 0.5, "developing_poc": true,
                 "developing_value_area": true, "extend_poc": true, "extend_vah": true,
                 "extend_val": true,
@@ -933,6 +937,7 @@ mod tests {
         let legacy = serde_json::to_value(legacy).unwrap();
         assert_eq!(legacy["footprint_statistics"], false);
         assert_eq!(legacy["footprint_row_ticks"], 0);
+        assert_eq!(legacy["tpo_letters"], false);
         assert_eq!(
             legacy["footprint_colors"],
             serde_json::json!([null, null, null, null])
