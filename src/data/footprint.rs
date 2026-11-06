@@ -105,6 +105,12 @@ impl FootprintBar {
 
     /// Adds the executions of the next bar in time, extending the running delta path.
     pub(crate) fn absorb(&mut self, next: &FootprintBar) {
+        self.absorb_grouped(next, 1);
+    }
+
+    /// [`absorb`](Self::absorb) with every `group` neighbouring rows of `next` summed into the
+    /// row keyed by their quotient.
+    pub(crate) fn absorb_grouped(&mut self, next: &FootprintBar, group: i64) {
         let open = self.delta();
         self.min_delta = self.min_delta.min(open + next.min_delta);
         self.max_delta = self.max_delta.max(open + next.max_delta);
@@ -112,6 +118,7 @@ impl FootprintBar {
         self.ask += next.ask;
         self.unknown += next.unknown;
         for (&level, row) in &next.levels {
+            let level = level.div_euclid(group);
             let target = self.levels.entry(level).or_insert_with(|| FootprintLevel {
                 level,
                 ..Default::default()

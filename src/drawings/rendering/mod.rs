@@ -373,7 +373,11 @@ impl Drawing {
                 | T::Sticker
                 | T::Image
         );
-        if !bounded || self.extend_left || self.extend_right {
+        if !bounded
+            || self.extend_left
+            || self.extend_right
+            || self.volume_profile.is_some_and(|c| c.extend_right)
+        {
             return None;
         }
         if matches!(
@@ -1397,6 +1401,21 @@ mod tests {
                 vec![(163.4, 230.), (336.6, 170.)],
                 vec![(163.4, 170.), (250., 240.)],
             ),
+            // Samples round the same semicircle, closed by the chord between the stroke's ends.
+            (
+                T::Brush,
+                (0..=12)
+                    .map(|i| {
+                        let (sin, cos) = (i as f32 * std::f32::consts::PI / 12.).sin_cos();
+                        (200. - 100. * cos, 200. - 100. * sin)
+                    })
+                    .collect(),
+                false,
+                std::f32::consts::PI * 5000.,
+                80.,
+                vec![(200., 150.)],
+                vec![(200., 250.)],
+            ),
         ] {
             let mut drawing = Drawing::new(1, tool);
             drawing.points = points.into_iter().map(Pos2::from).collect();
@@ -1627,6 +1646,25 @@ mod tests {
             ["Fill"]
         );
         assert!(selected.texts[0].visual_bounding_rect().max.y <= 274.0);
+        // The popup is a card in the theme's colours whatever the pin's colour, tied to the pin's
+        // head by a thin line in the pin's colour.
+        let theme = crate::theme::Theme::dark();
+        let [card] = &selected.rects[..] else {
+            panic!("one popup");
+        };
+        assert_eq!(card.fill, theme.ui.panel_bg);
+        assert_eq!(card.stroke, egui::Stroke::new(1.0, theme.ui.border));
+        assert_eq!(
+            selected.texts[0].galley.job.sections[0].format.color,
+            theme.ui.text
+        );
+        assert_eq!(
+            selected.segments,
+            [(
+                [pos(200.0, card.rect.max.y), pos(200.0, 278.0)],
+                egui::Stroke::new(1.0, Color32::from_rgb(0xF2, 0x36, 0x45)),
+            )]
+        );
 
         let comment = draw(DrawingToolType::Comment, &[(100., 300.)], "Hi", false);
         let [bubble] = &comment.rects[..] else {

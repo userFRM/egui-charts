@@ -1160,6 +1160,7 @@ mod tests {
                 BarsStyle {
                     open_visible: false,
                     thin_bars: false,
+                    ..Default::default()
                 },
                 None,
             ),

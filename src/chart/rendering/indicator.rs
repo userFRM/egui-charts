@@ -281,6 +281,12 @@ impl IndicatorRenderer {
                     ..coords.clone()
                 },
             );
+            if let Some(color) = indicator.background() {
+                context
+                    .painter
+                    .with_clip_rect(context.rect)
+                    .rect_filled(context.rect, 0.0, color);
+            }
             Self::render_study(
                 context,
                 indicator.as_ref(),
@@ -292,7 +298,8 @@ impl IndicatorRenderer {
         }
     }
 
-    /// Shared study geometry for overlays and indicator panes.
+    /// Shared study geometry for overlays and indicator panes. Each paints the study's tint first,
+    /// beneath what else it paints there.
     pub(crate) fn render_study(
         context: &RenderContext,
         indicator: &dyn Indicator,
@@ -302,9 +309,6 @@ impl IndicatorRenderer {
         coords: &ChartMapping,
     ) {
         let painter = context.painter.with_clip_rect(context.rect);
-        if let Some(color) = indicator.background() {
-            painter.rect_filled(context.rect, 0.0, color);
-        }
         if indicator.is_overlay() {
             crate::chart::indicators::plots::paint_overlay_levels(&painter, indicator, price_scale);
         }
@@ -1005,6 +1009,9 @@ mod tests {
             .collect();
         let mut study = ConfiguredStudy::new(Box::new(AwesomeOscillator::new(2, 3)));
         assert_eq!(study.plot_style(0).plot_type, PlotType::Columns);
+        // On the price pane, where the tint lies beneath the shared geometry.
+        study.set_overlay(true);
+        study.set_scale(crate::studies::StudyScale::Main);
         study.calculate(&bars);
         // At bar 5: (1 + 4)/2 - (3 + 1 + 4)/3 = -1/6, rising from -2/3.
         assert!((study.values().value(0, 5).unwrap() + 1.0 / 6.0).abs() < 1e-12);
@@ -1072,11 +1079,10 @@ mod tests {
                     // Latest-value lines span the viewport even while the last bar is offscreen.
                     let coords = ChartMapping::new(rect, 30.0, 0, 2, 0.0, map);
                     let mut output = Context::default().run_ui(RawInput::default(), |ui| {
-                        IndicatorRenderer::render_study(
+                        IndicatorRenderer::render(
                             &RenderContext::new(ui.painter(), rect),
-                            &study,
+                            std::slice::from_ref(&study.clone_box()),
                             &data,
-                            0,
                             &map,
                             &coords,
                         );
@@ -1530,5 +1536,63 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// An AO saved as a 4 px histogram before falling bars had a width of their own draws its
+    /// falling bars as it did then, at the plot width.
+    #[test]
+    fn older_ao_histogram_keeps_its_falling_bar_width() {
+        use crate::studies::{AwesomeOscillator, ConfiguredStudy, StudyTemplate};
+        let bars: Vec<_> = [1.0, 2.0, 4.0, 3.0, 1.0, 4.0]
+            .into_iter()
+            .map(|p| Bar::new(Utc.timestamp_opt(0, 0).unwrap(), p, p, p, p, 1.0))
+            .collect();
+        let study = ConfiguredStudy::new(Box::new(AwesomeOscillator::new(2, 3)));
+        let mut saved = serde_json::to_value(StudyTemplate::from_study(&study)).unwrap();
+        for key in [
+            "price_line_plots",
+            "plot_variants",
+            "background",
+            "background_visible",
+            "fills",
+        ] {
+            saved["settings"].as_object_mut().unwrap().remove(key);
+        }
+        saved["settings"]["plots"][0]["plot_type"] = serde_json::json!("Histogram");
+        saved["settings"]["plots"][0]["width"] = 4.0.into();
+        let template: StudyTemplate = serde_json::from_value(saved).unwrap();
+        let mut loaded = template.create().unwrap();
+        loaded.calculate(&bars);
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(240.0, 120.0));
+        let map = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(-1.0, 1.0),
+            0.0,
+            120.0,
+            false,
+        );
+        let coords = ChartMapping::new(rect, 30.0, 0, 5, 0.0, map);
+        let mut output = Context::default().run_ui(RawInput::default(), |ui| {
+            IndicatorRenderer::render_study(
+                &RenderContext::new(ui.painter(), rect),
+                loaded.as_ref(),
+                &bars,
+                0,
+                &map,
+                &coords,
+            );
+        });
+        let shapes = std::mem::take(&mut output.shapes);
+        output.drop_without_applying_deltas();
+        // AO(2, 3) is 2/3, 1/2, -2/3 and -1/6 from bar 2, so bars 3 and 4 fall.
+        let falling = AwesomeOscillator::new(2, 3).colors()[1];
+        let widths: Vec<f32> = shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                Shape::Rect(r) if r.fill == falling => Some(r.rect.width()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(widths, [4.0, 4.0], "falling bar widths {widths:?}");
     }
 }

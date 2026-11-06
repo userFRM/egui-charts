@@ -6864,6 +6864,83 @@ mod tests {
         }
     }
 
+    /// Bars outside regular hours are shaded only in the extended session, and a saved layout
+    /// returns in the session it was saved in. A layout saved before the session was recorded
+    /// returns its extended hours choice as the 24/7 session.
+    #[test]
+    fn saved_layouts_keep_their_session_and_only_the_extended_one_shades() {
+        use egui_charts::ui::top_toolbar::components::layout_menu::LayoutAction;
+        use egui_charts::widget::ChartLayoutMode;
+        let shading = egui::Color32::from_rgb(201, 37, 180);
+        // 07:00 in New York on a Tuesday: outside regular hours.
+        let now = "2026-11-03T12:00:00Z".parse().unwrap();
+        for (saved, legacy, opened) in [
+            (SessionType::Full24x7, false, SessionType::Full24x7),
+            (SessionType::RTH, false, SessionType::RTH),
+            (SessionType::ETH, false, SessionType::ETH),
+            (SessionType::Full24x7, true, SessionType::Full24x7),
+        ] {
+            let ctx = egui::Context::default();
+            let mut app = DemoApp::new_at(
+                &eframe::CreationContext::_new_kittest(ctx.clone()),
+                now,
+                true,
+            );
+            let shaded = |app: &mut DemoApp| {
+                settle(app, &ctx);
+                app.chart.config_mut().extended_hours_color = shading;
+                for extra in &mut app.extra_charts {
+                    extra.chart.config_mut().extended_hours_color = shading;
+                }
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1440.0, 900.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| eframe::App::ui(&mut *app, ui, &mut eframe::Frame::_new_kittest()),
+                );
+                let rects = output
+                    .shapes
+                    .iter()
+                    .filter(|shape| {
+                        matches!(&shape.shape, egui::Shape::Rect(rect) if rect.fill == shading)
+                    })
+                    .count();
+                output.drop_without_applying_deltas();
+                rects > 0
+            };
+            app.timeframe_toolbar.set_session(saved);
+            app.apply_session();
+            app.ensure_chart_slots(ChartLayoutMode::TwoHorizontal);
+            assert_eq!(shaded(&mut app), saved == SessionType::ETH, "{saved:?}");
+
+            app.handle_layout_action(LayoutAction::Save);
+            app.poll_storage(&ctx);
+            let name = app.layout_tabs[app.layout_tab].name.clone();
+            if legacy {
+                let groups = app.storage.layout_groups(&name).unwrap().unwrap();
+                let mut groups = serde_json::to_value(&groups).unwrap();
+                groups.as_object_mut().unwrap().remove("continuous");
+                let groups = serde_json::from_value(groups).unwrap();
+                app.storage.save_layout_groups(&name, &groups).unwrap();
+            }
+            app.handle_layout_action(LayoutAction::Open(name));
+            app.poll_storage(&ctx);
+            assert_eq!(
+                shaded(&mut app),
+                opened == SessionType::ETH,
+                "{saved:?} legacy {legacy}"
+            );
+            assert_eq!(app.timeframe_toolbar.state.session_type, opened);
+            assert_eq!(app.live.view(app.chart.extended_hours()).0, opened);
+            let extra = &app.extra_charts[0];
+            assert_eq!(extra.live.view(extra.chart.extended_hours()).0, opened);
+        }
+    }
+
     /// The dialog gets Escape before the chart or replay transport.
     #[test]
     fn dialogs_keep_drawing_and_replay_keys_with_their_owner() {

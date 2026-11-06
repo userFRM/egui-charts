@@ -612,7 +612,7 @@ fn map_drawing(drawing: &Drawing, source: &Chart, target: &Chart) -> Option<Draw
     if drawing.pane.is_some() {
         // Study ids are local to each chart, so the copy goes to the corresponding pane.
         let pane = source
-            .drawing_pane(drawing.id)
+            .owner_pane(drawing)
             .filter(|pane| *pane != PaneId::MAIN)?;
         let pane = source.linked_pane(pane, target)?;
         copy.pane = target.pane_series(pane).first().map(|id| id.0);

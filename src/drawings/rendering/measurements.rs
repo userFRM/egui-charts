@@ -106,7 +106,6 @@ impl Drawing {
         view: &ChartView,
         selected: bool,
     ) {
-        use crate::drawings::LineMeasurementPosition as P;
         let &[a, b, ..] = self.points.as_slice() else {
             return;
         };
@@ -120,19 +119,49 @@ impl Drawing {
         if settings.price_labels {
             self.render_anchor_prices(painter, a, b, view);
         }
-        if !(settings.persistent || selected || !self.completed) {
-            return;
+        if (settings.persistent || selected || !self.completed)
+            && let Some((galley, align, pos, size)) = self.line_measurement_card(painter, view)
+        {
+            paint_stats_card(painter, align, pos, galley, size);
         }
+    }
+
+    /// The rectangle the readout card covers when `painter` clips to the drawing's pane, or
+    /// `None` without a card. Computed on demand for what must stay clear of the card.
+    #[cfg(feature = "ui")]
+    pub(crate) fn line_measurement_card_rect(
+        &self,
+        painter: &egui::Painter,
+        view: &ChartView,
+    ) -> Option<Rect> {
+        let (_, align, pos, size) = self.line_measurement_card(painter, view)?;
+        Some(card_rect(painter.clip_rect(), align, pos, size))
+    }
+
+    /// The readout card's text, the point and alignment that place it, and its size.
+    fn line_measurement_card(
+        &self,
+        painter: &egui::Painter,
+        view: &ChartView,
+    ) -> Option<(std::sync::Arc<egui::Galley>, Align2, Pos2, egui::Vec2)> {
+        use crate::drawings::LineMeasurementPosition as P;
+        let &[a, b, ..] = self.points.as_slice() else {
+            return None;
+        };
+        if !(a.is_finite() && b.is_finite()) {
+            return None;
+        }
+        let settings = self.line_measurements;
         let text = self.line_measurement_label(view);
         if text.is_empty() {
-            return;
+            return None;
         }
         let clip = painter.clip_rect();
         if self
             .trend_line_ends(clip)
             .is_none_or(|(a, b)| crate::painting::dashed_line::clip_segment(a, b, clip).is_none())
         {
-            return;
+            return None;
         }
         let galley = if self.tool_type == DrawingToolType::InfoLine {
             let color = self.text_box_colors(painter.ctx()).text;
@@ -208,7 +237,7 @@ impl Drawing {
             settings.position
         };
         let (pos, align) = place(position);
-        paint_stats_card(painter, align, pos, galley, size);
+        Some((galley, align, pos, size))
     }
 
     /// Paints each anchor's price on a small label on the side away from the other anchor.
@@ -523,12 +552,7 @@ fn paint_stats_card(
 ) -> Rect {
     let theme = painter.ctx().active_theme();
     let chart = theme.chart;
-    let clip = painter.clip_rect();
-    let min = align
-        .anchor_size(pos, size)
-        .min
-        .clamp(clip.min, clip.max - size.min(clip.size()));
-    let card = Rect::from_min_size(min, size);
+    let card = card_rect(painter.clip_rect(), align, pos, size);
     // The border keeps the white light-theme card visible on the white chart.
     painter.rect(
         card,
@@ -537,8 +561,17 @@ fn paint_stats_card(
         Stroke::new(1.0, theme.ui.border),
         egui::StrokeKind::Inside,
     );
-    painter.galley(min + CARD_PADDING, galley, chart.axis_text);
+    painter.galley(card.min + CARD_PADDING, galley, chart.axis_text);
     card
+}
+
+/// A card of `size` placed at `pos` by `align` and moved inside `clip`.
+fn card_rect(clip: Rect, align: Align2, pos: Pos2, size: egui::Vec2) -> Rect {
+    let min = align
+        .anchor_size(pos, size)
+        .min
+        .clamp(clip.min, clip.max - size.min(clip.size()));
+    Rect::from_min_size(min, size)
 }
 
 /// Paints a shaft from `from` to `to` and a filled head at `to`; nothing when they meet.

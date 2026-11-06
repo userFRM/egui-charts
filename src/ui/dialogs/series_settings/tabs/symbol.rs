@@ -43,7 +43,12 @@ impl SymbolTab {
             if !settings.chart_type.uses_ohlc() {
                 let label = ui.label(l10n::text(ui.ctx(), "Price source"));
                 ui.label_inputs_by(label.id, |ui| {
-                    Self::price_source_dropdown(ui, &mut settings.price_source);
+                    let source = if settings.chart_type == ChartType::Columns {
+                        &mut settings.chart_type_params.styles.columns.price_source
+                    } else {
+                        &mut settings.price_source
+                    };
+                    Self::price_source_dropdown(ui, source);
                 });
                 ui.end_row();
             }
@@ -567,16 +572,18 @@ impl SymbolTab {
             ]
         };
         ui.label_inputs_by(label.id, |ui| {
-            let options = std::iter::once(None)
+            let mut options: Vec<_> = std::iter::once(None)
                 .chain(
                     zones
                         .iter()
                         .filter_map(|zone| TimezoneId::named(zone))
                         .map(Some),
                 )
-                .chain(custom.zone.clone().map(Some));
-            let mut options: Vec<_> = options.collect();
-            options.dedup();
+                .collect();
+            // A saved zone outside the list stays selectable.
+            if !options.contains(&custom.zone) {
+                options.push(custom.zone.clone());
+            }
             ui.combo_select("profile_zone", &mut custom.zone, options, |zone| {
                 zone.as_ref()
                     .map_or("Exchange", |zone| zone.name())
@@ -937,7 +944,15 @@ impl SymbolTab {
     }
 
     fn candle_colors_section(ui: &mut Ui, settings: &mut SeriesSettings) {
-        ui.label(l10n::text(ui.ctx(), "Body"));
+        let columns = settings.chart_type == ChartType::Columns;
+        ui.label(l10n::text(
+            ui.ctx(),
+            if columns {
+                "Up and down colors"
+            } else {
+                "Body"
+            },
+        ));
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
             Self::color_picker(ui, &mut settings.bullish_color);
@@ -945,7 +960,8 @@ impl SymbolTab {
         });
         ui.end_row();
 
-        if settings.chart_type.is_time_independent() {
+        // A column is one filled rectangle, so it has no border or wick.
+        if settings.chart_type.is_time_independent() || columns {
             return;
         }
 
