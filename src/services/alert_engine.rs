@@ -155,8 +155,9 @@ struct Observation {
     /// What the message of the first condition's interval reads on this bar. An update of another
     /// interval, which may fire the alert, cannot read it.
     values: Vec<(AlertSource, Option<f64>)>,
-    /// The bar before this one as it ended, for a shorter bar that closes with it. Only a longer
-    /// interval of an alert evaluated at bar close keeps it.
+    /// The bar before this one as it ended, or as last observed when the update held only this
+    /// one, for a shorter bar that closes with it. Only a longer interval of an alert evaluated at
+    /// bar close keeps it.
     earlier: Option<Box<Observation>>,
 }
 
@@ -789,20 +790,23 @@ fn observe(
         }
     };
     let event = |at: usize| clock.bar_open(bars[at].time);
-    let kept = run
-        .intervals
-        .remove(&timeframe)
-        .filter(|old| old.seen.time == bar.time);
-    let newest = match kept {
-        Some(old) => observed(index, seen, old.before, old.event, old.earlier),
-        None => {
-            let earlier = index
-                .checked_sub(1)
-                .filter(|_| alert.frequency == AlertFrequency::OncePerBarClose && !closed)
-                .map(|at| {
+    let newest = match run.intervals.remove(&timeframe) {
+        Some(old) if old.seen.time == bar.time => {
+            observed(index, seen, old.before, old.event, old.earlier)
+        }
+        old => {
+            let earlier = match index.checked_sub(1) {
+                _ if alert.frequency != AlertFrequency::OncePerBarClose || closed => None,
+                Some(at) => {
                     let before = read(at.checked_sub(1));
-                    Box::new(observed(at, seen_at(at), before, event(at), None))
-                });
+                    Some(Box::new(observed(at, seen_at(at), before, event(at), None)))
+                }
+                // The update holds only the newest bar, so keep the one before as last observed.
+                None => old.map(|mut old| {
+                    old.earlier = None;
+                    Box::new(old)
+                }),
+            };
             observed(
                 index,
                 seen,
@@ -1429,7 +1433,7 @@ mod tests {
                     host.fired().is_empty(),
                     "future interval cannot use an older fast observation"
                 );
-                send(Timeframe::Min1, 10, 99.0, 10.0);
+                send(Timeframe::Min1, if closed { 9 } else { 10 }, 99.0, 10.0);
                 assert_eq!(host.fired().len(), 1);
                 send(Timeframe::Min1, 5, 99.0, 10.0);
                 assert!(host.fired().is_empty(), "rewind");
