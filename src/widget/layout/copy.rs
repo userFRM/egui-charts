@@ -877,7 +877,7 @@ mod tests {
         a.recalculate_studies();
         assert!(a.indicators().all(|(_, study)| draws(study)));
         let factory = IndicatorFactory::new();
-        let mut charts = [&mut a, &mut b];
+        let charts = [&mut a, &mut b];
         let issues = pair().copy_issues(&charts, 0, &LayoutCopy::Study(delta), &factory);
         assert_eq!(issues, []);
 
