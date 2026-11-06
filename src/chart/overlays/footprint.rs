@@ -39,7 +39,8 @@ pub struct FootprintConfig {
     /// picks black or white numbers for each cell, or each half of a split cell, instead. The default suits a dark chart; set the
     /// theme's text colour on a light one, or the fill, lines and labels vanish.
     pub text_color: Color32,
-    /// Cell fill for balanced or unclassified executions.
+    /// Cell fill for balanced or unclassified executions; under [`FootprintColor::VolumeSteps`]
+    /// its weakest shade fills a row without classified volume, apart from a POC of the same colour.
     pub neutral_color: Color32,
     /// The colour behind the cells, which the volume shades and the patches behind numbers are
     /// mixed with, or `None`, the default, for the plot background of the painter's active theme.
@@ -440,7 +441,7 @@ pub fn render_footprint(
                     if poc_row {
                         config.text_color
                     } else if row.bid + row.ask == 0.0 && row.unknown > 0.0 {
-                        config.neutral_color
+                        step_color(config.neutral_color, 0, text_background)
                     } else {
                         step_color(
                             color,

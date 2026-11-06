@@ -1382,3 +1382,152 @@ fn footprint_shades_follow_the_chart_background() {
         "sell shades on a black chart background {shades:?}, expected {expected:?}"
     );
 }
+
+/// A footprint row whose volume is all unclassified must not look like the bar's POC, in the chart
+/// type, which passes its text colour as the neutral colour, and in a host's config that does the
+/// same. Bar: 100 holds 2 unclassified, 101 holds 2 sold and 6 bought (the POC, 8), 102 holds 1
+/// sold and 2 bought.
+#[test]
+fn unclassified_footprint_rows_do_not_look_like_the_poc() {
+    use crate::chart::coords::ChartMapping;
+    use crate::chart::overlays::FootprintConfig;
+    use crate::data::{
+        Datafeed, Footprint, HistoryPage, HistoryRequest, Reply, TradePage, TradeRequest,
+    };
+    use crate::model::{Bar, BarClock, ChartType, Instrument, OrderSide, Tick, Timeframe};
+    use crate::widget::ChartBuilder;
+    use chrono::{TimeDelta, Utc};
+    const TRADES: [(f64, f64, Option<OrderSide>); 5] = [
+        (100.0, 2.0, None),
+        (101.0, 2.0, Some(OrderSide::Sell)),
+        (101.0, 6.0, Some(OrderSide::Buy)),
+        (102.0, 1.0, Some(OrderSide::Sell)),
+        (102.0, 2.0, Some(OrderSide::Buy)),
+    ];
+    /// The fills of the sell cells of 100 and 101 of the bar at `index`, clear of their numbers.
+    fn sell_fills(
+        shapes: &[egui::epaint::ClippedShape],
+        map: &ChartMapping,
+        index: usize,
+    ) -> (Option<egui::Color32>, Option<egui::Color32>) {
+        let quads: Vec<_> = shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                Shape::Mesh(mesh) => Some(
+                    mesh.vertices
+                        .chunks(4)
+                        .map(|q| (Rect::from_two_pos(q[0].pos, q[3].pos), q[0].color))
+                        .collect::<Vec<_>>(),
+                ),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        let x = map.idx_to_x(index) - map.bar_spacing * 0.46 + 4.0;
+        let at = |price: f64| {
+            let point = egui::pos2(x, map.price_to_y(price));
+            quads
+                .iter()
+                .rev()
+                .find(|(rect, _)| rect.contains(point))
+                .map(|(_, color)| *color)
+        };
+        (at(100.0), at(101.0))
+    }
+    struct Executions;
+    impl Datafeed for Executions {
+        fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {
+            reply.send(Ok(Instrument::new(symbol).with_tick_size(1.0)));
+        }
+        fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
+            let time = "2026-01-05T10:00:00Z"
+                .parse::<chrono::DateTime<Utc>>()
+                .unwrap();
+            reply.send(Ok(HistoryPage::new(
+                vec![Bar::new(time, 100.0, 102.0, 100.0, 101.0, 13.0)],
+                true,
+            )));
+        }
+        fn trades(&self, _: TradeRequest, reply: Reply<TradePage>) {
+            let time = "2026-01-05T10:00:00Z"
+                .parse::<chrono::DateTime<Utc>>()
+                .unwrap();
+            reply.send(Ok(TradePage::new(
+                TRADES
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, (price, size, side))| {
+                        Tick::new(time + TimeDelta::seconds(i as i64), price, size, side)
+                    })
+                    .collect(),
+                true,
+            )));
+        }
+    }
+    let mut fills = Vec::new();
+    for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+        let ctx = egui::Context::default();
+        crate::theme::apply_to_egui(&ctx, &theme);
+        let mut chart = ChartBuilder::new()
+            .with_feed(std::sync::Arc::new(Executions))
+            .with_symbol("FLOW")
+            .with_timeframe(Timeframe::Min1)
+            .with_chart_type(ChartType::VolumeFootprint)
+            .build();
+        chart.set_server_time(Some(
+            "2026-01-05T10:02:00Z"
+                .parse::<chrono::DateTime<Utc>>()
+                .unwrap(),
+        ));
+        let mut shapes = Vec::new();
+        for _ in 0..5 {
+            chart.apply_synced_time_scale(160.0, 1.0);
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    chart.show(ui);
+                },
+            );
+            output.textures_delta.clear();
+            shapes = output.shapes;
+        }
+        fills.push(sell_fills(&shapes, &chart.get_chart_mapping(), 0));
+
+        // The same bar from a host, whose neutral colour equals its text colour.
+        let mut host = self::chart(&[100.0], &[102.0]);
+        host.set_symbol("FLOW");
+        host.apply_synced_time_scale(160.0, 1.0);
+        let time = host.bars(crate::widget::SeriesId::MAIN)[99].time;
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        for (price, size, side) in TRADES {
+            flow.push(&Tick::new(time, price, size, side)).unwrap();
+        }
+        let ink = theme.chart.axis_text;
+        let config = FootprintConfig {
+            auto_row_height: None,
+            text_color: ink,
+            neutral_color: ink,
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+                ..Default::default()
+            },
+            |ui| {
+                host.show_footprint(ui, &flow, &config);
+            },
+        );
+        output.textures_delta.clear();
+        fills.push(sell_fills(&output.shapes, &host.get_chart_mapping(), 99));
+    }
+    assert!(
+        fills
+            .iter()
+            .all(|(unclassified, poc)| poc.is_some() && unclassified != poc),
+        "(unclassified row, POC row) sell cell fills, chart then host, light then dark: {fills:?}"
+    );
+}
