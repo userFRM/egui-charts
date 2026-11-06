@@ -592,7 +592,11 @@ mod tests {
             let mut charts = [&mut a, &mut b, &mut c];
             layout.apply_copy(&mut charts, 0, &LayoutCopy::Study(sma), &factory);
             for redo in steps {
-                assert!(if *redo { charts[1].redo() } else { charts[1].undo() });
+                assert!(if *redo {
+                    charts[1].redo()
+                } else {
+                    charts[1].undo()
+                });
             }
             show(&mut layout, &mut charts);
             let counts = charts.each_ref().map(|chart| chart.indicators().count());

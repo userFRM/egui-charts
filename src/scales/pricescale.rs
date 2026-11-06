@@ -293,6 +293,7 @@ impl PriceScale {
     }
 
     /// The decimals [`Self::set_price_precision`] set, whatever the scale's mode shows.
+    #[cfg(feature = "widget")]
     pub(crate) fn price_precision(&self) -> Option<u8> {
         self.price_precision
     }
