@@ -107,6 +107,7 @@ impl DrawingLinks {
             let origin = *self.origins.entry(key).or_insert(key);
             let symbol = charts[key.0].symbol().to_owned();
             let mut saveable = false;
+            let mut writers: Vec<usize> = Vec::new();
             for slot in 0..count {
                 // Charts on one storage read each other's stored drawings instead.
                 let stored = drawing.as_ref().is_some_and(|drawing| drawing.saveable);
@@ -154,8 +155,13 @@ impl DrawingLinks {
                 } else if let Some(id) = linked {
                     changed = true;
                     unlock(charts[slot], id);
-                    // Charts on one storage read the change; a write here would replace it.
+                    // Charts on one storage read the change, so one write per storage is enough:
+                    // a second would replace the first, or be refused as a conflict where storage
+                    // keeps revisions.
                     if !charts[slot].shares_stored_drawings(charts[key.0])
+                        && !writers
+                            .iter()
+                            .any(|&other| charts[slot].shares_stored_drawings(charts[other]))
                         && charts[slot]
                             .drawings()
                             .drawings
@@ -163,6 +169,7 @@ impl DrawingLinks {
                             .any(|d| d.id == id && d.saveable)
                     {
                         saveable = true;
+                        writers.push(slot);
                         charts[slot].history.drawing_edits += 1;
                     }
                     charts[slot].drawings_mut().delete_drawing(id);
@@ -1477,6 +1484,71 @@ mod tests {
                  {edit_first}: {shown:?} {restored:?}"
             );
         }
+    }
+
+    /// Two charts keep their drawings in one storage that keeps revisions, a third in its own.
+    /// Keeping a mirrored drawing on the third chart takes it out of the shared storage in one
+    /// write, which the other chart there reads: a second write would be refused as a conflict
+    /// for the user to settle, and that chart would write nothing until then.
+    #[test]
+    fn keeping_a_mirrored_copy_writes_a_shared_storage_once() {
+        use crate::services::document::tests::Revised;
+        use crate::widget::{ChartLayout, ChartLayoutMode};
+
+        let (shared, own) = (Arc::new(Revised::default()), Arc::new(Revised::default()));
+        let charts = || {
+            [&shared, &own, &shared].map(|storage| {
+                let mut chart = bars(60);
+                chart.set_symbol("SAMPLE");
+                chart.set_storage(storage.clone());
+                chart
+            })
+        };
+        let layout = || ChartLayout {
+            mode: ChartLayoutMode::ThreeHorizontal,
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let frames = |layout: &mut ChartLayout, charts: &mut [Chart; 3]| {
+            for _ in 0..4 {
+                ctx.run_ui(egui::RawInput::default(), |ui| {
+                    layout.show(ui, &mut charts.each_mut());
+                })
+                .drop_without_applying_deltas();
+            }
+        };
+        let counts = |charts: &[Chart; 3]| {
+            charts
+                .each_ref()
+                .map(|chart| chart.drawings().drawings.len())
+        };
+        let top = ["Top".to_owned()];
+        let mut session = layout();
+        let mut shown = charts();
+        frames(&mut session, &mut shown);
+        shown[0].user_action(|chart| {
+            let id = chart.drawings_mut().add_drawing(line("Kept")).unwrap();
+            assert!(chart.drawings_mut().move_to_folder(&[id], &[], &top));
+            assert!(
+                chart
+                    .drawings_mut()
+                    .set_folder_sync(&top, Some(FolderSync::Layout))
+            );
+        });
+        frames(&mut session, &mut shown);
+        assert_eq!(counts(&shown), [1, 1, 1], "mirrored");
+        shown[1].user_action(|chart| {
+            assert!(
+                chart
+                    .drawings_mut()
+                    .set_folder_sync(&top, Some(FolderSync::Chart))
+            );
+        });
+        frames(&mut session, &mut shown);
+        assert_eq!(shown.each_ref().map(Chart::storage_conflict), [None; 3]);
+        let mut restarted = charts();
+        frames(&mut layout(), &mut restarted);
+        assert_eq!((counts(&shown), counts(&restarted)), ([0, 1, 0], [0, 1, 0]));
     }
 
     /// Guards #1622: bars evicted from a chart or loaded in front of its bars renumber its
