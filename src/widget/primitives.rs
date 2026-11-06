@@ -2800,4 +2800,204 @@ mod tests {
             }
         }
     }
+
+    const PINNED: Color32 = Color32::from_rgb(27, 43, 67);
+
+    fn text_rect(text: &egui::epaint::TextShape) -> egui::Rect {
+        text.galley.rect.translate(text.pos.to_vec2())
+    }
+
+    /// The series a primitive goes on for the tests below: the main series, a study whose values
+    /// fill its own pane, or the second of two such studies sharing a pane.
+    fn pane_owner(chart: &mut Chart, owner: &str) -> SeriesId {
+        chart.config.show_volume = false;
+        let study = || {
+            Box::new(
+                CustomIndicator::new("Pane", |bars| {
+                    (0..bars.len())
+                        .map(|at| IndicatorValue::Single(at as f64))
+                        .collect()
+                })
+                .with_overlay(false),
+            )
+        };
+        match owner {
+            "main" => SeriesId::MAIN,
+            "study" => chart.add_indicator(study()),
+            _ => {
+                let first = chart.add_indicator(study());
+                let second = chart.add_indicator(study());
+                assert!(chart.move_indicator_to_pane(second, first));
+                second
+            }
+        }
+    }
+
+    fn pane_plot(chart: &Chart, owner: &str) -> egui::Rect {
+        match owner {
+            "main" => chart.last_rendered_price_rect,
+            _ => chart.last_rendered_indicator_panes[0].chart_rect,
+        }
+    }
+
+    #[test]
+    fn crosshair_labels_stay_above_pinned_axis_tags() {
+        struct Pinned;
+        impl Primitive for Pinned {
+            fn price_axis_labels(&self, _: &PrimitiveView<'_>) -> Vec<PriceAxisLabel> {
+                let mut label = PriceAxisLabel::new(f64::NAN, "Pinned price", PINNED);
+                label.fixed_coordinate = Some(60.0);
+                vec![label]
+            }
+            fn time_axis_labels(&self, view: &PrimitiveView<'_>) -> Vec<TimeAxisLabel> {
+                let mut label = TimeAxisLabel::new(view.bars[0].time, "Pinned time", PINNED);
+                label.fixed_coordinate = Some(200.0);
+                vec![label]
+            }
+        }
+        let mut observed = Vec::new();
+        for owner in ["main", "study", "second member"] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[10.0], &[20.0]);
+            let id = pane_owner(&mut chart, owner);
+            chart.attach_primitive(id, Pinned).unwrap();
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let plot = pane_plot(&chart, owner);
+            // The pointer sits where both tags are pinned: 60 points below the top of the
+            // pane's price axis and 200 points right of the left edge of the time axis.
+            let pos = Pos2::new(chart.time_axis_rect.left() + 200.0, plot.top() + 60.0);
+            frame(&ctx, &mut chart, 1.0, vec![Event::PointerMoved(pos)]);
+            let painted = shapes(&ctx, &mut chart, 2.0, vec![Event::PointerMoved(pos)]);
+            let axes: &[(&str, bool)] = if owner == "main" {
+                &[("Pinned price", true), ("Pinned time", false)]
+            } else {
+                &[("Pinned price", true)]
+            };
+            for &(pinned, price) in axes {
+                // The pinned tag's fill, then the other text it overlaps nearest the pointer:
+                // the crosshair's label on that axis.
+                let (fill_at, fill) = painted
+                    .iter()
+                    .enumerate()
+                    .find_map(|(at, shape)| match shape {
+                        Shape::Rect(rect)
+                            if rect.fill == PINNED
+                                && (rect.rect.center().y > plot.bottom()) != price =>
+                        {
+                            Some((at, rect.rect))
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("{owner}: {pinned} is painted"));
+                let crosshair = painted
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(at, shape)| match shape {
+                        Shape::Text(text)
+                            if text.galley.text() != pinned && text_rect(text).intersects(fill) =>
+                        {
+                            Some((at, text))
+                        }
+                        _ => None,
+                    })
+                    .min_by(|(_, a), (_, b)| {
+                        let distance = |text: &egui::epaint::TextShape| {
+                            let centre = text_rect(text).center();
+                            if price {
+                                (centre.y - pos.y).abs()
+                            } else {
+                                (centre.x - pos.x).abs()
+                            }
+                        };
+                        distance(a).total_cmp(&distance(b))
+                    });
+                observed.push(match crosshair {
+                    Some((at, text)) => format!(
+                        "{owner} {pinned}: crosshair label {:?} {}",
+                        text.galley.text(),
+                        if at > fill_at { "above" } else { "below" }
+                    ),
+                    None => format!("{owner} {pinned}: no crosshair label"),
+                });
+            }
+        }
+        // The crosshair labels read the pointer and stay above every other tag on their axis,
+        // as they do over the last price, drawings and automatic primitive tags.
+        assert!(
+            observed.iter().all(|line| line.ends_with("above")),
+            "{observed:?}"
+        );
+    }
+
+    #[test]
+    fn pinned_price_tags_hide_the_axis_labels_they_cover_in_every_pane() {
+        struct Pinned(Arc<Mutex<f32>>);
+        impl Primitive for Pinned {
+            fn price_axis_labels(&self, _: &PrimitiveView<'_>) -> Vec<PriceAxisLabel> {
+                let mut label = PriceAxisLabel::new(f64::NAN, "X", PINNED);
+                label.fixed_coordinate = Some(*self.0.lock().unwrap());
+                vec![label]
+            }
+        }
+        let mut covered = Vec::new();
+        for owner in ["main", "study", "second member"] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[10.0], &[20.0]);
+            let id = pane_owner(&mut chart, owner);
+            // A non-finite offset omits the tag until a scale label is chosen.
+            let offset = Arc::new(Mutex::new(f32::NAN));
+            chart.attach_primitive(id, Pinned(offset.clone())).unwrap();
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let painted = shapes(&ctx, &mut chart, 1.0, vec![]);
+            let plot = pane_plot(&chart, owner);
+            // The scale label of the pane nearest its middle.
+            let mark = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Text(text)
+                        if text_rect(text).left() > plot.right()
+                            && plot.y_range().contains(text_rect(text).center().y)
+                            && text.galley.text().replace(',', "").parse::<f64>().is_ok() =>
+                    {
+                        Some(text_rect(text))
+                    }
+                    _ => None,
+                })
+                .min_by(|a, b| {
+                    (a.center().y - plot.center().y)
+                        .abs()
+                        .total_cmp(&(b.center().y - plot.center().y).abs())
+                })
+                .unwrap_or_else(|| panic!("{owner}: a scale label"));
+            *offset.lock().unwrap() = mark.center().y - plot.top();
+            frame(&ctx, &mut chart, 2.0, vec![]);
+            let painted = shapes(&ctx, &mut chart, 3.0, vec![]);
+            let tag = painted
+                .iter()
+                .find_map(|shape| match shape {
+                    Shape::Rect(rect) if rect.fill == PINNED => Some(rect.rect),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{owner}: the pinned tag"));
+            covered.push((
+                owner,
+                painted
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        Shape::Text(text)
+                            if text.galley.text() != "X" && text_rect(text).intersects(tag) =>
+                        {
+                            Some(text.galley.text().to_owned())
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>(),
+            ));
+        }
+        // Scale labels under a tag are left out in the main pane; every pane follows that rule.
+        assert!(
+            covered.iter().all(|(_, labels)| labels.is_empty()),
+            "{covered:?}"
+        );
+    }
 }

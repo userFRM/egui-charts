@@ -2917,6 +2917,25 @@ impl Chart {
             }
         }
 
+        // Pinned tags go above every other tag and below the crosshair's, which stay readable.
+        for (x, label) in fixed_time_labels {
+            time_tags.push(rendering::axes::render_primitive_time_label(
+                &painter,
+                self.time_axis_rect,
+                x,
+                label,
+            ));
+        }
+
+        rendering::axes::render_primitive_price_labels(
+            &painter,
+            price_rect,
+            axis_edge,
+            fixed_price_labels,
+            &mut tags,
+            self.config.price_axis.allow_label_overlap,
+        );
+
         // Draw crosshair with options from chart_options. The pointer still hovers the chart
         // while a context menu is open, so the crosshair, its labels and the tooltip wait until
         // the menu closes.
@@ -3566,23 +3585,6 @@ impl Chart {
             }
         }
 
-        for (x, label) in fixed_time_labels {
-            time_tags.push(rendering::axes::render_primitive_time_label(
-                &painter,
-                self.time_axis_rect,
-                x,
-                label,
-            ));
-        }
-
-        rendering::axes::render_primitive_price_labels(
-            &painter,
-            price_rect,
-            axis_edge,
-            fixed_price_labels,
-            &mut tags,
-            self.config.price_axis.allow_label_overlap,
-        );
         let current_price = crate::model::last_with_value(&self.state.data().bars)
             .filter(|_| self.main_series_visible && self.config.show_symbol_last_val)
             .map(|bar| {
