@@ -651,6 +651,35 @@ mod tests {
         assert!(vertical <= 30, "{vertical} vertical lines");
     }
 
+    /// A study's levels in its own pane are painted over its pane tint, as on the price pane.
+    #[test]
+    fn pane_tint_stays_beneath_the_study_levels() {
+        use crate::widget::test_frames::{chart, shapes};
+        let mut chart = chart(&[40.0], &[60.0]);
+        let id = chart.add_indicator(Box::new(crate::studies::RSI::default()));
+        let tint = Color32::from_rgb(20, 30, 40);
+        let level = Color32::from_rgb(250, 10, 10);
+        let study = chart.indicator_mut(id).unwrap();
+        let mut settings = study.settings();
+        settings.background = Some(tint);
+        settings.levels[0].color = level;
+        settings.levels[0].pattern = crate::model::LineStyle::Solid;
+        study.apply_settings(&[], settings).unwrap();
+        let ctx = egui::Context::default();
+        shapes(&ctx, &mut chart, 0.0, Vec::new());
+        let painted = shapes(&ctx, &mut chart, 1.0, Vec::new());
+        let is_tint = |shape: &egui::Shape| matches!(shape, egui::Shape::Rect(r) if r.fill == tint);
+        assert_eq!(painted.iter().filter(|shape| is_tint(shape)).count(), 1);
+        let tinted = painted.iter().position(is_tint).unwrap();
+        let line = painted
+            .iter()
+            .position(|shape| {
+                matches!(shape, egui::Shape::LineSegment { stroke, .. } if stroke.color == level)
+            })
+            .expect("the level line is painted");
+        assert!(line > tinted, "level painted at {line}, tint at {tinted}");
+    }
+
     #[test]
     fn rsi_paints_the_band_and_guides_of_its_preset_and_its_level_settings() {
         let config = IndicatorPaneConfig::rsi();

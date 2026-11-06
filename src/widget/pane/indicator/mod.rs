@@ -161,6 +161,11 @@ impl IndicatorPane {
         // Determine y-axis range
         let (y_min, y_max) = self.calculate_y_range(indicator, &visible_range);
 
+        // The study's tint lies beneath everything else it paints
+        if let Some(color) = indicator.background() {
+            painter.rect_filled(chart_rect, 0.0, color);
+        }
+
         // Draw zone fills (colored bands)
         if self.config.show_zones && self.config.zones.len() >= 2 {
             self.draw_zone_fills(painter, chart_rect, y_min, y_max, indicator);
@@ -252,6 +257,11 @@ impl IndicatorPane {
         let displayed_range = horizontal.x_to_idx(chart_rect.left())
             ..horizontal.x_to_idx(chart_rect.right()).saturating_add(1);
         let (y_min, y_max) = self.calculate_y_range(indicator, &displayed_range);
+
+        // The study's tint lies beneath everything else it paints
+        if let Some(color) = indicator.background() {
+            painter.rect_filled(chart_rect, 0.0, color);
+        }
 
         // Draw zone fills (colored bands)
         if self.config.show_zones && self.config.zones.len() >= 2 {
@@ -462,6 +472,11 @@ impl IndicatorPane {
         });
         if !collapsed {
             let plot_painter = &painter.with_clip_rect(chart_rect.intersect(painter.clip_rect()));
+            // The study's tint lies beneath everything else it paints
+            if let Some(color) = indicator.background() {
+                plot_painter.rect_filled(chart_rect, 0.0, color);
+            }
+
             // Draw zone fills (colored bands)
             if self.config.show_zones && self.config.zones.len() >= 2 {
                 self.draw_zone_fills(plot_painter, chart_rect, y_min, y_max, indicator);
