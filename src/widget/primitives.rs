@@ -449,8 +449,9 @@ impl Chart {
             .filter_map(|point| Some((CustomKey::of(&point)?, point)))
             .collect();
         custom.feed.rejected_bars += (total - rows.len()) as u64;
-        // A stable sort leaves duplicates in the order they arrived, so the last one wins.
-        rows.sort_by_key(|(key, _)| clock.bar_open(key.time));
+        // Keys in order keep a slot together with its latest point last, and a stable sort leaves
+        // points with one key in the order they arrived, so the last one wins.
+        rows.sort_by_key(|(key, _)| key.time);
         let mut kept: Vec<(CustomKey, P)> = Vec::with_capacity(rows.len());
         for row in rows {
             match kept.last_mut() {
@@ -3084,5 +3085,49 @@ mod tests {
         frame(&ctx, &mut chart, 1.0, vec![]);
         assert_eq!(*log.lock().unwrap(), ["attached", "update"]);
         assert!(chart.detach_primitive(id));
+    }
+
+    /// Of several points in one slot of a fed chart's interval, `set_custom_data` keeps the one
+    /// with the latest key, as `set_data` keeps the latest bar of a slot, whatever their order.
+    #[test]
+    fn feed_slot_keeps_the_latest_point_as_bars_do() {
+        struct Silent;
+        impl crate::data::Datafeed for Silent {
+            fn history(
+                &self,
+                _: crate::data::HistoryRequest,
+                _: crate::data::Reply<crate::data::HistoryPage>,
+            ) {
+            }
+        }
+        let mut chart = crate::widget::ChartBuilder::new()
+            .with_feed(Arc::new(Silent))
+            .with_timeframe(crate::model::Timeframe::Hour1)
+            .build();
+        let (id, _) = band_series(&mut chart);
+        let at = |minutes| DateTime::UNIX_EPOCH + chrono::TimeDelta::minutes(minutes);
+        chart.set_data(
+            SeriesId::MAIN,
+            vec![
+                Bar::new(at(45), 1.0, 2.0, 1.0, 2.0, 1.0),
+                Bar::new(at(15), 1.0, 2.0, 1.0, 2.0, 1.0),
+            ],
+        );
+        let point = |minutes, note| Band {
+            time: at(minutes),
+            values: Some((1.0, 2.0)),
+            note,
+        };
+        assert!(chart.set_custom_data(id, vec![point(45, "00:45"), point(15, "00:15")]));
+        let bars: Vec<_> = (chart.bars(SeriesId::MAIN).iter())
+            .map(|bar| bar.time)
+            .collect();
+        let points: Vec<_> = chart
+            .custom_points::<Band>(id)
+            .iter()
+            .map(|point| point.note)
+            .collect();
+        let kept = (bars, points);
+        assert_eq!(kept, (vec![at(45)], vec!["00:45"]), "{kept:?}");
     }
 }
