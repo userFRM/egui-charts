@@ -59,43 +59,42 @@ impl Evaluation {
             inputs.start = None;
             inputs.visible = None;
         }
-        let mut required: HashSet<_> = alert
-            .rules()
-            .filter(|(_, _, interval)| *interval == timeframe)
-            .flat_map(|(source, condition, _)| {
-                std::iter::once(source).chain(condition.partners().into_iter().flatten())
-            })
-            .filter_map(|source| match source {
-                AlertSource::Study { id, .. } => id.parse::<usize>().ok(),
-                _ => None,
-            })
-            .collect();
-        // The fired message comes from the first interval. A study only the message reads and
-        // the factory cannot make reads `NaN`, instead of stopping the alert's other studies.
-        if timeframe == alert.timeframe.unwrap_or_default() {
-            required.extend(alert.plot_studies().into_iter().filter(|id| {
-                inputs
-                    .studies
-                    .iter()
-                    .any(|study| study.id == *id && factory.has(&study.name))
-            }));
-        }
-        loop {
-            let before = required.len();
+        // `ids` with the saved studies they take as input, transitively.
+        let with_inputs = |mut ids: HashSet<usize>| loop {
+            let before = ids.len();
             for study in &inputs.studies {
-                if !required.contains(&study.id) {
+                if !ids.contains(&study.id) {
                     continue;
                 }
                 for (_, input) in &study.inputs {
                     if let crate::model::InputValue::Source(StudySource::Study { id, .. }) = input {
-                        required.insert(*id);
+                        ids.insert(*id);
                     }
                 }
             }
-            if required.len() == before {
-                break;
+            if ids.len() == before {
+                break ids;
             }
-        }
+        };
+        let tested = with_inputs(
+            alert
+                .rules()
+                .filter(|(_, _, interval)| *interval == timeframe)
+                .flat_map(|(source, condition, _)| {
+                    std::iter::once(source).chain(condition.partners().into_iter().flatten())
+                })
+                .filter_map(|source| match source {
+                    AlertSource::Study { id, .. } => id.parse::<usize>().ok(),
+                    _ => None,
+                })
+                .collect(),
+        );
+        // The fired message comes from the first interval.
+        let required = if timeframe == alert.timeframe.unwrap_or_default() {
+            with_inputs(tested.iter().copied().chain(alert.plot_studies()).collect())
+        } else {
+            tested.clone()
+        };
         let mut result = Self {
             alert: alert.clone(),
             timeframe,
@@ -128,7 +127,10 @@ impl Evaluation {
             })();
             match restored {
                 Ok(study) => result.studies.push(study),
-                Err(error) => result.error = Some(error),
+                Err(error) if tested.contains(&id) => result.error = Some(error),
+                // A study only the message reads and that cannot be made reads `NaN`, instead of
+                // stopping the alert's other studies.
+                Err(_) => {}
             }
         }
         result
@@ -841,7 +843,8 @@ mod tests {
 
     /// `prepare_alert` saves every study of the chart with the alert; a price alert's message
     /// names study 7, which no condition tests. One-minute closes 200 and 300: the mean is 250.
-    /// Study 8 is not saved, the factory does not know study 9 and nothing names study 10.
+    /// Study 8 is not saved, the factory does not know study 9, study 11 reads study 12, which
+    /// the factory does not know either, and nothing names study 10.
     #[test]
     fn plot_placeholder_reads_a_saved_study_no_condition_tests() {
         let mut factory = IndicatorFactory::new();
@@ -854,18 +857,26 @@ mod tests {
         };
         let mut alert = Alert::new("SYM", crate::model::AlertCondition::Above(250.0));
         alert.timeframe = Some(Timeframe::Min1);
-        alert.message = "{{close}} mean {{plot_7_0}} {{plot_8_0}} {{plot_9_0}}".into();
+        let mut on_study_12 = saved(11, "Pair mean");
+        on_study_12.inputs.push((
+            "source".into(),
+            crate::model::InputValue::Source(StudySource::Study { id: 12, plot: 0 }),
+        ));
+        alert.message =
+            "{{close}} mean {{plot_7_0}} {{plot_8_0}} {{plot_9_0}} {{plot_11_0}}".into();
         alert.inputs = Some(Box::new(AlertInputs {
             studies: vec![
                 saved(7, "Pair mean"),
                 saved(9, "Unregistered"),
                 saved(10, "Unused"),
+                on_study_12,
+                saved(12, "Unregistered"),
             ],
             ..Default::default()
         }));
         assert_eq!(
             fired_messages(Arc::new(Feed::default()), &factory, alert),
-            ["300 mean 250 NaN NaN"]
+            ["300 mean 250 NaN NaN NaN"]
         );
     }
 
