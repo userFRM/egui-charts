@@ -159,7 +159,11 @@ impl Chart {
                 .chain(
                     self.pane_series(self.main_series_pane())
                         .iter()
-                        .filter(|id| **id != super::SeriesId::MAIN)
+                        // Series 0 names the original pane while that pane exists.
+                        .filter(|id| {
+                            **id != super::SeriesId::MAIN
+                                || self.pane_index(super::PaneId::MAIN).is_none()
+                        })
                         .map(|id| Some(id.0)),
                 )
                 .collect()

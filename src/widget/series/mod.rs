@@ -119,11 +119,12 @@ impl Chart {
     /// and near the live edge the view follows a new last bar, as with [`update`](Self::update).
     /// A view scrolled back stays on its bars when older or newer bars arrive.
     ///
-    /// Bar series accept data; unknown ids and study ids are ignored with a warning.
+    /// Bar series accept data; unknown ids and study ids are ignored with a warning, and so is
+    /// the main series while it is removed from a chart that keeps the original pane.
     /// See [`set_data_operation_notifications`](Self::set_data_operation_notifications) to
     /// observe every accepted call, including empty and unchanged replacements.
     pub fn set_data(&mut self, series: SeriesId, bars: Vec<Bar>) {
-        if (series == SeriesId::MAIN && self.main_series_present
+        if (series == SeriesId::MAIN && self.main_bars_live()
             || self.price_series.iter().any(|item| item.id == series))
             && self.replay_retains(series)
         {
@@ -144,7 +145,7 @@ impl Chart {
             self.data_set(series);
             return;
         }
-        if !self.main_series_present || !holds_bars(series, "set_data") {
+        if !self.main_bars_live() || !holds_bars(series, "set_data") {
             return;
         }
         self.replace_main_data(bars);
@@ -205,7 +206,7 @@ impl Chart {
         } else {
             None
         };
-        let changed = if (series == SeriesId::MAIN && self.main_series_present
+        let changed = if (series == SeriesId::MAIN && self.main_bars_live()
             || self.price_series.iter().any(|item| item.id == series))
             && self.replay_retains(series)
         {
@@ -227,7 +228,7 @@ impl Chart {
             let changed = merged.first_changed.is_some();
             self.enforce_bar_limit(series);
             changed
-        } else if self.main_series_present && holds_bars(series, "update") {
+        } else if self.main_bars_live() && holds_bars(series, "update") {
             self.apply(vec![(bar, Origin::Live)])
                 .first_changed
                 .is_some()
@@ -249,14 +250,14 @@ impl Chart {
     ///
     /// Bar series accept this; unknown ids and study ids are ignored with a warning.
     pub fn pop_bars(&mut self, series: SeriesId, count: usize) -> Vec<Bar> {
-        let present = series == SeriesId::MAIN && self.main_series_present
+        let present = series == SeriesId::MAIN && self.main_bars_live()
             || self.price_series.iter().any(|item| item.id == series);
         let removed = if present && self.replay_retains(series) {
             self.replay_pop(series, count)
         } else if let Some(item) = self.price_series.iter_mut().find(|item| item.id == series) {
             item.revision = crate::model::next_revision();
             item.bars.split_off(item.bars.len().saturating_sub(count))
-        } else if self.main_series_present && holds_bars(series, "pop_bars") {
+        } else if self.main_bars_live() && holds_bars(series, "pop_bars") {
             let before = self.edge();
             #[cfg(feature = "drawings")]
             self.anchor_drawing_points();
@@ -312,9 +313,13 @@ impl Chart {
         }
     }
 
-    /// The retained-bar limit of `series`, or `None` when unlimited or absent.
+    /// The retained-bar limit of `series`, or `None` when unlimited or absent. The main bars keep
+    /// their limit while they stay live without the original pane, as
+    /// [`remove_pane`](Self::remove_pane) describes.
     pub fn bar_limit(&self, series: SeriesId) -> Option<NonZeroUsize> {
-        self.bar_limits.get(&series).copied()
+        let limit = self.bar_limits.get(&series).copied();
+        // A removed main series keeps its limit for when its bars take data again.
+        limit.filter(|_| series != SeriesId::MAIN || self.main_bars_live())
     }
 
     /// Removes up to `count` oldest bars of `series`, returning them oldest first. Studies
@@ -401,7 +406,14 @@ impl Chart {
 
     fn bar_series_present(&self, series: SeriesId, call: &str) -> bool {
         self.price_series.iter().any(|item| item.id == series)
-            || self.main_series_present && holds_bars(series, call)
+            || self.main_bars_live() && holds_bars(series, call)
+    }
+
+    /// Whether the main bars take data. A main series removed with the original pane stays out
+    /// of the layout, but its bars still supply the surviving panes' studies and time axis, and
+    /// without that pane nothing brings the series back to supply them later.
+    pub(super) fn main_bars_live(&self) -> bool {
+        self.main_series_present || self.pane_index(super::PaneId::MAIN).is_none()
     }
 
     fn enforce_bar_limit(&mut self, series: SeriesId) -> usize {
@@ -416,9 +428,10 @@ impl Chart {
 
     /// The bars of `series`, oldest first, with their colours and payloads: `bars(id).get(index)`
     /// is the bar at an index and `bars(id).last()` the last bar, which can be a
-    /// [whitespace](Bar::whitespace) bar. Removed series, volume and studies hold no bars.
+    /// [whitespace](Bar::whitespace) bar. Removed series, volume and studies hold no bars, except
+    /// the main series on a chart without the original pane, whose bars stay live.
     pub fn bars(&self, series: SeriesId) -> &[Bar] {
-        if series == SeriesId::MAIN && self.main_series_present {
+        if series == SeriesId::MAIN && self.main_bars_live() {
             &self.state.data().bars
         } else {
             self.price_series
@@ -667,9 +680,10 @@ impl Chart {
 
     /// What the chart knows about the feed of `series`, such as the bars dropped as invalid.
     /// `Some` for every present bar series and custom data series, whose invalid points count
-    /// as `rejected_bars`.
+    /// as `rejected_bars`, and for the main series while its bars are live without the original
+    /// pane.
     pub fn feed_state(&self, series: SeriesId) -> Option<&FeedState> {
-        if series == SeriesId::MAIN && self.main_series_present {
+        if series == SeriesId::MAIN && self.main_bars_live() {
             Some(&self.feed)
         } else {
             self.price_series
@@ -715,12 +729,13 @@ impl Chart {
         merged
     }
 
-    /// Removes a bar series or study and clears its selection. Removing the main series pauses
-    /// its feed and retains the time axis for the remaining series and drawings. Undo of the
-    /// [`user_action`](Self::user_action) that removed a bar series restores it with its
-    /// markers, price lines, formatter and bar limit, and for the main series the feed follows
-    /// [`set_feed_paused`](Self::set_feed_paused) again. Returns `false` for an unknown or
-    /// already removed id.
+    /// Removes a bar series or study and clears its selection. Removing the main series retains
+    /// the time axis for the remaining series and drawings and pauses its feed; on a chart without
+    /// the original pane its bars stay live instead, as [`remove_pane`](Self::remove_pane)
+    /// describes. Undo of the [`user_action`](Self::user_action) that removed a bar series
+    /// restores it with its markers, price lines, formatter and bar limit, and for the main
+    /// series the feed follows [`set_feed_paused`](Self::set_feed_paused) again. Returns `false`
+    /// for an unknown or already removed id.
     pub fn remove_series(&mut self, id: SeriesId) -> bool {
         if id == SeriesId::MAIN {
             if !self.main_series_present {
