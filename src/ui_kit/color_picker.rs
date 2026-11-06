@@ -121,6 +121,18 @@ pub const COLOR_VARIATIONS: [[Color32; 10]; 6] = [
     ],
 ];
 
+/// `picked`, at the opacity of `current` unless the custom editor set it or `current` is invisible:
+/// palette swatches are opaque, and a highlighter or fill stays translucent when recoloured.
+pub(crate) fn keep_opacity(picked: Color32, current: Color32, custom: bool) -> Color32 {
+    let [r, g, b, a] = picked.to_srgba_unmultiplied();
+    let a = if custom || current.a() == 0 {
+        a
+    } else {
+        current.a()
+    };
+    Color32::from_rgba_unmultiplied(r, g, b, a)
+}
+
 // ============================================================================
 // COLOR PICKER CONFIG
 // ============================================================================

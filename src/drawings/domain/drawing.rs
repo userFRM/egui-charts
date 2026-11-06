@@ -178,9 +178,11 @@ pub struct Drawing {
     /// Border colour of annotation boxes; `None` uses the drawing colour.
     #[serde(default)]
     pub border_color: Option<[u8; 4]>,
-    /// Extend line to left edge
+    /// Extend line to left edge; an extended line, info line or trend angle extends past its first
+    /// anchor, whichever way it was drawn
     pub extend_left: bool,
-    /// Extend line to right edge
+    /// Extend line to right edge; an extended line, info line or trend angle extends past its second
+    /// anchor, whichever way it was drawn
     pub extend_right: bool,
     /// Arrow style at start of line
     pub arrow_start_style: ArrowStyle,
@@ -270,7 +272,7 @@ pub(super) const TEAL: [u8; 4] = [8, 153, 129, 255];
 pub(super) const CYAN: [u8; 4] = [0, 188, 212, 255];
 pub(super) const PINK: [u8; 4] = [233, 30, 99, 255];
 pub(super) const PURPLE: [u8; 4] = [156, 39, 176, 255];
-const DEEP_PURPLE: [u8; 4] = [103, 58, 183, 255];
+pub(super) const DEEP_PURPLE: [u8; 4] = [103, 58, 183, 255];
 pub(super) const GREY: [u8; 4] = [128, 128, 128, 255];
 const WHITE: [u8; 4] = [255, 255, 255, 255];
 
@@ -380,6 +382,8 @@ fn default_style(tool: DrawingToolType) -> DefaultStyle {
             ..LINE
         },
         T::AnchoredVWAP => DefaultStyle { width: 1.0, ..LINE },
+        // The colour of the range tint, the same cyan as the rows of rising volume.
+        T::FixedRangeVolumeProfile | T::AnchoredVolumeProfile => colored([83, 196, 216, 255]),
         T::XABCDPattern | T::CypherPattern => filled(BLUE, 38),
         T::HeadAndShoulders => filled(TEAL, 38),
         T::ABCDPattern | T::SineLine => colored(TEAL),
@@ -489,7 +493,9 @@ impl Drawing {
             text_color: match tool_type {
                 DrawingToolType::Note | DrawingToolType::Callout => Some(WHITE),
                 // Independent of the line, which can change colour without its text.
-                DrawingToolType::InfoLine | DrawingToolType::HorizontalLine => Some(BLUE),
+                DrawingToolType::ExtendedLine
+                | DrawingToolType::InfoLine
+                | DrawingToolType::HorizontalLine => Some(BLUE),
                 _ => None,
             },
             background: !plain_text,
@@ -1075,7 +1081,7 @@ mod tests {
         let mut fib = drawing(T::FibonacciRetracement, &[(0.0, 100.0), (10.0, 200.0)]);
         let mut config = FibonacciConfig {
             levels_as_percent: true,
-            ..Default::default()
+            ..FibonacciConfig::legacy()
         };
         config.levels[1].visible = false;
         config.levels[2].label = "100%".into();

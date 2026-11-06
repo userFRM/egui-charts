@@ -1295,6 +1295,18 @@ mod tests {
                 Some([41, 98, 255, 38]),
             ),
             (DrawingToolType::AnchoredVWAP, [41, 98, 255, 255], 1.0, None),
+            (
+                DrawingToolType::FixedRangeVolumeProfile,
+                [83, 196, 216, 255],
+                2.0,
+                None,
+            ),
+            (
+                DrawingToolType::AnchoredVolumeProfile,
+                [83, 196, 216, 255],
+                2.0,
+                None,
+            ),
             (DrawingToolType::Pitchfan, [242, 54, 69, 255], 2.0, None),
         ] {
             let drawing = place(&mut manager, tool);
