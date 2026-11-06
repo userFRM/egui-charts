@@ -301,6 +301,16 @@ impl Default for HeikinStyle {
     }
 }
 
+impl HeikinStyle {
+    /// How a Heikin-Ashi chart drew before it had this style: only the original close was tagged.
+    fn saved_without_style() -> Self {
+        Self {
+            real_price_only: true,
+            ..Self::default()
+        }
+    }
+}
+
 /// Independent candle components for the hollow candles chart.
 ///
 /// A bar is coloured by its close against the previous close and is hollow, an outline without
@@ -421,6 +431,16 @@ impl Default for HighLowStyle {
     }
 }
 
+impl HighLowStyle {
+    /// How a high-low chart drew before it had this style: without price labels.
+    fn saved_without_style() -> Self {
+        Self {
+            labels_visible: false,
+            ..Self::default()
+        }
+    }
+}
+
 /// The Kagi chart's stroke widths in logical points. Non-positive or non-finite widths hide
 /// the lines of that thickness.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -467,13 +487,17 @@ pub struct ChartTypeStyles {
     pub hollow: HollowStyle,
     /// Volume candles chart.
     pub volume_candles: VolumeCandlesStyle,
-    /// Heikin-Ashi chart.
+    /// Heikin-Ashi chart. Documents saved before this style restore with their original close
+    /// alone on the scale, as they were drawn.
+    #[serde(default = "HeikinStyle::saved_without_style")]
     pub heikin: HeikinStyle,
     /// Bars chart.
     pub bars: BarsStyle,
     /// Columns chart.
     pub columns: ColumnsStyle,
-    /// High-low chart.
+    /// High-low chart. Documents saved before this style restore without price labels, as they
+    /// were drawn.
+    #[serde(default = "HighLowStyle::saved_without_style")]
     pub high_low: HighLowStyle,
     /// Kagi chart.
     pub kagi: KagiStyle,
@@ -515,6 +539,17 @@ impl Default for ChartTypeStyles {
             crosshair_marker_border_color: None,
             crosshair_marker_border_width: DESIGN_TOKENS.stroke.thick,
             last_price_animation: LastPriceAnimation::Disabled,
+        }
+    }
+}
+
+impl ChartTypeStyles {
+    /// The styles of a document saved before chart types had styles of their own.
+    pub(super) fn saved_without_styles() -> Self {
+        Self {
+            heikin: HeikinStyle::saved_without_style(),
+            high_low: HighLowStyle::saved_without_style(),
+            ..Self::default()
         }
     }
 }

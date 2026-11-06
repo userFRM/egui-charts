@@ -16,7 +16,6 @@ const FONT_LIMITS: [f32; 2] = [8.0, 24.0];
 /// The share of a ladder column each of its side cells takes.
 const LADDER_CELL_SHARE: f32 = 0.39;
 /// The height of a ladder bar's totals and box, three rows of the 10 point font and their margins.
-#[cfg(feature = "studies")]
 const INFO_BOX_HEIGHT: f32 = 46.0;
 
 pub use crate::model::{FootprintColor, FootprintMode};
@@ -37,11 +36,17 @@ pub struct FootprintConfig {
     /// Sell colour.
     pub bid_color: Color32,
     /// Text colour and POC outline, or POC fill under [`FootprintColor::VolumeSteps`], which
-    /// picks black or white numbers for each cell instead. The default suits a dark chart; set the
-    /// theme's text colour on a light one, or the fill, lines and labels vanish.
+    /// picks black or white numbers for each cell, or each half of a split cell, instead. The
+    /// default suits a dark chart; set the theme's text colour on a light one, or the fill, lines
+    /// and labels vanish.
     pub text_color: Color32,
-    /// Cell fill for balanced or unclassified executions.
+    /// Cell fill for balanced or unclassified executions; under [`FootprintColor::VolumeSteps`]
+    /// its weakest shade fills a row without classified volume, apart from a POC of the same
+    /// colour.
     pub neutral_color: Color32,
+    /// The colour behind the cells, which the volume shades and the patches behind numbers are
+    /// mixed with, or `None`, the default, for the plot background of the painter's active theme.
+    pub background: Option<Color32>,
     /// Group adjacent rows automatically to at least this screen height. `None` keeps the
     /// aggregation's manual grouping. Grouping is an integer multiple of the input step.
     pub auto_row_height: Option<f32>,
@@ -60,7 +65,8 @@ pub struct FootprintConfig {
     /// Compare to the opposite side one price away instead of at the same price.
     pub diagonal: bool,
     /// Put a strip along the outer edge of a side that dominates under the imbalance settings,
-    /// under [`FootprintColor::VolumeSteps`].
+    /// under [`FootprintColor::VolumeSteps`]: in the side's colour, or its strongest shade next to
+    /// a cell of that colour.
     pub show_imbalance: bool,
     /// Outline the highest-volume row when its cells are large enough for the stroke, or fill it
     /// under [`FootprintColor::VolumeSteps`].
@@ -114,6 +120,7 @@ impl Default for FootprintConfig {
             bid_color: crate::tokens::DESIGN_TOKENS.semantic.chart.bearish,
             text_color: Color32::WHITE,
             neutral_color: Color32::GRAY,
+            background: None,
             auto_row_height: Some(16.0),
             row_ticks: 0,
             min_text_height: 12.0,
@@ -270,7 +277,10 @@ pub fn render_footprint(
     let background = painter.add(Shape::Noop);
     let mut mesh = Mesh::default();
     let columns = config.modes.len().min(4);
-    let text_background = painter.ctx().active_theme().chart.bg.to_opaque();
+    let text_background = config
+        .background
+        .unwrap_or_else(|| painter.ctx().active_theme().chart.bg)
+        .to_opaque();
     let steps = config.color_by == FootprintColor::VolumeSteps;
     let spine_drawn = !has_ladder(config);
     // Use the existing half-gap so price markers do not shrink execution columns.
@@ -433,7 +443,7 @@ pub fn render_footprint(
                     if poc_row {
                         config.text_color
                     } else if row.bid + row.ask == 0.0 && row.unknown > 0.0 {
-                        config.neutral_color
+                        step_color(config.neutral_color, 0, text_background)
                     } else {
                         step_color(
                             color,
@@ -448,19 +458,32 @@ pub fn render_footprint(
                     let half_gap = mapping.bar_spacing * 0.04;
                     let clear = (half_gap - 3.0).clamp(0.0, 1.0);
                     let strip_width = half_gap.clamp(1.0, 3.0);
-                    for (imbalanced, edge, side) in [
-                        (imbalances.0 && column == 0, rect.left(), -1.0),
-                        (imbalances.1 && column + 1 == columns, rect.right(), 1.0),
+                    for (imbalanced, edge, side, color, shade) in [
+                        (
+                            imbalances.0 && column == 0,
+                            rect.left(),
+                            -1.0,
+                            config.bid_color,
+                            shades[0],
+                        ),
+                        (
+                            imbalances.1 && column + 1 == columns,
+                            rect.right(),
+                            1.0,
+                            config.ask_color,
+                            shades[1],
+                        ),
                     ] {
                         if imbalanced {
                             let strip = Rect::from_two_pos(
                                 pos2(edge + side * clear, rect.top()),
                                 pos2(edge + side * (clear + strip_width), rect.bottom()),
                             );
-                            let color = if side < 0.0 {
-                                config.bid_color
+                            // A strip of its cell's colour would only make the cell look wider.
+                            let color = if color == shade {
+                                step_color(color, 3, text_background)
                             } else {
-                                config.ask_color
+                                color
                             };
                             mesh.add_colored_rect(strip.intersect(mapping.rect), color);
                         }
@@ -529,12 +552,12 @@ pub fn render_footprint(
                             fills[2] = Some((ask, config.ask_color.gamma_multiply(0.5)));
                         }
                     }
-                    let ink = if !steps {
-                        config.text_color
+                    let inks = if !steps {
+                        [config.text_color; 2]
                     } else if ladder {
-                        contrasting_text(shades[side])
+                        [contrasting_text(shades[side]); 2]
                     } else {
-                        contrasting_text(shades[0].lerp_to_gamma(shades[1], 0.5))
+                        shades.map(contrasting_text)
                     };
                     for &(fill, color) in fills.iter().flatten() {
                         mesh.add_colored_rect(fill.intersect(mapping.rect), color);
@@ -608,14 +631,30 @@ pub fn render_footprint(
                                 }
                                 // A number overhanging its profile bar lies partly on the
                                 // background, where a colour picked for the fill can vanish.
-                                let ink = if fill.left() <= at.x
+                                let inks = if fill.left() <= at.x
                                     && at.x + galley.size().x <= fill.right()
                                 {
-                                    ink
+                                    inks
                                 } else {
-                                    config.text_color
+                                    [config.text_color; 2]
                                 };
-                                painter.galley_with_override_text_color(at, galley, ink);
+                                if inks[0] == inks[1] {
+                                    painter.galley_with_override_text_color(at, galley, inks[0]);
+                                } else {
+                                    // Halves that need different inks each show their part.
+                                    let (sell, buy) = fill.split_left_right_at_x(fill.center().x);
+                                    for (half, ink) in [sell, buy].into_iter().zip(inks) {
+                                        let half =
+                                            Rect::from_x_y_ranges(half.x_range(), rect.y_range());
+                                        painter
+                                            .with_clip_rect(painter.clip_rect().intersect(half))
+                                            .galley_with_override_text_color(
+                                                at,
+                                                galley.clone(),
+                                                ink,
+                                            );
+                                    }
+                                }
                             }
                         }
                     }
@@ -963,6 +1002,15 @@ fn info_box_offset(config: &FootprintConfig) -> f32 {
     }
 }
 
+/// The room a bar's summary takes below its lowest row, in points; zero when none is drawn.
+pub(crate) fn summary_room(config: &FootprintConfig) -> f32 {
+    if config.info_box && has_ladder(config) {
+        info_box_offset(config) + INFO_BOX_HEIGHT
+    } else {
+        0.0
+    }
+}
+
 /// The sell and buy cells of a ladder column; the candle body takes the gap between them.
 fn ladder_sides(column: Rect) -> [Rect; 2] {
     let width = column.width() * LADDER_CELL_SHARE;
@@ -1011,7 +1059,8 @@ fn contrasting_text(fill: Color32) -> Color32 {
 }
 
 /// Writes a bar's sell and buy totals below their ladder cells, and its delta and total volume in
-/// a box below them. Each part is drawn whole or not at all.
+/// a box below them: beside their labels, or as values alone, compact if need be, where the labels
+/// do not fit. Each part is drawn whole or not at all.
 fn render_info_box(
     painter: &Painter,
     mapping: &ChartMapping,
@@ -1060,22 +1109,38 @@ fn render_info_box(
     } else {
         config.text_color
     };
-    let lines = [
-        ("Delta", text(delta, delta_color)),
-        ("Total", text(shown.volume(), config.text_color)),
-    ]
-    .map(|(label, value)| {
-        let label = painter.layout_no_wrap(label.to_owned(), font.clone(), config.text_color);
-        (label, value)
-    });
-    let line = lines[0].0.size().y;
-    let labels = lines[0].0.size().x.max(lines[1].0.size().x) + 6.0;
-    let values = lines[0].1.size().x.max(lines[1].1.size().x);
+    let labels = ["Delta", "Total"]
+        .map(|label| painter.layout_no_wrap(label.to_owned(), font.clone(), config.text_color));
+    let line = labels[0].size().y;
+    let labels_width = labels[0].size().x.max(labels[1].size().x) + 6.0;
     let bounds = Rect::from_x_y_ranges(block.x_range(), top + line + 3.0..=top + line * 3.0 + 9.0);
-    if labels + values + 8.0 > bounds.width() || !mapping.rect.contains_rect(bounds) {
+    if !mapping.rect.contains_rect(bounds) {
         return;
     }
-    let background = painter.ctx().active_theme().chart.bg.to_opaque();
+    let values_width = |values: &[Arc<Galley>; 2]| values[0].size().x.max(values[1].size().x);
+    let room = bounds.width() - 8.0;
+    let mut values = [
+        text(delta, delta_color),
+        text(shown.volume(), config.text_color),
+    ];
+    let labelled = labels_width + values_width(&values) <= room;
+    if values_width(&values) > room {
+        values =
+            [(delta, delta_color), (shown.volume(), config.text_color)].map(|(value, color)| {
+                painter.layout_no_wrap(
+                    ladder_text(value, config, true),
+                    FontId::monospace(FONT_LIMITS[0]),
+                    color,
+                )
+            });
+        if values_width(&values) > room {
+            return;
+        }
+    }
+    let background = config
+        .background
+        .unwrap_or_else(|| painter.ctx().active_theme().chart.bg)
+        .to_opaque();
     painter.rect_filled(bounds, 4, background);
     painter.rect_stroke(
         bounds,
@@ -1083,11 +1148,18 @@ fn render_info_box(
         Stroke::new(1.0, config.neutral_color.gamma_multiply(0.25)),
         StrokeKind::Inside,
     );
-    let x = bounds.center().x - (labels + values) * 0.5;
-    for (i, (label, value)) in lines.into_iter().enumerate() {
+    let x = bounds.center().x - (labels_width + values_width(&values)) * 0.5;
+    for (i, (label, value)) in labels.into_iter().zip(values).enumerate() {
         let y = bounds.top() + 3.0 + i as f32 * line;
-        painter.galley(pos2(x, y), label, config.text_color);
-        painter.galley(pos2(x + labels, y), value, config.text_color);
+        if labelled {
+            painter.galley(pos2(x, y), label, config.text_color);
+            painter.galley(pos2(x + labels_width, y), value, config.text_color);
+        } else {
+            // Delta above total, in the order of the labels they stand without.
+            let center = pos2(bounds.center().x, y + line * 0.5);
+            let at = Align2::CENTER_CENTER.anchor_size(center, value.size());
+            painter.galley(at.min, value, config.text_color);
+        }
     }
 }
 
@@ -1434,8 +1506,9 @@ pub fn render_footprint_studies(
             // The two threshold-marker rows extend up to 18 points beyond either extreme, and a
             // ladder's summary below the bar takes the same space or more.
             let mut reserved = rect.expand2(vec2(0.0, 18.0));
-            if config.info_box && has_ladder(config) {
-                reserved.max.y = rect.max.y + info_box_offset(config) + INFO_BOX_HEIGHT;
+            let summary = summary_room(config);
+            if summary > 0.0 {
+                reserved.max.y = rect.max.y + summary;
             }
             rect.intersects(mapping.rect).then_some((index, reserved))
         })
@@ -1758,26 +1831,8 @@ mod tests {
             |ui| render_footprint(ui.painter(), &map, &bars, &flow, &config),
         );
         output.textures_delta.clear();
-        let quads: Vec<_> = output
-            .shapes
-            .iter()
-            .filter_map(|s| match &s.shape {
-                Shape::Mesh(mesh) => Some(mesh.vertices.clone()),
-                _ => None,
-            })
-            .flatten()
-            .collect::<Vec<_>>()
-            .chunks(4)
-            .map(|q| (Rect::from_two_pos(q[0].pos, q[3].pos), q[0].color))
-            .collect();
-        let at = |x: f32, price: f64| {
-            let point = pos2(x, map.price_to_y(price));
-            quads
-                .iter()
-                .rev()
-                .find(|(r, _)| r.contains(point))
-                .map(|(_, c)| *c)
-        };
+        let quads = quads(&output.shapes);
+        let at = |x: f32, price: f64| color_at(&quads, pos2(x, map.price_to_y(price)));
         let background = ctx.active_theme().chart.bg.to_opaque();
         let center = map.idx_to_x(0);
         let edge = 120.0 * 0.46;
@@ -1993,7 +2048,8 @@ mod tests {
     }
 
     /// Both sides of a ladder keep their numbers or lose them together, and the summary below the
-    /// bar leaves room for the extreme ratio written in the same place.
+    /// bar leaves room for the extreme ratio written in the same place. Where the numbers fit but
+    /// the labels of the summary do not, its delta and total stay as values alone.
     #[test]
     fn ladder_numbers_and_summary_do_not_vanish_alone_or_collide() {
         let config = FootprintConfig {
@@ -2035,6 +2091,25 @@ mod tests {
                 .find(|(label, _)| label == total)
                 .unwrap_or_else(|| panic!("{total} missing from {text:?}"));
             assert!(!rect.intersects(below), "{total} over the extreme ratio");
+        }
+        // At 80 points per bar the labelled summary needs 80 points in a block of 73.1.
+        let rows = [(106.0, 2_340.0, 2_510.0), (105.0, 3_201.0, 1_200.0)];
+        let (shapes, _) = paint_ladder(&rows, 80.0, false, &config);
+        let text = painted_text(&shapes);
+        let at = |wanted: &str| {
+            text.iter()
+                .find(|(label, _)| label == wanted)
+                .unwrap_or_else(|| panic!("{wanted} missing from {text:?}"))
+                .1
+        };
+        // Totals of 5,541 and 3,710, written compactly in their 28.5 point cells.
+        for total in ["5.5K", "3.7K"] {
+            for value in ["-1.83K", "9.25K"] {
+                assert!(
+                    at(value).top() >= at(total).bottom(),
+                    "{value} over {total}"
+                );
+            }
         }
         // A side cell needs a point: 3.3 points per bar leave it 0.99, 3.4 leave it 1.02.
         assert!(paint_ladder(&rows, 3.3, false, &config).0.is_empty());
@@ -3178,5 +3253,180 @@ mod tests {
             details |= output.shapes.iter().any(|s| matches!(&s.shape, Shape::Text(t) if t.galley.text().starts_with("Single: 100 to 100")));
         }
         assert!(details, "compact annotations retain hover details");
+    }
+
+    /// One bar of (price, sell, buy) rows at `spacing` points per bar over 98 to 110 on a plot
+    /// 480 by 320 points, painted with `config` under `theme`.
+    fn paint_themed(
+        rows: &[(f64, f64, f64)],
+        spacing: f32,
+        theme: &crate::theme::Theme,
+        config: &FootprintConfig,
+    ) -> (Vec<egui::epaint::ClippedShape>, ChartMapping) {
+        let time = "2026-01-05T10:00:00Z".parse().unwrap();
+        // Open and close match so the candle takes the text colour, not a side's.
+        let bars = [Bar::new(time, 102.0, 104.0, 100.0, 102.0, 1.0)];
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(480.0, 320.0));
+        let map = ChartMapping::new(
+            rect,
+            spacing,
+            0,
+            0,
+            0.0,
+            PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(98.0, 110.0),
+                0.0,
+                320.0,
+                false,
+            ),
+        );
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        for &(price, sell, buy) in rows {
+            for (size, side) in [(sell, OrderSide::Sell), (buy, OrderSide::Buy)] {
+                flow.push(&Tick::new(time, price, size, Some(side)))
+                    .unwrap();
+            }
+        }
+        let ctx = egui::Context::default();
+        crate::theme::apply_to_egui(&ctx, theme);
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(rect),
+                ..Default::default()
+            },
+            |ui| render_footprint(ui.painter(), &map, &bars, &flow, config),
+        );
+        output.textures_delta.clear();
+        (output.shapes, map)
+    }
+
+    /// Every quad of the meshes in `shapes`, in paint order.
+    fn quads(shapes: &[egui::epaint::ClippedShape]) -> Vec<(Rect, Color32)> {
+        shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                Shape::Mesh(mesh) => Some(
+                    mesh.vertices
+                        .chunks(4)
+                        .map(|q| (Rect::from_two_pos(q[0].pos, q[3].pos), q[0].color))
+                        .collect::<Vec<_>>(),
+                ),
+                _ => None,
+            })
+            .flatten()
+            .collect()
+    }
+
+    /// The colour painted last at `point`.
+    fn color_at(quads: &[(Rect, Color32)], point: egui::Pos2) -> Option<Color32> {
+        quads
+            .iter()
+            .rev()
+            .find(|(rect, _)| rect.contains(point))
+            .map(|(_, color)| *color)
+    }
+
+    /// An imbalance strip has to stand apart from the cell it marks. On a light chart the second
+    /// shade is the side colour itself, and below 100 points per bar the strip is less than a
+    /// point clear of its cell. Rows (sell, buy) 104: 10, 10; 103: 20, 40; 102: 10, 90 (POC);
+    /// 101: 60, 20; 100: 30, 10. The buy range is 10 to 90, so 40 is in its second quarter, and
+    /// 40 bought at 103 is four times the 10 sold one row below, the bar's only imbalance.
+    #[test]
+    fn light_imbalance_strip_stands_apart_from_its_cell() {
+        let rows = [
+            (104.0, 10.0, 10.0),
+            (103.0, 20.0, 40.0),
+            (102.0, 10.0, 90.0),
+            (101.0, 60.0, 20.0),
+            (100.0, 30.0, 10.0),
+        ];
+        let config = FootprintConfig {
+            auto_row_height: None,
+            text_color: Color32::BLACK,
+            ..Default::default()
+        };
+        let mut marks = Vec::new();
+        for spacing in [60.0, 90.0, 120.0] {
+            let (shapes, map) =
+                paint_themed(&rows, spacing, &crate::theme::Theme::light(), &config);
+            let quads = quads(&shapes);
+            let y = map.price_to_y(103.0);
+            // The buy cell ends at the outer edge of the bar's only column.
+            let edge = map.idx_to_x(0) - spacing * 0.46 + spacing * 0.92 - 0.5;
+            let cell = color_at(&quads, pos2(edge - 1.0, y));
+            let strip = quads.iter().find(|(rect, _)| {
+                rect.width() <= 3.01 && rect.left() >= edge - 0.01 && rect.y_range().contains(y)
+            });
+            marks.push((
+                spacing,
+                strip.map(|(rect, _)| rect.left() - edge),
+                strip.map(|s| s.1),
+                cell,
+            ));
+        }
+        assert!(
+            marks.iter().all(|&(_, gap, strip, cell)| {
+                gap.is_some_and(|gap| gap >= 0.99) || (strip.is_some() && strip != cell)
+            }),
+            "(spacing, strip gap from its cell, strip colour, cell colour): {marks:?}"
+        );
+    }
+
+    /// Under the volume step colouring a sell × buy cell is split into a sell half and a buy half.
+    /// On a light chart a half in the weakest quarter needs black text and a half above it white.
+    /// Rows (sell, buy) 104: 10, 50; 103: 10, 20; 102: 50, 50 (POC); 101: 20, 10; 100: 30, 10. Both
+    /// ranges are 10 to 50, so every row but the POC has one half in the weakest quarter and one
+    /// above it. White on the weakest sell shade (249, 155, 162) is 2.05:1, on the weakest buy
+    /// shade (132, 204, 192) 1.85:1; black on them is 10.2:1 and 11.4:1.
+    #[test]
+    fn light_sell_buy_numbers_read_on_both_halves() {
+        let rows = [
+            (104.0, 10.0, 50.0),
+            (103.0, 10.0, 20.0),
+            (102.0, 50.0, 50.0),
+            (101.0, 20.0, 10.0),
+            (100.0, 30.0, 10.0),
+        ];
+        let config = FootprintConfig {
+            modes: vec![FootprintMode::BidAsk],
+            auto_row_height: None,
+            text_color: Color32::BLACK,
+            ..Default::default()
+        };
+        let (shapes, _) = paint_themed(&rows, 120.0, &crate::theme::Theme::light(), &config);
+        let quads = quads(&shapes);
+        let mut numbers = std::collections::BTreeSet::new();
+        let mut ends = 0;
+        let mut unreadable = Vec::new();
+        for clipped in &shapes {
+            let Shape::Text(text) = &clipped.shape else {
+                continue;
+            };
+            if !text.galley.text().contains('×') {
+                continue;
+            }
+            // A number painted in two halves is still one number, at one position.
+            numbers.insert((text.pos.x.to_bits(), text.pos.y.to_bits()));
+            let ink = text.override_text_color.unwrap_or(config.text_color);
+            let y = text.pos.y + text.galley.size().y * 0.5;
+            for x in [text.pos.x + 2.0, text.pos.x + text.galley.size().x - 2.0] {
+                if !clipped.clip_rect.contains(pos2(x, y)) {
+                    continue;
+                }
+                ends += 1;
+                let fill = color_at(&quads, pos2(x, y)).expect("a cell under the number");
+                let ratio = crate::theme::contrast(ink, fill);
+                if ratio < 3.0 {
+                    unreadable.push((text.galley.text().to_owned(), ink, fill, ratio));
+                }
+            }
+        }
+        assert_eq!(numbers.len(), 5, "every row writes its numbers");
+        assert_eq!(ends, 10, "both ends of every number are painted");
+        assert!(
+            unreadable.is_empty(),
+            "numbers under 3:1 on their half: {unreadable:?}"
+        );
     }
 }

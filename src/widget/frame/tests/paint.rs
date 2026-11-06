@@ -32,6 +32,58 @@ fn legend_marks_a_chart_only_while_it_replays() {
     );
 }
 
+/// The price fit leaves room for the delta and total box below the bar with the lowest low, or the
+/// 10% bottom margin leaves it about 44 points of the 48 it needs and the box is dropped.
+#[test]
+fn footprint_summary_of_the_lowest_bar_stays_in_the_plot() {
+    use crate::chart::overlays::FootprintConfig;
+    use crate::data::Footprint;
+    use crate::model::{BarClock, OrderSide, Tick, Timeframe};
+    let ctx = egui::Context::default();
+    let mut chart = chart(&[100.0, 104.0], &[106.0, 110.0]);
+    chart.set_symbol("FLOW");
+    chart.apply_synced_time_scale(160.0, 1.0);
+    let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+    for bar in chart.bars(crate::widget::SeriesId::MAIN) {
+        for price in bar.low as i32..=bar.high as i32 {
+            flow.push(&Tick::new(
+                bar.time,
+                f64::from(price),
+                2.0,
+                Some(OrderSide::Buy),
+            ))
+            .unwrap();
+        }
+    }
+    let config = FootprintConfig {
+        auto_row_height: None,
+        ..Default::default()
+    };
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 500.0))),
+            ..Default::default()
+        },
+        |ui| {
+            chart.show_footprint(ui, &flow, &config);
+        },
+    );
+    output.textures_delta.clear();
+    let map = chart.get_chart_mapping();
+    let plot = chart.get_rendered_price_rect();
+    let low = map.price_to_y(100.0);
+    assert!(
+        output.shapes.iter().any(|shape| match &shape.shape {
+            Shape::Text(text) => {
+                let rect = Rect::from_min_size(text.pos, text.galley.size());
+                text.galley.text() == "Delta" && rect.top() > low && plot.contains_rect(rect)
+            }
+            _ => false,
+        }),
+        "the box of a bar with the lowest low"
+    );
+}
+
 #[test]
 fn footprint_stays_below_legend_at_wide_and_narrow_sizes() {
     use crate::chart::overlays::{FootprintColor, FootprintConfig};
@@ -314,8 +366,13 @@ fn footprint_annotations_and_statistics_follow_executions() {
                 "missing {expected}, revisited={revisited}"
             );
         }
+        // The summary below the bar writes the volume too; the table's is the lowest.
+        let table = shapes.iter().filter_map(|s| match &s.shape {
+            Shape::Text(t) if t.galley.text() == "16" => Some(t.pos.y),
+            _ => None,
+        });
         assert!(
-            text("16").unwrap().pos.y >= map.rect.bottom(),
+            table.fold(f32::MIN, f32::max) >= map.rect.bottom(),
             "table overlaps prices"
         );
         assert!(
@@ -1238,4 +1295,220 @@ fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
             );
         }
     }
+}
+
+/// The colour of the mesh quad painted last at `point`.
+fn mesh_color_at(shapes: &[egui::epaint::ClippedShape], point: Pos2) -> Option<egui::Color32> {
+    shapes
+        .iter()
+        .rev()
+        .filter_map(|s| match &s.shape {
+            Shape::Mesh(mesh) => Some(mesh),
+            _ => None,
+        })
+        .find_map(|mesh| {
+            mesh.vertices.chunks(4).rev().find_map(|q| {
+                Rect::from_two_pos(q[0].pos, q[3].pos)
+                    .contains(point)
+                    .then_some(q[0].color)
+            })
+        })
+}
+
+/// The footprint's volume shades are mixed with the background the chart paints. With the light
+/// theme and a black chart background, as the Canvas settings set it, the sell shades must be
+/// those drawn on black: 20, 40, 60 and 80% of rgb(242, 54, 69), hand-worked as (48, 11, 14),
+/// (97, 22, 28), (145, 32, 41) and (194, 43, 55). Sells of 10, 20, 30 and 50 at 102 to 105 fall
+/// in the four quarters of the bar's sell range, 10 to 50; 101 holds the POC.
+#[test]
+fn footprint_shades_follow_the_chart_background() {
+    use crate::chart::overlays::FootprintConfig;
+    use crate::data::Footprint;
+    use crate::model::{BarClock, OrderSide, Tick, Timeframe};
+    let ctx = egui::Context::default();
+    crate::theme::apply_to_egui(&ctx, &crate::theme::Theme::light());
+    let mut chart = chart(&[100.0], &[106.0]);
+    chart.set_symbol("FLOW");
+    chart.apply_synced_time_scale(100.0, 1.0);
+    let time = chart.bars(crate::widget::SeriesId::MAIN)[99].time;
+    let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+    for (price, sell, buy) in [
+        (101.0, 10.0, 200.0),
+        (102.0, 10.0, 1.0),
+        (103.0, 20.0, 1.0),
+        (104.0, 30.0, 1.0),
+        (105.0, 50.0, 1.0),
+    ] {
+        for (size, side) in [(sell, OrderSide::Sell), (buy, OrderSide::Buy)] {
+            flow.push(&Tick::new(time, price, size, Some(side)))
+                .unwrap();
+        }
+    }
+    let config = FootprintConfig {
+        auto_row_height: None,
+        text_color: egui::Color32::WHITE,
+        ..Default::default()
+    };
+    let draw = |chart: &mut crate::widget::Chart| {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+                ..Default::default()
+            },
+            |ui| {
+                chart.show_footprint(ui, &flow, &config);
+            },
+        );
+        output.textures_delta.clear();
+        output.shapes
+    };
+    // The first frame follows the light palette; the edit after it is the user's.
+    draw(&mut chart);
+    chart.config_mut().background_color = egui::Color32::BLACK;
+    let shapes = draw(&mut chart);
+    let map = chart.get_chart_mapping();
+    let x = map.idx_to_x(99) - map.bar_spacing * 0.46 + 4.0;
+    let shades: Vec<_> = [102.0, 103.0, 104.0, 105.0]
+        .into_iter()
+        .map(|price| {
+            mesh_color_at(&shapes, egui::pos2(x, map.price_to_y(price)))
+                .map(|c| [c.r(), c.g(), c.b()])
+        })
+        .collect();
+    let expected = [[48, 11, 14], [97, 22, 28], [145, 32, 41], [194, 43, 55]];
+    assert!(
+        shades.iter().zip(expected).all(|(shade, expected)| {
+            shade.is_some_and(|shade| shade.iter().zip(expected).all(|(a, b)| a.abs_diff(b) <= 1))
+        }),
+        "sell shades on a black chart background {shades:?}, expected {expected:?}"
+    );
+}
+
+/// A footprint row whose volume is all unclassified must not look like the bar's POC, in the chart
+/// type, which passes its text colour as the neutral colour, and in a host's config that does the
+/// same. Bar: 100 holds 2 unclassified, 101 holds 2 sold and 6 bought (the POC, 8), 102 holds 1
+/// sold and 2 bought.
+#[test]
+fn unclassified_footprint_rows_do_not_look_like_the_poc() {
+    use crate::chart::coords::ChartMapping;
+    use crate::chart::overlays::FootprintConfig;
+    use crate::data::{
+        Datafeed, Footprint, HistoryPage, HistoryRequest, Reply, TradePage, TradeRequest,
+    };
+    use crate::model::{Bar, BarClock, ChartType, Instrument, OrderSide, Tick, Timeframe};
+    use crate::widget::ChartBuilder;
+    use chrono::{TimeDelta, Utc};
+    const TRADES: [(f64, f64, Option<OrderSide>); 5] = [
+        (100.0, 2.0, None),
+        (101.0, 2.0, Some(OrderSide::Sell)),
+        (101.0, 6.0, Some(OrderSide::Buy)),
+        (102.0, 1.0, Some(OrderSide::Sell)),
+        (102.0, 2.0, Some(OrderSide::Buy)),
+    ];
+    /// The fills of the sell cells of 100 and 101 of the bar at `index`, clear of their numbers.
+    fn sell_fills(
+        shapes: &[egui::epaint::ClippedShape],
+        map: &ChartMapping,
+        index: usize,
+    ) -> (Option<egui::Color32>, Option<egui::Color32>) {
+        let x = map.idx_to_x(index) - map.bar_spacing * 0.46 + 4.0;
+        let at = |price: f64| mesh_color_at(shapes, egui::pos2(x, map.price_to_y(price)));
+        (at(100.0), at(101.0))
+    }
+    struct Executions;
+    impl Datafeed for Executions {
+        fn resolve(&self, symbol: &str, reply: Reply<Instrument>) {
+            reply.send(Ok(Instrument::new(symbol).with_tick_size(1.0)));
+        }
+        fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
+            let time = "2026-01-05T10:00:00Z"
+                .parse::<chrono::DateTime<Utc>>()
+                .unwrap();
+            reply.send(Ok(HistoryPage::new(
+                vec![Bar::new(time, 100.0, 102.0, 100.0, 101.0, 13.0)],
+                true,
+            )));
+        }
+        fn trades(&self, _: TradeRequest, reply: Reply<TradePage>) {
+            let time = "2026-01-05T10:00:00Z"
+                .parse::<chrono::DateTime<Utc>>()
+                .unwrap();
+            reply.send(Ok(TradePage::new(
+                TRADES
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, (price, size, side))| {
+                        Tick::new(time + TimeDelta::seconds(i as i64), price, size, side)
+                    })
+                    .collect(),
+                true,
+            )));
+        }
+    }
+    let mut fills = Vec::new();
+    for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+        let ctx = egui::Context::default();
+        crate::theme::apply_to_egui(&ctx, &theme);
+        let mut chart = ChartBuilder::new()
+            .with_feed(std::sync::Arc::new(Executions))
+            .with_symbol("FLOW")
+            .with_timeframe(Timeframe::Min1)
+            .with_chart_type(ChartType::VolumeFootprint)
+            .build();
+        chart.set_server_time(Some(
+            "2026-01-05T10:02:00Z"
+                .parse::<chrono::DateTime<Utc>>()
+                .unwrap(),
+        ));
+        let mut shapes = Vec::new();
+        for _ in 0..5 {
+            chart.apply_synced_time_scale(160.0, 1.0);
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    chart.show(ui);
+                },
+            );
+            output.textures_delta.clear();
+            shapes = output.shapes;
+        }
+        fills.push(sell_fills(&shapes, &chart.get_chart_mapping(), 0));
+
+        // The same bar from a host, whose neutral colour equals its text colour.
+        let mut host = self::chart(&[100.0], &[102.0]);
+        host.set_symbol("FLOW");
+        host.apply_synced_time_scale(160.0, 1.0);
+        let time = host.bars(crate::widget::SeriesId::MAIN)[99].time;
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        for (price, size, side) in TRADES {
+            flow.push(&Tick::new(time, price, size, side)).unwrap();
+        }
+        let ink = theme.chart.axis_text;
+        let config = FootprintConfig {
+            auto_row_height: None,
+            text_color: ink,
+            neutral_color: ink,
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+                ..Default::default()
+            },
+            |ui| {
+                host.show_footprint(ui, &flow, &config);
+            },
+        );
+        output.textures_delta.clear();
+        fills.push(sell_fills(&output.shapes, &host.get_chart_mapping(), 99));
+    }
+    assert!(
+        fills
+            .iter()
+            .all(|(unclassified, poc)| poc.is_some() && unclassified != poc),
+        "(unclassified row, POC row) sell cell fills, chart then host, light then dark: {fills:?}"
+    );
 }
