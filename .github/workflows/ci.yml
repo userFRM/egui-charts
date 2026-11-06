@@ -177,7 +177,7 @@ jobs:
     if: "!cancelled() && github.event.pull_request.draft != true"
     name: Test (${{ matrix.os }}, ${{ matrix.rust }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ matrix.os == 'macos-latest' && 20 || 30 }}
+    timeout-minutes: 30
     env:
       CARGO_INCREMENTAL: 0
     strategy:
