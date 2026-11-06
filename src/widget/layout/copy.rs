@@ -22,8 +22,9 @@ pub enum LayoutCopy {
     /// shared panes, as [`Chart::apply_study_template_set_with`] does.
     Studies,
     /// Applies these settings to every chart, the source included. Each other chart keeps its
-    /// symbol, interval and chart type, the sizes and other parameters of that type, and the
-    /// precision of its instrument unless the source was given another one.
+    /// symbol, interval and chart type, the sizes and other parameters of that type, its own
+    /// price-to-bar ratio when the settings lock it, its quantity unit and order-flow sizes, and
+    /// the precision of its instrument unless the source was given another one.
     Settings(Box<ChartSettingsState>),
 }
 
@@ -182,8 +183,10 @@ impl CopiedStudies {
 
 /// Applies the settings of the chart with `from` as its configuration and `from_decimals` as its
 /// instrument's precision to another chart. That chart keeps the parameters of its chart type,
-/// whose sizes and base prices suit its own prices, and takes the colours of `from` for its
-/// candles when the settings describe another style of candles and so do not hold them.
+/// whose sizes and base prices suit its own prices, its own price-to-bar ratio when the settings
+/// lock it, and its quantity unit and order-flow sizes, which suit its own instrument. It takes
+/// the colours of `from` for its candles when the settings describe another style of candles and
+/// so do not hold them.
 ///
 /// shortcut: a precision chosen equal to the source instrument's follows each chart's instrument,
 /// as a chart does not keep whether its precision was chosen; keep that choice to tell them apart.
@@ -205,12 +208,29 @@ fn apply_to_other_chart(
             chart.set_chart_type_params(own);
         }
     }
-    if settings.apply_to_chart(chart).is_ok()
-        && matches!(
-            settings.chart_type,
-            ChartType::Heikin | ChartType::HollowCandles | ChartType::VolumeCandles
-        )
-    {
+    // Order-flow sizes and the quantity unit are in the source's sizes: each chart keeps its own.
+    let own = ChartSettingsState::from_chart(chart).order_flow;
+    let flow = &mut settings.order_flow;
+    flow.heatmap.lower_cutoff = own.heatmap.lower_cutoff;
+    flow.heatmap.full_intensity_size = own.heatmap.full_intensity_size;
+    flow.order_book.quantity_unit = own.order_book.quantity_unit;
+    flow.order_book.tiers = own.order_book.tiers;
+    flow.order_book.filter.min_size = own.order_book.filter.min_size;
+    flow.volume_bubbles.min_size_filter = own.volume_bubbles.min_size_filter;
+    let own_ratio = chart.state().price_scale().bar_ratio();
+    if settings.apply_to_chart(chart).is_err() {
+        return;
+    }
+    if settings.scales_and_lines.lock_price_to_bar_ratio {
+        // The ratio is in the source's prices per bar: keep this chart's own lock, or lock it at
+        // its own view on its next frame.
+        chart.price_scale_mut().set_bar_ratio(own_ratio);
+        chart.last_ratio_lock = own_ratio.is_some();
+    }
+    if matches!(
+        settings.chart_type,
+        ChartType::Heikin | ChartType::HollowCandles | ChartType::VolumeCandles
+    ) {
         let to = chart.config_mut();
         to.bullish_color = from.bullish_color;
         to.bearish_color = from.bearish_color;
@@ -595,5 +615,117 @@ mod tests {
         let mut charts = [&mut a, &mut b];
         assert_eq!(pair().apply_copy(&mut charts, 0, &copy, &factory), []);
         assert_eq!(charts[1].config().bullish_color, egui::Color32::RED);
+    }
+
+    /// A locked price-to-bar ratio is in the source's prices. A chart whose prices are a thousandth
+    /// of the source's locks at its own view, and a chart that has its own lock keeps it.
+    #[test]
+    fn settings_copy_keeps_a_price_per_bar_each_chart_can_show() {
+        use crate::widget::test_frames::frame;
+        let start = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let mut b = Chart::new(BarData::from_bars(
+            (0..50)
+                .map(|i| {
+                    let close = (10.0 + (i % 5) as f64) / 1000.0;
+                    Bar::new(start + Duration::minutes(i), close, 0.016, 0.009, close, 1.0)
+                })
+                .collect(),
+        ));
+        b.set_timeframe(Timeframe::Min1);
+        b.config_mut().show_volume = false;
+        let mut a = chart(50);
+        let (ctx_a, ctx_b) = (egui::Context::default(), egui::Context::default());
+        frame(&ctx_a, &mut a, 0.0, vec![]);
+        frame(&ctx_b, &mut b, 0.0, vec![]);
+        // The source locks its scale at its own view, as ticking the setting on it does.
+        let (spacing, height) = (
+            a.state.time_scale().bar_spacing(),
+            a.get_rendered_price_rect().height(),
+        );
+        a.state
+            .price_scale_mut()
+            .set_bar_ratio_locked(true, spacing, height);
+        let settings = ChartSettingsState::from_chart(&a);
+        let ratio = settings.scales_and_lines.price_to_bar_ratio;
+        let copy = LayoutCopy::Settings(Box::new(settings));
+        let factory = IndicatorFactory::new();
+        let mut charts = [&mut a, &mut b];
+
+        assert_eq!(pair().apply_copy(&mut charts, 0, &copy, &factory), []);
+        assert_eq!(charts[0].state.price_scale().bar_ratio(), Some(ratio));
+        frame(&ctx_b, charts[1], 1.0, vec![]);
+        let scale = charts[1].state.price_scale();
+        let (own_lock, range) = (scale.bar_ratio(), scale.range());
+        assert!(own_lock.is_some(), "locked at its own view");
+        // Its bars span 0.009 to 0.016: ten times the span it fits them in is still below 0.0875.
+        assert!(range.max - range.min < 0.0875, "{range:?}");
+
+        assert_eq!(pair().apply_copy(&mut charts, 0, &copy, &factory), []);
+        assert_eq!(charts[1].state.price_scale().bar_ratio(), own_lock);
+    }
+
+    /// Order-flow sizes and the quantity unit describe the source's instrument: a chart of another
+    /// symbol keeps its own, and takes the rest, such as the heatmap's brightness.
+    #[test]
+    fn settings_copy_keeps_each_symbols_order_flow_sizes() {
+        use crate::chart::overlays::{LiquidityHeatmapConfig, OrderBookView, VolumeBubblesConfig};
+        struct Feed;
+        impl crate::data::Datafeed for Feed {
+            fn history(
+                &self,
+                _: crate::data::HistoryRequest,
+                reply: crate::data::Reply<crate::data::HistoryPage>,
+            ) {
+                reply.send(Ok(crate::data::HistoryPage::new(Vec::new(), true)));
+            }
+        }
+        let build = |symbol: &str| {
+            crate::widget::ChartBuilder::new()
+                .with_feed(std::sync::Arc::new(Feed))
+                .with_symbol(symbol)
+                .with_timeframe(Timeframe::Min1)
+                .build()
+        };
+        let (mut a, mut b) = (build("ES"), build("BTCUSD"));
+        let mut book = OrderBookView {
+            quantity_unit: Some("contracts".into()),
+            tiers: Some(crate::data::OrderSizeTiers {
+                notable: 100.0,
+                large: 500.0,
+            }),
+            ..OrderBookView::default()
+        };
+        book.filter.min_size = 5.0;
+        a.set_order_book_view(book);
+        a.set_liquidity_heatmap_config(LiquidityHeatmapConfig {
+            brightness: 0.5,
+            lower_cutoff: 50.0,
+            full_intensity_size: Some(1000.0),
+        });
+        a.set_volume_bubbles(Some(VolumeBubblesConfig {
+            min_size_filter: Some(10.0),
+            ..VolumeBubblesConfig::default()
+        }));
+        b.set_order_book_view(OrderBookView {
+            quantity_unit: Some("BTC".into()),
+            ..OrderBookView::default()
+        });
+        let copy = LayoutCopy::Settings(Box::new(ChartSettingsState::from_chart(&a)));
+        let factory = IndicatorFactory::new();
+        let mut charts = [&mut a, &mut b];
+        assert_eq!(pair().apply_copy(&mut charts, 0, &copy, &factory), []);
+        let flow = ChartSettingsState::from_chart(charts[1]).order_flow;
+        assert_eq!(
+            (
+                flow.order_book.quantity_unit.as_deref(),
+                flow.order_book.tiers,
+                flow.order_book.filter.min_size,
+                flow.heatmap.lower_cutoff,
+                flow.heatmap.full_intensity_size,
+                flow.volume_bubbles.min_size_filter,
+            ),
+            (Some("BTC"), None, 0.0, 0.0, None, None),
+        );
+        assert_eq!(flow.heatmap.brightness, 0.5);
     }
 }
