@@ -313,9 +313,13 @@ impl Chart {
         }
     }
 
-    /// The retained-bar limit of `series`, or `None` when unlimited or absent.
+    /// The retained-bar limit of `series`, or `None` when unlimited or absent. The main bars keep
+    /// their limit while they stay live without the original pane, as
+    /// [`remove_pane`](Self::remove_pane) describes.
     pub fn bar_limit(&self, series: SeriesId) -> Option<NonZeroUsize> {
-        self.bar_limits.get(&series).copied()
+        let limit = self.bar_limits.get(&series).copied();
+        // A removed main series keeps its limit for when its bars take data again.
+        limit.filter(|_| series != SeriesId::MAIN || self.main_bars_live())
     }
 
     /// Removes up to `count` oldest bars of `series`, returning them oldest first. Studies

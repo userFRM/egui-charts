@@ -162,16 +162,15 @@ struct HeldSeries {
     bar_limit: Option<std::num::NonZeroUsize>,
 }
 
-/// Whether the main series is present in one state of the chart, with the price lines, price
-/// formatter and bar limit that the state without it lacks. Its bars and markers stay in the
-/// chart, which reads the markers only while the series is present; the bars also give the
-/// remaining series their time axis while it is absent.
+/// Whether the main series is present in one state of the chart, with the price lines and price
+/// formatter that the state without it lacks. Its bars, bar limit and markers stay in the chart,
+/// which reads the markers only while the series is present and the limit while its bars take
+/// data; the bars also give the remaining series their time axis while it is absent.
 #[derive(Default)]
 struct MainSeries {
     present: bool,
     price_lines: Vec<(super::PriceLineId, crate::model::PriceLine)>,
     formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
-    bar_limit: Option<std::num::NonZeroUsize>,
     /// The time axis the absent state kept, for the redo of a removal whose undo reloads the feed.
     bars: Vec<crate::model::Bar>,
 }
@@ -583,8 +582,8 @@ impl Chart {
         held.series
     }
 
-    /// Takes the main series out of the chart and pauses its feed. The pending action keeps its
-    /// price lines, formatter and bar limit, so undo restores them.
+    /// Takes the main series out of the chart and pauses its feed unless its bars stay live. The
+    /// pending action keeps its price lines and formatter, so undo restores them.
     pub(super) fn remove_main_series(&mut self) {
         let mut removed = MainSeries::default();
         self.swap_main_series(&mut removed);
@@ -593,14 +592,15 @@ impl Chart {
         }
     }
 
-    /// Exchanges the main series' presence, price lines, formatter and bar limit with `main`,
-    /// so the exchange reverses itself, and pauses or resumes the feed to match. Removing the
-    /// series again before the resumed feed sent its bars, or after it failed to, restores the
-    /// bars the series left behind, so the remaining series keep their time axis.
+    /// Exchanges the main series' presence, price lines and formatter with `main`, so the
+    /// exchange reverses itself, and pauses or resumes the feed to match. Removing the series
+    /// again before the resumed feed sent its bars, or after it failed to, restores the bars the
+    /// series left behind, so the remaining series keep their time axis.
     fn swap_main_series(&mut self, main: &mut MainSeries) {
         std::mem::swap(&mut self.main_series_present, &mut main.present);
         std::mem::swap(&mut self.price_lines, &mut main.price_lines);
-        self.swap_series_settings(SeriesId::MAIN, &mut main.formatter, &mut main.bar_limit);
+        // The bar limit stays with the bars, which take data again without the original pane.
+        self.swap_formatter(SeriesId::MAIN, &mut main.formatter);
         self.follow_feed_pause();
         if self.main_series_present {
             // The resumed feed's reload empties the bars until its page arrives.
@@ -623,13 +623,22 @@ impl Chart {
         formatter: &mut Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
         bar_limit: &mut Option<std::num::NonZeroUsize>,
     ) {
-        *formatter = match formatter.take() {
-            Some(formatter) => self.series_formatters.insert(id, formatter),
-            None => self.series_formatters.remove(&id),
-        };
+        self.swap_formatter(id, formatter);
         *bar_limit = match bar_limit.take() {
             Some(limit) => self.bar_limits.insert(id, limit),
             None => self.bar_limits.remove(&id),
+        };
+    }
+
+    /// Exchanges the price formatter of the bar series `id` with `formatter`.
+    fn swap_formatter(
+        &mut self,
+        id: SeriesId,
+        formatter: &mut Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
+    ) {
+        *formatter = match formatter.take() {
+            Some(formatter) => self.series_formatters.insert(id, formatter),
+            None => self.series_formatters.remove(&id),
         };
     }
 

@@ -1507,4 +1507,46 @@ mod tests {
             "the removal leaves the feed running"
         );
     }
+
+    /// The main bars that stay live without the original pane stay under their limit: after the
+    /// removal of the pane holding the main series, its undo and redo, the removal of the pane
+    /// emptied by removing the series, and in a chart restoring a layout without the pane.
+    /// A limit of 80 keeps 80 - 80 / 8 = 70 of 100 bars.
+    #[test]
+    fn main_bar_limit_holds_without_price_pane() {
+        use crate::widget::SeriesId;
+        use crate::widget::test_frames::chart;
+
+        let limit = std::num::NonZeroUsize::new(80);
+        let data = chart(&[100.0], &[110.0]).bars(SeriesId::MAIN).to_vec();
+        let limited = || {
+            let mut chart = chart(&[100.0], &[110.0]);
+            chart.add_indicator(Box::new(RSI::new(3)));
+            chart.set_bar_limit(SeriesId::MAIN, limit);
+            chart
+        };
+        let kept = |chart: &mut Chart| {
+            chart.set_data(SeriesId::MAIN, data.clone());
+            (
+                chart.bar_limit(SeriesId::MAIN),
+                chart.bars(SeriesId::MAIN).len(),
+            )
+        };
+        let mut live = limited();
+        assert!(live.user_action(|chart| chart.remove_pane(PaneId::MAIN)));
+        let removed = kept(&mut live);
+        assert!(live.undo());
+        assert!(live.redo());
+        let redone = kept(&mut live);
+        let mut emptied = limited();
+        assert!(emptied.remove_series(SeriesId::MAIN));
+        assert!(emptied.remove_pane(PaneId::MAIN));
+        let mut restored = limited();
+        restored.restore(&live.snapshot().unwrap()).unwrap();
+        assert_eq!(
+            [removed, redone, kept(&mut emptied), kept(&mut restored)],
+            [(limit, 70); 4],
+            "removed, redone, emptied, restored"
+        );
+    }
 }
