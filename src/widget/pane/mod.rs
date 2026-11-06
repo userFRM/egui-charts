@@ -3,28 +3,18 @@
 mod controls;
 mod indicator;
 mod render;
+pub use crate::chart::primitives::PaneId;
 pub use indicator::{IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneInteraction};
 pub use render::RenderedIndicatorPane;
 
 use super::volume;
-use super::{Chart, SeriesId};
+use super::{Chart, SeriesId, Watermark};
 #[cfg(feature = "drawings")]
 use crate::drawings::persistence::StoredPane;
 use egui::{Color32, Rect, Vec2};
 
 /// A study's name and input values, which identify it across charts.
 type PaneStudy = (String, Vec<(String, serde_json::Value)>);
-
-/// Identifies a pane of a chart. [`PaneId::MAIN`] is the original price pane;
-/// [`Chart::add_pane`] and [`Chart::panes`] return the others. An id stays valid until its pane
-/// is removed. Added pane ids are never reused by the chart.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct PaneId(pub(super) usize);
-
-impl PaneId {
-    /// The original price pane, which can be removed. The main series can move elsewhere.
-    pub const MAIN: PaneId = PaneId(0);
-}
 
 /// Behaviour and colours of the separators between panes, set with
 /// [`Chart::with_pane_options`] or [`Chart::pane_options_mut`].
@@ -95,11 +85,14 @@ pub(super) struct Pane {
     /// Keep the pane when its last member leaves it.
     pub(super) preserve: bool,
     pub(super) collapsed: Option<bool>,
+    pub(super) axes: crate::model::PaneAxisOptions,
     pub(super) scale: crate::scales::PriceScale,
     /// Named assignments other than the pane's default right scale, in creation order.
     pub(super) scales: Vec<(crate::model::SeriesScale, crate::scales::PriceScale)>,
     /// Panel rect in the last frame; [`Rect::NOTHING`] when the pane was not drawn.
     pub(super) rect: Rect,
+    /// Host watermark painted behind this pane's series; see [`Chart::set_pane_watermark`].
+    pub(super) watermark: Option<Watermark>,
 }
 
 impl Pane {
@@ -111,9 +104,11 @@ impl Pane {
             height: None,
             preserve: false,
             collapsed: None,
+            axes: Default::default(),
             scale: Self::new_scale(),
             scales: Vec::new(),
             rect: Rect::NOTHING,
+            watermark: None,
         }
     }
 
@@ -127,18 +122,26 @@ impl Pane {
         })
     }
 
-    pub(super) fn assigned_scale(
+    /// The scale of an assignment, or `None` before anything creates it.
+    pub(super) fn own_scale(
         &self,
         key: crate::model::SeriesScale,
-    ) -> &crate::scales::PriceScale {
+    ) -> Option<&crate::scales::PriceScale> {
         if key == crate::model::SeriesScale::Right {
-            &self.scale
+            Some(&self.scale)
         } else {
             self.scales
                 .iter()
                 .find(|(item, _)| *item == key)
-                .map_or(&self.scale, |(_, scale)| scale)
+                .map(|(_, scale)| scale)
         }
+    }
+
+    pub(super) fn assigned_scale(
+        &self,
+        key: crate::model::SeriesScale,
+    ) -> &crate::scales::PriceScale {
+        self.own_scale(key).unwrap_or(&self.scale)
     }
 
     pub(super) fn assigned_scale_mut(
@@ -172,70 +175,16 @@ impl Pane {
 }
 
 impl Chart {
-    /// The pane's own scale follows the price axis settings; other assignments sit on the left.
-    fn pane_axis_on_left(&self, key: crate::model::SeriesScale) -> bool {
-        key != crate::model::SeriesScale::Right || !self.config.show_right_axis
-    }
-
-    /// The visible named axes in a secondary pane, in member order.
-    fn pane_axis_keys(&self, id: PaneId) -> Vec<crate::model::SeriesScale> {
-        use crate::model::SeriesScale;
-        let members = self.pane_series(id);
-        let shown = self.config.show_right_axis || self.config.show_left_axis;
-        if members.is_empty() && shown {
-            return vec![SeriesScale::Right];
-        }
-        let mut keys = Vec::new();
-        for member in members {
-            if !self.is_series_visible(member) {
-                continue;
-            }
-            let key = self.series_scale(member).or_else(|| {
-                let study = self.indicators().find(|(id, _)| *id == member)?.1;
-                match study.scale() {
-                    crate::studies::StudyScale::Shared(key) => Some(key),
-                    crate::studies::StudyScale::None => None,
-                    _ => Some(SeriesScale::Right),
-                }
-            });
-            if let Some(key) = key
-                && !matches!(key, SeriesScale::Overlay(_))
-                && (key != SeriesScale::Right || shown)
-                && !keys.contains(&key)
-            {
-                keys.push(key);
-            }
-        }
-        keys
-    }
-
-    /// Axis slots use the same plot column in every pane.
     fn pane_axes(
         &self,
         id: PaneId,
         rect: Rect,
         plot: Rect,
     ) -> Vec<(crate::model::SeriesScale, Rect)> {
-        let keys = self.pane_axis_keys(id);
-        let count = keys
-            .iter()
-            .filter(|key| self.pane_axis_on_left(**key))
-            .count();
-        let width = self
-            .measured_axis_width
-            .max(self.config.left_axis_width)
-            .min((plot.left() - rect.left()).max(0.0) / count.max(1) as f32);
-        let mut left = plot.left();
-        keys.into_iter()
-            .map(|key| {
-                let axis = if !self.pane_axis_on_left(key) {
-                    Rect::from_x_y_ranges(plot.right()..=rect.right(), rect.y_range())
-                } else {
-                    let axis = Rect::from_x_y_ranges((left - width)..=left, rect.y_range());
-                    left -= width;
-                    axis
-                };
-                (key, axis)
+        self.pane_scale_axes(id, rect, plot)
+            .filter_map(|(key, rect)| match key {
+                super::PaneScale::Named(key) => Some((key, rect)),
+                super::PaneScale::Study(_) => None,
             })
             .collect()
     }
@@ -272,11 +221,15 @@ impl Chart {
             || pane.members.iter().any(|id| self.pane_member(*id))
     }
 
-    /// Whether `pane` is drawn below or above the price pane: it is empty or has a visible member.
+    /// Whether `pane` is drawn below or above the price pane: it is empty, owns a primitive or has a visible member.
     pub(super) fn pane_shown(&self, pane: &Pane) -> bool {
         pane.id != PaneId::MAIN
             && self.pane_listed(pane)
             && (pane.members.is_empty()
+                || self
+                    .primitives
+                    .iter()
+                    .any(|item| item.pane == Some(pane.id))
                 || pane
                     .members
                     .iter()
@@ -293,7 +246,7 @@ impl Chart {
                 .any(|pane| self.pane_shown(pane))
     }
 
-    fn pane_index(&self, pane: PaneId) -> Option<usize> {
+    pub(super) fn pane_index(&self, pane: PaneId) -> Option<usize> {
         self.pane_layout
             .panes
             .iter()
@@ -465,6 +418,19 @@ impl Chart {
         id
     }
 
+    /// Paints a host watermark behind the series in `pane`, sized, aligned and clipped to its
+    /// plot. `None` clears only that pane's watermark. It follows pane resizing and ordering,
+    /// is hidden with a collapsed pane, and is dropped when the pane is removed.
+    /// Returns `false` for an unknown or removed pane without changing another pane.
+    pub fn set_pane_watermark(&mut self, pane: PaneId, watermark: Option<Watermark>) -> bool {
+        self.sync_panes();
+        let Some(at) = self.pane_index(pane) else {
+            return false;
+        };
+        self.pane_layout.panes[at].watermark = watermark;
+        true
+    }
+
     /// Removes a pane, its series, studies, markers, price lines and drawings, including locked
     /// drawings. Attached primitives detach on the next frame. The original price pane can be
     /// removed; its retained data still supplies the shared horizontal mapping and study inputs.
@@ -535,37 +501,39 @@ impl Chart {
     /// are the bar series not moved to another pane and the overlay studies.
     /// Empty for an unknown pane.
     pub fn pane_series(&self, pane: PaneId) -> Vec<SeriesId> {
-        if self.pane_index(pane).is_none() {
-            return Vec::new();
-        }
-        if pane == PaneId::MAIN {
-            (self.main_series_present && !self.in_pane(SeriesId::MAIN))
-                .then_some(SeriesId::MAIN)
-                .into_iter()
-                .chain(
-                    self.price_series
-                        .iter()
-                        .map(|item| item.id)
-                        .filter(|id| !self.in_pane(*id)),
-                )
-                .chain(
-                    self.indicators()
-                        .filter(|(_, study)| study.is_overlay())
-                        .map(|(id, _)| id),
-                )
-                .collect()
-        } else {
-            self.pane_index(pane)
-                .map(|at| {
-                    self.pane_layout.panes[at]
-                        .members
-                        .iter()
-                        .copied()
-                        .filter(|id| self.pane_member(*id))
-                        .collect()
-                })
-                .unwrap_or_default()
-        }
+        self.pane_series_iter(pane).collect()
+    }
+
+    pub(in crate::widget) fn pane_series_iter(
+        &self,
+        pane: PaneId,
+    ) -> impl Iterator<Item = SeriesId> + '_ {
+        let entry = self.pane_index(pane).map(|at| &self.pane_layout.panes[at]);
+        let main = entry.is_some() && pane == PaneId::MAIN;
+        (main && self.main_series_present && !self.in_pane(SeriesId::MAIN))
+            .then_some(SeriesId::MAIN)
+            .into_iter()
+            .chain(
+                main.then_some(&self.price_series)
+                    .into_iter()
+                    .flatten()
+                    .map(|item| item.id)
+                    .filter(|id| !self.in_pane(*id)),
+            )
+            .chain(
+                main.then(|| self.indicators())
+                    .into_iter()
+                    .flatten()
+                    .filter(|(_, study)| study.is_overlay())
+                    .map(|(id, _)| id),
+            )
+            .chain(
+                entry
+                    .filter(|_| pane != PaneId::MAIN)
+                    .into_iter()
+                    .flat_map(|item| item.members.iter().copied())
+                    .filter(|id| self.pane_member(*id)),
+            )
     }
 
     /// The pane of `other` that corresponds to the study pane `pane` of this chart, for linking
@@ -982,85 +950,53 @@ impl Chart {
             .padding
             .max(0.0)
             .min(widget_rect.width().min(widget_rect.height()).max(0.0) / 2.0);
-        let study_axes = if self.config.show_left_axis || self.config.show_right_axis {
-            self.studies
-                .indicators()
+        use crate::model::AxisSide;
+        let available = (widget_rect.width() - 2.0 * padding).max(0.0);
+        let columns = |side| {
+            self.pane_layout
+                .panes
                 .iter()
-                .enumerate()
-                .filter(|(idx, study)| {
-                    study.is_visible()
-                        && self.series_pane(self.study_ids[*idx]) == Some(self.main_series_pane())
-                        && !study.is_volume()
-                        && study.scale() == crate::studies::StudyScale::Independent
+                .filter(|pane| {
+                    pane.id == PaneId::MAIN
+                        || pane.id == self.main_series_pane()
+                        || self.pane_shown(pane)
                 })
-                .count() as f32
-                * self
-                    .measured_axis_width
-                    .max(self.config.right_axis_width)
-                    .max(self.config.left_axis_width)
+                .map(|pane| self.pane_scale_count(pane.id, side))
+                .max()
+                .unwrap_or(0) as f32
+        };
+        let right_width = self.measured_axis_width.max(self.config.right_axis_width);
+        let right_axis =
+            (columns(AxisSide::Right) * right_width).min(right_width.max(available * 0.5));
+        let primary_left = self.primary_axis_side() == Some(AxisSide::Left);
+        let primary_width = if primary_left {
+            self.measured_axis_width.max(self.config.left_axis_width)
         } else {
             0.0
         };
-        let series_axes = self.series_axis_keys();
-        let series_left = series_axes
-            .iter()
-            .filter(|key| **key != crate::model::SeriesScale::Right)
-            .count() as f32
-            * self
-                .measured_axis_width
-                .max(self.config.right_axis_width)
-                .max(self.config.left_axis_width);
-        let series_right = if series_axes.contains(&crate::model::SeriesScale::Right) {
-            self.measured_axis_width.max(self.config.right_axis_width)
-        } else {
-            0.0
-        };
-        let study_axes = study_axes + series_left;
-        let left_axis = if self.config.show_left_axis {
-            self.config.left_axis_width.max(self.measured_axis_width)
-        } else {
-            0.0
-        };
-        let right_axis = if self.config.show_right_axis {
-            self.config.right_axis_width.max(self.measured_axis_width)
-        } else {
-            0.0
-        } + series_right;
-        let study_axes = study_axes
-            .min((widget_rect.width() - 2.0 * padding - left_axis - right_axis).max(0.0) * 0.5);
-        let pane_axes: Vec<_> = self
+        let extra_columns = self
+            .pane_scale_count(self.main_series_pane(), AxisSide::Left)
+            .saturating_sub(usize::from(primary_left)) as f32;
+        let extra_width = self
+            .measured_axis_width
+            .max(self.config.left_axis_width)
+            .max(self.config.right_axis_width);
+        let main_left = primary_width
+            + (extra_columns * extra_width)
+                .min((available - primary_width - right_axis).max(0.0) * 0.5);
+        let other_left = self
             .pane_layout
             .panes
             .iter()
             .filter(|pane| {
-                self.pane_shown(pane)
-                    || pane.id == PaneId::MAIN && self.main_series_pane() != PaneId::MAIN
+                pane.id != self.main_series_pane()
+                    && (pane.id == PaneId::MAIN || self.pane_shown(pane))
             })
-            .map(|pane| self.pane_axis_keys(pane.id))
-            .collect();
-        let pane_left = pane_axes
-            .iter()
-            .map(|keys| {
-                keys.iter()
-                    .filter(|key| self.pane_axis_on_left(**key))
-                    .count()
-            })
+            .map(|pane| self.pane_scale_count(pane.id, AxisSide::Left))
             .max()
             .unwrap_or(0) as f32
             * self.measured_axis_width.max(self.config.left_axis_width);
-        let left_axis = (left_axis + study_axes)
-            .max(pane_left)
-            .min((widget_rect.width() - 2.0 * padding).max(0.0) * 0.5);
-        let right_axis = right_axis.max(
-            if pane_axes
-                .iter()
-                .any(|keys| keys.iter().any(|key| !self.pane_axis_on_left(*key)))
-            {
-                self.measured_axis_width.max(self.config.right_axis_width)
-            } else {
-                0.0
-            },
-        );
+        let left_axis = main_left.max(other_left).min(available * 0.5);
         let bottom_padding = if show_time_labels {
             self.time_axis_height()
         } else {
@@ -1118,6 +1054,261 @@ mod tests {
         fn detached(&mut self) {
             self.0.fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    /// A 2:1 image fits half the padded plot: its height is (pane height - 20) / 2.
+    /// The following 10 point line adds 12 points to the aligned block. Layout changes must
+    /// move both parts together, and neither text nor an explicitly oversized image may leak.
+    #[test]
+    fn pane_watermarks_follow_layout_clip_and_export_independently() {
+        use crate::widget::{
+            ImageExportOptions, PaneId, SeriesId, SeriesOptions, Watermark, WatermarkLine,
+        };
+        use egui::{Align2, Color32, Shape, load::SizedTexture};
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[110.0]);
+        chart.config_mut().show_volume = false;
+        let main_color = Color32::from_rgb(21, 43, 65);
+        let pane_color = Color32::from_rgb(32, 54, 76);
+        chart.set_watermark(Some(Watermark::default().with_line(WatermarkLine::new(
+            "MAIN WATERMARK",
+            20.0,
+            main_color,
+        ))));
+        let pane = chart.add_pane();
+        for _ in 0..2 {
+            let series = chart.add_series(SeriesOptions::default());
+            chart.set_data(series, chart.bars(SeriesId::MAIN).to_vec());
+            assert!(chart.move_series_to_pane(series, pane));
+        }
+        let texture = egui::TextureId::User(77);
+        let watermark = Watermark::default()
+            .with_image(
+                egui::Image::from_texture(SizedTexture::new(texture, Vec2::new(200.0, 100.0)))
+                    .fit_to_fraction(Vec2::splat(0.5)),
+            )
+            .with_line(WatermarkLine::new("PANE WATERMARK", 10.0, pane_color))
+            .with_padding(10.0);
+        let render = |chart: &mut crate::Chart| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(800.0, 600.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        chart.show(ui);
+                    });
+                },
+            );
+            let painted = std::mem::take(&mut output.shapes);
+            output.drop_without_applying_deltas();
+            painted
+        };
+        for height in [120.0, 240.0] {
+            assert!(chart.set_pane_height(pane, height));
+            assert!(chart.move_pane(pane, usize::from(height == 120.0)));
+            for align in [
+                Align2::LEFT_TOP,
+                Align2::CENTER_TOP,
+                Align2::RIGHT_TOP,
+                Align2::LEFT_CENTER,
+                Align2::CENTER_CENTER,
+                Align2::RIGHT_CENTER,
+                Align2::LEFT_BOTTOM,
+                Align2::CENTER_BOTTOM,
+                Align2::RIGHT_BOTTOM,
+            ] {
+                assert!(chart.set_pane_watermark(pane, Some(watermark.clone().with_align(align))));
+                let painted = render(&mut chart);
+                let panel = chart
+                    .pane_layout
+                    .panes
+                    .iter()
+                    .find(|item| item.id == pane)
+                    .unwrap()
+                    .rect;
+                let plot = Rect::from_x_y_ranges(
+                    chart.get_rendered_price_rect().x_range(),
+                    panel.y_range(),
+                );
+                assert!((plot.height() - height).abs() < 0.01);
+                let inner = plot.shrink(10.0);
+                let image_height = (height - 20.0) / 2.0;
+                let top = match align.y() {
+                    egui::Align::Min => inner.top(),
+                    egui::Align::Center => inner.center().y - (image_height + 12.0) / 2.0,
+                    egui::Align::Max => inner.bottom() - image_height - 12.0,
+                };
+                let images: Vec<_> = painted
+                    .iter()
+                    .filter(|shape| shape.shape.texture_id() == texture)
+                    .collect();
+                assert_eq!(images.len(), 1, "one image per pane, {height} {align:?}");
+                let image = images[0].shape.visual_bounding_rect();
+                assert!((image.height() - image_height).abs() <= 1.0);
+                assert!((image.width() - 2.0 * image_height).abs() <= 1.0);
+                assert!((image.top() - top).abs() <= 0.5);
+                let edge = |part: Rect| match align.x() {
+                    egui::Align::Min => part.left() - inner.left(),
+                    egui::Align::Center => part.center().x - inner.center().x,
+                    egui::Align::Max => part.right() - inner.right(),
+                };
+                assert!(edge(image).abs() <= 0.5);
+                let text: Vec<_> = painted
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        Shape::Text(text) if text.fallback_color == pane_color => Some(text),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(text.len(), 1);
+                let bounds = text[0].galley.rect.translate(text[0].pos.to_vec2());
+                assert!((bounds.center().y - top - image_height - 6.0).abs() < 0.01);
+                assert!(edge(bounds).abs() < 0.01);
+                assert!(painted.iter().any(|shape| matches!(&shape.shape, Shape::Text(text) if text.fallback_color == main_color)));
+            }
+        }
+        let oversized = Watermark::default()
+            .with_image(
+                egui::Image::from_texture(SizedTexture::new(texture, Vec2::new(2000.0, 1000.0)))
+                    .fit_to_exact_size(Vec2::new(2000.0, 1000.0)),
+            )
+            .with_line(WatermarkLine::new("WIDE ".repeat(200), 20.0, pane_color));
+        assert!(chart.set_pane_watermark(pane, Some(oversized)));
+        let painted = render(&mut chart);
+        let panel = chart
+            .pane_layout
+            .panes
+            .iter()
+            .find(|item| item.id == pane)
+            .unwrap()
+            .rect;
+        let plot =
+            Rect::from_x_y_ranges(chart.get_rendered_price_rect().x_range(), panel.y_range());
+        for shape in painted.iter().filter(|shape| {
+            shape.shape.texture_id() == texture
+                || matches!(&shape.shape, Shape::Text(text) if text.fallback_color == pane_color)
+        }) {
+            assert!(
+                plot.contains_rect(shape.clip_rect),
+                "watermark escaped its plot: {shape:?}"
+            );
+        }
+        assert!(chart.set_pane_watermark(pane, Some(watermark.clone())));
+        for include_watermark in [true, false] {
+            let mut image = chart
+                .export_image(
+                    &ctx,
+                    &ImageExportOptions {
+                        size: [800, 600],
+                        include_title: false,
+                        include_timestamp: false,
+                        include_watermark,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            for color in [main_color, pane_color] {
+                assert_eq!(image.primitives.iter().any(|primitive| matches!(&primitive.primitive,
+                    egui::epaint::Primitive::Mesh(mesh) if mesh.vertices.iter().any(|vertex| vertex.color == color))), include_watermark);
+            }
+            assert_eq!(
+                image
+                    .primitives
+                    .iter()
+                    .any(|primitive| matches!(&primitive.primitive,
+                egui::epaint::Primitive::Mesh(mesh) if mesh.texture_id == texture)),
+                include_watermark
+            );
+            image.textures_delta.clear();
+        }
+        assert!(chart.set_pane_watermark(pane, None));
+        let painted = render(&mut chart);
+        assert!(
+            !painted
+                .iter()
+                .any(|shape| shape.shape.texture_id() == texture)
+        );
+        assert!(painted.iter().any(
+            |shape| matches!(&shape.shape, Shape::Text(text) if text.fallback_color == main_color)
+        ));
+        assert!(chart.set_pane_watermark(pane, Some(watermark.clone())));
+        assert!(
+            render(&mut chart)
+                .iter()
+                .any(|shape| shape.shape.texture_id() == texture)
+        );
+        assert!(chart.remove_pane(pane));
+        assert!(!chart.set_pane_watermark(pane, None));
+        assert!(chart.pane_layout.panes.iter().all(|item| item.id != pane));
+        let replacement = chart.add_pane();
+        assert_ne!(replacement, pane);
+        assert!(
+            chart
+                .pane_layout
+                .panes
+                .iter()
+                .find(|item| item.id == replacement)
+                .unwrap()
+                .watermark
+                .is_none()
+        );
+        let painted = render(&mut chart);
+        assert!(
+            !painted
+                .iter()
+                .any(|shape| shape.shape.texture_id() == texture)
+        );
+        assert!(chart.set_pane_watermark(replacement, Some(watermark)));
+        assert!(
+            render(&mut chart)
+                .iter()
+                .any(|shape| shape.shape.texture_id() == texture)
+        );
+        chart
+            .pane_layout
+            .panes
+            .iter_mut()
+            .find(|item| item.id == replacement)
+            .unwrap()
+            .collapsed = Some(true);
+        assert!(
+            !render(&mut chart)
+                .iter()
+                .any(|shape| shape.shape.texture_id() == texture)
+        );
+        chart
+            .pane_layout
+            .panes
+            .iter_mut()
+            .find(|item| item.id == replacement)
+            .unwrap()
+            .collapsed = Some(false);
+        assert!(chart.move_series_to_pane(SeriesId::MAIN, replacement));
+        let painted = render(&mut chart);
+        assert!(
+            painted
+                .iter()
+                .any(|shape| shape.shape.texture_id() == texture)
+        );
+        assert!(painted.iter().any(
+            |shape| matches!(&shape.shape, Shape::Text(text) if text.fallback_color == main_color)
+        ));
+        assert!(chart.remove_pane(PaneId::MAIN));
+        assert!(!chart.set_pane_watermark(PaneId::MAIN, None));
+        let painted = render(&mut chart);
+        assert!(
+            painted
+                .iter()
+                .any(|shape| shape.shape.texture_id() == texture)
+        );
+        assert!(!painted.iter().any(
+            |shape| matches!(&shape.shape, Shape::Text(text) if text.fallback_color == main_color)
+        ));
     }
 
     /// A host series moved into a pane leaves the price scale, panes share the height by

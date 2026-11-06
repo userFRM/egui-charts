@@ -159,6 +159,13 @@ impl DemoApp {
         }
         let mut report = sample_backtest(&self.state.symbol, self.state.timeframe, source);
         report.currency = self.chart.instrument().and_then(|i| i.currency.clone());
+        if let Some(tick) = self.chart.instrument().and_then(|i| i.tick_size) {
+            let mut settings = self.strategy_report.settings().clone();
+            settings.price_increment = tick;
+            if let Err(error) = self.strategy_report.set_settings(settings) {
+                log::warn!("Cannot use the instrument's price increment: {error}");
+            }
+        }
         self.strategy_report.set_report(Some(report), source);
         self.strategy_report
             .select_strategy("Consecutive Up/Down")
@@ -172,6 +179,16 @@ impl DemoApp {
         self.update_live_strategy();
         if self.strategy_report.report().is_none() {
             return;
+        }
+        let chart_type = self.chart.chart_type();
+        if self.live_strategy.is_none() && self.strategy_report.settings().chart_type != chart_type
+        {
+            let mut settings = self.strategy_report.settings().clone();
+            settings.chart_type = chart_type;
+            settings.recalculate_on_history &= !chart_type.transforms_data();
+            if let Err(error) = self.strategy_report.set_settings(settings) {
+                log::warn!("Cannot update strategy candles: {error}");
+            }
         }
         let mut clear = false;
         let action = egui::Panel::bottom("strategy_report")
@@ -205,6 +222,14 @@ impl DemoApp {
                 )
             })
             .inner;
+        if self.live_strategy.is_none() && self.strategy_report.settings().chart_type != chart_type
+        {
+            let kind = self.strategy_report.settings().chart_type;
+            self.state.chart_type = kind;
+            self.top_toolbar.chart_type_selector.current = kind;
+            self.chart.set_chart_type(kind);
+            self.size_price_based_charts();
+        }
         if clear {
             self.stop_live_strategy();
             self.strategy_report.set_report(None, &[]);
@@ -569,7 +594,10 @@ mod tests {
                 matches!(&shape.shape, Shape::Path(marker)
                     if marker.closed && marker.points.len() == 3
                         && marker.stroke.width == 1.0
-                        && (marker.points[0].x - point.x).abs() < 0.1)
+                        && (marker.points[0].x - point.x).abs() < 0.1
+                        // Sample bar marks are triangles of the same stroke at the same bars;
+                        // a fill marker is the narrower one.
+                        && (marker.points[2].x - marker.points[1].x - 10.0).abs() < 0.01)
                     && bounds.width() <= 16.0
                     && bounds.height() <= 16.0
                     && bounds.expand(0.1).contains(point)

@@ -50,6 +50,21 @@ Attach once during setup, then call `chart.show(ui)` each frame. Reattaching
 every frame would accumulate primitives. Undoing a study removal restores the
 study without its primitive attachments, so the host must recreate those.
 
+## Pane decorations
+
+[`Chart::attach_pane_primitive(pane, primitive)`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.attach_pane_primitive)
+attaches a
+[`PanePrimitive`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/trait.PanePrimitive.html)
+to an existing pane instead of a series. It returns `None` for an unknown pane and
+drops the primitive. The decoration stays while the pane exists, including an
+empty retained pane and a chart without loaded bars, and is detached once on the
+next frame after the pane is removed. `detach_primitive` removes it earlier.
+
+It draws and hit tests in the same passes as a series primitive, clipped to the
+pane's plot, but its
+[`PanePrimitiveView`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/struct.PanePrimitiveView.html)
+has no price scale, and it cannot add axis labels or autoscale margins.
+
 ## Draw passes and coordinates
 
 [`draw`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/trait.Primitive.html#method.draw)
@@ -99,9 +114,16 @@ as this scene does, or
 [`PriceAxisLabel`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/struct.PriceAxisLabel.html)
 values from
 [`price_axis_labels`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/trait.Primitive.html#method.price_axis_labels).
-The chart places tags, chooses readable text against their fill, and omits price
-tags off the scale or without room. Time tags suppress underlying axis labels
-they cover.
+The chart places tags at their price or time, chooses readable text against their
+fill, draws a short tick at the plot edge, and omits price tags off the scale or
+without room. Time tags suppress underlying axis labels they cover.
+
+Set `text_color` to choose the text and tick colour, and `tick_visible` to `false`
+to omit the tick. Set `fixed_coordinate` to pin a tag instead: its centre is that
+many UI points from the top of the pane's price axis, or from the left edge of the
+shared time axis, whatever the price or time. A fixed tag is not moved to fit, is
+clipped at the axis edges, and paints above the automatic tags, with later fixed
+tags on top. A non-finite offset omits the tag.
 
 For other axis geometry, use
 [`draw_price_axis`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/trait.Primitive.html#method.draw_price_axis)
@@ -116,6 +138,18 @@ automatic price fit. `None` adds nothing. It does not change a manual range.
 An overlay study on an independent scale fits that scale to its study values
 only. The [custom-series scene](/egui-charts/docs/extensions/custom-series/) includes zero so
 that lollipop stems remain inside their pane's automatic range.
+
+Graphics of a fixed pixel size need room that does not scale with prices. Override
+[`autoscale_info`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/trait.Primitive.html#method.autoscale_info)
+to return an
+[`AutoscaleInfo`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.AutoscaleInfo.html):
+the price range plus
+[`AutoscaleMargins`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.AutoscaleMargins.html)
+`top` and `bottom`, in logical pixels. A series does the same through
+[`AutoscaleProvider::with_margins`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.AutoscaleProvider.html#method.with_margins).
+Each pane and scale keeps the largest request at each screen edge and adds it to
+the scale's fractional margins, so the clearance holds after a resize or a price
+change. A pane too short for the request keeps its ordinary fit.
 
 ## Hit testing and host actions
 

@@ -196,6 +196,16 @@ pub trait Indicator: Send {
         crate::model::LineStyle::Dashed
     }
 
+    /// Stroke width of a pane reference level in logical pixels.
+    fn level_width(&self, _value: f64) -> f32 {
+        1.0
+    }
+
+    /// Optional tint beneath the study's geometry over its plot area.
+    fn background(&self) -> Option<Color32> {
+        None
+    }
+
     /// Colour of the band between the outer pane levels.
     fn level_fill_color(&self) -> Color32 {
         let color = self.plot_style(0).color;
@@ -223,6 +233,12 @@ pub trait Indicator: Send {
         self.plot_style(line).visible
     }
 
+    /// The output lines the legend lists, in the order it lists them: all of them in plot order
+    /// by default. A study whose leading reading is not its first output lists that one first.
+    fn legend_lines(&self) -> Vec<usize> {
+        (0..self.line_count()).collect()
+    }
+
     /// Whether plot `line` shows its last value in a tag on the price scale while the chart
     /// shows study values. By default every plot of a study with up to four plots does and no
     /// plot of a study with more, whose values stay in the legend, so that the tags leave the
@@ -231,6 +247,27 @@ pub trait Indicator: Send {
     fn plot_tagged(&self, line: usize) -> bool {
         let _ = line;
         self.line_count() <= 4
+    }
+
+    /// Whether a horizontal latest-value line is drawn for this output. Off by default,
+    /// independent of scale tags and displacement. A missing latest output draws no line.
+    fn plot_price_line(&self, _line: usize) -> bool {
+        false
+    }
+
+    /// Editable alternate colour and width states, separate from the output's main style.
+    fn plot_variants(&self, _line: usize) -> Vec<super::PlotVariant> {
+        Vec::new()
+    }
+
+    /// Alternate state at a source bar, or `None` for the main style.
+    fn plot_variant(&self, _line: usize, _bar: usize) -> Option<usize> {
+        None
+    }
+
+    /// Stroke width at a source bar. Column and background plots use bar pitch instead.
+    fn plot_width(&self, line: usize, _bar: usize) -> f32 {
+        self.plot_style(line).width
     }
 
     /// The output whose visibility in the style tab also applies to plot `line`, for a plot past
@@ -298,6 +335,23 @@ pub trait Indicator: Send {
             level_fill_color,
             untagged_plots: (0..self.line_count())
                 .filter(|&line| !self.plot_tagged(line))
+                .collect(),
+            price_line_plots: (0..self.line_count())
+                .filter(|&line| self.plot_price_line(line))
+                .collect(),
+            plot_variants: (0..self.line_count())
+                .map(|line| self.plot_variants(line))
+                .collect(),
+            background: self.background(),
+            background_visible: true,
+            fills: self
+                .fills()
+                .iter()
+                .map(|fill| super::FillStyle {
+                    color: fill.color,
+                    inverted_color: fill.inverted_color,
+                    visible: true,
+                })
                 .collect(),
         }
     }
@@ -420,9 +474,10 @@ pub trait Indicator: Send {
     /// The oldest time this study reads from `request`, one of its
     /// [`data_requests`](Indicator::data_requests). A connected feed stops loading older
     /// history of that series once it holds a bar at or before the earliest such time of the
-    /// studies reading it, and loads more when that time moves earlier. `None`, the default,
-    /// and a time before the chart's first bar load the series back to that bar. Price-based
-    /// chart types such as Renko do not use the times and always load it back to that bar.
+    /// studies reading it or the feed reports its end, and loads more when that time moves
+    /// earlier. The time may lie before the chart's first bar, however few bars the chart holds.
+    /// `None`, the default, counts as the chart's first bar. Price-based chart types such as
+    /// Renko do not use the times and always load the series back to that bar.
     fn data_start(
         &self,
         request: &super::StudyDataRequest,
@@ -540,6 +595,18 @@ pub trait Indicator: Send {
         false
     }
 
+    /// Called by the chart after it evicted the oldest `count` source bars, before it calculates
+    /// the study again in full, which can be a few frames later. Returns whether the study
+    /// dropped the outputs of those bars and keeps the others on the bars that remain until
+    /// then; otherwise it has no values until then. The default keeps nothing. The chart's
+    /// presentation wrapper, which holds every study whose
+    /// [`has_settings`](Indicator::has_settings) is `false`, keeps the values of a study that
+    /// draws no candles, zones, markers, labels, projections, provisional segments or drawings.
+    fn remove_oldest_bars(&mut self, count: usize) -> bool {
+        let _ = count;
+        false
+    }
+
     /// Apply the chart instrument's time zone and trading session. Returns `true`
     /// if calculation settings changed and the caller must recalculate from bar 0.
     /// The chart calls this on add and before calculation after its symbol or metadata changes.
@@ -562,7 +629,8 @@ pub trait Indicator: Send {
     /// Return the computed output columns, with NaN for missing values.
     ///
     /// The length of the returned output matches the length of the `data`
-    /// slice most recently passed to [`calculate`](Indicator::calculate).
+    /// slice most recently passed to [`calculate`](Indicator::calculate), less the bars
+    /// [`remove_oldest_bars`](Indicator::remove_oldest_bars) removed since.
     fn values(&self) -> &IndicatorValues;
 
     /// Rendering style of an overlay line. Defaults to a 1 px line in its configured colour.

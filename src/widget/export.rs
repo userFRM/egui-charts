@@ -18,8 +18,9 @@ pub struct ImageExportOptions {
     pub include_title: bool,
     /// Include the export time in the chart's time zone above the chart.
     pub include_timestamp: bool,
-    /// Draw the symbol watermark and the one set with [`Chart::set_watermark`], as they show on
-    /// screen, independently of the title and timestamp.
+    /// Draw the symbol watermark and every host watermark set with [`Chart::set_watermark`]
+    /// or [`Chart::set_pane_watermark`], as they show on screen, independently of the title and
+    /// timestamp.
     pub include_watermark: bool,
     /// Omit the chart and header backgrounds, retaining plot and drawing colours.
     pub transparent_background: bool,
@@ -217,6 +218,11 @@ impl Chart {
     /// times and precision. During replay it holds the bars the replay cutoff has completed,
     /// and on price-based chart types still the source bars. Loads nothing: only loaded bars are listed.
     pub fn data_table(&self) -> DataTable {
+        self.data_table_with_columns().0
+    }
+
+    /// Build cells and their stable series/plot identities from the same calculated studies.
+    pub(crate) fn data_table_with_columns(&self) -> (DataTable, Vec<(usize, usize)>) {
         let bars = &self.state.data().bars;
         let price_precision = self
             .instrument()
@@ -302,10 +308,21 @@ impl Chart {
             }));
             rows.push(row);
         }
-        DataTable {
-            headers: header,
-            rows,
-        }
+        let column_ids = (0..6)
+            .map(|column| (super::SeriesId::MAIN.0, column))
+            .chain(
+                columns
+                    .iter()
+                    .map(|&(study, line, _)| (self.study_ids[study].0, line)),
+            )
+            .collect();
+        (
+            DataTable {
+                headers: header,
+                rows,
+            },
+            column_ids,
+        )
     }
 
     /// Renders an isolated image frame using the same chart, studies, primitives, drawings and
@@ -535,7 +552,9 @@ impl Chart {
         chart.config.show_symbol_labels &= options.include_title;
         if !options.include_watermark {
             chart.config.show_watermark = false;
-            chart.watermark = None;
+            for pane in &mut chart.pane_layout.panes {
+                pane.watermark = None;
+            }
         }
         let mut theme = self
             .theme_override
@@ -608,7 +627,6 @@ impl Chart {
         chart.feed_link = self.feed_link.as_ref().map(super::feed::FeedLink::frozen);
         chart.legend_instrument = self.instrument().cloned();
         chart.legend_badge = self.legend_badge.clone();
-        chart.watermark = self.watermark.clone();
         chart.legend_statuses = self.legend_statuses.clone();
         chart.quote = self.quote.clone();
         chart.session_quote = self.session_quote.clone();
@@ -680,6 +698,7 @@ impl Chart {
             chart.volume_setting = self.volume_setting;
         }
         chart.primitives = self.primitives.clone();
+        chart.freeze_custom_points(self.replay_time());
         chart.next_primitive = self.next_primitive;
         chart.settle_primitives();
         chart.study_data = self.study_data.snapshot();

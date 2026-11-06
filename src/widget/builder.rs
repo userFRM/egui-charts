@@ -118,6 +118,7 @@ impl Chart {
             from_ticks: BTreeMap::new(),
             bar_limits: Default::default(),
             studies: IndicatorRegistry::new(),
+            readout_revision: crate::model::next_revision(),
             study_data: Default::default(),
             element_studies: Default::default(),
             execution_ranges: Default::default(),
@@ -136,6 +137,7 @@ impl Chart {
             study_inputs: Vec::new(),
             study_autoscale: Vec::new(),
             pending_from: Vec::new(),
+            stale: Vec::new(),
             next_refresh: Vec::new(),
             // 0 and 1 are the main and volume series.
             next_series: 2,
@@ -163,7 +165,6 @@ impl Chart {
             currency_choices: Vec::new(),
             currency_choice: None,
             legend_badge: None,
-            watermark: None,
             legend_statuses: Vec::new(),
             quote: None,
             quote_action: None,
@@ -224,6 +225,7 @@ impl Chart {
             last_rendered_indicator_panes: Vec::new(),
             // Multi-chart sync
             layout_inactive: false,
+            layout_link_controls: false,
             synced_crosshair_bar_idx: None,
             synced_crosshair_period: None,
             synced_crosshair_price: None,
@@ -529,15 +531,15 @@ impl Chart {
     /// Width in points of the main price axis on `side` at the last frame, 0 when that axis is
     /// hidden: the configured minimum width, or wider when the labels need more room.
     pub fn price_axis_width(&self, side: crate::scales::PriceScaleId) -> f32 {
-        let (shown, minimum) = match side {
+        let (axis_side, minimum) = match side {
             crate::scales::PriceScaleId::Right => {
-                (self.config.show_right_axis, self.config.right_axis_width)
+                (crate::model::AxisSide::Right, self.config.right_axis_width)
             }
             crate::scales::PriceScaleId::Left => {
-                (self.config.show_left_axis, self.config.left_axis_width)
+                (crate::model::AxisSide::Left, self.config.left_axis_width)
             }
         };
-        if shown {
+        if self.primary_axis_side() == Some(axis_side) {
             minimum.max(self.measured_axis_width)
         } else {
             0.0

@@ -1,6 +1,37 @@
 use crate::widget::test_frames::{candle_ys, chart, frame, shapes};
 use egui::{Pos2, Rect, Shape};
 
+/// Each chart of a layout carries the replay mark exactly while it replays itself.
+#[test]
+fn legend_marks_a_chart_only_while_it_replays() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let mut chart = chart(&[100.0, 101.0, 102.0], &[110.0, 111.0, 112.0]);
+    let cutoff = chart.bars(crate::widget::SeriesId::MAIN)[2].time;
+    chart.set_replay_time(Some(cutoff));
+    let mut harness = Harness::builder()
+        .allow_missing_glyphs()
+        .with_size(egui::vec2(900.0, 600.0))
+        .build_ui_state(
+            |ui, chart: &mut crate::widget::Chart| {
+                chart.show(ui);
+            },
+            chart,
+        );
+    harness.run();
+    assert!(
+        harness
+            .query_by_role_and_label(egui::Role::Image, "Replay")
+            .is_some()
+    );
+    harness.state_mut().set_replay_time(None);
+    harness.run();
+    assert!(
+        harness
+            .query_by_role_and_label(egui::Role::Image, "Replay")
+            .is_none()
+    );
+}
+
 #[test]
 fn footprint_stays_below_legend_at_wide_and_narrow_sizes() {
     use crate::chart::overlays::{FootprintColor, FootprintConfig};
@@ -40,8 +71,10 @@ fn footprint_stays_below_legend_at_wide_and_narrow_sizes() {
                 }
             }
             let config = FootprintConfig {
+                modes: vec![crate::model::FootprintMode::BidAsk],
                 auto_row_height: None,
                 color_by: FootprintColor::Volume,
+                abbreviate: false,
                 text_color: theme.chart.axis_text,
                 neutral_color: egui::Color32::from_rgb(21, 45, 78),
                 ..Default::default()

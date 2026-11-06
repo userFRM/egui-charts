@@ -59,6 +59,7 @@ pub struct SettingsDialog {
     margin_right_str: String,
     /// Controls the host hid.
     hidden: HashSet<Control>,
+    apply_to_all: bool,
     /// The local sounds the host can play, by name, offered on the Trading and Alerts tabs. The host
     /// plays the chosen one; see
     /// [`Trading::take_execution_sound`](crate::ui::trading::Trading::take_execution_sound).
@@ -171,10 +172,18 @@ impl SettingsDialog {
             timezones: timezones.iter().map(|zone| (*zone).to_owned()).collect(),
             config: SettingsDialogConfig::default(),
             hidden: HashSet::new(),
+            apply_to_all: false,
             execution_sounds: Vec::new(),
             sound_preview: None,
             order_flow_layers: [true; 4],
         }
+    }
+
+    /// Offers a button that applies the dialog's settings to all charts of the layout and closes
+    /// the dialog, for a host showing several charts. It returns as
+    /// [`SettingsAction::ApplyToAll`]. Off by default.
+    pub fn offer_apply_to_all(&mut self, offered: bool) {
+        self.apply_to_all = offered;
     }
 
     /// Shows or hides `control`: Templates (the template button and menu; Reset to defaults
@@ -456,6 +465,31 @@ impl SettingsDialog {
                     if self.template_menu_open {
                         action = self.draw_template_menu(ui, theme, &button, action.clone());
                     }
+                }
+                if error.is_none()
+                    && self.apply_to_all
+                    && ui
+                        .add(
+                            egui::Button::new(
+                                RichText::new(l10n::text(ui.ctx(), "Apply to all"))
+                                    .size(theme.text.title)
+                                    .color(theme.ui.text),
+                            )
+                            .fill(theme.ui.panel_bg)
+                            .stroke(egui::Stroke::new(
+                                DESIGN_TOKENS.stroke.hairline,
+                                theme.ui.border_control,
+                            ))
+                            .corner_radius(theme.radius.md as u8)
+                            .min_size(Vec2::new(
+                                0.0,
+                                DESIGN_TOKENS.sizing.settings_dialog.button_height,
+                            )),
+                        )
+                        .clicked()
+                {
+                    action = SettingsAction::ApplyToAll(Box::new(self.settings.clone()));
+                    self.is_open = false;
                 }
             });
         if ok {
@@ -741,6 +775,14 @@ impl SettingsDialog {
                 price_source: Some(Default::default()),
                 ..Default::default()
             };
+            if matches!(
+                self.settings.chart_type,
+                crate::model::ChartType::Heikin
+                    | crate::model::ChartType::HollowCandles
+                    | crate::model::ChartType::VolumeCandles
+            ) {
+                self.settings.candle_colors.show_border = true;
+            }
             self.template_name.clear();
             self.update_color_pickers_from_settings();
             self.template_menu_open = false;
@@ -827,6 +869,11 @@ mod tests {
         };
         for (kind, label) in [
             (ChartType::Heikin, "Body"),
+            (ChartType::HollowCandles, "Body"),
+            (
+                ChartType::VolumeCandles,
+                "Color bars based on previous close",
+            ),
             (ChartType::Bars, "Body"),
             (ChartType::Line, "Line width"),
             (ChartType::Baseline, "Base level"),

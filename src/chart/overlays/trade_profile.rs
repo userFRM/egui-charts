@@ -95,6 +95,7 @@ fn render_profiles(
     let pixel = 1.0 / painter.pixels_per_point();
     let mut extensions = Vec::new();
     for profile in profiles {
+        let step = step * profile.group as f64;
         let first = bars.partition_point(|b| b.time < profile.range.start);
         let end = bars.partition_point(|b| b.time < profile.range.end);
         if first >= end {
@@ -225,12 +226,12 @@ fn render_profiles(
                 .copied()
                 .unwrap_or(FootprintMode::BidAsk);
             let segments = match mode {
-                FootprintMode::BidAsk if session => vec![
+                FootprintMode::BidAsk | FootprintMode::Ladder if session => vec![
                     (row.ask, config.ask_color),
                     (row.bid, config.bid_color),
                     (row.unknown, config.neutral_color),
                 ],
-                FootprintMode::BidAsk => vec![
+                FootprintMode::BidAsk | FootprintMode::Ladder => vec![
                     (row.bid, config.bid_color),
                     (row.ask, config.ask_color),
                     (row.unknown, config.neutral_color),

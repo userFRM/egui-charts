@@ -129,6 +129,19 @@ impl IndicatorValues {
         self.len = 0;
     }
 
+    /// The output without its first `count` bars, empty when it has no more.
+    pub(crate) fn without_first(&self, count: usize) -> Self {
+        let count = count.min(self.len);
+        Self {
+            columns: self
+                .columns
+                .iter()
+                .map(|line| line[count..].to_vec())
+                .collect(),
+            len: self.len - count,
+        }
+    }
+
     pub(crate) fn truncate(&mut self, len: usize) {
         self.len = self.len.min(len);
         for line in &mut self.columns {

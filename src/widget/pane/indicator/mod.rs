@@ -86,6 +86,7 @@ pub struct IndicatorPane {
     pub(super) pane_controls: bool,
     pub(super) axis_rect: Option<Rect>,
     pub(super) axis_tags: Vec<Option<Rect>>,
+    pub(super) fixed_axis_labels: Vec<crate::chart::primitives::PriceAxisLabel>,
     pub(super) axis_options: crate::config::PriceAxisOptions,
     pub(super) legend_backdrop: f32,
 }
@@ -109,6 +110,7 @@ impl IndicatorPane {
             pane_controls: false,
             axis_rect: None,
             axis_tags: Vec::new(),
+            fixed_axis_labels: Vec::new(),
             axis_options,
             legend_backdrop: 0.6,
         }
@@ -349,6 +351,7 @@ impl IndicatorPane {
         bar_series: bool,
         mut draw_primitives: impl FnMut(&egui::Painter, crate::chart::primitives::PrimitivePass),
     ) -> Option<PaneInteraction> {
+        self.fixed_axis_labels.clear();
         if !indicator.is_visible() {
             return None;
         }
@@ -427,6 +430,9 @@ impl IndicatorPane {
                 mapping: mapping.clone(),
                 bars,
                 visible: displayed_range.clone(),
+                custom: primitives
+                    .iter()
+                    .find_map(|item| item.custom_view(bars, &mapping)),
             });
         let crosshair = hover.map(|(mut pos, options)| {
             if let Some(index) = self.bar_index {
@@ -494,6 +500,9 @@ impl IndicatorPane {
                 draw_primitives(plot_painter, PrimitivePass::Series);
             }
 
+            let label_rect = self.axis_rect.map_or(chart_rect, |axis| {
+                crate::widget::series::axis_label_rect(chart_rect, axis)
+            });
             if let (Some(view), Some(side)) = (&view, axis)
                 && indicator.scale() != crate::studies::StudyScale::None
             {
@@ -514,25 +523,22 @@ impl IndicatorPane {
                 for item in primitives {
                     let primitive = item.get();
                     primitive.draw_price_axis(&axis_painter, axis_rect, view);
-                    for label in primitive.price_axis_labels(view) {
-                        let map = mapping.price;
-                        if map.range().contains(map.transform().to_scale(label.price)) {
-                            let tag = crate::chart::rendering::axes::render_axis_value(
-                                painter,
-                                chart_rect,
-                                axis_edge,
-                                map.price_to_y(label.price),
-                                label.text,
-                                (
-                                    crate::chart::rendering::axes::tag_text_color(label.color),
-                                    label.color,
-                                ),
-                                &self.axis_tags,
-                                self.axis_options.allow_label_overlap,
-                            );
-                            self.axis_tags.push(tag);
-                        }
-                    }
+                    let (fixed, automatic): (Vec<_>, Vec<_>) = primitive
+                        .price_axis_labels(view)
+                        .into_iter()
+                        .partition(|label| label.fixed_coordinate.is_some());
+                    self.fixed_axis_labels.extend(fixed);
+                    crate::chart::rendering::axes::render_primitive_price_labels(
+                        painter,
+                        label_rect,
+                        axis_edge,
+                        automatic
+                            .into_iter()
+                            .map(|label| (label, mapping.price))
+                            .collect(),
+                        &mut self.axis_tags,
+                        self.axis_options.allow_label_overlap,
+                    );
                 }
             }
             let context = crate::chart::rendering::RenderContext::new(painter, chart_rect);
@@ -548,7 +554,7 @@ impl IndicatorPane {
                     return None;
                 }
                 crate::chart::rendering::render_crosshair_price_tag(
-                    &context,
+                    &crate::chart::rendering::RenderContext::new(painter, label_rect),
                     pos,
                     &mapping.price.with_price_precision(Some(
                         indicator.precision().unwrap_or(2).min(255) as u8,

@@ -1,6 +1,6 @@
 //! Style tab - color, line width, line style.
 
-use crate::drawings::ArrowStyle;
+use crate::drawings::{ArrowStyle, LineMeasurementPosition};
 use crate::localization as l10n;
 use crate::model::LineStyle;
 use egui::{Color32, Role, Sense, Stroke, StrokeKind, Ui, Vec2, WidgetInfo};
@@ -147,6 +147,53 @@ impl StyleTab {
                     ui.checkbox(&mut props.extend_left, l10n::text(ui.ctx(), "Left"));
                     ui.add_space(ui.active_theme().spacing.xxl - ui.spacing().item_spacing.x);
                     ui.checkbox(&mut props.extend_right, l10n::text(ui.ctx(), "Right"));
+                });
+                ui.end_row();
+            }
+            // Last, so that the long list of readouts keeps the other rows above the fold.
+            if let Some(template) = &mut props.tool_settings
+                && template.settings.tool_type.supports_line_measurements()
+            {
+                let measurements = &mut template.settings.line_measurements;
+                for (label, value) in [
+                    ("Middle point", &mut measurements.midpoint),
+                    ("Price labels", &mut measurements.price_labels),
+                    ("Keep statistics visible", &mut measurements.persistent),
+                    ("Price change", &mut measurements.price_change),
+                    ("Percentage change", &mut measurements.percent_change),
+                    ("Pip change", &mut measurements.pip_change),
+                    ("Bar count", &mut measurements.bar_count),
+                    ("Elapsed time", &mut measurements.elapsed_time),
+                    ("Length in periods", &mut measurements.length),
+                    ("Inclination", &mut measurements.inclination),
+                ] {
+                    ui.label(l10n::text(ui.ctx(), label));
+                    ui.checkbox(value, l10n::text(ui.ctx(), "Show"))
+                        .accessible_name(l10n::text(ui.ctx(), label));
+                    ui.end_row();
+                }
+                let label = ui.label(l10n::text(ui.ctx(), "Statistics placement"));
+                ui.label_inputs_by(label.id, |ui| {
+                    let ctx = ui.ctx().clone();
+                    ui.combo_select(
+                        "line_measurement_position",
+                        &mut measurements.position,
+                        [
+                            LineMeasurementPosition::Left,
+                            LineMeasurementPosition::Center,
+                            LineMeasurementPosition::Right,
+                        ],
+                        |position| {
+                            l10n::text(
+                                &ctx,
+                                match position {
+                                    LineMeasurementPosition::Left => "Left",
+                                    LineMeasurementPosition::Center => "Center",
+                                    LineMeasurementPosition::Right => "Right",
+                                },
+                            )
+                        },
+                    );
                 });
                 ui.end_row();
             }

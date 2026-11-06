@@ -205,6 +205,137 @@ pub(crate) fn render_axis_value(
     ))
 }
 
+/// Primitive tags share automatic placement; callers defer fixed tags until automatic tags finish.
+pub(crate) fn render_primitive_price_labels(
+    painter: &Painter,
+    plot: Rect,
+    axis_right: f32,
+    labels: Vec<(crate::chart::primitives::PriceAxisLabel, PriceMap)>,
+    occupied: &mut Vec<Option<Rect>>,
+    allow_overlap: bool,
+) {
+    let painter = painter.with_clip_rect(painter.clip_rect().intersect(Rect::from_x_y_ranges(
+        painter.clip_rect().x_range(),
+        plot.y_range(),
+    )));
+    let axis = Rect::from_x_y_ranges(
+        if axis_right <= plot.left() {
+            painter.clip_rect().left()..=plot.left()
+        } else {
+            plot.right()..=axis_right
+        },
+        plot.y_range(),
+    );
+    let axis_painter = painter.with_clip_rect(painter.clip_rect().intersect(axis));
+    for (label, map) in labels {
+        let fixed = label.fixed_coordinate.is_some();
+        if !fixed && !map.range().contains(map.transform().to_scale(label.price)) {
+            continue;
+        }
+        let y = label
+            .fixed_coordinate
+            .map_or_else(|| map.price_to_y(label.price), |offset| plot.top() + offset);
+        if !y.is_finite() {
+            continue;
+        }
+        let ink = label
+            .text_color
+            .unwrap_or_else(|| tag_text_color(label.color));
+        let tag = if fixed {
+            let (anchor, align) = price_tag_anchor(plot, axis_right, y);
+            Some(paint_axis_tag(
+                &axis_painter,
+                anchor,
+                align,
+                axis_right,
+                label.text,
+                ink,
+                label.color,
+            ))
+        } else {
+            render_axis_value(
+                &painter,
+                plot,
+                axis_right,
+                y,
+                label.text,
+                (ink, label.color),
+                occupied,
+                allow_overlap,
+            )
+        };
+        let clip = if fixed {
+            axis_painter.clip_rect()
+        } else {
+            painter.clip_rect()
+        };
+        if let Some(tag) = tag.filter(|tag| tag.intersects(clip)) {
+            if label.tick_visible {
+                let edge = if axis_right <= plot.left() {
+                    plot.left()
+                } else {
+                    plot.right()
+                };
+                let end = edge + if axis_right <= plot.left() { -5.0 } else { 5.0 };
+                axis_painter.line_segment(
+                    [
+                        Pos2::new(edge, tag.center().y),
+                        Pos2::new(end, tag.center().y),
+                    ],
+                    Stroke::new(1.0, ink),
+                );
+            }
+            occupied.push(Some(tag));
+        }
+    }
+}
+
+/// Fixed time tags are clipped rather than moved; automatic tags keep the usual edge fitting.
+pub(crate) fn render_primitive_time_label(
+    painter: &Painter,
+    axis: Rect,
+    x: f32,
+    label: crate::chart::primitives::TimeAxisLabel,
+) -> Option<Rect> {
+    if !x.is_finite() || (label.fixed_coordinate.is_none() && !axis.x_range().contains(x)) {
+        return None;
+    }
+    let painter = painter.with_clip_rect(painter.clip_rect().intersect(axis));
+    let ink = label
+        .text_color
+        .unwrap_or_else(|| tag_text_color(label.color));
+    let tag = if label.fixed_coordinate.is_some() {
+        let galley = painter.layout_no_wrap(label.text, axis_font(painter.ctx()), ink);
+        let size = Vec2::new(galley.size().x + 8.0, 25.0_f32.max(galley.size().y));
+        let tag = Align2::CENTER_TOP.anchor_size(Pos2::new(x, axis.top() + 1.5), size);
+        painter.rect_filled(tag, 1.0, label.color);
+        painter.galley(tag.center() - galley.size() / 2.0, galley, ink);
+        tag
+    } else {
+        paint_crosshair_tag(
+            &painter,
+            Pos2::new(x, axis.top() + 1.5),
+            Align2::CENTER_TOP,
+            axis.left()..=axis.right(),
+            label.text,
+            (ink, label.color),
+            axis_font(painter.ctx()),
+            25.0,
+            None,
+        )
+    };
+    if !tag.intersects(painter.clip_rect()) {
+        return None;
+    }
+    if label.tick_visible {
+        painter.line_segment(
+            [Pos2::new(x, axis.top()), Pos2::new(x, axis.top() + 5.0)],
+            Stroke::new(1.0, ink),
+        );
+    }
+    Some(tag.intersect(axis))
+}
+
 /// Last-bar values of visible study lines, in the same units and colours as their plot.
 pub(crate) fn render_study_tags(
     painter: &Painter,
@@ -722,10 +853,7 @@ pub fn axis_settings_button(ui: &mut egui::Ui, corner: Rect) -> egui::Response {
         egui::Sense::click(),
     );
     crate::icons::icons::SETTINGS
-        .as_image_tinted(
-            Vec2::splat(16.0),
-            ui.ctx().active_theme().chart.axis_text_secondary,
-        )
+        .as_image_tinted(Vec2::splat(16.0), ui.ctx().active_theme().ui.text)
         .paint_at(
             ui,
             Rect::from_center_size(target.center(), Vec2::splat(16.0)),
@@ -1208,41 +1336,57 @@ mod tests {
     #[test]
     fn axis_controls_emit_their_actions() {
         use egui::{Event, Modifiers, PointerButton};
-        let ctx = Context::default();
-        let tag = Rect::from_min_max(Pos2::new(100.0, 100.0), Pos2::new(180.0, 121.0));
-        let corner = Rect::from_min_max(Pos2::new(200.0, 200.0), Pos2::new(260.0, 228.0));
-        let mut actions = Vec::new();
-        for (pos, expected) in [
-            (Pos2::new(87.0, 110.5), Some("add")),
-            (tag.center(), None),
-            (corner.center(), Some("settings")),
-        ] {
-            let before = actions.len();
-            for pressed in [None, Some(true), Some(false)] {
-                let mut input = RawInput::default();
-                input.events.push(Event::PointerMoved(pos));
-                if let Some(pressed) = pressed {
-                    input.events.push(Event::PointerButton {
-                        pos,
-                        button: PointerButton::Primary,
-                        pressed,
-                        modifiers: Modifiers::NONE,
+        let mut custom = crate::theme::Theme::dark();
+        custom.ui.text = Color32::from_rgb(123, 100, 90);
+        for theme in crate::theme::presets()
+            .into_iter()
+            .map(|(_, theme)| theme)
+            .chain([custom])
+        {
+            let ctx = Context::default();
+            crate::icons::install_loader(&ctx);
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let tag = Rect::from_min_max(Pos2::new(100.0, 100.0), Pos2::new(180.0, 121.0));
+            let corner = Rect::from_min_max(Pos2::new(200.0, 200.0), Pos2::new(260.0, 228.0));
+            let mut actions = Vec::new();
+            for (pos, expected) in [
+                (Pos2::new(87.0, 110.5), Some("add")),
+                (tag.center(), None),
+                (corner.center(), Some("settings")),
+            ] {
+                let before = actions.len();
+                for pressed in [None, Some(true), Some(false)] {
+                    let mut input = RawInput::default();
+                    input.events.push(Event::PointerMoved(pos));
+                    if let Some(pressed) = pressed {
+                        input.events.push(Event::PointerButton {
+                            pos,
+                            button: PointerButton::Primary,
+                            pressed,
+                            modifiers: Modifiers::NONE,
+                        });
+                    }
+                    let output = ctx.run_ui(input, |ui| {
+                        if let Some(price) = crosshair_price_action(ui, tag, 704.64, Color32::WHITE)
+                        {
+                            assert_eq!(price, 704.64);
+                            actions.push("add");
+                        }
+                        if axis_settings_button(ui, corner).clicked() {
+                            actions.push("settings");
+                        }
                     });
+                    let ink = output.shapes.iter().find_map(|shape| match &shape.shape {
+                        Shape::Rect(rect) if rect.brush.is_some() => Some(rect.fill),
+                        _ => None,
+                    });
+                    assert_eq!(ink, Some(theme.ui.text));
+                    output.drop_without_applying_deltas();
                 }
-                let output = ctx.run_ui(input, |ui| {
-                    if let Some(price) = crosshair_price_action(ui, tag, 704.64, Color32::WHITE) {
-                        assert_eq!(price, 704.64);
-                        actions.push("add");
-                    }
-                    if axis_settings_button(ui, corner).clicked() {
-                        actions.push("settings");
-                    }
-                });
-                output.drop_without_applying_deltas();
+                assert_eq!(actions[before..].first().copied(), expected);
             }
-            assert_eq!(actions[before..].first().copied(), expected);
+            assert_eq!(actions, ["add", "settings"]);
         }
-        assert_eq!(actions, ["add", "settings"]);
     }
 
     /// Study tags keep their optional names and choose readable text for the plot fill.

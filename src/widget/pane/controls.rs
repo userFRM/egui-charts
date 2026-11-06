@@ -4,6 +4,71 @@ use crate::localization as l10n;
 use egui::{Pos2, Rect, Sense, Ui};
 
 impl Chart {
+    /// Whether this frame is a Ctrl/Command double-click that collapses the pointed pane. Pane
+    /// and chart handlers drop their own double-click on it. A maximised pane has no other pane
+    /// to collapse, so it keeps the ordinary double-click.
+    pub(in crate::widget) fn pane_collapse_click(&self, ctx: &egui::Context) -> bool {
+        self.has_panes()
+            && self.pane_layout.maximized.is_none()
+            && self.pointer_commands_enabled(ctx)
+            && ctx.input(|input| {
+                input.modifiers.command
+                    && !input.modifiers.alt
+                    && !input.modifiers.shift
+                    && input
+                        .pointer
+                        .button_double_clicked(egui::PointerButton::Primary)
+            })
+    }
+
+    /// Collapses or restores the pane under the pointer, as one undoable edit that keeps its
+    /// stretch, and focuses the chart.
+    pub(super) fn pane_collapse_shortcut(&mut self, ui: &Ui) {
+        if !ui.is_enabled() || !self.pane_collapse_click(ui.ctx()) {
+            return;
+        }
+        let pos = ui.input(|input| input.pointer.interact_pos());
+        let pane = self.pane_layout.panes.iter().position(|pane| {
+            pos.is_some_and(|pos| pane.rect.contains(pos)) && ui.rect_contains_pointer(pane.rect)
+        });
+        if let Some(at) = pane {
+            let collapsed = self.pane_layout.panes[at].rect.height() <= 24.0;
+            self.user_action(|chart| chart.pane_layout.panes[at].collapsed = Some(!collapsed));
+            if let Some(id) = self.keyboard.chart_id {
+                ui.memory_mut(|memory| memory.request_focus(id));
+            }
+            ui.ctx().request_repaint();
+        }
+    }
+
+    /// Header row of a collapsed price pane; a click restores it.
+    pub(super) fn collapsed_price_header(&mut self, ui: &mut Ui, rect: Rect) {
+        let response = ui.interact(rect, ui.scope_id().with("collapsed_price"), Sense::click());
+        ui.painter().text(
+            rect.left_center() + egui::vec2(8.0, 0.0),
+            egui::Align2::LEFT_CENTER,
+            &self.symbol,
+            egui::TextStyle::Body.resolve(ui.style()),
+            ui.visuals().text_color(),
+        );
+        let label = l10n::text(ui.ctx(), "Expand pane");
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
+        if response.clicked() && !ui.input(|input| input.modifiers.command) {
+            let id = self.main_series_pane();
+            self.user_action(|chart| {
+                if let Some(pane) = chart
+                    .pane_layout
+                    .panes
+                    .iter_mut()
+                    .find(|pane| pane.id == id)
+                {
+                    pane.collapsed = Some(false);
+                }
+            });
+        }
+        response.on_hover_text(label);
+    }
+
     pub(super) fn pane_scale_interaction(
         &mut self,
         ui: &mut Ui,
@@ -45,6 +110,7 @@ impl Chart {
                 ui.ctx().request_repaint();
             }
             if response.double_clicked()
+                && !self.pane_collapse_click(ui.ctx())
                 && self.chart_options.handle_scale.enabled
                 && self
                     .chart_options
@@ -93,6 +159,57 @@ impl Chart {
                         )
                         .changed()
                     {
+                        ui.close();
+                    }
+                    ui.separator();
+                    let options = chart.pane_axis_options(pane_id).expect("present pane");
+                    for (label, side) in [
+                        ("Axes on left", crate::model::AxisSide::Left),
+                        ("Axes on right", crate::model::AxisSide::Right),
+                    ] {
+                        if ui
+                            .selectable_label(
+                                options.side == Some(side),
+                                l10n::text(ui.ctx(), label),
+                            )
+                            .clicked()
+                        {
+                            chart.set_pane_axis_options(
+                                pane_id,
+                                crate::model::PaneAxisOptions {
+                                    side: (options.side != Some(side)).then_some(side),
+                                    ..options
+                                },
+                            );
+                            ui.close();
+                        }
+                    }
+                    ui.menu_button(l10n::text(ui.ctx(), "Join price scales"), |ui| {
+                        for (label, side) in [
+                            ("At left edge", crate::model::AxisSide::Left),
+                            ("At right edge", crate::model::AxisSide::Right),
+                        ] {
+                            if ui
+                                .selectable_label(false, l10n::text(ui.ctx(), label))
+                                .clicked()
+                            {
+                                chart.merge_pane_scales(pane_id, side);
+                                ui.close();
+                            }
+                        }
+                    });
+                    let mut hide_unused = options.hide_unused;
+                    if ui
+                        .checkbox(&mut hide_unused, l10n::text(ui.ctx(), "Hide unused axes"))
+                        .changed()
+                    {
+                        chart.set_pane_axis_options(
+                            pane_id,
+                            crate::model::PaneAxisOptions {
+                                hide_unused,
+                                ..options
+                            },
+                        );
                         ui.close();
                     }
                 });
@@ -414,13 +531,181 @@ impl Chart {
                 self.pane_layout.panes[idx].height = Some(rect.height() - delta);
                 ui.ctx().request_repaint();
             }
-            if response.double_clicked() {
+            if response.double_clicked() && !self.pane_collapse_click(ui.ctx()) {
                 for at in [upper_idx, idx] {
                     let pane = &mut self.pane_layout.panes[at];
                     pane.height = None;
                     pane.stretch = Pane::default_stretch(pane.id);
                 }
                 ui.ctx().request_repaint();
+            }
+        }
+    }
+}
+
+#[cfg(all(test, feature = "studies", feature = "drawings"))]
+mod tests {
+    use super::*;
+    use egui::{Context, Event, Modifiers, PointerButton, RawInput};
+
+    #[test]
+    fn pointer_command_double_click_collapses_and_restores_the_pointed_pane() {
+        for location in ["plot", "header", "axis", "price", "moved-price", "disabled"] {
+            for modifiers in [
+                Modifiers::CTRL.plus(Modifiers::COMMAND),
+                Modifiers::MAC_CMD.plus(Modifiers::COMMAND),
+            ] {
+                let ctx = Context::default();
+                let mut chart = crate::widget::test_frames::chart(&[100.0; 100], &[110.0; 100]);
+                let study = chart.add_indicator(Box::new(crate::studies::RSI::new(14)));
+                let study_pane = chart.series_pane(study).unwrap();
+                if location == "price" {
+                    chart.add_indicator(Box::new(crate::studies::RSI::new(7)));
+                    for pane in &mut chart.pane_layout.panes {
+                        if pane.id != PaneId::MAIN {
+                            pane.collapsed = Some(false);
+                        }
+                    }
+                }
+                if location == "moved-price" {
+                    chart.move_series_to_pane(SeriesId::MAIN, study_pane);
+                }
+                let id = if location == "price" || location == "moved-price" {
+                    chart.main_series_pane()
+                } else {
+                    study_pane
+                };
+                let screen_height = std::cell::Cell::new(600.0);
+                let mut time = 0.0;
+                let mut frame = |chart: &mut Chart, events| {
+                    time += 0.02;
+                    ctx.run_ui(
+                        RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                Pos2::ZERO,
+                                egui::vec2(800.0, screen_height.get()),
+                            )),
+                            time: Some(time),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            if location == "disabled" {
+                                ui.disable();
+                            }
+                            chart.show(ui);
+                        },
+                    )
+                    .drop_without_applying_deltas();
+                };
+                for _ in 0..3 {
+                    frame(&mut chart, vec![]);
+                }
+                let at = chart
+                    .pane_layout
+                    .panes
+                    .iter()
+                    .position(|pane| pane.id == id)
+                    .unwrap();
+                let height = chart.pane_height(id).unwrap();
+                let stretch = chart.pane_stretch_factor(id).unwrap();
+                let click = |rect: Rect| match location {
+                    "header" => rect.left_top() + egui::vec2(30.0, 10.0),
+                    "axis" => rect.right_center() - egui::vec2(10.0, 0.0),
+                    _ => rect.center(),
+                };
+                let pos = click(chart.pane_layout.panes[at].rect);
+                for pressed in [true, false, true, false] {
+                    frame(
+                        &mut chart,
+                        vec![
+                            Event::ModifiersChanged(modifiers),
+                            Event::PointerMoved(pos),
+                            Event::PointerButton {
+                                pos,
+                                pressed,
+                                button: PointerButton::Primary,
+                                modifiers,
+                            },
+                        ],
+                    );
+                }
+                frame(&mut chart, vec![]);
+                if location == "disabled" {
+                    assert_eq!(chart.pane_height(id), Some(height));
+                    assert_eq!(chart.pane_layout.maximized, None);
+                    continue;
+                }
+                assert_eq!(
+                    chart.pane_height(id),
+                    Some(24.0),
+                    "{location} {modifiers:?}"
+                );
+                assert_eq!(chart.pane_layout.maximized, None);
+                assert_eq!(chart.pane_stretch_factor(id), Some(stretch));
+                if location == "price" {
+                    // Three headers fit here, but an expanded study needs at least 40 px.
+                    screen_height.set(115.0);
+                    frame(&mut chart, vec![]);
+                    assert!(
+                        chart
+                            .pane_layout
+                            .panes
+                            .iter()
+                            .all(|pane| pane.rect.height() <= 24.0)
+                    );
+                    screen_height.set(600.0);
+                    frame(&mut chart, vec![]);
+                }
+                let focus = ctx.memory(|memory| memory.focused());
+                #[cfg(feature = "ui")]
+                {
+                    let snapshot = chart.snapshot().unwrap();
+                    let mut restored =
+                        crate::widget::test_frames::chart(&[100.0; 100], &[110.0; 100]);
+                    restored.restore(&snapshot).unwrap();
+                    frame(&mut restored, vec![]);
+                    let saved_pane = restored.panes()[at];
+                    assert_eq!(
+                        restored.pane_height(saved_pane),
+                        Some(24.0),
+                        "saved {location}"
+                    );
+                }
+                assert!(chart.undo());
+                frame(&mut chart, vec![]);
+                assert!((chart.pane_height(id).unwrap() - height).abs() < 0.01);
+                assert!(chart.redo());
+                frame(&mut chart, vec![]);
+                // Separate the next double click from the first one's click count.
+                for _ in 0..40 {
+                    frame(&mut chart, vec![]);
+                }
+                let pos = chart.pane_layout.panes[at].rect.center();
+                for pressed in [true, false, true, false] {
+                    frame(
+                        &mut chart,
+                        vec![
+                            Event::PointerMoved(pos),
+                            Event::PointerButton {
+                                pos,
+                                pressed,
+                                button: PointerButton::Primary,
+                                modifiers,
+                            },
+                        ],
+                    );
+                }
+                frame(&mut chart, vec![]);
+                assert!(
+                    (chart.pane_height(id).unwrap() - height).abs() < 0.01,
+                    "restored {location}"
+                );
+                assert_eq!(ctx.memory(|memory| memory.focused()), focus);
+                assert!(
+                    chart.take_indicator_settings_request().is_none(),
+                    "{location} {modifiers:?}"
+                );
             }
         }
     }

@@ -22,13 +22,14 @@ pub enum CursorDataPolicy {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct ChartPointer {
-    /// Stored timestamp of the nearest eligible main or added-series point, including whitespace.
-    /// `None` without data or when the selected position has no stored point.
+    /// Stored timestamp of the nearest eligible main, added-series or custom point, including
+    /// whitespace. `None` without eligible cursor data or when the selected position has no
+    /// stored point.
     pub time: Option<DateTime<Utc>>,
     /// Price on the main pane, or the value on the scale of the hovered pane or volume.
     pub price: f64,
-    /// `MAIN`, `VOLUME`, or the first series or study of another hovered pane. An empty pane
-    /// reports no position.
+    /// `MAIN`, `VOLUME`, or the first series or study of another hovered pane. A primitive hit
+    /// in an empty pane uses `MAIN`; `target` identifies the primitive independently.
     pub series: SeriesId,
     /// Nearest slot in the rendered series, counting elements on price-based chart types.
     /// Added points between main-series slots round to the nearest slot. Negative or past
@@ -49,15 +50,17 @@ pub struct ChartPointer {
     /// Every series added with `add_series` or `add_comparison` that has a bar at `time`,
     /// including hidden series and their host payloads.
     pub series_bars: Vec<(SeriesId, Bar)>,
+    /// Points of custom data series at `time`, read with [`Self::custom_point`].
+    custom_points: Vec<CustomPointAt>,
     /// Study plots at the selected main-series point, each with its stable study id. Defaults to the visible plots
     /// returned by [`Chart::study_values_at`]; [`Chart::set_cursor_data_policy`] can include
     /// hidden studies and plots. Missing values remain `None`; empty between main-series points.
     pub studies: Vec<(SeriesId, StudyValue)>,
-    /// The drawing, primitive, series or study under the pointer. Custom hit priority is
+    /// The annotation, drawing, primitive, series or study under the pointer. Custom hit priority is
     /// documented by [`PrimitiveHit`](super::PrimitiveHit).
     pub target: Option<PointerTarget>,
     /// The winning primitive or custom renderer's object, including its cursor and host data.
-    /// `target` identifies its primitive or series; `None` for drawings and built-in plots.
+    /// `target` identifies its primitive or series; `None` for annotations, drawings and built-in plots.
     pub primitive_hit: Option<super::PrimitiveHit>,
     /// Modifier keys held during the event.
     pub modifiers: Modifiers,
@@ -70,6 +73,21 @@ pub struct ChartPointer {
     pub origin: Option<egui::Event>,
 }
 
+/// A clone of the point of a custom data series under the cursor.
+#[derive(Debug, Clone)]
+struct CustomPointAt {
+    series: SeriesId,
+    /// Points have no equality of their own; any change of the series' data counts as a change.
+    revision: u64,
+    point: std::sync::Arc<dyn std::any::Any + Send + Sync>,
+}
+
+impl PartialEq for CustomPointAt {
+    fn eq(&self, other: &Self) -> bool {
+        self.series == other.series && self.revision == other.revision
+    }
+}
+
 impl PartialEq for ChartPointer {
     fn eq(&self, other: &Self) -> bool {
         self.origin == other.origin && self.same_position(other)
@@ -77,6 +95,17 @@ impl PartialEq for ChartPointer {
 }
 
 impl ChartPointer {
+    /// The point of the custom data series `series` at [`time`](Self::time), including
+    /// whitespace and hidden series, as [`series_bars`](Self::series_bars) holds added bars.
+    /// `None` without a point at that key, for another series or for another point type.
+    pub fn custom_point<P: super::CustomPoint>(&self, series: SeriesId) -> Option<&P> {
+        self.custom_points
+            .iter()
+            .find(|item| item.series == series)?
+            .point
+            .downcast_ref()
+    }
+
     fn same_position(&self, other: &Self) -> bool {
         self.time == other.time
             && self.price == other.price
@@ -85,6 +114,7 @@ impl ChartPointer {
             && self.pos == other.pos
             && self.pane == other.pane
             && self.previous_close == other.previous_close
+            && self.custom_points == other.custom_points
             && self.studies == other.studies
             && self.target == other.target
             && self.primitive_hit == other.primitive_hit
@@ -102,8 +132,8 @@ impl ChartPointer {
     }
 }
 
-fn same_bar(left: &Bar, right: &Bar) -> bool {
-    // Empty slots contain NaNs, but do not change while the pointer stays still.
+/// Whether two bars are the same, including whitespace bars, whose NaN values never compare equal.
+pub(super) fn same_bar(left: &Bar, right: &Bar) -> bool {
     left == right
         || (left.is_whitespace()
             && right.is_whitespace()
@@ -113,7 +143,13 @@ fn same_bar(left: &Bar, right: &Bar) -> bool {
 }
 
 /// The object under the pointer of a [`ChartPointer`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Annotations follow paint order: normal markers and added-series price lines sit with
+/// their series; above-series markers precede main-series price lines and drawings; top
+/// markers follow drawings. Above-pass primitives follow top markers.
+/// Later annotations in the same layer win. Only the clipped parts painted this frame can be targeted.
+/// Existing drawing and custom-hit precedence applies when no annotation wins.
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PointerTarget {
     /// A series or study line, as a click there would select it.
@@ -122,6 +158,22 @@ pub enum PointerTarget {
     Drawing(usize),
     /// A primitive whose [`hit_test_result`](super::Primitive::hit_test_result) reports the pointer.
     Primitive(super::PrimitiveId),
+    /// A painted bar marker. The host ID remains stable when the marker list changes.
+    Marker {
+        /// The series that owns the marker.
+        series: SeriesId,
+        /// The identity supplied by the host, or `None` for an unnamed marker.
+        id: Option<String>,
+        /// Time of the marker, mapped to its displayed element on price-based charts.
+        time: DateTime<Utc>,
+    },
+    /// A painted custom price line with its live handle.
+    PriceLine {
+        /// The series that owns the line.
+        series: SeriesId,
+        /// The handle returned by [`Chart::add_price_line`].
+        id: super::PriceLineId,
+    },
 }
 
 /// The device behind a [`ChartPointer`].
@@ -171,8 +223,8 @@ pub enum ChartEvent {
     TimeScaleResized(egui::Vec2),
     /// The local cursor moved or anything its pointer carries changed, such as the bar under a
     /// stationary cursor, held modifiers or touch details; `None` means it left the plots or
-    /// loaded data has no eligible crosshair index in view. Empty plots report a position
-    /// without a data time.
+    /// loaded data has no eligible crosshair index in view. Empty plots and visible annotation
+    /// targets without eligible cursor data report a position without a data time.
     /// Programmatically synchronized cursors do not emit this event.
     CrosshairMoved(Option<ChartPointer>),
     /// A primary or secondary click in a plot, including clicks selecting drawings or studies.
@@ -213,28 +265,31 @@ pub enum ChartEvent {
     #[cfg(feature = "drawings")]
     #[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
     ImageRequested(ImageRequest),
-    /// A successful history page or `set_data` completed, including an empty result.
-    /// Live updates emit `DataUpdated` instead; failed or obsolete feed replies emit nothing.
+    /// A successful history page, `set_data` or `set_custom_data` completed, including an empty
+    /// result. Live updates emit `DataUpdated` instead; failed or obsolete feed replies emit
+    /// nothing.
     DataLoaded {
-        /// Bar series that received data.
+        /// Series that received data.
         series: SeriesId,
-        /// Total accepted bars now held by that series, after cleaning and merging.
+        /// Total accepted bars or points now held by that series, after cleaning and merging.
         bars: usize,
     },
-    /// A live bar from `update` or the chart's feed changed the bars of a series, or `pop_bars`
-    /// removed some. Changes of one series in a row are reported once, with the latest count.
+    /// A live bar from `update` or the chart's feed changed the bars of a series, `pop_bars`
+    /// removed some, or `update_custom_data` changed a custom data series. Changes of one series
+    /// in a row are reported once, with the latest count.
     DataUpdated {
-        /// Bar series whose bars changed.
+        /// Series whose bars or points changed.
         series: SeriesId,
-        /// Total bars now held by that series.
+        /// Total bars or points now held by that series.
         bars: usize,
     },
-    /// One accepted `set_data` or `update` call, when enabled with
-    /// [`Chart::set_data_operation_notifications`]. Never coalesced; additional to the compact
-    /// `DataLoaded` and `DataUpdated` events. Feed replies, removals and constructor data do not
-    /// emit this event. Overflow is reported by `EventsDropped` as for other notifications.
+    /// One accepted `set_data`, `update`, `set_custom_data` or `update_custom_data` call, when
+    /// enabled with [`Chart::set_data_operation_notifications`]. Never coalesced; additional to
+    /// the compact `DataLoaded` and `DataUpdated` events. Feed replies, removals and constructor
+    /// data do not emit this event. Overflow is reported by `EventsDropped` as for other
+    /// notifications.
     DataOperation {
-        /// Bar series that accepted the operation.
+        /// Series that accepted the operation.
         series: SeriesId,
         /// The operation and, for an update, its incoming bar time.
         operation: DataOperation,
@@ -306,6 +361,7 @@ pub(super) struct HostEvents {
     input_frame: Option<(u64, Modifiers)>,
     /// What the pointer is over this frame, resolved while the plots are drawn.
     pub target: Option<PointerTarget>,
+    pub annotation_target: std::cell::RefCell<Option<PointerTarget>>,
     pub primitive_hit: Option<super::PrimitiveHit>,
     pub volume_map: Option<crate::scales::PriceMap>,
     #[cfg(feature = "drawings")]
@@ -387,7 +443,7 @@ impl Chart {
     pub(super) fn data_loaded(&mut self, series: SeriesId) {
         self.host_events.push(ChartEvent::DataLoaded {
             series,
-            bars: self.bars(series).len(),
+            bars: self.series_len(series),
         });
     }
 
@@ -401,13 +457,13 @@ impl Chart {
             self.host_events.push(ChartEvent::DataOperation {
                 series,
                 operation,
-                bars: self.bars(series).len(),
+                bars: self.series_len(series),
             });
         }
     }
 
     pub(super) fn data_updated(&mut self, series: SeriesId) {
-        let bars = self.bars(series).len();
+        let bars = self.series_len(series);
         if let Some(ChartEvent::DataUpdated {
             series: last,
             bars: count,
@@ -457,35 +513,42 @@ impl Chart {
                 .abs()
                 .max(coords.rect.right().abs())
                 .max(1.0);
-        for item in &self.price_series {
-            let at = item.bars.partition_point(|bar| bar.time < pointer_time);
-            for side in [
-                &mut item.bars[..at].iter().rev() as &mut dyn Iterator<Item = &Bar>,
-                &mut item.bars[at..].iter(),
-            ] {
-                for bar in side {
-                    let Some(index) = crate::model::index_at(shown, bar.time) else {
-                        continue;
-                    };
-                    let x = x_at(index);
-                    let candidate_distance = (x - pos.x).abs();
-                    if candidate_distance > distance + precision {
-                        break;
-                    }
-                    if !coords.is_x_visible(x) {
-                        continue;
-                    }
-                    let main = shown.binary_search_by_key(&bar.time, |bar| bar.time).ok();
-                    if self.crosshair_time_eligible(bar.time, main)
-                        && (candidate_distance + precision < distance
-                            || selected
-                                .is_none_or(|(time, _)| time.is_none_or(|time| bar.time > time)))
-                    {
-                        selected = Some((Some(bar.time), index));
-                        distance = candidate_distance;
-                    }
+        let mut nearest = |times: &mut dyn Iterator<Item = DateTime<Utc>>| {
+            for time in times {
+                let Some(index) = crate::model::index_at(shown, time) else {
+                    continue;
+                };
+                let x = x_at(index);
+                let candidate_distance = (x - pos.x).abs();
+                if candidate_distance > distance + precision {
+                    break;
+                }
+                if !coords.is_x_visible(x) {
+                    continue;
+                }
+                let main = shown.binary_search_by_key(&time, |bar| bar.time).ok();
+                if self.crosshair_time_eligible(time, main)
+                    && (candidate_distance + precision < distance
+                        || selected.is_none_or(|(selected, _)| {
+                            selected.is_none_or(|selected| time > selected)
+                        }))
+                {
+                    selected = Some((Some(time), index));
+                    distance = candidate_distance;
                 }
             }
+        };
+        for item in &self.price_series {
+            let at = item.bars.partition_point(|bar| bar.time < pointer_time);
+            nearest(&mut item.bars[..at].iter().rev().map(|bar| bar.time));
+            nearest(&mut item.bars[at..].iter().map(|bar| bar.time));
+        }
+        for custom in self.custom_series() {
+            let keys = custom.keys();
+            let keys = custom.shown(&keys);
+            let at = keys.partition_point(|key| key.time < pointer_time);
+            nearest(&mut keys[..at].iter().rev().map(|key| key.time));
+            nearest(&mut keys[at..].iter().map(|key| key.time));
         }
         selected
     }
@@ -587,7 +650,14 @@ impl Chart {
     ) -> Option<ChartPointer> {
         let plot = self.last_rendered_price_rect;
         let shown = self.state.shown();
-        let (time, index) = self.pointer_time(pos)?;
+        let pane_primitive = matches!(self.host_events.target.as_ref(),
+            Some(PointerTarget::Primitive(id))
+                if self.primitives.iter().any(|item| item.id == *id && item.pane.is_some())
+        );
+        let (time, index) = self.pointer_time(pos).or_else(|| {
+            (self.host_events.annotation_target.borrow().is_some() || pane_primitive)
+                .then(|| (None, self.get_chart_mapping().x_to_idx_f64(pos.x)))
+        })?;
         let index = index.round();
         let bar_at = (index >= 0.0 && index < shown.len() as f64)
             .then_some(index as usize)
@@ -618,9 +688,13 @@ impl Chart {
                     && plot.x_range().contains(pos.x)
             }) {
             let members = self.pane_series(group.id);
-            let owner = *members.first()?;
-            let map = self
-                .series_price_map(owner)
+            let owner = members
+                .first()
+                .copied()
+                .or(pane_primitive.then_some(SeriesId::MAIN))?;
+            let map = members
+                .first()
+                .and_then(|id| self.series_price_map(*id))
                 .unwrap_or_else(|| group.price_map());
             let closes = members.iter().filter_map(|id| {
                 let item =
@@ -721,11 +795,31 @@ impl Chart {
                     Some((item.id, item.bars[at].clone()))
                 })
                 .collect(),
+            custom_points: time.map_or_else(Vec::new, |time| {
+                self.custom_points_at(time)
+                    .map(|(series, revision, point)| CustomPointAt {
+                        series,
+                        revision,
+                        point,
+                    })
+                    .collect()
+            }),
             studies: bar_at.map_or_else(Vec::new, |index| {
                 self.study_rows_at_with_policy(index, self.host_events.cursor_data_policy)
             }),
-            target: self.host_events.target,
-            primitive_hit: self.host_events.primitive_hit.clone(),
+            target: self
+                .host_events
+                .annotation_target
+                .borrow()
+                .clone()
+                .or_else(|| self.host_events.target.clone()),
+            primitive_hit: self
+                .host_events
+                .annotation_target
+                .borrow()
+                .is_none()
+                .then(|| self.host_events.primitive_hit.clone())
+                .flatten(),
             modifiers: origin
                 .as_ref()
                 .map_or_else(|| ui.input(|input| input.modifiers), |(_, keys)| *keys),

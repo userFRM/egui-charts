@@ -65,6 +65,15 @@ fn pattern_combo(ui: &mut egui::Ui, pattern: &mut LineStyle) {
         .accessible_name(l10n::text(ui.ctx(), "Line pattern"));
 }
 
+fn width_picker(ui: &mut egui::Ui, width: &mut f32) {
+    ui.add(
+        egui::DragValue::new(width)
+            .range(0.5..=10.0)
+            .suffix(l10n::text(ui.ctx(), " px")),
+    )
+    .accessible_name(l10n::text(ui.ctx(), "Line width"));
+}
+
 impl IndicatorSettingsDialog {
     /// Open on the current values of the study identified by `id`.
     pub fn open(&mut self, id: SeriesId, study: &dyn Indicator, interval: Option<Timeframe>) {
@@ -239,12 +248,7 @@ impl IndicatorSettingsDialog {
                                             ),
                                         );
                                         ui.color_edit_button_srgba(&mut plot.color);
-                                        ui.add(
-                                            egui::DragValue::new(&mut plot.width)
-                                                .range(0.5..=10.0)
-                                                .suffix(l10n::text(ui.ctx(), " px")),
-                                        )
-                                        .accessible_name(l10n::text(ui.ctx(), "Line width"));
+                                        width_picker(ui, &mut plot.width);
                                     });
                                     ui.horizontal_wrapped(|ui| {
                                         pattern_combo(ui, &mut plot.pattern);
@@ -304,7 +308,36 @@ impl IndicatorSettingsDialog {
                                                 edit.settings.untagged_plots.push(line);
                                             }
                                         }
+                                        let mut price_line =
+                                            edit.settings.price_line_plots.contains(&line);
+                                        if ui
+                                            .checkbox(
+                                                &mut price_line,
+                                                l10n::text(ui.ctx(), "Latest value line"),
+                                            )
+                                            .changed()
+                                        {
+                                            edit.settings
+                                                .price_line_plots
+                                                .retain(|&other| other != line);
+                                            if price_line {
+                                                edit.settings.price_line_plots.push(line);
+                                            }
+                                        }
                                     });
+                                    if let Some(variants) =
+                                        edit.settings.plot_variants.get_mut(line)
+                                    {
+                                        for (index, variant) in variants.iter_mut().enumerate() {
+                                            ui.push_id(("variant", index), |ui| {
+                                                ui.horizontal_wrapped(|ui| {
+                                                    ui.label(l10n::text(ui.ctx(), &variant.name));
+                                                    ui.color_edit_button_srgba(&mut variant.color);
+                                                    width_picker(ui, &mut variant.width);
+                                                });
+                                            });
+                                        }
+                                    }
                                     ui.separator();
                                 });
                             }
@@ -331,6 +364,7 @@ impl IndicatorSettingsDialog {
                                         ui.color_edit_button_srgba(&mut level.color)
                                             .accessible_name(l10n::text(ui.ctx(), "Level colour"));
                                         pattern_combo(ui, &mut level.pattern);
+                                        width_picker(ui, &mut level.width);
                                     });
                                 });
                             }
@@ -346,6 +380,57 @@ impl IndicatorSettingsDialog {
                             }
                             if !edit.settings.levels.is_empty() {
                                 ui.separator();
+                            }
+                            ui.horizontal_wrapped(|ui| {
+                                let mut enabled = edit.settings.background.is_some()
+                                    && edit.settings.background_visible;
+                                if ui
+                                    .checkbox(&mut enabled, l10n::text(ui.ctx(), "Pane tint"))
+                                    .changed()
+                                {
+                                    edit.settings.background_visible = enabled;
+                                    if enabled && edit.settings.background.is_none() {
+                                        edit.settings.background =
+                                            Some(egui::Color32::from_rgba_unmultiplied(
+                                                120, 123, 134, 16,
+                                            ));
+                                    }
+                                }
+                                if let Some(color) = &mut edit.settings.background {
+                                    ui.color_edit_button_srgba(color)
+                                        .accessible_name(l10n::text(ui.ctx(), "Pane tint colour"));
+                                }
+                            });
+                            for (index, fill) in edit.settings.fills.iter_mut().enumerate() {
+                                ui.push_id(("fill", index), |ui| {
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.checkbox(
+                                            &mut fill.visible,
+                                            format!(
+                                                "{} {}",
+                                                l10n::text(ui.ctx(), "Band"),
+                                                index + 1
+                                            ),
+                                        );
+                                        ui.color_edit_button_srgba(&mut fill.color)
+                                            .accessible_name(l10n::text(ui.ctx(), "Band colour"));
+                                        let mut separate = fill.inverted_color.is_some();
+                                        if ui
+                                            .checkbox(
+                                                &mut separate,
+                                                l10n::text(ui.ctx(), "Alternate below"),
+                                            )
+                                            .changed()
+                                        {
+                                            fill.inverted_color = separate.then_some(fill.color);
+                                        }
+                                        if let Some(color) = &mut fill.inverted_color {
+                                            ui.color_edit_button_srgba(color).accessible_name(
+                                                l10n::text(ui.ctx(), "Band colour below"),
+                                            );
+                                        }
+                                    });
+                                });
                             }
                             ui.horizontal_wrapped(|ui| {
                                 ui.label(l10n::text(ui.ctx(), "Precision"));
@@ -431,6 +516,115 @@ impl IndicatorSettingsDialog {
 mod tests {
     use super::*;
     use crate::studies::{ConfiguredStudy, SMA};
+
+    #[test]
+    fn ao_presentation_saves_cancels_and_restores_across_gaps() {
+        use crate::studies::{AwesomeOscillator, StudyTemplate};
+        let bars: Vec<_> = [1.0, 2.0, 4.0, f64::NAN, 3.0, 1.0, 4.0, 2.0]
+            .into_iter()
+            .map(|p| {
+                crate::model::Bar::new("2026-01-01T00:00:00Z".parse().unwrap(), p, p, p, p, 1.0)
+            })
+            .collect();
+        let mut study = ConfiguredStudy::new(Box::new(AwesomeOscillator::new(2, 3)));
+        study.calculate(&bars);
+        let before = study.snapshot_settings();
+        let mut edited = serde_json::to_value(study.settings()).unwrap();
+        edited["price_line_plots"] = serde_json::json!([0, 99, 0]);
+        edited["untagged_plots"] = serde_json::json!([0]);
+        edited["plot_variants"] = serde_json::json!([[{
+            "name": "Decreasing bars", "color": [191, 71, 17, 255], "width": 5.0
+        }]]);
+        edited["background"] = serde_json::json!([20, 40, 60, 16]);
+        edited["background_visible"] = false.into();
+        edited["plots"][0]["color"] = serde_json::json!([17, 71, 191, 255]);
+        edited["plots"][0]["width"] = 2.0.into();
+        edited["plots"][0]["visible"] = false.into();
+        let mut dialog = IndicatorSettingsDialog::default();
+        dialog.open(SeriesId(2), &study, Some(Timeframe::Min1));
+        dialog.tab = Tab::Style;
+        dialog.edit.as_mut().unwrap().settings = serde_json::from_value(edited.clone()).unwrap();
+        let ctx = egui::Context::default();
+        let mut cancel_at = None;
+        for pressed in [None, None, Some(true), Some(false)] {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    events: pressed.map_or_else(Vec::new, |pressed| {
+                        let pos = cancel_at.expect("Cancel button is visible");
+                        vec![
+                            egui::Event::PointerMoved(pos),
+                            egui::Event::PointerButton {
+                                pos,
+                                button: egui::PointerButton::Primary,
+                                pressed,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ]
+                    }),
+                    ..Default::default()
+                },
+                |ui| {
+                    assert!(dialog.show(ui.ctx(), &Theme::dark()).is_none());
+                },
+            );
+            cancel_at = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Cancel" => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            });
+            output.drop_without_applying_deltas();
+        }
+        assert!(!dialog.is_open());
+        assert!(study.snapshot_settings() == before);
+        study
+            .apply_settings(&[], serde_json::from_value(edited).unwrap())
+            .unwrap();
+        study.calculate(&bars);
+        let applied = study.snapshot_settings();
+        let saved = serde_json::to_value(StudyTemplate::from_study(&study)).unwrap();
+        assert_eq!(
+            saved["settings"]["price_line_plots"],
+            serde_json::json!([0])
+        );
+        assert_eq!(saved["settings"]["plot_variants"][0][0]["width"], 5.0);
+        assert_eq!(saved["settings"]["background_visible"], false);
+        let template: StudyTemplate = serde_json::from_value(saved).unwrap();
+        let mut loaded = template.create().unwrap();
+        loaded.calculate(&bars);
+        assert_eq!(loaded.settings(), study.settings());
+        assert!(loaded.values().value(0, 3).is_none());
+        assert!(loaded.values().value(0, 5).is_none());
+        // At bar 7: (4 + 2)/2 - (1 + 4 + 2)/3 = 2/3, recovering after the gap.
+        assert!((loaded.values().value(0, 7).unwrap() - 2.0 / 3.0).abs() < 1e-12);
+        study.restore_settings(&before).unwrap();
+        study.calculate(&bars);
+        assert!(study.snapshot_settings() == before);
+        study.restore_settings(&applied).unwrap();
+        study.calculate(&bars);
+        assert_eq!(study.settings(), loaded.settings());
+        // Saved presentation predating these controls keeps the old widths and no new tint or line.
+        let mut older = serde_json::to_value(template).unwrap();
+        for key in [
+            "price_line_plots",
+            "plot_variants",
+            "background",
+            "background_visible",
+            "fills",
+        ] {
+            older["settings"].as_object_mut().unwrap().remove(key);
+        }
+        let older: StudyTemplate = serde_json::from_value(older).unwrap();
+        let older = older.create().unwrap();
+        let older = serde_json::to_value(older.settings()).unwrap();
+        assert_eq!(older["price_line_plots"], serde_json::json!([]));
+        assert!(older["background"].is_null());
+        assert_eq!(older["plots"][0]["width"], 2.0);
+    }
 
     #[test]
     fn dialog_follows_the_window_when_it_shrinks() {

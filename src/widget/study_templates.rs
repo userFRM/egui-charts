@@ -5,7 +5,7 @@ use crate::studies::{IndicatorFactory, InputValue, StudySource, StudyTemplate, S
 
 /// The position saved for a link to a study the chart no longer has: past the end of any set,
 /// and still a `usize` where that is 32 bits wide.
-const NO_STUDY: usize = u32::MAX as usize;
+pub(super) const NO_STUDY: usize = u32::MAX as usize;
 
 impl Chart {
     /// The chart's studies as a [`StudyTemplateSet`], in the order they were added. A link to
@@ -96,9 +96,25 @@ impl Chart {
         set: &StudyTemplateSet,
         factory: &IndicatorFactory,
     ) -> Result<Vec<SeriesId>, String> {
+        self.place_study_template_set(set, factory, true)
+    }
+
+    /// Adds the studies of `set`, in place of the chart's own when `replace` is true, and fails
+    /// as [`apply_study_template_set_with`](Self::apply_study_template_set_with) does.
+    pub(super) fn place_study_template_set(
+        &mut self,
+        set: &StudyTemplateSet,
+        factory: &IndicatorFactory,
+        replace: bool,
+    ) -> Result<Vec<SeriesId>, String> {
+        let kept = if replace {
+            0
+        } else {
+            self.indicators().count()
+        };
         if self
             .study_limit
-            .is_some_and(|limit| set.studies.len() > limit)
+            .is_some_and(|limit| kept + set.studies.len() > limit)
         {
             return Err("Study limit reached".into());
         }
@@ -118,9 +134,11 @@ impl Chart {
                     .map_err(|error| error.to_string())
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let replaced: Vec<_> = self.indicators().map(|(id, _)| id).collect();
-        for id in replaced {
-            self.remove_series(id);
+        if replace {
+            let replaced: Vec<_> = self.indicators().map(|(id, _)| id).collect();
+            for id in replaced {
+                self.remove_series(id);
+            }
         }
         let ids: Vec<_> = studies
             .into_iter()
@@ -156,9 +174,12 @@ impl Chart {
             .indicators()
             .find(|(_, study)| study.is_volume())
             .map(|(id, _)| id);
-        self.volume_study = volume;
-        self.volume_setting = self.volume_study.is_some();
-        self.config.show_volume = self.volume_setting;
+        // A study added beside the chart's own leaves the setting alone unless it is the volume.
+        if replace || (volume.is_some() && self.volume_study.is_none()) {
+            self.volume_study = volume;
+            self.volume_setting = self.volume_study.is_some();
+            self.config.show_volume = self.volume_setting;
+        }
         self.recalculate_studies();
         Ok(ids)
     }
@@ -169,6 +190,108 @@ mod tests {
     use super::super::test_frames;
     use crate::studies::{CCI, EMA, MACD, RSI, SMA, StudySource, StudyTemplateSet, Volume};
     use crate::widget::{Chart, SeriesId};
+
+    /// New studies inherit host defaults while explicit edits and saved studies keep their
+    /// settings through templates, copies, layout restore and undo.
+    #[test]
+    fn host_defaults_yield_to_explicit_and_saved_study_settings() {
+        use crate::model::PriceSource;
+        use crate::studies::{IndicatorFactory, InputValue, StudySource, StudyTemplate};
+
+        let mut chart = test_frames::chart(&[1.0, 4.0, 7.0], &[2.0, 5.0, 8.0]);
+        chart.add_indicator(Box::new(SMA::new(1)));
+        let saved = chart.study_template_set();
+        let mut factory = IndicatorFactory::new();
+        let mut defaults = saved.studies[0].clone();
+        defaults.inputs = vec![
+            ("period".into(), InputValue::Length(3)),
+            (
+                "source".into(),
+                InputValue::Source(StudySource::Price(PriceSource::Open)),
+            ),
+            ("plot_offset".into(), InputValue::Integer(1)),
+        ];
+        defaults.settings.plots[0].width = 4.0;
+        defaults.settings.show_legend_values = false;
+        factory.set_defaults(&[defaults]).unwrap();
+
+        let added = chart.user_action(|chart| chart.add_indicator(factory.create("SMA").unwrap()));
+        let study = chart.indicators().last().unwrap().1;
+        // The three opens average to (1 + 4 + 7) / 3 = 4.
+        assert_eq!(study.values().value(0, 2), Some(4.0));
+        assert_eq!(study.plot_offset(0), 1);
+        assert_eq!(study.plot_style(0).width, 4.0);
+        assert!(!study.legend_visible(0));
+        assert!(chart.undo());
+        assert_eq!(chart.indicators().count(), 1);
+        assert!(chart.redo());
+        assert_eq!(
+            chart.indicators().last().unwrap().1.plot_style(0).width,
+            4.0
+        );
+
+        let study = chart.indicator_mut(added).unwrap();
+        let mut settings = study.settings();
+        settings.plots[0].width = 2.0;
+        study
+            .apply_settings(
+                &[
+                    ("period".into(), InputValue::Length(2)),
+                    (
+                        "source".into(),
+                        InputValue::Source(StudySource::Price(PriceSource::Close)),
+                    ),
+                    ("plot_offset".into(), InputValue::Integer(0)),
+                ],
+                settings,
+            )
+            .unwrap();
+        chart.recalculate_studies();
+        let study = chart.indicators().last().unwrap().1;
+        // The final two closes average to (5 + 8) / 2 = 6.5.
+        assert_eq!(study.values().value(0, 2), Some(6.5));
+        assert_eq!(study.plot_offset(0), 0);
+        assert_eq!(study.plot_style(0).width, 2.0);
+
+        let ids = chart
+            .user_action(|chart| chart.apply_study_template_set_with(&saved, &factory))
+            .unwrap();
+        assert_eq!(ids.len(), 1);
+        let study = chart.indicators().next().unwrap().1;
+        assert_eq!(study.settings(), saved.studies[0].settings);
+        assert_eq!(study.values().value(0, 2), Some(8.0));
+        assert_eq!(study.plot_offset(0), 0);
+        assert!(chart.undo());
+        assert_eq!(chart.indicators().count(), 2);
+        assert!(chart.redo());
+        assert_eq!(chart.indicators().count(), 1);
+
+        #[cfg(feature = "drawings")]
+        {
+            let copied = chart.copy_indicator(ids[0]).unwrap();
+            let pasted = chart.paste_indicator(&copied, &factory).unwrap();
+            let study = chart.indicators().find(|(id, _)| *id == pasted).unwrap().1;
+            assert_eq!(study.plot_offset(0), 0);
+            assert_eq!(study.values().value(0, 2), Some(8.0));
+            assert_eq!(study.settings(), saved.studies[0].settings);
+        }
+        #[cfg(feature = "ui")]
+        {
+            let snapshot = serde_json::to_string(&chart.snapshot().unwrap()).unwrap();
+            chart
+                .restore_with(&serde_json::from_str(&snapshot).unwrap(), &factory)
+                .unwrap();
+            for (_, study) in chart.indicators() {
+                assert_eq!(study.settings(), saved.studies[0].settings);
+                assert_eq!(study.plot_offset(0), 0);
+                assert_eq!(study.values().value(0, 2), Some(8.0));
+            }
+        }
+        // Template reconstruction alone also ignores defaults, even for omitted inputs.
+        let mut legacy: StudyTemplate = saved.studies[0].clone();
+        legacy.inputs.clear();
+        assert_eq!(legacy.create_with(&factory).unwrap().plot_offset(0), 0);
+    }
 
     #[test]
     fn study_template_sets_keep_links_shared_panes_and_volume_on_another_chart() {

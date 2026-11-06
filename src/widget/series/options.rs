@@ -35,6 +35,17 @@ fn fed_symbols(name: &str) -> Vec<String> {
     }
 }
 
+/// Identifies a price axis within a pane, as returned by [`Chart::pane_scales`]; see
+/// [`Chart::pane_scale`] for the scale behind it.
+/// Shared assignments identify one scale; independently mapped studies identify their own axes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PaneScale {
+    /// A shared bar-series or study assignment.
+    Named(SeriesScale),
+    /// An independently mapped study.
+    Study(SeriesId),
+}
+
 /// Display settings of a host-fed bar series.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SeriesOptions {
@@ -198,6 +209,35 @@ impl SeriesOptions {
                 line_with_markers: line_style,
                 marker_radius: self.marker_radius.unwrap_or(3.0),
                 area,
+                hollow: crate::model::HollowStyle {
+                    body_up: self.up_color,
+                    body_down: self.down_color,
+                    border_up: self.up_color,
+                    border_down: self.down_color,
+                    wick_up: self.up_color,
+                    wick_down: self.down_color,
+                    ..Default::default()
+                },
+                volume_candles: crate::model::VolumeCandlesStyle {
+                    body_up: self.up_color,
+                    body_down: self.down_color,
+                    border_up: self.up_color,
+                    border_down: self.down_color,
+                    wick_up: self.up_color,
+                    wick_down: self.down_color,
+                    ..Default::default()
+                },
+                hlc_area: crate::model::HlcAreaStyle::with_colors(self.up_color, self.down_color),
+                heikin: crate::model::HeikinStyle {
+                    body_up: self.up_color,
+                    body_down: self.down_color,
+                    border_up: self.up_color,
+                    border_down: self.down_color,
+                    wick_up: self.up_color,
+                    wick_down: self.down_color,
+                    border_visible: self.candle_border_width > 0.0,
+                    ..Default::default()
+                },
                 bars: self.bars_style.clone(),
                 last_price_animation: self.last_price_animation,
                 baseline,

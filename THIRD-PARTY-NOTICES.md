@@ -16,7 +16,7 @@ The generated API reference retains rustdoc's scripts and styles under the MIT o
 
 `assets/icons/lines/cursor-demonstration.svg`, `assets/icons/lines/cursor-magic.svg`, `assets/icons/ui/compare-add.svg`, `assets/icons/ui/layout-single.svg`, `assets/icons/ui/drawing-keep.svg`, `assets/icons/ui/drawing-magnet.svg`, `assets/icons/ui/pin-scale.svg` and `assets/icons/ui/widget-bar-layers.svg` are original project artwork, licensed under either the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at your option.
 
-`assets/icons/ui/layout-2-columns.svg`, `layout-2-rows.svg`, `layout-3.svg` to `layout-16.svg`, the `layout-3-*.svg` to `layout-6-*.svg` arrangements, `layout-6-2x3.svg`, `layout-7-columns.svg`, `layout-8-*.svg` to `layout-10-*.svg` and `layout-12-*.svg`, `layout-14-7x2.svg` and `layout-16-8x2.svg` arrangements, `layout-tabs.svg`, `publish.svg`, `quick-search.svg` and `settings-nut.svg` in the same directory are original project artwork, licensed under either the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at your option.
+`assets/icons/ui/layout-2-columns.svg`, `layout-2-rows.svg`, `layout-3.svg` to `layout-16.svg`, the `layout-3-*.svg` to `layout-6-*.svg` arrangements, `layout-6-2x3.svg`, `layout-7-columns.svg`, `layout-8-*.svg` to `layout-10-*.svg` and `layout-12-*.svg`, `layout-14-7x2.svg` and `layout-16-8x2.svg` arrangements, `layout-4-split-*.svg`, `layout-5-split-*.svg`, `layout-5-2-top.svg`, `layout-6-2-top.svg`, `layout-6-4-top.svg`, `layout-7-large-left.svg` and `layout-9-5-top.svg`, `layout-tabs.svg`, `publish.svg`, `quick-search.svg` and `settings-nut.svg` in the same directory are original project artwork, licensed under either the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at your option.
 
 `assets/icons/shapes-annotations/arrow-mark-left.svg`, `arrow-mark-right.svg`, `sector.svg` and `sticker.svg` in the same directory, and the vector glyphs in `src/drawings/glyphs.rs`, are original project artwork, licensed under either the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at your option.
 
@@ -24,7 +24,7 @@ The generated API reference retains rustdoc's scripts and styles under the MIT o
 
 `assets/icons/chart-types/chart-volume-footprint.svg` and `chart-session-volume-profile.svg` in the same directory are original project artwork, licensed under either the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at your option.
 
-`assets/icons/ui/liquidity-heatmap.svg` is original project artwork, licensed under either the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at your option.
+`assets/icons/ui/liquidity-heatmap.svg`, `replay-random.svg` and `replay-select-bar.svg` are original project artwork, licensed under either the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at your option.
 
 ## Lucide icons
 

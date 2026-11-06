@@ -132,24 +132,66 @@ impl Default for BaselineStyle {
     }
 }
 
-/// The HLC area chart's fill and close line. The fills take the chart's bullish and bearish
-/// colours and the close line its bullish colour.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+/// The HLC area chart's high, low and close lines and the fills between them. Lines join their
+/// points with straight segments like the fills, whatever their `line_type`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HlcAreaStyle {
-    /// Opacity of the high-to-close and close-to-low fills, 0 to 1. Values outside the range
-    /// are clamped; a non-finite opacity draws no fill.
-    pub fill_opacity: f32,
-    /// Close line width in logical points. Non-positive or non-finite widths hide the line.
-    pub line_width: f32,
+    /// Draw the line through the highs.
+    pub high_line_visible: bool,
+    /// Line through the highs.
+    pub high_line: LinePlotStyle,
+    /// Draw the line through the lows.
+    pub low_line_visible: bool,
+    /// Line through the lows.
+    pub low_line: LinePlotStyle,
+    /// Line through the closes. A non-positive or non-finite width hides it.
+    pub close_line: LinePlotStyle,
+    /// Draw the fill between the high and close lines.
+    pub high_to_close_fill_visible: bool,
+    /// Fill between the high and close lines, including opacity.
+    pub high_to_close_fill: Color32,
+    /// Draw the fill between the close and low lines.
+    pub close_to_low_fill_visible: bool,
+    /// Fill between the close and low lines, including opacity.
+    pub close_to_low_fill: Color32,
+}
+
+impl HlcAreaStyle {
+    /// The default style with its high line and upper fill in `up` and its low line and lower
+    /// fill in `down`.
+    pub(crate) fn with_colors(up: Color32, down: Color32) -> Self {
+        let line = |color| LinePlotStyle {
+            color,
+            ..Default::default()
+        };
+        // Fills default to 20% opacity.
+        let fill = |color| Self::fill_tint(color, 51);
+        Self {
+            high_line_visible: true,
+            high_line: line(up),
+            low_line_visible: true,
+            low_line: line(down),
+            close_line: line(Color32::from_rgb(134, 137, 147)),
+            high_to_close_fill_visible: true,
+            high_to_close_fill: fill(up),
+            close_to_low_fill_visible: true,
+            close_to_low_fill: fill(down),
+        }
+    }
+
+    /// `color` at the fill opacity `alpha`.
+    pub(crate) fn fill_tint(color: Color32, alpha: u8) -> Color32 {
+        Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha)
+    }
 }
 
 impl Default for HlcAreaStyle {
     fn default() -> Self {
-        Self {
-            fill_opacity: 30.0 / 255.0,
-            line_width: DESIGN_TOKENS.stroke.thick,
-        }
+        Self::with_colors(
+            DESIGN_TOKENS.semantic.extended.bullish,
+            DESIGN_TOKENS.semantic.extended.bearish,
+        )
     }
 }
 
@@ -197,6 +239,149 @@ impl Default for CandlesStyle {
     }
 }
 
+/// Independent candle components and scale prices for the Heikin-Ashi chart.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HeikinStyle {
+    /// Fill the transformed open-to-close body.
+    pub body_visible: bool,
+    /// Outline the transformed body inside its bounds, using the chart's positive border
+    /// width or a one-point stroke by default.
+    pub border_visible: bool,
+    /// Draw the transformed high-to-low wick.
+    pub wick_visible: bool,
+    /// Compare transformed closes when choosing colours instead of open and close.
+    pub color_by_previous_close: bool,
+    /// Rising body colour.
+    pub body_up: Color32,
+    /// Falling body colour.
+    pub body_down: Color32,
+    /// Rising border colour.
+    pub border_up: Color32,
+    /// Falling border colour.
+    pub border_down: Color32,
+    /// Rising wick colour.
+    pub wick_up: Color32,
+    /// Falling wick colour.
+    pub wick_down: Color32,
+    /// Show only the original close on the price scale. By default both original and
+    /// transformed closes are labelled.
+    pub real_price_only: bool,
+}
+
+impl Default for HeikinStyle {
+    fn default() -> Self {
+        let up = DESIGN_TOKENS.semantic.extended.bullish;
+        let down = DESIGN_TOKENS.semantic.extended.bearish;
+        Self {
+            body_visible: true,
+            border_visible: true,
+            wick_visible: true,
+            color_by_previous_close: false,
+            body_up: up,
+            body_down: down,
+            border_up: up,
+            border_down: down,
+            wick_up: up,
+            wick_down: down,
+            real_price_only: false,
+        }
+    }
+}
+
+/// Independent candle components for the hollow candles chart.
+///
+/// A bar is coloured by its close against the previous close and is hollow, an outline without
+/// fill, when its close is above its open.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HollowStyle {
+    /// Fill the body of a candle that is not hollow.
+    pub body_visible: bool,
+    /// Outline the body, which is all a hollow candle shows of it.
+    pub border_visible: bool,
+    /// Draw the high-to-low wick.
+    pub wick_visible: bool,
+    /// Rising body colour.
+    pub body_up: Color32,
+    /// Falling body colour.
+    pub body_down: Color32,
+    /// Rising border colour.
+    pub border_up: Color32,
+    /// Falling border colour.
+    pub border_down: Color32,
+    /// Rising wick colour.
+    pub wick_up: Color32,
+    /// Falling wick colour.
+    pub wick_down: Color32,
+}
+
+impl Default for HollowStyle {
+    fn default() -> Self {
+        let up = DESIGN_TOKENS.semantic.extended.bullish;
+        let down = DESIGN_TOKENS.semantic.extended.bearish;
+        Self {
+            body_visible: true,
+            border_visible: true,
+            wick_visible: true,
+            body_up: up,
+            body_down: down,
+            border_up: up,
+            border_down: down,
+            wick_up: up,
+            wick_down: down,
+        }
+    }
+}
+
+/// Independent candle components for the volume candles chart.
+///
+/// A bar is rising when its close is above its open, or with `color_by_previous_close` when its
+/// close is not below the previous close.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VolumeCandlesStyle {
+    /// Fill the body.
+    pub body_visible: bool,
+    /// Outline the body.
+    pub border_visible: bool,
+    /// Draw the high-to-low wick.
+    pub wick_visible: bool,
+    /// Compare a bar's close with the previous close instead of its open.
+    pub color_by_previous_close: bool,
+    /// Rising body colour.
+    pub body_up: Color32,
+    /// Falling body colour.
+    pub body_down: Color32,
+    /// Rising border colour.
+    pub border_up: Color32,
+    /// Falling border colour.
+    pub border_down: Color32,
+    /// Rising wick colour.
+    pub wick_up: Color32,
+    /// Falling wick colour.
+    pub wick_down: Color32,
+}
+
+impl Default for VolumeCandlesStyle {
+    fn default() -> Self {
+        let up = DESIGN_TOKENS.semantic.extended.bullish;
+        let down = DESIGN_TOKENS.semantic.extended.bearish;
+        Self {
+            body_visible: true,
+            border_visible: true,
+            wick_visible: true,
+            color_by_previous_close: false,
+            body_up: up,
+            body_down: down,
+            border_up: up,
+            border_down: down,
+            wick_up: up,
+            wick_down: down,
+        }
+    }
+}
+
 /// The Kagi chart's stroke widths in logical points. Non-positive or non-finite widths hide
 /// the lines of that thickness.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -217,7 +402,8 @@ impl Default for KagiStyle {
     }
 }
 
-/// Styles of the candles, bars, line, step, marker, area, HLC area, baseline and Kagi chart types.
+/// Styles of the candle, hollow candle, volume candle, Heikin-Ashi, bar, line, step, marker, area,
+/// HLC area, baseline and Kagi chart types.
 /// Defaults use the design-token palette and remain independent of candle colours.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -238,6 +424,12 @@ pub struct ChartTypeStyles {
     pub hlc_area: HlcAreaStyle,
     /// Candles chart.
     pub candles: CandlesStyle,
+    /// Hollow candles chart.
+    pub hollow: HollowStyle,
+    /// Volume candles chart.
+    pub volume_candles: VolumeCandlesStyle,
+    /// Heikin-Ashi chart.
+    pub heikin: HeikinStyle,
     /// Bars chart.
     pub bars: BarsStyle,
     /// Kagi chart.
@@ -268,6 +460,9 @@ impl Default for ChartTypeStyles {
             baseline: BaselineStyle::default(),
             hlc_area: HlcAreaStyle::default(),
             candles: CandlesStyle::default(),
+            hollow: HollowStyle::default(),
+            volume_candles: VolumeCandlesStyle::default(),
+            heikin: HeikinStyle::default(),
             bars: BarsStyle::default(),
             kagi: KagiStyle::default(),
             crosshair_marker_radius: 0.0,

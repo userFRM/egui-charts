@@ -4,9 +4,10 @@ mod options;
 mod paint;
 mod scales;
 
-pub use options::SeriesOptions;
+pub use options::{PaneScale, SeriesOptions};
 pub(super) use options::{PriceSeries, SeriesLegend, base_line};
 pub(super) use paint::paint_last_price_pulse;
+pub(super) use scales::axis_label_rect;
 
 use super::change_marks::ChangeMarks;
 use super::{Chart, ChartElementId, DataOperation, SeriesId};
@@ -26,14 +27,24 @@ pub(super) fn index_at_time(
     time: DateTime<Utc>,
     direction: MismatchDirection,
 ) -> Option<usize> {
-    let at = bars.partition_point(|bar| bar.time < time);
-    if bars.get(at).is_some_and(|bar| bar.time == time) {
+    index_of_key(bars, |bar| bar.time, time, direction)
+}
+
+/// [`index_at_time`] over any items in time order.
+pub(super) fn index_of_key<T>(
+    items: &[T],
+    key: impl Fn(&T) -> DateTime<Utc>,
+    time: DateTime<Utc>,
+    direction: MismatchDirection,
+) -> Option<usize> {
+    let at = items.partition_point(|item| key(item) < time);
+    if items.get(at).is_some_and(|item| key(item) == time) {
         return Some(at);
     }
     match direction {
         MismatchDirection::Exact => None,
         MismatchDirection::NearestLeft => at.checked_sub(1),
-        MismatchDirection::NearestRight => (at < bars.len()).then_some(at),
+        MismatchDirection::NearestRight => (at < items.len()).then_some(at),
     }
 }
 
@@ -52,10 +63,12 @@ pub enum MismatchDirection {
 }
 
 /// The bars of a series inside a range of logical indices, from
-/// [`Chart::bars_in_logical_range`].
+/// [`Chart::bars_in_logical_range`], or the points of a custom series, from
+/// [`Chart::custom_points_in_logical_range`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct BarsInRange {
-    /// Indices into [`Chart::bars`] of the bars inside the range, empty when none is.
+    /// Indices into [`Chart::bars`] or [`Chart::custom_points`] of the items inside the range,
+    /// empty when none is.
     pub bars: std::ops::Range<usize>,
     /// The logical distance from the series' first bar to the first selected bar. If no bars
     /// are selected, or the series' first bar is selected, measured to the unrounded left
@@ -111,7 +124,7 @@ impl Chart {
     pub fn set_data(&mut self, series: SeriesId, bars: Vec<Bar>) {
         if (series == SeriesId::MAIN && self.main_series_present
             || self.price_series.iter().any(|item| item.id == series))
-            && self.replay.is_some()
+            && self.replay_retains(series)
         {
             self.replay_set_data(series, bars);
             self.data_set(series);
@@ -174,8 +187,8 @@ impl Chart {
             let clock = self.clock();
             let slot = clock.bar_open(bar.time);
             let bars = self
-                .replay
-                .as_ref()
+                .replay_window()
+                .filter(|_| self.replay_retains(series))
                 .and_then(|replay| replay.bars.get(&series))
                 .map_or_else(|| self.bars(series), Vec::as_slice);
             Some(
@@ -190,7 +203,7 @@ impl Chart {
         };
         let changed = if (series == SeriesId::MAIN && self.main_series_present
             || self.price_series.iter().any(|item| item.id == series))
-            && self.replay.is_some()
+            && self.replay_retains(series)
         {
             self.replay_update(series, bar)
         } else if let Some(at) = self.price_series.iter().position(|item| item.id == series) {
@@ -234,7 +247,7 @@ impl Chart {
     pub fn pop_bars(&mut self, series: SeriesId, count: usize) -> Vec<Bar> {
         let present = series == SeriesId::MAIN && self.main_series_present
             || self.price_series.iter().any(|item| item.id == series);
-        let removed = if present && self.replay.is_some() {
+        let removed = if present && self.replay_retains(series) {
             self.replay_pop(series, count)
         } else if let Some(item) = self.price_series.iter_mut().find(|item| item.id == series) {
             item.revision = crate::model::next_revision();
@@ -289,9 +302,8 @@ impl Chart {
                 self.bar_limits.remove(&series);
             }
         }
-        if self.replay.is_some() {
-            self.apply_replay_window();
-        } else if self.enforce_bar_limit(series) > 0 {
+        self.apply_replay_window();
+        if !self.replay_windows(series) && self.enforce_bar_limit(series) > 0 {
             self.data_updated(series);
         }
     }
@@ -304,7 +316,8 @@ impl Chart {
     /// Removes up to `count` oldest bars of `series`, returning them oldest first. Studies
     /// restart on the retained window; drawings keep their timestamps and the view keeps its
     /// time position where possible. During replay this removes from the full retained history
-    /// and its matching finer-source slots.
+    /// and its matching finer-source slots; in market replay the main series and the series a
+    /// feed supplies lose the bars the driver built instead.
     /// Emits [`ChartEvent::DataUpdated`](super::ChartEvent::DataUpdated) when bars are removed.
     /// Unknown ids and study ids are ignored with a warning.
     pub fn remove_oldest_bars(&mut self, series: SeriesId, count: usize) -> Vec<Bar> {
@@ -322,7 +335,9 @@ impl Chart {
         let clock = self
             .timeframe
             .map_or_else(BarClock::exact, |_| self.bar_clock());
-        let removed = if let Some(replay) = &mut self.replay {
+        let removed = if self.replay_windows(series)
+            && let Some(replay) = self.replay_window_mut()
+        {
             let removed = replay.remove_oldest_bars(series, count, &clock);
             self.apply_replay_window();
             removed
@@ -356,7 +371,15 @@ impl Chart {
                 if let Some(marks) = &mut self.change_marks {
                     marks.clear();
                 }
-                self.pending_from.fill(Some(0));
+                // A study that keeps the values of the remaining bars draws them until its turn.
+                for (at, study) in self.studies.indicators_mut().iter_mut().enumerate() {
+                    if self.pending_from[at] != Some(0) && study.remove_oldest_bars(removed.len()) {
+                        self.pending_from[at] = None;
+                        self.stale[at] = true;
+                    } else {
+                        self.pending_from[at] = Some(0);
+                    }
+                }
                 if let Some(start) = &mut self.pending_start_idx {
                     *start = start.saturating_sub(removed.len());
                 }
@@ -426,18 +449,29 @@ impl Chart {
         index: f64,
         direction: MismatchDirection,
     ) -> Option<&Bar> {
+        let bars = self.bars(series);
+        bars.get(self.key_at_index(bars, |bar| bar.time, index, direction)?)
+    }
+
+    /// The position in `items`, in time order, at a logical position on the shared scale.
+    pub(super) fn key_at_index<T>(
+        &self,
+        items: &[T],
+        key: impl Fn(&T) -> DateTime<Utc>,
+        index: f64,
+        direction: MismatchDirection,
+    ) -> Option<usize> {
         if !index.is_finite() {
             return None;
         }
         self.state.shown().first()?;
-        let bars = self.bars(series);
         if let Some(time) = self.index_to_time(index) {
-            return bars.get(self.bar_index_at(series, time, direction)?);
+            return index_of_key(items, key, time, direction);
         }
         // Extrapolation beyond the timestamp domain still has a neighbour on one side.
         match direction {
-            MismatchDirection::NearestLeft if index > 0.0 => bars.last(),
-            MismatchDirection::NearestRight if index < 0.0 => bars.first(),
+            MismatchDirection::NearestLeft if index > 0.0 => items.len().checked_sub(1),
+            MismatchDirection::NearestRight if index < 0.0 => (!items.is_empty()).then_some(0),
             _ => None,
         }
     }
@@ -456,23 +490,32 @@ impl Chart {
         series: SeriesId,
         range: LogicalRange,
     ) -> Option<BarsInRange> {
-        let bars = self.bars(series);
+        self.keys_in_logical_range(self.bars(series), |bar| bar.time, range)
+    }
+
+    /// [`bars_in_logical_range`](Self::bars_in_logical_range) over any items in time order.
+    pub(super) fn keys_in_logical_range<T>(
+        &self,
+        items: &[T],
+        key: impl Fn(&T) -> DateTime<Utc>,
+        range: LogicalRange,
+    ) -> Option<BarsInRange> {
         let shown = self.state.shown();
-        let (first, last) = (bars.first()?, bars.last()?);
-        let index = |bar: &Bar| crate::model::index_at(shown, bar.time).unwrap_or(f64::NAN);
+        let (first, last) = (items.first()?, items.last()?);
+        let index = |item: &T| crate::model::index_at(shown, key(item)).unwrap_or(f64::NAN);
         let (left, right) = (f64::from(range.left), f64::from(range.right));
         shown.first()?;
-        let start = bars.partition_point(|bar| index(bar) < left.round());
-        let end = bars
-            .partition_point(|bar| index(bar) <= right.round())
+        let start = items.partition_point(|item| index(item) < left.round());
+        let end = items
+            .partition_point(|item| index(item) <= right.round())
             .max(start);
         let from = if start > 0 && start < end {
-            index(&bars[start])
+            index(&items[start])
         } else {
             left
         };
-        let to = if end < bars.len() && start < end {
-            index(&bars[end - 1])
+        let to = if end < items.len() && start < end {
+            index(&items[end - 1])
         } else {
             right
         };
@@ -619,7 +662,8 @@ impl Chart {
     }
 
     /// What the chart knows about the feed of `series`, such as the bars dropped as invalid.
-    /// `Some` for every present bar series.
+    /// `Some` for every present bar series and custom data series, whose invalid points count
+    /// as `rejected_bars`.
     pub fn feed_state(&self, series: SeriesId) -> Option<&FeedState> {
         if series == SeriesId::MAIN && self.main_series_present {
             Some(&self.feed)
@@ -628,6 +672,7 @@ impl Chart {
                 .iter()
                 .find(|item| item.id == series)
                 .map(|item| &item.feed)
+                .or_else(|| self.custom_feed_state(series))
         }
     }
 

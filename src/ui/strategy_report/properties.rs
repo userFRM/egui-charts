@@ -2,7 +2,7 @@
 
 use crate::{
     localization as l10n,
-    model::Timeframe,
+    model::{ChartType, OrderSide, Timeframe},
     strategies::{BacktestSettings, Commission, OrderSize, Slippage},
 };
 
@@ -17,6 +17,20 @@ pub(super) fn validate(settings: &BacktestSettings) -> Result<(), &'static str> 
         Slippage::Fraction(v) => v,
         Slippage::Ticks { tick_size, .. } => tick_size,
     };
+    if [settings.long_funding, settings.short_funding]
+        .into_iter()
+        .flatten()
+        .any(|value| !value.is_finite() || value < 0.0)
+        || !settings.price_increment.is_finite()
+        || settings.price_increment <= 0.0
+        || !settings.liquidation_increment.is_finite()
+        || settings.liquidation_increment <= 0.0
+        || (settings.chart_type.transforms_data() && settings.recalculate_on_history)
+    {
+        return Err(
+            "Use nonnegative funding, positive price and unit steps, and regular candles for historical ticks",
+        );
+    }
     if !settings.initial_capital.is_finite()
         || !settings.risk_free_rate.is_finite()
         || settings.risk_free_rate <= -1.0
@@ -41,7 +55,19 @@ fn number(ui: &mut egui::Ui, label: &str, value: &mut f64, min: f64) {
     ui.add(
         egui::DragValue::new(value)
             .range(min..=f64::MAX)
-            .speed(0.01),
+            .speed(0.01)
+            .custom_formatter(|value, decimals| {
+                let text = egui::emath::format_with_decimals_in_range(value, decimals);
+                let tolerance = crate::model::rounding_tolerance(value, 4.0 * f64::EPSILON);
+                if text
+                    .parse::<f64>()
+                    .is_ok_and(|shown| (shown - value).abs() > tolerance)
+                {
+                    value.to_string()
+                } else {
+                    text
+                }
+            }),
     )
     .labelled_by(label.id);
     ui.end_row();
@@ -154,7 +180,63 @@ pub(super) fn show(
                 }
             }
         }
-        number(ui, "Leverage", &mut settings.leverage, 1.0);
+        for (side, label) in [
+            (OrderSide::Buy, "Long funding (%)"),
+            (OrderSide::Sell, "Short funding (%)"),
+        ] {
+            let before = settings.funding(side) * 100.0;
+            let mut percent = before;
+            number(ui, label, &mut percent, 0.0);
+            if percent != before {
+                let funding = match side {
+                    OrderSide::Buy => &mut settings.long_funding,
+                    OrderSide::Sell => &mut settings.short_funding,
+                };
+                *funding = Some(percent / 100.0);
+            }
+        }
+        number(
+            ui,
+            "Price increment",
+            &mut settings.price_increment,
+            0.0f64.next_up(),
+        );
+        number(
+            ui,
+            "Liquidation unit step",
+            &mut settings.liquidation_increment,
+            0.0f64.next_up(),
+        );
+        let mut crossing = usize::from(settings.require_limit_cross);
+        choice(
+            ui,
+            "Limit verification",
+            &mut crossing,
+            &["At the limit", "Cross by one increment"],
+        );
+        settings.require_limit_cross = crossing == 1;
+        let label = ui.label(l10n::text(ui.ctx(), "Order execution delay (price ticks)"));
+        ui.add(egui::DragValue::new(&mut settings.order_delay))
+            .labelled_by(label.id);
+        ui.end_row();
+        let label = ui.label(l10n::text(ui.ctx(), "Decision candles"));
+        egui::ComboBox::from_id_salt("decision_candles")
+            .selected_text(l10n::text(ui.ctx(), settings.chart_type.to_string()))
+            .show_ui(ui, |ui| {
+                for kind in [ChartType::Candles, ChartType::Heikin] {
+                    ui.selectable_value(
+                        &mut settings.chart_type,
+                        kind,
+                        l10n::text(ui.ctx(), kind.to_string()),
+                    );
+                }
+            })
+            .response
+            .labelled_by(label.id);
+        ui.end_row();
+        if settings.chart_type.transforms_data() {
+            settings.recalculate_on_history = false;
+        }
         let label = ui.label(l10n::text(ui.ctx(), "Start (UTC)"));
         ui.add(
             egui::TextEdit::singleline(start)
@@ -171,6 +253,18 @@ pub(super) fn show(
         &mut settings.recalculate_after_fills,
         l10n::text(ui.ctx(), "Recalculate after fills"),
     );
+    ui.add_enabled_ui(!settings.chart_type.transforms_data(), |ui| {
+        ui.checkbox(
+            &mut settings.recalculate_on_history,
+            l10n::text(ui.ctx(), "Decide on historical price ticks"),
+        );
+    });
+    ui.add_enabled_ui(settings.chart_type == ChartType::Heikin, |ui| {
+        ui.checkbox(
+            &mut settings.original_price_fills,
+            l10n::text(ui.ctx(), "Execute at original candle prices"),
+        );
+    });
     ui.checkbox(lower, l10n::text(ui.ctx(), "Lower-interval fills"));
     if *lower {
         egui::ComboBox::from_id_salt("fill_interval")

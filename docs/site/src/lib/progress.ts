@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 
 export const areas = ['Chart', 'Drawings', 'Studies', 'Order flow', 'Options', 'Terminal', 'Builder API'] as const;
-export const statuses = ['done', 'partial', 'missing'] as const;
+export const statuses = ['verified', 'unverified', 'incomplete', 'missing'] as const;
 type Status = typeof statuses[number];
 export type Feature = {
   area: typeof areas[number];
@@ -59,14 +59,15 @@ function parseFeatures(csv: string): Feature[] {
 
 export function counts(features: Feature[]) {
   return {
-    done: features.filter((feature) => feature.status === 'done').length,
-    partial: features.filter((feature) => feature.status === 'partial').length,
+    verified: features.filter((feature) => feature.status === 'verified').length,
+    unverified: features.filter((feature) => feature.status === 'unverified').length,
+    incomplete: features.filter((feature) => feature.status === 'incomplete').length,
     missing: features.filter((feature) => feature.status === 'missing').length,
     total: features.length,
   };
 }
 export const percentage = (features: Feature[]) =>
-  (features.length ? counts(features).done / features.length * 100 : 0).toFixed(1);
+  (features.length ? counts(features).verified / features.length * 100 : 0).toFixed(1);
 export const features = parseFeatures(readFileSync(`${root}/${path}`, 'utf8'));
 
 type Box = { x: number; y: number; width: number; height: number };

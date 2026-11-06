@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use egui::{Event, Pos2, RawInput, Rect, Shape, Vec2};
 
 /// Frames run before the measured ones.
-const WARMUP: usize = 60;
+pub const WARMUP: usize = 60;
 
 /// One measured frame.
 pub struct Sample {
@@ -28,7 +28,8 @@ pub fn run(
     mut ui: impl FnMut(&mut egui::Ui),
 ) -> Vec<Sample> {
     let ctx = egui::Context::default();
-    let mut samples = Vec::with_capacity(frames);
+    // Keep setup-only and short measured runs on the same heap layout.
+    let mut samples = Vec::with_capacity(frames.max(WARMUP));
     for i in 0..WARMUP + frames {
         let input = RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, screen)),

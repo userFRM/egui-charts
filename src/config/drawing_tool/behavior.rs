@@ -185,6 +185,14 @@ impl DrawingToolType {
         matches!(self, Self::Rect | Self::ParallelChannel)
     }
 
+    /// Whether the renderer shows the drawing's line measurements and midpoint.
+    pub fn supports_line_measurements(&self) -> bool {
+        matches!(
+            self,
+            Self::TrendLine | Self::Ray | Self::ExtendedLine | Self::InfoLine
+        )
+    }
+
     /// Whether a double click edits the drawing's text in place instead of opening its settings.
     pub fn edits_text_inline(&self) -> bool {
         self.is_text_annotation()

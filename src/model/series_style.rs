@@ -52,16 +52,61 @@ pub enum PriceLineSource {
     LastVisible,
 }
 
-/// The range a series contributes when its price scale fits the visible bars.
+/// Extra space at the screen edges of an automatically fitted price scale, in logical pixels.
+///
+/// Each edge takes the largest request among visible contributors on that pane and scale.
+/// These margins add to the scale's fractional margins, including on inverted scales.
+/// Negative and non-finite requests are ignored. Manual ranges ignore these margins;
+/// a pane too short to leave room for prices keeps its ordinary fit.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct AutoscaleMargins {
+    /// Extra space at the top of the plot.
+    pub top: f32,
+    /// Extra space at the bottom of the plot.
+    pub bottom: f32,
+}
+
+impl AutoscaleMargins {
+    #[cfg(feature = "widget")]
+    pub(crate) fn merge(&mut self, other: Self) {
+        if other.top.is_finite() {
+            self.top = self.top.max(other.top);
+        }
+        if other.bottom.is_finite() {
+            self.bottom = self.bottom.max(other.bottom);
+        }
+    }
+}
+
+/// Prices and extra screen space contributed to one automatically fitted price scale.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AutoscaleInfo {
+    /// The lowest and highest raw prices to include.
+    pub price_range: (f64, f64),
+    /// Extra screen space above and below the fitted prices. Defaults to zero.
+    pub margins: AutoscaleMargins,
+}
+
+impl From<(f64, f64)> for AutoscaleInfo {
+    fn from(price_range: (f64, f64)) -> Self {
+        Self {
+            price_range,
+            margins: AutoscaleMargins::default(),
+        }
+    }
+}
+
+/// The prices and optional pixel margins a series contributes when fitting visible bars.
 ///
 /// The function receives the series' visible bars and the range the chart would fit, in prices,
 /// or `None` when they have no finite values. It returns the range to fit instead, as
-/// `(min, max)` in prices, or `None` to leave the series out of the fit. A manual price range
-/// ignores it.
+/// `(min, max)` in prices, or `None` to leave the series out of the fit. Use
+/// [`with_margins`](Self::with_margins) to also reserve screen space. A manual price range
+/// ignores the contribution.
 #[derive(Clone)]
 #[allow(clippy::type_complexity)]
 pub struct AutoscaleProvider(
-    Arc<dyn Fn(&[Bar], Option<(f64, f64)>) -> Option<(f64, f64)> + Send + Sync>,
+    Arc<dyn Fn(&[Bar], Option<(f64, f64)>) -> Option<AutoscaleInfo> + Send + Sync>,
 );
 
 impl AutoscaleProvider {
@@ -69,11 +114,19 @@ impl AutoscaleProvider {
     pub fn new(
         provide: impl Fn(&[Bar], Option<(f64, f64)>) -> Option<(f64, f64)> + Send + Sync + 'static,
     ) -> Self {
+        Self::with_margins(move |bars, default| provide(bars, default).map(Into::into))
+    }
+
+    /// Wraps a provider that returns prices together with fixed logical-pixel margins.
+    /// The inputs and `None` behavior are the same as [`new`](Self::new).
+    pub fn with_margins(
+        provide: impl Fn(&[Bar], Option<(f64, f64)>) -> Option<AutoscaleInfo> + Send + Sync + 'static,
+    ) -> Self {
         Self(Arc::new(provide))
     }
 
-    /// The range to fit for `bars`, given the chart's `default` range.
-    pub(crate) fn range(&self, bars: &[Bar], default: Option<(f64, f64)>) -> Option<(f64, f64)> {
+    /// The contribution for `bars`, given the chart's `default` price range.
+    pub(crate) fn info(&self, bars: &[Bar], default: Option<(f64, f64)>) -> Option<AutoscaleInfo> {
         (self.0)(bars, default)
     }
 }
@@ -153,12 +206,13 @@ pub struct SeriesStyle {
     pub base_line_width: f32,
     /// Base line pattern. Defaults to [`LineStyle::Solid`].
     pub base_line_style: LineStyle,
-    /// Replaces the range the series contributes to its scale's fit. A function is not saved;
-    /// hosts set it again after restoring a chart.
+    /// Replaces the prices and pixel margins the series contributes to its scale's fit.
+    /// A function is not saved; hosts set it again after restoring a chart.
     #[serde(skip)]
     pub autoscale: Option<AutoscaleProvider>,
     /// Horizontal distance in logical points from a bar's centre within which a click on its
-    /// high to low range selects the main series. Host series do not take clicks.
+    /// high to low range selects the main series. Host series do not take clicks. A column
+    /// series also selects a click this far outside its painted column in any direction.
     pub hit_tolerance: f32,
     /// Visibility and style of the series' alert levels.
     pub alerts: SeriesAlerts,

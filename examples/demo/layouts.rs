@@ -619,6 +619,13 @@ impl DemoApp {
                 return false;
             }
         };
+        if let Some(groups) = &groups
+            && let Err(error) = self.layout.clone().set_sizes(&groups.sizes, true)
+        {
+            self.toasts
+                .error(format!("Could not open chart sizes: {error}"));
+            return false;
+        }
         let mut comparisons = match comparisons {
             Ok(saved) if saved.is_empty() => (0..layout.charts.len()).map(|_| Vec::new()).collect(),
             Ok(saved) if saved.len() == layout.charts.len() => saved,
@@ -842,6 +849,7 @@ impl DemoApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui_charts::widget::{ChartLink, ChartLinkGroups};
 
     #[test]
     fn compact_demo_keeps_hidden_rail_panels_reachable_without_a_single_layout_strip() {
@@ -996,6 +1004,23 @@ mod tests {
         app.extra_charts[0].live.set_paused(true);
         app.layout.sync.sync_time_axis = false;
         app.layout.set_active(0);
+        app.layout.set_link_groups(
+            0,
+            ChartLinkGroups {
+                symbol: ChartLink::Group("🔶".into()),
+                interval: ChartLink::Group("💧".into()),
+            },
+            true,
+        );
+        app.layout.set_link_groups(
+            1,
+            ChartLinkGroups {
+                symbol: ChartLink::Unlinked,
+                interval: ChartLink::Group("🍀".into()),
+            },
+            true,
+        );
+        let memberships = app.layout.saved_link_groups();
         app.open_panel = Some(super::super::SidePanel::TimeAndSales);
         let frame = |app: &mut DemoApp, events| {
             let output = ctx.run_ui(
@@ -1040,6 +1065,7 @@ mod tests {
                 vec![Event::ModifiersChanged(modifiers), key(Key::Tab, modifiers)],
             );
             assert_eq!(app.layout_slot, expected);
+            assert_eq!(app.layout.saved_link_groups(), memberships);
             frame(&mut app, vec![]);
             let before = app.chart.get_time_scale_state();
             let other = app.extra_charts[0].chart.get_time_scale_state();
@@ -1105,6 +1131,53 @@ mod tests {
         super::super::tests::finish_spreads(&mut app.chart, &mut app.spreads);
         app.layout.sync.sync_drawings = true;
         app.ensure_chart_slots(ChartLayoutMode::Four);
+        super::super::tests::settle(&mut app, &ctx);
+        let mut sizes = app.layout.sizes(ChartLayoutMode::Four);
+        sizes.weights[1] = vec![3.0, 2.0];
+        app.layout.set_sizes(&[sizes], true).unwrap();
+        let saved_sizes = app.layout.saved_sizes();
+        for (slot, symbol, interval) in [(0, "🔶", "💧"), (1, "💧", "🔶"), (15, "🍀", "💧")]
+        {
+            app.layout.set_link_groups(
+                slot,
+                ChartLinkGroups {
+                    symbol: ChartLink::Group(symbol.into()),
+                    interval: ChartLink::Group(interval.into()),
+                },
+                true,
+            );
+        }
+        app.layout.set_link_groups(
+            2,
+            ChartLinkGroups {
+                symbol: ChartLink::Unlinked,
+                interval: ChartLink::Layout,
+            },
+            true,
+        );
+        let saved_links = app.layout.saved_link_groups();
+        let saved = app.capture_layout().unwrap();
+        let comparisons = app.capture_comparisons().unwrap();
+        app.storage
+            .save_layout_groups("Sized", &app.layout_groups())
+            .unwrap();
+        app.layout.reset_sizes(true);
+        app.layout
+            .set_link_groups(0, ChartLinkGroups::default(), true);
+        assert!(app.restore_layout("Sized".into(), saved, Ok(comparisons)));
+        assert_eq!(app.layout.saved_sizes(), saved_sizes);
+        assert_eq!(app.layout.saved_link_groups(), saved_links);
+        let saved_groups = app.layout_groups();
+        let mut legacy = serde_json::to_value(&saved_groups).unwrap();
+        legacy.as_object_mut().unwrap().remove("links");
+        app.restore_layout_groups(Some(serde_json::from_value(legacy).unwrap()));
+        assert_eq!(
+            app.layout.saved_link_groups(),
+            std::array::from_fn(|_| ChartLinkGroups::default()),
+            "older documents retain their layout-wide switch behavior"
+        );
+        app.restore_layout_groups(Some(saved_groups));
+        assert_eq!(app.layout.saved_link_groups(), saved_links);
         for copy in &mut app.extra_charts {
             let spread = copy
                 .chart

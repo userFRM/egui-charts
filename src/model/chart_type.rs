@@ -368,6 +368,9 @@ pub enum FootprintMode {
     Trades,
     /// Total volume divided by execution count; absent for an empty row.
     AverageSize,
+    /// A narrow candle body in the middle of the column, with the sell volume of each row in a
+    /// cell on its left and the buy volume in a cell on its right.
+    Ladder,
 }
 
 /// What determines a footprint cell's colour.
@@ -385,6 +388,11 @@ pub enum FootprintColor {
     /// opacity growing with the delta's absolute size relative to the bar's largest. A zero delta
     /// takes the neutral colour at full opacity.
     DeltaOpacity,
+    /// Sell and buy volume shaded separately, each in one of four strengths of its own colour by
+    /// the quarter it falls in between the smallest and the largest volume of its side in the
+    /// bar. The POC row takes the text colour, the value area is two dotted lines, and a side
+    /// that dominates under the imbalance settings gets a strip along its outer edge.
+    VolumeSteps,
 }
 
 /// How `studies::TradeProfile::nodes` (requires `studies`) chooses volume nodes.
@@ -402,11 +410,63 @@ pub struct NodeSensitivity {
     pub prominence: f64,
 }
 
+/// The daily hours of a [`ProfileSession::Custom`] session profile.
+///
+/// A window that ends at or before its start spans midnight and belongs to the day it ends on.
+/// Clock changes in `zone` move the window with them.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CustomProfileSession {
+    /// Wall-clock time each session opens, in `zone`.
+    pub start: chrono::NaiveTime,
+    /// Wall-clock time each session closes, in `zone`.
+    pub end: chrono::NaiveTime,
+    /// Zone of `start` and `end`. `None` uses the instrument's exchange zone, or UTC without one.
+    pub zone: Option<super::TimezoneId>,
+}
+
+/// Which hours divide a session volume profile chart into sessions.
+///
+/// Only intraday charts are divided this way: daily and longer bars profile by trading date.
+/// Bars outside the chosen hours still join the session before them, so a host that wants
+/// them left out should not supply them.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub enum ProfileSession {
+    /// The chart's own calendar: its instrument's hours, with extended hours as the chart shows
+    /// them, or calendar days in the instrument's zone without hours.
+    #[default]
+    Chart,
+    /// The instrument's regular windows only. The chart's calendar without instrument hours.
+    Regular,
+    /// The instrument's regular and extended windows. The chart's calendar without instrument
+    /// hours.
+    Extended,
+    /// The same hours every day, whatever the instrument trades.
+    Custom(CustomProfileSession),
+}
+
+/// How a session volume profile groups executions into price rows, in instrument ticks.
+///
+/// Rows are never finer than the feed's own rows, and align to multiples of their height.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProfileRows {
+    /// The rows the feed groups executions into.
+    #[default]
+    Feed,
+    /// About this many rows between each session's lowest and highest traded rows.
+    Count(u32),
+    /// At least this many instrument ticks per row.
+    Ticks(u32),
+}
+
 /// Display settings of the chart's execution-based session profiles.
 /// Defaults retain the stacked session histogram, with optional annotations hidden.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TradeProfileSettings {
+    /// Hours that divide the chart into sessions.
+    pub session: ProfileSession,
+    /// Price row grouping.
+    pub rows: ProfileRows,
     /// Bid/ask stacks, total volume or signed delta; `DeltaVolume` also draws signed delta.
     pub mode: FootprintMode,
     /// Trace the total-volume POC after each complete execution bar.
@@ -434,6 +494,8 @@ pub struct TradeProfileSettings {
 impl Default for TradeProfileSettings {
     fn default() -> Self {
         Self {
+            session: ProfileSession::Chart,
+            rows: ProfileRows::Feed,
             mode: FootprintMode::BidAsk,
             developing_poc: false,
             developing_value_area: false,
@@ -532,7 +594,11 @@ pub struct ChartTypeParams {
     pub footprint_colors: [Option<egui::Color32>; 4],
     /// Footprint: instrument ticks per row; zero groups automatically with zoom.
     pub footprint_row_ticks: u32,
-    /// Footprint: outline the highest-volume row.
+    /// Footprint: put a strip along the outer edge of a side that dominates under the imbalance
+    /// settings, under [`FootprintColor::VolumeSteps`].
+    pub footprint_imbalance: bool,
+    /// Footprint: outline the highest-volume row, or fill it under
+    /// [`FootprintColor::VolumeSteps`].
     pub footprint_poc: bool,
     /// Footprint: share of volume in the value area; None hides it.
     pub footprint_value_area: Option<f64>,
@@ -570,6 +636,9 @@ pub struct ChartTypeParams {
     pub footprint_show_zero: bool,
     /// Footprint: preferred minimum and maximum font sizes in points, within 8 to 24.
     pub footprint_font_size: [f32; 2],
+    /// Footprint: write the sell and buy totals and a delta and total volume box below each bar
+    /// of a [`FootprintMode::Ladder`] column.
+    pub footprint_info_box: bool,
     /// Footprint: show the selected statistics rows below the price pane.
     pub footprint_statistics: bool,
     /// Footprint: statistics rows in display order; an empty list hides the table.
@@ -632,6 +701,8 @@ pub struct ChartTypeParams {
     pub tpo_split_sessions: bool,
     /// TPO: highlight the rows touched by a single period.
     pub tpo_single_prints: bool,
+    /// TPO: caption and mark the middle of each profile's range.
+    pub tpo_midpoint: bool,
     /// TPO: paint each period's letter inside its block.
     pub tpo_letters: bool,
     /// TPO: sessions combined into one profile, as in
@@ -642,11 +713,12 @@ pub struct ChartTypeParams {
 impl Default for ChartTypeParams {
     fn default() -> Self {
         Self {
-            footprint_modes: vec![FootprintMode::BidAsk],
-            footprint_profile: true,
-            footprint_color_by: FootprintColor::Delta,
+            footprint_modes: vec![FootprintMode::Ladder],
+            footprint_profile: false,
+            footprint_color_by: FootprintColor::VolumeSteps,
             footprint_colors: [None; 4],
             footprint_row_ticks: 0,
+            footprint_imbalance: true,
             footprint_poc: true,
             footprint_value_area: Some(0.7),
             footprint_imbalance_ratio: 3.0,
@@ -663,9 +735,10 @@ impl Default for ChartTypeParams {
             footprint_ratio: None,
             footprint_extreme_ratio: false,
             footprint_pullback: false,
-            footprint_abbreviate: false,
+            footprint_abbreviate: true,
             footprint_show_zero: true,
             footprint_font_size: [10.0, 10.0],
+            footprint_info_box: true,
             footprint_statistics: false,
             footprint_statistics_rows: vec![
                 FootprintStatistic::Volume,
@@ -698,7 +771,8 @@ impl Default for ChartTypeParams {
             tpo_row_ticks: 0,
             tpo_value_area: 70.0,
             tpo_split_sessions: false,
-            tpo_single_prints: true,
+            tpo_single_prints: false,
+            tpo_midpoint: false,
             tpo_letters: false,
             tpo_composites: Vec::new(),
         }
@@ -719,6 +793,7 @@ impl ChartTypeParams {
             value_area_pct: self.tpo_value_area / 100.0,
             split_sessions: self.tpo_split_sessions,
             show_single_prints: self.tpo_single_prints,
+            show_midpoint: self.tpo_midpoint,
             display_mode: if self.tpo_letters {
                 super::TPODisplayMode::Both
             } else {
@@ -896,23 +971,34 @@ mod tests {
                 1.0,
             ),
         ];
-        for (saved, minutes, high, enabled) in [
+        for (saved, minutes, high, enabled, marked) in [
             (
                 r#"{"tpo_initial_balance_minutes":30,"tpo_poor_highs_lows":true,"tpo_initial_balance_extensions":true}"#,
                 30,
                 102.0,
                 true,
+                false,
             ),
             (
                 r#"{"tpo_period_minutes":30,"tpo_row_ticks":1}"#,
                 60,
                 104.0,
                 false,
+                false,
+            ),
+            (
+                r#"{"tpo_single_prints":true,"tpo_midpoint":true}"#,
+                60,
+                104.0,
+                false,
+                true,
             ),
         ] {
             let params: ChartTypeParams = serde_json::from_str(saved).unwrap();
             let config = params.tpo_config(Some(1.0));
             assert_eq!(config.initial_balance_minutes, minutes);
+            assert_eq!(config.show_single_prints, marked);
+            assert_eq!(config.show_midpoint, marked);
             let profiles = to_tpo_profiles(&bars, &config, &Timeframe::Min30.into());
             assert_eq!(
                 (
@@ -925,6 +1011,8 @@ mod tests {
             assert_eq!(saved["tpo_initial_balance_minutes"], minutes);
             assert_eq!(saved["tpo_poor_highs_lows"], enabled);
             assert_eq!(saved["tpo_initial_balance_extensions"], enabled);
+            assert_eq!(saved["tpo_single_prints"], marked);
+            assert_eq!(saved["tpo_midpoint"], marked);
             assert_eq!(
                 serde_json::from_value::<ChartTypeParams>(saved).unwrap(),
                 params

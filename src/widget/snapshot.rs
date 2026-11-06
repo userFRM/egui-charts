@@ -85,6 +85,9 @@ pub struct SavedPane {
     /// Additional named scales in this pane, including options and manual ranges.
     #[serde(default)]
     pub scales: Vec<(crate::model::SeriesScale, crate::scales::PriceScale)>,
+    /// Axis placement and unused-axis visibility for this pane.
+    #[serde(default)]
+    pub axes: crate::model::PaneAxisOptions,
 }
 
 /// What a chart shows and how: everything a user sets on it, without the bars, which come from
@@ -93,6 +96,10 @@ pub struct SavedPane {
 /// of it.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChartSnapshot {
+    /// The main series' assignment within its saved pane. `None` in layouts saved before it was
+    /// recorded, which keep the restoring chart's assignment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub main_scale: Option<crate::model::SeriesScale>,
     /// The symbol shown.
     pub symbol: String,
     /// The interval shown, `None` for a chart without one.
@@ -248,6 +255,7 @@ impl Chart {
             .collect();
         let (bar_spacing, right_offset) = self.get_time_scale_state();
         let snapshot = ChartSnapshot {
+            main_scale: Some(self.main_series_scale),
             symbol: self.symbol.clone(),
             interval: self.timeframe,
             extended_hours: self.extended_hours,
@@ -300,11 +308,34 @@ impl Chart {
                                 .map(|id| id.0)
                                 .collect()
                         } else {
-                            pane.members.iter().map(|id| id.0).collect()
+                            self.pane_series(*id).iter().map(|id| id.0).collect()
                         },
                         scale: (*id != PaneId::MAIN || *id != self.main_series_pane())
                             .then(|| pane.scale.clone()),
-                        scales: pane.scales.clone(),
+                        scales: if *id == PaneId::MAIN {
+                            let mut scales: Vec<(
+                                crate::model::SeriesScale,
+                                crate::scales::PriceScale,
+                            )> = Vec::new();
+                            for member in self.pane_series(*id) {
+                                if let Some(super::PaneScale::Named(key)) =
+                                    self.source_axis_key(*id, member)
+                                    && key != self.main_series_scale
+                                    && !scales.iter().any(|(other, _)| *other == key)
+                                {
+                                    // A study can change assignment before a frame creates the scale.
+                                    let scale =
+                                        self.series_scales.get(&key).cloned().unwrap_or_else(
+                                            || crate::scales::PriceScale::new(Default::default()),
+                                        );
+                                    scales.push((key, scale));
+                                }
+                            }
+                            scales
+                        } else {
+                            pane.scales.clone()
+                        },
+                        axes: pane.axes,
                     }
                 })
                 .collect(),
@@ -313,7 +344,7 @@ impl Chart {
             drawings,
         };
         // A layout that restore would refuse is an error now rather than at the next load.
-        check(&snapshot, factory)
+        check(&snapshot, factory, self.main_series_scale)
             .map_err(|error| SaveError::Json(serde::ser::Error::custom(error)))?;
         Ok(snapshot)
     }
@@ -347,7 +378,7 @@ impl Chart {
         snapshot: &ChartSnapshot,
         factory: &IndicatorFactory,
     ) -> Result<Vec<SkippedDrawing>, RestoreError> {
-        let (studies, drawings) = check(snapshot, factory)?;
+        let (studies, drawings) = check(snapshot, factory, self.main_series_scale)?;
         let main_present = snapshot.panes.iter().any(|pane| pane.main);
         let main_source_present =
             main_present || snapshot.panes.iter().any(|pane| pane.members.contains(&0));
@@ -387,6 +418,10 @@ impl Chart {
         }
         if let Some(options) = &snapshot.options {
             self.set_chart_options(options.clone());
+        }
+        if let Some(main_scale) = snapshot.main_scale {
+            self.main_series_scale = main_scale;
+            self.series_scales.remove(&main_scale);
         }
         if let Some(scale) = &snapshot.price_scale {
             *self.state.price_scale_mut() = scale.clone();
@@ -500,6 +535,7 @@ impl Chart {
                 .find(|pane| pane.id == id)
                 .expect("restored pane");
             pane.collapsed = saved.collapsed;
+            pane.axes = saved.axes;
             pane.preserve = saved.preserve;
             if !saved.main && !saved.members.is_empty() {
                 pane.members.sort_by_key(|id| {
@@ -517,7 +553,11 @@ impl Chart {
                 pane.scale = scale.clone();
             }
             for (key, scale) in &saved.scales {
-                *pane.assigned_scale_mut(*key) = scale.clone();
+                if saved.main {
+                    self.series_scales.insert(*key, scale.clone());
+                } else {
+                    *pane.assigned_scale_mut(*key) = scale.clone();
+                }
             }
             if saved.main && !saved.members.is_empty() {
                 self.pane_layout.main = saved
@@ -572,7 +612,12 @@ impl Chart {
 type Checked = (Vec<Box<dyn crate::studies::Indicator>>, Option<String>);
 
 /// Checks `snapshot` as [`Chart::restore_with`] does before changing the chart.
-fn check(snapshot: &ChartSnapshot, factory: &IndicatorFactory) -> Result<Checked, RestoreError> {
+fn check(
+    snapshot: &ChartSnapshot,
+    factory: &IndicatorFactory,
+    main_scale: crate::model::SeriesScale,
+) -> Result<Checked, RestoreError> {
+    let main_scale = snapshot.main_scale.unwrap_or(main_scale);
     let studies = snapshot
         .studies
         .iter()
@@ -686,8 +731,8 @@ fn check(snapshot: &ChartSnapshot, factory: &IndicatorFactory) -> Result<Checked
         || snapshot.panes.iter().any(|pane| {
             let keys: std::collections::HashSet<_> =
                 pane.scales.iter().map(|(key, _)| *key).collect();
-            (pane.main && !keys.is_empty())
-                || keys.contains(&crate::model::SeriesScale::Right)
+            (pane.main && keys.contains(&main_scale))
+                || (!pane.main && keys.contains(&crate::model::SeriesScale::Right))
                 || keys.len() != pane.scales.len()
         })
         || snapshot
@@ -1272,5 +1317,77 @@ mod tests {
         .unwrap();
         let layout = SavedLayout::from_json(&json).unwrap();
         chart(&[10.0], &[11.0]).restore(&layout.charts[0]).unwrap();
+    }
+
+    /// A layout that does not record the main series' assignment keeps the chart's, and series
+    /// saved on that scale share it again. A layout that records it restores it.
+    #[test]
+    fn layout_without_main_assignment_keeps_comparison_on_main_scale() {
+        use crate::model::SeriesScale::{self, Left, Right};
+        use crate::widget::SeriesId;
+        let bars: Vec<_> = (0..30)
+            .map(|i| {
+                let price = 100.0 + i as f64;
+                Bar::new(
+                    Utc.timestamp_opt(i * 60, 0).unwrap(),
+                    price,
+                    price,
+                    price,
+                    price,
+                    1.0,
+                )
+            })
+            .collect();
+        let on = |scale: SeriesScale| {
+            let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+            chart.config.show_volume = false;
+            assert!(chart.set_series_scale(SeriesId::MAIN, scale));
+            chart
+        };
+        // The main series' scale when saved, that of the restoring chart, whether the layout
+        // records it, and the assignments of the main series and the comparison after restore.
+        for (saved_on, into, recorded, main, comparison) in [
+            (Left, Left, false, Left, Left),
+            (Right, Right, false, Right, Right),
+            (Left, Right, false, Right, Left),
+            (Right, Left, false, Left, Right),
+            (Left, Left, true, Left, Left),
+            (Right, Right, true, Right, Right),
+            (Left, Right, true, Left, Left),
+            (Right, Left, true, Right, Right),
+        ] {
+            let case = format!("{saved_on:?} into {into:?}, recorded {recorded}");
+            let mut saved_chart = on(saved_on);
+            let saved_id = saved_chart.add_comparison("Peer", egui::Color32::GOLD);
+            saved_chart.set_data(saved_id, bars.clone());
+            assert_eq!(saved_chart.series_scale(saved_id), Some(saved_on), "{case}");
+            let mut saved = serde_json::to_value(saved_chart.snapshot().unwrap()).unwrap();
+            let field = saved.as_object_mut().unwrap().remove("main_scale");
+            assert!(field.is_some(), "{case}: written");
+            if recorded {
+                saved["main_scale"] = field.unwrap();
+            }
+            let mut chart = on(into);
+            chart
+                .restore(&serde_json::from_value(saved).unwrap())
+                .unwrap();
+            let restored = chart.restored_series_id(saved_id.0).unwrap();
+            assert_eq!(
+                (
+                    chart.series_scale(SeriesId::MAIN),
+                    chart.series_scale(restored)
+                ),
+                (Some(main), Some(comparison)),
+                "{case}"
+            );
+            assert_eq!(
+                std::ptr::eq(
+                    chart.series_price_scale(SeriesId::MAIN).unwrap(),
+                    chart.series_price_scale(restored).unwrap(),
+                ),
+                main == comparison,
+                "{case}: one scale"
+            );
+        }
     }
 }

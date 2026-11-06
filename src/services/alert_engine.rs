@@ -9,7 +9,7 @@ use super::{AlertEvent, Alerts, Events};
 use crate::data::{FeedError, MaybeSend, Reply};
 use crate::model::{
     Alert, AlertChannelComparison, AlertComparison, AlertCondition, AlertFrequency, AlertId,
-    AlertSource, AlertStatus, Bar, Timeframe,
+    AlertSource, AlertStatus, Bar, BarClock, Timeframe,
 };
 
 /// An [`Alerts`] service that keeps alerts in memory and evaluates them on the bars the host
@@ -27,22 +27,28 @@ use crate::model::{
 ///
 /// # Rules
 ///
-/// *Subject.* An alert is evaluated on its `symbol`, or on each member of its `watchlist` as
-/// [`set_watchlist`](Self::set_watchlist) gave it, with its own state per symbol. An update for
-/// another symbol, or for a timeframe other than the alert's, does not touch the alert. An alert
-/// without a timeframe takes the timeframe of the first update that reaches it, which the engine
-/// saves and pushes as an [`AlertEvent::Upsert`], so it is fixed from then on.
+/// *Subject.* Each symbol or watchlist member retains independent state. An unset first interval
+/// takes the first interval not reserved by an additional override (or one minute), saved in an
+/// `Upsert` event. The datafeed evaluator selects one minute. Additional rules
+/// follow it unless `additional_timeframes` supplies an override. Unused intervals are ignored.
 ///
-/// *Evaluated bar.* The newest bar, still forming, or for
-/// [`OncePerBarClose`](AlertFrequency::OncePerBarClose) the newest completed one. Every rule of
-/// an alert, the first and the additional conditions, is judged on that bar, and the alert holds
-/// when every rule holds. A missing or non-finite value makes its rule false. Price is the close
-/// and volume the volume of a bar; the `value` function of `update` resolves the other sources.
+/// *Synchronization.* Each interval evaluates its own newest forming bar, including its own
+/// lookbacks and preceding source values. For `OncePerBarClose`, the shortest interval uses its
+/// newest completed bar; other intervals keep their live observations. Each completed occurrence
+/// is evaluated once after compatible observations arrive. The shortest interval supplies the
+/// occurrence bar. Other observations must cover its event time: a forming observation covers its
+/// clock's bar window; a completed observation covers the window beginning at its close. Window
+/// ends are excluded. Observations from later windows cannot satisfy an earlier event, nor can
+/// expired observations satisfy a newer one. Each direct update evaluates the latest overlapping
+/// observations; `AlertEvaluator` gathers a complete poll before evaluating. Missing or non-finite
+/// sources make their conditions false. Price and volume come from each interval's own bars.
+/// Messages retain the first condition's interval and source values. Hosts feeding the engine
+/// directly use UTC windows; the evaluator retains feed calendars.
 ///
 /// *Change.* An update whose evaluated bar, its close and volume and the value of every source
 /// equal those of the previous update does nothing, unless a per-minute alert enters a new
 /// minute or its schedule opens. An update
-/// whose evaluated bar is older than the newest one already evaluated for the alert is ignored:
+/// whose evaluated bar is older than the newest one already evaluated for its interval is ignored:
 /// reloading history, rewinding a replay or switching to a coarser timeframe never fires an
 /// alert again.
 ///
@@ -62,8 +68,11 @@ use crate::model::{
 /// [`OncePerMinute`](AlertFrequency::OncePerMinute) fires at most once per minute of the update
 /// time `now`; moving the clock backwards does not repeat a minute.
 ///
-/// *Schedule.* An alert's `schedule` restricts triggers. Outside it the engine keeps observing
-/// values for crossings, but does not fire or consume an occurrence. A once alert stays armed.
+/// *Schedule.* An alert's `schedule` restricts notifications. Outside it the engine keeps
+/// observing values for crossings and records each trigger as a silent
+/// [`AlertEvent::SilentTriggered`] entry without calling the delivery callback or consuming an
+/// occurrence, so a once alert stays armed. It records at most one entry per occurrence of its
+/// frequency, a once alert one per bar. `starts` holds back evaluation altogether until that time.
 ///
 /// *Expiry.* Every `update` and [`tick`](Self::tick) first marks active alerts whose expiry has
 /// passed as [`Expired`](AlertStatus::Expired), so an alert never fires at or after its expiry
@@ -111,17 +120,30 @@ struct State {
 /// What the engine remembers of one alert on one symbol.
 #[derive(Default)]
 struct Run {
-    /// Open time of the newest bar evaluated.
-    newest: Option<DateTime<Utc>>,
-    /// The previous evaluation, which the next one is compared with.
-    seen: Option<Seen>,
+    intervals: HashMap<Timeframe, Observation>,
+    /// Inputs of the most recent synchronized evaluation.
+    joined: Vec<Seen>,
     /// The occurrence the alert last fired on: the open time of a bar, or the minute for a
     /// per-minute alert.
     fired: Option<DateTime<Utc>>,
+    /// The occurrence of the last silent entry, so a lasting condition outside the schedule
+    /// does not log every update.
+    silent: Option<DateTime<Utc>>,
     /// A watchlist alert with frequency once has fired on this symbol.
     done: bool,
     #[cfg(feature = "strategies")]
     last_fill: u64,
+}
+
+/// The latest observation for conditions sharing one calculation interval.
+struct Observation {
+    available: bool,
+    seen: Seen,
+    holds: bool,
+    clock: BarClock,
+    event: DateTime<Utc>,
+    bar: Bar,
+    message: String,
 }
 
 /// The inputs of one evaluation: the bar, its close and volume, and for each rule the value of
@@ -230,11 +252,11 @@ impl AlertEngine {
         state.watchlists.insert(id.to_owned(), symbols);
     }
 
-    /// Evaluates every active alert whose subject is `symbol` on `timeframe` against the newest
-    /// of `bars`, oldest first, at the time `now`. `value` resolves a study or drawing source at
-    /// a bar index of `bars`, for instance with `Chart::alert_value`; price and volume come from
-    /// `bars`. Call it each frame with the bars of every live chart, but not with a chart in
-    /// replay.
+    /// Updates active conditions of `symbol` on `timeframe` against the newest of `bars`, oldest
+    /// first, at the time `now`. Feed every interval in [`Alert::timeframes`]. `value` resolves a
+    /// study or drawing source at a bar index of `bars`, for instance with `Chart::alert_value`;
+    /// price and volume come from `bars`. Call it each frame with the bars of every live chart, but
+    /// not with a chart in replay.
     pub fn update(
         &self,
         symbol: &str,
@@ -243,11 +265,17 @@ impl AlertEngine {
         now: DateTime<Utc>,
         value: impl Fn(&AlertSource, usize) -> Option<f64>,
     ) {
-        self.update_matching(None, symbol, timeframe, bars, now, value);
+        self.update_matching(
+            None,
+            symbol,
+            &[(&BarClock::new(timeframe), bars)],
+            now,
+            |_, source, at| value(source, at),
+        );
     }
 
-    /// Evaluates one alert with its retained source definitions. Other alerts may refer to
-    /// different study instances with the same chart-local identifiers.
+    /// Updates one interval of an alert with its retained source definitions. Other alerts may
+    /// refer to different study instances with the same chart-local identifiers.
     pub fn update_alert(
         &self,
         id: &AlertId,
@@ -257,17 +285,23 @@ impl AlertEngine {
         now: DateTime<Utc>,
         value: impl Fn(&AlertSource, usize) -> Option<f64>,
     ) {
-        self.update_matching(Some(id), symbol, timeframe, bars, now, value);
+        self.update_matching(
+            Some(id),
+            symbol,
+            &[(&BarClock::new(timeframe), bars)],
+            now,
+            |_, source, at| value(source, at),
+        );
     }
 
-    fn update_matching(
+    /// Updates the active alerts of `symbol`, or only `id`, with one set of interval inputs.
+    pub(super) fn update_matching(
         &self,
         id: Option<&AlertId>,
         symbol: &str,
-        timeframe: Timeframe,
-        bars: &[Bar],
+        inputs: &[(&BarClock, &[Bar])],
         now: DateTime<Utc>,
-        value: impl Fn(&AlertSource, usize) -> Option<f64>,
+        value: impl Fn(Timeframe, &AlertSource, usize) -> Option<f64>,
     ) {
         let mut fired = Vec::new();
         let mut state = self.lock();
@@ -282,6 +316,7 @@ impl AlertEngine {
         for alert in alerts.iter_mut().filter(|alert| {
             alert.status == AlertStatus::Active
                 && alert.is_valid()
+                && alert.starts.is_none_or(|starts| starts <= now)
                 && !matches!(alert.condition, AlertCondition::StrategyFills(_))
                 && id.is_none_or(|id| alert.id.as_ref() == Some(id))
         }) {
@@ -295,33 +330,66 @@ impl AlertEngine {
             if !subject {
                 continue;
             }
-            match alert.timeframe {
-                Some(own) if own != timeframe => continue,
-                Some(_) => {}
-                None => {
-                    alert.timeframe = Some(timeframe);
-                    if let Some(events) = events {
-                        events.push(AlertEvent::Upsert(alert.clone()));
-                    }
+            if alert.timeframe.is_none()
+                && let Some(timeframe) = inputs
+                    .iter()
+                    .filter_map(|(clock, _)| clock.timeframe())
+                    .find(|timeframe| {
+                        *timeframe == Timeframe::default()
+                            || !alert.additional_timeframes.contains(&Some(*timeframe))
+                    })
+            {
+                alert.timeframe = Some(timeframe);
+                if let Some(events) = events {
+                    events.push(AlertEvent::Upsert(Box::new(alert.clone())));
                 }
             }
+            let intervals = alert.timeframes();
+            let mut matched = false;
+            let mut ready = true;
             let run = runs.entry((id.clone(), symbol.to_owned())).or_default();
-            let Some((bar, message)) = evaluate(alert, run, (symbol, timeframe), bars, now, &value)
-            else {
+            for (clock, bars) in inputs {
+                let Some(timeframe) = clock.timeframe().filter(|tf| intervals.contains(tf)) else {
+                    continue;
+                };
+                matched = true;
+                if !observe(alert, run, (symbol, clock), bars, now, &|source, at| {
+                    value(timeframe, source, at)
+                }) {
+                    ready = false;
+                }
+            }
+            if !matched || !ready {
+                continue;
+            }
+            let Some((bar, message, silent)) = evaluate(alert, run, now) else {
                 continue;
             };
             let price = bar.close.is_finite().then_some(bar.close);
+            if silent {
+                if let Some(events) = events {
+                    events.push(AlertEvent::SilentTriggered {
+                        id,
+                        symbol: symbol.to_owned(),
+                        time: now,
+                        price,
+                        message,
+                    });
+                }
+                continue;
+            }
+            alert.last_triggered_at = Some(alert.last_triggered_at.map_or(now, |old| old.max(now)));
             if alert.frequency == AlertFrequency::Once {
                 run.done = true;
                 if alert.watchlist.is_none() {
                     alert.status = AlertStatus::Triggered;
                 }
             }
-            run.fired = Some(occurrence(alert.frequency, bar, now));
+            run.fired = Some(occurrence(alert.frequency, &bar, now));
             if let Some(events) = events
                 && alert.status != AlertStatus::Active
             {
-                events.push(AlertEvent::Upsert(alert.clone()));
+                events.push(AlertEvent::Upsert(Box::new(alert.clone())));
             }
             let event = AlertEvent::TriggeredForSymbol {
                 id,
@@ -379,6 +447,7 @@ impl AlertEngine {
         for alert in alerts.iter_mut().filter(|alert| {
             alert.status == AlertStatus::Active
                 && alert.is_valid()
+                && alert.starts.is_none_or(|starts| starts <= now)
                 && matches!(&alert.condition, AlertCondition::StrategyFills(id) if id == run)
                 && alert.timeframe.is_none_or(|own| own == timeframe)
                 && match &alert.watchlist {
@@ -392,7 +461,7 @@ impl AlertEngine {
             if alert.timeframe.is_none() {
                 alert.timeframe = Some(timeframe);
                 if let Some(events) = events {
-                    events.push(AlertEvent::Upsert(alert.clone()));
+                    events.push(AlertEvent::Upsert(Box::new(alert.clone())));
                 }
             }
             let seen = runs.entry((id.clone(), symbol.to_owned())).or_default();
@@ -406,22 +475,8 @@ impl AlertEngine {
                     continue;
                 }
                 seen.last_fill = fill.sequence;
-                if seen.done
-                    || alert
-                        .schedule
-                        .as_ref()
-                        .is_some_and(|schedule| !schedule.allows(now))
-                {
+                if seen.done {
                     continue;
-                }
-                if alert.frequency == AlertFrequency::Once {
-                    seen.done = true;
-                    if alert.watchlist.is_none() {
-                        alert.status = AlertStatus::Triggered;
-                    }
-                    if let Some(events) = events {
-                        events.push(AlertEvent::Upsert(alert.clone()));
-                    }
                 }
                 let side = match fill.side {
                     crate::model::OrderSide::Buy => "Buy",
@@ -442,8 +497,38 @@ impl AlertEngine {
                     let bar = Bar::new(
                         fill.time, fill.price, fill.price, fill.price, fill.price, 0.0,
                     );
-                    alert.expand_message(symbol, timeframe, &bar, |_| Some(fill.price))
+                    alert.expand_message(symbol, timeframe, &bar, fill.time, |_| Some(fill.price))
                 };
+                if alert
+                    .schedule
+                    .as_ref()
+                    .is_some_and(|schedule| !schedule.allows(now))
+                {
+                    if let Some(events) = events {
+                        events.push(AlertEvent::SilentTriggered {
+                            id: id.clone(),
+                            symbol: symbol.to_owned(),
+                            time: fill.time,
+                            price: Some(fill.price),
+                            message,
+                        });
+                    }
+                    continue;
+                }
+                alert.last_triggered_at = Some(
+                    alert
+                        .last_triggered_at
+                        .map_or(fill.time, |old| old.max(fill.time)),
+                );
+                if alert.frequency == AlertFrequency::Once {
+                    seen.done = true;
+                    if alert.watchlist.is_none() {
+                        alert.status = AlertStatus::Triggered;
+                    }
+                    if let Some(events) = events {
+                        events.push(AlertEvent::Upsert(Box::new(alert.clone())));
+                    }
+                }
                 let event = AlertEvent::TriggeredForSymbol {
                     id: id.clone(),
                     symbol: symbol.to_owned(),
@@ -476,6 +561,8 @@ impl State {
     /// Adds `alert` or replaces the one with its id, giving it an id if it has none.
     fn insert(&mut self, mut alert: Alert) -> Alert {
         if alert.id.is_none() {
+            alert.created_at = Some(Utc::now());
+            alert.last_triggered_at = None;
             loop {
                 self.next_id += 1;
                 let id = AlertId(self.next_id.to_string());
@@ -485,13 +572,24 @@ impl State {
                 }
             }
         }
+        let existing = self.alerts.iter().find(|old| old.id == alert.id);
+        if let Some(old) = existing {
+            alert.created_at = old.created_at;
+            alert.last_triggered_at = old.last_triggered_at;
+        }
+        let same_monitoring = existing.is_some_and(|old| {
+            old.same_monitoring(&alert)
+                && (old.extend_line != alert.extend_line
+                    || old.blink_on_trigger != alert.blink_on_trigger
+                    || old.delivery != alert.delivery)
+        });
         let same_strategy = matches!(alert.condition, AlertCondition::StrategyFills(_))
             && self
                 .alerts
                 .iter()
                 .any(|old| old.id == alert.id && old.condition == alert.condition);
         self.runs.retain(|(id, _), run| {
-            if Some(id) != alert.id.as_ref() {
+            if Some(id) != alert.id.as_ref() || same_monitoring {
                 return true;
             }
             if same_strategy {
@@ -525,7 +623,7 @@ impl State {
             if !matches!(alert.condition, AlertCondition::StrategyFills(_)) {
                 self.runs.retain(|(id, _), _| Some(id) != alert.id.as_ref());
             }
-            self.push(AlertEvent::Upsert(alert));
+            self.push(AlertEvent::Upsert(Box::new(alert)));
         }
     }
 }
@@ -538,7 +636,7 @@ impl Alerts for AlertEngine {
     fn watch(&self, events: Events<AlertEvent>) {
         let mut state = self.lock();
         for alert in &state.alerts {
-            events.push(AlertEvent::Upsert(alert.clone()));
+            events.push(AlertEvent::Upsert(Box::new(alert.clone())));
         }
         state.events = Some(events);
     }
@@ -552,7 +650,7 @@ impl Alerts for AlertEngine {
         }
         let mut state = self.lock();
         let alert = state.insert(alert);
-        state.push(AlertEvent::Upsert(alert));
+        state.push(AlertEvent::Upsert(Box::new(alert)));
         reply.send(Ok(()));
     }
 
@@ -565,23 +663,37 @@ impl Alerts for AlertEngine {
     }
 }
 
-/// Evaluates `alert` on the newest of `bars` of `subject`, updating what `run` remembers. Returns
-/// the bar it fired on and its message, if it did.
-fn evaluate<'a>(
+/// Observe one interval before testing the complete set of conditions.
+fn observe(
     alert: &Alert,
     run: &mut Run,
-    (symbol, timeframe): (&str, Timeframe),
-    bars: &'a [Bar],
+    (symbol, clock): (&str, &BarClock),
+    bars: &[Bar],
     now: DateTime<Utc>,
     value: &impl Fn(&AlertSource, usize) -> Option<f64>,
-) -> Option<(&'a Bar, String)> {
-    let closed = alert.frequency == AlertFrequency::OncePerBarClose;
-    let index = bars.len().checked_sub(if closed { 2 } else { 1 })?;
+) -> bool {
+    let Some(timeframe) = clock.timeframe() else {
+        return false;
+    };
+    let intervals = alert.timeframes();
+    let closed = alert.frequency == AlertFrequency::OncePerBarClose
+        && timeframe.as_str() == intervals[0].as_str();
+    let Some(index) = bars.len().checked_sub(if closed { 2 } else { 1 }) else {
+        if let Some(observation) = run.intervals.get_mut(&timeframe) {
+            observation.available = false;
+        }
+        return false;
+    };
     let bar = &bars[index];
-    if run.newest.is_some_and(|newest| bar.time < newest)
-        || (closed && run.newest == Some(bar.time))
-    {
-        return None;
+    let previous = run.intervals.get(&timeframe);
+    if previous.is_some_and(|previous| bar.time < previous.seen.time) {
+        return false;
+    }
+    if closed && previous.is_some_and(|previous| bar.time == previous.seen.time) {
+        if let Some(previous) = run.intervals.get_mut(&timeframe) {
+            previous.available = true;
+        }
+        return true;
     }
     let source = |source: &AlertSource, at: usize| -> Option<f64> {
         let found = match source {
@@ -591,13 +703,10 @@ fn evaluate<'a>(
         };
         found.is_finite().then_some(found)
     };
-    let rules: Vec<_> = std::iter::once((&alert.source, &alert.condition))
-        .chain(
-            alert
-                .additional_conditions
-                .iter()
-                .map(|rule| (&rule.source, &rule.condition)),
-        )
+    let rules: Vec<_> = alert
+        .rules()
+        .filter(|(_, _, interval)| *interval == timeframe)
+        .map(|(source, condition, _)| (source, condition))
         .collect();
     let seen = Seen {
         time: bar.time,
@@ -618,42 +727,100 @@ fn evaluate<'a>(
             })
             .collect(),
     };
-    if run.seen.as_ref() == Some(&seen) {
+    if previous.is_some_and(|previous| previous.seen == seen) {
+        if let Some(previous) = run.intervals.get_mut(&timeframe) {
+            previous.available = true;
+        }
+        return true;
+    }
+    let holds = rules.iter().enumerate().all(|(n, (src, condition))| {
+        let [current, a, b] = seen.rules[n];
+        let previous = match previous.map(|previous| &previous.seen) {
+            Some(last)
+                if last.time == bar.time
+                    || !matches!(condition, AlertCondition::Channel { .. }) =>
+            {
+                last.rules[n]
+            }
+            _ => {
+                let previous = |src| index.checked_sub(1).and_then(|at| source(src, at));
+                let [a, b] = condition.partners().map(|other| other.and_then(previous));
+                [previous(src), a, b]
+            }
+        };
+        current.is_some_and(|current| {
+            condition_holds(
+                condition,
+                current,
+                previous,
+                [a, b],
+                &bars[..=index],
+                |back| {
+                    index
+                        .checked_sub(back as usize)
+                        .and_then(|at| source(src, at))
+                },
+            )
+        })
+    });
+    let event = if closed {
+        clock.next_open(bar.time).unwrap_or(bars[index + 1].time)
+    } else {
+        bar.time
+    };
+    let message = if holds {
+        alert.expand_message(symbol, timeframe, bar, now, |src| source(src, index))
+    } else {
+        String::new()
+    };
+    run.intervals.insert(
+        timeframe,
+        Observation {
+            available: true,
+            seen,
+            holds,
+            clock: clock.clone(),
+            event,
+            bar: bar.clone(),
+            message,
+        },
+    );
+    true
+}
+
+/// Test one coherent set of interval observations and consume its occurrence. Returns the bar
+/// and message to fire, and whether the trigger falls outside the schedule and is only logged.
+fn evaluate(alert: &Alert, run: &mut Run, now: DateTime<Utc>) -> Option<(Bar, String, bool)> {
+    let intervals = alert.timeframes();
+    let anchor = run.intervals.get(&intervals[0])?;
+    if alert.frequency == AlertFrequency::OncePerBarClose
+        && run
+            .joined
+            .first()
+            .is_some_and(|seen| seen.time == anchor.seen.time)
+    {
         return None;
     }
-    let holds = seen.scheduled
-        && rules.iter().enumerate().all(|(n, (src, condition))| {
-            let [current, a, b] = seen.rules[n];
-            let previous = match &run.seen {
-                Some(last)
-                    if last.time == bar.time
-                        || !matches!(condition, AlertCondition::Channel { .. }) =>
-                {
-                    last.rules[n]
-                }
-                _ => {
-                    let previous = |src| index.checked_sub(1).and_then(|at| source(src, at));
-                    let [a, b] = condition.partners().map(|other| other.and_then(previous));
-                    [previous(src), a, b]
-                }
-            };
-            current.is_some_and(|current| {
-                condition_holds(
-                    condition,
-                    current,
-                    previous,
-                    [a, b],
-                    &bars[..=index],
-                    |back| {
-                        index
-                            .checked_sub(back as usize)
-                            .and_then(|at| source(src, at))
-                    },
-                )
-            })
-        });
-    run.newest = Some(bar.time);
-    run.seen = Some(seen);
+    let joined: Option<Vec<_>> = intervals
+        .iter()
+        .map(|interval| {
+            let observation = run.intervals.get(interval)?;
+            (observation.available
+                && observation.event <= anchor.event
+                && (intervals.len() == 1
+                    || observation.clock.same_bar(observation.event, anchor.event)))
+            .then(|| observation.seen.clone())
+        })
+        .collect();
+    let joined = joined?;
+    if joined == run.joined {
+        return None;
+    }
+    run.joined = joined;
+    let bar = &anchor.bar;
+    let holds = intervals
+        .iter()
+        .all(|interval| run.intervals[interval].holds);
     let fires = holds
         && match alert.frequency {
             AlertFrequency::Once => !run.done,
@@ -665,10 +832,22 @@ fn evaluate<'a>(
                 run.fired != Some(occurrence(alert.frequency, bar, now))
             }
         };
-    fires.then(|| {
-        let message = alert.expand_message(symbol, timeframe, bar, |src| source(src, index));
-        (bar, message)
-    })
+    if !fires {
+        return None;
+    }
+    let silent = alert
+        .schedule
+        .as_ref()
+        .is_some_and(|schedule| !schedule.allows(now));
+    if silent {
+        let at = occurrence(alert.frequency, bar, now);
+        if alert.frequency != AlertFrequency::EveryTime && run.silent == Some(at) {
+            return None;
+        }
+        run.silent = Some(at);
+    }
+    let primary = &run.intervals[&alert.timeframe.unwrap_or_default()];
+    Some((bar.clone(), primary.message.clone(), silent))
 }
 
 /// What a frequency fires at most once per: the bar, or for a per-minute alert the minute of `now`.
@@ -1082,6 +1261,158 @@ mod tests {
     }
 
     #[test]
+    fn independent_intervals_join_only_overlapping_observations() {
+        for frequency in [
+            AlertFrequency::EveryTime,
+            AlertFrequency::OncePerBar,
+            AlertFrequency::OncePerBarClose,
+        ] {
+            for reverse in [false, true] {
+                let mut watching = alert(AlertCondition::Above(100.0), frequency);
+                watching.timeframe = Some(Timeframe::Min5);
+                let mut stored = serde_json::to_value(&watching).unwrap();
+                stored["additional_timeframes"] = serde_json::json!(["Min1"]);
+                stored["additional_conditions"] = serde_json::json!([{
+                    "source": "Volume", "condition": {"Above": 5.0}
+                }]);
+                let host = Host::new(vec![serde_json::from_value(stored).unwrap()]);
+                host.events();
+                let closed = frequency == AlertFrequency::OncePerBarClose;
+                let send = |tf, minute, close, volume| {
+                    let mut bars = vec![bar(minute, close, volume)];
+                    if closed && tf == Timeframe::Min1 {
+                        bars.push(bar(minute + 1, 1.0, 1.0));
+                    }
+                    host.engine
+                        .update("SYM", tf, &bars, time(1000), |_, _| None);
+                };
+                let slow = || send(Timeframe::Min5, 0, 101.0, 1.0);
+                let fast = || send(Timeframe::Min1, 0, 99.0, 10.0);
+                if reverse {
+                    fast();
+                    slow();
+                } else {
+                    slow();
+                    fast();
+                }
+                assert_eq!(host.fired().len(), 1, "first join: {frequency}, {reverse}");
+                slow();
+                fast();
+                assert!(host.fired().is_empty(), "repeated observations");
+                send(Timeframe::Min1, 1, 99.0, 10.0);
+                assert_eq!(
+                    host.fired().len(),
+                    1,
+                    "frequency follows the smaller interval"
+                );
+                send(Timeframe::Min1, if closed { 4 } else { 5 }, 99.0, 10.0);
+                assert!(host.fired().is_empty(), "expired slow observation");
+                send(Timeframe::Min5, 5, 101.0, 1.0);
+                assert_eq!(host.fired().len(), 1, "late matching interval");
+                send(Timeframe::Min5, 10, 101.0, 1.0);
+                assert!(
+                    host.fired().is_empty(),
+                    "future interval cannot use an older fast observation"
+                );
+                send(Timeframe::Min1, if closed { 9 } else { 10 }, 99.0, 10.0);
+                assert_eq!(host.fired().len(), 1);
+                send(Timeframe::Min1, if closed { 4 } else { 5 }, 99.0, 10.0);
+                assert!(host.fired().is_empty(), "rewind");
+            }
+        }
+        // A failed close is consumed: a later change of the larger interval waits for the next close.
+        let stored = serde_json::json!({
+            "symbol":"SYM", "timeframe":"Min5", "condition":{"Above":100.0},
+            "frequency":"OncePerBarClose", "additional_timeframes":["Min1"],
+            "additional_conditions":[{"source":"Volume","condition":{"Above":5.0}}]
+        });
+        let host = Host::new(vec![serde_json::from_value(stored.clone()).unwrap()]);
+        host.events();
+        let slow = |close| {
+            host.engine.update(
+                "SYM",
+                Timeframe::Min5,
+                &[bar(0, close, 1.0)],
+                time(1000),
+                |_, _| None,
+            )
+        };
+        let fast = |minute| {
+            host.engine.update(
+                "SYM",
+                Timeframe::Min1,
+                &[bar(minute, 99.0, 10.0), bar(minute + 1, 99.0, 0.0)],
+                time(1000),
+                |_, _| None,
+            )
+        };
+        slow(99.0);
+        fast(0);
+        assert!(host.fired().is_empty());
+        slow(101.0);
+        assert!(
+            host.fired().is_empty(),
+            "do not reconsider an already evaluated close"
+        );
+        fast(1);
+        assert_eq!(host.fired().len(), 1);
+
+        // A missing input blocks a cached close, preserving its comparison or crossing on recovery.
+        for condition in [
+            serde_json::json!({"Above":5.0}),
+            serde_json::json!({"CrossingUp":5.0}),
+        ] {
+            let mut stored = stored.clone();
+            stored["additional_conditions"][0]["condition"] = condition;
+            let host = Host::new(vec![serde_json::from_value(stored).unwrap()]);
+            host.events();
+            let fast = [bar(-1, 99.0, 0.0), bar(0, 99.0, 10.0), bar(1, 99.0, 0.0)];
+            host.engine
+                .update("SYM", Timeframe::Min1, &fast, time(1000), |_, _| None);
+            host.engine
+                .update("SYM", Timeframe::Min1, &[], time(1000), |_, _| None);
+            host.engine.update(
+                "SYM",
+                Timeframe::Min5,
+                &[bar(0, 101.0, 1.0)],
+                time(1000),
+                |_, _| None,
+            );
+            assert!(
+                host.fired().is_empty(),
+                "missing interval blocks cached observations"
+            );
+            host.engine
+                .update("SYM", Timeframe::Min1, &fast, time(1000), |_, _| None);
+            assert_eq!(host.fired().len(), 1, "restored close is still eligible");
+        }
+
+        // Equivalent interval spellings close together, rather than mixing a closed and a forming bar.
+        let stored = serde_json::json!({
+            "symbol":"SYM", "timeframe":"Min1", "condition":{"Above":100.0},
+            "frequency":"OncePerBarClose", "additional_timeframes":[{"Custom":60}],
+            "additional_conditions":[{"source":"Volume","condition":{"Above":5.0}}]
+        });
+        let host = Host::new(vec![serde_json::from_value(stored).unwrap()]);
+        host.events();
+        host.engine.update(
+            "SYM",
+            Timeframe::Min1,
+            &[bar(0, 101.0, 1.0), bar(1, 99.0, 0.0)],
+            time(1000),
+            |_, _| None,
+        );
+        host.engine.update(
+            "SYM",
+            "60s".parse().unwrap(),
+            &[bar(0, 99.0, 10.0), bar(1, 99.0, 0.0)],
+            time(1000),
+            |_, _| None,
+        );
+        assert_eq!(host.fired().len(), 1);
+    }
+
+    #[test]
     fn frequencies_count_ticks_bars_and_closed_bars() {
         // Four frames of one rising feed: the first bar forming at 101 and then 102, then a new
         // bar forming at 103 and then 104. Each trigger reports the close of the evaluated bar.
@@ -1161,7 +1492,14 @@ mod tests {
                 host.events();
                 let bars = [bar(-2, 100.0, 10.0), bar(-1, 100.0, 10.0)];
                 feed(&host, &bars, &[], 59);
-                assert!(host.events().is_empty(), "{condition:?}, {frequency}");
+                // Outside the window the trigger is only logged, once, and nothing is delivered.
+                let events = host.events();
+                assert!(
+                    matches!(events.as_slice(), [AlertEvent::SilentTriggered { price: Some(p), .. }] if *p == 100.0),
+                    "{condition:?}, {frequency}: {events:?}"
+                );
+                feed(&host, &bars, &[], 59);
+                assert!(host.events().is_empty());
                 assert_eq!(host.engine.alerts()[0].status, AlertStatus::Active);
                 assert!(host.delivered.lock().unwrap().is_empty());
 
@@ -1229,7 +1567,7 @@ mod tests {
     fn a_trigger_follows_the_change_of_status_and_reloads_never_repeat_it() {
         let mut watching = alert(AlertCondition::Above(100.0), AlertFrequency::EveryTime);
         watching.timeframe = None;
-        watching.message = "{{symbol}} closed at {{close}}".into();
+        watching.message = "{{symbol}} closed at {{close}} on {{trigger_time}}".into();
         let host = Host::new(vec![watching]);
         host.events();
         let bars = [bar(0, 99.0, 1.0), bar(1, 101.0, 1.0), bar(2, 103.0, 1.0)];
@@ -1243,14 +1581,40 @@ mod tests {
             matches!(&events[1], AlertEvent::TriggeredForSymbol { price: Some(p), .. } if *p == 103.0)
         );
         assert_eq!(events.len(), 2);
+        let saved = serde_json::to_value(host.engine.alerts()[0].clone()).unwrap();
+        assert!(saved["created_at"].is_string());
+        assert_eq!(
+            saved["last_triggered_at"],
+            serde_json::to_value(time(1_000)).unwrap()
+        );
         // The message is filled in the event, and the host callback gets the same event.
         assert!(
-            matches!(&events[1], AlertEvent::TriggeredForSymbol { message, .. } if message == "SYM closed at 103")
+            matches!(&events[1], AlertEvent::TriggeredForSymbol { message, .. } if *message == format!("SYM closed at 103 on {}", time(1_000).to_rfc3339()))
         );
         let delivered = host.delivered.lock().unwrap().clone();
         assert_eq!(delivered.len(), 1);
         assert_eq!(delivered[0].1, events[1]);
         feed(&host, &bars, &[], 1_001);
+        for (line, blink, push) in [
+            (true, false, false),
+            (false, true, false),
+            (false, true, true),
+        ] {
+            let mut edited = saved.clone();
+            edited["extend_line"] = line.into();
+            edited["blink_on_trigger"] = blink.into();
+            edited["delivery"]["push"] = push.into();
+            let alert: Alert = serde_json::from_value(edited).unwrap();
+            assert_eq!(host.save(alert), Ok(()));
+            feed(&host, &bars, &[], 1_001);
+            assert!(
+                host.fired().is_empty(),
+                "display and delivery changes must preserve occurrences"
+            );
+            let kept = serde_json::to_value(host.engine.alerts()[0].clone()).unwrap();
+            assert_eq!(kept["created_at"], saved["created_at"]);
+            assert_eq!(kept["last_triggered_at"], saved["last_triggered_at"]);
+        }
         // History that grew at the front, a rewound replay and another timeframe: nothing fires.
         let mut reloaded = vec![bar(-1, 98.0, 1.0)];
         reloaded.extend(bars.clone());
@@ -1313,6 +1677,16 @@ mod tests {
         );
         feed(&host, &bars, &[], 2_001);
         assert!(host.events().is_empty());
+
+        // An alert with a start time ignores data until then.
+        let mut timed = alert(AlertCondition::Above(100.0), AlertFrequency::EveryTime);
+        timed.starts = Some(time(1_000));
+        let host = Host::new(vec![timed]);
+        host.events();
+        feed(&host, &bars, &[], 999);
+        assert!(host.events().is_empty());
+        feed(&host, &bars, &[], 1_000);
+        assert_eq!(host.fired(), [101.0]);
 
         // A disabled alert is ignored; saving it active again starts with a first observation.
         let mut paused = alert(AlertCondition::CrossingUp(100.0), AlertFrequency::Once);

@@ -11,6 +11,7 @@ use crate::theme::ThemeExt;
 use crate::tokens::DESIGN_TOKENS;
 use crate::widget::{
     Chart, IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneId, PaneInteraction,
+    PaneScale,
 };
 use egui::{Pos2, Rect, Response, Sense, Ui};
 
@@ -41,12 +42,6 @@ pub struct RenderedIndicatorPane {
     pub coords: IndicatorCoordParams,
     /// Full mapping, including manual ranges, scale modes and inversion.
     pub mapping: crate::chart::coords::ChartMapping,
-}
-
-/// Whether the initial pane draws `study` on a scale of its own, apart from the pane's fitted range.
-fn study_has_own_scale(study: &dyn Indicator) -> bool {
-    study.scale() == crate::studies::StudyScale::Independent
-        || (study.is_volume() && !matches!(study.scale(), crate::studies::StudyScale::Shared(_)))
 }
 
 impl Chart {
@@ -146,16 +141,25 @@ impl Chart {
                 .min((available.height() - axis_height).max(0.0) / gap_count.max(1) as f32)
         };
         let usable_height = (available.height() - axis_height - gap * gap_count as f32).max(0.0);
-        let main_minimum = if main_present { 40.0 } else { 0.0 };
+        let main_collapsed = maximized.is_none()
+            && self
+                .pane_layout
+                .panes
+                .iter()
+                .any(|pane| pane.id == main_pane && pane.collapsed == Some(true));
+        let main_expanded = main_present && !main_collapsed;
+        let main_minimum = if main_expanded { 40.0 } else { 0.0 };
         let auto_collapse = usable_height
             / (if main_present { 3.0 } else { 0.0 } + pane_count as f32).max(1.0)
             < 40.0;
-        let row_height = 24.0_f32.min(usable_height / pane_count.max(1) as f32);
-        let mut expanded_budget = ((usable_height - row_height * pane_count as f32 - main_minimum)
+        let row_count = pane_count + usize::from(main_collapsed);
+        let row_height = 24.0_f32.min(usable_height / row_count.max(1) as f32);
+        let mut expanded_budget = ((usable_height - row_height * row_count as f32 - main_minimum)
             / (40.0 - row_height))
             .max(0.0) as usize;
         for (idx, id, collapsed) in &mut panes {
             if *id == main_pane {
+                *collapsed = main_collapsed;
                 continue;
             }
             *collapsed = maximized.is_none()
@@ -203,12 +207,12 @@ impl Chart {
                 }
             }
         }
-        let main_min = if !main_present || maximized.is_some_and(|id| id != main_pane) {
+        let main_min = if !main_expanded || maximized.is_some_and(|id| id != main_pane) {
             0.0
         } else {
             40.0
         };
-        let expanded_count = expanded.len().saturating_sub(usize::from(main_present));
+        let expanded_count = expanded.len().saturating_sub(usize::from(main_expanded));
         let pane_budget = (remaining - main_min).max(0.0);
         let minimum = (pane_budget / expanded_count.max(1) as f32).min(40.0);
         let excess: f32 = desired
@@ -229,10 +233,10 @@ impl Chart {
             if at > 0 {
                 top += gap;
             }
-            let height = if *id == main_pane {
-                main_height
-            } else if *collapsed {
+            let height = if *collapsed {
                 row_height
+            } else if *id == main_pane {
+                main_height
             } else {
                 *height
             };
@@ -268,10 +272,15 @@ impl Chart {
                     Sense::click_and_drag(),
                 )
             });
+        let price_frame = if main_collapsed {
+            Rect::from_min_size(main_rect.min, egui::vec2(main_rect.width(), 0.0))
+        } else {
+            main_rect
+        };
         let response = ui
             .scope_builder(
                 egui::UiBuilder::new()
-                    .max_rect(main_rect)
+                    .max_rect(price_frame)
                     .layout(egui::Layout::top_down(egui::Align::LEFT)),
                 |ui| self.show_internal(ui, Some(time_axis), shared_plot.as_ref(), footprint),
             )
@@ -361,7 +370,7 @@ impl Chart {
             .with_overlay(false)
             .with_line_count(0);
 
-        for ((_, pane_id, collapsed), panel_rect) in
+        for ((pane_idx, pane_id, collapsed), panel_rect) in
             panes.iter().copied().zip(rects.iter().copied())
         {
             if pane_id == main_pane {
@@ -396,11 +405,11 @@ impl Chart {
                 .first()
                 .and_then(|id| self.series_price_map(*id))
                 .unwrap_or(map);
-            let axes = self.pane_axes(pane_id, panel_rect, plot);
+            let axes: Vec<_> = self.pane_scale_axes(pane_id, panel_rect, plot).collect();
             let mut drawing_response = None;
-            let mut scale_tags =
-                std::collections::HashMap::<crate::model::SeriesScale, Vec<Option<Rect>>>::new();
+            let mut scale_tags = std::collections::HashMap::<PaneScale, Vec<Option<Rect>>>::new();
             let mut drawn_axes = Vec::new();
+            let mut fixed_axis_labels = Vec::new();
             let hovered = self.last_hover_bar_idx.and_then(|index| {
                 let index = index.round() as usize;
                 (index < self.state.shown().len()).then_some(index)
@@ -551,12 +560,8 @@ impl Chart {
                     ..self.config.price_axis
                 };
                 let assignment = id
-                    .and_then(|id| self.series_scale(id))
-                    .or_else(|| match indicator.scale() {
-                        crate::studies::StudyScale::Shared(key) => Some(key),
-                        _ => None,
-                    })
-                    .unwrap_or(crate::model::SeriesScale::Right);
+                    .and_then(|id| self.source_axis_key(pane_id, id))
+                    .unwrap_or(PaneScale::Named(crate::model::SeriesScale::Right));
                 let member_map = if let Some(item) =
                     id.and_then(|id| self.price_series.iter().find(|item| item.id == id))
                 {
@@ -607,11 +612,10 @@ impl Chart {
                 let axis_owner = series
                     .iter()
                     .map(|at| &self.price_series[*at])
-                    .find(|item| item.options.scale == assignment)
+                    .find(|item| PaneScale::Named(item.options.scale) == assignment)
                     .map(|item| item.id);
                 panel.draw_axis = !drawn_axes.contains(&assignment)
-                    && axis_owner.is_none_or(|owner| Some(owner) == id)
-                    && !(pane_id == PaneId::MAIN && study_has_own_scale(indicator));
+                    && axis_owner.is_none_or(|owner| Some(owner) == id);
                 if panel.draw_axis {
                     drawn_axes.push(assignment);
                 }
@@ -763,7 +767,9 @@ impl Chart {
                     Some(plot.x_range()),
                     collapsed,
                     panel.axis_rect.map(|_| {
-                        if !self.pane_axis_on_left(assignment) {
+                        if self.pane_scale_side(pane_id, assignment)
+                            == Some(crate::model::AxisSide::Right)
+                        {
                             crate::scales::PriceScaleId::Right
                         } else {
                             crate::scales::PriceScaleId::Left
@@ -777,16 +783,23 @@ impl Chart {
                     |painter, pass| {
                         use crate::widget::{PrimitivePass, primitives};
                         if pass == PrimitivePass::Below && paint_row == 0 {
+                            if let Some(watermark) = &self.pane_layout.panes[pane_idx].watermark {
+                                crate::chart::rendering::render_watermark(
+                                    ui, painter, pane_plot, watermark,
+                                );
+                            }
                             let backgrounds = primitives::backgrounds(
                                 painter,
-                                self.pane_primitives(&members, &pane_mapping),
+                                self.pane_primitives(pane_id, &members, &pane_mapping),
                                 pass,
                                 self.merge_groups.factor(),
                             );
                             below_grouped = !backgrounds.is_empty();
                             primitives::paint_backgrounds(painter, backgrounds);
                             if below_grouped {
-                                for (item, view) in self.pane_primitives(&members, &pane_mapping) {
+                                for (item, view) in
+                                    self.pane_primitives(pane_id, &members, &pane_mapping)
+                                {
                                     item.draw(painter, &view, pass, self.merge_groups.factor());
                                 }
                             }
@@ -795,8 +808,14 @@ impl Chart {
                             || (pass == PrimitivePass::Series && series_backgrounds.is_empty())
                         {
                             for (item, view) in self
-                                .pane_primitives(&members, &pane_mapping)
-                                .filter(|(item, _)| Some(item.series) == id)
+                                .pane_primitives(pane_id, &members, &pane_mapping)
+                                .filter(|(item, _)| {
+                                    if item.pane.is_some() {
+                                        pass == PrimitivePass::Below && paint_row == 0
+                                    } else {
+                                        Some(item.series) == id
+                                    }
+                                })
                             {
                                 item.draw(painter, &view, pass, self.merge_groups.factor());
                             }
@@ -804,7 +823,7 @@ impl Chart {
                         if pass == PrimitivePass::Below && paint_row == 0 {
                             series_backgrounds = primitives::backgrounds(
                                 painter,
-                                self.pane_primitives(&members, &pane_mapping),
+                                self.pane_primitives(pane_id, &members, &pane_mapping),
                                 PrimitivePass::Series,
                                 self.merge_groups.factor(),
                             );
@@ -835,6 +854,12 @@ impl Chart {
                     }
                     self.measured_axis_width =
                         self.measured_axis_width.max(panel.measured_axis_width);
+                    fixed_axis_labels.extend(
+                        panel
+                            .fixed_axis_labels
+                            .drain(..)
+                            .map(|label| (assignment, member_map, label)),
+                    );
                     scale_tags.insert(assignment, panel.axis_tags.clone());
                     let PaneInteraction {
                         panel_rect,
@@ -936,9 +961,12 @@ impl Chart {
                     });
                     ui.ctx()
                         .accesskit_node_builder(toggle.id, |node| node.set_expanded(!collapsed));
-                    if toggle.clicked() && !control_clicked {
+                    if toggle.clicked() && !control_clicked && !ui.input(|i| i.modifiers.command) {
                         pending_pane_collapse = Some((pane_id, !collapsed));
                         ui.ctx().request_repaint();
+                    }
+                    if self.pane_collapse_click(ui.ctx()) {
+                        pane_response.flags.remove(egui::response::Flags::CLICKED);
                     }
                     let mut pane_coords = coords.to_mapping(chart_rect, y_min, y_max);
                     pane_coords.price = member_map;
@@ -947,7 +975,7 @@ impl Chart {
                     let pointer = ui
                         .input(|input| input.pointer.interact_pos())
                         .filter(|pos| chart_rect.contains(*pos));
-                    let pane_primitives = || self.pane_primitives(&members, &pane_mapping);
+                    let pane_primitives = || self.pane_primitives(pane_id, &members, &pane_mapping);
                     let primitive_hit = pointer.and_then(|pos| {
                         crate::widget::primitives::primitive_at(
                             pane_primitives().filter(|(item, _)| {
@@ -1047,6 +1075,13 @@ impl Chart {
                             pending_pane_selection = Some(hit);
                         }
                     }
+                    if !collapsed
+                        && self.host_events.annotation_target.borrow().is_some()
+                        && id.is_some_and(|id| self.study_ids.contains(&id))
+                        && pointer.and_then(study_at) == id.map(ChartElementId::Indicator)
+                    {
+                        self.cover_annotation_hit();
+                    }
                     // What the pointer is over, for host pointer events: drawings sit on top.
                     if !collapsed && let Some(pos) = pointer {
                         #[cfg(feature = "drawings")]
@@ -1057,7 +1092,7 @@ impl Chart {
                             .as_ref()
                             .filter(|hit| {
                                 study_at(pos).map(crate::widget::PointerTarget::Element)
-                                    == Some(hit.target)
+                                    == Some(hit.target.clone())
                             })
                             .cloned();
                         let hit = crate::widget::primitives::best_hit(primitive_hit, renderer);
@@ -1072,8 +1107,26 @@ impl Chart {
                         }
                         self.host_events.target = drawing
                             .map(crate::widget::PointerTarget::Drawing)
-                            .or(hit.as_ref().map(|hit| hit.target))
+                            .or(hit.as_ref().map(|hit| hit.target.clone()))
                             .or_else(|| study_at(pos).map(crate::widget::PointerTarget::Element));
+                        if series_backgrounds.is_empty()
+                            && hit.as_ref().is_some_and(|hit| {
+                                hit.result.pass == crate::widget::PrimitivePass::Series
+                                    && self.primitives.iter().any(|item| {
+                                        Some(item.series) == id
+                                            && hit.target
+                                                == if item.replaces {
+                                                    crate::widget::PointerTarget::Element(
+                                                        ChartElementId::Indicator(item.series),
+                                                    )
+                                                } else {
+                                                    crate::widget::PointerTarget::Primitive(item.id)
+                                                }
+                                    })
+                            })
+                        {
+                            self.cover_annotation_hit();
+                        }
                         self.host_events.primitive_hit =
                             hit.filter(|_| drawing.is_none()).map(|hit| hit.result);
                     }
@@ -1119,19 +1172,50 @@ impl Chart {
             }
             if let Some((_, chart_rect, _)) = &drawing_response {
                 let chart_rect = *chart_rect;
-                if !collapsed && !series_backgrounds.is_empty() {
+                let pane_owned = self
+                    .primitives
+                    .iter()
+                    .any(|item| item.pane == Some(pane_id));
+                if !collapsed && (pane_owned || !series_backgrounds.is_empty()) {
+                    let grouped = !series_backgrounds.is_empty();
                     let painter = ui
                         .painter()
                         .with_clip_rect(chart_rect.intersect(ui.clip_rect()));
                     crate::widget::primitives::paint_backgrounds(&painter, series_backgrounds);
-                    for (item, view) in self.pane_primitives(&members, &pane_mapping) {
+                    let mut hit_drawn = grouped;
+                    for (item, view) in self
+                        .pane_primitives(pane_id, &members, &pane_mapping)
+                        .filter(|(item, _)| grouped || item.pane.is_some())
+                    {
                         item.draw(
                             &painter,
                             &view,
                             crate::widget::PrimitivePass::Series,
                             self.merge_groups.factor(),
                         );
+                        hit_drawn |= self.host_events.target
+                            == Some(crate::widget::PointerTarget::Primitive(item.id));
                     }
+                    if hit_drawn
+                        && ui
+                            .input(|input| input.pointer.interact_pos())
+                            .is_some_and(|pos| chart_rect.contains(pos))
+                        && self
+                            .host_events
+                            .primitive_hit
+                            .as_ref()
+                            .is_some_and(|hit| hit.pass == crate::widget::PrimitivePass::Series)
+                    {
+                        self.cover_annotation_hit();
+                    }
+                }
+                if !collapsed {
+                    self.paint_pane_marks(
+                        ui.painter(),
+                        chart_rect,
+                        &members,
+                        crate::model::MarkerZOrder::AboveSeries,
+                    );
                 }
                 let painter = ui
                     .painter()
@@ -1173,14 +1257,17 @@ impl Chart {
                             }
                         })
                     })
-                    .unwrap_or(crate::model::SeriesScale::Right);
+                    .map(PaneScale::Named)
+                    .unwrap_or(PaneScale::Named(crate::model::SeriesScale::Right));
                 #[cfg(feature = "drawings")]
-                let axis_edge = axes
+                let drawing_axis = axes
                     .iter()
                     .find(|(key, _)| *key == drawing_key)
-                    .map(|(_, axis)| axis.right());
+                    .map(|(_, axis)| *axis);
                 #[cfg(feature = "drawings")]
-                if !collapsed && let Some(axis_edge) = axis_edge {
+                if !collapsed && let Some(axis) = drawing_axis {
+                    let axis_edge = axis.right();
+                    let label_rect = super::super::series::axis_label_rect(chart_rect, axis);
                     let map = drawing_map;
                     let axis_tags = scale_tags.entry(drawing_key).or_default();
                     for (value, fill) in self
@@ -1207,7 +1294,7 @@ impl Chart {
                         );
                         axis_tags.push(crate::chart::rendering::axes::render_axis_value(
                             &painter,
-                            chart_rect,
+                            label_rect,
                             axis_edge,
                             map.price_to_y(value),
                             label,
@@ -1224,12 +1311,16 @@ impl Chart {
                     .with_clip_rect(panel_rect.intersect(ui.clip_rect()));
                 for at in &series {
                     let item = &self.price_series[*at];
-                    let Some((_, axis)) = axes.iter().find(|(key, _)| *key == item.options.scale)
+                    let Some((_, axis)) = axes
+                        .iter()
+                        .find(|(key, _)| *key == PaneScale::Named(item.options.scale))
                     else {
                         continue;
                     };
                     let map = self.series_map(item, panel_rect);
-                    let tags = scale_tags.entry(item.options.scale).or_default();
+                    let tags = scale_tags
+                        .entry(PaneScale::Named(item.options.scale))
+                        .or_default();
                     for (value, colors, last) in
                         self.series_axis_values(item).filter(|(value, ..)| {
                             map.range().contains(map.transform().to_scale(*value))
@@ -1237,7 +1328,7 @@ impl Chart {
                     {
                         let tag = crate::chart::rendering::axes::render_axis_value(
                             &painter,
-                            pane_plot,
+                            super::super::series::axis_label_rect(pane_plot, *axis),
                             axis.right(),
                             map.price_to_y(value),
                             self.series_tag_label(item, &map, value, last),
@@ -1246,6 +1337,27 @@ impl Chart {
                             self.config.price_axis.allow_label_overlap,
                         );
                         tags.push(tag);
+                    }
+                }
+            }
+            if !collapsed {
+                for (key, axis) in &axes {
+                    let labels = fixed_axis_labels
+                        .iter()
+                        .filter(|(assignment, _, _)| assignment == key)
+                        .map(|(_, map, label)| (label.clone(), *map))
+                        .collect();
+                    let tags = scale_tags.entry(*key).or_default();
+                    crate::chart::rendering::axes::render_primitive_price_labels(
+                        &ui.painter().with_clip_rect(axis.intersect(ui.clip_rect())),
+                        super::super::series::axis_label_rect(pane_plot, *axis),
+                        axis.right(),
+                        labels,
+                        tags,
+                        self.config.price_axis.allow_label_overlap,
+                    );
+                    for tag in tags.iter().flatten() {
+                        self.measured_axis_width = self.measured_axis_width.max(tag.width() + 11.0);
                     }
                 }
             }
@@ -1289,6 +1401,22 @@ impl Chart {
                 };
                 #[cfg(not(feature = "drawings"))]
                 let drawing_hit: Option<usize> = None;
+                #[cfg(feature = "drawings")]
+                if let Some(id) = ui
+                    .input(|input| input.pointer.interact_pos())
+                    .filter(|pos| chart_rect.contains(*pos))
+                    .and_then(|pos| self.drawings.hit_test(pos))
+                {
+                    self.cover_annotation_hit();
+                    self.host_events.target = Some(crate::widget::PointerTarget::Drawing(id));
+                    self.host_events.primitive_hit = None;
+                }
+                self.paint_pane_marks(
+                    ui.painter(),
+                    chart_rect,
+                    &members,
+                    crate::model::MarkerZOrder::Top,
+                );
                 // Study settings stay on the legend button and the context menu.
                 if pane_response.double_clicked() && drawing_hit.is_none() {
                     pending_pane_maximize = Some(pane_id);
@@ -1330,10 +1458,26 @@ impl Chart {
                         .with_clip_rect(chart_rect.intersect(ui.clip_rect()));
                     crate::widget::primitives::paint_pass(
                         &painter,
-                        self.pane_primitives(&members, &pane_mapping),
+                        self.pane_primitives(pane_id, &members, &pane_mapping),
                         crate::widget::PrimitivePass::Above,
                         self.merge_groups.factor(),
                     );
+                    if self.host_events.annotation_target.borrow().is_some()
+                        && let Some(hit) = ui
+                            .input(|input| input.pointer.interact_pos())
+                            .filter(|pos| chart_rect.contains(*pos))
+                            .and_then(|pos| {
+                                crate::widget::primitives::primitive_at(
+                                    self.pane_primitives(pane_id, &members, &pane_mapping),
+                                    pos,
+                                )
+                            })
+                            .filter(|hit| hit.result.pass == crate::widget::PrimitivePass::Above)
+                    {
+                        self.cover_annotation_hit();
+                        self.host_events.target = Some(hit.target);
+                        self.host_events.primitive_hit = Some(hit.result);
+                    }
                 }
             }
             if !collapsed {
@@ -1417,6 +1561,11 @@ impl Chart {
             Some((id, ..)) => self.indicator_settings_request = Some(id),
             None => {}
         }
+
+        if main_collapsed {
+            self.collapsed_price_header(ui, main_rect);
+        }
+        self.pane_collapse_shortcut(ui);
 
         ui.advance_cursor_after_rect(available);
         ui.spacing_mut().item_spacing = host_spacing;

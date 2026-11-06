@@ -179,6 +179,32 @@ impl ExchangeSessionProvider {
         !self.window_closes(time, extended_hours).is_empty()
     }
 
+    /// The first instant at or after `time` inside a window, extended ones included: `time`
+    /// itself while the exchange is open, `None` when no window opens within a year.
+    pub(crate) fn open_at_or_after(&self, time: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        if self.is_open(time, true) {
+            return Some(time);
+        }
+        let date = self.wall_time(time).date();
+        let opens_on = |date: NaiveDate| {
+            if self.continuous_on(date) {
+                let day = self.instant(date.and_time(NaiveTime::MIN));
+                return day.filter(|open| self.trades_on(date) && *open >= time);
+            }
+            (self.hours_on(date).iter())
+                .filter_map(|hours| self.window_open(date, hours))
+                .filter(|open| *open >= time)
+                .min()
+        };
+        let first = (0..=366).find_map(|days| {
+            let date = date.checked_add_days(Days::new(days))?;
+            Some((date, opens_on(date)?))
+        })?;
+        // A window that closes the next day can open before this date's next one.
+        let overnight = first.0.succ_opt().and_then(opens_on);
+        Some(overnight.map_or(first.1, |open| open.min(first.1)))
+    }
+
     /// The state of the session at `time`, or `None` without trading hours.
     #[cfg(any(feature = "widget", all(test, feature = "timezones")))]
     pub(crate) fn market_session(&self, time: DateTime<Utc>) -> Option<MarketSession> {
@@ -609,6 +635,53 @@ mod tests {
     use super::*;
     use crate::model::session::find_session_breaks;
     use chrono::{Duration, Weekday};
+
+    #[test]
+    fn open_at_or_after_finds_the_next_window() {
+        use crate::model::{Session, SessionWindow};
+        let days = [
+            Weekday::Mon,
+            Weekday::Tue,
+            Weekday::Wed,
+            Weekday::Thu,
+            Weekday::Fri,
+        ];
+        let hm = |h, m| NaiveTime::from_hms_opt(h, m, 0).unwrap();
+        // January 2024 in UTC; the 5th is a Friday and the 8th a Monday.
+        let day = |d, h, m| {
+            NaiveDate::from_ymd_opt(2024, 1, d)
+                .and_then(|date| date.and_hms_opt(h, m, 0))
+                .unwrap()
+                .and_utc()
+        };
+        let provider = |session| ExchangeSessionProvider::new(TimezoneId::utc(), Some(session));
+        let regular = || Session::new([SessionWindow::new(days, hm(9, 30), hm(16, 0))]);
+        let overnight = Session::new([
+            SessionWindow::new(days, hm(20, 0), hm(21, 0)),
+            SessionWindow::new(days, hm(18, 0), hm(2, 0)),
+        ]);
+        let holiday = NaiveDate::from_ymd_opt(2024, 1, 9).unwrap();
+        for (session, time, expected) in [
+            (regular(), day(9, 10, 0), Some(day(9, 10, 0))),
+            (regular(), day(9, 8, 0), Some(day(9, 9, 30))),
+            (regular(), day(5, 16, 0), Some(day(8, 9, 30))),
+            (regular(), day(6, 12, 0), Some(day(8, 9, 30))),
+            // The next day's overnight window opens before this day's evening one.
+            (overnight, day(9, 3, 0), Some(day(9, 18, 0))),
+            (
+                Session::new([]).with_holidays([holiday]),
+                day(9, 12, 0),
+                Some(day(10, 0, 0)),
+            ),
+            (
+                Session::new([SessionWindow::new([], hm(9, 0), hm(16, 0))]),
+                day(9, 8, 0),
+                None,
+            ),
+        ] {
+            assert_eq!(provider(session).open_at_or_after(time), expected, "{time}");
+        }
+    }
 
     #[test]
     fn calendar_dividers_follow_bar_dates_and_coarser_periods() {
