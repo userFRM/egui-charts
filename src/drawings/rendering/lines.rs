@@ -3,6 +3,7 @@
 //! Includes: lines, rays, shapes (rect, circle, ellipse, triangle, arc),
 //! arrows, and polylines.
 
+use super::ChartView;
 use super::style::{Acceleration, ellipse_arc, smooth_path};
 use crate::drawings::domain::Drawing;
 use crate::styles::{stroke, typography};
@@ -97,15 +98,15 @@ impl Drawing {
     }
 
     /// Ends from left to right, or in anchor order on a vertical line, extended to the pane edges
-    /// as configured; `None` below two anchors. An info line extends left past its first anchor
-    /// and right past its second, whichever way it was drawn, as vertical rays do; vertical
-    /// extended lines count from the top; other lines extend towards the pane's sides.
+    /// as configured; `None` below two anchors. An info line or a trend angle extends left past
+    /// its first anchor and right past its second, whichever way it was drawn, as vertical rays do;
+    /// vertical extended lines count from the top; other lines extend towards the pane's sides.
     pub(crate) fn trend_line_ends(&self, rect: Rect) -> Option<(Pos2, Pos2)> {
         use crate::drawings::DrawingToolType as T;
         let &[a, b, ..] = self.points.as_slice() else {
             return None;
         };
-        if self.tool_type == T::InfoLine
+        if matches!(self.tool_type, T::InfoLine | T::TrendAngle)
             || (a.x == b.x && matches!(self.tool_type, T::Ray | T::ExtendedLine))
         {
             let (start, end) = if self.tool_type == T::ExtendedLine && b.y < a.y {
@@ -268,13 +269,15 @@ impl Drawing {
         }
     }
 
-    /// Render a signed screen angle with plain text and dotted construction guides.
+    /// Render a signed screen angle with plain text, its readouts and dotted construction guides.
     pub(crate) fn render_trend_angle(
         &self,
         painter: &egui::Painter,
         rect: Rect,
         color: Color32,
         stroke: Stroke,
+        view: &ChartView,
+        selected: bool,
     ) {
         let &[start, end, ..] = self.points.as_slice() else {
             if let Some(&point) = self.points.first() {
@@ -296,18 +299,17 @@ impl Drawing {
             .line_arc_radius
             .min(start.distance(end));
         let label_direction = egui::vec2((angle / 2.0).cos(), -(angle / 2.0).sin());
-        let galley = painter.layout_no_wrap(
-            format!("{:.1}°", angle.to_degrees()),
-            self.annotation_font(),
-            color,
-        );
+        let text_color = self.text_box_colors(painter.ctx()).text;
+        let galley =
+            self.annotation_galley(painter, format!("{:.1}°", angle.to_degrees()), text_color);
         let label_distance =
             radius + DESIGN_TOKENS.spacing.sm + label_direction.abs().dot(galley.size()) / 2.0;
         painter.galley(
             start + label_direction * label_distance - galley.size() / 2.0,
             galley,
-            color,
+            text_color,
         );
+        self.render_line_measurements(painter, view, selected);
         self.finish_style(painter, first_shape, rect);
 
         // Construction guides stay thin and dotted regardless of the main line's style.
@@ -1043,8 +1045,10 @@ mod tests {
             (egui::vec2(100., 0.), "0.0°"),
             (egui::vec2(16., -12.), "36.9°"),
         ] {
-            for (size, width, style) in [(12., 2., LineStyle::Solid), (24., 5., LineStyle::Dashed)]
-            {
+            for (size, width, style, italic, text_color) in [
+                (12., 2., LineStyle::Solid, false, None),
+                (24., 5., LineStyle::Dashed, true, Some([200, 40, 40, 255])),
+            ] {
                 let mut drawing = Drawing::new(1, DrawingToolType::TrendAngle);
                 drawing.points = vec![start, start + delta];
                 drawing.chart_points = drawing
@@ -1056,6 +1060,8 @@ mod tests {
                 drawing.stroke_width = width;
                 drawing.line_style = style;
                 drawing.color = [40, 120, 200, 255];
+                drawing.italic = italic;
+                drawing.text_color = text_color;
                 let mut output = egui::Context::default().run_ui(Default::default(), |ui| {
                     let view = ChartView {
                         price_formatter: None,
@@ -1087,7 +1093,11 @@ mod tests {
                 assert_eq!(texts[0].galley.job.text, label);
                 let format = &texts[0].galley.job.sections[0].format;
                 assert_eq!(format.font_id.size, size);
-                assert_eq!(format.color, drawing.color32());
+                assert_eq!(
+                    format.color.to_srgba_unmultiplied(),
+                    text_color.unwrap_or(drawing.color)
+                );
+                assert_eq!(format.italics, italic);
                 assert!(
                     !output
                         .shapes
@@ -1176,11 +1186,11 @@ mod tests {
         }
     }
 
-    /// An info line extends left past its first anchor and right past its second, in either
-    /// drawing order and on a vertical line, and selection follows the painted extension.
+    /// An info line or trend angle extends left past its first anchor and right past its second,
+    /// in either drawing order and on a vertical line, and selection follows the painted extension.
     #[test]
-    fn info_line_extends_past_the_anchor_named_in_paint_and_hit_testing() {
-        use crate::drawings::services::DrawingInteraction;
+    fn info_line_and_trend_angle_extend_past_the_anchor_named_in_paint_and_hit_testing() {
+        use crate::drawings::{DrawingToolType as T, services::DrawingInteraction};
         let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(1000.0, 600.0));
         let (low, high) = (Pos2::new(400.0, 100.0), Pos2::new(500.0, 200.0));
         let (top, bottom) = (Pos2::new(300.0, 100.0), Pos2::new(300.0, 400.0));
@@ -1244,8 +1254,11 @@ mod tests {
                 (300.0, 500.0),
             ),
         ];
-        for (first, second, left, right, want, on, off) in cases {
-            let mut drawing = Drawing::new(1, crate::drawings::DrawingToolType::InfoLine);
+        for ((first, second, left, right, want, on, off), tool) in cases
+            .into_iter()
+            .flat_map(|case| [T::InfoLine, T::TrendAngle].map(|tool| (case, tool)))
+        {
+            let mut drawing = Drawing::new(1, tool);
             drawing.points = vec![first, second];
             (drawing.extend_left, drawing.extend_right) = (left, right);
             assert_eq!(drawing.trend_line_ends(rect), Some(want));
