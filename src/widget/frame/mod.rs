@@ -882,6 +882,9 @@ impl Chart {
                 self.config.text_color,
             );
             self.paint_empty_pane_primitives(ui, &painter);
+            // This frame paints no marks, and those of the last frame went with its bars.
+            self.mark_hits.get_mut().clear();
+            self.clickable_marks.clear();
             self.record_host_click(ui, &response);
             return response;
         }

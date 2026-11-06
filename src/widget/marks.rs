@@ -1027,6 +1027,58 @@ mod tests {
         }
     }
 
+    /// A chart without bars paints no marks, so a click there reports none, from its first
+    /// empty frame on.
+    #[test]
+    fn click_on_an_emptied_chart_reports_no_removed_mark() {
+        for settled in [false, true] {
+            let ctx = Context::default();
+            let mut chart = test_frames::chart(&[95.0], &[105.0]);
+            chart.config_mut().show_volume = false;
+            test_frames::frame(&ctx, &mut chart, 0.0, vec![]);
+            let time = chart.state.shown()[70].time;
+            chart.set_markers(
+                SeriesId::MAIN,
+                vec![Marker::new(time).with_pos(MarkerPos::InBar).with_id("old")],
+            );
+            test_frames::frame(&ctx, &mut chart, 0.1, vec![]);
+            test_frames::frame(&ctx, &mut chart, 0.2, vec![]);
+            let pos = chart.clickable_marks.last().unwrap().rect.center();
+            let button = |pressed| {
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                }]
+            };
+            if !settled {
+                test_frames::frame(&ctx, &mut chart, 0.3, button(true));
+            }
+            // The host drops the marks and the bars, as a symbol change does until new bars arrive.
+            chart.set_markers(SeriesId::MAIN, Vec::new());
+            chart.set_data(SeriesId::MAIN, Vec::new());
+            if settled {
+                test_frames::frame(&ctx, &mut chart, 0.3, vec![]);
+                test_frames::frame(&ctx, &mut chart, 0.4, vec![]);
+                chart.drain_events().for_each(drop);
+                test_frames::frame(&ctx, &mut chart, 0.5, button(true));
+            }
+            test_frames::frame(&ctx, &mut chart, 0.6, button(false));
+            let events: Vec<_> = chart
+                .drain_events()
+                .filter_map(|event| match event {
+                    ChartEvent::Click { position, .. } => {
+                        Some(format!("Click {:?}", position.target))
+                    }
+                    ChartEvent::MarkClick { id, .. } => Some(format!("MarkClick {id}")),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(events, ["Click None"], "settled {settled}");
+        }
+    }
+
     #[derive(Default)]
     struct Source(Mutex<Vec<(MarksRequest, Reply<MarksPage>)>>);
 
