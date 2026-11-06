@@ -289,17 +289,23 @@ impl Chart {
         }
         let y = map.price_to_y(line.price);
         let stroke_hit = line.width > 0.0 && (pos.y - y).abs() <= (line.width * 0.5).max(3.0);
-        let title_hit = line.title.as_ref().is_some_and(|title| {
-            let galley = painter.layout_no_wrap(
-                title.clone(),
-                crate::chart::rendering::axes::axis_font(painter.ctx()),
-                line.color,
-            );
-            let title_rect = egui::Align2::LEFT_BOTTOM
-                .anchor_size(egui::pos2(rect.left(), y), galley.size())
-                .intersect(clip);
-            title_rect.is_positive() && title_rect.contains(pos)
-        });
+        let title_hit = !stroke_hit
+            && pos.y <= y
+            && line.title.as_ref().is_some_and(|title| {
+                let font = crate::chart::rendering::axes::axis_font(painter.ctx());
+                // Only lay out a title the pointer can be over: its rows stand on the line, each
+                // within a pixel of the font's row height once rounded to pixels.
+                let row = painter.ctx().fonts_mut(|fonts| fonts.row_height(&font))
+                    + painter.pixels_per_point().recip();
+                if y - pos.y > row * (1 + title.matches('\n').count()) as f32 {
+                    return false;
+                }
+                let galley = painter.layout_no_wrap(title.clone(), font, line.color);
+                let title_rect = egui::Align2::LEFT_BOTTOM
+                    .anchor_size(egui::pos2(rect.left(), y), galley.size())
+                    .intersect(clip);
+                title_rect.is_positive() && title_rect.contains(pos)
+            });
         if stroke_hit || title_hit {
             *self.host_events.annotation_target.borrow_mut() =
                 Some(super::PointerTarget::PriceLine { series, id });
@@ -587,6 +593,15 @@ mod tests {
                 probe(&ctx, &mut chart, title, &mut tick).target,
                 line_target
             );
+            // Every row of a title stands on its line, up to the top of the first.
+            let font = crate::chart::rendering::axes::axis_font(&ctx);
+            let row = ctx.fonts_mut(|fonts| fonts.row_height(&font));
+            for (text, rows) in [("Level", 1.0), ("Two\nrows", 2.0)] {
+                let titled = line.clone().with_width(0.0).with_title(text);
+                assert!(chart.update_price_line(handle, titled));
+                let top = egui::pos2(title.x, pos.y - rows * row + 1.0);
+                assert_eq!(probe(&ctx, &mut chart, top, &mut tick).target, line_target);
+            }
             assert!(chart.update_price_line(handle, line.clone()));
             assert_eq!(probe(&ctx, &mut chart, pos, &mut tick).target, line_target);
             assert!(chart.update_price_line(handle, PriceLine::new(1_000.0, Color32::BLUE)));
@@ -1076,6 +1091,80 @@ mod tests {
                 })
                 .collect();
             assert_eq!(events, ["Click None"], "settled {settled}");
+        }
+    }
+
+    /// Hovering a pane makes no heap allocation for each titled price line away from the pointer.
+    #[cfg(feature = "studies")]
+    #[test]
+    fn hover_allocates_nothing_per_titled_price_line() {
+        use crate::model::PriceLine;
+        use egui::{Color32, Event, Pos2, RawInput, Rect, vec2};
+
+        let hover_cost = |titled: bool| {
+            let ctx = Context::default();
+            let mut chart = test_frames::chart(&[95.0], &[105.0]);
+            chart.config_mut().show_volume = false;
+            for i in 0..24 {
+                let line = PriceLine::new(100.0 + f64::from(i) * 0.04, Color32::BLUE)
+                    .with_axis_label(false);
+                let line = if titled {
+                    line.with_title(format!("Line {i}"))
+                } else {
+                    line
+                };
+                assert!(chart.add_price_line(SeriesId::MAIN, line).is_some());
+            }
+            test_frames::frame(&ctx, &mut chart, 0.0, vec![]);
+            let plot = chart.get_rendered_price_rect();
+            let map = chart.series_price_map(SeriesId::MAIN).unwrap();
+            // On the time axis under the plot, then far below and far above every line and title.
+            let at = |y| Pos2::new(plot.center().x, y);
+            let positions = [
+                at(plot.bottom() + 8.0),
+                at(map.price_to_y(96.0)),
+                at(map.price_to_y(104.0)),
+            ];
+            assert!(!plot.contains(positions[0]));
+            assert!(plot.contains(positions[1]) && plot.contains(positions[2]));
+            let mut tick = 0.0;
+            positions.map(|pos| {
+                for _ in 0..3 {
+                    tick += 0.1;
+                    test_frames::frame(&ctx, &mut chart, tick, vec![Event::PointerMoved(pos)]);
+                }
+                chart.drain_events().for_each(drop);
+                (0..3)
+                    .map(|_| {
+                        tick += 0.1;
+                        let input = RawInput {
+                            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0))),
+                            time: Some(tick),
+                            ..Default::default()
+                        };
+                        let (count, output) =
+                            crate::widget::studies_data::tests::allocations(|| {
+                                ctx.run_ui(input, |ui| {
+                                    egui::CentralPanel::default().show(ui, |ui| {
+                                        chart.show(ui);
+                                    });
+                                })
+                            });
+                        output.drop_without_applying_deltas();
+                        count as i64
+                    })
+                    .min()
+                    .unwrap()
+            })
+        };
+        let (plain, titled) = (hover_cost(false), hover_cost(true));
+        // Titles do not change while the pointer moves, so they cost no more to hover than none.
+        // Each count is taken against the same chart off the plot.
+        for at in [1, 2] {
+            assert!(
+                (titled[at] - titled[0]) - (plain[at] - plain[0]) < 24,
+                "hover allocations at {at}: untitled lines {plain:?}, titled lines {titled:?}"
+            );
         }
     }
 
