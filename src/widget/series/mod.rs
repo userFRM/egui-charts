@@ -728,11 +728,10 @@ impl Chart {
     /// Removes a bar series or study and clears its selection. Removing the main series retains
     /// the time axis for the remaining series and drawings and pauses its feed; on a chart without
     /// the original pane its bars stay live instead, as [`remove_pane`](Self::remove_pane)
-    /// describes. Undo of the
-    /// [`user_action`](Self::user_action) that removed a bar series restores it with its
-    /// markers, price lines, formatter and bar limit, and for the main series the feed follows
-    /// [`set_feed_paused`](Self::set_feed_paused) again. Returns `false` for an unknown or
-    /// already removed id.
+    /// describes. Undo of the [`user_action`](Self::user_action) that removed a bar series
+    /// restores it with its markers, price lines, formatter and bar limit, and for the main
+    /// series the feed follows [`set_feed_paused`](Self::set_feed_paused) again. Returns `false`
+    /// for an unknown or already removed id.
     pub fn remove_series(&mut self, id: SeriesId) -> bool {
         if id == SeriesId::MAIN {
             if !self.main_series_present {
