@@ -869,8 +869,6 @@ impl LinkChange {
 #[derive(Default)]
 struct LayoutEdits {
     steps: Arc<Mutex<Vec<(u64, bool)>>>,
-    #[cfg(feature = "studies")]
-    next: u64,
 }
 
 impl Clone for LayoutEdits {
@@ -883,10 +881,12 @@ impl Clone for LayoutEdits {
 impl LayoutEdits {
     #[cfg(feature = "studies")]
     fn start(&mut self) -> LayoutEditLink {
-        self.next += 1;
+        // Process-wide, so that a clone of a layout, which starts a new queue, never reuses an
+        // id that a chart's history may already hold from the original.
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         LayoutEditLink {
             steps: Arc::clone(&self.steps),
-            id: self.next,
+            id: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         }
     }
 }
