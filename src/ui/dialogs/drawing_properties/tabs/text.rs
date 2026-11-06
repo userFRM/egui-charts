@@ -74,7 +74,8 @@ impl TextTab {
                 return;
             };
             let settings = &mut template.settings;
-            if settings.tool_type.supports_line_measurements() {
+            let line_text = settings.tool_type == DrawingToolType::HorizontalLine;
+            if line_text || settings.tool_type.supports_line_measurements() {
                 let measurements = &mut settings.line_measurements;
                 let label = ui.label(l10n::text(ui.ctx(), "Horizontal alignment"));
                 ui.label_inputs_by(label.id, |ui| {
@@ -127,7 +128,7 @@ impl TextTab {
                 ui.end_row();
             }
             let boxed = has_text_box(settings.tool_type);
-            if !(boxed || settings.tool_type == DrawingToolType::InfoLine) {
+            if !(boxed || line_text || settings.tool_type == DrawingToolType::InfoLine) {
                 return;
             }
             // The swatches show the colours the chart draws with the edits so far.
@@ -212,5 +213,46 @@ impl TextTab {
             });
             ui.end_row();
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::drawings::Drawing;
+
+    /// A horizontal line offers its text placement, colour and emphasis; a horizontal ray keeps
+    /// the plain text settings it draws.
+    #[test]
+    fn horizontal_line_offers_its_text_settings() {
+        let chart = crate::Chart::new(crate::model::BarData::default());
+        for (tool, offered) in [
+            (DrawingToolType::HorizontalLine, true),
+            (DrawingToolType::HorizontalRay, false),
+        ] {
+            let mut props = DrawingProps::from_drawing(&Drawing::new(1, tool), &chart);
+            let output = egui::Context::default().run_ui(Default::default(), |ui| {
+                let mut pickers = [(); 3].map(|_| ColorPickerState::new(props.color));
+                TextTab::show(ui, &mut props, &mut pickers);
+            });
+            let labels: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+                    _ => None,
+                })
+                .collect();
+            for label in [
+                "Horizontal alignment",
+                "Vertical alignment",
+                "Text color",
+                "Bold",
+                "Italic",
+            ] {
+                assert_eq!(labels.contains(&label), offered, "{tool:?} {label}");
+            }
+            output.drop_without_applying_deltas();
+        }
     }
 }
