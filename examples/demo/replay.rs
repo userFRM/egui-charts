@@ -8,6 +8,7 @@ use egui_charts::ui::floating_replay_control::ReplayControlAction;
 use egui_charts::ui::replay::{
     ReplayAction, ReplayController, ReplayStartAction, paint_start_line,
 };
+use egui_charts::ui::timeframe_toolbar::SessionType;
 use egui_charts::widget::{ChartLinkGroups, SeriesId};
 use std::collections::VecDeque;
 use std::num::NonZeroU64;
@@ -474,6 +475,10 @@ pub(super) struct LayoutGroups {
     sync: [bool; 6],
     #[serde(default)]
     cents: [bool; 16],
+    /// Whether each chart shows the continuous 24/7 session, which the chart's extended hours
+    /// choice cannot tell from the extended session. Layouts saved without it have `None`.
+    #[serde(default)]
+    continuous: Option<[bool; 16]>,
     #[serde(default)]
     pub(super) sizes: Vec<egui_charts::widget::ChartLayoutSizing>,
 }
@@ -517,25 +522,31 @@ impl DemoApp {
 
     pub(super) fn layout_groups(&self) -> LayoutGroups {
         let sync = &self.layout.sync;
+        let live_in_slot = |slot: usize| {
+            if slot == self.layout_slot {
+                Some(&self.live)
+            } else {
+                self.extra_charts
+                    .get(if slot < self.layout_slot {
+                        slot
+                    } else {
+                        slot - 1
+                    })
+                    .map(|extra| &extra.live)
+            }
+        };
         LayoutGroups {
             sizes: self.layout.saved_sizes(),
             links: self.layout.saved_link_groups(),
             groups: std::array::from_fn(|slot| self.layout.sync_group(slot).map(str::to_owned)),
             detached: std::array::from_fn(|slot| self.layout.is_detached(slot)),
             cents: std::array::from_fn(|slot| {
-                let live = if slot == self.layout_slot {
-                    Some(&self.live)
-                } else {
-                    self.extra_charts
-                        .get(if slot < self.layout_slot {
-                            slot
-                        } else {
-                            slot - 1
-                        })
-                        .map(|extra| &extra.live)
-                };
-                live.is_some_and(|live| live.instrument().unit.as_deref() == Some("US cents"))
+                live_in_slot(slot)
+                    .is_some_and(|live| live.instrument().unit.as_deref() == Some("US cents"))
             }),
+            continuous: Some(std::array::from_fn(|slot| {
+                live_in_slot(slot).is_some_and(|live| live.view(false).0 == SessionType::Full24x7)
+            })),
             sync: [
                 sync.sync_symbol,
                 sync.sync_timeframe,
@@ -558,6 +569,7 @@ impl DemoApp {
                 .error(format!("Could not open chart sizes: {error}"));
         }
         let cents = groups.as_ref().map_or([false; 16], |groups| groups.cents);
+        let continuous = groups.as_ref().and_then(|groups| groups.continuous);
         for (slot, cents) in cents.into_iter().enumerate() {
             let (chart, live) = if slot == self.layout_slot {
                 (&mut self.chart, &self.live)
@@ -573,6 +585,20 @@ impl DemoApp {
             live.set_price_unit(cents);
             let adjusted = chart.conversion().is_some_and(|c| c.ends_with("adjusted"));
             chart.set_conversion(conversion(cents, adjusted));
+            let extended = chart.extended_hours();
+            // Layouts without the record hold the 24/7 session as extended hours.
+            let session = if continuous.map_or(extended, |continuous| continuous[slot]) {
+                SessionType::Full24x7
+            } else if extended {
+                SessionType::ETH
+            } else {
+                SessionType::RTH
+            };
+            if live.view(extended).0 != session {
+                live.set_view(session, adjusted);
+                chart.reload_feed();
+                chart.set_instrument(Some(live.instrument()));
+            }
         }
         let Some(groups) = groups else {
             for slot in 0..16 {
