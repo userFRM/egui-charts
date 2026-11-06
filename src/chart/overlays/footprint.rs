@@ -36,7 +36,7 @@ pub struct FootprintConfig {
     /// Sell colour.
     pub bid_color: Color32,
     /// Text colour and POC outline, or POC fill under [`FootprintColor::VolumeSteps`], which
-    /// picks black or white numbers for each cell instead. The default suits a dark chart; set the
+    /// picks black or white numbers for each cell, or each half of a split cell, instead. The default suits a dark chart; set the
     /// theme's text colour on a light one, or the fill, lines and labels vanish.
     pub text_color: Color32,
     /// Cell fill for balanced or unclassified executions.
@@ -549,12 +549,12 @@ pub fn render_footprint(
                             fills[2] = Some((ask, config.ask_color.gamma_multiply(0.5)));
                         }
                     }
-                    let ink = if !steps {
-                        config.text_color
+                    let inks = if !steps {
+                        [config.text_color; 2]
                     } else if ladder {
-                        contrasting_text(shades[side])
+                        [contrasting_text(shades[side]); 2]
                     } else {
-                        contrasting_text(shades[0].lerp_to_gamma(shades[1], 0.5))
+                        shades.map(contrasting_text)
                     };
                     for &(fill, color) in fills.iter().flatten() {
                         mesh.add_colored_rect(fill.intersect(mapping.rect), color);
@@ -628,14 +628,30 @@ pub fn render_footprint(
                                 }
                                 // A number overhanging its profile bar lies partly on the
                                 // background, where a colour picked for the fill can vanish.
-                                let ink = if fill.left() <= at.x
+                                let inks = if fill.left() <= at.x
                                     && at.x + galley.size().x <= fill.right()
                                 {
-                                    ink
+                                    inks
                                 } else {
-                                    config.text_color
+                                    [config.text_color; 2]
                                 };
-                                painter.galley_with_override_text_color(at, galley, ink);
+                                if inks[0] == inks[1] {
+                                    painter.galley_with_override_text_color(at, galley, inks[0]);
+                                } else {
+                                    // Halves that need different inks each show their part.
+                                    let (sell, buy) = fill.split_left_right_at_x(fill.center().x);
+                                    for (half, ink) in [sell, buy].into_iter().zip(inks) {
+                                        let half =
+                                            Rect::from_x_y_ranges(half.x_range(), rect.y_range());
+                                        painter
+                                            .with_clip_rect(painter.clip_rect().intersect(half))
+                                            .galley_with_override_text_color(
+                                                at,
+                                                galley.clone(),
+                                                ink,
+                                            );
+                                    }
+                                }
                             }
                         }
                     }
@@ -3369,6 +3385,63 @@ mod tests {
                 gap.is_some_and(|gap| gap >= 0.99) || (strip.is_some() && strip != cell)
             }),
             "(spacing, strip gap from its cell, strip colour, cell colour): {marks:?}"
+        );
+    }
+
+    /// Under the volume step colouring a sell × buy cell is split into a sell half and a buy half.
+    /// On a light chart a half in the weakest quarter needs black text and a half above it white.
+    /// Rows (sell, buy) 104: 10, 50; 103: 10, 20; 102: 50, 50 (POC); 101: 20, 10; 100: 30, 10. Both
+    /// ranges are 10 to 50, so every row but the POC has one half in the weakest quarter and one
+    /// above it. White on the weakest sell shade (249, 155, 162) is 2.05:1, on the weakest buy
+    /// shade (132, 204, 192) 1.85:1; black on them is 10.2:1 and 11.4:1.
+    #[test]
+    fn light_sell_buy_numbers_read_on_both_halves() {
+        let rows = [
+            (104.0, 10.0, 50.0),
+            (103.0, 10.0, 20.0),
+            (102.0, 50.0, 50.0),
+            (101.0, 20.0, 10.0),
+            (100.0, 30.0, 10.0),
+        ];
+        let config = FootprintConfig {
+            modes: vec![FootprintMode::BidAsk],
+            auto_row_height: None,
+            text_color: Color32::BLACK,
+            ..Default::default()
+        };
+        let (shapes, _) = paint_themed(&rows, 120.0, &crate::theme::Theme::light(), &config);
+        let quads = quads(&shapes);
+        let mut numbers = std::collections::BTreeSet::new();
+        let mut ends = 0;
+        let mut unreadable = Vec::new();
+        for clipped in &shapes {
+            let Shape::Text(text) = &clipped.shape else {
+                continue;
+            };
+            if !text.galley.text().contains('×') {
+                continue;
+            }
+            // A number painted in two halves is still one number, at one position.
+            numbers.insert((text.pos.x.to_bits(), text.pos.y.to_bits()));
+            let ink = text.override_text_color.unwrap_or(config.text_color);
+            let y = text.pos.y + text.galley.size().y * 0.5;
+            for x in [text.pos.x + 2.0, text.pos.x + text.galley.size().x - 2.0] {
+                if !clipped.clip_rect.contains(pos2(x, y)) {
+                    continue;
+                }
+                ends += 1;
+                let fill = color_at(&quads, pos2(x, y)).expect("a cell under the number");
+                let ratio = crate::theme::contrast(ink, fill);
+                if ratio < 3.0 {
+                    unreadable.push((text.galley.text().to_owned(), ink, fill, ratio));
+                }
+            }
+        }
+        assert_eq!(numbers.len(), 5, "every row writes its numbers");
+        assert_eq!(ends, 10, "both ends of every number are painted");
+        assert!(
+            unreadable.is_empty(),
+            "numbers under 3:1 on their half: {unreadable:?}"
         );
     }
 }
