@@ -583,19 +583,16 @@ impl Chart {
     }
 
     /// The main series' last-value colour for the bar at `index` of `bars`: the price line
-    /// colour, the bar's own colour, or its direction. Hollow candles, and candles coloured by
-    /// the previous close, take the direction their painters give the bar.
+    /// colour, the bar's own colour, or its direction. Columns, hollow candles, and candles
+    /// coloured by the previous close, take the direction their painters give the bar.
     pub(in crate::widget) fn main_value_color(&self, bars: &[Bar], index: usize) -> Color32 {
         let (up, down) = self.main_body_colors();
         let bar = &bars[index];
+        let styles = &self.chart_type_params.styles;
         let by_previous_close = match self.chart_type {
-            ChartType::HollowCandles => true,
-            ChartType::Candles => {
-                self.chart_type_params
-                    .styles
-                    .candles
-                    .color_by_previous_close
-            }
+            ChartType::HollowCandles | ChartType::Columns => true,
+            ChartType::Candles => styles.candles.color_by_previous_close,
+            ChartType::VolumeCandles => styles.volume_candles.color_by_previous_close,
             _ => false,
         };
         let reference = if by_previous_close {

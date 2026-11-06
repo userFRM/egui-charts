@@ -494,8 +494,8 @@ fn last_value_queries_select_loaded_or_visible_on_the_series_scale() {
     assert_eq!((last.value, last.index), (130.0, 2.0));
 }
 
-/// Hollow candles, and candles coloured by the previous close, take their direction from the
-/// close before them. The last bar opens at 13 and closes at 12.5, above the previous close of
+/// Columns, hollow candles, and candles coloured by the previous close, take their direction from
+/// the close before them. The last bar opens at 13 and closes at 12.5, above the previous close of
 /// 12, so it is painted in the rising colour, and its price line, label and last value take that
 /// colour too. Candles compared with their open stay falling, and the bar before the first in
 /// view still counts when only the last bar is in view.
@@ -512,8 +512,11 @@ fn last_value_colour_follows_the_previous_close_rule() {
     ];
     for (kind, by_previous_close, expected) in [
         (ChartType::HollowCandles, false, up),
+        (ChartType::Columns, false, up),
         (ChartType::Candles, true, up),
         (ChartType::Candles, false, down),
+        (ChartType::VolumeCandles, true, up),
+        (ChartType::VolumeCandles, false, down),
     ] {
         for source in [PriceLineSource::LastBar, PriceLineSource::LastVisible] {
             let ctx = egui::Context::default();
@@ -525,7 +528,10 @@ fn last_value_colour_follows_the_previous_close_rule() {
             let mut params = chart.chart_type_params().clone();
             params.styles.hollow.body_up = up;
             params.styles.hollow.body_down = down;
+            params.styles.volume_candles.body_up = up;
+            params.styles.volume_candles.body_down = down;
             params.styles.candles.color_by_previous_close = by_previous_close;
+            params.styles.volume_candles.color_by_previous_close = by_previous_close;
             chart.set_chart_type_params(params);
             chart.main_series_style.price_line_source = source;
             frame(&ctx, &mut chart, 0.0, vec![]);
