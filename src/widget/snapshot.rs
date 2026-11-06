@@ -379,6 +379,7 @@ impl Chart {
         factory: &IndicatorFactory,
     ) -> Result<Vec<SkippedDrawing>, RestoreError> {
         let (studies, drawings) = check(snapshot, factory, self.main_series_scale)?;
+        self.layout_identity = crate::model::next_revision();
         let main_present = snapshot.panes.iter().any(|pane| pane.main);
         let main_source_present =
             main_present || snapshot.panes.iter().any(|pane| pane.members.contains(&0));
