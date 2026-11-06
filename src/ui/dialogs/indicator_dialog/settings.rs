@@ -209,8 +209,13 @@ impl IndicatorSettingsDialog {
                                     InputValue::Source(crate::studies::StudySource::Study { .. })
                                 )
                             });
+                            let shown: Vec<_> = self
+                                .inputs
+                                .iter()
+                                .map(|input| input.is_shown(&self.inputs))
+                                .collect();
                             FormGrid::new("study_inputs").show(ui, |ui| {
-                                for input in &mut self.inputs {
+                                for (input, shown) in self.inputs.iter_mut().zip(shown) {
                                     if study_source
                                         && matches!(
                                             input.id.as_str(),
@@ -220,6 +225,9 @@ impl IndicatorSettingsDialog {
                                         )
                                     {
                                         input.value = input.default.clone();
+                                        continue;
+                                    }
+                                    if !shown {
                                         continue;
                                     }
                                     crate::ui::strategy_report::inputs::show_input(
@@ -691,6 +699,57 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// The smoothing length and band deviation hide when the chosen type does not use them and
+    /// keep their values, which an edit still carries.
+    #[test]
+    fn smoothing_inputs_hide_when_they_do_not_apply() {
+        use crate::studies::RSI;
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let mut study = RSI::default();
+        study
+            .set_input("smoothing_deviation", InputValue::Number(3.0))
+            .unwrap();
+        let mut dialog = IndicatorSettingsDialog::default();
+        dialog.open(
+            SeriesId(2),
+            &ConfiguredStudy::new(Box::new(study)),
+            Some(Timeframe::Min1),
+        );
+        let at = |id| {
+            dialog
+                .inputs
+                .iter()
+                .position(|input| input.id == id)
+                .unwrap()
+        };
+        let (smoothing, deviation) = (at("smoothing"), at("smoothing_deviation"));
+        for (choice, length_shown, deviation_shown) in [
+            (0, false, false),
+            (1, true, false),
+            (2, true, true),
+            (6, true, false),
+        ] {
+            dialog.inputs[smoothing].value = InputValue::Choice(choice);
+            let mut harness = Harness::builder()
+                .with_context_setup(egui_extras::install_image_loaders)
+                .with_size(egui::Vec2::new(1440.0, 900.0))
+                .build_ui(|ui| {
+                    dialog.show(ui.ctx(), &Theme::dark());
+                });
+            harness.run();
+            for (label, shown) in [
+                ("Smoothing length", length_shown),
+                ("Band deviation", deviation_shown),
+            ] {
+                let found = harness.query_all_by_label(label).next().is_some();
+                assert_eq!(found, shown, "{label} under choice {choice}");
+            }
+            drop(harness);
+            assert_eq!(dialog.inputs[deviation].value, InputValue::Number(3.0));
         }
     }
 
