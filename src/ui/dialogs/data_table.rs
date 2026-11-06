@@ -8,7 +8,7 @@
 //! the table stays open while a watchlist or search changes the chart's symbol.
 
 use crate::localization as l10n;
-use crate::model::{Bar, Timeframe};
+use crate::model::Timeframe;
 use crate::studies::StudySettingsSnapshot;
 use crate::ui_kit::buttons::Button;
 use crate::ui_kit::dialog::{DialogFrame, dialog_header};
@@ -45,8 +45,6 @@ struct Source {
     symbol: String,
     timeframe: Option<Timeframe>,
     len: usize,
-    first: Option<Bar>,
-    last: Option<Bar>,
     replay: Option<DateTime<Utc>>,
     studies: Vec<(SeriesId, bool, StudySettingsSnapshot)>,
     instrument: Option<crate::model::Instrument>,
@@ -55,14 +53,11 @@ struct Source {
 
 impl Source {
     fn of(chart: &Chart) -> Self {
-        let bars = chart.bars(SeriesId::MAIN);
         Self {
             revision: chart.data_table_revision(),
             symbol: chart.symbol().to_owned(),
             timeframe: chart.timeframe(),
-            len: bars.len(),
-            first: bars.first().cloned(),
-            last: bars.last().cloned(),
+            len: chart.bars(SeriesId::MAIN).len(),
             replay: chart.replay_time(),
             studies: chart
                 .indicators()
@@ -595,6 +590,20 @@ mod tests {
         assert_eq!(format!("{action:?}"), "SearchSymbol(\"\")");
     }
 
+    /// One frame of `dialog` over `chart`: the address of its rows, which move when the table is
+    /// rebuilt, as the new rows are allocated while the old ones are alive.
+    fn shown_rows(
+        ctx: &Context,
+        dialog: &mut DataTableDialog,
+        chart: &Chart,
+    ) -> *const Vec<String> {
+        ctx.run_ui(Default::default(), |ui| {
+            dialog.show(ui.ctx(), chart);
+        })
+        .drop_without_applying_deltas();
+        dialog.cached.as_ref().unwrap().1.rows.as_ptr()
+    }
+
     /// A column turned off on one chart stays off on that chart, also after it restores its saved
     /// state, and leaves the columns of another chart the dialog follows.
     #[test]
@@ -693,5 +702,34 @@ mod tests {
         first.restore(&first.snapshot().unwrap()).unwrap();
         assert_eq!(first.data_table().headers.len(), 7);
         assert_eq!(headers(&mut dialog, &first), without_sma);
+    }
+
+    /// Frames over an unchanged chart reuse its table while an edge bar is whitespace, whose NaN
+    /// fields differ from themselves, until a bar of values replaces it.
+    #[test]
+    fn unchanged_chart_with_a_whitespace_edge_reuses_its_table() {
+        let start = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        for edge in [49, 0] {
+            let mut bars: Vec<_> = (0..50)
+                .map(|i| {
+                    let time = start + chrono::Duration::days(i);
+                    Bar::new(time, 10.0, 12.0, 9.0, 11.0, 100.0)
+                })
+                .collect();
+            let time = bars[edge].time;
+            bars[edge] = Bar::whitespace(time);
+            let mut chart = Chart::new(BarData::from_bars(bars));
+            let ctx = Context::default();
+            let mut dialog = DataTableDialog::new();
+            dialog.open();
+            let built = shown_rows(&ctx, &mut dialog, &chart);
+            assert_eq!(shown_rows(&ctx, &mut dialog, &chart), built, "bar {edge}");
+
+            chart.update(SeriesId::MAIN, Bar::new(time, 10.0, 99.0, 9.0, 99.0, 100.0));
+            assert_ne!(shown_rows(&ctx, &mut dialog, &chart), built, "bar {edge}");
+            let table = &dialog.cached.as_ref().unwrap().1;
+            let row = table.rows.iter().find(|row| row[0] == time.to_rfc3339());
+            assert_eq!(row.unwrap()[4], "99.00", "bar {edge}");
+        }
     }
 }
