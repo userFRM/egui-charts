@@ -228,7 +228,8 @@ impl Indicator for RSI {
         self.stepper
             .run(data, from, &mut self.values, |state, bar| {
                 match state.rsi.next(bar, period) {
-                    IndicatorValue::Single(rsi) => state
+                    // Without an average the value passes through, so skip the call on every bar.
+                    IndicatorValue::Single(rsi) if kind != SmoothingType::None => state
                         .smoothed
                         .next(kind, length, deviation, rsi, bar.volume),
                     other => other,
