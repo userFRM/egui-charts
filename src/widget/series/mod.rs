@@ -789,6 +789,8 @@ impl Chart {
             for pending in &mut self.pending_from {
                 *pending = Some(pending.map_or(from, |pending| pending.min(from)));
             }
+            // The history revision leaves out edits of the last bar, which change the table too.
+            self.readout_revision = crate::model::next_revision();
         }
         self.follow_live_edge(before, clock);
     }

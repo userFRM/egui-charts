@@ -588,6 +588,12 @@ impl Drawing {
         drawing
     }
 
+    /// Whether the line colour is still the tool's default, which rendering may shade to read on
+    /// the theme, rather than one chosen for this drawing.
+    pub(crate) fn has_default_color(&self) -> bool {
+        self.color == default_style(self.tool_type).color
+    }
+
     /// Update screen coordinates from chart_points using current transforms
     ///
     /// This should be called each frame before rendering.
