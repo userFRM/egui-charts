@@ -2,7 +2,7 @@
 
 use super::document::{Received, StoredDocument};
 use super::{ConflictChoice, Storage, StoreKind};
-use crate::config::DrawingToolType;
+use crate::config::{DrawingSort, DrawingToolType};
 use crate::model::{ReplaySession, Timeframe, Watchlist};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeMap;
@@ -19,6 +19,9 @@ use std::time::Duration;
 pub struct UserSettings {
     /// Name of the theme preset, as listed by [`presets`](crate::theme::presets).
     pub theme: Option<String>,
+    /// The order of each symbol's listed drawings; a symbol without one keeps the order of the
+    /// charts.
+    pub drawing_sort: BTreeMap<String, DrawingSort>,
     /// The symbol shown last.
     pub symbol: Option<String>,
     /// The interval shown last.

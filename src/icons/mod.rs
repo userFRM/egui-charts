@@ -445,6 +445,8 @@ pub mod icons {
     pub const DRAWING_MAGNET: Icon = crate::icon_from_path!("ui/drawing-magnet.svg");
     /// Magnet SVG icon.
     pub const MAGNET: Icon = crate::icon_from_path!("ui/magnet.svg");
+    /// Sort order SVG icon.
+    pub const SORT: Icon = crate::icon_from_path!("ui/sort.svg");
     /// Trash SVG icon.
     pub const TRASH: Icon = crate::icon_from_path!("ui/trash.svg");
     /// Duplicate SVG icon.

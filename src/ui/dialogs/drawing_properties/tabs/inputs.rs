@@ -328,6 +328,14 @@ impl InputsTab {
                         );
                     });
                     ui.end_row();
+                    if drawing.tool_type == Tool::FixedRangeVolumeProfile {
+                        ui.label("");
+                        ui.checkbox(
+                            &mut config.extend_right,
+                            l10n::text(ui.ctx(), "Extend right"),
+                        );
+                        ui.end_row();
+                    }
                     if config.display != ProfileDisplay::Total {
                         let pickers = grid_pickers(pickers, 0);
                         pickers.resize_with(2, ColorPickerState::default);
@@ -349,6 +357,9 @@ impl InputsTab {
                     updated.display = config.display;
                     updated.up_color = config.up_color;
                     updated.down_color = config.down_color;
+                    updated.value_area_colors = config.value_area_colors;
+                    updated.show_value_area_lines = config.show_value_area_lines;
+                    updated.extend_right = config.extend_right;
                     if updated != original {
                         drawing.volume_profile = Some(updated);
                     }
@@ -357,6 +368,8 @@ impl InputsTab {
             Tool::AnchoredVWAP => {
                 let original = drawing.vwap.unwrap_or_default();
                 let mut config = original;
+                let pickers = grid_pickers(pickers, 0);
+                pickers.resize_with(config.bands.len(), ColorPickerState::default);
                 for (i, band) in config.bands.iter_mut().enumerate() {
                     ui.push_id(i, |ui| {
                         ui.horizontal(|ui| {
@@ -373,10 +386,12 @@ impl InputsTab {
                                 )
                                 .accessible_name(name(ui, "Band {0} multiplier"))
                                 .changed()
-                                && let Some(updated) = VwapBand::new(band.enabled, multiplier)
+                                && let Some(mut updated) = VwapBand::new(band.enabled, multiplier)
                             {
+                                updated.color = band.color;
                                 *band = updated;
                             }
+                            level_color(ui, &mut band.color, &mut pickers[i]);
                         });
                     });
                 }

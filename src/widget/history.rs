@@ -58,12 +58,15 @@ struct Action {
     studies: Vec<StudyChange>,
     #[cfg(feature = "drawings")]
     drawings: HistoryService,
+    /// The drawings removed from a symbol the chart did not show, whose undo reaches them there.
+    #[cfg(feature = "drawings")]
+    unshown: Option<super::layout::UnshownDeletion>,
 }
 
 impl Action {
     fn is_empty(&self) -> bool {
         #[cfg(feature = "drawings")]
-        let drawings_changed = self.drawings.can_undo();
+        let drawings_changed = self.drawings.can_undo() || self.unshown.is_some();
         #[cfg(not(feature = "drawings"))]
         let drawings_changed = false;
         self.layout_sizes.is_none()
@@ -196,8 +199,16 @@ impl ChartHistory {
         });
     }
 
+    /// Records in the action in progress the drawings it removed from an unshown symbol.
+    #[cfg(feature = "drawings")]
+    pub(super) fn record_unshown_deletion(&mut self, deletion: super::layout::UnshownDeletion) {
+        if let Some(pending) = &mut self.pending {
+            pending.before.unshown = Some(deletion);
+        }
+    }
+
     /// Makes the action in progress this chart's part of a cross-chart edit.
-    #[cfg(feature = "studies")]
+    #[cfg(any(feature = "studies", feature = "drawings"))]
     pub(super) fn join_layout_edit(&mut self, edit: super::layout::LayoutEditLink) {
         if let Some(pending) = &mut self.pending {
             pending.before.layout_edit = Some(edit);
@@ -997,6 +1008,9 @@ impl Chart {
                 while self.drawings.undo() {}
             }
             self.drawings.swap_history(&mut action.drawings);
+            if let Some(deletion) = &mut action.unshown {
+                self.step_unshown_deletion(deletion, redo);
+            }
         }
         self.history.edits += 1;
         #[cfg(feature = "drawings")]
