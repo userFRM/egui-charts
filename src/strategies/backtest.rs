@@ -88,7 +88,8 @@ pub struct BacktestSettings {
     pub short_funding: Option<f64>,
     /// Require a limit to trade through by one `price_increment` before filling at its limit, or
     /// at the open of a bar that opens at or beyond that threshold. An order that can first fill
-    /// at a price already beyond the threshold, as after a delay or a triggered stop, fills there.
+    /// at a price already at or beyond the threshold, as after a delay or a triggered stop, fills
+    /// there.
     /// Applies to entries, triggered stop-limits and profit-taking exits, without slippage.
     pub require_limit_cross: bool,
     /// Smallest price increment for limit verification. Must be positive and finite.
@@ -444,6 +445,7 @@ impl StrategyContext<'_> {
             deferred: (self.after_fill || self.forming).then_some(self.tick),
             delay: self.order_delay,
             triggered: None,
+            active: None,
         };
         match self
             .orders
@@ -472,6 +474,20 @@ struct Working {
     delay: u32,
     /// The stop-limit request this order came from, once its stop has triggered.
     triggered: Option<Kind>,
+    /// Tick where the order starts working after its stop triggered or it waited out an equal
+    /// point. A limit already reached there never traded through its threshold while working.
+    active: Option<u64>,
+}
+
+/// How an execution at a reached price point is priced.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Pricing {
+    /// The point, moved by slippage.
+    Slips,
+    /// The limit after a crossing, or the point of a gap when limits must be crossed.
+    Verified,
+    /// The point: the order first became fillable there, so no crossing took place.
+    Market,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1171,8 +1187,8 @@ impl<'a> Run<'a> {
         }
     }
 
-    /// Trigger price and whether the execution slips. Stop-limit triggers are not executions.
-    fn fill_price(&self, order: &Working, start: f64, end: f64) -> Option<(f64, bool)> {
+    /// Trigger price and how the execution is priced. Stop-limit triggers are not executions.
+    fn fill_price(&self, order: &Working, start: f64, end: f64) -> Option<(f64, Pricing)> {
         if order.delay > 0 {
             return None;
         }
@@ -1194,6 +1210,7 @@ impl<'a> Run<'a> {
                     deferred: order.deferred,
                     delay: 0,
                     triggered: None,
+                    active: order.active,
                 };
                 return self.fill_price(&exit, start, end);
             }
@@ -1204,31 +1221,39 @@ impl<'a> Run<'a> {
             .map(|price| {
                 (
                     price,
-                    matches!(order_type, OrderType::Market | OrderType::Stop(_)),
+                    if matches!(order_type, OrderType::Market | OrderType::Stop(_)) {
+                        Pricing::Slips
+                    } else {
+                        Pricing::Verified
+                    },
                 )
             }),
             Kind::Exit(take_profit, stop_loss, side) => {
                 let side = side?;
                 if take_profit.is_none() && stop_loss.is_none() {
-                    Some((start, true))
+                    Some((start, Pricing::Slips))
                 } else {
                     // The stop first, so it wins a tie.
                     [
-                        (stop_loss.map(OrderType::Stop), true),
-                        (take_profit.map(OrderType::Limit), false),
+                        (stop_loss.map(OrderType::Stop), Pricing::Slips),
+                        (take_profit.map(OrderType::Limit), Pricing::Verified),
                     ]
                     .into_iter()
-                    .filter_map(|(order_type, slips)| {
+                    .filter_map(|(order_type, pricing)| {
                         let price = match order_type? {
                             OrderType::Limit(limit) => self.limit_trigger(side, limit, start, end),
                             order_type => order_type.fill_price(side, start, end),
                         };
-                        price.map(|price| (price, slips))
+                        price.map(|price| (price, pricing))
                     })
                     .min_by(|(a, _), (b, _)| (a - start).abs().total_cmp(&(b - start).abs()))
                 }
             }
         }?;
+        let first_fillable = |(price, pricing): (f64, Pricing)| {
+            let market = pricing == Pricing::Verified;
+            (price, if market { Pricing::Market } else { pricing })
+        };
         if order.deferred == Some(self.tick) && reached.0 == start {
             // A newly placed marketable order waits for the next price point, avoiding a
             // strategy repeatedly entering and exiting on the same tick.
@@ -1242,8 +1267,11 @@ impl<'a> Run<'a> {
                 deferred: None,
                 delay: 0,
                 triggered: None,
+                active: None,
             };
-            self.fill_price(&next, end, end)
+            self.fill_price(&next, end, end).map(first_fillable)
+        } else if order.active == Some(self.tick) && reached.0 == start {
+            Some(first_fillable(reached))
         } else {
             Some(reached)
         }
@@ -1327,12 +1355,12 @@ impl<'a> Run<'a> {
     fn fill_segment(&mut self, mut start: f64, end: f64, time: DateTime<Utc>, advance: bool) {
         let mut at_end = !advance;
         loop {
-            let mut next: Option<(usize, f64, bool)> = None;
+            let mut next: Option<(usize, f64, Pricing)> = None;
             for (index, order) in self.orders.iter().enumerate() {
-                if let Some((price, slips)) = self.fill_price(order, start, end)
+                if let Some((price, pricing)) = self.fill_price(order, start, end)
                     && next.is_none_or(|(_, best, _)| (price - start).abs() < (best - start).abs())
                 {
-                    next = Some((index, price, slips));
+                    next = Some((index, price, pricing));
                 }
             }
             // An order at the boundary can avert a deficit; an existing deficit wins a tie.
@@ -1360,9 +1388,10 @@ impl<'a> Run<'a> {
                         deferred: None,
                         delay: 0,
                         triggered: None,
+                        active: None,
                     },
                     price,
-                    true,
+                    Pricing::Slips,
                     time,
                 );
                 if self.position().abs() == held {
@@ -1370,10 +1399,18 @@ impl<'a> Run<'a> {
                 }
                 continue;
             }
-            let Some((index, price, slips)) = next else {
+            let Some((index, price, pricing)) = next else {
                 if !at_end {
                     // Equal OHLC prices still denote successive points in the bar.
+                    let tick = self.tick;
                     self.tick += 1;
+                    if start == end {
+                        for order in &mut self.orders {
+                            if order.deferred == Some(tick) {
+                                order.active = Some(self.tick);
+                            }
+                        }
+                    }
                     start = end;
                     at_end = true;
                     continue;
@@ -1389,10 +1426,11 @@ impl<'a> Run<'a> {
                 self.orders[index].triggered = Some(self.orders[index].kind);
                 self.orders[index].kind = Kind::Entry(side, OrderType::Limit(limit));
                 self.orders[index].deferred = None;
+                self.orders[index].active = Some(self.tick);
                 continue;
             }
             let order = self.orders.remove(index);
-            self.fill(order, price, slips, time);
+            self.fill(order, price, pricing, time);
         }
     }
 
@@ -1401,7 +1439,7 @@ impl<'a> Run<'a> {
         self.fill_segment(price, price, time, false);
     }
 
-    fn fill(&mut self, order: Working, mark: f64, slips: bool, time: DateTime<Utc>) {
+    fn fill(&mut self, order: Working, mark: f64, pricing: Pricing, time: DateTime<Utc>) {
         let side = match order.kind {
             Kind::Entry(side, _) => side,
             Kind::RelativeExit(_, _, side) => {
@@ -1414,10 +1452,10 @@ impl<'a> Run<'a> {
             Kind::Exit(.., Some(side)) => side,
             Kind::Exit(.., None) => return,
         };
-        let price = if slips {
-            self.settings.slipped(mark, side)
-        } else {
-            self.verified_price(&order, mark)
+        let price = match pricing {
+            Pricing::Slips => self.settings.slipped(mark, side),
+            Pricing::Verified => self.verified_price(&order, mark),
+            Pricing::Market => mark,
         };
         let held = self.position().abs();
         let order_id = self.fills.as_ref().map(|_| order.id.clone());
@@ -2660,6 +2698,19 @@ mod tests {
                 );
             }
         }
+        fn threshold_stop_limit(bar: usize, context: &mut StrategyContext<'_>) {
+            if bar == 0 {
+                context.entry(
+                    "A",
+                    Buy,
+                    None,
+                    OrderType::StopLimit {
+                        stop: 105.75,
+                        limit: 106.0,
+                    },
+                );
+            }
+        }
         fn verified_relative_exit(bar: usize, context: &mut StrategyContext<'_>) {
             if bar == 0 {
                 context.entry("A", Buy, None, OrderType::Market);
@@ -2940,6 +2991,63 @@ mod tests {
                 ],
                 vec![trade(Buy, 2.0, 1, 99.75, Some((2, 110.25, 21.0)), "A / X")],
                 vec![1000.0, 1000.0, 1000.0, 1021.0],
+                0,
+            ),
+            (
+                "verified_limit_reaching_its_threshold_after_open_fills_there: delay",
+                limits,
+                BacktestSettings {
+                    require_limit_cross: true,
+                    price_increment: 0.25,
+                    order_delay: 1,
+                    ..terms.clone()
+                },
+                vec![(100.0, 100.0, 100.0, 100.0), (99.0, 99.75, 98.0, 98.5)],
+                vec![trade(Buy, 2.0, 1, 99.75, None, "A")],
+                vec![1000.0, 1000.0, 997.5],
+                0,
+            ),
+            (
+                "verified_limit_reaching_its_threshold_after_open_fills_there: equal points",
+                limits,
+                BacktestSettings {
+                    require_limit_cross: true,
+                    price_increment: 0.25,
+                    order_delay: 1,
+                    ..terms.clone()
+                },
+                // The path repeats the open at the low, so the delay ends on the same price.
+                vec![(100.0, 100.0, 100.0, 100.0), (99.75, 100.5, 99.75, 100.0)],
+                vec![trade(Buy, 2.0, 1, 99.75, None, "A")],
+                vec![1000.0, 1000.0, 1000.5],
+                0,
+            ),
+            (
+                "verified_limit_reaching_its_threshold_after_open_fills_there: triggered stop",
+                threshold_stop_limit,
+                BacktestSettings {
+                    require_limit_cross: true,
+                    price_increment: 0.25,
+                    ..terms.clone()
+                },
+                vec![(100.0, 100.0, 100.0, 100.0), (105.0, 105.75, 104.75, 105.5)],
+                vec![trade(Buy, 2.0, 1, 105.75, None, "A")],
+                vec![1000.0, 1000.0, 999.5],
+                0,
+            ),
+            (
+                "delayed limit crossed after its delay ends fills at the limit",
+                limits,
+                BacktestSettings {
+                    require_limit_cross: true,
+                    price_increment: 0.25,
+                    order_delay: 1,
+                    ..terms.clone()
+                },
+                // The delay ends at the open of 101 and the next segment falls through 99.75.
+                vec![(100.0, 100.0, 100.0, 100.0), (101.0, 104.0, 99.5, 101.0)],
+                vec![trade(Buy, 2.0, 1, 100.0, None, "A")],
+                vec![1000.0, 1000.0, 1002.0],
                 0,
             ),
             (
