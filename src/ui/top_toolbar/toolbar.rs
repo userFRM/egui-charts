@@ -756,9 +756,10 @@ impl TopToolbar {
                     },
                 ))
             }
-            S::Indicators | S::Alert | S::Replay => {
-                IconTextButton::new(icon, label, &self.config).show(ui)
-            }
+            S::Replay => IconTextButton::new(icon, label, &self.config)
+                .selected(self.state.replay_active)
+                .show(ui),
+            S::Indicators | S::Alert => IconTextButton::new(icon, label, &self.config).show(ui),
             _ => ToolbarIconButton::new(icon, label, &self.config).show(ui),
         };
         if response.clicked() {
@@ -913,6 +914,44 @@ impl TopToolbar {
 mod tests {
     use super::*;
     use egui::{Event, PointerButton, Pos2, RawInput, Rect, pos2, vec2};
+
+    /// The Replay button reports and draws the host's replay state, as the other toggles do.
+    #[test]
+    fn replay_button_is_selected_exactly_while_replay_is_active() {
+        for active in [false, true] {
+            let ctx = egui::Context::default();
+            ctx.enable_accesskit();
+            let mut toolbar = TopToolbar::new();
+            toolbar.state.replay_active = active;
+            let filled = ctx.active_theme().ui.text;
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                ui.horizontal(|ui| {
+                    let mut action = TopToolbarAction::None;
+                    toolbar.show_control(ui, S::Replay, "SAMPLE", &mut action);
+                });
+            });
+            output.textures_delta.clear();
+            let update = output.platform_output.accesskit_update.as_ref().unwrap();
+            let node = update
+                .nodes
+                .iter()
+                .map(|(_, node)| node)
+                .find(|node| node.label() == Some("Replay"))
+                .unwrap();
+            let toggled = active.then_some(egui::accesskit::Toggled::True);
+            assert_eq!(
+                node.toggled(),
+                toggled.or(Some(egui::accesskit::Toggled::False))
+            );
+            assert_eq!(
+                output.shapes.iter().any(
+                    |shape| matches!(&shape.shape, egui::Shape::Rect(rect) if rect.fill == filled)
+                ),
+                active
+            );
+            output.drop_without_applying_deltas();
+        }
+    }
 
     #[test]
     fn host_menu_entries_keep_the_menu_visible_and_handle_actions_and_submenus() {
