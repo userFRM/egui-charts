@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "node --test prepare-guides.test.mjs remark-docs.test.mjs check-api-links.test.mjs && node prepare-guides.mjs && astro build && node --test progress.test.mjs && cargo doc --manifest-path ../../Cargo.toml --no-deps --all-features && node check-api-links.mjs",
+    "build": "node --test prepare-guides.test.mjs remark-docs.test.mjs check-api-links.test.mjs tour.test.mjs && node prepare-guides.mjs && astro build && node --test progress.test.mjs && cargo doc --manifest-path ../../Cargo.toml --no-deps --all-features && node check-api-links.mjs",
     "dev": "node prepare-guides.mjs && astro dev"
   },
   "dependencies": {

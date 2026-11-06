@@ -183,7 +183,8 @@ pub trait PanePrimitive: Send {
     /// Called once on detachment if [`attached`](Self::attached) ran.
     fn detached(&mut self) {}
 
-    /// Refreshes cached drawing state before each chart paint, after attachment.
+    /// Refreshes cached drawing state before each chart paint, after attachment. An image export
+    /// also calls it, and leaves out a primitive whose [`attached`](Self::attached) has not run.
     fn update(&mut self) {}
 }
 

@@ -20,6 +20,52 @@ hero:
 import { LinkCard, CardGrid } from '@astrojs/starlight/components';
 import FirstChart from '../../components/FirstChart.astro';
 
+<figure id="product-tour" className="live-chart">
+  <figcaption>
+    <span>Explore the demo <span className="sample-label">Generated sample data</span></span>
+    <a href="/egui-charts/demo/">Open the demo <span aria-hidden="true">→</span></a>
+  </figcaption>
+  <video id="tour-video" autoplay muted loop playsinline preload="metadata" poster="/egui-charts/docs/media/tour-poster.webp" width="2560" height="1440" aria-label="Chart layouts, studies, drawing tools, watchlist and bar replay in the demo">
+    <source data-src="/egui-charts/docs/media/tour-1080p.webm" type="video/webm; codecs=av01.0.09M.08" />
+    <source data-src="/egui-charts/docs/media/tour-1080p.mp4" type="video/mp4" />
+    <a href="/egui-charts/docs/media/tour-1080p.mp4">Watch the demo tour</a>
+  </video>
+  <p><button id="tour-play" type="button" hidden>Play the demo tour</button> Four charts, studies, drawing tools and replay. All prices come from the sample feed.</p>
+  <noscript><p><a href="/egui-charts/docs/media/tour-1080p.mp4">Play the demo tour</a></p></noscript>
+</figure>
+
+<script is:inline set:html={`
+  (() => {
+    const video = document.getElementById('tour-video');
+    const play = document.getElementById('tour-play');
+    const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const load = () => {
+      for (const source of video.querySelectorAll('source')) source.src = source.dataset.src;
+      video.load();
+    };
+    const update = () => {
+      video.autoplay = !motion.matches;
+      play.hidden = !motion.matches;
+      video.controls = !motion.matches;
+      if (motion.matches) {
+        video.pause();
+        for (const source of video.querySelectorAll('source')) source.removeAttribute('src');
+        video.load();
+      } else {
+        load();
+        video.play().catch(() => { play.hidden = false; });
+      }
+    };
+    play.addEventListener('click', () => {
+      video.controls = true;
+      load();
+      video.play().then(() => { play.hidden = true; }).catch(() => { play.hidden = false; });
+    });
+    motion.addEventListener('change', update);
+    update();
+  })();
+`} />
+
 <FirstChart />
 
 ## Learn the chart

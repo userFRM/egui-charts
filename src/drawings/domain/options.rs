@@ -797,8 +797,9 @@ pub enum LineTextVerticalAlign {
 }
 
 /// Independent readouts of a trend line, ray, extended line, info line or trend angle, and the
-/// placement of a line's text. Readouts start hidden except on an info line, see
-/// [`Self::for_tool`]; saves from before these settings read the same way.
+/// placement of the text of those tools and of a horizontal line, which has no readouts. Readouts
+/// start hidden except on an info line, see [`Self::for_tool`]; saves from before these settings
+/// read the same way.
 /// Price changes follow anchor order; lengths and elapsed time are unsigned.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -838,8 +839,15 @@ thread_local! {
 
 impl LineMeasurements {
     /// The settings a new drawing of `tool` starts with: an info line keeps every readout visible
-    /// in the middle of the line, other tools keep them hidden.
+    /// in the middle of the line, a horizontal line writes its text on the line, other tools keep
+    /// their readouts hidden and their text above the line.
     pub fn for_tool(tool: super::DrawingToolType) -> Self {
+        if tool == super::DrawingToolType::HorizontalLine {
+            return Self {
+                text_vertical_align: LineTextVerticalAlign::Middle,
+                ..Self::default()
+            };
+        }
         if tool != super::DrawingToolType::InfoLine {
             return Self::default();
         }
@@ -868,10 +876,11 @@ impl LineMeasurements {
         LINE_MEASUREMENTS_LEFT_OUT.set(false);
     }
 
-    /// Takes [`Self::for_tool`] of `tool` when the drawing just read left its settings out, so an
-    /// info line saved before they existed keeps the readouts it always showed.
+    /// Takes [`Self::for_tool`] of an info line whose settings the drawing just read left out, so
+    /// one saved before they existed keeps the readouts it always showed; other tools keep the
+    /// [`Default`] ones, which draw their text where it always was.
     pub(crate) fn fill_left_out(&mut self, tool: super::DrawingToolType) {
-        if LINE_MEASUREMENTS_LEFT_OUT.replace(false) {
+        if LINE_MEASUREMENTS_LEFT_OUT.replace(false) && tool == super::DrawingToolType::InfoLine {
             *self = Self::for_tool(tool);
         }
     }
