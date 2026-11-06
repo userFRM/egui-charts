@@ -154,6 +154,9 @@ pub use layout::{
 #[cfg(feature = "studies")]
 #[cfg_attr(docsrs, doc(cfg(feature = "studies")))]
 pub use layout::{LayoutCopy, LayoutCopyIssue, LayoutCopyIssueKind};
+#[cfg(feature = "drawings")]
+#[cfg_attr(docsrs, doc(cfg(feature = "drawings")))]
+pub use layout::{SymbolDrawing, SymbolDrawings};
 pub(crate) mod sync;
 mod time_scale;
 use feed::FeedLink;
