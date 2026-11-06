@@ -1468,6 +1468,95 @@ mod tests {
         }
     }
 
+    /// A high-low document without the chart type's style printed no price labels, so a layout or
+    /// a chart settings template saved then restores without them; a layout saved with the style
+    /// keeps its six. Labels are picked by their text and size, whatever their colour.
+    #[test]
+    #[cfg(feature = "drawings")]
+    fn high_low_layout_saved_before_the_style_restores_without_labels() {
+        use crate::model::ChartType;
+        use crate::widget::ChartSnapshot;
+        use crate::widget::test_frames::{frame, shapes};
+        let bars = || {
+            BarData::from_bars(
+                [
+                    (10.0, 18.0, 8.0, 14.0),
+                    (13.0, 17.0, 8.5, 11.0),
+                    (12.0, 15.0, 9.0, 10.0),
+                ]
+                .into_iter()
+                .enumerate()
+                .map(|(i, (o, h, l, c))| {
+                    let time = chrono::DateTime::UNIX_EPOCH + chrono::Duration::days(i as i64);
+                    Bar::new(time, o, h, l, c, 0.0)
+                })
+                .collect(),
+            )
+        };
+        let source = || {
+            let mut chart = Chart::new(bars());
+            chart.set_chart_type(ChartType::HighLow);
+            chart.config_mut().show_volume = false;
+            chart
+        };
+        let without_style = |saved: &mut serde_json::Value, paths: &[&str]| {
+            for path in paths {
+                let styles = saved.pointer_mut(path).unwrap().as_object_mut().unwrap();
+                assert!(styles.remove("high_low").is_some());
+            }
+        };
+        let layouts = [
+            "/chart_type_params/styles",
+            "/settings/chart_type_params/styles",
+        ];
+        let layout = |strip: bool| {
+            let mut saved = serde_json::to_value(source().snapshot().unwrap()).unwrap();
+            if strip {
+                without_style(&mut saved, &layouts);
+            }
+            let saved: ChartSnapshot = serde_json::from_value(saved).unwrap();
+            let mut restored = Chart::new(bars());
+            restored.restore(&saved).unwrap();
+            restored
+        };
+        let template = || {
+            let mut saved =
+                serde_json::to_value(ChartSettingsState::from_chart(&source())).unwrap();
+            without_style(&mut saved, &["/chart_type_params/styles"]);
+            let saved: ChartSettingsState = serde_json::from_value(saved).unwrap();
+            let mut chart = source();
+            saved.apply_to_chart(&mut chart).unwrap();
+            chart
+        };
+        for (name, mut chart, expected) in [
+            ("layout with the style", layout(false), 6),
+            ("layout without the style", layout(true), 0),
+            ("template without the style", template(), 0),
+        ] {
+            let ctx = Context::default();
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            chart.state.time_scale_mut().set_bar_spacing(80.0);
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+            let plot = chart.get_rendered_price_rect();
+            let prices = ["18.00", "8.00", "17.00", "8.50", "15.00", "9.00"];
+            let labels = painted
+                .iter()
+                .filter(|shape| {
+                    matches!(shape, Shape::Text(t)
+                    if prices.contains(&t.galley.text())
+                    && t.galley.job.sections[0].format.font_id.size == 7.0
+                    && plot.contains(t.pos))
+                })
+                .count();
+            assert_eq!(labels, expected, "{name}");
+            assert_eq!(
+                chart.chart_type_params().styles.high_low.labels_visible,
+                expected > 0,
+                "{name}"
+            );
+        }
+    }
+
     /// A shape with both stops its fill at the middle of the stroke and shrinks it for a
     /// transparent stroke, so a border that is not opaque must leave the body a shape of its own.
     /// A distinct opaque border is painted; one in the colour of an opaque body is not.

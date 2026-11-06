@@ -419,6 +419,16 @@ impl Default for HighLowStyle {
     }
 }
 
+impl HighLowStyle {
+    /// How a high-low chart drew before it had this style: without price labels.
+    fn saved_without_style() -> Self {
+        Self {
+            labels_visible: false,
+            ..Self::default()
+        }
+    }
+}
+
 /// The Kagi chart's stroke widths in logical points. Non-positive or non-finite widths hide
 /// the lines of that thickness.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -471,7 +481,9 @@ pub struct ChartTypeStyles {
     pub heikin: HeikinStyle,
     /// Bars chart.
     pub bars: BarsStyle,
-    /// High-low chart.
+    /// High-low chart. Documents saved before this style restore without price labels, as they
+    /// were drawn.
+    #[serde(default = "HighLowStyle::saved_without_style")]
     pub high_low: HighLowStyle,
     /// Kagi chart.
     pub kagi: KagiStyle,
@@ -521,6 +533,7 @@ impl ChartTypeStyles {
     pub(super) fn saved_without_styles() -> Self {
         Self {
             heikin: HeikinStyle::saved_without_style(),
+            high_low: HighLowStyle::saved_without_style(),
             ..Self::default()
         }
     }
