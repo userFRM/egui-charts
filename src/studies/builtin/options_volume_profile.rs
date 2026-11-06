@@ -1734,4 +1734,68 @@ mod tests {
         assert_eq!(lines.len(), 1, "latest-value lines at {lines:?}");
         assert!((lines[0] - 81.0).abs() <= 0.5, "{lines:?}");
     }
+
+    /// A calculated profile over `chain` with the expected move on and its band hidden, saved.
+    fn saved_hidden_band(
+        chain: OptionChain,
+        expiry: NaiveDate,
+        bars: &[Bar],
+    ) -> crate::studies::StudyTemplate {
+        let mut study = crate::studies::ConfiguredStudy::new(Box::new(
+            OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry]).unwrap(),
+        ));
+        study.calculate(bars);
+        let settings = study.settings();
+        study
+            .apply_settings(
+                &[("expected_move".into(), InputValue::Toggle(true))],
+                settings,
+            )
+            .unwrap();
+        assert_eq!(study.fills().len(), 1);
+        let mut settings = study.settings();
+        settings.fills[0].visible = false;
+        study.apply_settings(&[], settings).unwrap();
+        assert!(study.fills().is_empty());
+        crate::studies::StudyTemplate::from_study(&study)
+    }
+
+    /// A factory that builds the profile over `chain`, as the indicator dialog registers it.
+    fn profile_factory(
+        chain: OptionChain,
+        expiry: NaiveDate,
+    ) -> crate::studies::IndicatorFactory {
+        let mut factory = crate::studies::IndicatorFactory::new();
+        factory.register("Options Volume Profile", move || {
+            Box::new(
+                OptionsVolumeProfile::from_chain(chain.clone(), "SAMPLE", vec![expiry]).unwrap(),
+            )
+        });
+        factory
+    }
+
+    /// A band hidden in a saved template stays hidden when the study is rebuilt before it knows
+    /// its band. Quotes without an underlying price wait for the last close.
+    #[test]
+    fn saved_band_style_survives_a_template() {
+        let (chain, sink, mut rows, expiry, bars) = expected_move_chain();
+        for row in &mut rows {
+            row.underlying_price = None;
+            row.implied_volatility = None;
+        }
+        sink.push(rows).unwrap();
+        let template = saved_hidden_band(chain.clone(), expiry, &bars);
+        let mut loaded = template
+            .create_with(&profile_factory(chain, expiry))
+            .unwrap();
+        loaded.calculate(&bars);
+        // The last close of 100 stands in for the underlying, so the move is 93..107 again.
+        assert!((loaded.plot_value(6, 1).unwrap() - 93.0).abs() < 1e-10);
+        assert!(
+            loaded.fills().is_empty(),
+            "saved band styles {:?}, restored {:?}",
+            template.settings.fills,
+            loaded.settings().fills
+        );
+    }
 }

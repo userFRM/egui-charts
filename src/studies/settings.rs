@@ -209,17 +209,15 @@ fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
             }
         }
     }
+    // Saved band styles are kept whatever the study declares so far, since a study can declare
+    // a band only once it has data. Bands beyond them start with the study's own style.
     let fills = study.fills();
-    if settings.fills.len() != fills.len() {
-        settings.fills = fills
-            .iter()
-            .map(|fill| FillStyle {
-                color: fill.color,
-                inverted_color: fill.inverted_color,
-                visible: true,
-            })
-            .collect();
-    }
+    let saved = settings.fills.len().min(fills.len());
+    settings.fills.extend(fills[saved..].iter().map(|fill| FillStyle {
+        color: fill.color,
+        inverted_color: fill.inverted_color,
+        visible: true,
+    }));
 }
 
 /// Interval visibility evaluated for every interval, including custom and trade-based ones.
@@ -318,7 +316,8 @@ pub struct StudySettings {
     #[serde(default = "enabled_by_default")]
     pub background_visible: bool,
     /// One independent style per band returned by [`Indicator::fills`].
-    /// Missing styles take the study's declared colours and visibility.
+    /// Missing styles take the study's declared colours and visibility. Styles of bands the study
+    /// does not declare yet are kept for when it does.
     #[serde(default)]
     pub fills: Vec<FillStyle>,
 }
@@ -1128,7 +1127,10 @@ impl Indicator for ConfiguredStudy {
         Ok(())
     }
     fn settings(&self) -> StudySettings {
-        self.settings.clone()
+        let mut settings = self.settings.clone();
+        // A study can declare a band after its settings were last applied.
+        match_declared_styles(self.study.as_ref(), &mut settings);
+        settings
     }
     fn apply_settings(
         &mut self,
@@ -1226,6 +1228,11 @@ impl Indicator for ConfiguredStudy {
             if plot.color != edited.study.plot_style(line).color {
                 edited.study.set_color(line, plot.color);
             }
+        }
+        // Bands these inputs remove take their styles with them.
+        let bands = edited.study.fills().len();
+        if bands < self.study.fills().len() {
+            settings.fills.truncate(bands);
         }
         match_declared_styles(edited.study.as_ref(), &mut settings);
         if self.study.value_format() != edited.study.value_format() {
