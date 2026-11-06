@@ -1,7 +1,8 @@
 //! # Volume Bubbles Overlay
 //!
 //! Draws the trades of the chart's series as bubbles, grouped as [`BubbleGrouping`] says, by
-//! default marking only the large trades, one bubble each, with an area proportional to the size.
+//! default marking at most the 20 largest visible trades of at least the mean plus two standard
+//! deviations of the visible sizes, one bubble each, with an area proportional to the size.
 //! The colour shows the aggressor side or the delta, as [`BubbleColor`] says.
 //! Turn them on with [`Chart::set_volume_bubbles`](crate::widget::Chart::set_volume_bubbles).
 
@@ -12,6 +13,9 @@ use egui::{Color32, Mesh, Painter, Pos2, Shape, Vec2};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
+
+/// The most bubbles the default large-trade rule draws in a view, so a dense view stays sparse.
+const DEFAULT_BUBBLES: usize = 20;
 
 /// Configuration for volume bubbles overlay. Serializable, so a host can keep it with its chart
 /// settings; fields missing from older documents take their defaults.
@@ -45,9 +49,10 @@ pub struct VolumeBubblesConfig {
     /// Border color
     pub border_color: Color32,
     /// Bubbles with less volume are neither drawn nor scaled over. Without one,
-    /// [`Ungrouped`](BubbleGrouping::Ungrouped) draws the trades of at least the mean plus two
-    /// standard deviations of the visible trades' sizes, and the other groupings draw every
-    /// bubble. `Some(0.0)` draws every trade.
+    /// [`Ungrouped`](BubbleGrouping::Ungrouped) draws at most the 20 largest visible trades of at
+    /// least the mean plus two standard deviations of the visible trades' sizes, the latest of
+    /// those tied at the 20th size first, and the other groupings draw every bubble. `Some(0.0)`
+    /// draws every trade.
     pub min_size_filter: Option<f64>,
     /// Which trades share a bubble.
     pub grouping: BubbleGrouping,
@@ -90,7 +95,8 @@ pub enum BubbleGrouping {
     /// One bubble per execution, at its own time and price, so fills of one price and instant
     /// stay separate bubbles even when they land on one pixel. Considers every visible execution,
     /// at most the chart's bounded trade store, and draws those that
-    /// [`min_size_filter`](VolumeBubblesConfig::min_size_filter) leaves.
+    /// [`min_size_filter`](VolumeBubblesConfig::min_size_filter) leaves, or without one at most the
+    /// 20 largest of at least the mean plus two standard deviations of the visible sizes.
     Ungrouped,
     /// One bubble per price level and time window. Windows start on multiples of their length
     /// counted from the Unix epoch, and a bubble sits in the middle of its window. A length
@@ -462,6 +468,23 @@ impl VolumeBubbles {
             None => f64::NEG_INFINITY,
         };
         shown.retain(|(_, _, bubble)| bubble.volume >= min_size);
+        if self.config.min_size_filter.is_none()
+            && self.config.grouping == BubbleGrouping::Ungrouped
+            && shown.len() > DEFAULT_BUBBLES
+        {
+            let mut volumes: Vec<f64> = shown.iter().map(|(_, _, b)| b.volume).collect();
+            let cut = *volumes
+                .select_nth_unstable_by(DEFAULT_BUBBLES - 1, |a, b| b.total_cmp(a))
+                .1;
+            let room = DEFAULT_BUBBLES - volumes.iter().filter(|v| **v > cut).count();
+            // `shown` is in time order, so the oldest trades tied at the cut go first.
+            let mut older = volumes.iter().filter(|v| **v == cut).count() - room;
+            shown.retain(|(_, _, bubble)| {
+                let dropped = bubble.volume == cut && older > 0;
+                older -= usize::from(dropped);
+                bubble.volume >= cut && !dropped
+            });
+        }
         let mut scale = Scale::new(
             &self.config,
             shown.iter().flat_map(|(_, _, b)| {
@@ -1102,7 +1125,9 @@ mod tests {
     /// square root of the size counted from zero and held at the minimum, an absolute size
     /// replaces the threshold, and explicit scaling keeps its stretch.
     /// Expected values by hand: the session has 202 trades, sum 1,100, squares 172,200, so a mean
-    /// of 5.446, a deviation of 28.685 and a threshold of 62.82.
+    /// of 5.446, a deviation of 28.685 and a threshold of 62.82. Of 3,000 trades of sizes
+    /// `10 / sqrt(u)`, 74 reach the threshold of 63.1 and only the largest 20 draw, the 21st being
+    /// 120, so that the count does not grow with the trades in view.
     #[test]
     fn default_bubbles_mark_the_large_trades_by_area() {
         let (buy, sell) = (Some(OrderSide::Buy), Some(OrderSide::Sell));
@@ -1140,6 +1165,25 @@ mod tests {
                 VolumeBubblesConfig { min_size_filter: Some(0.0), scaling_mode: BubbleScalingMode::SquareRoot, ..config.clone() },
                 sized([1.0, 4.0, 16.0]),
                 vec![(100.0, 100.0, 4.0, green, None), (180.0, 100.0, 16.0, green, None), (260.0, 100.0, 40.0, green, None)]),
+            ("of trades tied at the 20th size the latest draw",
+                VolumeBubblesConfig::default(),
+                Vec::from_iter((0..30).map(|second| trade(second, 100.0, 1.0, buy))),
+                Vec::from_iter((10..30).map(|second| (100.0 + (second as f32 / 60.0 - 0.5) * 80.0, 100.0, 40.0, green, None)))),
+            ("a dense view draws only the 20 largest trades",
+                VolumeBubblesConfig::default(),
+                Vec::from_iter((0..3000).map(|j: i64| {
+                    trade(j / 10, 100.0, (10.0 / ((j + 1) as f64 / 3001.0).sqrt()).round(), buy)
+                })),
+                Vec::from_iter(
+                    [548.0, 387.0, 316.0, 274.0, 245.0, 224.0, 207.0, 194.0, 183.0, 173.0,
+                        165.0, 158.0, 152.0, 146.0, 141.0, 137.0, 133.0, 129.0, 126.0, 122.0_f32]
+                        .into_iter()
+                        .enumerate()
+                        .map(|(j, size)| {
+                            let x = if j < 10 { 60.0 } else { 184.0 / 3.0 };
+                            (x, 100.0, 40.0 * (size / 548.0).sqrt(), green, None)
+                        }),
+                )),
         ];
         for (name, config, trades, expected) in cases {
             assert_draws(name, config, 80.0, &trades, expected);
