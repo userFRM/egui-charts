@@ -1127,6 +1127,10 @@ impl Chart {
                 .or_default()
                 .merge(primitive_margins);
         }
+        // With nothing to fit the scale keeps its range, which already holds its margins.
+        if !data_range.0.is_finite() {
+            margins.remove(&self.main_series_scale);
+        }
         if self.main_series_visible
             && footprint.is_none()
             && self.chart_type == ChartType::TimePriceOpportunity

@@ -1240,11 +1240,14 @@ impl Chart {
         let mut main = Vec::new();
         let mut pixel_margins = std::collections::HashMap::new();
         for (key, (transform, min, max, margins)) in values {
+            // The main series also fits its scale, so the frame decides on those margins.
+            if margins != AutoscaleMargins::default()
+                && (min.is_finite() || key == self.main_series_scale)
+            {
+                pixel_margins.insert(key, margins);
+            }
             if !min.is_finite() {
                 continue;
-            }
-            if margins != AutoscaleMargins::default() {
-                pixel_margins.insert(key, margins);
             }
             if key == self.main_series_scale {
                 main.extend([min, max]);
