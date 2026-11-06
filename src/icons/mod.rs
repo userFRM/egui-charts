@@ -353,6 +353,10 @@ pub mod icons {
     pub const ALERTS: Icon = crate::icon_from_path!("ui/alert.svg");
     /// Replay SVG icon.
     pub const REPLAY: Icon = crate::icon_from_path!("ui/replay.svg");
+    /// Replay start at a chosen bar SVG icon.
+    pub const REPLAY_SELECT_BAR: Icon = crate::icon_from_path!("ui/replay-select-bar.svg");
+    /// Replay start at a random bar SVG icon.
+    pub const REPLAY_RANDOM: Icon = crate::icon_from_path!("ui/replay-random.svg");
     /// Undo SVG icon.
     pub const UNDO: Icon = crate::icon_from_path!("ui/undo.svg");
     /// Redo SVG icon.
