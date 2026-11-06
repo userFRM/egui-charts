@@ -474,8 +474,9 @@ pub struct TradeProfileSettings {
     /// Trace the outer value area edges after each complete execution bar; hidden without
     /// `value_area`. Uses that share and the same row selection as the final profile.
     pub developing_value_area: bool,
-    /// Extend a completed session's POC until the first later bar whose low-to-high range
-    /// reaches its row, or the viewport's right edge while untouched.
+    /// Extend a completed session's POC to the first later bar that trades in its row: a bar
+    /// with volume whose low-to-high range reaches the row. Untouched, it runs to the viewport's
+    /// right edge.
     pub extend_poc: bool,
     /// Extend a completed session's value area high, as for `extend_poc`; hidden without
     /// `value_area`.
