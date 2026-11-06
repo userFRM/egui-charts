@@ -80,7 +80,8 @@ At each observed price point, equity below the required funding closes four time
 in units, truncated to [`liquidation_increment`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.liquidation_increment), oldest lots first. The fill is labelled `Margin call`,
 with exit fees and market slippage. For example, capital 1,000 and 40 long units entered at 100
 with 20% funding have equity 600 and require 720 at a price of 90; the shortfall of 120 buys 6.67
-units of funding, truncated to 6, so 24 units close and 16 stay open.
+units of funding, truncated to 6, so 24 units close and 16 stay open. A deficit on a position
+smaller than one step closes the whole position.
 
 Runs with leverage above one and no fraction for the position's side keep whole-position
 liquidation. Along every segment of the price path, equity below margin closes the whole position
@@ -91,16 +92,20 @@ leaving equity 500 before exit costs, even if the bar later recovers.
 
 [`require_limit_cross`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.require_limit_cross) makes limit entries, triggered stop-limits and profit-taking exits wait until
 the price trades through the limit by one [`price_increment`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.price_increment). They then fill at the limit, or at
-the better price of a gap beyond that threshold. [`order_delay`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.order_delay) holds a new order back for that
-many further price points, so market orders placed at a close fill at the next bar's open with
-zero, its first extreme with one and its second extreme with two.
+the open of a bar that gaps to or beyond that threshold. An order that can first fill at a price
+already beyond the threshold, as after a delay or a triggered stop, fills at that price.
+[`order_delay`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.order_delay) holds a new order back for that many further price points, so market orders
+placed at a close fill at the next bar's open with zero, its first extreme with one and its second
+extreme with two. Requesting a working order again with the same quantity, kind and prices leaves
+it as it is, its delay included; a request that changes any of them restarts the delay.
 
 [`recalculate_on_history`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.recalculate_on_history) replays each bar as its open, two extremes and close, or as those four
 points of each finer bar, and decides at each with a candle holding only the prices reached so far.
 `prepare` then receives no bars and `prepare_update` refreshes calculations before each decision.
 It is unavailable on transformed chart types. [`chart_type`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.chart_type) set to Heikin Ashi derives decision candles
 from the original bars you supply; these candles also set fills and equity unless
-[`original_price_fills`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.original_price_fills) keeps those on the original prices.
+[`original_price_fills`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.original_price_fills) keeps those on the original prices. A whitespace
+bar stays empty in those candles, and the next one continues from the last bar with a value.
 
 [`recalculate_after_fills`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.recalculate_after_fills) calls the strategy again after every fill, with [`price()`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.StrategyContext.html#method.price) equal
 to the execution price and [`equity()`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.StrategyContext.html#method.equity) marked there after commission. [`is_after_fill()`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.StrategyContext.html#method.is_after_fill)

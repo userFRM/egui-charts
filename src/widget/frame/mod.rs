@@ -449,13 +449,6 @@ impl Chart {
         let show_right_axis = primary_side == Some(crate::model::AxisSide::Right);
         let main_pane = self.main_series_pane();
         let order = self.main_series_order().to_vec();
-        let study_indices: Vec<_> = self
-            .study_ids
-            .iter()
-            .enumerate()
-            .filter(|(_, id)| self.series_pane(**id) == Some(main_pane))
-            .map(|(idx, _)| idx)
-            .collect();
         // Register the icon loader once per context, and the general SVG loader for UI images.
         #[cfg(feature = "icons")]
         {
@@ -726,6 +719,15 @@ impl Chart {
 
         // Handle keyboard shortcuts
         self.handle_keyboard_shortcuts(ui, &time_response, chart_width, chart_rect.min.x);
+
+        // Taken after the shortcuts: a key can remove a study and shift the ones after it.
+        let study_indices: Vec<_> = self
+            .study_ids
+            .iter()
+            .enumerate()
+            .filter(|(_, id)| self.series_pane(**id) == Some(main_pane))
+            .map(|(idx, _)| idx)
+            .collect();
 
         // Calculate visible bars
         let logical_range = self.state.time_scale().visible_logical_range();
@@ -3028,6 +3030,7 @@ impl Chart {
                     .filter(|_| self.main_series_visible && self.config.show_quote_boxes);
                 legend.show_title = self.main_series_present && self.config.show_symbol_labels;
                 legend.show_market_status = self.config.show_market_status;
+                legend.replaying = self.replay_time().is_some();
                 if legend.show_title && legend.show_market_status {
                     // The quote's time is not a clock: it stops when quotes stop.
                     let now = self.chart_time().unwrap_or_else(chrono::Utc::now);
