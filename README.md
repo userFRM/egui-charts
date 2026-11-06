@@ -25,7 +25,7 @@ This README and the [guide](https://userfrm.github.io/egui-charts/docs/) follow 
 
 <a href="https://userfrm.github.io/egui-charts/docs/#product-tour"><picture>
   <source media="(prefers-color-scheme: light)" srcset="docs/images/tour-light.webp">
-  <img src="docs/images/tour-dark.webp" alt="Four charts with footprints, volume profiles and filled study bands; the pointer switches layouts and searches for a study" width="1280" height="720">
+  <img src="docs/images/tour-dark.webp" alt="Four charts with footprints, volume profiles and filled study bands; the pointer switches layouts and searches for a study">
 </picture></a>
 
 *Chart layouts, studies and chart types in motion. [Watch the full demo tour](https://userfrm.github.io/egui-charts/docs/#product-tour). Every image uses generated sample data and simulated trading.*
