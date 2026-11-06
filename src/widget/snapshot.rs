@@ -1463,18 +1463,26 @@ mod tests {
 
     /// A chart built with a feed from a layout saved without the original price pane
     /// requests its symbol's history, as one built from the same layout before the removal does.
+    /// A chart whose feed runs keeps it when the pane goes: no reload, and the next bar arrives.
     #[test]
     fn layout_without_price_pane_loads_its_feed() {
-        use crate::data::{Datafeed, HistoryPage, HistoryRequest, Reply};
+        use crate::data::{Datafeed, HistoryPage, HistoryRequest, Reply, Sink, Subscription};
+        use crate::widget::SeriesId;
         use crate::widget::test_frames::{chart, frame};
         use std::sync::{Arc, Mutex};
 
-        struct Requests(Mutex<Vec<String>>);
+        struct Requests(Mutex<Vec<String>>, Vec<Bar>, Mutex<Option<Sink>>);
         impl Datafeed for Requests {
-            fn history(&self, request: HistoryRequest, _: Reply<HistoryPage>) {
+            fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
                 self.0.lock().unwrap().push(request.symbol);
+                reply.send(Ok(HistoryPage::new(self.1.clone(), true)));
+            }
+            fn subscribe(&self, subscription: Subscription) {
+                *self.2.lock().unwrap() = Some(subscription.sink);
             }
         }
+        let data = chart(&[100.0], &[110.0]).bars(SeriesId::MAIN).to_vec();
+        let feed = || Arc::new(Requests(Mutex::default(), data.clone(), Mutex::default()));
         let mut saved = chart(&[100.0], &[110.0]);
         saved.set_symbol("BBB");
         saved.add_indicator(Box::new(RSI::new(3)));
@@ -1482,7 +1490,7 @@ mod tests {
         assert!(saved.remove_pane(PaneId::MAIN));
         let without_price_pane = saved.snapshot().unwrap();
         let requested = |snapshot: &ChartSnapshot| {
-            let feed = Arc::new(Requests(Mutex::default()));
+            let feed = feed();
             let (mut chart, _) = crate::widget::ChartBuilder::new()
                 .with_feed(feed.clone())
                 .build_restored(snapshot)
@@ -1497,14 +1505,27 @@ mod tests {
             [requested(&with_price_pane), requested(&without_price_pane)],
             [Some("BBB".to_owned()), Some("BBB".to_owned())]
         );
+        let feed = feed();
         let (mut live, _) = crate::widget::ChartBuilder::new()
-            .with_feed(Arc::new(Requests(Mutex::default())))
+            .with_feed(feed.clone())
             .build_restored(&with_price_pane)
             .unwrap();
+        let ctx = egui::Context::default();
+        for step in 0..3 {
+            frame(&ctx, &mut live, f64::from(step), vec![]);
+        }
         assert!(live.remove_pane(PaneId::MAIN));
-        assert!(
-            !live.feed_link.as_ref().unwrap().paused,
-            "the removal leaves the feed running"
+        let mut next = data[data.len() - 1].clone();
+        next.time += chrono::Duration::days(1);
+        feed.2.lock().unwrap().as_ref().unwrap().push_bar(next);
+        frame(&ctx, &mut live, 3.0, vec![]);
+        assert_eq!(
+            (
+                feed.0.lock().unwrap().len(),
+                live.bars(SeriesId::MAIN).len()
+            ),
+            (1, 101),
+            "one history request, and the bar after the 100 it sent"
         );
     }
 
