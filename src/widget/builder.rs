@@ -119,6 +119,8 @@ impl Chart {
             bar_limits: Default::default(),
             studies: IndicatorRegistry::new(),
             readout_revision: crate::model::next_revision(),
+            #[cfg(feature = "ui")]
+            data_table_identity: crate::model::next_revision(),
             study_data: Default::default(),
             element_studies: Default::default(),
             execution_ranges: Default::default(),

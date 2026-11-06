@@ -73,6 +73,11 @@ pub struct ChartImage {
     pub textures_delta: egui::TexturesDelta,
 }
 
+/// A column of a [`DataTable`] across symbol changes and restores of the chart's saved state: the
+/// title of its study with the study's place among those of that title, `None` for the main
+/// series, then its plot or main series column.
+pub(crate) type ColumnId = (Option<(String, usize)>, usize);
+
 /// The loaded bars and visible study plots as text, aligned by chart time: what
 /// `Chart::export_csv` (with `csv`) writes and the chart data table lists.
 #[derive(Debug, Clone, PartialEq)]
@@ -221,8 +226,8 @@ impl Chart {
         self.data_table_with_columns().0
     }
 
-    /// Build cells and their stable series/plot identities from the same calculated studies.
-    pub(crate) fn data_table_with_columns(&self) -> (DataTable, Vec<(usize, usize)>) {
+    /// Build cells and the identity of each column from the same calculated studies.
+    pub(crate) fn data_table_with_columns(&self) -> (DataTable, Vec<ColumnId>) {
         let bars = &self.state.data().bars;
         let price_precision = self
             .instrument()
@@ -309,12 +314,15 @@ impl Chart {
             rows.push(row);
         }
         let column_ids = (0..6)
-            .map(|column| (super::SeriesId::MAIN.0, column))
-            .chain(
-                columns
+            .map(|column| (None, column))
+            .chain(columns.iter().map(|&(study, line, _)| {
+                let title = studies[study].name();
+                let occurrence = studies[..study]
                     .iter()
-                    .map(|&(study, line, _)| (self.study_ids[study].0, line)),
-            )
+                    .filter(|earlier| earlier.name() == title)
+                    .count();
+                (Some((title.to_owned(), occurrence)), line)
+            }))
             .collect();
         (
             DataTable {

@@ -10,6 +10,13 @@ impl Chart {
         (self.state.revision(), self.readout_revision)
     }
 
+    /// Tells this chart from the others a host shows one data table over, through a restore of
+    /// its saved state, which adds its studies again under new ids.
+    #[cfg(feature = "ui")]
+    pub(crate) fn data_table_identity(&self) -> u64 {
+        self.data_table_identity
+    }
+
     /// Takes the source preselection requested by a study menu's Add indicator action.
     /// Open the host indicator chooser with this source, then call `set_indicator_source`
     /// on the added study. The chart owns no chooser or account service.

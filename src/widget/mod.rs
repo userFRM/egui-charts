@@ -55,6 +55,8 @@ use crate::studies::IndicatorRegistry;
 pub use builder::ChartBuilder;
 use chrono::{DateTime, Utc};
 use egui::{Pos2, Rect, Vec2};
+#[cfg(feature = "ui")]
+pub(crate) use export::ColumnId;
 pub use export::{ChartImage, DataTable, ExportError, ImageExportOptions};
 pub use pane::{IndicatorCoordParams, IndicatorPane, IndicatorPaneConfig, PaneInteraction};
 use std::collections::BTreeMap;
@@ -287,6 +289,9 @@ pub struct Chart {
     pub(crate) studies: IndicatorRegistry,
     /// Changes when study edits or completed calculations can affect table cells.
     readout_revision: u64,
+    /// See [`Self::data_table_identity`].
+    #[cfg(feature = "ui")]
+    data_table_identity: u64,
     study_data: studies_data::StudyDataCache,
     pub(crate) element_studies: crate::chart::rendering::candles::price_based::ElementStudies,
     /// Range bars built from the held trades, while the chart type is Range.

@@ -12,10 +12,10 @@ use crate::model::{Bar, Timeframe};
 use crate::studies::StudySettingsSnapshot;
 use crate::ui_kit::buttons::Button;
 use crate::ui_kit::dialog::{DialogFrame, dialog_header};
-use crate::widget::{Chart, DataTable, SeriesId};
+use crate::widget::{Chart, ColumnId, DataTable, SeriesId};
 use chrono::{DateTime, Utc};
 use egui::{Align2, Context, FontId, Rect, ScrollArea, Sense, Ui, vec2};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 /// Width of the time column in logical points.
 const TIME_WIDTH: f32 = 210.0;
@@ -78,10 +78,11 @@ impl Source {
 pub struct DataTableDialog {
     /// Whether the dialog is currently visible.
     pub is_open: bool,
-    /// Stable series and plot identities keep choices through renames and symbol changes.
-    hidden: BTreeSet<(usize, usize)>,
+    /// The columns turned off on each chart. Studies are known by title, so the choices last
+    /// through symbol changes and through a restore, which gives the studies new ids.
+    hidden: HashMap<u64, BTreeSet<ColumnId>>,
     cached: Option<(Source, DataTable)>,
-    column_ids: Vec<(usize, usize)>,
+    column_ids: Vec<ColumnId>,
 }
 
 impl Default for DataTableDialog {
@@ -95,7 +96,7 @@ impl DataTableDialog {
     pub fn new() -> Self {
         Self {
             is_open: false,
-            hidden: BTreeSet::new(),
+            hidden: HashMap::new(),
             cached: None,
             column_ids: Vec::new(),
         }
@@ -130,7 +131,7 @@ impl DataTableDialog {
             self.cached = Some((source, table));
         }
         let table = &self.cached.as_ref().expect("table was just built").1;
-        let hidden = &mut self.hidden;
+        let hidden = self.hidden.entry(chart.data_table_identity()).or_default();
         let mut action = DataTableAction::None;
         let mut open = true;
         DialogFrame::new("Chart data", vec2(804.0, 472.0)).show(ctx, |ui| {
@@ -200,8 +201,8 @@ impl DataTableDialog {
     fn contents(
         ui: &mut Ui,
         table: &DataTable,
-        hidden: &mut BTreeSet<(usize, usize)>,
-        columns: &[(usize, usize)],
+        hidden: &mut BTreeSet<ColumnId>,
+        columns: &[ColumnId],
     ) -> DataTableAction {
         let mut action = DataTableAction::None;
         let shown: Vec<usize> = (0..table.headers.len())
@@ -216,7 +217,7 @@ impl DataTableDialog {
                         if visible {
                             hidden.remove(column);
                         } else {
-                            hidden.insert(*column);
+                            hidden.insert(column.clone());
                         }
                     }
                 }
@@ -592,5 +593,105 @@ mod tests {
         let (_, texts, _) = frame(&mut dialog, &mut chart, vec![]);
         let (action, _, _) = click(&mut dialog, &mut chart, find(&texts, "Symbol"));
         assert_eq!(format!("{action:?}"), "SearchSymbol(\"\")");
+    }
+
+    /// A column turned off on one chart stays off on that chart, also after it restores its saved
+    /// state, and leaves the columns of another chart the dialog follows.
+    #[test]
+    fn column_choice_on_one_chart_hides_no_column_of_another() {
+        use egui::{Event, Modifiers, PointerButton, Pos2};
+
+        let start = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let bars: Vec<_> = (0..30)
+            .map(|i| Bar::from_value(start + chrono::Duration::days(i), 10.0 + i as f64))
+            .collect();
+        let mut first = Chart::new(BarData::from_bars(bars.clone()));
+        let mut second = Chart::new(BarData::from_bars(bars));
+        first.add_indicator(Box::new(crate::studies::SMA::new(3)));
+        second.add_indicator(Box::new(crate::studies::RSI::new(14)));
+        let ctx = Context::default();
+        let mut dialog = DataTableDialog::new();
+        dialog.open();
+        let frame = |dialog: &mut DataTableDialog, chart: &Chart, events| {
+            let mut action = DataTableAction::None;
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| action = dialog.show(ui.ctx(), chart),
+            );
+            let texts: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some((
+                        text.galley.text().to_owned(),
+                        text.pos + text.galley.size() / 2.0,
+                    )),
+                    _ => None,
+                })
+                .collect();
+            let commands = output.platform_output.commands.clone();
+            output.drop_without_applying_deltas();
+            (action, texts, commands)
+        };
+        let click = |dialog: &mut DataTableDialog, chart: &Chart, at| {
+            frame(dialog, chart, vec![Event::PointerMoved(at)]);
+            frame(
+                dialog,
+                chart,
+                [true, false]
+                    .map(|pressed| Event::PointerButton {
+                        pos: at,
+                        button: PointerButton::Primary,
+                        pressed,
+                        modifiers: Modifiers::NONE,
+                    })
+                    .to_vec(),
+            )
+        };
+        let find = |texts: &[(String, Pos2)], label: &str| {
+            texts.iter().rfind(|(text, _)| text == label).unwrap().1
+        };
+        let headers = |dialog: &mut DataTableDialog, chart: &Chart| {
+            let names = chart.data_table().headers;
+            let (_, texts, _) = frame(dialog, chart, vec![]);
+            let painted: Vec<_> = texts
+                .into_iter()
+                .map(|(text, _)| text)
+                .filter(|text| names.contains(text))
+                .collect();
+            painted
+        };
+        frame(&mut dialog, &first, vec![]);
+        let (_, texts, _) = frame(&mut dialog, &first, vec![]);
+        click(&mut dialog, &first, find(&texts, "Columns"));
+        let (_, texts, _) = frame(&mut dialog, &first, vec![]);
+        // The last label of that name is the box in the Columns menu.
+        click(&mut dialog, &first, find(&texts, "SMA: SMA(3)"));
+        egui::Popup::close_all(&ctx);
+        let without_sma = ["time", "open", "high", "low", "close", "volume"];
+        assert_eq!(headers(&mut dialog, &first), without_sma);
+
+        assert_eq!(
+            headers(&mut dialog, &second),
+            second.data_table().headers,
+            "the other chart keeps its first study's column"
+        );
+        let (_, texts, _) = frame(&mut dialog, &second, vec![]);
+        let (_, _, commands) = click(&mut dialog, &second, find(&texts, "Copy"));
+        assert!(commands.iter().any(|command| matches!(
+            command,
+            egui::OutputCommand::CopyText(text) if text.contains("RSI: RSI(14)")
+        )));
+        let (action, _, _) = click(&mut dialog, &second, find(&texts, "Export CSV"));
+        assert!(matches!(action, DataTableAction::Export(csv) if csv.contains("RSI: RSI(14)")));
+
+        assert_eq!(headers(&mut dialog, &first), without_sma);
+        first.restore(&first.snapshot().unwrap()).unwrap();
+        assert_eq!(first.data_table().headers.len(), 7);
+        assert_eq!(headers(&mut dialog, &first), without_sma);
     }
 }
