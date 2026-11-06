@@ -270,7 +270,7 @@ pub(super) const TEAL: [u8; 4] = [8, 153, 129, 255];
 pub(super) const CYAN: [u8; 4] = [0, 188, 212, 255];
 pub(super) const PINK: [u8; 4] = [233, 30, 99, 255];
 pub(super) const PURPLE: [u8; 4] = [156, 39, 176, 255];
-const DEEP_PURPLE: [u8; 4] = [103, 58, 183, 255];
+pub(super) const DEEP_PURPLE: [u8; 4] = [103, 58, 183, 255];
 pub(super) const GREY: [u8; 4] = [128, 128, 128, 255];
 const WHITE: [u8; 4] = [255, 255, 255, 255];
 
@@ -1077,7 +1077,7 @@ mod tests {
         let mut fib = drawing(T::FibonacciRetracement, &[(0.0, 100.0), (10.0, 200.0)]);
         let mut config = FibonacciConfig {
             levels_as_percent: true,
-            ..Default::default()
+            ..FibonacciConfig::legacy()
         };
         config.levels[1].visible = false;
         config.levels[2].label = "100%".into();

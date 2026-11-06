@@ -620,7 +620,7 @@ mod tests {
                 let label = output.shapes.iter().any(|s| {
                     matches!(&s.shape,
                     egui::Shape::Text(t) if t.galley.text() == format!("level ({want:.2})")
-                        && t.pos.y + t.galley.size().y < y)
+                        && (t.pos.y + t.galley.size().y / 2.0 - y).abs() < 1.0)
                 });
                 let band = output.shapes.iter().any(|s| matches!(&s.shape,
                     egui::Shape::Rect(r) if (r.rect.top()-y).abs() < 1e-3 || (r.rect.bottom()-y).abs() < 1e-3));
