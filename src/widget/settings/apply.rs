@@ -1389,6 +1389,85 @@ mod tests {
         }
     }
 
+    /// Before hollow candles had a style, a layout held the candles' switches for them, Borders
+    /// off by default, and the painter ignored them: rising candles outlined, falling candles
+    /// filled, every wick drawn. Such a layout restores as it was painted, with its switches on.
+    #[test]
+    #[cfg(feature = "drawings")]
+    fn hollow_layout_saved_before_the_style_restores_its_candles() {
+        use crate::model::ChartType;
+        use crate::widget::ChartSnapshot;
+        use crate::widget::test_frames::{frame, shapes};
+        let (up, down) = (
+            Color32::from_rgb(8, 153, 129),
+            Color32::from_rgb(242, 54, 69),
+        );
+        let bars: Vec<Bar> = [
+            (10.0, 18.0, 8.0, 14.0),
+            (13.0, 17.0, 8.5, 11.0),
+            (11.0, 14.0, 6.0, 12.0),
+            (12.0, 15.0, 9.0, 10.0),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (o, h, l, c))| {
+            let time = chrono::DateTime::UNIX_EPOCH + chrono::Duration::days(i as i64);
+            Bar::new(time, o, h, l, c, 0.0)
+        })
+        .collect();
+        for (show_body, show_border, show_wick) in [(true, false, true), (false, false, false)] {
+            let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+            chart.set_chart_type(ChartType::HollowCandles);
+            chart.config_mut().show_volume = false;
+            let mut saved = serde_json::to_value(chart.snapshot().unwrap()).unwrap();
+            for path in [
+                "/chart_type_params/styles",
+                "/settings/chart_type_params/styles",
+            ] {
+                let styles = saved.pointer_mut(path).unwrap().as_object_mut().unwrap();
+                assert!(styles.remove("hollow").is_some());
+            }
+            for (name, value) in [
+                ("show_body", show_body),
+                ("show_border", show_border),
+                ("show_wick", show_wick),
+            ] {
+                saved["settings"]["candle_colors"][name] = value.into();
+            }
+            let saved: ChartSnapshot = serde_json::from_value(saved).unwrap();
+            let ctx = Context::default();
+            let mut restored = Chart::new(BarData::from_bars(bars.clone()));
+            restored.restore(&saved).unwrap();
+            frame(&ctx, &mut restored, 0.0, vec![]);
+            let painted = shapes(&ctx, &mut restored, 0.1, vec![]);
+            let plot = restored.get_rendered_price_rect();
+            let (mut outlined, mut filled, mut wicks) = (0, 0, 0);
+            for shape in &painted {
+                match shape {
+                    Shape::Rect(r) if plot.contains(r.rect.center()) => {
+                        if r.fill == Color32::TRANSPARENT
+                            && r.stroke.width > 0.0
+                            && r.stroke.color == up
+                        {
+                            outlined += 1;
+                        } else if r.fill == down {
+                            filled += 1;
+                        }
+                    }
+                    Shape::LineSegment { points, stroke }
+                        if points[0].x == points[1].x && [up, down].contains(&stroke.color) =>
+                    {
+                        wicks += 1;
+                    }
+                    _ => {}
+                }
+            }
+            assert_eq!((outlined, filled, wicks), (2, 2, 8));
+            let colors = ChartSettingsState::from_chart(&restored).candle_colors;
+            assert!(colors.show_body && colors.show_border && colors.show_wick);
+        }
+    }
+
     /// A shape with both stops its fill at the middle of the stroke and shrinks it for a
     /// transparent stroke, so a border that is not opaque must leave the body a shape of its own.
     /// A distinct opaque border is painted; one in the colour of an opaque body is not.

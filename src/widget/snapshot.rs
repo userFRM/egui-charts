@@ -404,8 +404,15 @@ impl Chart {
         self.set_main_series_visible(snapshot.main_series_visible);
         self.main_series_style.alerts = snapshot.main_series_alerts;
         self.main_series_style.display_format = snapshot.main_series_display_format;
-        snapshot
-            .settings
+        let mut settings = snapshot.settings.clone();
+        if settings.chart_type == crate::model::ChartType::HollowCandles {
+            // Settings saved before hollow candles had a style hold the switches of the candles.
+            let style = &snapshot.chart_type_params.styles.hollow;
+            settings.candle_colors.show_body = style.body_visible;
+            settings.candle_colors.show_border = style.border_visible;
+            settings.candle_colors.show_wick = style.wick_visible;
+        }
+        settings
             .apply_to_chart(self)
             .map_err(RestoreError::Settings)?;
         if let Some(config) = &snapshot.config {
