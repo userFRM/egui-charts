@@ -186,13 +186,7 @@ impl ChartState {
         &mut self,
         series: impl IntoIterator<Item = (&'a [Bar], u64)>,
     ) {
-        // shown() can already contain the fallback; inspect the main domain alone.
-        let series: Vec<_> = if self
-            .elements
-            .as_deref()
-            .unwrap_or(&self.data.bars)
-            .is_empty()
-        {
+        let series: Vec<_> = if self.shows_fallback() {
             series.into_iter().collect()
         } else {
             Vec::new()
@@ -222,6 +216,16 @@ impl ChartState {
         }
         self.fallback_series = keys;
         self.sync_time_scale();
+    }
+
+    /// Whether the time scale lays out added-series slots: the main domain alone is empty, as
+    /// [`shown`](Self::shown) can already contain the fallback.
+    #[cfg(feature = "widget")]
+    pub(crate) fn shows_fallback(&self) -> bool {
+        self.elements
+            .as_deref()
+            .unwrap_or(&self.data.bars)
+            .is_empty()
     }
 
     #[cfg(feature = "widget")]

@@ -226,12 +226,12 @@ fn render_profiles(
                 .copied()
                 .unwrap_or(FootprintMode::BidAsk);
             let segments = match mode {
-                FootprintMode::BidAsk if session => vec![
+                FootprintMode::BidAsk | FootprintMode::Ladder if session => vec![
                     (row.ask, config.ask_color),
                     (row.bid, config.bid_color),
                     (row.unknown, config.neutral_color),
                 ],
-                FootprintMode::BidAsk => vec![
+                FootprintMode::BidAsk | FootprintMode::Ladder => vec![
                     (row.bid, config.bid_color),
                     (row.ask, config.ask_color),
                     (row.unknown, config.neutral_color),
