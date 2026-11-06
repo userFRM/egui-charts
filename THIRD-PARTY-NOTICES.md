@@ -24,7 +24,7 @@ The generated API reference retains rustdoc's scripts and styles under the MIT o
 
 `assets/icons/chart-types/chart-volume-footprint.svg` and `chart-session-volume-profile.svg` in the same directory are original project artwork, licensed under either the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at your option.
 
-`assets/icons/ui/liquidity-heatmap.svg`, `replay-random.svg` and `replay-select-bar.svg` are original project artwork, licensed under either the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at your option.
+`assets/icons/ui/liquidity-heatmap.svg`, `replay-random.svg`, `replay-select-bar.svg` and `sort.svg` are original project artwork, licensed under either the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at your option.
 
 ## Lucide icons
 

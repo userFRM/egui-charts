@@ -1024,6 +1024,7 @@ pub(crate) fn drawing_to_stored_with(
     let id = drawing.stored_id.clone();
     let mut stored = StoredDrawing::new(id.unwrap_or_else(|| drawing.id.to_string()), settings);
     stored.created_at = drawing.created_at.unwrap_or(stored.created_at);
+    stored.modified_at = drawing.modified_at.unwrap_or(stored.modified_at);
     stored.notes.clone_from(&drawing.notes);
     stored.points = drawing
         .chart_points
@@ -1041,8 +1042,8 @@ pub(crate) fn drawing_to_stored_with(
 }
 
 /// Convert StoredDrawing back to a completed Drawing with id `next_id`, its anchors mapped from
-/// timestamp to bar index and the record's id, creation time and notes kept; the screen points
-/// follow on the next [`Drawing::update_screen_coords`].
+/// timestamp to bar index and the record's id, creation and edit times and notes kept; the screen
+/// points follow on the next [`Drawing::update_screen_coords`].
 ///
 /// `time_to_bar` must be the inverse of the `bar_to_time` passed to
 /// [`drawing_to_stored`]: it returns fractional bar indices and extrapolates
@@ -1065,6 +1066,7 @@ pub(crate) fn stored_to_drawing_with(
     drawing.id = next_id;
     drawing.stored_id = Some(stored.id.clone());
     drawing.created_at = Some(stored.created_at);
+    drawing.modified_at = Some(stored.modified_at);
     drawing.notes.clone_from(&stored.notes);
     drawing.chart_points = stored
         .points
@@ -1110,6 +1112,7 @@ mod tests {
         let mut drawing = stored_to_drawing(stored, time_to_bar, id);
         drawing.update_screen_coords(bar_to_x, price_to_y);
         (drawing.stored_id, drawing.created_at, drawing.notes) = (None, None, None);
+        drawing.modified_at = None;
         drawing
     }
 
@@ -1173,6 +1176,7 @@ mod tests {
         let mut vwap = VwapConfig::default();
         vwap.bands[0].enabled = false;
         vwap.bands[1] = VwapBand::new(true, 2.5).unwrap();
+        vwap.bands[2].color = [21, 22, 23, 24];
         d.vwap = Some(vwap);
         if tool == DrawingToolType::DoubleCurve {
             d.chart_points.push(ChartPoint::new(12.0, 115.0));

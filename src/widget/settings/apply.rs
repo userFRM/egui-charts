@@ -157,10 +157,17 @@ impl ChartSettingsState {
         settings.candle_colors.show_border = config.candle_border_width > 0.0;
         settings.candle_colors.show_wick = candles.wick_visible;
         settings.candle_colors.color_by_previous_close = candles.color_by_previous_close;
+        if chart.chart_type() == crate::model::ChartType::Bars {
+            settings.candle_colors.color_by_previous_close = chart
+                .chart_type_params()
+                .styles
+                .bars
+                .color_by_previous_close;
+        }
         if chart.chart_type() == crate::model::ChartType::HollowCandles {
             let style = &chart.chart_type_params().styles.hollow;
             settings.candle_colors = super::CandleColorConfig {
-                color_by_previous_close: true,
+                color_by_previous_close: candles.color_by_previous_close,
                 show_body: style.body_visible,
                 show_border: style.border_visible,
                 show_wick: style.wick_visible,
@@ -668,6 +675,12 @@ impl ChartSettingsState {
             if chart.chart_type_params() != &params {
                 chart.set_chart_type_params(params);
             }
+        } else if self.chart_type == crate::model::ChartType::Bars {
+            let mut params = chart.chart_type_params().clone();
+            params.styles.bars.color_by_previous_close = self.candle_colors.color_by_previous_close;
+            if chart.chart_type_params() != &params {
+                chart.set_chart_type_params(params);
+            }
         } else {
             let candles = CandlesStyle {
                 body_visible: self.candle_colors.show_body,
@@ -1099,8 +1112,11 @@ mod tests {
                     if t.galley.job.sections[0].format.font_id.size == 12.0
                         && t.galley.text() == "18.00")));
                 // The falling and flat bars share the bar colour on the last-price label too.
-                let last = chart.state.data().bars.last().unwrap().clone();
-                assert_eq!(chart.main_value_color(&last), style.bar_color);
+                let last = chart.state.data().bars.clone();
+                assert_eq!(
+                    chart.main_value_color(&last, last.len() - 1),
+                    style.bar_color
+                );
 
                 // Labels that do not fit the bar spacing go together; the bars stay visible.
                 chart.state.time_scale_mut().set_bar_spacing(2.0);
@@ -1218,7 +1234,8 @@ mod tests {
                 c.show_body = flags & 1 != 0;
                 c.show_border = flags & 2 != 0;
                 c.show_wick = flags & 4 != 0;
-                c.color_by_previous_close = by_previous;
+                // Hollow candles colour by the previous close whatever the candles' hidden switch holds.
+                c.color_by_previous_close = by_previous && kind != ChartType::HollowCandles;
                 [
                     c.body_up,
                     c.body_down,
@@ -1294,6 +1311,272 @@ mod tests {
                 chart.set_chart_type(kind);
                 assert_eq!(ChartSettingsState::from_chart(&chart).candle_colors, c);
             }
+        }
+    }
+
+    /// Hollow candles always colour by the previous close and hide that switch. A template saved
+    /// from one and loaded on a candles chart, under the open chart's type, keeps the candles'
+    /// colouring by the open.
+    #[test]
+    fn hollow_template_keeps_the_candles_colour_rule() {
+        use crate::model::ChartType;
+        let bars = vec![Bar::new(
+            chrono::DateTime::UNIX_EPOCH,
+            10.0,
+            18.0,
+            8.0,
+            14.0,
+            0.0,
+        )];
+        let mut hollow = Chart::new(BarData::from_bars(bars.clone()));
+        hollow.set_chart_type(ChartType::HollowCandles);
+        let mut template = ChartSettingsState::from_chart(&hollow);
+        let mut candles = Chart::new(BarData::from_bars(bars));
+        template.chart_type = candles.chart_type();
+        template.apply_to_chart(&mut candles).unwrap();
+        let styles = &candles.chart_type_params().styles;
+        assert!(!styles.candles.color_by_previous_close);
+    }
+
+    /// A Heikin-Ashi layout without the chart type's style, or without any chart type styles,
+    /// tagged only the source close on its scale and restores that way; one saved with the style
+    /// keeps the pair. The source (10, 18, 8, 14) closes at 14 and its transformed close is
+    /// (10 + 18 + 8 + 14) / 4 = 12.5.
+    #[test]
+    #[cfg(feature = "drawings")]
+    fn heikin_layout_saved_before_the_style_restores_its_scale() {
+        use crate::model::ChartType;
+        use crate::widget::ChartSnapshot;
+        use crate::widget::test_frames::{frame, shapes};
+        let bars = || {
+            BarData::from_bars(vec![Bar::new(
+                chrono::DateTime::UNIX_EPOCH,
+                10.0,
+                18.0,
+                8.0,
+                14.0,
+                0.0,
+            )])
+        };
+        for (missing, expected) in [
+            (None, &[14.0, 12.5][..]),
+            (Some("heikin"), &[14.0][..]),
+            (Some("styles"), &[14.0][..]),
+        ] {
+            let mut chart = Chart::new(bars());
+            chart.set_chart_type(ChartType::Heikin);
+            chart.config_mut().show_volume = false;
+            let mut saved = serde_json::to_value(chart.snapshot().unwrap()).unwrap();
+            for path in ["/chart_type_params", "/settings/chart_type_params"] {
+                let params = saved.pointer_mut(path).unwrap().as_object_mut().unwrap();
+                match missing {
+                    Some("heikin") => {
+                        let styles = params["styles"].as_object_mut().unwrap();
+                        assert!(styles.remove("heikin").is_some());
+                    }
+                    Some(key) => assert!(params.remove(key).is_some()),
+                    None => {}
+                }
+            }
+            let saved: ChartSnapshot = serde_json::from_value(saved).unwrap();
+            let ctx = Context::default();
+            let mut restored = Chart::new(bars());
+            restored.restore(&saved).unwrap();
+            frame(&ctx, &mut restored, 0.0, vec![]);
+            let painted = shapes(&ctx, &mut restored, 0.1, vec![]);
+            let plot = restored.get_rendered_price_rect();
+            let up = restored.chart_type_params().styles.heikin.body_up;
+            let tagged: Vec<f64> = [14.0, 12.5]
+                .into_iter()
+                .filter(|&price| {
+                    let y = restored.last_price_map.price_to_y(price);
+                    painted.iter().any(|shape| {
+                        matches!(shape, Shape::Rect(r)
+                        if r.fill == up
+                        && (r.rect.right() <= plot.left() || r.rect.left() >= plot.right())
+                        && r.rect.y_range().contains(y))
+                    })
+                })
+                .collect();
+            assert_eq!(tagged, expected);
+            let settings = ChartSettingsState::from_chart(&restored);
+            assert_eq!(
+                settings
+                    .chart_type_params
+                    .unwrap()
+                    .styles
+                    .heikin
+                    .real_price_only,
+                missing.is_some()
+            );
+        }
+    }
+
+    /// Before hollow candles had a style, a layout held the candles' switches for them, Borders
+    /// off by default, and the painter ignored them: rising candles outlined, falling candles
+    /// filled, every wick drawn. Such a layout restores as it was painted, with its switches on.
+    #[test]
+    #[cfg(feature = "drawings")]
+    fn hollow_layout_saved_before_the_style_restores_its_candles() {
+        use crate::model::ChartType;
+        use crate::widget::ChartSnapshot;
+        use crate::widget::test_frames::{frame, shapes};
+        let (up, down) = (
+            Color32::from_rgb(8, 153, 129),
+            Color32::from_rgb(242, 54, 69),
+        );
+        let bars: Vec<Bar> = [
+            (10.0, 18.0, 8.0, 14.0),
+            (13.0, 17.0, 8.5, 11.0),
+            (11.0, 14.0, 6.0, 12.0),
+            (12.0, 15.0, 9.0, 10.0),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (o, h, l, c))| {
+            let time = chrono::DateTime::UNIX_EPOCH + chrono::Duration::days(i as i64);
+            Bar::new(time, o, h, l, c, 0.0)
+        })
+        .collect();
+        for (show_body, show_border, show_wick) in [(true, false, true), (false, false, false)] {
+            let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+            chart.set_chart_type(ChartType::HollowCandles);
+            chart.config_mut().show_volume = false;
+            let mut saved = serde_json::to_value(chart.snapshot().unwrap()).unwrap();
+            for path in [
+                "/chart_type_params/styles",
+                "/settings/chart_type_params/styles",
+            ] {
+                let styles = saved.pointer_mut(path).unwrap().as_object_mut().unwrap();
+                assert!(styles.remove("hollow").is_some());
+            }
+            for (name, value) in [
+                ("show_body", show_body),
+                ("show_border", show_border),
+                ("show_wick", show_wick),
+            ] {
+                saved["settings"]["candle_colors"][name] = value.into();
+            }
+            let saved: ChartSnapshot = serde_json::from_value(saved).unwrap();
+            let ctx = Context::default();
+            let mut restored = Chart::new(BarData::from_bars(bars.clone()));
+            restored.restore(&saved).unwrap();
+            frame(&ctx, &mut restored, 0.0, vec![]);
+            let painted = shapes(&ctx, &mut restored, 0.1, vec![]);
+            let plot = restored.get_rendered_price_rect();
+            let (mut outlined, mut filled, mut wicks) = (0, 0, 0);
+            for shape in &painted {
+                match shape {
+                    Shape::Rect(r) if plot.contains(r.rect.center()) => {
+                        if r.fill == Color32::TRANSPARENT
+                            && r.stroke.width > 0.0
+                            && r.stroke.color == up
+                        {
+                            outlined += 1;
+                        } else if r.fill == down {
+                            filled += 1;
+                        }
+                    }
+                    Shape::LineSegment { points, stroke }
+                        if points[0].x == points[1].x && [up, down].contains(&stroke.color) =>
+                    {
+                        wicks += 1;
+                    }
+                    _ => {}
+                }
+            }
+            assert_eq!((outlined, filled, wicks), (2, 2, 8));
+            let colors = ChartSettingsState::from_chart(&restored).candle_colors;
+            assert!(colors.show_body && colors.show_border && colors.show_wick);
+        }
+    }
+
+    /// A high-low document without the chart type's style printed no price labels, so a layout or
+    /// a chart settings template saved then restores without them; a layout saved with the style
+    /// keeps its six. Labels are picked by their text and size, whatever their colour.
+    #[test]
+    #[cfg(feature = "drawings")]
+    fn high_low_layout_saved_before_the_style_restores_without_labels() {
+        use crate::model::ChartType;
+        use crate::widget::ChartSnapshot;
+        use crate::widget::test_frames::{frame, shapes};
+        let bars = || {
+            BarData::from_bars(
+                [
+                    (10.0, 18.0, 8.0, 14.0),
+                    (13.0, 17.0, 8.5, 11.0),
+                    (12.0, 15.0, 9.0, 10.0),
+                ]
+                .into_iter()
+                .enumerate()
+                .map(|(i, (o, h, l, c))| {
+                    let time = chrono::DateTime::UNIX_EPOCH + chrono::Duration::days(i as i64);
+                    Bar::new(time, o, h, l, c, 0.0)
+                })
+                .collect(),
+            )
+        };
+        let source = || {
+            let mut chart = Chart::new(bars());
+            chart.set_chart_type(ChartType::HighLow);
+            chart.config_mut().show_volume = false;
+            chart
+        };
+        let without_style = |saved: &mut serde_json::Value, paths: &[&str]| {
+            for path in paths {
+                let styles = saved.pointer_mut(path).unwrap().as_object_mut().unwrap();
+                assert!(styles.remove("high_low").is_some());
+            }
+        };
+        let layouts = [
+            "/chart_type_params/styles",
+            "/settings/chart_type_params/styles",
+        ];
+        let layout = |strip: bool| {
+            let mut saved = serde_json::to_value(source().snapshot().unwrap()).unwrap();
+            if strip {
+                without_style(&mut saved, &layouts);
+            }
+            let saved: ChartSnapshot = serde_json::from_value(saved).unwrap();
+            let mut restored = Chart::new(bars());
+            restored.restore(&saved).unwrap();
+            restored
+        };
+        let template = || {
+            let mut saved =
+                serde_json::to_value(ChartSettingsState::from_chart(&source())).unwrap();
+            without_style(&mut saved, &["/chart_type_params/styles"]);
+            let saved: ChartSettingsState = serde_json::from_value(saved).unwrap();
+            let mut chart = source();
+            saved.apply_to_chart(&mut chart).unwrap();
+            chart
+        };
+        for (name, mut chart, expected) in [
+            ("layout with the style", layout(false), 6),
+            ("layout without the style", layout(true), 0),
+            ("template without the style", template(), 0),
+        ] {
+            let ctx = Context::default();
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            chart.state.time_scale_mut().set_bar_spacing(80.0);
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+            let plot = chart.get_rendered_price_rect();
+            let prices = ["18.00", "8.00", "17.00", "8.50", "15.00", "9.00"];
+            let labels = painted
+                .iter()
+                .filter(|shape| {
+                    matches!(shape, Shape::Text(t)
+                    if prices.contains(&t.galley.text())
+                    && t.galley.job.sections[0].format.font_id.size == 7.0
+                    && plot.contains(t.pos))
+                })
+                .count();
+            assert_eq!(labels, expected, "{name}");
+            assert_eq!(
+                chart.chart_type_params().styles.high_low.labels_visible,
+                expected > 0,
+                "{name}"
+            );
         }
     }
 

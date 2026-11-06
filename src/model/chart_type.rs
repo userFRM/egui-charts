@@ -57,7 +57,8 @@ pub enum ChartType {
     HlcArea,
     /// Baseline comparison chart with colored fill
     Baseline,
-    /// One column per bar, colored by close versus the previous close.
+    /// One column per bar up to the price of `ChartTypeStyles::columns`, colored by close versus
+    /// the previous close.
     /// The base is the pane bottom unless `ChartTypeParams::columns_base` is set.
     Columns,
 
@@ -210,7 +211,7 @@ impl ChartType {
             ChartType::Area => "Filled area chart",
             ChartType::HlcArea => "High-Low-Close area",
             ChartType::Baseline => "Baseline comparison",
-            ChartType::Columns => "Columns up to the close",
+            ChartType::Columns => "Columns up to the selected price",
             ChartType::HighLow => "High-Low range",
             ChartType::TimePriceOpportunity => "TPO / Market Profile",
             ChartType::LineBreak => "Three line break",
@@ -474,8 +475,9 @@ pub struct TradeProfileSettings {
     /// Trace the outer value area edges after each complete execution bar; hidden without
     /// `value_area`. Uses that share and the same row selection as the final profile.
     pub developing_value_area: bool,
-    /// Extend a completed session's POC until the first later bar whose low-to-high range
-    /// reaches its row, or the viewport's right edge while untouched.
+    /// Extend a completed session's POC to the first later bar that trades in its row: a bar
+    /// with volume whose low-to-high range reaches the row. Untouched, it runs to the viewport's
+    /// right edge.
     pub extend_poc: bool,
     /// Extend a completed session's value area high, as for `extend_poc`; hidden without
     /// `value_area`.
@@ -646,6 +648,7 @@ pub struct ChartTypeParams {
     /// Execution-based session profile display settings.
     pub profile: TradeProfileSettings,
     /// Independent line, area and baseline styles, retained across chart type changes.
+    #[serde(default = "super::ChartTypeStyles::saved_without_styles")]
     pub styles: super::ChartTypeStyles,
     /// Renko: method resolved once from loaded history, then frozen while bars stream.
     pub renko_size_method: super::BoxSizeMethod,
@@ -952,6 +955,71 @@ mod tests {
             "extend_val",
         ] {
             assert_eq!(legacy["profile"][field], false);
+        }
+    }
+
+    /// A zone chosen from the session zone list is listed once when the list is opened again,
+    /// whether it is one of the listed zones or a saved zone outside them.
+    #[cfg(all(feature = "ui", feature = "timezones"))]
+    #[test]
+    fn session_zone_choices_list_the_chosen_zone_once() {
+        for zone in ["America/New_York", "Europe/Berlin"] {
+            let mut series = crate::chart::series::SeriesSettings {
+                chart_type: ChartType::SessionVolumeProfile,
+                ..Default::default()
+            };
+            series.chart_type_params.profile.session =
+                ProfileSession::Custom(CustomProfileSession {
+                    start: chrono::NaiveTime::from_hms_opt(9, 30, 0).unwrap(),
+                    end: chrono::NaiveTime::from_hms_opt(16, 0, 0).unwrap(),
+                    zone: Some(crate::model::TimezoneId::named(zone).unwrap()),
+                });
+            let ctx = egui::Context::default();
+            // Room for every entry: rows scrolled out of a shorter list are not painted.
+            ctx.all_styles_mut(|style| style.spacing.combo_height = 4000.0);
+            let mut frame = |events: Vec<egui::Event>| {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1440.0, 2400.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| crate::ui::dialogs::series_settings::SymbolTab::show(ui, &mut series),
+                );
+                let found: Vec<egui::Pos2> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == zone => {
+                            Some(text.pos + text.galley.size() / 2.0)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                output.drop_without_applying_deltas();
+                found
+            };
+            frame(vec![]);
+            let pos = frame(vec![])[0];
+            frame(vec![egui::Event::PointerMoved(pos)]);
+            let button = |pressed| egui::Event::PointerButton {
+                pos,
+                pressed,
+                button: egui::PointerButton::Primary,
+                modifiers: Default::default(),
+            };
+            frame(vec![button(true)]);
+            frame(vec![button(false)]);
+            // The combo's own text and one entry in the opened list.
+            let shown = frame(vec![]).len();
+            assert_eq!(shown, 2, "{zone} is drawn {shown} times");
+            let ProfileSession::Custom(custom) = &series.chart_type_params.profile.session else {
+                panic!("the session stays custom");
+            };
+            assert_eq!(custom.zone.as_ref().map(|z| z.name()), Some(zone));
         }
     }
 

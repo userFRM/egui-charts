@@ -58,12 +58,15 @@ struct Action {
     studies: Vec<StudyChange>,
     #[cfg(feature = "drawings")]
     drawings: HistoryService,
+    /// The drawings removed from a symbol the chart did not show, whose undo reaches them there.
+    #[cfg(feature = "drawings")]
+    unshown: Option<super::layout::UnshownDeletion>,
 }
 
 impl Action {
     fn is_empty(&self) -> bool {
         #[cfg(feature = "drawings")]
-        let drawings_changed = self.drawings.can_undo();
+        let drawings_changed = self.drawings.can_undo() || self.unshown.is_some();
         #[cfg(not(feature = "drawings"))]
         let drawings_changed = false;
         self.layout_sizes.is_none()
@@ -162,16 +165,15 @@ struct HeldSeries {
     bar_limit: Option<std::num::NonZeroUsize>,
 }
 
-/// Whether the main series is present in one state of the chart, with the price lines, price
-/// formatter and bar limit that the state without it lacks. Its bars and markers stay in the
-/// chart, which reads them only while the series is present; the bars also give the remaining
-/// series their time axis while it is absent.
+/// Whether the main series is present in one state of the chart, with the price lines and price
+/// formatter that the state without it lacks. Its bars, bar limit and markers stay in the chart,
+/// which reads the markers only while the series is present and the limit while its bars take
+/// data; the bars also give the remaining series their time axis while it is absent.
 #[derive(Default)]
 struct MainSeries {
     present: bool,
     price_lines: Vec<(super::PriceLineId, crate::model::PriceLine)>,
     formatter: Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
-    bar_limit: Option<std::num::NonZeroUsize>,
     /// The time axis the absent state kept, for the redo of a removal whose undo reloads the feed.
     bars: Vec<crate::model::Bar>,
 }
@@ -197,8 +199,16 @@ impl ChartHistory {
         });
     }
 
+    /// Records in the action in progress the drawings it removed from an unshown symbol.
+    #[cfg(feature = "drawings")]
+    pub(super) fn record_unshown_deletion(&mut self, deletion: super::layout::UnshownDeletion) {
+        if let Some(pending) = &mut self.pending {
+            pending.before.unshown = Some(deletion);
+        }
+    }
+
     /// Makes the action in progress this chart's part of a cross-chart edit.
-    #[cfg(feature = "studies")]
+    #[cfg(any(feature = "studies", feature = "drawings"))]
     pub(super) fn join_layout_edit(&mut self, edit: super::layout::LayoutEditLink) {
         if let Some(pending) = &mut self.pending {
             pending.before.layout_edit = Some(edit);
@@ -583,8 +593,8 @@ impl Chart {
         held.series
     }
 
-    /// Takes the main series out of the chart and pauses its feed. The pending action keeps its
-    /// price lines, formatter and bar limit, so undo restores them.
+    /// Takes the main series out of the chart and pauses its feed unless its bars stay live. The
+    /// pending action keeps its price lines and formatter, so undo restores them.
     pub(super) fn remove_main_series(&mut self) {
         let mut removed = MainSeries::default();
         self.swap_main_series(&mut removed);
@@ -593,16 +603,16 @@ impl Chart {
         }
     }
 
-    /// Exchanges the main series' presence, price lines, formatter and bar limit with `main`,
-    /// so the exchange reverses itself, and pauses or resumes the feed to match. Removing the
-    /// series again before the resumed feed sent its bars, or after it failed to, restores the
-    /// bars the series left behind, so the remaining series keep their time axis.
+    /// Exchanges the main series' presence, price lines and formatter with `main`, so the
+    /// exchange reverses itself, and pauses or resumes the feed to match. Removing the series
+    /// again before the resumed feed sent its bars, or after it failed to, restores the bars the
+    /// series left behind, so the remaining series keep their time axis.
     fn swap_main_series(&mut self, main: &mut MainSeries) {
         std::mem::swap(&mut self.main_series_present, &mut main.present);
         std::mem::swap(&mut self.price_lines, &mut main.price_lines);
-        self.swap_series_settings(SeriesId::MAIN, &mut main.formatter, &mut main.bar_limit);
-        let paused = self.feed_link.as_ref().is_some_and(|link| link.host_paused);
-        self.set_feed_paused(paused);
+        // The bar limit stays with the bars, which take data again without the original pane.
+        self.swap_formatter(SeriesId::MAIN, &mut main.formatter);
+        self.follow_feed_pause();
         if self.main_series_present {
             // The resumed feed's reload empties the bars until its page arrives.
             if self.feed_link.as_ref().is_some_and(|link| !link.paused) {
@@ -624,13 +634,22 @@ impl Chart {
         formatter: &mut Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
         bar_limit: &mut Option<std::num::NonZeroUsize>,
     ) {
-        *formatter = match formatter.take() {
-            Some(formatter) => self.series_formatters.insert(id, formatter),
-            None => self.series_formatters.remove(&id),
-        };
+        self.swap_formatter(id, formatter);
         *bar_limit = match bar_limit.take() {
             Some(limit) => self.bar_limits.insert(id, limit),
             None => self.bar_limits.remove(&id),
+        };
+    }
+
+    /// Exchanges the price formatter of the bar series `id` with `formatter`.
+    fn swap_formatter(
+        &mut self,
+        id: SeriesId,
+        formatter: &mut Option<std::sync::Arc<dyn crate::scales::PriceFormatter>>,
+    ) {
+        *formatter = match formatter.take() {
+            Some(formatter) => self.series_formatters.insert(id, formatter),
+            None => self.series_formatters.remove(&id),
         };
     }
 
@@ -971,6 +990,8 @@ impl Chart {
                     std::mem::swap(&mut pane.watermark, &mut current.watermark);
                 }
             }
+            // The original pane coming or going decides whether a removed main series is fed.
+            self.follow_feed_pause();
         }
         self.sync_panes();
         if let Some(ChartElementId::Indicator(id)) = self.selection.selected_id()
@@ -987,6 +1008,9 @@ impl Chart {
                 while self.drawings.undo() {}
             }
             self.drawings.swap_history(&mut action.drawings);
+            if let Some(deletion) = &mut action.unshown {
+                self.step_unshown_deletion(deletion, redo);
+            }
         }
         self.history.edits += 1;
         #[cfg(feature = "drawings")]

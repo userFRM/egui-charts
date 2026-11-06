@@ -4,6 +4,9 @@
 //! [`DataWindowInfo`]. Apply drawing and study actions through
 //! [`ObjectTreePanel::apply_to_chart`]. Copy each drawing's `folder` and
 //! `folder_sync_mode()` into its source row. Folders persist with their drawings.
+//!
+//! To offer the layout's drawings by symbol, set [`ObjectTreeState::symbol_drawings`] from
+//! `ChartLayout::drawing_inventory` each frame and handle the actions the list emits.
 
 mod actions;
 mod chart_actions;

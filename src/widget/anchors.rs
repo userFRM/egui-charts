@@ -143,8 +143,13 @@ impl Chart {
                     price,
                 )
             });
+            stored.modified_at = self
+                .drawings
+                .modified_at(drawing)
+                .unwrap_or(stored.modified_at);
+            // A drawing without an owner is stored for the price pane, wherever that pane is.
             stored.pane = self
-                .drawing_pane(drawing.id)
+                .owner_pane(drawing)
                 .and_then(|pane| self.stored_pane(pane));
             storage.add_drawing(stored);
         }

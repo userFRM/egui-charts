@@ -93,7 +93,7 @@ leaving equity 500 before exit costs, even if the bar later recovers.
 [`require_limit_cross`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.require_limit_cross) makes limit entries, triggered stop-limits and profit-taking exits wait until
 the price trades through the limit by one [`price_increment`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.price_increment). They then fill at the limit, or at
 the open of a bar that gaps to or beyond that threshold. An order that can first fill at a price
-already beyond the threshold, as after a delay or a triggered stop, fills at that price.
+already at or beyond the threshold, as after a delay or a triggered stop, fills at that price.
 [`order_delay`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/strategies/struct.BacktestSettings.html#structfield.order_delay) holds a new order back for that many further price points, so market orders
 placed at a close fill at the next bar's open with zero, its first extreme with one and its second
 extreme with two. Requesting a working order again with the same quantity, kind and prices leaves

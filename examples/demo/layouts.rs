@@ -6,6 +6,7 @@ use crate::sampledata::DemoSymbol;
 use egui_charts::model::Timeframe;
 use egui_charts::services::UserSettings;
 use egui_charts::ui::top_toolbar::components::layout_menu::LayoutAction;
+use egui_charts::ui::widget_bar::panels::object_tree::ObjectTreeAction;
 use egui_charts::widget::{Chart, ChartLayout, ChartLayoutMode, SavedLayout, SeriesId};
 use std::sync::Arc;
 
@@ -541,6 +542,38 @@ impl DemoApp {
         self.extra_charts.get_mut(index).map(|c| &mut c.chart)
     }
 
+    /// Gives the object tree the layout's drawings by symbol, while it lists them.
+    pub(super) fn refresh_symbol_drawings(&mut self) {
+        let inventory = if self.object_tree.state().showing_symbol_drawings {
+            let mut charts: Vec<_> = self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
+            charts.insert(self.layout_slot, &mut self.chart);
+            charts.truncate(self.layout.mode.chart_count());
+            self.layout.drawing_inventory(&charts)
+        } else {
+            Vec::new()
+        };
+        self.object_tree.state_mut().symbol_drawings = Some(inventory);
+    }
+
+    /// Handles the object tree's actions on the layout's drawings by symbol. Returns whether
+    /// `action` was one.
+    pub(super) fn handle_symbol_drawings(&mut self, action: &ObjectTreeAction) -> bool {
+        let mut charts: Vec<_> = self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
+        charts.insert(self.layout_slot, &mut self.chart);
+        charts.truncate(self.layout.mode.chart_count());
+        match action {
+            ObjectTreeAction::ReadSymbolDrawings => {
+                self.layout.read_drawing_inventory(&mut charts);
+                true
+            }
+            ObjectTreeAction::DeleteSymbolDrawings(symbol) => {
+                self.layout.delete_symbol_drawings(&mut charts, symbol);
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// The open layout: its arrangement and the charts it shows, in slot order.
     pub(super) fn capture_layout(&mut self) -> Result<SavedLayout, String> {
         let mode = self.layout.mode;
@@ -766,11 +799,13 @@ impl DemoApp {
             .into_iter()
             .collect();
         settings.market_heatmap = self.market_heatmap.selection.clone();
+        settings.drawing_sort = self.object_tree.state().drawing_sort.clone();
         settings
     }
 
     /// Applies stored settings, opening the layout that was open last.
     pub(super) fn apply_user_settings(&mut self, ctx: &egui::Context, settings: UserSettings) {
+        self.object_tree.state_mut().drawing_sort = settings.drawing_sort.clone();
         self.update_theme(ctx);
         // Switching stops a replay the demo restored from its own storage.
         if let Some(symbol) = settings
@@ -1091,6 +1126,21 @@ mod tests {
         );
         assert!(app.chart.undo());
         assert!(app.chart.config().show_grid);
+    }
+
+    /// The order chosen for the drawings by symbol comes back with the user's settings.
+    #[test]
+    fn drawing_sort_is_kept_with_the_user_settings() {
+        use egui_charts::config::DrawingSort;
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        let sorted: std::collections::BTreeMap<_, _> =
+            [("AAPL".to_owned(), DrawingSort::LastModified)].into();
+        app.object_tree.state_mut().drawing_sort = sorted.clone();
+        let json = app.user_settings().to_json();
+        app.object_tree.state_mut().drawing_sort.clear();
+        app.apply_user_settings(&ctx, UserSettings::from_json(&json).unwrap());
+        assert_eq!(app.object_tree.state().drawing_sort, sorted);
     }
 
     #[test]
