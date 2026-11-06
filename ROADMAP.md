@@ -77,7 +77,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Editable text, notes, callouts, price labels, comments, signposts and tables with persistent cell contents.
 - [x] Image annotations load an address through application-installed egui image loaders; local post and idea cards store editable supplied content.
 - [x] Searchable bundled icons, emoji and stickers with size controls and recent selections.
-- [x] Fibonacci retracement and extension fills share their level lines' horizontal span; their labels show only for levels inside the price pane, including its boundaries. Channel levels extend to the pane edges.
+- [x] Fibonacci retracement and extension fills share their level lines' horizontal span; their labels are centred on the lines and show only for levels inside the price pane, including its boundaries. Channel levels extend to the pane edges. Each Fibonacci tool starts from its own level table with further ratios listed hidden, and circle, arc and wedge backgrounds fill to the centre.
 - [ ] Build the triangle pattern's two boundaries and apex, and correct its polygon fill.
 - [x] Three-drives ratios and the reversal zone are measured in price.
 - [x] Elliott impulse targets project the first price leg in its own direction, independent of zoom and scale.
