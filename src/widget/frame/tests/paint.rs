@@ -1297,6 +1297,24 @@ fn execution_chart_settings_drive_grouping_statistics_restore_and_undo() {
     }
 }
 
+/// The colour of the mesh quad painted last at `point`.
+fn mesh_color_at(shapes: &[egui::epaint::ClippedShape], point: Pos2) -> Option<egui::Color32> {
+    shapes
+        .iter()
+        .rev()
+        .filter_map(|s| match &s.shape {
+            Shape::Mesh(mesh) => Some(mesh),
+            _ => None,
+        })
+        .find_map(|mesh| {
+            mesh.vertices.chunks(4).rev().find_map(|q| {
+                Rect::from_two_pos(q[0].pos, q[3].pos)
+                    .contains(point)
+                    .then_some(q[0].color)
+            })
+        })
+}
+
 /// The footprint's volume shades are mixed with the background the chart paints. With the light
 /// theme and a black chart background, as the Canvas settings set it, the sell shades must be
 /// those drawn on black: 20, 40, 60 and 80% of rgb(242, 54, 69), hand-worked as (48, 11, 14),
@@ -1349,29 +1367,12 @@ fn footprint_shades_follow_the_chart_background() {
     chart.config_mut().background_color = egui::Color32::BLACK;
     let shapes = draw(&mut chart);
     let map = chart.get_chart_mapping();
-    let quads: Vec<_> = shapes
-        .iter()
-        .filter_map(|s| match &s.shape {
-            Shape::Mesh(mesh) => Some(
-                mesh.vertices
-                    .chunks(4)
-                    .map(|q| (Rect::from_two_pos(q[0].pos, q[3].pos), q[0].color))
-                    .collect::<Vec<_>>(),
-            ),
-            _ => None,
-        })
-        .flatten()
-        .collect();
     let x = map.idx_to_x(99) - map.bar_spacing * 0.46 + 4.0;
     let shades: Vec<_> = [102.0, 103.0, 104.0, 105.0]
         .into_iter()
         .map(|price| {
-            let point = egui::pos2(x, map.price_to_y(price));
-            quads
-                .iter()
-                .rev()
-                .find(|(rect, _)| rect.contains(point))
-                .map(|(_, c)| [c.r(), c.g(), c.b()])
+            mesh_color_at(&shapes, egui::pos2(x, map.price_to_y(price)))
+                .map(|c| [c.r(), c.g(), c.b()])
         })
         .collect();
     let expected = [[48, 11, 14], [97, 22, 28], [145, 32, 41], [194, 43, 55]];
@@ -1410,28 +1411,8 @@ fn unclassified_footprint_rows_do_not_look_like_the_poc() {
         map: &ChartMapping,
         index: usize,
     ) -> (Option<egui::Color32>, Option<egui::Color32>) {
-        let quads: Vec<_> = shapes
-            .iter()
-            .filter_map(|s| match &s.shape {
-                Shape::Mesh(mesh) => Some(
-                    mesh.vertices
-                        .chunks(4)
-                        .map(|q| (Rect::from_two_pos(q[0].pos, q[3].pos), q[0].color))
-                        .collect::<Vec<_>>(),
-                ),
-                _ => None,
-            })
-            .flatten()
-            .collect();
         let x = map.idx_to_x(index) - map.bar_spacing * 0.46 + 4.0;
-        let at = |price: f64| {
-            let point = egui::pos2(x, map.price_to_y(price));
-            quads
-                .iter()
-                .rev()
-                .find(|(rect, _)| rect.contains(point))
-                .map(|(_, color)| *color)
-        };
+        let at = |price: f64| mesh_color_at(shapes, egui::pos2(x, map.price_to_y(price)));
         (at(100.0), at(101.0))
     }
     struct Executions;

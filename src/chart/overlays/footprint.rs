@@ -36,11 +36,13 @@ pub struct FootprintConfig {
     /// Sell colour.
     pub bid_color: Color32,
     /// Text colour and POC outline, or POC fill under [`FootprintColor::VolumeSteps`], which
-    /// picks black or white numbers for each cell, or each half of a split cell, instead. The default suits a dark chart; set the
-    /// theme's text colour on a light one, or the fill, lines and labels vanish.
+    /// picks black or white numbers for each cell, or each half of a split cell, instead. The
+    /// default suits a dark chart; set the theme's text colour on a light one, or the fill, lines
+    /// and labels vanish.
     pub text_color: Color32,
     /// Cell fill for balanced or unclassified executions; under [`FootprintColor::VolumeSteps`]
-    /// its weakest shade fills a row without classified volume, apart from a POC of the same colour.
+    /// its weakest shade fills a row without classified volume, apart from a POC of the same
+    /// colour.
     pub neutral_color: Color32,
     /// The colour behind the cells, which the volume shades and the patches behind numbers are
     /// mixed with, or `None`, the default, for the plot background of the painter's active theme.
@@ -1829,26 +1831,8 @@ mod tests {
             |ui| render_footprint(ui.painter(), &map, &bars, &flow, &config),
         );
         output.textures_delta.clear();
-        let quads: Vec<_> = output
-            .shapes
-            .iter()
-            .filter_map(|s| match &s.shape {
-                Shape::Mesh(mesh) => Some(mesh.vertices.clone()),
-                _ => None,
-            })
-            .flatten()
-            .collect::<Vec<_>>()
-            .chunks(4)
-            .map(|q| (Rect::from_two_pos(q[0].pos, q[3].pos), q[0].color))
-            .collect();
-        let at = |x: f32, price: f64| {
-            let point = pos2(x, map.price_to_y(price));
-            quads
-                .iter()
-                .rev()
-                .find(|(r, _)| r.contains(point))
-                .map(|(_, c)| *c)
-        };
+        let quads = quads(&output.shapes);
+        let at = |x: f32, price: f64| color_at(&quads, pos2(x, map.price_to_y(price)));
         let background = ctx.active_theme().chart.bg.to_opaque();
         let center = map.idx_to_x(0);
         let edge = 120.0 * 0.46;
