@@ -42,7 +42,7 @@ The compiled setup is in [series.rs](https://github.com/userFRM/egui-charts/blob
 holds [`CandlesStyle`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.CandlesStyle.html):
 body visibility, wick visibility and colouring by previous close.
 [`BarsStyle`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.BarsStyle.html)
-controls the open tick and thin bars.
+controls the open tick, thin bars and colouring by previous close.
 [`HighLowStyle`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.HighLowStyle.html)
 sets the high-low bar colour and the visibility, colour and size of its price
 labels, which do not read the candle colours. Apply these through
@@ -56,7 +56,7 @@ can override a bar's body, wick and border. Added OHLC series use
 and `down_color`, and draw each bar's border colour inside its body when
 [`SeriesOptions::candle_border_width`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.SeriesOptions.html#structfield.candle_border_width)
 is positive (zero by default). Added Bars series take `bars_style` for the open
-tick and thin bars; they do not expose the main series' candle style switches.
+tick, thin bars and colouring by previous close; they do not expose the main series' candle style switches.
 Added high-low series draw in
 [`SeriesOptions::color`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.SeriesOptions.html#structfield.color)
 without price labels. All five types can be [added series](../chart-types.mdx#added-series-restrictions).

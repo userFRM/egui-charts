@@ -199,7 +199,8 @@ pub struct Drawing {
 
     // === Tool-specific configuration (None uses the defaults) ===
     /// Readouts, midpoint, price labels and text placement of a trend line, ray, extended line,
-    /// info line or trend angle. Other tools ignore these settings.
+    /// info line or trend angle, and the text placement of a horizontal line. Other tools ignore
+    /// these settings.
     #[serde(default = "LineMeasurements::left_out")]
     pub line_measurements: LineMeasurements,
     /// Quantity of the long and short position tools
@@ -487,8 +488,8 @@ impl Drawing {
             italic: false,
             text_color: match tool_type {
                 DrawingToolType::Note | DrawingToolType::Callout => Some(WHITE),
-                // Independent of the line, which can change colour without its readouts.
-                DrawingToolType::InfoLine => Some(BLUE),
+                // Independent of the line, which can change colour without its text.
+                DrawingToolType::InfoLine | DrawingToolType::HorizontalLine => Some(BLUE),
                 _ => None,
             },
             background: !plain_text,

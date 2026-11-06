@@ -750,11 +750,13 @@ impl Chart {
                 Pos2::new(chart_rect.max.x, rect.max.y),
             )
         });
+        // Below any footprint statistics rows, which the interaction rect above includes.
         self.time_axis_rect = Rect::from_min_size(
-            time_axis_rect.min,
+            Pos2::new(time_axis_rect.left(), time_axis_top),
             Vec2::new(
                 time_axis_rect.width(),
-                self.time_axis_height().min(time_axis_rect.height()),
+                self.time_axis_height()
+                    .min(time_axis_rect.bottom() - time_axis_top),
             ),
         );
 
@@ -964,11 +966,15 @@ impl Chart {
             })
             .and_then(|flow| {
                 let first = flow.complete_from()?;
-                let candles =
-                    self.state.shown()[start_idx..end_idx].partition_point(|bar| bar.time < first);
+                let candles = self.state.shown()[..end_idx].partition_point(|bar| bar.time < first);
                 let settings = self.trade_profile_settings();
                 let extend = settings.extend_poc || settings.extend_vah || settings.extend_val;
-                let profile_start = if extend { 0 } else { start_idx + candles };
+                // Sessions left of the view still extend, but only from the first complete bar on.
+                let profile_start = if extend {
+                    candles
+                } else {
+                    candles.max(start_idx)
+                };
                 let ranges = self.execution_profile_ranges(profile_start..end_idx)?;
                 let mapping = self.get_chart_mapping().with_rect(price_rect);
                 let bars = &self.state.data().bars;
@@ -1586,14 +1592,19 @@ impl Chart {
         let style = &self.main_series_style;
         // Last price line & label, from the newest bar even when it is scrolled out of view, or
         // from the newest bar in view
-        let last = match style.price_line_source {
-            crate::model::PriceLineSource::LastBar => {
-                crate::model::last_with_value(&self.state.data().bars)
-            }
+        let (last_bars, last_from) = match style.price_line_source {
+            crate::model::PriceLineSource::LastBar => (self.state.data().bars.as_slice(), 0),
             crate::model::PriceLineSource::LastVisible => {
-                crate::model::last_with_value(visible_data)
+                let (from, to) = self.state.visible_range();
+                (&self.state.shown()[..to], from)
             }
         };
+        let last_at = last_bars[last_from..]
+            .iter()
+            .rposition(|bar| !bar.is_whitespace())
+            .map(|at| last_from + at);
+        let last = last_at.map(|at| &last_bars[at]);
+        let last_color = last_at.map(|at| self.main_value_color(last_bars, at));
         let heikin_style = self.chart_type_params.styles.heikin.clone();
         let heikin_last = (self.chart_type == ChartType::Heikin)
             .then(|| {
@@ -1621,32 +1632,35 @@ impl Chart {
         } else {
             heikin_last.as_ref().map(|(bar, _)| bar).or(last)
         };
-        let last_price_line = last.filter(|_| self.main_series_visible).map(|last| {
-            PriceLine::new(
-                last.close,
-                if self.chart_type == ChartType::Heikin && !heikin_style.real_price_only {
-                    let rising = heikin_last.as_ref().is_none_or(|(_, rising)| *rising);
-                    style.price_line_color.unwrap_or(if rising {
-                        heikin_style.body_up
+        let last_price_line = last
+            .zip(last_color)
+            .filter(|_| self.main_series_visible)
+            .map(|(last, color)| {
+                PriceLine::new(
+                    last.close,
+                    if self.chart_type == ChartType::Heikin && !heikin_style.real_price_only {
+                        let rising = heikin_last.as_ref().is_none_or(|(_, rising)| *rising);
+                        style.price_line_color.unwrap_or(if rising {
+                            heikin_style.body_up
+                        } else {
+                            heikin_style.body_down
+                        })
                     } else {
-                        heikin_style.body_down
-                    })
+                        color
+                    },
+                )
+                .with_width(if self.config.show_price_line && style.price_line_visible {
+                    style.price_line_width
                 } else {
-                    self.main_value_color(last)
-                },
-            )
-            .with_width(if self.config.show_price_line && style.price_line_visible {
-                style.price_line_width
-            } else {
-                0.0
-            })
-            .with_style(style.price_line_style)
-            .with_axis_label(
-                (show_right_axis || show_left_axis)
-                    && self.config.show_symbol_last_val
-                    && style.last_value_visible,
-            )
-        });
+                    0.0
+                })
+                .with_style(style.price_line_style)
+                .with_axis_label(
+                    (show_right_axis || show_left_axis)
+                        && self.config.show_symbol_last_val
+                        && style.last_value_visible,
+                )
+            });
         // Footprint fills and glyphs must cover the current-price stroke.
         let price_line_below = !session_profiles
             && executions.is_some_and(|(flow, _, candles)| {
@@ -1866,6 +1880,9 @@ impl Chart {
                     &(start_idx..end_idx),
                     Some(&self.merge_groups),
                 );
+                if let Some(color) = study.background() {
+                    painter.rect_filled(rect, 0.0, color);
+                }
                 super::volume::paint(
                     &painter,
                     rect,
@@ -1918,6 +1935,11 @@ impl Chart {
                 );
             } else {
                 let mapping = rendering::study_mapping(study.as_ref(), &coords);
+                if let Some(color) = study.background() {
+                    painter
+                        .with_clip_rect(price_rect)
+                        .rect_filled(price_rect, 0.0, color);
+                }
                 rendering::IndicatorRenderer::render_study(
                     &price_ctx,
                     study.as_ref(),
@@ -2419,9 +2441,8 @@ impl Chart {
         if self.main_series_visible
             && self.chart_type == ChartType::Heikin
             && !heikin_style.real_price_only
-            && let Some(raw) = original_last
+            && let Some((raw, color)) = original_last.zip(last_color)
         {
-            let color = self.main_value_color(raw);
             let line = PriceLine::new(raw.close, color)
                 .with_width(
                     if self.config.show_price_line && self.main_series_style.price_line_visible {
@@ -2924,6 +2945,25 @@ impl Chart {
                 }
             }
         }
+
+        // Pinned tags go above every other tag and below the crosshair's, which stay readable.
+        for (x, label) in fixed_time_labels {
+            time_tags.push(rendering::axes::render_primitive_time_label(
+                &painter,
+                self.time_axis_rect,
+                x,
+                label,
+            ));
+        }
+
+        rendering::axes::render_primitive_price_labels(
+            &painter,
+            price_rect,
+            axis_edge,
+            fixed_price_labels,
+            &mut tags,
+            self.config.price_axis.allow_label_overlap,
+        );
 
         // Draw crosshair with options from chart_options. The pointer still hovers the chart
         // while a context menu is open, so the crosshair, its labels and the tooltip wait until
@@ -3572,23 +3612,6 @@ impl Chart {
             }
         }
 
-        for (x, label) in fixed_time_labels {
-            time_tags.push(rendering::axes::render_primitive_time_label(
-                &painter,
-                self.time_axis_rect,
-                x,
-                label,
-            ));
-        }
-
-        rendering::axes::render_primitive_price_labels(
-            &painter,
-            price_rect,
-            axis_edge,
-            fixed_price_labels,
-            &mut tags,
-            self.config.price_axis.allow_label_overlap,
-        );
         let current_price = crate::model::last_with_value(&self.state.data().bars)
             .filter(|_| self.main_series_visible && self.config.show_symbol_last_val)
             .map(|bar| {

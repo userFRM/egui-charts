@@ -201,19 +201,25 @@ fn match_declared_styles(study: &dyn Indicator, settings: &mut StudySettings) {
         let declared = study.plot_variants(line);
         if variants.len() != declared.len() {
             *variants = declared;
+            // Saved before this plot had alternate states, all its bars used the plot's width.
+            if let Some(plot) = settings.plots.get(line) {
+                for variant in variants.iter_mut() {
+                    variant.width = plot.width;
+                }
+            }
         }
     }
+    // Saved band styles are kept whatever the study declares so far, since a study can declare
+    // a band only once it has data. Bands beyond them start with the study's own style.
     let fills = study.fills();
-    if settings.fills.len() != fills.len() {
-        settings.fills = fills
-            .iter()
-            .map(|fill| FillStyle {
-                color: fill.color,
-                inverted_color: fill.inverted_color,
-                visible: true,
-            })
-            .collect();
-    }
+    let saved = settings.fills.len().min(fills.len());
+    settings
+        .fills
+        .extend(fills[saved..].iter().map(|fill| FillStyle {
+            color: fill.color,
+            inverted_color: fill.inverted_color,
+            visible: true,
+        }));
 }
 
 /// Interval visibility evaluated for every interval, including custom and trade-based ones.
@@ -312,7 +318,8 @@ pub struct StudySettings {
     #[serde(default = "enabled_by_default")]
     pub background_visible: bool,
     /// One independent style per band returned by [`Indicator::fills`].
-    /// Missing styles take the study's declared colours and visibility.
+    /// Missing styles take the study's declared colours and visibility. Styles of bands the study
+    /// does not declare yet are kept for when it does.
     #[serde(default)]
     pub fills: Vec<FillStyle>,
 }
@@ -406,6 +413,10 @@ impl StudySettingsSnapshot {
             study.apply_settings(&inputs, self.settings.clone())?;
         }
         study.set_colors(self.colors.clone());
+        // A palette recolours the bands of a wrapped study, and the saved band styles win.
+        if study.settings().fills != self.settings.fills {
+            study.apply_settings(&[], self.settings.clone())?;
+        }
         study.set_visible(self.visible);
         if let Some(overlay) = self.overlay {
             study.set_overlay(overlay);
@@ -930,6 +941,10 @@ impl Indicator for ConfiguredStudy {
                 variant.color = declared.color;
             }
         }
+        for (style, declared) in self.settings.fills.iter_mut().zip(self.study.fills()) {
+            style.color = declared.color;
+            style.inverted_color = declared.inverted_color;
+        }
     }
     fn set_color(&mut self, line: usize, color: Color32) {
         if let Some(plot) = self.settings.plots.get_mut(line) {
@@ -1114,7 +1129,10 @@ impl Indicator for ConfiguredStudy {
         Ok(())
     }
     fn settings(&self) -> StudySettings {
-        self.settings.clone()
+        let mut settings = self.settings.clone();
+        // A study can declare a band after its settings were last applied.
+        match_declared_styles(self.study.as_ref(), &mut settings);
+        settings
     }
     fn apply_settings(
         &mut self,
@@ -1212,6 +1230,13 @@ impl Indicator for ConfiguredStudy {
             if plot.color != edited.study.plot_style(line).color {
                 edited.study.set_color(line, plot.color);
             }
+        }
+        // Bands these inputs remove take their styles with them. A study left with none keeps
+        // them, since it may declare its bands only once it has data and these inputs can
+        // recalculate it without bars.
+        let bands = edited.study.fills().len();
+        if bands > 0 && bands < self.study.fills().len() {
+            settings.fills.truncate(bands);
         }
         match_declared_styles(edited.study.as_ref(), &mut settings);
         if self.study.value_format() != edited.study.value_format() {
@@ -2014,5 +2039,41 @@ mod tests {
         adx.apply_settings(&[("threshold".into(), InputValue::Length(25))], settings)
             .unwrap();
         assert_eq!(values(&adx), [25.0]);
+    }
+
+    /// A palette set on a chart study recolours its band, as it recolours its plots.
+    #[test]
+    fn set_colors_recolours_the_band() {
+        let band = Color32::from_rgba_unmultiplied(1, 2, 3, 40);
+        let palette = vec![Color32::RED, Color32::GREEN, Color32::BLUE, band];
+        let mut own = BollingerBands::default();
+        own.set_colors(palette.clone());
+        // Bollinger Bands fill the band in the fourth palette colour.
+        assert_eq!(own.fills()[0].color, band);
+        let mut study = ConfiguredStudy::new(Box::new(BollingerBands::default()));
+        study.set_colors(palette);
+        assert_eq!(study.plot_style(0).color, Color32::RED);
+        assert_eq!(study.fills()[0].color, band);
+
+        // A hidden band stays hidden through a palette, and a template keeps its colour.
+        let mut settings = study.settings();
+        settings.fills[0].visible = false;
+        study.apply_settings(&[], settings).unwrap();
+        study.set_colors(vec![Color32::RED, Color32::GREEN, Color32::BLUE, band]);
+        assert!(study.fills().is_empty());
+        let restored = crate::studies::StudyTemplate::from_study(&study)
+            .create()
+            .unwrap();
+        assert_eq!(restored.settings().fills[0].color, band);
+        assert!(restored.fills().is_empty());
+
+        // Restoring a snapshot through the trait reapplies the palette after the saved styles,
+        // which keep a band colour of their own.
+        let own = Color32::from_rgba_unmultiplied(9, 8, 7, 60);
+        let mut settings = study.settings();
+        settings.fills[0] = FillStyle::new(own);
+        study.apply_settings(&[], settings).unwrap();
+        study.snapshot_settings().restore(&mut study).unwrap();
+        assert_eq!(study.fills()[0].color, own);
     }
 }

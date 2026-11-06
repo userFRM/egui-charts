@@ -180,7 +180,9 @@ impl Drawing {
         }
     }
 
-    /// Render horizontal line
+    /// Render horizontal line, across the pane whichever bar its anchor is on, with its text placed
+    /// along the pane by the alignment settings. Text written on the line interrupts it, so that
+    /// the line never strikes through the letters.
     pub(crate) fn render_horizontal_line(
         &self,
         painter: &egui::Painter,
@@ -190,8 +192,33 @@ impl Drawing {
         if !self.points.is_empty() {
             let y = self.points[0].y;
             let (left, right) = (Pos2::new(rect.min.x, y), Pos2::new(rect.max.x, y));
-            self.styled_segment(painter, left, right, stroke);
-            self.render_line_text(painter, left, right, true);
+            let anchor = self.line_text_anchor();
+            // The text stays clear of the pane's edges and, on the line, of the line.
+            let margin = DESIGN_TOKENS.spacing.sm;
+            let (start, end) = (
+                left + egui::vec2(margin, 0.0),
+                right - egui::vec2(margin, 0.0),
+            );
+            let gap = self
+                .text_galley(painter)
+                .filter(|_| anchor.y() == Align::Center)
+                .map(|galley| {
+                    anchor
+                        .x()
+                        .align_size_within_range(galley.size().x, start.x..=end.x)
+                        .expand(margin)
+                });
+            if let Some(gap) = gap {
+                if gap.min > left.x {
+                    self.styled_segment(painter, left, Pos2::new(gap.min, y), stroke);
+                }
+                if gap.max < right.x {
+                    self.styled_segment(painter, Pos2::new(gap.max, y), right, stroke);
+                }
+            } else {
+                self.styled_segment(painter, left, right, stroke);
+            }
+            self.render_aligned_line_text(painter, start, end, anchor);
         }
     }
 
@@ -831,7 +858,7 @@ mod tests {
             (T::TrendLine, RISING, -FRAC_PI_4, A::CENTER_BOTTOM, (196.4645, 196.4645)),
             (T::TrendLine, &[(300., 300.), (100., 100.)], FRAC_PI_4, A::CENTER_BOTTOM, (203.5355, 196.4645)),
             (T::Ray, &[(100., 200.), (200., 200.)], 0.0, A::CENTER_BOTTOM, (150., 195.)),
-            (T::HorizontalLine, &[(50., 120.)], 0.0, A::CENTER_BOTTOM, (250., 115.)),
+            (T::HorizontalLine, &[(50., 120.)], 0.0, A::CENTER_CENTER, (250., 120.)),
             (T::HorizontalRay, &[(300., 120.)], 0.0, A::CENTER_BOTTOM, (400., 115.)),
             (T::VerticalLine, &[(150., 50.)], -FRAC_PI_2, A::CENTER_BOTTOM, (145., 200.)),
             (T::CrossLine, &[(150., 120.)], 0.0, A::CENTER_BOTTOM, (250., 115.)),
@@ -854,6 +881,8 @@ mod tests {
             drawing.stroke_width = 2.0;
             drawing.font_size = 20.0;
             drawing.color = [40, 120, 200, 255];
+            // Text without a colour of its own follows the line.
+            drawing.text_color = None;
             // Synthetic bold paints the text twice.
             drawing.font_weight = crate::drawings::FontWeight::Normal;
             let place = |drawing: &mut Drawing, points: &[Pos2]| {
@@ -921,6 +950,82 @@ mod tests {
         ray.points = vec![Pos2::new(540., 120.)];
         ray.chart_points = vec![ChartPoint::new(4.4, 38.0)];
         assert!(strings(&texts(&ray)).iter().all(|t| t != LABEL));
+    }
+
+    /// In a pane from x = 0 to 500, with a margin of 4 pt and a gap of 1 + 4 pt from a line of width
+    /// 2 at y = 120, the text's named point sits at x = 4, 250 or 496 and y = 125, 120 or 115. Only
+    /// text on the line interrupts it, 4 pt clear of the letters on each side.
+    #[test]
+    fn horizontal_line_text_follows_its_settings_and_interrupts_the_line_only_on_it() {
+        use crate::drawings::{
+            DrawingToolType as T, LineTextHorizontalAlign as H, LineTextVerticalAlign as V,
+        };
+        use egui::{Align2 as A, Context, RawInput, Shape, epaint::TextShape};
+
+        let paint = |drawing: &Drawing| {
+            let output = Context::default().run_ui(RawInput::default(), |ui| {
+                let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(500., 400.));
+                drawing.render_horizontal_line(ui.painter(), pane, Stroke::new(2.0, Color32::RED));
+            });
+            let (mut text, mut lines) = (None::<TextShape>, Vec::new());
+            for shape in &output.shapes {
+                match &shape.shape {
+                    Shape::Text(t) => text = Some(t.clone()),
+                    Shape::LineSegment { points, .. } => lines.push((points[0].x, points[1].x)),
+                    _ => {}
+                }
+            }
+            output.drop_without_applying_deltas();
+            (text, lines)
+        };
+        let mut drawing = Drawing::new(1, T::HorizontalLine);
+        drawing.points = vec![Pos2::new(50., 120.)];
+        drawing.stroke_width = 2.0;
+        assert_eq!(
+            paint(&drawing).1,
+            [(0., 500.)],
+            "no text leaves the line whole"
+        );
+        drawing.text = Some("Weekly support".into());
+        drawing.italic = true;
+        drawing.text_color = Some([10, 20, 30, 128]);
+        #[rustfmt::skip]
+        let cases = [
+            (H::Left, V::Top, A::LEFT_TOP, (4., 125.)),
+            (H::Center, V::Top, A::CENTER_TOP, (250., 125.)),
+            (H::Right, V::Top, A::RIGHT_TOP, (496., 125.)),
+            (H::Left, V::Middle, A::LEFT_CENTER, (4., 120.)),
+            (H::Center, V::Middle, A::CENTER_CENTER, (250., 120.)),
+            (H::Right, V::Middle, A::RIGHT_CENTER, (496., 120.)),
+            (H::Left, V::Bottom, A::LEFT_BOTTOM, (4., 115.)),
+            (H::Center, V::Bottom, A::CENTER_BOTTOM, (250., 115.)),
+            (H::Right, V::Bottom, A::RIGHT_BOTTOM, (496., 115.)),
+        ];
+        for (horizontal, vertical, anchor, (x, y)) in cases {
+            drawing.line_measurements.text_horizontal_align = horizontal;
+            drawing.line_measurements.text_vertical_align = vertical;
+            let (text, lines) = paint(&drawing);
+            let text = text.unwrap();
+            let at = text.pos + anchor.pos_in_rect(&text.galley.rect).to_vec2();
+            assert!(at.distance(Pos2::new(x, y)) < 1e-3, "{anchor:?}: at {at:?}");
+            let format = &text.galley.job.sections[0].format;
+            assert!(format.italics, "{anchor:?}");
+            assert_eq!(
+                format.color,
+                Color32::from_rgba_unmultiplied(10, 20, 30, 128),
+                "{anchor:?}"
+            );
+            let width = text.galley.size().x;
+            let want = match (vertical, horizontal) {
+                (V::Middle, H::Left) => vec![(width + 8., 500.)],
+                (V::Middle, H::Center) => {
+                    vec![(0., 250. - width / 2. - 4.), (250. + width / 2. + 4., 500.)]
+                }
+                (V::Middle, H::Right) => vec![(0., 492. - width)],
+                _ => vec![(0., 500.)],
+            };
+            assert_eq!(lines, want, "{anchor:?}");
+        }
     }
 
     /// Screen y points down: equal rise and run give 45 degrees, and a 3-4-5

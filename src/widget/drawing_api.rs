@@ -105,8 +105,9 @@ impl Chart {
     }
 
     /// Replaces a trend line's, ray's, extended line's, info line's or trend angle's readouts,
-    /// midpoint, price labels and text placement as one undoable edit.
-    /// Unknown, locked and other drawing types leave drawings and history untouched.
+    /// midpoint, price labels and text placement as one undoable edit. A horizontal line draws
+    /// only the text placement. Unknown, locked and other drawing types leave drawings and
+    /// history untouched.
     pub fn set_line_measurements(
         &mut self,
         id: usize,
@@ -121,9 +122,11 @@ impl Chart {
         if drawing.locked {
             return Err(DrawingError::Locked(id));
         }
-        if !drawing.tool_type.supports_line_measurements() {
+        if !(drawing.tool_type.supports_line_measurements()
+            || drawing.tool_type == crate::drawings::DrawingToolType::HorizontalLine)
+        {
             return Err(DrawingError::Invalid(
-                "Drawing is not a trend line, ray, extended line, info line or trend angle",
+                "Drawing is not a trend line, ray, extended line, info line, trend angle or horizontal line",
             ));
         }
         self.user_action(|chart| {
@@ -421,6 +424,15 @@ mod tests {
             .remove("line_measurements");
         let old: StoredDrawing = serde_json::from_value(old).unwrap();
         assert_eq!(old.drawing.line_measurements, Default::default());
+        // A horizontal line saved before these settings keeps its text above the line.
+        let mut old = serde_json::to_value(&stored).unwrap();
+        old["drawing"]["tool_type"] = serde_json::to_value(T::HorizontalLine).unwrap();
+        old["drawing"]
+            .as_object_mut()
+            .unwrap()
+            .remove("line_measurements");
+        let old: StoredDrawing = serde_json::from_value(old).unwrap();
+        assert_eq!(old.drawing.line_measurements, Default::default());
         // An info line saved before these settings keeps showing its readouts.
         let mut old = serde_json::to_value(&stored).unwrap();
         old["drawing"]["tool_type"] = serde_json::to_value(T::InfoLine).unwrap();
@@ -454,7 +466,13 @@ mod tests {
             Err(DrawingError::Invalid(_))
         ));
         assert_eq!(chart.drawings().drawings[0].line_measurements, measurements);
-        for tool in [T::TrendLine, T::Ray, T::InfoLine, T::TrendAngle] {
+        for tool in [
+            T::TrendLine,
+            T::Ray,
+            T::InfoLine,
+            T::TrendAngle,
+            T::HorizontalLine,
+        ] {
             chart.drawings_mut().drawings[0].tool_type = tool;
             chart.drawings_mut().drawings[0].line_measurements = measurements;
             chart.set_line_measurements(1, Default::default()).unwrap();
