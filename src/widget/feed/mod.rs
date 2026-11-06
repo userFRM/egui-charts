@@ -295,6 +295,7 @@ impl Chart {
     pub(crate) fn attach_feed(&mut self, feed: Arc<dyn Datafeed>, initial_bars: usize) {
         self.set_timeframe(self.timeframe.unwrap_or_default());
         let timeframe = self.timeframe.unwrap_or_default();
+        self.readout_revision = crate::model::next_revision();
         self.feed_link = Some(FeedLink {
             feed,
             inbox: Arc::default(),
@@ -566,6 +567,7 @@ impl Chart {
                 link.reload_pending = true;
                 // The headers must not keep the previous choice's currency while loading.
                 link.instrument = None;
+                self.readout_revision = crate::model::next_revision();
             }
         }
     }

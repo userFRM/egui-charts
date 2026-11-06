@@ -2198,4 +2198,38 @@ pub(super) mod tests {
                 .push((subscription.timeframe, subscription.sink));
         }
     }
+
+    /// A frame of an open data table over an unchanged chart allocates nothing for each study:
+    /// with every study hidden it paints the same cells as a chart without studies.
+    #[cfg(feature = "ui")]
+    #[test]
+    fn open_data_table_frame_allocates_nothing_per_study() {
+        let prices = [100.0; 200];
+        let mut counts = Vec::new();
+        for studies in [0, 20] {
+            let mut chart = Chart::new(crate::model::BarData::from_bars(bars(&prices, 1)));
+            for _ in 0..studies {
+                let id = chart.add_indicator(Box::new(SMA::new(5)));
+                chart.set_indicator_visible(id, false);
+            }
+            let ctx = egui::Context::default();
+            let mut dialog = crate::ui::dialogs::DataTableDialog::new();
+            dialog.open();
+            let mut frame = || {
+                ctx.run_ui(Default::default(), |ui| {
+                    dialog.show(ui.ctx(), &chart);
+                })
+            };
+            for _ in 0..4 {
+                frame().drop_without_applying_deltas();
+            }
+            let (count, output) = allocations(&mut frame);
+            output.drop_without_applying_deltas();
+            counts.push(count);
+        }
+        assert!(
+            counts[1] < counts[0] + 20,
+            "allocations of one unchanged frame with 0 and 20 hidden studies: {counts:?}"
+        );
+    }
 }

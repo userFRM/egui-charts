@@ -9,7 +9,6 @@
 
 use crate::localization as l10n;
 use crate::model::Timeframe;
-use crate::studies::StudySettingsSnapshot;
 use crate::ui_kit::buttons::Button;
 use crate::ui_kit::dialog::{DialogFrame, dialog_header};
 use crate::widget::{Chart, ColumnId, DataTable, SeriesId};
@@ -38,7 +37,8 @@ pub enum DataTableAction {
     SearchSymbol(String),
 }
 
-/// Inputs to the table, without copying historical bars or calculated study values.
+/// Inputs to the table, without copying bars, study settings or the instrument, whose changes
+/// move the chart's table revision.
 #[derive(PartialEq)]
 struct Source {
     revision: (u64, u64),
@@ -46,8 +46,6 @@ struct Source {
     timeframe: Option<Timeframe>,
     len: usize,
     replay: Option<DateTime<Utc>>,
-    studies: Vec<(SeriesId, bool, StudySettingsSnapshot)>,
-    instrument: Option<crate::model::Instrument>,
     timezone: crate::scales::TimezoneMode,
 }
 
@@ -59,11 +57,6 @@ impl Source {
             timeframe: chart.timeframe(),
             len: chart.bars(SeriesId::MAIN).len(),
             replay: chart.replay_time(),
-            studies: chart
-                .indicators()
-                .map(|(id, study)| (id, study.is_visible(), study.snapshot_settings()))
-                .collect(),
-            instrument: chart.instrument().cloned(),
             timezone: chart.chart_options().time_scale.timezone.clone(),
         }
     }
@@ -317,7 +310,7 @@ impl DataTableDialog {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Bar, BarData};
+    use crate::model::{Bar, BarData, PriceSource};
     use chrono::DateTime;
 
     #[test]
@@ -446,6 +439,27 @@ mod tests {
             // A host-fed denominator changes with no edit to the chart bars or study settings.
             assert_eq!(cached_value(&dialog, 5000, "Ratio"), expected);
         }
+        chart.set_instrument(Some(
+            crate::model::Instrument::new("A").with_tick_size(0.001),
+        ));
+        show(&mut dialog, &chart);
+        assert_eq!(dialog.cached.as_ref().unwrap().1.rows[0][1], "31.000");
+        chart
+            .set_indicator_source(study, crate::studies::StudySource::Price(PriceSource::High))
+            .unwrap();
+        show(&mut dialog, &chart);
+        assert_eq!(cached_value(&dialog, 5000, "SMA"), "28.667"); // (12 + 32 + 42) / 3
+        let headers = |dialog: &DataTableDialog| dialog.cached.as_ref().unwrap().1.headers.clone();
+        chart.set_indicator_visible(ratio, false);
+        show(&mut dialog, &chart);
+        assert!(
+            !headers(&dialog)
+                .iter()
+                .any(|name| name.starts_with("Ratio"))
+        );
+        chart.remove_series(study);
+        show(&mut dialog, &chart);
+        assert!(!headers(&dialog).iter().any(|name| name.starts_with("SMA")));
     }
 
     /// Watchlist picks and symbol search remain usable while the table keeps column choices.

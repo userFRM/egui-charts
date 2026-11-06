@@ -98,6 +98,7 @@ impl Chart {
             .flatten();
         let overlay = indicator.is_overlay() && original;
         self.studies.add(indicator);
+        self.readout_revision = crate::model::next_revision();
         self.study_ids.push(id);
         self.study_autoscale.push(true);
         self.study_inputs.push(String::new());
@@ -151,6 +152,7 @@ impl Chart {
             self.volume_setting = false;
         }
         let indicator = self.studies.remove_indicator(at);
+        self.readout_revision = crate::model::next_revision();
         self.study_ids.remove(at);
         self.study_autoscale.remove(at);
         self.study_inputs.remove(at);
@@ -170,6 +172,7 @@ impl Chart {
             return false;
         };
         self.record_study(id);
+        self.readout_revision = crate::model::next_revision();
         self.studies.indicators_mut()[at].set_visible(visible);
         true
     }
@@ -324,6 +327,7 @@ impl Chart {
     }
 
     pub(super) fn recalculate_studies(&mut self) {
+        self.readout_revision = crate::model::next_revision();
         let requests = self
             .studies
             .indicators()
@@ -388,6 +392,7 @@ impl Chart {
         edited.set_input("source", InputValue::Source(source))?;
         self.record_study(id);
         self.studies.indicators_mut()[at] = edited;
+        self.readout_revision = crate::model::next_revision();
         self.pending_from[at] = Some(0);
         self.next_refresh[at] = f64::NEG_INFINITY;
         self.element_studies.dirty = true;

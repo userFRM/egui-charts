@@ -547,6 +547,9 @@ impl Chart {
     /// and the default tick-mark grid. An explicit `tick_marks.min_price_step` takes precedence.
     /// Pass `None` to clear the metadata. Feed metadata takes precedence when available.
     pub fn set_instrument(&mut self, instrument: Option<crate::model::Instrument>) {
+        if self.legend_instrument != instrument {
+            self.readout_revision = crate::model::next_revision();
+        }
         self.legend_instrument = instrument;
         let precision = self
             .instrument()
