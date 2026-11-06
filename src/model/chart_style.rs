@@ -340,6 +340,33 @@ impl Default for VolumeCandlesStyle {
     }
 }
 
+/// The High-low chart's single bar colour and its price labels.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HighLowStyle {
+    /// Colour of every bar, whatever its direction.
+    pub bar_color: Color32,
+    /// Print each bar's high beyond its high end and its low beyond its low end, once the bar
+    /// spacing is wide enough to fit every visible label.
+    pub labels_visible: bool,
+    /// Price label colour.
+    pub label_color: Color32,
+    /// Price label size in logical points. Non-positive or non-finite sizes hide the labels.
+    pub label_font_size: f32,
+}
+
+impl Default for HighLowStyle {
+    fn default() -> Self {
+        let color = DESIGN_TOKENS.semantic.brand.accent;
+        Self {
+            bar_color: color,
+            labels_visible: true,
+            label_color: color,
+            label_font_size: 7.0,
+        }
+    }
+}
+
 /// The Kagi chart's stroke widths in logical points. Non-positive or non-finite widths hide
 /// the lines of that thickness.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -360,8 +387,8 @@ impl Default for KagiStyle {
     }
 }
 
-/// Styles of the candle, hollow candle, volume candle, Heikin-Ashi, bar, line, step, marker, area,
-/// HLC area, baseline and Kagi chart types.
+/// Styles of the candle, hollow candle, volume candle, Heikin-Ashi, bar, high-low, line, step,
+/// marker, area, HLC area, baseline and Kagi chart types.
 /// Defaults use the design-token palette and remain independent of candle colours.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -390,6 +417,8 @@ pub struct ChartTypeStyles {
     pub heikin: HeikinStyle,
     /// Bars chart.
     pub bars: BarsStyle,
+    /// High-low chart.
+    pub high_low: HighLowStyle,
     /// Kagi chart.
     pub kagi: KagiStyle,
     /// Radius in logical points of the marker drawn on the line at the crosshair's bar in the
@@ -422,6 +451,7 @@ impl Default for ChartTypeStyles {
             volume_candles: VolumeCandlesStyle::default(),
             heikin: HeikinStyle::default(),
             bars: BarsStyle::default(),
+            high_low: HighLowStyle::default(),
             kagi: KagiStyle::default(),
             crosshair_marker_radius: 0.0,
             crosshair_marker_fill: None,

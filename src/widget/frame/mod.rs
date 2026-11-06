@@ -1482,6 +1482,7 @@ impl Chart {
             tick_size: self
                 .instrument()
                 .and_then(|instrument| instrument.tick_size),
+            price_formatter: price_formatter.as_deref(),
         };
 
         let render_params = rendering::ChartTypeParams::new(

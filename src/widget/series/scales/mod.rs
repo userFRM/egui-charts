@@ -585,7 +585,13 @@ impl Chart {
     /// The main series' last-value colour for `bar`: the price line colour, the bar's own
     /// colour, or its direction.
     pub(in crate::widget) fn main_value_color(&self, bar: &Bar) -> Color32 {
-        let (up, down) = self.main_body_colors();
+        let (up, down) = match self.chart_type {
+            ChartType::HighLow => {
+                let color = self.chart_type_params.styles.high_low.bar_color;
+                (color, color)
+            }
+            _ => self.main_body_colors(),
+        };
         self.main_series_style
             .price_line_color
             .or_else(|| bar.colors.as_ref().and_then(|own| own.color))
