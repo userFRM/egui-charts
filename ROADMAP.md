@@ -215,7 +215,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 
 ## Alerts
 
-- [x] Typed `Alert` conditions model price crossings/comparisons, moves over a bar span, study plots, supported drawing levels, watchlists and up to five conditions. Each condition retains its calculation interval; synchronized evaluation uses the shortest interval for frequency and rejects expired observations.
+- [x] Typed `Alert` conditions model price crossings/comparisons, moves over a bar span, study plots, supported drawing levels, watchlists and up to five conditions. Each condition retains its calculation interval; synchronized evaluation uses the shortest interval for frequency, joins each of its bars to the longer bar whose period holds its open, wherever the feed stamped that bar and including the last bar of a session, and rejects expired observations. A crossing on any interval compares the values of two evaluations.
 - [x] Shared creation/editing dialog validates conditions, name, message, frequency and expiry; editable condition previews retain interval choices. Up to five stored presets keep the selected condition, interval, frequency, expiry duration, name and message, delivery and schedule settings, leaving out levels, drawings and webhook URLs, and can be applied, replaced or deleted; a reset returns the dialog to its initial state.
 - [x] Each alert selects popup, sound, email, mobile push and webhook delivery. The alerts panel honours popup and sound and the host sends the rest from the saved alert.
 - [x] The terminal wires toolbar, context-menu, price-scale and configurable keyboard entry points, plus draggable chart alert levels. Alert display, toast duration and host sound playback follow the Alerts settings tab.
