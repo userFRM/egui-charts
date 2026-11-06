@@ -110,11 +110,12 @@ fn render_profiles(
             let start = mapping.idx_to_x(end - 1) + mapping.bar_spacing * 0.5;
             let mut extend = |price: f64, level: i64, stroke: Stroke| {
                 // Trading anywhere in the level's row touches it, as for footprint POC revisits.
+                // A candle without volume, such as the one a heartbeat opens, traded nowhere.
                 let row =
                     level as f64 * step - tick * 0.5..(level as f64 + 1.0) * step - tick * 0.5;
                 let last = bars[end..]
                     .iter()
-                    .position(|bar| bar.low < row.end && row.start <= bar.high)
+                    .position(|bar| bar.volume > 0.0 && bar.low < row.end && row.start <= bar.high)
                     .map_or(mapping.rect.right(), |i| mapping.idx_to_x(end + i));
                 let left = start.max(mapping.rect.left());
                 let right = last.min(mapping.rect.right());
@@ -649,6 +650,117 @@ mod tests {
             &s.shape,
             Shape::LineSegment { points, .. } if points[1].x > session_end && points[0].y != own_poc
         )));
+    }
+
+    /// A heartbeat opens the next session's first slot as an empty candle at the last close.
+    /// Nothing trades there, so the prior POC and VAL in that row keep running to the edge.
+    #[test]
+    fn empty_candle_at_the_previous_close_does_not_end_prior_levels() {
+        let time = "2026-01-05T10:00:00Z".parse().unwrap();
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        // Rows 100:1, 101:6, 102:2: POC 101, 70% area 101 to 102; the session closes at 101.
+        for (minute, price, size) in [
+            (0, 100.0, 1.0),
+            (0, 101.0, 4.0),
+            (1, 102.0, 2.0),
+            (1, 101.0, 2.0),
+            (3, 103.0, 1.0),
+            (3, 104.0, 1.0),
+            (4, 104.0, 1.0),
+            (4, 103.0, 1.0),
+        ] {
+            let at: chrono::DateTime<chrono::Utc> = time + TimeDelta::minutes(minute);
+            flow.push(&Tick::new(
+                at + TimeDelta::seconds(size as i64),
+                price,
+                size,
+                None,
+            ))
+            .unwrap();
+        }
+        let bars: Vec<_> = [
+            (100.0, 101.0, 100.0, 101.0, 5.0),
+            (102.0, 102.0, 101.0, 101.0, 4.0),
+            // The empty candle a heartbeat opens: no execution, the last close carried.
+            (101.0, 101.0, 101.0, 101.0, 0.0),
+            (103.0, 104.0, 103.0, 104.0, 2.0),
+            (104.0, 104.0, 103.0, 103.0, 2.0),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (open, high, low, close, volume))| {
+            Bar::new(
+                time + TimeDelta::minutes(i as i64),
+                open,
+                high,
+                low,
+                close,
+                volume,
+            )
+        })
+        .collect();
+        let ranges = TradeProfileRanges::new(vec![
+            time..time + TimeDelta::minutes(2),
+            time + TimeDelta::minutes(2)..time + TimeDelta::minutes(5),
+        ])
+        .unwrap();
+        let profiles = trade_profiles(&flow, &ranges);
+        assert_eq!(profiles[0].volume.poc(), Some(101));
+        assert_eq!(profiles[0].volume.value_area(0.7), Some((101, 102)));
+        let transform = PriceTransform::default();
+        let mapping = ChartMapping::new(
+            Rect::from_min_size(pos2(40.0, 20.0), vec2(400.0, 240.0)),
+            40.0,
+            0,
+            4,
+            0.0,
+            PriceMap::new(
+                transform,
+                PriceRange::new(transform.to_scale(98.0), transform.to_scale(105.0)),
+                20.0,
+                260.0,
+                false,
+            ),
+        );
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            render_session_volume_profiles(
+                ui.painter(),
+                &mapping,
+                &bars,
+                &profiles,
+                &flow,
+                &TradeProfileSettings {
+                    extend_poc: true,
+                    extend_val: true,
+                    ..Default::default()
+                },
+            );
+        });
+        output.textures_delta.clear();
+        // Extensions start at the first session's right edge, x(1) + 20 = 319.
+        let start = mapping.idx_to_x(1) + mapping.bar_spacing * 0.5;
+        let ends: Vec<_> = [101.0, 100.5]
+            .into_iter()
+            .map(|price| {
+                let y = mapping.price_to_y(price);
+                output.shapes.iter().find_map(|s| match &s.shape {
+                    Shape::LineSegment { points, .. }
+                        if points[0] == pos2(start, y) && points[1].y == y =>
+                    {
+                        Some(points[1].x)
+                    }
+                    _ => None,
+                })
+            })
+            .collect();
+        // Nothing trades at 101 after the first session: both run to the right edge, 440.
+        assert_eq!(
+            ends,
+            [Some(mapping.rect.right()), Some(mapping.rect.right())],
+            "POC 101 and VAL 100.5 end at {ends:?}; the empty candle is at x(2) = {}",
+            mapping.idx_to_x(2)
+        );
     }
 
     /// At 70%, 6 + 3 exceeds 7 of 10; after adding 8 at 100, 9 + 6 exceeds 12.6

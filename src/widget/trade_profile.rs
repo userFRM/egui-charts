@@ -4,7 +4,8 @@ use super::frame::session_ranges;
 use super::{Chart, SeriesId};
 use crate::chart::overlays::TradeProfileSettings;
 use crate::model::{
-    BarClock, ChartType, ProfileSession, Session, SessionProvider, SessionWindow, TimezoneId,
+    BarClock, ChartType, ProfileSession, Session, SessionProvider, SessionWindow, Timeframe,
+    TimezoneId,
 };
 use crate::studies::TradeProfileRanges;
 use chrono::{DateTime, Utc, Weekday};
@@ -106,8 +107,11 @@ impl Chart {
             ChartType::SessionVolumeProfile => &self.trade_profile_settings().session,
             _ => &ProfileSession::Chart,
         };
+        // Daily and longer bars carry a trading date rather than a time of day to divide or re-zone.
+        let intraday =
+            self.timeframe.unwrap_or_default().duration_ms() < Timeframe::Day1.duration_ms();
         match selection {
-            ProfileSession::Custom(custom) => {
+            ProfileSession::Custom(custom) if intraday => {
                 use Weekday::*;
                 let zone = custom.zone.clone().unwrap_or_else(exchange_zone);
                 let every_day = [Mon, Tue, Wed, Thu, Fri, Sat, Sun];
@@ -315,5 +319,96 @@ mod tests {
         });
         other_type.set_chart_type(ChartType::TimePriceOpportunity);
         assert_eq!(other_type.profile_clock(), plain);
+    }
+
+    /// Daily and longer bars profile by trading date whatever the custom hours' zone: a Paris
+    /// instrument's bars stamped at Paris midnight keep their Monday-to-Friday weeks, and its
+    /// monthly bars their calendar years.
+    #[test]
+    fn custom_zone_keeps_daily_profiles_on_their_trading_weeks() {
+        use Weekday::*;
+        let paris = TimezoneId::named("Europe/Paris").unwrap();
+        let at = |hour, minute| NaiveTime::from_hms_opt(hour, minute, 0).unwrap();
+        let exchange = Instrument::new("X")
+            .with_time_zone(paris)
+            .with_session(Session::new([SessionWindow::new(
+                [Mon, Tue, Wed, Thu, Fri],
+                at(9, 0),
+                at(17, 30),
+            )]));
+        // Paris midnight is 23:00 UTC the day before in winter (CET).
+        let stamped = |times: &[&str]| -> Vec<Bar> {
+            times
+                .iter()
+                .map(|time| Bar::new(time.parse().unwrap(), 100.0, 102.0, 99.0, 101.0, 1.0))
+                .collect()
+        };
+        // Trading dates Mon 4 to Fri 8 and Mon 11 to Fri 15 March 2024.
+        let days = stamped(&[
+            "2024-03-03T23:00:00Z",
+            "2024-03-04T23:00:00Z",
+            "2024-03-05T23:00:00Z",
+            "2024-03-06T23:00:00Z",
+            "2024-03-07T23:00:00Z",
+            "2024-03-10T23:00:00Z",
+            "2024-03-11T23:00:00Z",
+            "2024-03-12T23:00:00Z",
+            "2024-03-13T23:00:00Z",
+            "2024-03-14T23:00:00Z",
+        ]);
+        // November and December 2023, January and February 2024.
+        let months = stamped(&[
+            "2023-10-31T23:00:00Z",
+            "2023-11-30T23:00:00Z",
+            "2023-12-31T23:00:00Z",
+            "2024-01-31T23:00:00Z",
+        ]);
+        let held = |bars: &[Bar], timeframe, session: ProfileSession| {
+            let mut chart = Chart::new(BarData::from_bars(bars.to_vec()));
+            chart.set_chart_type(ChartType::SessionVolumeProfile);
+            chart.set_timeframe(timeframe);
+            chart.set_instrument(Some(exchange.clone()));
+            chart.set_trade_profile_settings(TradeProfileSettings {
+                session,
+                ..Default::default()
+            });
+            let ranges = chart.trade_profile_ranges().unwrap();
+            ranges
+                .ranges()
+                .iter()
+                .map(|r| bars.iter().filter(|b| r.contains(&b.time)).count())
+                .collect::<Vec<_>>()
+        };
+        let custom = |zone: &str| {
+            ProfileSession::Custom(CustomProfileSession {
+                start: at(9, 0),
+                end: at(17, 30),
+                zone: Some(TimezoneId::named(zone).unwrap()),
+            })
+        };
+        let observed = [
+            (
+                "day chart",
+                held(&days, Timeframe::Day1, ProfileSession::Chart),
+            ),
+            ("day UTC", held(&days, Timeframe::Day1, custom("UTC"))),
+            (
+                "day New York",
+                held(&days, Timeframe::Day1, custom("America/New_York")),
+            ),
+            (
+                "month chart",
+                held(&months, Timeframe::Month1, ProfileSession::Chart),
+            ),
+            ("month UTC", held(&months, Timeframe::Month1, custom("UTC"))),
+        ];
+        let expected = [
+            ("day chart", vec![5, 5]),
+            ("day UTC", vec![5, 5]),
+            ("day New York", vec![5, 5]),
+            ("month chart", vec![2, 2]),
+            ("month UTC", vec![2, 2]),
+        ];
+        assert!(observed == expected, "bars per profile: {observed:?}");
     }
 }

@@ -424,7 +424,8 @@ impl AlertsPanel {
             .max()
     }
 
-    /// Missing timestamps stay last in either direction; ties use host identity after reconnects.
+    /// Missing timestamps stay last in either direction; ties use host identity after reconnects,
+    /// shorter ids first so that numbered alerts keep their numeric order.
     fn sorted(&self) -> Vec<&Alert> {
         let mut alerts: Vec<&Alert> = self.alerts.iter().filter(|a| a.id.is_some()).collect();
         let rank = |a: &Alert| match a.status {
@@ -460,7 +461,10 @@ impl AlertsPanel {
             } else {
                 order
             };
-            order.then_with(|| a.id.as_ref().unwrap().0.cmp(&b.id.as_ref().unwrap().0))
+            order.then_with(|| {
+                let (a, b) = (&a.id.as_ref().unwrap().0, &b.id.as_ref().unwrap().0);
+                (a.len(), a).cmp(&(b.len(), b))
+            })
         });
         alerts
     }
@@ -724,6 +728,10 @@ impl AlertsPanel {
         let before = self.options.clone();
         let mut history_action = None;
         ui.horizontal_wrapped(|ui| {
+            // Completing a restore pops the last history entry, so nothing may add one meanwhile.
+            if self.restoring.is_some() {
+                ui.disable();
+            }
             ui.label(l10n::text(ui.ctx(), "Sort by"));
             egui::ComboBox::from_id_salt("alert_sort")
                 .selected_text(l10n::text(
@@ -1358,6 +1366,89 @@ mod tests {
                 panel.alerts.reverse();
             }
         }
+        // Equal keys keep the host's numbering past nine alerts, in either direction, and ids
+        // that are not numbers keep one order whatever the push order.
+        let numbered: Vec<_> = (1..=12).map(|n| n.to_string()).collect();
+        for (pushed, expected) in [
+            (numbered.clone(), numbered.concat()),
+            (vec!["b".into(), "aa".into(), "a".into()], "abaa".into()),
+        ] {
+            panel.alerts = pushed
+                .iter()
+                .map(|id| {
+                    let mut alert = Alert::new("AAPL", AlertCondition::Above(1.0));
+                    alert.id = Some(AlertId(id.clone()));
+                    alert
+                })
+                .collect();
+            for key in [
+                AlertSortKey::Created,
+                AlertSortKey::Symbol,
+                AlertSortKey::Status,
+            ] {
+                for descending in [false, true] {
+                    (panel.options.sort, panel.options.descending) = (key, descending);
+                    assert_eq!(ids(&panel), expected, "{key:?} descending={descending}");
+                    panel.alerts.reverse();
+                    assert_eq!(ids(&panel), expected, "pushed reversed {key:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn list_change_during_a_pending_undo_stays_undoable() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let host = Arc::new(Host::default());
+        let answer = || host.reply.lock().unwrap().take().unwrap().send(Ok(()));
+        let mut panel = AlertsPanel::default();
+        panel.set_service(host.clone());
+        let events = host.events.lock().unwrap().clone().unwrap();
+        let mut toasts = Toasts::new();
+        let mut h = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(egui::vec2(300.0, 700.0))
+            .build_ui_state(
+                move |ui, panel: &mut AlertsPanel| {
+                    panel.poll(ui.ctx(), &mut toasts);
+                    panel.show(ui);
+                },
+                panel,
+            );
+        let mut alert = Alert::new("SYM", AlertCondition::Above(1.0));
+        alert.id = Some(AlertId("1".into()));
+        alert.extend_line = true;
+        events.push(AlertEvent::Upsert(Box::new(alert.clone())));
+        h.run_steps(3);
+        // The marker menu turns the line off and the host applies it.
+        alert.extend_line = false;
+        h.state_mut().save(alert.clone());
+        answer();
+        events.push(AlertEvent::Upsert(Box::new(alert.clone())));
+        h.run_steps(3);
+        // Undo it and press Descending before the host pushes the alert back.
+        let descending = h.state().options.descending;
+        h.get_by_label("Undo").click();
+        h.run_steps(3);
+        answer();
+        h.run_steps(3);
+        h.get_by_label("Descending").click();
+        h.run_steps(3);
+        alert.extend_line = true;
+        events.push(AlertEvent::Upsert(Box::new(alert.clone())));
+        h.run_steps(3);
+        h.get_by_label("Undo").click();
+        h.run_steps(3);
+        assert!(h.state().alerts()[0].extend_line);
+        assert_eq!(h.state().options.descending, descending);
+        // Once the restore has finished the direction changes again and Undo reverts it.
+        h.get_by_label("Descending").click();
+        h.run_steps(3);
+        assert_eq!(h.state().options.descending, !descending);
+        h.get_by_label("Undo").click();
+        h.run_steps(3);
+        assert_eq!(h.state().options.descending, descending);
+        assert!(h.state().alerts()[0].extend_line);
     }
 
     #[test]
