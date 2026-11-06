@@ -1322,9 +1322,10 @@ mod tests {
         assert!(!styles.candles.color_by_previous_close);
     }
 
-    /// A Heikin-Ashi layout without the chart type's style tagged only the source close on its
-    /// scale and restores that way; one saved with the style keeps the pair. The source (10, 18,
-    /// 8, 14) closes at 14 and its transformed close is (10 + 18 + 8 + 14) / 4 = 12.5.
+    /// A Heikin-Ashi layout without the chart type's style, or without any chart type styles,
+    /// tagged only the source close on its scale and restores that way; one saved with the style
+    /// keeps the pair. The source (10, 18, 8, 14) closes at 14 and its transformed close is
+    /// (10 + 18 + 8 + 14) / 4 = 12.5.
     #[test]
     #[cfg(feature = "drawings")]
     fn heikin_layout_saved_before_the_style_restores_its_scale() {
@@ -1341,18 +1342,24 @@ mod tests {
                 0.0,
             )])
         };
-        for (saved_with_style, expected) in [(false, &[14.0][..]), (true, &[14.0, 12.5][..])] {
+        for (missing, expected) in [
+            (None, &[14.0, 12.5][..]),
+            (Some("heikin"), &[14.0][..]),
+            (Some("styles"), &[14.0][..]),
+        ] {
             let mut chart = Chart::new(bars());
             chart.set_chart_type(ChartType::Heikin);
             chart.config_mut().show_volume = false;
             let mut saved = serde_json::to_value(chart.snapshot().unwrap()).unwrap();
-            if !saved_with_style {
-                for path in [
-                    "/chart_type_params/styles",
-                    "/settings/chart_type_params/styles",
-                ] {
-                    let styles = saved.pointer_mut(path).unwrap().as_object_mut().unwrap();
-                    assert!(styles.remove("heikin").is_some());
+            for path in ["/chart_type_params", "/settings/chart_type_params"] {
+                let params = saved.pointer_mut(path).unwrap().as_object_mut().unwrap();
+                match missing {
+                    Some("heikin") => {
+                        let styles = params["styles"].as_object_mut().unwrap();
+                        assert!(styles.remove("heikin").is_some());
+                    }
+                    Some(key) => assert!(params.remove(key).is_some()),
+                    None => {}
                 }
             }
             let saved: ChartSnapshot = serde_json::from_value(saved).unwrap();
@@ -1384,7 +1391,7 @@ mod tests {
                     .styles
                     .heikin
                     .real_price_only,
-                !saved_with_style
+                missing.is_some()
             );
         }
     }
