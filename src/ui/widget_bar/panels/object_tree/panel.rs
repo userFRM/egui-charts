@@ -346,8 +346,8 @@ impl ObjectTreePanel {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 for mut symbol in inventory {
-                    if let Some(sort) = self.state.drawing_sort {
-                        symbol.sort(sort);
+                    if let Some(sort) = self.state.drawing_sort.get(&symbol.symbol) {
+                        symbol.sort(*sort);
                     }
                     ui.push_id(&symbol.symbol, |ui| {
                         self.show_symbol_row(ui, &symbol, action);
@@ -395,7 +395,16 @@ impl ObjectTreePanel {
                     self.state.expanded_symbols.insert(name.to_owned());
                 }
             }
-            ui.strong_label(name);
+            // However long the name, its count and the row's controls keep their room.
+            let name_width = (ui.available_width() - 96.0).max(0.0);
+            ui.scope(|ui| {
+                ui.set_max_width(name_width);
+                ui.add(
+                    egui::Label::new(RichText::new(name).strong())
+                        .selectable(false)
+                        .truncate(),
+                );
+            });
             if self.config.show_item_counts {
                 ui.label(
                     RichText::new(format!("({})", symbol.drawings.len()))
@@ -430,12 +439,16 @@ impl ObjectTreePanel {
                             (DrawingSort::Name, "Sort by name"),
                             (DrawingSort::LastModified, "Sort by last modified"),
                         ] {
-                            let chosen = self.state.drawing_sort == Some(order);
+                            let chosen = self.state.drawing_sort.get(name) == Some(&order);
                             if ui
                                 .selectable_label(chosen, l10n::text(ui.ctx(), title))
                                 .clicked()
                             {
-                                self.state.drawing_sort = (!chosen).then_some(order);
+                                if chosen {
+                                    self.state.drawing_sort.remove(name);
+                                } else {
+                                    self.state.drawing_sort.insert(name.to_owned(), order);
+                                }
                                 ui.close();
                             }
                         }
@@ -454,7 +467,11 @@ impl ObjectTreePanel {
                                     ui.visuals().widgets.noninteractive.fg_stroke.color,
                                 ),
                         );
-                        ui.label(drawing.name());
+                        ui.add(
+                            egui::Label::new(l10n::text(ui.ctx(), drawing.name()))
+                                .selectable(false)
+                                .truncate(),
+                        );
                     });
                 }
             });
@@ -1013,7 +1030,7 @@ mod tests {
         h.run();
         assert_eq!(
             h.state().0.state().drawing_sort,
-            Some(crate::config::DrawingSort::Name)
+            [("AAA".to_owned(), crate::config::DrawingSort::Name)].into()
         );
         assert!(!rows(&h), "alphabetical, ignoring case");
 
@@ -1023,6 +1040,25 @@ mod tests {
             h.state().1.last(),
             Some(&ObjectTreeAction::DeleteSymbolDrawings("AAA".into()))
         );
+
+        // A long symbol name stops before the row's count and controls.
+        let long = "L".repeat(80);
+        let chart = &mut h.state_mut().2;
+        chart.set_symbol(long.as_str());
+        let mut drawing = Drawing::new(0, DrawingToolType::TrendLine);
+        drawing.chart_points = vec![ChartPoint::new(1.0, 100.0), ChartPoint::new(2.0, 110.0)];
+        drawing.completed = true;
+        chart.drawings_mut().add_synced_drawing(drawing).unwrap();
+        h.run();
+        h.hover_at(
+            h.get_by_label(&format!("Toggle {long} drawings"))
+                .rect()
+                .center(),
+        );
+        h.run();
+        let sort = h.get_by_label(&format!("Sort {long} drawings")).rect();
+        assert!(h.get_by_label("(1)").rect().right() <= sort.left());
+
         h.get_by_label("Back to objects").click();
         h.run();
         assert!(h.query_by_label("AAA").is_none());

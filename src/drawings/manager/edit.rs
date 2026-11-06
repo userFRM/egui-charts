@@ -551,6 +551,9 @@ impl DrawingManager {
                 );
             }
         }
+        for (_, drawing) in &before {
+            self.stamp(drawing.id);
+        }
         self.history.push_snapshot(before);
     }
 
@@ -577,6 +580,9 @@ impl DrawingManager {
                     Some(&sync_id(drawing)),
                 );
             }
+        }
+        for (_, drawing) in &before {
+            self.stamp(drawing.id);
         }
         self.history.push_snapshot(before);
     }
@@ -774,7 +780,7 @@ impl DrawingManager {
                 .iter()
                 .any(|d| d.stored_id == drawing.stored_id)
         {
-            (drawing.stored_id, drawing.created_at) = (None, None);
+            (drawing.stored_id, drawing.created_at, drawing.modified_at) = (None, None, None);
         }
         if drawing.stored_id.is_none() {
             drawing.z_order = self.top_z_order();
@@ -783,7 +789,11 @@ impl DrawingManager {
         drawing.id = self.take_id();
         if drawing.stored_id.is_none() {
             if drawing.saveable {
-                self.queue(DrawingSyncAction::SaveDrawing(drawing.id));
+                // A linked copy keeps the time of the edit it copies.
+                if drawing.modified_at.is_none() {
+                    self.stamp(drawing.id);
+                }
+                self.notify(DrawingSyncAction::SaveDrawing(drawing.id));
             }
             self.history.push_add(drawing.clone());
         }

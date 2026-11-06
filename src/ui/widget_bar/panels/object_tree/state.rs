@@ -2,7 +2,7 @@
 //!
 //! Tracks selection, expansion, filtering, and other UI state.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use super::types::SourceType;
 use crate::config::DrawingSort;
@@ -26,8 +26,9 @@ pub struct ObjectTreeState {
     pub showing_symbol_drawings: bool,
     /// The symbols whose drawings are expanded.
     pub expanded_symbols: BTreeSet<String>,
-    /// The order of the listed drawings; `None` keeps the order of the charts.
-    pub drawing_sort: Option<DrawingSort>,
+    /// The order of each symbol's listed drawings; a symbol without one keeps the order of the
+    /// charts.
+    pub drawing_sort: BTreeMap<String, DrawingSort>,
 
     // === Selection ===
     /// Drawing and source ids in the rendered order, used for range selection.

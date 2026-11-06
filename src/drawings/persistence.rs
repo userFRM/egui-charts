@@ -1042,8 +1042,8 @@ pub(crate) fn drawing_to_stored_with(
 }
 
 /// Convert StoredDrawing back to a completed Drawing with id `next_id`, its anchors mapped from
-/// timestamp to bar index and the record's id, creation and edit times and notes kept; the screen points
-/// follow on the next [`Drawing::update_screen_coords`].
+/// timestamp to bar index and the record's id, creation and edit times and notes kept; the screen
+/// points follow on the next [`Drawing::update_screen_coords`].
 ///
 /// `time_to_bar` must be the inverse of the `bar_to_time` passed to
 /// [`drawing_to_stored`]: it returns fractional bar indices and extrapolates

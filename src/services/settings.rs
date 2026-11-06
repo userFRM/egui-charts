@@ -19,8 +19,9 @@ use std::time::Duration;
 pub struct UserSettings {
     /// Name of the theme preset, as listed by [`presets`](crate::theme::presets).
     pub theme: Option<String>,
-    /// The order of the drawings listed by symbol; `None` keeps the order of the charts.
-    pub drawing_sort: Option<DrawingSort>,
+    /// The order of each symbol's listed drawings; a symbol without one keeps the order of the
+    /// charts.
+    pub drawing_sort: BTreeMap<String, DrawingSort>,
     /// The symbol shown last.
     pub symbol: Option<String>,
     /// The interval shown last.

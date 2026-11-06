@@ -11,7 +11,8 @@ impl ObjectTreePanel {
     ///
     /// Bind the main data source with `with_series_id(SeriesId::MAIN)` to control its visibility.
     /// Returns `false` for host-owned property dialogs, colour gestures, templates, main-series
-    /// removal, renaming non-drawing rows and the layout-wide drawings by symbol. Drawing names are saved and undone with the drawing.
+    /// removal, renaming non-drawing rows and the layout-wide drawings by symbol. Drawing names are
+    /// saved and undone with the drawing.
     /// Bulk actions apply to drawings, studies and added bar series. Visibility includes the main
     /// series; bar-series ordering stays within its pane.
     pub fn apply_to_chart(

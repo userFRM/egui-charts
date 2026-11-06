@@ -547,6 +547,7 @@ impl DemoApp {
         let inventory = if self.object_tree.state().showing_symbol_drawings {
             let mut charts: Vec<_> = self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
             charts.insert(self.layout_slot, &mut self.chart);
+            charts.truncate(self.layout.mode.chart_count());
             self.layout.drawing_inventory(&charts)
         } else {
             Vec::new()
@@ -559,6 +560,7 @@ impl DemoApp {
     pub(super) fn handle_symbol_drawings(&mut self, action: &ObjectTreeAction) -> bool {
         let mut charts: Vec<_> = self.extra_charts.iter_mut().map(|c| &mut c.chart).collect();
         charts.insert(self.layout_slot, &mut self.chart);
+        charts.truncate(self.layout.mode.chart_count());
         match action {
             ObjectTreeAction::ReadSymbolDrawings => {
                 self.layout.read_drawing_inventory(&mut charts);
@@ -797,13 +799,13 @@ impl DemoApp {
             .into_iter()
             .collect();
         settings.market_heatmap = self.market_heatmap.selection.clone();
-        settings.drawing_sort = self.object_tree.state().drawing_sort;
+        settings.drawing_sort = self.object_tree.state().drawing_sort.clone();
         settings
     }
 
     /// Applies stored settings, opening the layout that was open last.
     pub(super) fn apply_user_settings(&mut self, ctx: &egui::Context, settings: UserSettings) {
-        self.object_tree.state_mut().drawing_sort = settings.drawing_sort;
+        self.object_tree.state_mut().drawing_sort = settings.drawing_sort.clone();
         self.update_theme(ctx);
         // Switching stops a replay the demo restored from its own storage.
         if let Some(symbol) = settings
@@ -1132,14 +1134,13 @@ mod tests {
         use egui_charts::config::DrawingSort;
         let ctx = egui::Context::default();
         let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
-        app.object_tree.state_mut().drawing_sort = Some(DrawingSort::LastModified);
+        let sorted: std::collections::BTreeMap<_, _> =
+            [("AAPL".to_owned(), DrawingSort::LastModified)].into();
+        app.object_tree.state_mut().drawing_sort = sorted.clone();
         let json = app.user_settings().to_json();
-        app.object_tree.state_mut().drawing_sort = None;
+        app.object_tree.state_mut().drawing_sort.clear();
         app.apply_user_settings(&ctx, UserSettings::from_json(&json).unwrap());
-        assert_eq!(
-            app.object_tree.state().drawing_sort,
-            Some(DrawingSort::LastModified)
-        );
+        assert_eq!(app.object_tree.state().drawing_sort, sorted);
     }
 
     #[test]

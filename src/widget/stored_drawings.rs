@@ -294,10 +294,10 @@ impl DrawingStore {
                     return;
                 }
                 let symbols = self.symbols.get_or_insert_default();
+                // A failed read leaves the document out, so that a deletion cannot write over it.
+                symbols.remove(&name);
                 match answer {
-                    Ok(None) => {
-                        symbols.remove(&name);
-                    }
+                    Ok(None) => {}
                     // A kept copy names its symbol, which differs from the document's name.
                     Ok(Some(json)) => match DrawingStorage::from_json(&json) {
                         Ok((drawings, _)) if drawings.symbol != name => {}
@@ -708,6 +708,12 @@ impl Chart {
                 for (name, revision) in &changed {
                     if let Some(document) = store.documents.get_mut(name) {
                         document.changed_elsewhere(revision.clone());
+                        shared = true;
+                    } else if store.symbols.is_some() {
+                        store
+                            .copies
+                            .queued
+                            .push_back(CopyRequest::ReadSymbol { name: name.clone() });
                         shared = true;
                     }
                 }

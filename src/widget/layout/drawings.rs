@@ -1,4 +1,5 @@
-//! Propagate drawing changes without consuming the host's persistence queue.
+//! Propagate drawing changes without consuming the host's persistence queue, and list and delete
+//! the layout's drawings by symbol.
 
 use super::ChartLayout;
 use crate::config::{DrawingSort, DrawingToolType};
@@ -296,7 +297,12 @@ fn inventoried(drawing: &Drawing) -> bool {
 /// locally: its settings and its times and prices.
 fn copy_key(drawing: &Drawing, points: impl IntoIterator<Item = (i64, u32, f64)>) -> String {
     let mut settings = drawing.clone();
-    (settings.saveable, settings.locked, settings.pane) = (true, false, None);
+    (
+        settings.saveable,
+        settings.locked,
+        settings.pane,
+        settings.z_order,
+    ) = (true, false, None, 0);
     let style = serde_json::to_string(&settings).unwrap_or_default();
     let points: Vec<_> = points
         .into_iter()
@@ -438,8 +444,8 @@ impl ChartLayout {
     /// Deletes the drawings [`Self::drawing_inventory`] lists under `symbol`, locked ones
     /// included, and leaves those of other symbols. Stored drawings are written without them.
     /// Undoing the edit on the active chart or any chart it changed restores them on all of
-    /// them. Returns whether the symbol had drawings. Wrap nothing: each chart records its part
-    /// as its own user action.
+    /// them. Returns whether the symbol had drawings. Call it outside [`Chart::user_action`]:
+    /// each chart records its part as its own action.
     pub fn delete_symbol_drawings(&mut self, charts: &mut [&mut Chart], symbol: &str) -> bool {
         let keys: HashSet<String> = inventory(charts)
             .remove(symbol)
@@ -510,10 +516,7 @@ impl ChartLayout {
                     manager
                         .drawings
                         .iter()
-                        .filter(|drawing| {
-                            (stored && doomed(chart, drawing))
-                                || (!drawing.saveable && doomed(chart, drawing))
-                        })
+                        .filter(|drawing| (stored || !drawing.saveable) && doomed(chart, drawing))
                         .map(|drawing| drawing.id)
                         .collect()
                 })
@@ -741,6 +744,23 @@ mod tests {
         assert!(a.redo());
         layout.step_layout_edits(&mut [&mut a, &mut b]);
         assert_eq!(names(&layout, &[&mut a, &mut b]), bbb);
+
+        // A copy takes the top layer of its chart, which is no difference in the drawing.
+        let (mut c, mut d) = (bars(60), bars(60));
+        c.set_symbol("AAA");
+        d.set_symbol("AAA");
+        let mut layout = ChartLayout::default();
+        layout.sync.sync_drawings = true;
+        let mut top = line("Top");
+        top.z_order = 5;
+        c.drawings_mut().add_drawing(top).unwrap();
+        sync(&mut layout, &mut c, &mut d);
+        d.drawings_mut().add_drawing(line("Under")).unwrap();
+        sync(&mut layout, &mut c, &mut d);
+        assert_eq!(
+            names(&layout, &[&mut c, &mut d]),
+            listed(&[("AAA", &["Top", "Under"])])
+        );
     }
 
     /// Through shared storage: a symbol no chart shows is read from its document and listed once,
@@ -828,6 +848,27 @@ mod tests {
         settle(&mut a, &mut b);
         assert_eq!(records("CCC"), [("Hidden".to_owned(), 2_001)]);
         assert_eq!(a.storage_conflict(), None);
+
+        // A chart that holds no such document open still follows the write of another.
+        layout.set_active(1);
+        assert!(layout.delete_symbol_drawings(&mut [&mut a, &mut b], "DDD"));
+        settle(&mut a, &mut b);
+        assert!(names(&layout, &[&mut a, &mut b]).is_empty());
+        assert!(b.undo());
+        settle(&mut a, &mut b);
+        assert_eq!(
+            names(&layout, &[&mut a, &mut b]),
+            listed(&[("DDD", &["Two"])])
+        );
+
+        // A document that no longer reads leaves the list, so a deletion cannot write over it.
+        host.put("DDD", "unreadable");
+        layout.read_drawing_inventory(&mut [&mut a, &mut b]);
+        settle(&mut a, &mut b);
+        assert!(a.take_storage_error().is_some());
+        assert!(!layout.delete_symbol_drawings(&mut [&mut a, &mut b], "DDD"));
+        settle(&mut a, &mut b);
+        assert_eq!(host.get("DDD").as_deref(), Some("unreadable"));
     }
 
     /// The order by name ignores case and the order by edit time starts at the latest; equal
@@ -859,12 +900,12 @@ mod tests {
             symbol.sort(sort);
             let ids: Vec<_> = symbol.drawings.iter().map(|d| d.id.as_str()).collect();
             assert_eq!(ids, order, "{sort:?}");
-            // A row without a name goes by its tool's.
-            assert_eq!(
-                row("5", " ", None).name(),
-                DrawingToolType::TrendLine.as_str()
-            );
         }
+        // A row without a name goes by its tool's.
+        assert_eq!(
+            row("5", " ", None).name(),
+            DrawingToolType::TrendLine.as_str()
+        );
 
         let mut chart = bars(60);
         chart.set_symbol("AAA");
@@ -917,6 +958,33 @@ mod tests {
         assert_eq!(times(&chart), before, "undo restores the time before");
         assert!(chart.redo());
         assert_eq!(times(&chart)[0], before[0]);
+
+        // A drawing mirrored to another chart is no edit: its copy keeps the time.
+        let mut layout = ChartLayout::default();
+        layout.sync.sync_drawings = true;
+        let mut other = bars(60);
+        other.set_symbol("AAA");
+        let groups = layout.groups.clone();
+        layout
+            .drawings
+            .sync(&mut [&mut other, &mut restored], 2, &groups, false, true);
+        let inventory = layout.drawing_inventory(&[&mut other, &mut restored]);
+        let rows = inventory[0].drawings.iter();
+        let mut copied: Vec<_> = rows.map(|d| d.modified_at).collect();
+        copied.sort();
+        assert_eq!(copied, [Some(1_000), Some(2_000)]);
+
+        // Bulk edits are edits.
+        for bulk in [
+            |chart: &mut Chart| chart.drawings_mut().set_visibility_all(false),
+            |chart: &mut Chart| chart.drawings_mut().toggle_lock_all(),
+        ] {
+            let mut chart = bars(60);
+            chart.set_symbol("AAA");
+            chart.load_drawings_remapped(&json, true).unwrap();
+            bulk(&mut chart);
+            assert!(times(&chart).iter().all(|(_, time)| *time > 2_000));
+        }
     }
 
     /// The top-level folder decides whether its drawings mirror, over the layout-wide switch, and
