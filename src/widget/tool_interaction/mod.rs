@@ -199,7 +199,7 @@ impl Chart {
                 (x_to_bar_precise(pointer.x + distance).ceil().max(0.0) as usize).saturating_add(1)
             };
             for (i, bar) in bars.iter().enumerate().take(end).skip(first) {
-                if pane.is_none() {
+                if pane.is_none() && self.main_series_visible {
                     for price in [bar.open, bar.high, bar.low, bar.close] {
                         let point = Pos2::new(bar_to_x(i as f32), price_to_y(price));
                         if price.is_finite()
@@ -221,7 +221,15 @@ impl Chart {
                     .study_ids
                     .iter()
                     .zip(self.rendered_studies().indicators())
-                    .filter(|(id, study)| study.is_visible() && members.contains(&Some(id.0)))
+                    .filter(|(id, study)| {
+                        study.is_visible()
+                            && members.contains(&Some(id.0))
+                            // The price pane paints a volume overlay only with the main series.
+                            && (pane.is_some()
+                                || self.main_series_visible
+                                || !study.is_volume()
+                                || matches!(study.scale(), crate::studies::StudyScale::Shared(_)))
+                    })
                 {
                     // Use the renderer's map so independent, shared and volume scales snap
                     // at the painted point rather than interpreting study units as prices.
@@ -1376,6 +1384,109 @@ mod tests {
                 assert_eq!(chart.drawings().drawings[0].chart_points[0], after);
             }
         }
+    }
+
+    /// Places a trend line from `first` and returns the price and screen height of its first
+    /// anchor.
+    fn first_anchor(
+        ctx: &Context,
+        chart: &mut crate::widget::Chart,
+        first: egui::Pos2,
+        second: egui::Pos2,
+    ) -> (f64, f32) {
+        let button = |pos, pressed| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        chart
+            .drawings_mut()
+            .set_active_tool(Some(DrawingToolType::TrendLine));
+        let mut time = 1.0;
+        for pos in [first, second] {
+            for events in [
+                vec![Event::PointerMoved(pos)],
+                vec![button(pos, true)],
+                vec![button(pos, false)],
+            ] {
+                time += 0.1;
+                frame(ctx, chart, time, events);
+            }
+        }
+        let price = chart.drawings().drawings[0].chart_points[0].price;
+        (price, chart.get_chart_mapping().price_to_y(price))
+    }
+
+    /// Hiding the main series hides its volume, so neither its bars nor its volume columns are
+    /// magnet targets while it is hidden.
+    #[test]
+    fn magnet_ignores_hidden_main_series_bars_and_volume() {
+        use egui::Pos2;
+
+        let mut observed = Vec::new();
+        for (visible, strong, target) in [
+            (true, false, "volume"),
+            (true, true, "volume"),
+            (true, false, "high"),
+            (true, true, "high"),
+            (false, false, "volume"),
+            (false, true, "volume"),
+            (false, false, "high"),
+            (false, true, "high"),
+        ] {
+            let ctx = Context::default();
+            let mut chart = chart(&[10.0], &[20.0]);
+            chart.config_mut().show_volume = true;
+            chart.drawings_mut().options.magnet_mode = true;
+            chart.drawings_mut().options.strong_magnet = strong;
+            chart.drawings_mut().update_snap_options();
+            frame(&ctx, &mut chart, 0.1, vec![]);
+            chart.set_main_series_visible(visible);
+            frame(&ctx, &mut chart, 0.2, vec![]);
+            let map = chart.get_chart_mapping();
+            // Every bar has volume 1, the visible maximum, so each column reaches the top of the
+            // overlay: 12% of the plot above its 12 point baseline inset.
+            let bottom = map.rect.bottom() - 12.0;
+            let y = if target == "volume" {
+                bottom - (bottom - map.rect.top()) * 0.12
+            } else {
+                map.price_to_y(20.0)
+            };
+            let (first, last) = chart.state.visible_range();
+            let bar = (first + last) / 2;
+            let (_, anchor) = first_anchor(
+                &ctx,
+                &mut chart,
+                Pos2::new(
+                    map.idx_to_x(bar) + 2.0,
+                    if target == "volume" { y - 1.0 } else { y + 1.0 },
+                ),
+                Pos2::new(map.idx_to_x(bar + 8), map.rect.center().y),
+            );
+            observed.push((
+                visible,
+                strong,
+                target,
+                ((anchor - y) * 100.0).round() / 100.0,
+            ));
+        }
+        // Shown, the anchor lands on the value; hidden, it stays 1 point from where it was clicked.
+        let expected = [
+            (true, false, "volume", 0.0),
+            (true, true, "volume", 0.0),
+            (true, false, "high", 0.0),
+            (true, true, "high", 0.0),
+            (false, false, "volume", -1.0),
+            (false, true, "volume", -1.0),
+            (false, false, "high", 1.0),
+            (false, true, "high", 1.0),
+        ];
+        assert!(
+            observed == expected,
+            "(main series visible, strong magnet, target, first anchor below the target) \
+             observed {observed:?} expected {expected:?}"
+        );
     }
 
     /// With the eraser on, a click on a drawing deletes it, whether or not a drawing is
