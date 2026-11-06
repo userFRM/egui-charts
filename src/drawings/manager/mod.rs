@@ -116,8 +116,8 @@ struct PaintedDrawing {
     id: usize,
     points: Vec<Pos2>,
     shapes: Vec<ClippedShape>,
-    /// A regression trend's fitted endpoints, where its handles sit.
-    regression_ends: Option<[Pos2; 2]>,
+    /// Where the handles of a drawing that fits itself to the bars sit.
+    handle_points: Option<Vec<Pos2>>,
     /// The tessellation of `shapes`, made once a second frame paints the same shapes.
     tessellated: Option<Tessellated>,
 }
@@ -276,6 +276,9 @@ pub struct DrawingManager {
     pub pending_sync: Arc<Mutex<Vec<DrawingSyncAction>>>,
     /// Whether edits emit per-drawing storage notifications.
     pub(crate) sync_enabled: bool,
+    /// When each drawing edited since the last [`Self::apply_edit_times`] was edited. Held apart
+    /// because [`Self::queue`] runs where the drawings are borrowed.
+    edited: Mutex<Vec<(usize, i64)>>,
 }
 
 impl Default for DrawingManager {
@@ -334,6 +337,7 @@ impl DrawingManager {
             curr_timeframe: String::from("1D"),
             eraser_mode: false,
             pending_sync: Arc::new(Mutex::new(Vec::new())),
+            edited: Mutex::new(Vec::new()),
             sync_enabled: true,
         }
     }
@@ -471,6 +475,8 @@ impl DrawingManager {
         &mut self,
         step: fn(&mut HistoryService, &mut Vec<Drawing>) -> Option<usize>,
     ) -> bool {
+        // An undo puts back the edit time of the state it restores, so it must hold the last one.
+        self.apply_edit_times();
         let before: Vec<_> = self
             .drawings
             .iter()
@@ -487,21 +493,70 @@ impl DrawingManager {
         for &id in self.history.affected_ids() {
             let was = before.iter().find(|&&(i, _)| i == id);
             match (was, self.drawings.iter().any(|d| d.id == id && d.saveable)) {
-                (Some(_), true) => self.queue(DrawingSyncAction::UpdateDrawing(id)),
+                (Some(_), true) => self.notify(DrawingSyncAction::UpdateDrawing(id)),
                 (Some((_, stored_id)), false) => {
-                    self.queue(DrawingSyncAction::Delete(stored_id.clone()))
+                    self.notify(DrawingSyncAction::Delete(stored_id.clone()))
                 }
-                (None, true) => self.queue(DrawingSyncAction::SaveDrawing(id)),
+                (None, true) => self.notify(DrawingSyncAction::SaveDrawing(id)),
                 (None, false) => {}
             }
+        }
+        // A redone addition comes back as it was recorded, before its first edit time.
+        let now = chrono::Utc::now().timestamp_millis();
+        let affected = self.history.affected_ids().to_vec();
+        for drawing in self
+            .drawings
+            .iter_mut()
+            .filter(|d| affected.contains(&d.id))
+        {
+            drawing.modified_at.get_or_insert(now);
         }
         self.selection
             .prune(&self.drawings.iter().map(|d| d.id).collect());
         true
     }
 
-    /// Queues a change for the host to save.
+    /// Records the edit of a drawing, which [`Self::apply_edit_times`] puts on the drawing.
+    fn stamp(&self, id: usize) {
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut edited = self.edited.lock().unwrap_or_else(|e| e.into_inner());
+        match edited.iter_mut().find(|(edited, _)| *edited == id) {
+            Some(entry) => entry.1 = now,
+            None => edited.push((id, now)),
+        }
+    }
+
+    /// Puts the times of the edits made since the last call on their drawings.
+    pub(crate) fn apply_edit_times(&mut self) {
+        let edited = std::mem::take(self.edited.get_mut().unwrap_or_else(|e| e.into_inner()));
+        for (id, time) in edited {
+            if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id) {
+                drawing.modified_at = Some(time);
+            }
+        }
+    }
+
+    /// The time of a drawing's last edit, including one not applied yet.
+    pub(crate) fn modified_at(&self, drawing: &Drawing) -> Option<i64> {
+        self.edited
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .find(|(id, _)| *id == drawing.id)
+            .map(|(_, time)| *time)
+            .or(drawing.modified_at)
+    }
+
+    /// Records an edit for the host to save.
     fn queue(&self, action: DrawingSyncAction) {
+        if let DrawingSyncAction::SaveDrawing(id) | DrawingSyncAction::UpdateDrawing(id) = &action {
+            self.stamp(*id);
+        }
+        self.notify(action);
+    }
+
+    /// Queues a change for the host to save.
+    fn notify(&self, action: DrawingSyncAction) {
         if !self.sync_enabled {
             return;
         }

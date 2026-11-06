@@ -32,7 +32,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       # Native checks share disk with the web builds; debug symbols are unused here.
       CARGO_PROFILE_DEV_DEBUG: "0"

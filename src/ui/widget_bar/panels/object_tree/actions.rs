@@ -91,6 +91,14 @@ pub enum ObjectTreeAction {
     /// Set locking of every drawing in a folder and its descendants.
     SetFolderLocked(Vec<String>, bool),
 
+    // === Drawings by symbol ===
+    /// The list of the layout's drawings by symbol opened: read them again, for example with
+    /// `ChartLayout::read_drawing_inventory`.
+    ReadSymbolDrawings,
+    /// Delete the drawings saved under a symbol, for example with
+    /// `ChartLayout::delete_symbol_drawings`.
+    DeleteSymbolDrawings(String),
+
     // === Navigation ===
     /// Zoom to object on chart (focus view)
     ZoomTo(usize),
@@ -150,6 +158,7 @@ impl ObjectTreeAction {
                 | Self::SetFolderSync(_, _)
                 | Self::SetFolderVisible(_, _)
                 | Self::SetFolderLocked(_, _)
+                | Self::DeleteSymbolDrawings(_)
                 | Self::RemoveIndicator(_)
                 | Self::RemoveAllDrawings
                 | Self::RemoveAllIndicators
