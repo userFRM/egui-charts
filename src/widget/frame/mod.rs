@@ -750,11 +750,13 @@ impl Chart {
                 Pos2::new(chart_rect.max.x, rect.max.y),
             )
         });
+        // Below any footprint statistics rows, which the interaction rect above includes.
         self.time_axis_rect = Rect::from_min_size(
-            time_axis_rect.min,
+            Pos2::new(time_axis_rect.left(), time_axis_top),
             Vec2::new(
                 time_axis_rect.width(),
-                self.time_axis_height().min(time_axis_rect.height()),
+                self.time_axis_height()
+                    .min(time_axis_rect.bottom() - time_axis_top),
             ),
         );
 
@@ -2936,6 +2938,25 @@ impl Chart {
             }
         }
 
+        // Pinned tags go above every other tag and below the crosshair's, which stay readable.
+        for (x, label) in fixed_time_labels {
+            time_tags.push(rendering::axes::render_primitive_time_label(
+                &painter,
+                self.time_axis_rect,
+                x,
+                label,
+            ));
+        }
+
+        rendering::axes::render_primitive_price_labels(
+            &painter,
+            price_rect,
+            axis_edge,
+            fixed_price_labels,
+            &mut tags,
+            self.config.price_axis.allow_label_overlap,
+        );
+
         // Draw crosshair with options from chart_options. The pointer still hovers the chart
         // while a context menu is open, so the crosshair, its labels and the tooltip wait until
         // the menu closes.
@@ -3583,23 +3604,6 @@ impl Chart {
             }
         }
 
-        for (x, label) in fixed_time_labels {
-            time_tags.push(rendering::axes::render_primitive_time_label(
-                &painter,
-                self.time_axis_rect,
-                x,
-                label,
-            ));
-        }
-
-        rendering::axes::render_primitive_price_labels(
-            &painter,
-            price_rect,
-            axis_edge,
-            fixed_price_labels,
-            &mut tags,
-            self.config.price_axis.allow_label_overlap,
-        );
         let current_price = crate::model::last_with_value(&self.state.data().bars)
             .filter(|_| self.main_series_visible && self.config.show_symbol_last_val)
             .map(|bar| {
