@@ -424,7 +424,8 @@ impl AlertsPanel {
             .max()
     }
 
-    /// Missing timestamps stay last in either direction; ties use host identity after reconnects.
+    /// Missing timestamps stay last in either direction; ties use host identity after reconnects,
+    /// shorter ids first so that numbered alerts keep their numeric order.
     fn sorted(&self) -> Vec<&Alert> {
         let mut alerts: Vec<&Alert> = self.alerts.iter().filter(|a| a.id.is_some()).collect();
         let rank = |a: &Alert| match a.status {
@@ -460,7 +461,10 @@ impl AlertsPanel {
             } else {
                 order
             };
-            order.then_with(|| a.id.as_ref().unwrap().0.cmp(&b.id.as_ref().unwrap().0))
+            order.then_with(|| {
+                let (a, b) = (&a.id.as_ref().unwrap().0, &b.id.as_ref().unwrap().0);
+                (a.len(), a).cmp(&(b.len(), b))
+            })
         });
         alerts
     }
@@ -1356,6 +1360,34 @@ mod tests {
                 panel.alerts.reverse();
                 assert_eq!(ids(&panel), expected, "reconnected {key:?}");
                 panel.alerts.reverse();
+            }
+        }
+        // Equal keys keep the host's numbering past nine alerts, in either direction, and ids
+        // that are not numbers keep one order whatever the push order.
+        let numbered: Vec<_> = (1..=12).map(|n| n.to_string()).collect();
+        for (pushed, expected) in [
+            (numbered.clone(), numbered.concat()),
+            (vec!["b".into(), "aa".into(), "a".into()], "abaa".into()),
+        ] {
+            panel.alerts = pushed
+                .iter()
+                .map(|id| {
+                    let mut alert = Alert::new("AAPL", AlertCondition::Above(1.0));
+                    alert.id = Some(AlertId(id.clone()));
+                    alert
+                })
+                .collect();
+            for key in [
+                AlertSortKey::Created,
+                AlertSortKey::Symbol,
+                AlertSortKey::Status,
+            ] {
+                for descending in [false, true] {
+                    (panel.options.sort, panel.options.descending) = (key, descending);
+                    assert_eq!(ids(&panel), expected, "{key:?} descending={descending}");
+                    panel.alerts.reverse();
+                    assert_eq!(ids(&panel), expected, "pushed reversed {key:?}");
+                }
             }
         }
     }
