@@ -728,6 +728,10 @@ impl AlertsPanel {
         let before = self.options.clone();
         let mut history_action = None;
         ui.horizontal_wrapped(|ui| {
+            // Completing a restore pops the last history entry, so nothing may add one meanwhile.
+            if self.restoring.is_some() {
+                ui.disable();
+            }
             ui.label(l10n::text(ui.ctx(), "Sort by"));
             egui::ComboBox::from_id_salt("alert_sort")
                 .selected_text(l10n::text(
@@ -1390,6 +1394,61 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn list_change_during_a_pending_undo_stays_undoable() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let host = Arc::new(Host::default());
+        let answer = || host.reply.lock().unwrap().take().unwrap().send(Ok(()));
+        let mut panel = AlertsPanel::default();
+        panel.set_service(host.clone());
+        let events = host.events.lock().unwrap().clone().unwrap();
+        let mut toasts = Toasts::new();
+        let mut h = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(egui::vec2(300.0, 700.0))
+            .build_ui_state(
+                move |ui, panel: &mut AlertsPanel| {
+                    panel.poll(ui.ctx(), &mut toasts);
+                    panel.show(ui);
+                },
+                panel,
+            );
+        let mut alert = Alert::new("SYM", AlertCondition::Above(1.0));
+        alert.id = Some(AlertId("1".into()));
+        alert.extend_line = true;
+        events.push(AlertEvent::Upsert(Box::new(alert.clone())));
+        h.run_steps(3);
+        // The marker menu turns the line off and the host applies it.
+        alert.extend_line = false;
+        h.state_mut().save(alert.clone());
+        answer();
+        events.push(AlertEvent::Upsert(Box::new(alert.clone())));
+        h.run_steps(3);
+        // Undo it and press Descending before the host pushes the alert back.
+        let descending = h.state().options.descending;
+        h.get_by_label("Undo").click();
+        h.run_steps(3);
+        answer();
+        h.run_steps(3);
+        h.get_by_label("Descending").click();
+        h.run_steps(3);
+        alert.extend_line = true;
+        events.push(AlertEvent::Upsert(Box::new(alert.clone())));
+        h.run_steps(3);
+        h.get_by_label("Undo").click();
+        h.run_steps(3);
+        assert!(h.state().alerts()[0].extend_line);
+        assert_eq!(h.state().options.descending, descending);
+        // Once the restore has finished the direction changes again and Undo reverts it.
+        h.get_by_label("Descending").click();
+        h.run_steps(3);
+        assert_eq!(h.state().options.descending, !descending);
+        h.get_by_label("Undo").click();
+        h.run_steps(3);
+        assert_eq!(h.state().options.descending, descending);
+        assert!(h.state().alerts()[0].extend_line);
     }
 
     #[test]
