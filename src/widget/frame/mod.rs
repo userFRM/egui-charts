@@ -964,11 +964,15 @@ impl Chart {
             })
             .and_then(|flow| {
                 let first = flow.complete_from()?;
-                let candles =
-                    self.state.shown()[start_idx..end_idx].partition_point(|bar| bar.time < first);
+                let candles = self.state.shown()[..end_idx].partition_point(|bar| bar.time < first);
                 let settings = self.trade_profile_settings();
                 let extend = settings.extend_poc || settings.extend_vah || settings.extend_val;
-                let profile_start = if extend { 0 } else { start_idx + candles };
+                // Sessions left of the view still extend, but only from the first complete bar on.
+                let profile_start = if extend {
+                    candles
+                } else {
+                    candles.max(start_idx)
+                };
                 let ranges = self.execution_profile_ranges(profile_start..end_idx)?;
                 let mapping = self.get_chart_mapping().with_rect(price_rect);
                 let bars = &self.state.data().bars;
@@ -1131,6 +1135,10 @@ impl Chart {
                 .entry(self.main_series_scale)
                 .or_default()
                 .merge(primitive_margins);
+        }
+        // With nothing to fit the scale keeps its range, which already holds its margins.
+        if !data_range.0.is_finite() {
+            margins.remove(&self.main_series_scale);
         }
         if self.main_series_visible
             && footprint.is_none()
@@ -1487,6 +1495,7 @@ impl Chart {
             tick_size: self
                 .instrument()
                 .and_then(|instrument| instrument.tick_size),
+            price_formatter: price_formatter.as_deref(),
         };
 
         let render_params = rendering::ChartTypeParams::new(
@@ -3091,19 +3100,17 @@ impl Chart {
                             Rect::from_min_max(
                                 price_rect.min,
                                 egui::pos2(
-                                    (price_rect.right() - 48.0).min(
-                                        rect.right()
-                                            - if self.layout_link_controls {
-                                                super::layout::LINK_CONTROLS_INSET
-                                            } else {
-                                                100.0
-                                            },
-                                    ),
+                                    (price_rect.right() - 48.0).min(rect.right() - 100.0),
                                     price_rect.bottom(),
                                 ),
                             ),
                             &colors,
                             Some(&study_indices),
+                            if self.layout_link_controls {
+                                rect.right() - super::layout::LINK_CONTROLS_INSET
+                            } else {
+                                f32::INFINITY
+                            },
                         )
                     })
                     .inner;

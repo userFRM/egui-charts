@@ -207,17 +207,19 @@ impl<'a> Legend<'a> {
             bearish_wick: None,
             candle_border_width: 0.0,
         };
-        let (quote, study, ..) = self.show_with_colors(ui, plot, &colors, None);
+        let (quote, study, ..) = self.show_with_colors(ui, plot, &colors, None, f32::INFINITY);
         (quote, study)
     }
 
     /// Also returns the bottom of the legend and the quantity box, when the user clicked it.
+    /// The first row keeps its usual inset from `first_row_end`, where another control starts.
     pub(crate) fn show_with_colors(
         &self,
         ui: &mut Ui,
         plot: Rect,
         colors: &StyleColors,
         study_indices: Option<&[usize]>,
+        first_row_end: f32,
     ) -> (
         Option<QuoteSide>,
         Option<StudyAction>,
@@ -235,9 +237,14 @@ impl<'a> Legend<'a> {
         let id = ui.next_auto_id().with(("series_legend", self.symbol));
         ui.skip_ahead_auto_ids(1);
         let painter = ui.painter().with_clip_rect(plot);
-        let mut layout = Layout::new(&painter, bounds, colors);
+        let mut layout = Layout::new(
+            &painter,
+            bounds,
+            colors,
+            (first_row_end - theme.spacing.lg).min(bounds.right()),
+        );
         #[cfg(feature = "icons")]
-        let title_start = layout.pos;
+        let (title_start, title_end) = (layout.pos, layout.row_end);
         if self.show_title {
             let image = self.badge.clone().or_else(|| {
                 self.instrument
@@ -301,7 +308,7 @@ impl<'a> Legend<'a> {
             } else {
                 pill_width + 8.0
             } + host_width;
-            let title_width = (bounds.right() - layout.pos.x - status_width - 64.0).max(0.0);
+            let title_width = (layout.row_end - layout.pos.x - status_width - 64.0).max(0.0);
             layout.text(
                 title,
                 theme.text.chart_title,
@@ -427,11 +434,12 @@ impl<'a> Legend<'a> {
         #[cfg(feature = "icons")]
         if self.show_title {
             let size = Vec2::new(116.0, 20.0);
-            // On a full row the controls cover its end instead of opening an empty row.
-            let controls = if layout.pos.x + size.x > bounds.right() {
+            // On a full row the controls cover its end instead of opening an empty row. They and
+            // the outline keep to the end of the title's first row on every row the title spans.
+            let controls = if layout.pos.x + size.x > title_end {
                 Rect::from_min_size(
                     Pos2::new(
-                        bounds.right() - size.x,
+                        title_end - size.x,
                         layout.pos.y + (layout.height - size.y) / 2.0,
                     ),
                     size,
@@ -440,9 +448,9 @@ impl<'a> Legend<'a> {
                 layout.reserve(size)
             };
             let row_right = if layout.pos.y > title_start.y {
-                bounds.right()
+                title_end
             } else {
-                controls.right().min(bounds.right())
+                controls.right()
             };
             let title_rect =
                 Rect::from_min_max(title_start, Pos2::new(row_right, controls.bottom()));
@@ -675,7 +683,7 @@ impl<'a> Legend<'a> {
                 if study.is_volume() && !self.show_volume {
                     continue;
                 }
-                let row_start = layout.pos;
+                let (row_start, row_end) = (layout.pos, layout.row_end);
                 if self.show_indicator_titles {
                     layout.text(
                         if study.is_volume() {
@@ -763,11 +771,15 @@ impl<'a> Legend<'a> {
                         layout.text(text, theme.text.ohlc, color, bounds.width());
                     }
                 }
+                // The row and its outline keep to the end of the row it starts on, which is the
+                // shortened first row when nothing comes before it. Controls past that end take
+                // a row of their own.
+                layout.row_end = layout.row_end.min(row_end);
                 let controls = layout
                     .reserve(Vec2::new(controls_width(study.as_ref()), 20.0))
                     .intersect(bounds);
                 let row_right = if layout.pos.y > row_start.y {
-                    bounds.right()
+                    row_end
                 } else {
                     controls.right()
                 };
@@ -944,6 +956,8 @@ struct Layout<'a> {
     painter: &'a egui::Painter,
     bounds: Rect,
     pos: Pos2,
+    /// Where the current row ends: `bounds` less what the first row leaves to another control.
+    row_end: f32,
     height: f32,
     background: egui::layers::ShapeIdx,
     /// Fill of the current row's background.
@@ -952,11 +966,17 @@ struct Layout<'a> {
 }
 
 impl<'a> Layout<'a> {
-    fn new(painter: &'a egui::Painter, bounds: Rect, colors: &'a StyleColors) -> Self {
+    fn new(
+        painter: &'a egui::Painter,
+        bounds: Rect,
+        colors: &'a StyleColors,
+        first_row_end: f32,
+    ) -> Self {
         Self {
             painter,
             bounds,
             pos: bounds.min,
+            row_end: first_row_end,
             height: 24.0,
             background: painter.add(egui::Shape::Noop),
             backdrop: painter.ctx().active_theme().chart.bg,
@@ -966,12 +986,16 @@ impl<'a> Layout<'a> {
 
     fn new_row(&mut self) {
         self.pos = Pos2::new(self.bounds.left(), self.pos.y + self.height);
+        self.row_end = self.bounds.right();
         self.height = 22.0;
         self.background = self.painter.add(egui::Shape::Noop);
     }
 
     fn reserve_space(&mut self, size: Vec2) -> Rect {
-        if self.pos.x > self.bounds.left() && self.pos.x + size.x > self.bounds.right() {
+        // A shortened first row gives way even to its first item; a full row has nowhere better.
+        if (self.pos.x > self.bounds.left() || self.row_end < self.bounds.right())
+            && self.pos.x + size.x > self.row_end
+        {
             self.new_row();
         }
         self.height = self.height.max(size.y);
@@ -1359,7 +1383,9 @@ mod tests {
                         let mut legend = Legend::new("SAMPLE", "1h", &bar);
                         legend.series_visible = series_visible;
                         let plot = Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 400.0));
-                        action = legend.show_with_colors(ui, plot, &colors, None).4;
+                        action = legend
+                            .show_with_colors(ui, plot, &colors, None, f32::INFINITY)
+                            .4;
                     },
                 );
                 let title = output.shapes.iter().any(|shape| {
