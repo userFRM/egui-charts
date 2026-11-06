@@ -87,7 +87,8 @@ pub struct BacktestSettings {
     /// `None` or an invalid fraction uses `1 / leverage`; zero disables short funding checks.
     pub short_funding: Option<f64>,
     /// Require a limit to trade through by one `price_increment` before filling at its limit, or
-    /// at the open of a bar that opens at or beyond that threshold.
+    /// at the open of a bar that opens at or beyond that threshold. An order that can first fill
+    /// at a price already beyond the threshold, as after a delay or a triggered stop, fills there.
     /// Applies to entries, triggered stop-limits and profit-taking exits, without slippage.
     pub require_limit_cross: bool,
     /// Smallest price increment for limit verification. Must be positive and finite.
