@@ -19,21 +19,33 @@
 //! williams.calculate(&bars);
 //! ```
 
-use super::over_finite_bars;
+use super::smoothing::{SMOOTHING_COLORS, Smoothed, SmoothingType};
 use crate::model::Bar;
 use crate::studies::palette;
-use crate::studies::stepper::{rolling_max, rolling_min};
-use crate::studies::stepper::{update_window, usable_behind};
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
+use std::collections::VecDeque;
 
 /// Williams %R indicator
 #[derive(Clone)]
 pub struct WilliamsR {
     period: usize,
+    smoothing: SmoothingType,
+    smoothing_length: usize,
+    smoothing_deviation: f64,
     values: IndicatorValues,
+    stepper: Stepper<Rolling>,
     color: Color32,
+    smoothing_colors: [Color32; 3],
     visible: bool,
+}
+
+/// The highs and lows of the last `period` bars with finite prices, and the average of %R.
+#[derive(Clone, Default)]
+struct Rolling {
+    window: VecDeque<(f64, f64)>,
+    smoothed: Smoothed,
 }
 
 impl WilliamsR {
@@ -44,8 +56,13 @@ impl WilliamsR {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
+            smoothing: SmoothingType::None,
+            smoothing_length: 14,
+            smoothing_deviation: 2.0,
             values: IndicatorValues::new(),
+            stepper: Stepper::default(),
             color: palette::PURPLE,
+            smoothing_colors: SMOOTHING_COLORS,
             visible: true,
         }
     }
@@ -64,42 +81,14 @@ impl Default for WilliamsR {
     }
 }
 
-impl WilliamsR {
-    /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-        if data.len() < self.period {
-            for _ in 0..data.len() {
-                values.push(IndicatorValue::None);
-            }
-            return values;
-        }
-
-        let highest = rolling_max(data.iter().map(|b| b.high), self.period);
-        let lowest = rolling_min(data.iter().map(|b| b.low), self.period);
-        for i in 0..data.len() {
-            if i < self.period - 1 {
-                values.push(IndicatorValue::None);
-            } else {
-                let (highest, lowest) = (highest[i], lowest[i]);
-                let range = highest - lowest;
-
-                if range == 0.0 {
-                    values.push(IndicatorValue::Single(-50.0)); // Middle value
-                } else {
-                    let r = (highest - data[i].close) / range * -100.0;
-                    values.push(IndicatorValue::Single(r.clamp(-100.0, 0.0)));
-                }
-            }
-        }
-
-        values
-    }
-}
-
 impl Indicator for WilliamsR {
     crate::studies::inputs::study_inputs!(self;
-        period: length("Period", 1, usize::MAX)
+        period: length("Period", 1, usize::MAX),
+        smoothing: choice("Smoothing", SmoothingType::ALL),
+        smoothing_length: length("Smoothing length", 1, usize::MAX)
+            if smoothing in SmoothingType::WITH_LENGTH,
+        smoothing_deviation: number("Band deviation", 0.0, f64::MAX)
+            if smoothing in SmoothingType::WITH_BANDS
     ; {});
 
     fn value_format(&self) -> crate::scales::StudyFormat {
@@ -119,23 +108,34 @@ impl Indicator for WilliamsR {
     }
 
     fn update(&mut self, data: &[Bar], from: usize) {
-        let mut values = std::mem::take(&mut self.values);
-        update_window(
-            &mut values,
-            data,
-            from,
-            usable_behind(self.period - 1, |b| {
-                b.high.is_finite() && b.low.is_finite() && b.close.is_finite()
-            }),
-            |data| {
-                over_finite_bars(
-                    data,
-                    |b| b.high.is_finite() && b.low.is_finite() && b.close.is_finite(),
-                    |data| self.compute(data),
-                )
-            },
+        let (period, kind, length, deviation) = (
+            self.period,
+            self.smoothing,
+            self.smoothing_length,
+            self.smoothing_deviation,
         );
-        self.values = values;
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if !(bar.high.is_finite() && bar.low.is_finite() && bar.close.is_finite()) {
+                    return IndicatorValue::None;
+                }
+                state.window.push_back((bar.high, bar.low));
+                if state.window.len() > period {
+                    state.window.pop_front();
+                }
+                if state.window.len() < period {
+                    return IndicatorValue::None;
+                }
+                let highest = state.window.iter().fold(f64::MIN, |max, w| max.max(w.0));
+                let lowest = state.window.iter().fold(f64::MAX, |min, w| min.min(w.1));
+                let range = highest - lowest;
+                let r = if range == 0.0 {
+                    -50.0 // Middle value
+                } else {
+                    ((highest - bar.close) / range * -100.0).clamp(-100.0, 0.0)
+                };
+                state.smoothed.next(kind, length, deviation, r, bar.volume)
+            });
     }
 
     fn is_incremental(&self) -> bool {
@@ -147,12 +147,20 @@ impl Indicator for WilliamsR {
     }
 
     fn colors(&self) -> Vec<Color32> {
-        vec![self.color]
+        let [average, upper, lower] = self.smoothing_colors;
+        vec![self.color, average, upper, lower]
+    }
+
+    fn fills(&self) -> Vec<crate::studies::StudyFill> {
+        self.smoothing.fills()
     }
 
     fn set_colors(&mut self, colors: Vec<Color32>) {
         if !colors.is_empty() {
             self.color = colors[0];
+            for (slot, color) in self.smoothing_colors.iter_mut().zip(&colors[1..]) {
+                *slot = *color;
+            }
         }
     }
 
@@ -173,6 +181,8 @@ impl Indicator for WilliamsR {
     }
 
     fn line_names(&self) -> Vec<String> {
-        vec![format!("%R({})", self.period)]
+        let mut names = vec![format!("%R({})", self.period)];
+        names.extend(self.smoothing.line_names("%R MA"));
+        names
     }
 }

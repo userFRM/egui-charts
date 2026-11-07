@@ -14,7 +14,9 @@ pub struct ObjectTreeState {
     /// Folder paths, rebuilt from the source rows on each frame: a folder exists while it holds
     /// a drawing, so an emptied one goes away and undo brings it back.
     pub folders: BTreeSet<Vec<String>>,
-    /// Collapsed folder paths. Search temporarily expands matching descendants.
+    /// Collapsed folder paths. Search temporarily expands matching descendants. A path stays while
+    /// the rows do not hold its folder, as when one panel follows the active chart, and is cleared
+    /// when the folder is deleted or moved from the panel.
     pub collapsed_folders: BTreeSet<Vec<String>>,
     /// Parent of the folder being created by the name prompt.
     pub creating_folder: Option<Vec<String>>,

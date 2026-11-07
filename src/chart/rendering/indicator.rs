@@ -338,6 +338,7 @@ impl IndicatorRenderer {
                 crate::chart::rendering::volume_profile::profile_span(&plot, coords),
                 crate::painting::volume_profile::ProfileStyle::Study {
                     right_aligned: plot.right_aligned,
+                    width: plot.width,
                 },
                 &|price| price_scale.price_to_y(price),
             );
