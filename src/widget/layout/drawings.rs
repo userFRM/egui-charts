@@ -3,7 +3,6 @@
 
 use super::ChartLayout;
 use crate::config::{DrawingSort, DrawingToolType};
-use crate::drawings::DrawingManager;
 use crate::drawings::manager::sync_id;
 use crate::drawings::persistence::{DrawingStorage, StoredCoord, StoredDrawing};
 use crate::drawings::{Drawing, FolderSync};
@@ -399,12 +398,12 @@ fn stored_key(record: &StoredDrawing) -> String {
     )
 }
 
-fn live_row(manager: &DrawingManager, drawing: &Drawing) -> SymbolDrawing {
+fn live_row(drawing: &Drawing) -> SymbolDrawing {
     SymbolDrawing {
         id: sync_id(drawing),
         tool_type: drawing.tool_type,
         label: drawing.label.clone(),
-        modified_at: manager.modified_at(drawing),
+        modified_at: drawing.modified_at,
     }
 }
 
@@ -457,11 +456,7 @@ fn inventory(charts: &[&mut Chart]) -> BTreeMap<String, Vec<(SymbolDrawing, Stri
         };
         if !chart.symbol().is_empty() {
             for drawing in chart.drawings().drawings.iter().filter(|d| inventoried(d)) {
-                hold(
-                    chart.symbol(),
-                    live_row(chart.drawings(), drawing),
-                    live_key(chart, drawing),
-                );
+                hold(chart.symbol(), live_row(drawing), live_key(chart, drawing));
             }
         }
         if chart.keeps_stored_drawings() {
@@ -475,7 +470,7 @@ fn inventory(charts: &[&mut Chart]) -> BTreeMap<String, Vec<(SymbolDrawing, Stri
         } else {
             for (symbol, (manager, _)) in &chart.symbol_drawings {
                 for drawing in manager.drawings.iter().filter(|d| inventoried(d)) {
-                    hold(symbol, live_row(manager, drawing), live_key(chart, drawing));
+                    hold(symbol, live_row(drawing), live_key(chart, drawing));
                 }
             }
         }
@@ -1060,7 +1055,6 @@ mod tests {
         }
         let ids: Vec<_> = chart.drawings().drawings.iter().map(|d| d.id).collect();
         for (id, time) in ids.iter().zip([1_000, 2_000]) {
-            chart.drawings.apply_edit_times();
             chart
                 .drawings
                 .drawings
