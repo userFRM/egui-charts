@@ -55,7 +55,15 @@ pub(super) fn render_high_low(
     }
 
     if style.labels_visible && style.label_font_size > 0.0 && style.label_font_size.is_finite() {
-        render_high_low_labels(painter, &ends, price_scale, price_formatter, style);
+        let style = HighLowStyle {
+            label_color: if style.label_color == Color32::PLACEHOLDER {
+                colors.text
+            } else {
+                style.label_color
+            },
+            ..*style
+        };
+        render_high_low_labels(painter, &ends, price_scale, price_formatter, &style);
     }
 
     if show_volume {

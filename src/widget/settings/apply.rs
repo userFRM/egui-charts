@@ -1491,6 +1491,50 @@ mod tests {
         }
     }
 
+    /// The default price labels are printed in the price scale's text colour, so they read at the
+    /// contrast the built-in themes hold their price text to on the chart background: 4.5:1, and
+    /// 7:1 in high contrast. No fixed colour meets both on white and on black.
+    #[test]
+    fn high_low_default_labels_read_on_every_theme() {
+        use crate::model::ChartType;
+        use crate::widget::test_frames::{frame, shapes};
+
+        for (name, theme) in crate::theme::presets() {
+            let ctx = Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut chart = Chart::new(BarData::from_bars(vec![Bar::new(
+                chrono::DateTime::UNIX_EPOCH,
+                10.0,
+                18.0,
+                8.0,
+                14.0,
+                0.0,
+            )]));
+            chart.set_chart_type(ChartType::HighLow);
+            chart.config_mut().show_volume = false;
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            chart.state.time_scale_mut().set_bar_spacing(80.0);
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+            let plot = chart.get_rendered_price_rect();
+            let ratios: Vec<f32> = painted
+                .iter()
+                .filter_map(|shape| match shape {
+                    Shape::Text(t)
+                        if t.galley.job.sections[0].format.font_id.size == 7.0
+                            && plot.contains(t.visual_bounding_rect().center()) =>
+                    {
+                        let color = t.galley.job.sections[0].format.color;
+                        Some(crate::theme::contrast(color, theme.chart.bg))
+                    }
+                    _ => None,
+                })
+                .collect();
+            let least = if name == "high-contrast" { 7.0 } else { 4.5 };
+            assert_eq!(ratios.len(), 2, "{name}: labels at {ratios:?}");
+            assert!(ratios.iter().all(|r| *r >= least), "{name}: {ratios:?}");
+        }
+    }
+
     /// A high-low document without the chart type's style printed no price labels, so a layout or
     /// a chart settings template saved then restores without them; a layout saved with the style
     /// keeps its six. Labels are picked by their text and size, whatever their colour.

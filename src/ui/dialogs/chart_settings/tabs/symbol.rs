@@ -997,10 +997,16 @@ mod tests {
                     let plot = chart.get_rendered_price_rect();
                     assert!(painted.iter().any(|s| matches!(s, Shape::Rect(r)
                         if plot.contains(r.rect.center()) && r.fill == expected.bar_color)));
+                    // Reset's default label colour prints in the price scale's text colour.
+                    let label_color = if expected.label_color == Color32::PLACEHOLDER {
+                        chart.config().text_color
+                    } else {
+                        expected.label_color
+                    };
                     let label = painted.iter().any(|s| {
                         matches!(s, Shape::Text(t)
                         if t.galley.text() == "18.00"
-                            && t.galley.job.sections[0].format.color == expected.label_color
+                            && t.galley.job.sections[0].format.color == label_color
                             && t.galley.job.sections[0].format.font_id.size
                                 == expected.label_font_size)
                     });

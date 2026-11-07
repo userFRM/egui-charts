@@ -866,7 +866,17 @@ impl SymbolTab {
     fn high_low(ui: &mut Ui, style: &mut HighLowStyle) {
         Self::fill_row(ui, "Bar colour", &mut style.bar_color);
         Self::switch(ui, "Price labels", &mut style.labels_visible);
-        Self::fill_row(ui, "Label colour", &mut style.label_color);
+        ui.label(l10n::text(ui.ctx(), "Label colour"));
+        // The default that follows the theme shows as the colour it prints in, until one is picked.
+        let mut shown = if style.label_color == Color32::PLACEHOLDER {
+            ui.active_theme().chart.axis_text
+        } else {
+            style.label_color
+        };
+        if Self::color_picker(ui, &mut shown) {
+            style.label_color = shown;
+        }
+        ui.end_row();
         let label = ui.label(l10n::text(ui.ctx(), "Label size"));
         ui.label_inputs_by(label.id, |ui| {
             ui.combo_select(
