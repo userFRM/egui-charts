@@ -3927,3 +3927,151 @@ fn volume_profile_studies_read_the_chart_executions() {
     assert_eq!(profile.up(), [2.0, 0.0, 0.0]);
     assert_eq!(profile.down(), [0.0, 1.0, 0.0]);
 }
+
+/// Leaving replay keeps the bars and the book history the chart showed before it and rebuilds
+/// only its last bar: from a latest page that reaches the kept bars, from executions the feed
+/// replays on resubscribing without counting those of the kept bars twice or letting the bars it
+/// pushes again replace them, or from a latest page alone when it starts after them.
+#[test]
+fn replay_exit_keeps_live_bars_and_depth() {
+    let minute = |at: usize| bars(13)[at].time;
+    let fill = |at, price| Tick::new(minute(at) + TimeDelta::seconds(10), price, 1.0, None);
+    let mut caught_up = bars(10);
+    caught_up[9] = Bar::new(minute(9), 109.0, 112.0, 108.0, 111.0, 3.0);
+    let cases = [
+        (
+            "a page that reaches the kept bars",
+            caught_up.clone(),
+            vec![],
+            vec![],
+            caught_up,
+        ),
+        (
+            "replayed executions",
+            bars(5),
+            vec![],
+            vec![fill(8, 108.0), fill(9, 109.0)],
+            bars(10),
+        ),
+        (
+            "bars the feed pushes again",
+            bars(5),
+            vec![Bar::new(minute(7), 107.0, 107.0, 107.0, 107.0, 0.5)],
+            vec![fill(9, 109.0)],
+            bars(10),
+        ),
+        (
+            "a page that starts after them",
+            bars(13)[11..].to_vec(),
+            vec![],
+            vec![],
+            bars(13)[11..].to_vec(),
+        ),
+    ];
+    for (case, latest, pushed, replayed, expected) in cases {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        chart.set_depth_history(Some(DepthHistory::new(Default::default()).unwrap()));
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+        feed.page().send(page(bars(10), true));
+        for _ in 0..3 {
+            frames.run(&mut chart);
+        }
+        let link = chart.feed_link.as_mut().unwrap();
+        link.depth_history
+            .as_mut()
+            .unwrap()
+            .push(crate::data::DepthColumn {
+                time: minute(9),
+                span: TimeDelta::seconds(1),
+                bids: vec![(100, 5.0)],
+                asks: vec![(101, 5.0)],
+                ..Default::default()
+            });
+        let shown = |chart: &Chart| {
+            let link = chart.feed_link.as_ref().unwrap();
+            let book = link
+                .depth_history
+                .as_ref()
+                .unwrap()
+                .columns()
+                .next()
+                .map(|c| c.time);
+            (chart.state.data().bars.clone(), book)
+        };
+        chart.set_replay_time(Some(minute(5)));
+        frames.run(&mut chart);
+        feed.calls();
+        chart.set_replay_time(None);
+        frames.run(&mut chart);
+        assert_eq!(
+            feed.calls(),
+            [
+                Call::Resolve("A".into()),
+                history("A", Timeframe::Min1, None)
+            ],
+            "{case}: catching up"
+        );
+        assert_eq!(
+            shown(&chart),
+            (bars(10)[..9].to_vec(), Some(minute(9))),
+            "{case}: kept"
+        );
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+        frames.run(&mut chart);
+        for bar in pushed {
+            feed.sink().push_bar(bar);
+        }
+        for tick in replayed {
+            feed.sink().push_tick(tick);
+        }
+        feed.page().send(page(latest, true));
+        for _ in 0..3 {
+            frames.run(&mut chart);
+        }
+        assert_eq!(
+            shown(&chart),
+            (expected, Some(minute(9))),
+            "{case}: caught up"
+        );
+    }
+}
+
+/// Resuming keeps the bars the stream built before the pause: the latest page counts their
+/// trades too, also in its newest bar, which must not add them a second time.
+#[test]
+fn resuming_keeps_the_bars_the_stream_built_before_the_pause() {
+    let feed = Arc::new(Script::default());
+    let mut chart = fed(&feed, Some("A"));
+    let mut frames = Frames::new();
+    frames.run(&mut chart);
+    feed.resolve()
+        .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+    feed.page().send(page(bars(5), true));
+    for _ in 0..3 {
+        frames.run(&mut chart);
+    }
+    for bar in &bars(8)[5..] {
+        let fill = Tick::new(bar.time + TimeDelta::seconds(10), bar.close, 1.0, None);
+        feed.sink().push_tick(fill);
+    }
+    for _ in 0..3 {
+        frames.run(&mut chart);
+    }
+    assert_eq!(chart.state.data().bars, bars(8), "streamed");
+    chart.set_feed_paused(true);
+    chart.set_feed_paused(false);
+    frames.run(&mut chart);
+    feed.resolve()
+        .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+    // Completed bars only: minute 7 still forms.
+    feed.page().send(page(bars(7), true));
+    for _ in 0..3 {
+        frames.run(&mut chart);
+    }
+    assert_eq!(chart.state.data().bars, bars(7));
+}

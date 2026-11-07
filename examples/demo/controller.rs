@@ -3516,11 +3516,8 @@ impl DemoApp {
                     ctx.request_repaint();
                 }
                 egui_charts::widget::ChartEvent::Click { position, button } => {
-                    if button == egui::PointerButton::Primary
-                        && position.series == SeriesId::MAIN
-                        && let Some(time) = position.time
-                    {
-                        replay_click.get_or_insert(time);
+                    if button == egui::PointerButton::Primary {
+                        replay_click.get_or_insert(position.pos);
                     }
                     self.last_chart_click = Some(position);
                 }
@@ -3547,7 +3544,8 @@ impl DemoApp {
                 _ => {}
             }
         }
-        if let Some(time) = replay_click {
+        if let Some(index) = replay_click.and_then(|pos| self.replay_start_bar(pos)) {
+            let time = self.chart.state().shown()[index].time;
             self.handle_replay_bar_click(ctx, time);
         }
         if open_settings && !self.replay_selecting {
@@ -5397,6 +5395,84 @@ mod tests {
             app.toasts.toasts().last().unwrap().message,
             "Click the chart to choose a research time and price"
         );
+    }
+
+    /// Wherever bar selection draws its cut line, a click starts replay at the bar it marks: in
+    /// the volume band at the bottom of the price pane and after the last bar.
+    #[test]
+    fn bar_selection_click_starts_wherever_the_cut_line_is_drawn() {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = DemoApp::new_at(&cc, "2026-11-03T02:00:00Z".parse().unwrap(), true);
+        finish_feed(&app.live);
+        app.apply_session();
+        app.chart.set_signal_source(None);
+        let frame = |app: &mut DemoApp, events| {
+            finish_feed(&app.live);
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    time: Some(ctx.input(|input| input.time) + 0.2),
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, 600.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    app.show_top_toolbar(ui, app.theme.ui.panel_bg);
+                    app.show_chart(ui, app.theme.ui.panel_bg);
+                    app.show_replay_start(ui.ctx());
+                },
+            );
+            let shapes = std::mem::take(&mut output.shapes);
+            output.drop_without_applying_deltas();
+            shapes
+        };
+        for volume_band in [true, false] {
+            app.stop_replay();
+            for _ in 0..3 {
+                frame(&mut app, vec![]);
+            }
+            let map = app.chart.get_chart_mapping();
+            let last = app.chart.state().shown().len() - 1;
+            let (marked, pos) = if volume_band {
+                let y = app.chart.get_rendered_volume_rect().center().y;
+                (last - 8, egui::pos2(map.idx_to_x(last - 8), y))
+            } else {
+                (
+                    last,
+                    egui::pos2(map.idx_to_x(last) + 20.0, map.rect.center().y),
+                )
+            };
+            app.toggle_replay();
+            assert!(app.replay_selecting);
+            let shapes = frame(&mut app, vec![egui::Event::PointerMoved(pos)]);
+            let x = map.idx_to_x(marked);
+            assert!(shapes.iter().any(|shape| matches!(
+                &shape.shape,
+                egui::Shape::LineSegment { points, .. }
+                    if (points[0].x - x).abs() < 0.5
+                        && (points[1].x - x).abs() < 0.5
+                        && (points[1].y - points[0].y).abs() > map.rect.height() * 0.9
+            )));
+            for pressed in [true, false] {
+                frame(
+                    &mut app,
+                    vec![egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                );
+            }
+            assert_eq!(
+                app.replay.as_ref().map(|replay| replay.state.curr_bar),
+                Some(marked),
+                "volume band: {volume_band}"
+            );
+        }
     }
 
     #[test]
