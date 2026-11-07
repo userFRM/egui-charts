@@ -558,9 +558,10 @@ impl Footprint {
     /// bar opens, grouped on from there. A second bar that opens and sums as grouped, or the page
     /// ending exactly with the first, proves the start; one bar alone could be a fill split by
     /// the bar before it. On volume and delta intervals a second bar proves the start only when
-    /// the bar before closes at another price than every execution at the start's time. The newest
-    /// proven run is kept, so its bars have no gap. Older bars get no cells and draw candles. With
-    /// `before`, adds only the executions strictly before it.
+    /// the bar before closes at another price than every execution at the start's time, and the
+    /// page's end only when it ends with the last of `history`. The newest proven run is kept, so
+    /// its bars have no gap. Older bars get no cells and draw candles. With `before`, adds only
+    /// the executions strictly before it.
     #[cfg(feature = "widget")]
     pub(crate) fn push_history(
         &mut self,
@@ -608,7 +609,11 @@ impl Footprint {
                 trades[start].size,
                 None,
             );
-            if run.proven && (whole || run.end.is_some()) {
+            // The page's end pins the split only with the last bar: an earlier one has executions
+            // after the page, and when they sum to the part a grouping moved, it matches as well.
+            let ends = run.end.is_some()
+                && run.parts.last().map(|part| part.1) == history.last().map(|bar| bar.time);
+            if run.proven && (whole || ends) {
                 newest = run.parts;
                 at = start + run.next.max(1);
             } else if run.proven {

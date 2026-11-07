@@ -192,8 +192,8 @@ impl FeedLink {
     /// older than the one before it is left out, as it is when it arrives live. The bar of the
     /// oldest held trade is incomplete until a trade page reports the start of trade history.
     /// On a trade-based interval, paged trades fill only the bars of `history`, the chart's, that
-    /// they rebuild ([`Footprint::push_history`]). With `before`, includes only executions
-    /// strictly before that replay cutoff.
+    /// open before the live executions and that they rebuild ([`Footprint::push_history`]). With
+    /// `before`, includes only executions strictly before that replay cutoff.
     pub(super) fn footprint(
         &self,
         before: Option<chrono::DateTime<chrono::Utc>>,
@@ -218,7 +218,11 @@ impl FeedLink {
             let paged: Vec<_> = held()
                 .filter(|trade| lost.is_none_or(|lost| trade.ts > lost))
                 .collect();
-            flow.push_history(&paged, history, before);
+            // Bars from the first live execution on hold executions the page lacks, so it cannot
+            // end with them.
+            let live = self.trades.live().next().map(|trade| trade.ts);
+            let paged_bars = history.partition_point(|bar| live.is_none_or(|live| bar.time < live));
+            flow.push_history(&paged, &history[..paged_bars], before);
         } else if !trade_based || lost.is_none() || self.trades.live().next().is_none() {
             for trade in trades() {
                 let _ = flow.push(trade);

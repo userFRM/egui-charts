@@ -1591,7 +1591,12 @@ fn paged_cells(
 /// at 106. Every boundary splits a fill, and each page starts with the fill the first boundary
 /// split, so a bar draws its own cells or a candle. The third tape's bars open with whole
 /// executions at new prices, so its page, which ends inside a bar, proves its start and must
-/// draw. The last tape's 10 volume bars split nearly every boundary, as fractional sizes do.
+/// draw. The fourth tape's page stops before the sell that completes its fourth bar with 1, the
+/// part of the buy at 101 in the bar before, so a grouping from that buy matches every bar to
+/// the page's end. Its own cells: 1 of that buy, the sell of 5 at 102 and 4 of the sell of 6 at
+/// 103; the other 2, the buy of 5 at 104 and 3 of the buy of 6 at 105; the other 3, the sell of 6
+/// at 106 and 1 of the sell of 4 at 106. The last tape's 10 volume bars split nearly every
+/// boundary, as fractional sizes do.
 #[test]
 fn split_fill_boundaries_draw_only_a_bars_own_executions() {
     use crate::model::OrderSide::{Buy, Sell};
@@ -1709,6 +1714,29 @@ fn split_fill_boundaries_draw_only_a_bars_own_executions() {
                 None,
             ],
             true,
+        ),
+        (
+            "page ending before the fill that completes its last bar",
+            "10v",
+            tape(&[
+                (100.0, 9.0, Buy),
+                (101.0, 2.0, Buy),
+                (102.0, 5.0, Sell),
+                (103.0, 6.0, Sell),
+                (104.0, 5.0, Buy),
+                (105.0, 6.0, Buy),
+                (106.0, 6.0, Sell),
+                (106.0, 4.0, Sell),
+            ]),
+            1..7,
+            vec![
+                None,
+                Some(vec![(101, 0.0, 1.0), (102, 5.0, 0.0), (103, 4.0, 0.0)]),
+                Some(vec![(103, 2.0, 0.0), (104, 0.0, 5.0), (105, 0.0, 3.0)]),
+                Some(vec![(105, 0.0, 3.0), (106, 7.0, 0.0)]),
+                None,
+            ],
+            false,
         ),
         (
             "fractional volume tape draws no cells of another bar",
