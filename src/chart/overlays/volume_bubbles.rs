@@ -928,12 +928,13 @@ mod tests {
             let case = format!("radius {radius} at {ppp}x, border {with_border}, shaded {shaded}");
             assert!(mesh.is_valid(), "{case}");
             // 0.4 of the way from the red fill to white, a third of the fill's radius up and left.
-            let (apex, color) = match shaded {
-                true => (
+            let (apex, color) = if shaded {
+                (
                     center - Vec2::splat((radius - half) / 3.0),
                     Color32::from_rgb(255, 102, 102),
-                ),
-                false => (center, fill),
+                )
+            } else {
+                (center, fill)
             };
             assert!((mesh.vertices[0].pos - apex).length() < 1e-3, "{case}");
             assert_eq!(mesh.vertices[0].color, color, "{case}");
@@ -1208,6 +1209,10 @@ mod tests {
                 VolumeBubblesConfig::default(),
                 Vec::from_iter((0..30).map(|second| trade(second, 100.0, 1.0, buy))),
                 Vec::from_iter((10..30).map(|second| (100.0 + (second as f32 / 60.0 - 0.5) * 80.0, 100.0, 40.0, green, None)))),
+            ("an absolute size draws every trade it admits, past the 20",
+                VolumeBubblesConfig { min_size_filter: Some(1.0), ..VolumeBubblesConfig::default() },
+                Vec::from_iter((0..30).map(|second| trade(second, 100.0, 1.0, buy))),
+                Vec::from_iter((0..30).map(|second| (100.0 + (second as f32 / 60.0 - 0.5) * 80.0, 100.0, 40.0, green, None)))),
             ("a dense view draws only the 20 largest trades",
                 VolumeBubblesConfig::default(),
                 Vec::from_iter((0..3000).map(|j: i64| {
