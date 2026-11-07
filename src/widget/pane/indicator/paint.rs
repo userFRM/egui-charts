@@ -1217,7 +1217,8 @@ mod tests {
     }
 
     /// The pane legend colours a value as its plot shows it: a plot drawn one bar to the right of
-    /// its source bar takes the colour of the source bar its value comes from.
+    /// its source bar takes the colour of the source bar its value comes from, and a transparent
+    /// colour at that bar, which hides only the segment into it, leaves the plot's own colour.
     #[test]
     fn pane_legend_colours_a_shifted_value_by_its_source_bar() {
         let mut study = CustomIndicator::new("Shifted", |bars| {
@@ -1239,6 +1240,23 @@ mod tests {
             .find(|s| job.text[s.byte_range.start.0..s.byte_range.end.0].starts_with("14"))
             .map(|s| s.format.color);
         assert_eq!(value, Some(Color32::RED), "{value:?} in {}", job.text);
+        let mut stepped = CustomIndicator::new("Stepped", |bars| {
+            (0..bars.len())
+                .map(|i| IndicatorValue::Single(10.0 + i as f64))
+                .collect()
+        })
+        .with_overlay(false)
+        .with_color(Color32::GREEN)
+        .with_plot_color(|_, bar, _| (bar == 0).then_some(Color32::TRANSPARENT));
+        stepped.calculate(&bars_from_closes([1.0; 8]));
+        pane.bar_index = Some(0);
+        let job = pane.legend_job(&stepped, Color32::WHITE, Color32::GRAY, Color32::BLACK, 12.0);
+        let value = job
+            .sections
+            .iter()
+            .find(|s| job.text[s.byte_range.start.0..s.byte_range.end.0].starts_with("10"))
+            .map(|s| s.format.color);
+        assert_eq!(value, Some(Color32::GREEN), "{value:?} in {}", job.text);
     }
 
     /// Every value the pane legend draws in a plot colour reads at 4.5:1 or better on the pane in
