@@ -51,8 +51,8 @@ pub struct VolumeBubblesConfig {
     /// Bubbles with less volume are neither drawn nor scaled over. Without one,
     /// [`Ungrouped`](BubbleGrouping::Ungrouped) draws at most the 20 largest visible trades of at
     /// least the mean plus two standard deviations of the visible trades' sizes, the latest of
-    /// those tied at the 20th size first, a visible trade being one centred inside the plot in
-    /// price and time, and the other groupings draw every bubble. `Some(0.0)` draws every trade.
+    /// those tied at the 20th size first, and the other groupings draw every bubble. `Some(0.0)`
+    /// draws every trade. A trade is visible when it is centred inside the plot in price and time.
     pub min_size_filter: Option<f64>,
     /// Which trades share a bubble.
     pub grouping: BubbleGrouping,
