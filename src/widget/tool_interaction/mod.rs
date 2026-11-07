@@ -72,18 +72,12 @@ impl Chart {
         let Some(pane) = pane else {
             return Some(super::SeriesId::MAIN);
         };
-        self.pane_layout
-            .panes
-            .iter()
-            .find(|p| p.id == pane)?
-            .members
-            .iter()
-            .copied()
-            .find(|id| {
-                self.price_series
-                    .iter()
-                    .any(|item| item.id == *id && item.visible)
-            })
+        // The original price pane does not list its series as members.
+        self.pane_series_iter(pane).find(|id| {
+            self.price_series
+                .iter()
+                .any(|item| item.id == *id && item.visible)
+        })
     }
 
     /// The interval drawings measure on time-based charts with a time axis.
@@ -1710,29 +1704,42 @@ mod tests {
     /// An RSI pane is in RSI points, not in the instrument's quarter-point ticks: an info line
     /// from 40 to 50 on it rises 10 points, which its readouts must not count as 40 ticks. The
     /// original price pane the main series left empty has no price series either; it paints the
-    /// drawings that name it by its id, 0, which is also the main series' id.
+    /// drawings that name it by its id, 0, which is also the main series' id. With a host series
+    /// left in it, that pane is a price pane, where a line from 100 to 110 rises 40 ticks.
     #[cfg(feature = "ui")]
     #[test]
     fn study_pane_readouts_leave_out_the_instrument_ticks() {
         use crate::studies::RSI;
-        use crate::widget::{PaneId, SeriesId};
-        for emptied in [false, true] {
+        use crate::widget::{PaneId, SeriesId, SeriesOptions};
+        for (moved, kept) in [(false, false), (true, false), (true, true)] {
+            let row = format!("main series moved {moved}, host series kept {kept}");
             let ctx = Context::default();
+            let data = chart(&[90.0], &[95.0, 115.0]).bars(SeriesId::MAIN).to_vec();
             let mut chart = chart(&[90.0], &[110.0]);
             chart.set_instrument(Some(
                 crate::model::Instrument::new("TEST").with_tick_size(0.25),
             ));
-            let owner = if emptied {
+            let owner = if moved {
                 chart.config_mut().show_volume = false;
                 let pane = chart.add_pane();
                 assert!(chart.move_series_to_pane(SeriesId::MAIN, pane));
-                // The emptied pane keeps its scale's default range, 0 to 100.
-                PaneId::MAIN.0
+                if kept {
+                    let series = chart.add_series(SeriesOptions::default());
+                    chart.set_data(series, data);
+                    series.0
+                } else {
+                    // The emptied pane keeps its scale's default range, 0 to 100.
+                    PaneId::MAIN.0
+                }
             } else {
                 chart.add_indicator(Box::new(RSI::new(14))).0
             };
+            let from = if kept { 100.0 } else { 40.0 };
             let mut line = Drawing::new(1, DrawingToolType::InfoLine);
-            line.chart_points = vec![ChartPoint::new(60.0, 40.0), ChartPoint::new(90.0, 50.0)];
+            line.chart_points = vec![
+                ChartPoint::new(60.0, from),
+                ChartPoint::new(90.0, from + 10.0),
+            ];
             line.completed = true;
             line.pane = Some(owner);
             chart.drawings_mut().drawings.push(line);
@@ -1746,14 +1753,18 @@ mod tests {
                     _ => None,
                 })
                 .collect();
+            assert!(!readouts.is_empty(), "{row}: no readouts painted");
             assert!(
-                !readouts.is_empty(),
-                "emptied {emptied}: no readouts painted"
+                readouts.iter().all(|text| if kept {
+                    text.contains("+40 ticks")
+                } else {
+                    !text.contains("tick")
+                }),
+                "{row}: {readouts:?}"
             );
-            assert!(
-                readouts.iter().all(|text| !text.contains("tick")),
-                "emptied {emptied}: {readouts:?}"
-            );
+            if kept {
+                continue;
+            }
             // The card the selection toolbar keeps clear of is the painted one, without ticks too.
             let card = |chart: &crate::widget::Chart| {
                 let mut card = None;
@@ -1765,8 +1776,8 @@ mod tests {
             };
             let with_instrument = card(&chart);
             chart.set_instrument(None);
-            assert!(with_instrument.is_some(), "emptied {emptied}");
-            assert_eq!(with_instrument, card(&chart), "emptied {emptied}");
+            assert!(with_instrument.is_some(), "{row}");
+            assert_eq!(with_instrument, card(&chart), "{row}");
         }
     }
 }
