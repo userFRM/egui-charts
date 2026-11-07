@@ -16,11 +16,13 @@ pub(crate) fn controls_width(study: &dyn crate::studies::Indicator) -> f32 {
 
 /// The row outline and its hide, settings, remove, more-actions and help buttons. Returns the first
 /// three buttons and, when the more-actions button is clicked or the row secondary-clicked, the
-/// corner of the study menu.
+/// corner of the study menu. `backdrop` fills the revealed controls with the chart background, for
+/// a caller that paints nothing under them.
 pub(crate) fn study_controls(
     ui: &mut Ui,
     row: Rect,
     controls: Rect,
+    backdrop: bool,
     id: egui::Id,
     study: &dyn crate::studies::Indicator,
 ) -> ([Response; 3], Option<Pos2>) {
@@ -88,8 +90,10 @@ pub(crate) fn study_controls(
         && ui.rect_contains_pointer(row);
     let revealed = selected || focused || hovered;
     if revealed {
-        ui.painter()
-            .rect_filled(controls, theme.radius.sm, theme.chart.bg);
+        if backdrop {
+            ui.painter()
+                .rect_filled(controls, theme.radius.sm, theme.chart.bg);
+        }
         ui.painter().rect_stroke(
             row.union(controls.expand2(Vec2::new(0.0, 2.0))),
             theme.radius.sm,
@@ -209,6 +213,7 @@ mod tests {
                             ui,
                             row,
                             controls,
+                            true,
                             egui::Id::unique("study"),
                             &crate::studies::CustomIndicator::new("Plain", |_| Vec::new()),
                         );
@@ -357,8 +362,14 @@ mod tests {
                         ..Default::default()
                     },
                     |ui| {
-                        let (buttons, _) =
-                            study_controls(ui, row, controls, egui::Id::unique("locked"), &study);
+                        let (buttons, _) = study_controls(
+                            ui,
+                            row,
+                            controls,
+                            true,
+                            egui::Id::unique("locked"),
+                            &study,
+                        );
                         clicks = buttons.map(|button| button.clicked());
                     },
                 );
@@ -430,7 +441,7 @@ mod tests {
                         ..Default::default()
                     },
                     |ui| {
-                        study_controls(ui, row, controls, egui::Id::unique("locked"), &study);
+                        study_controls(ui, row, controls, true, egui::Id::unique("locked"), &study);
                     },
                 );
                 for command in &output.platform_output.commands {

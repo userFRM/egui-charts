@@ -116,6 +116,13 @@ impl Indicator for TimePriceOpportunity {
             )
             .with_default(InputValue::Toggle(defaults.show_midpoint)),
             StudyInput::new(
+                "statistics",
+                "Statistics",
+                InputValue::Toggle(self.config.show_statistics),
+                InputKind::Toggle,
+            )
+            .with_default(InputValue::Toggle(defaults.show_statistics)),
+            StudyInput::new(
                 "display",
                 "Display",
                 display_choice(self.config.display_mode),
@@ -152,6 +159,7 @@ impl Indicator for TimePriceOpportunity {
             ("split_sessions", InputValue::Toggle(split)) => self.config.split_sessions = split,
             ("single_prints", InputValue::Toggle(show)) => self.config.show_single_prints = show,
             ("midpoint", InputValue::Toggle(show)) => self.config.show_midpoint = show,
+            ("statistics", InputValue::Toggle(show)) => self.config.show_statistics = show,
             ("display", InputValue::Choice(choice @ 0..=2)) => {
                 self.config.display_mode = DISPLAYS[choice]
             }

@@ -45,7 +45,9 @@ body visibility, wick visibility and colouring by previous close.
 controls the open tick, thin bars and colouring by previous close.
 [`HighLowStyle`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.HighLowStyle.html)
 sets the high-low bar colour and the visibility, colour and size of its price
-labels, which do not read the candle colours. Apply these through
+labels, which do not read the candle colours. The label colour is `Color32::PLACEHOLDER` by
+default, which prints the labels in the price scale's text colour, and the size is drawn at 1 to 256
+points. Apply these through
 [`Chart::set_chart_type_params`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.Chart.html#method.set_chart_type_params).
 
 Main-series colours, wick width and candle border width live in
@@ -59,6 +61,6 @@ is positive (zero by default). Added Bars series take `bars_style` for the open
 tick, thin bars and colouring by previous close; they do not expose the main series' candle style switches.
 Added high-low series draw in
 [`SeriesOptions::color`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.SeriesOptions.html#structfield.color)
-without price labels. All five types can be [added series](../chart-types.mdx#added-series-restrictions).
+and tag their last value and draw their price line in it, without price labels. All five types can be [added series](../chart-types.mdx#added-series-restrictions).
 
 For smoothed OHLC, continue to [Heikin-Ashi](/egui-charts/docs/chart-types/transforms/#heikin-ashi).
