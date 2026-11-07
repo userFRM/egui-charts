@@ -1179,6 +1179,19 @@ impl ChartLayout {
         }
     }
 
+    /// Moves the sync memberships, detached state and drawing links of two slots with their
+    /// charts, for a host that exchanges those charts. Invalid indices are ignored.
+    pub fn swap_slots(&mut self, a: usize, b: usize) {
+        if a.max(b) >= self.groups.len() {
+            return;
+        }
+        self.groups.swap(a, b);
+        self.links.groups.lock().unwrap().swap(a, b);
+        self.detached.swap(a, b);
+        #[cfg(feature = "drawings")]
+        self.drawings.swap_slots(a, b);
+    }
+
     /// Assigns the legacy group used by view/drawing links and layout-wide field switches.
     /// `Some` keeps both memberships: a field in an individual group or unlinked stays so, and a
     /// field following the layout setting follows it within the new group.
