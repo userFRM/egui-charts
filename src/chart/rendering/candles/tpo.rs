@@ -1031,8 +1031,7 @@ fn draw_session_profile(
 }
 
 /// Paint the session statistics table with its left edge at `anchor_x`, below the profile's lowest
-/// row or up against the bottom of the plot, unless it is wider than the `room` of its session or
-/// than the plot to its right.
+/// row or up against the bottom of the plot, unless it is wider than the `room` of its session.
 fn draw_statistics(
     painter: &Painter,
     price_rect: Rect,
@@ -1098,7 +1097,7 @@ fn draw_statistics(
     let (padding, gap) = (Vec2::new(6.0, 4.0), 12.0);
     let size =
         Vec2::new(label_width + gap + value_width, line * galleys.len() as f32) + padding * 2.0;
-    if size.x > room.min(price_rect.right() - anchor_x) {
+    if size.x > room {
         return;
     }
 
@@ -2558,8 +2557,6 @@ mod tests {
             (10.0, f32::INFINITY, true),
             // It would reach the next session's table.
             (10.0, 20.0, false),
-            // The forming session has endless room, but the values would be cut off by the plot.
-            (380.0, f32::INFINITY, false),
         ] {
             let ctx = egui::Context::default();
             ctx.begin_pass(egui::RawInput::default());
