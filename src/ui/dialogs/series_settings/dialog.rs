@@ -336,38 +336,48 @@ mod tests {
         assert_eq!(chart.series_settings().bullish_color, candle);
     }
 
-    /// The accepted colours of a hollow candles series reach its candles, a border or wick colour
-    /// of `None` meaning the body colour. The first bar closes above its open and is outlined; the
-    /// second closes below its open and is filled.
+    /// The accepted colours of a hollow or volume candles series reach its candles, a border or
+    /// wick colour of `None` meaning the body colour. The first bar closes above its open and is
+    /// outlined as a hollow candle and filled as a volume candle; the second closes below its open
+    /// and is filled. An opaque border in the colour of its fill paints as the fill alone.
     #[test]
-    fn series_settings_colours_reach_hollow_candles() {
+    fn series_settings_colours_reach_hollow_and_volume_candles() {
         use crate::model::{Bar, BarData};
         let time = chrono::DateTime::UNIX_EPOCH;
-        let mut chart = crate::Chart::new(BarData::from_bars(vec![
-            Bar::new(time, 10.0, 18.0, 8.0, 14.0, 0.0),
-            Bar::new(time + chrono::Duration::days(1), 13.0, 17.0, 8.5, 11.0, 0.0),
-        ]));
-        chart.config_mut().show_volume = false;
-        chart.set_chart_type(ChartType::HollowCandles);
-        let candle = chart.config().bullish_color;
         let up = egui::Color32::from_rgb(1, 100, 2);
         let down = egui::Color32::from_rgb(101, 2, 3);
-        let mut settings = chart.series_settings();
-        assert_eq!(settings.bullish_border_color, None);
-        assert_eq!(settings.bearish_wick_color, None);
-        settings.bullish_color = up;
-        settings.bearish_color = down;
-        chart.apply_series_settings(&settings);
-        let (bodies, wicks) = painted_candles(&mut chart, &[up, down]);
-        assert_eq!(
-            bodies.iter().map(|body| body.0).collect::<Vec<_>>(),
-            [egui::Color32::TRANSPARENT, down]
-        );
-        assert_eq!(bodies[0].1, up, "the rising candle is outlined");
-        assert_eq!(wicks, [up, up, down, down]);
-        assert_eq!(chart.series_settings().bullish_color, up);
-        chart.set_chart_type(ChartType::Candles);
-        assert_eq!(chart.series_settings().bullish_color, candle);
+        let none = egui::Color32::TRANSPARENT;
+        for (kind, bodies_expected) in [
+            (ChartType::HollowCandles, [(none, up), (down, none)]),
+            (ChartType::VolumeCandles, [(up, none), (down, none)]),
+        ] {
+            let mut chart = crate::Chart::new(BarData::from_bars(vec![
+                Bar::new(time, 10.0, 18.0, 8.0, 14.0, 100.0),
+                Bar::new(
+                    time + chrono::Duration::days(1),
+                    13.0,
+                    17.0,
+                    8.5,
+                    11.0,
+                    100.0,
+                ),
+            ]));
+            chart.config_mut().show_volume = false;
+            chart.set_chart_type(kind);
+            let candle = chart.config().bullish_color;
+            let mut settings = chart.series_settings();
+            assert_eq!(settings.bullish_border_color, None);
+            assert_eq!(settings.bearish_wick_color, None);
+            settings.bullish_color = up;
+            settings.bearish_color = down;
+            chart.apply_series_settings(&settings);
+            let (bodies, wicks) = painted_candles(&mut chart, &[up, down]);
+            assert_eq!(bodies, bodies_expected, "{kind:?}");
+            assert_eq!(wicks, [up, up, down, down], "{kind:?}");
+            assert_eq!(chart.series_settings().bullish_color, up, "{kind:?}");
+            chart.set_chart_type(ChartType::Candles);
+            assert_eq!(chart.series_settings().bullish_color, candle, "{kind:?}");
+        }
     }
 
     #[test]
