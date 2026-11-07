@@ -802,7 +802,7 @@ Studies,Indicators,Volume Weighted Average Price,incomplete,library,src/studies/
 Studies,Indicators,Volume-Weighted Moving Average,incomplete,library,src/studies/builtin/vwma.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Vortex Indicator,incomplete,library,src/studies/builtin/vortex.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Weighted Moving Average,unverified,library,src/studies/builtin/wma.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Williams %R,unverified,library,src/studies/builtin/williams_r.rs;src/studies/builtin/smoothing.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/ui/dialogs/indicator_dialog/settings.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
+Studies,Indicators,Williams %R,incomplete,library,src/studies/builtin/williams_r.rs;src/studies/builtin/smoothing.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/ui/dialogs/indicator_dialog/settings.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,2410
 Studies,Indicators,Williams Alligator,unverified,library,src/studies/builtin/williams_alligator.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Williams Fractal,verified,library,src/studies/builtin/williams_fractals.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Woodies CCI,incomplete,library,src/studies/builtin/woodies_cci.rs,
