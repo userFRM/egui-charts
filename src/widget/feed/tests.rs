@@ -1379,6 +1379,387 @@ fn paged_trades_without_history_leave_their_first_bar_incomplete() {
     assert_eq!(flow.complete_from(), Some(start + TimeDelta::seconds(2)));
 }
 
+/// Hand counts on two-trade bars of buys at 100, one a second: 1 and 2 (volume 3), 3 and 4 (7),
+/// 5 and 6 (11), and the live 7 and 8 (15). A store of seven leaves out the buy of 1 in both
+/// orders, and a store of six the buys of 1 and 2, so that the oldest held execution opens the
+/// second bar. Either way the first bar draws a candle and the others keep their cells, however
+/// many pages rebuild the footprint afterwards.
+#[test]
+fn history_page_after_a_store_loss_keeps_the_matched_cells() {
+    use crate::model::OrderSide::Buy;
+    let timeframe: Timeframe = "2t".parse().unwrap();
+    let start = bars(1)[0].time;
+    let buy = |i: i64| {
+        Tick::new(
+            start + TimeDelta::seconds(i),
+            100.0,
+            (i + 1) as f64,
+            Some(Buy),
+        )
+    };
+    let tape: Vec<_> = (0..6).map(buy).collect();
+    let candles =
+        crate::data::aggregate_trades_with_tick_size(&tape, timeframe, Some(1.0)).unwrap();
+    let volumes = |chart: &Chart| -> Vec<Option<f64>> {
+        let flow = (chart.feed_link.as_ref().unwrap().footprint.as_ref()).unwrap();
+        let complete = flow.complete_from();
+        (chart.bars(SeriesId::MAIN).iter())
+            .map(|bar| {
+                flow.bar_at(bar.time)
+                    .filter(|_| complete.is_some_and(|from| bar.time >= from))
+                    .map(|cells| cells.volume())
+            })
+            .collect()
+    };
+    for (label, live_first, capacity) in [
+        ("history page after the loss", false, 7),
+        ("trade page that overflows the store", true, 7),
+        ("history page after the loss of a whole bar", false, 6),
+        ("trade page that leaves out a whole bar", true, 6),
+    ] {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        chart.set_timeframe(timeframe);
+        chart.set_chart_type(ChartType::VolumeFootprint);
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+        feed.page().send(page(candles.clone(), false));
+        frames.run(&mut chart);
+        frames.run(&mut chart);
+        chart.feed_link.as_mut().unwrap().trades = Trades::new(capacity);
+        let sink = feed.sink();
+        let live = |chart: &mut Chart, frames: &mut Frames| {
+            for i in 6..8 {
+                sink.push_tick(buy(i));
+                frames.run(chart);
+            }
+        };
+        if live_first {
+            live(&mut chart, &mut frames);
+        }
+        (feed.trades.lock().unwrap().remove(0)).send(Ok(TradePage::new(tape.clone(), false)));
+        frames.run(&mut chart);
+        if !live_first {
+            live(&mut chart, &mut frames);
+        }
+        let kept = vec![None, Some(7.0), Some(11.0), Some(15.0)];
+        assert_eq!(volumes(&chart), kept, "{label}");
+        feed.page().send(page(Vec::new(), true));
+        frames.run(&mut chart);
+        assert_eq!(volumes(&chart), kept, "{label}, after the empty page");
+    }
+}
+
+/// Hand counts at price 100, one a second, with a store of three. 2t: buys of 1 and 2 (delta 3),
+/// 4 and 8 (12), 16 and 32 (48), then 64. 5v: buy 3 and 2 of the buy of 4 (5); its other 2 and 3
+/// of the sell of 4 (-1); its last unit, the buy of 2 and 2 of the sell of 6 (-1); its other 4 and
+/// 1 of the buy of 5 (-3); its other 4 (4). One study is away for the last two executions and
+/// another joins at the undo. Holding the last executions before the newest, they lack the first
+/// two bars and match the study that stayed on the others.
+#[cfg(feature = "studies")]
+#[test]
+fn restored_order_flow_study_after_a_store_loss_keeps_the_chart_bars() {
+    use crate::model::OrderSide::{Buy, Sell};
+    use crate::studies::OrderFlowStudy;
+    let rows = [
+        (
+            "2t",
+            vec![
+                (1.0, Buy),
+                (2.0, Buy),
+                (4.0, Buy),
+                (8.0, Buy),
+                (16.0, Buy),
+                (32.0, Buy),
+                (64.0, Buy),
+            ],
+            vec![3.0, 12.0, 48.0, 64.0],
+        ),
+        (
+            "5v",
+            vec![
+                (3.0, Buy),
+                (4.0, Buy),
+                (4.0, Sell),
+                (2.0, Buy),
+                (6.0, Sell),
+                (5.0, Buy),
+            ],
+            vec![5.0, -1.0, -1.0, -3.0, 4.0],
+        ),
+    ];
+    let start = bars(1)[0].time;
+    let values = |chart: &Chart, id| {
+        let study = chart.indicators().find(|(seen, _)| *seen == id).unwrap().1;
+        (study.values().line(0).iter())
+            .map(|value| (!value.is_nan()).then_some(*value))
+            .collect::<Vec<_>>()
+    };
+    for (interval, fills, stayed_values) in rows {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        chart.set_timeframe(interval.parse().unwrap());
+        let stayed = chart.add_indicator(Box::new(OrderFlowStudy::execution_delta(false)));
+        let restored = chart.add_indicator(Box::new(OrderFlowStudy::execution_delta(false)));
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+        feed.page().send(page(Vec::new(), true));
+        frames.run(&mut chart);
+        chart.feed_link.as_mut().unwrap().trades = Trades::new(3);
+        let sink = feed.sink();
+        let mut added = None;
+        for (i, &(size, side)) in fills.iter().enumerate() {
+            if i + 2 == fills.len() {
+                assert!(chart.user_action(|chart| chart.remove_series(restored)));
+                frames.run(&mut chart);
+            }
+            if i + 1 == fills.len() {
+                assert!(chart.undo());
+                added = Some(chart.add_indicator(Box::new(OrderFlowStudy::execution_delta(false))));
+                frames.run(&mut chart);
+            }
+            let at = start + TimeDelta::seconds(i as i64);
+            sink.push_tick(Tick::new(at, 100.0, size, Some(side)));
+            frames.run(&mut chart);
+        }
+        for _ in 0..8 {
+            frames.run(&mut chart);
+        }
+        let all: Vec<_> = stayed_values.iter().copied().map(Some).collect();
+        assert_eq!(values(&chart, stayed), all, "{interval}");
+        let held: Vec<_> = (all.iter().enumerate())
+            .map(|(bar, value)| value.filter(|_| bar >= 2))
+            .collect();
+        assert_eq!(values(&chart, restored), held, "{interval}, restored");
+        assert_eq!(values(&chart, added.unwrap()), held, "{interval}, added");
+    }
+}
+
+type PagedCells = Option<Vec<(i64, f64, f64)>>;
+
+/// Runs a chart on `interval` whose history page holds the bars of `tape` and whose trade page
+/// holds `tape[page]`, and returns, for each history bar, the cells the renderer would draw as
+/// (level, bid, ask), or `None` for a candle.
+fn paged_cells(
+    interval: &str,
+    tape: &[Tick],
+    page_range: std::ops::Range<usize>,
+) -> Vec<PagedCells> {
+    let timeframe: Timeframe = interval.parse().unwrap();
+    let candles = crate::data::aggregate_trades_with_tick_size(tape, timeframe, Some(1.0)).unwrap();
+    let feed = Arc::new(Script::default());
+    let mut chart = fed(&feed, Some("A"));
+    chart.set_timeframe(timeframe);
+    chart.set_chart_type(ChartType::VolumeFootprint);
+    let mut frames = Frames::new();
+    frames.run(&mut chart);
+    feed.resolve()
+        .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+    feed.page().send(page(candles.clone(), true));
+    frames.run(&mut chart);
+    frames.run(&mut chart);
+    (feed.trades.lock().unwrap().remove(0))
+        .send(Ok(TradePage::new(tape[page_range].to_vec(), false)));
+    frames.run(&mut chart);
+    assert_eq!(chart.bars(SeriesId::MAIN), candles, "{interval}");
+    let link = chart.feed_link.as_ref().unwrap();
+    let flow = link.footprint.as_ref().unwrap();
+    let complete = flow.complete_from();
+    candles
+        .iter()
+        .map(|bar| {
+            flow.bar_at(bar.time)
+                .filter(|_| complete.is_some_and(|from| bar.time >= from))
+                .map(|cells| {
+                    (cells.levels.values())
+                        .map(|level| (level.level, level.bid, level.ask))
+                        .collect()
+                })
+        })
+        .collect()
+}
+
+/// Hand counts, tick size 1. 10v: buy 8 at 100 and 2 of the buy of 4 at 101; its other 2, the
+/// sell of 3 at 102 and 5 of the sell of 9 at 103 (delta -6); its other 4, the buy of 2 at 104
+/// and 4 of the buy of 7 at 105 (2); its other 3 and the sell of 7 at 106 (-4). 5delta: buy 3
+/// and 2 of the buy of 4 at 101; its other 2, the sell of 1 at 102 and 4 of the buy of 6 at 103;
+/// its other 2, the sell of 1 at 104 and 4 of the buy of 6 at 105; its other 2 and the buy of 3
+/// at 106. Every boundary splits a fill, and each page starts with the fill the first boundary
+/// split, so a bar draws its own cells or a candle. The third tape's bars open with whole
+/// executions at new prices, so its page, which ends inside a bar, proves its start and must
+/// draw. The fourth tape's page stops before the sell that completes its fourth bar with 1, the
+/// part of the buy at 101 in the bar before, so a grouping from that buy matches every bar to
+/// the page's end. Its own cells: 1 of that buy, the sell of 5 at 102 and 4 of the sell of 6 at
+/// 103; the other 2, the buy of 5 at 104 and 3 of the buy of 6 at 105; the other 3, the sell of 6
+/// at 106 and 1 of the sell of 4 at 106. The last tape's 10 volume bars split nearly every
+/// boundary, as fractional sizes do.
+#[test]
+fn split_fill_boundaries_draw_only_a_bars_own_executions() {
+    use crate::model::OrderSide::{Buy, Sell};
+    let start = bars(1)[0].time;
+    let tape = |fills: &[(f64, f64, crate::model::OrderSide)]| -> Vec<Tick> {
+        (fills.iter().enumerate())
+            .map(|(second, &(price, size, side))| {
+                let at = start + TimeDelta::seconds(second as i64);
+                Tick::new(at, price, size, Some(side))
+            })
+            .collect()
+    };
+    // Sizes of 1/1024 to 3 in steps of 1/1024, so every sum is exact, a millisecond apart.
+    let mut seed: u64 = 0x2545_f491_4f6c_dd1d;
+    let mut price = 1000.0;
+    let fractional: Vec<Tick> = (0..3000)
+        .map(|i| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            price += (seed % 3) as f64 - 1.0;
+            let size = ((seed >> 8) % 3072 + 1) as f64 / 1024.0;
+            let side = if (seed >> 20) & 1 == 0 { Buy } else { Sell };
+            Tick::new(start + TimeDelta::milliseconds(i), price, size, Some(side))
+        })
+        .collect();
+    // Each bar takes the next 10 of volume, splitting the fill that crosses it.
+    let mut own = vec![std::collections::BTreeMap::new()];
+    let mut volume = 0.0;
+    for trade in &fractional {
+        let level = trade.price as i64;
+        let mut left = trade.size;
+        while left > 0.0 {
+            let part = left.min(10.0 - volume);
+            let cell = (own.last_mut().unwrap())
+                .entry(level)
+                .or_insert((level, 0.0, 0.0));
+            if trade.side == Some(Sell) {
+                cell.1 += part;
+            } else {
+                cell.2 += part;
+            }
+            (volume, left) = (volume + part, left - part);
+            if volume == 10.0 {
+                own.push(std::collections::BTreeMap::new());
+                volume = 0.0;
+            }
+        }
+    }
+    let fractional_cells: Vec<PagedCells> = (own.into_iter())
+        .filter(|cells| !cells.is_empty())
+        .map(|cells| Some(cells.into_values().collect()))
+        .collect();
+    let rows = [
+        (
+            "10v",
+            "10v",
+            tape(&[
+                (100.0, 8.0, Buy),
+                (101.0, 4.0, Buy),
+                (102.0, 3.0, Sell),
+                (103.0, 9.0, Sell),
+                (104.0, 2.0, Buy),
+                (105.0, 7.0, Buy),
+                (106.0, 7.0, Sell),
+            ]),
+            1..7,
+            vec![
+                None,
+                Some(vec![(101, 0.0, 2.0), (102, 3.0, 0.0), (103, 5.0, 0.0)]),
+                Some(vec![(103, 4.0, 0.0), (104, 0.0, 2.0), (105, 0.0, 4.0)]),
+                Some(vec![(105, 0.0, 3.0), (106, 7.0, 0.0)]),
+            ],
+            false,
+        ),
+        (
+            "5delta",
+            "5delta",
+            tape(&[
+                (100.0, 3.0, Buy),
+                (101.0, 4.0, Buy),
+                (102.0, 1.0, Sell),
+                (103.0, 6.0, Buy),
+                (104.0, 1.0, Sell),
+                (105.0, 6.0, Buy),
+                (106.0, 3.0, Buy),
+            ]),
+            1..7,
+            vec![
+                None,
+                Some(vec![(101, 0.0, 2.0), (102, 1.0, 0.0), (103, 0.0, 4.0)]),
+                Some(vec![(103, 0.0, 2.0), (104, 1.0, 0.0), (105, 0.0, 4.0)]),
+                Some(vec![(105, 0.0, 2.0), (106, 0.0, 3.0)]),
+            ],
+            false,
+        ),
+        (
+            "whole start at a new price, page ending inside a bar",
+            "10v",
+            tape(&[
+                (100.0, 6.0, Buy),
+                (101.0, 4.0, Sell),
+                (102.0, 5.0, Buy),
+                (103.0, 5.0, Sell),
+                (104.0, 3.0, Buy),
+                (105.0, 7.0, Sell),
+                (106.0, 2.0, Buy),
+                (107.0, 3.0, Sell),
+            ]),
+            2..7,
+            vec![
+                None,
+                Some(vec![(102, 0.0, 5.0), (103, 5.0, 0.0)]),
+                Some(vec![(104, 0.0, 3.0), (105, 7.0, 0.0)]),
+                None,
+            ],
+            true,
+        ),
+        (
+            "page ending before the fill that completes its last bar",
+            "10v",
+            tape(&[
+                (100.0, 9.0, Buy),
+                (101.0, 2.0, Buy),
+                (102.0, 5.0, Sell),
+                (103.0, 6.0, Sell),
+                (104.0, 5.0, Buy),
+                (105.0, 6.0, Buy),
+                (106.0, 6.0, Sell),
+                (106.0, 4.0, Sell),
+            ]),
+            1..7,
+            vec![
+                None,
+                Some(vec![(101, 0.0, 1.0), (102, 5.0, 0.0), (103, 4.0, 0.0)]),
+                Some(vec![(103, 2.0, 0.0), (104, 0.0, 5.0), (105, 0.0, 3.0)]),
+                Some(vec![(105, 0.0, 3.0), (106, 7.0, 0.0)]),
+                None,
+            ],
+            false,
+        ),
+        (
+            "fractional volume tape draws no cells of another bar",
+            "10v",
+            fractional,
+            1000..3000,
+            fractional_cells,
+            false,
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (label, interval, fills, page_range, own, must_draw) in rows {
+        let got = paged_cells(interval, &fills, page_range);
+        assert_eq!(got.len(), own.len(), "{label}");
+        for (bar, (got, own)) in got.iter().zip(&own).enumerate() {
+            if got != own && (must_draw || got.is_some()) {
+                failures.push(format!("{label} bar {bar}: drawn {got:?}, own {own:?}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{failures:?}");
+}
+
 /// The page answering an interval change holds what traded between the two subscriptions, and
 /// repeating the retained executions does not end the scroll-back for older ones.
 #[test]
