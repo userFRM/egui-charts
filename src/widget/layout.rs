@@ -9,9 +9,10 @@ use crate::theme::ThemeExt;
 use egui::{Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2};
 use std::sync::{Arc, Mutex};
 
-/// Narrowest chart that shows the field selectors in its header. The title controls need 8 points
-/// of status line inset, 116 of their own and 228 from the chart's right edge to the end of the
-/// first row; a narrower chart leaves the selectors to its corner menu.
+/// Narrowest span from the plot's left edge to the chart's right edge that shows the field
+/// selectors in the header. The title controls need 8 points of status line inset, 116 of their
+/// own and 228 from the chart's right edge to the end of the first row; a narrower chart leaves
+/// the selectors to its corner menu.
 const LINK_CONTROLS_MIN_WIDTH: f32 = 352.0;
 /// Distance of the selectors from the chart's right edge, which ends the status line's first row.
 pub(super) const LINK_CONTROLS_INSET: f32 = 220.0;
@@ -1664,7 +1665,15 @@ impl ChartLayout {
                     .id_salt(("chart_slot", index)),
                 |ui| {
                     ui.shrink_clip_rect(rect);
-                    let link_controls = total > 1 && rect.width() >= LINK_CONTROLS_MIN_WIDTH;
+                    // The status line starts at the plot, after any left price axis.
+                    let plot = charts[index].last_rendered_price_rect;
+                    let plot_left = if plot.is_positive() {
+                        plot.left()
+                    } else {
+                        rect.left()
+                    };
+                    let link_controls =
+                        total > 1 && rect.right() - plot_left >= LINK_CONTROLS_MIN_WIDTH;
                     charts[index].layout_link_controls = link_controls;
                     let response = charts[index].show(ui);
                     charts[index].layout_link_controls = false;
@@ -1689,7 +1698,7 @@ impl ChartLayout {
                         || index == self.active
                             && (ui.rect_contains_pointer(rect)
                                 || egui::Popup::is_any_open(ui.ctx())
-                                || total > 1 && rect.width() < LINK_CONTROLS_MIN_WIDTH)
+                                || total > 1 && !link_controls)
                             && charts[index]
                                 .pane_layout
                                 .maximized
@@ -4177,16 +4186,24 @@ mod tests {
 
     /// In a linked slot the title controls end where the first row before the selectors ends, 228
     /// points left of the slot's right edge, so their flag button stays inside the status line,
-    /// which starts 8 points right of the slot's left edge, only from 8 + 116 + 228 = 352 points.
-    /// Narrower slots leave the selectors to the corner menu; the slot of exactly 352 keeps them.
+    /// which starts 8 points right of the plot's left edge, only from 8 + 116 + 228 = 352 points
+    /// of plot left to slot right. Narrower slots leave the selectors to the corner menu, the
+    /// slot of exactly 352 keeps them, and a left price axis takes its width from those 352. In
+    /// slots too narrow for the controls the flag button stays at the start of the status line.
     #[cfg(feature = "icons")]
     #[test]
     fn title_controls_fit_in_narrow_linked_slots() {
-        for (target, shows_selectors) in [
-            (320.0_f32, false),
-            (336.0, false),
-            (351.0, false),
-            (352.0, true),
+        for (target, left_axis, shows_selectors) in [
+            (200.0_f32, false, false),
+            (320.0, false, false),
+            (336.0, false, false),
+            (351.0, false, false),
+            (352.0, false, true),
+            (300.0, true, false),
+            (352.0, true, false),
+            (411.0, true, false),
+            (430.0, true, false),
+            (480.0, true, true),
         ] {
             let ctx = egui::Context::default();
             let mut layout = ChartLayout {
@@ -4194,6 +4211,10 @@ mod tests {
                 ..Default::default()
             };
             let mut charts = [chart(60), chart(60)];
+            for chart in &mut charts {
+                chart.config_mut().show_left_axis = left_axis;
+                chart.config_mut().show_right_axis = !left_axis;
+            }
             let mut size = vec2(2.0 * target, 600.0);
             let slot = layout.rects(Rect::from_min_size(Pos2::ZERO, size), 2)[0];
             size.x += 2.0 * (target - slot.width());
@@ -4202,13 +4223,19 @@ mod tests {
             let bg = ctx.active_theme().chart.bg;
             let mut controls = None;
             let mut selectors = false;
-            for frame in 0..4 {
+            for frame in 0..5 {
+                let plot = charts[0].last_rendered_price_rect;
+                let plot_left = if plot.is_positive() {
+                    plot.left()
+                } else {
+                    slot.left()
+                };
                 let output = ctx.run_ui(
                     RawInput {
                         screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
                         time: Some(frame as f64 * 0.1),
                         events: vec![Event::PointerMoved(pos2(
-                            slot.left() + 40.0,
+                            plot_left + 40.0,
                             slot.top() + 14.0,
                         ))],
                         ..Default::default()
@@ -4217,6 +4244,7 @@ mod tests {
                         layout.show(ui, &mut charts.iter_mut().collect::<Vec<_>>());
                     },
                 );
+                selectors = false;
                 for shape in &output.shapes {
                     match &shape.shape {
                         egui::Shape::Rect(rect)
@@ -4237,10 +4265,14 @@ mod tests {
             let controls = controls.expect("the hovered title shows its controls");
             let flag = Rect::from_min_size(controls.min, Vec2::splat(20.0));
             assert!(
-                flag.left() >= slot.left() + 8.0 && slot.contains_rect(flag),
-                "slot {target}: flag {flag:?} leaves the status line"
+                flag.left() >= charts[0].last_rendered_price_rect.left() + 8.0
+                    && slot.contains_rect(flag),
+                "slot {target}, left axis {left_axis}: flag {flag:?} leaves the status line"
             );
-            assert_eq!(selectors, shows_selectors, "slot {target}");
+            assert_eq!(
+                selectors, shows_selectors,
+                "slot {target}, left axis {left_axis}"
+            );
             if shows_selectors {
                 assert!(
                     controls.right() <= slot.right() - LINK_CONTROLS_INSET,
