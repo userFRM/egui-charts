@@ -81,11 +81,12 @@ impl ReplayStartPicker {
 pub fn paint_start_line(painter: &Painter, plot: Rect, pointer: Pos2) {
     let theme = painter.ctx().active_theme();
     let color = theme.ui.accent;
-    // A plot shorter than the mark centres it.
+    // A plot shorter than the mark centres it. Its bounds then meet, and where f32 rounds the
+    // plot's height they cross by an ulp, which `clamp` would panic on.
     let half = (plot.height() / 2.0).min(12.0);
     let center = pos2(
         pointer.x,
-        pointer.y.clamp(plot.top() + half, plot.bottom() - half),
+        pointer.y.max(plot.top() + half).min(plot.bottom() - half),
     );
     painter.vline(center.x, plot.y_range(), Stroke::new(1.0, color));
     painter.circle_filled(center, 11.0, theme.chart.bg);
@@ -111,8 +112,13 @@ mod tests {
     /// pointer, with the scissors centred on it.
     #[test]
     fn start_line_on_a_plot_shorter_than_its_mark() {
-        for (height, marked) in [(0.0, None), (20.0, Some(pos2(150.0, 110.0)))] {
-            let plot = Rect::from_min_size(pos2(0.0, 100.0), Vec2::new(300.0, height));
+        for (top, height, marked) in [
+            (100.0, 0.0, None),
+            (100.0, 20.0, Some(pos2(150.0, 110.0))),
+            // Edges between pixels near the top of the window: f32 rounds the height up.
+            (1.6, 5.6, None),
+        ] {
+            let plot = Rect::from_min_size(pos2(0.0, top), Vec2::new(300.0, height));
             let ctx = egui::Context::default();
             let output = ctx.run_ui(egui::RawInput::default(), |ui| {
                 paint_start_line(ui.painter(), plot, pos2(150.0, 101.0));
