@@ -557,8 +557,10 @@ impl Footprint {
     /// each candidate is tried against the chart's bars instead: an execution first at the time a
     /// bar opens, grouped on from there. A second bar that opens and sums as grouped, or the page
     /// ending exactly with the first, proves the start; one bar alone could be a fill split by
-    /// the bar before it. The newest proven run is kept, so its bars have no gap. Older bars get
-    /// no cells and draw candles. With `before`, adds only the executions strictly before it.
+    /// the bar before it. On volume and delta intervals a second bar proves the start only when
+    /// the bar before closes at another price than every execution at the start's time. The newest
+    /// proven run is kept, so its bars have no gap. Older bars get no cells and draw candles. With
+    /// `before`, adds only the executions strictly before it.
     #[cfg(feature = "widget")]
     pub(crate) fn push_history(
         &mut self,
@@ -588,7 +590,21 @@ impl Footprint {
                 trades[start].size,
                 None,
             );
-            if run.proven {
+            // A fill split by a boundary opens the next bar with its rest at its own time. Counted
+            // whole, it can match every later bar while moving part of each boundary fill, so on
+            // volume and delta intervals only the page's end, or a bar before that closes at
+            // another price than every execution at the start's time, proves the start.
+            let whole = run.end.is_some()
+                || !matches!(
+                    timeframe,
+                    crate::model::Timeframe::Volume(_) | crate::model::Timeframe::Delta(_)
+                )
+                || first.checked_sub(1).is_some_and(|before| {
+                    (trades[start..].iter())
+                        .take_while(|trade| trade.ts == trades[start].ts)
+                        .all(|trade| !near(trade.price, history[before].close))
+                });
+            if run.proven && whole {
                 newest = run.parts;
                 at = start + run.next.max(1);
             }

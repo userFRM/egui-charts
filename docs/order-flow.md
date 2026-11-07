@@ -16,8 +16,11 @@ the sample snapshot. Depth and executions have separate coverage.
 
 On a tick, volume, range or delta interval, the chart matches the executions of its trade pages
 to the bars of its history: a bar shows cells only when the held executions rebuild its open,
-high, low, close and volume, grouped from one of the bars' first executions. A page may start
-anywhere inside a bar; the bars it does not rebuild stay candles, without cells from another bar.
+high, low, close and volume, grouped from one of the bars' first executions. On volume and delta
+intervals a fill split by a boundary opens the next bar with its rest, which the executions cannot
+show, so a grouping there also needs the bar before to close at another price than every execution
+at its start, or the page to end with a bar it rebuilds. A page may start anywhere inside a bar;
+the bars it does not rebuild stay candles, without cells from another bar.
 
 <!-- example -->
 

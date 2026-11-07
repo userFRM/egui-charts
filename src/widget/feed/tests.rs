@@ -1536,6 +1536,186 @@ fn restored_order_flow_study_after_a_store_loss_keeps_the_chart_bars() {
     }
 }
 
+type PagedCells = Option<Vec<(i64, f64, f64)>>;
+
+/// Runs a chart on `interval` whose history page holds the bars of `tape` and whose trade page
+/// holds `tape[page]`, and returns, for each history bar, the cells the renderer would draw as
+/// (level, bid, ask), or `None` for a candle.
+fn paged_cells(
+    interval: &str,
+    tape: &[Tick],
+    page_range: std::ops::Range<usize>,
+) -> Vec<PagedCells> {
+    let timeframe: Timeframe = interval.parse().unwrap();
+    let candles = crate::data::aggregate_trades_with_tick_size(tape, timeframe, Some(1.0)).unwrap();
+    let feed = Arc::new(Script::default());
+    let mut chart = fed(&feed, Some("A"));
+    chart.set_timeframe(timeframe);
+    chart.set_chart_type(ChartType::VolumeFootprint);
+    let mut frames = Frames::new();
+    frames.run(&mut chart);
+    feed.resolve()
+        .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+    feed.page().send(page(candles.clone(), true));
+    frames.run(&mut chart);
+    frames.run(&mut chart);
+    (feed.trades.lock().unwrap().remove(0))
+        .send(Ok(TradePage::new(tape[page_range].to_vec(), false)));
+    frames.run(&mut chart);
+    assert_eq!(chart.bars(SeriesId::MAIN), candles, "{interval}");
+    let link = chart.feed_link.as_ref().unwrap();
+    let flow = link.footprint.as_ref().unwrap();
+    let complete = flow.complete_from();
+    candles
+        .iter()
+        .map(|bar| {
+            flow.bar_at(bar.time)
+                .filter(|_| complete.is_some_and(|from| bar.time >= from))
+                .map(|cells| {
+                    (cells.levels.values())
+                        .map(|level| (level.level, level.bid, level.ask))
+                        .collect()
+                })
+        })
+        .collect()
+}
+
+/// Hand counts, tick size 1. 10v: buy 8 at 100 and 2 of the buy of 4 at 101; its other 2, the
+/// sell of 3 at 102 and 5 of the sell of 9 at 103 (delta -6); its other 4, the buy of 2 at 104
+/// and 4 of the buy of 7 at 105 (2); its other 3 and the sell of 7 at 106 (-4). 5delta: buy 3
+/// and 2 of the buy of 4 at 101; its other 2, the sell of 1 at 102 and 4 of the buy of 6 at 103;
+/// its other 2, the sell of 1 at 104 and 4 of the buy of 6 at 105; its other 2 and the buy of 3
+/// at 106. Every boundary splits a fill, and each page starts with the fill the first boundary
+/// split, so a bar draws its own cells or a candle. The third tape's bars open with whole
+/// executions at new prices, so its page, which ends inside a bar, proves its start and must
+/// draw. The last tape's 10 volume bars split nearly every boundary, as fractional sizes do.
+#[test]
+fn split_fill_boundaries_draw_only_a_bars_own_executions() {
+    use crate::model::OrderSide::{Buy, Sell};
+    let start = bars(1)[0].time;
+    let tape = |fills: &[(f64, f64, crate::model::OrderSide)]| -> Vec<Tick> {
+        (fills.iter().enumerate())
+            .map(|(second, &(price, size, side))| {
+                let at = start + TimeDelta::seconds(second as i64);
+                Tick::new(at, price, size, Some(side))
+            })
+            .collect()
+    };
+    // Sizes of 1/1024 to 3 in steps of 1/1024, so every sum is exact, a millisecond apart.
+    let mut seed: u64 = 0x2545_f491_4f6c_dd1d;
+    let mut price = 1000.0;
+    let fractional: Vec<Tick> = (0..3000)
+        .map(|i| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            price += (seed % 3) as f64 - 1.0;
+            let size = ((seed >> 8) % 3072 + 1) as f64 / 1024.0;
+            let side = if (seed >> 20) & 1 == 0 { Buy } else { Sell };
+            Tick::new(start + TimeDelta::milliseconds(i), price, size, Some(side))
+        })
+        .collect();
+    let timeframe: Timeframe = "10v".parse().unwrap();
+    let mut whole = Footprint::new(BarClock::new(timeframe), 1.0, 1).unwrap();
+    for trade in &fractional {
+        whole.push(trade).unwrap();
+    }
+    let fractional_cells: Vec<PagedCells> =
+        crate::data::aggregate_trades_with_tick_size(&fractional, timeframe, Some(1.0))
+            .unwrap()
+            .iter()
+            .map(|bar| {
+                let cells = whole.bar_at(bar.time).unwrap().levels.values();
+                Some(cells.map(|cell| (cell.level, cell.bid, cell.ask)).collect())
+            })
+            .collect();
+    let rows = [
+        (
+            "10v",
+            "10v",
+            tape(&[
+                (100.0, 8.0, Buy),
+                (101.0, 4.0, Buy),
+                (102.0, 3.0, Sell),
+                (103.0, 9.0, Sell),
+                (104.0, 2.0, Buy),
+                (105.0, 7.0, Buy),
+                (106.0, 7.0, Sell),
+            ]),
+            1..7,
+            vec![
+                None,
+                Some(vec![(101, 0.0, 2.0), (102, 3.0, 0.0), (103, 5.0, 0.0)]),
+                Some(vec![(103, 4.0, 0.0), (104, 0.0, 2.0), (105, 0.0, 4.0)]),
+                Some(vec![(105, 0.0, 3.0), (106, 7.0, 0.0)]),
+            ],
+            false,
+        ),
+        (
+            "5delta",
+            "5delta",
+            tape(&[
+                (100.0, 3.0, Buy),
+                (101.0, 4.0, Buy),
+                (102.0, 1.0, Sell),
+                (103.0, 6.0, Buy),
+                (104.0, 1.0, Sell),
+                (105.0, 6.0, Buy),
+                (106.0, 3.0, Buy),
+            ]),
+            1..7,
+            vec![
+                None,
+                Some(vec![(101, 0.0, 2.0), (102, 1.0, 0.0), (103, 0.0, 4.0)]),
+                Some(vec![(103, 0.0, 2.0), (104, 1.0, 0.0), (105, 0.0, 4.0)]),
+                Some(vec![(105, 0.0, 2.0), (106, 0.0, 3.0)]),
+            ],
+            false,
+        ),
+        (
+            "whole start at a new price, page ending inside a bar",
+            "10v",
+            tape(&[
+                (100.0, 6.0, Buy),
+                (101.0, 4.0, Sell),
+                (102.0, 5.0, Buy),
+                (103.0, 5.0, Sell),
+                (104.0, 3.0, Buy),
+                (105.0, 7.0, Sell),
+                (106.0, 2.0, Buy),
+                (107.0, 3.0, Sell),
+            ]),
+            2..7,
+            vec![
+                None,
+                Some(vec![(102, 0.0, 5.0), (103, 5.0, 0.0)]),
+                Some(vec![(104, 0.0, 3.0), (105, 7.0, 0.0)]),
+                None,
+            ],
+            true,
+        ),
+        (
+            "fractional volume tape draws no cells of another bar",
+            "10v",
+            fractional,
+            1000..3000,
+            fractional_cells,
+            false,
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (label, interval, fills, page_range, own, must_draw) in rows {
+        let got = paged_cells(interval, &fills, page_range);
+        assert_eq!(got.len(), own.len(), "{label}");
+        for (bar, (got, own)) in got.iter().zip(&own).enumerate() {
+            if got != own && (must_draw || got.is_some()) {
+                failures.push(format!("{label} bar {bar}: drawn {got:?}, own {own:?}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{failures:?}");
+}
+
 /// The page answering an interval change holds what traded between the two subscriptions, and
 /// repeating the retained executions does not end the scroll-back for older ones.
 #[test]
