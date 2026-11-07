@@ -39,14 +39,21 @@ pub(super) struct CustomKey {
     pub(super) time: DateTime<Utc>,
     /// Lowest, highest and current price; `None` for whitespace.
     prices: Option<(f64, f64, f64)>,
+    /// Renewed each time the host supplies the point, whose type has no equality of its own.
+    revision: u64,
 }
 
 impl CustomKey {
     /// `None` for an invalid point: not whitespace, with no prices or a non-finite one.
     fn of<P: CustomPoint>(point: &P) -> Option<Self> {
         let time = point.time();
+        let revision = crate::model::next_revision();
         if point.is_whitespace() {
-            return Some(Self { time, prices: None });
+            return Some(Self {
+                time,
+                prices: None,
+                revision,
+            });
         }
         let prices = point.prices();
         let current = *prices.last()?;
@@ -57,6 +64,7 @@ impl CustomKey {
                 prices.iter().copied().fold(f64::NEG_INFINITY, f64::max),
                 current,
             )),
+            revision,
         })
     }
 }
@@ -449,8 +457,9 @@ impl Chart {
             .filter_map(|point| Some((CustomKey::of(&point)?, point)))
             .collect();
         custom.feed.rejected_bars += (total - rows.len()) as u64;
-        // A stable sort leaves duplicates in the order they arrived, so the last one wins.
-        rows.sort_by_key(|(key, _)| clock.bar_open(key.time));
+        // Keys in order keep a slot together with its latest point last, and a stable sort leaves
+        // points with one key in the order they arrived, so the last one wins.
+        rows.sort_by_key(|(key, _)| key.time);
         let mut kept: Vec<(CustomKey, P)> = Vec::with_capacity(rows.len());
         for row in rows {
             match kept.last_mut() {
@@ -609,7 +618,15 @@ impl Chart {
         if let Some(at) = self.study_ids.iter().position(|id| *id == series) {
             self.pending_from[at] =
                 Some(self.pending_from[at].map_or(from, |pending| pending.min(from)));
-            self.element_studies.dirty = true;
+            // Its copy on the elements reads the same points and keeps its values until it
+            // recomputes; a rebuild would blank every other study's copy.
+            if self.chart_type.is_time_independent()
+                && let Some(stale) = self.element_studies.stale.get_mut(at)
+            {
+                *stale = true;
+            } else {
+                self.element_studies.dirty = true;
+            }
             self.readout_revision = crate::model::next_revision();
         }
     }
@@ -650,19 +667,23 @@ impl Chart {
         })
     }
 
-    /// Each custom data series' point at `time`, with its id and data revision.
+    /// Each custom data series' point at `time`, with its id and revision and a way to copy it.
     pub(super) fn custom_points_at(
         &self,
         time: DateTime<Utc>,
-    ) -> impl Iterator<Item = (SeriesId, u64, Arc<dyn Any + Send + Sync>)> + '_ {
+    ) -> impl Iterator<
+        Item = (
+            SeriesId,
+            u64,
+            impl FnOnce() -> Arc<dyn Any + Send + Sync> + '_,
+        ),
+    > + '_ {
         self.primitives.iter().filter_map(move |item| {
             let custom = item.custom.as_ref()?;
             let at = custom.at(time)?;
-            Some((
-                item.series,
-                custom.revision,
-                (custom.clone_point)(custom.points.as_ref(), at),
-            ))
+            Some((item.series, custom.keys()[at].revision, move || {
+                (custom.clone_point)(custom.points.as_ref(), at)
+            }))
         })
     }
 
@@ -3084,5 +3105,235 @@ mod tests {
         frame(&ctx, &mut chart, 1.0, vec![]);
         assert_eq!(*log.lock().unwrap(), ["attached", "update"]);
         assert!(chart.detach_primitive(id));
+    }
+
+    /// Of several points in one slot of a fed chart's interval, `set_custom_data` keeps the one
+    /// with the latest key, as `set_data` keeps the latest bar of a slot, whatever their order.
+    #[test]
+    fn feed_slot_keeps_the_latest_point_as_bars_do() {
+        struct Silent;
+        impl crate::data::Datafeed for Silent {
+            fn history(
+                &self,
+                _: crate::data::HistoryRequest,
+                _: crate::data::Reply<crate::data::HistoryPage>,
+            ) {
+            }
+        }
+        let mut chart = crate::widget::ChartBuilder::new()
+            .with_feed(Arc::new(Silent))
+            .with_timeframe(crate::model::Timeframe::Hour1)
+            .build();
+        let (id, _) = band_series(&mut chart);
+        let at = |minutes| DateTime::UNIX_EPOCH + chrono::TimeDelta::minutes(minutes);
+        chart.set_data(
+            SeriesId::MAIN,
+            vec![
+                Bar::new(at(45), 1.0, 2.0, 1.0, 2.0, 1.0),
+                Bar::new(at(15), 1.0, 2.0, 1.0, 2.0, 1.0),
+            ],
+        );
+        let point = |minutes, note| Band {
+            time: at(minutes),
+            values: Some((1.0, 2.0)),
+            note,
+        };
+        assert!(chart.set_custom_data(id, vec![point(45, "00:45"), point(15, "00:15")]));
+        let bars: Vec<_> = (chart.bars(SeriesId::MAIN).iter())
+            .map(|bar| bar.time)
+            .collect();
+        let points: Vec<_> = chart
+            .custom_points::<Band>(id)
+            .iter()
+            .map(|point| point.note)
+            .collect();
+        let kept = (bars, points);
+        assert_eq!(kept, (vec![at(45)], vec!["00:45"]), "{kept:?}");
+    }
+
+    /// A point that counts its clones.
+    #[derive(Debug)]
+    struct Counted {
+        time: DateTime<Utc>,
+        clones: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl Clone for Counted {
+        fn clone(&self) -> Self {
+            self.clones
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Self {
+                time: self.time,
+                clones: Arc::clone(&self.clones),
+            }
+        }
+    }
+
+    impl CustomPoint for Counted {
+        fn time(&self) -> DateTime<Utc> {
+            self.time
+        }
+        fn prices(&self) -> Vec<f64> {
+            vec![15.0]
+        }
+    }
+
+    /// While the pointer rests and nothing changes, the chart reports nothing and copies no
+    /// point; another key of the series changing leaves the point under the pointer the same,
+    /// and supplying that point again reports it.
+    #[test]
+    fn stationary_pointer_over_custom_points() {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[10.0], &[20.0]);
+        let main = chart.bars(SeriesId::MAIN).to_vec();
+        let clones = Arc::<std::sync::atomic::AtomicUsize>::default();
+        let id = chart.add_custom_data_series::<Counted>(
+            "Counted",
+            |study| study.with_overlay(false),
+            Probe("counted", Log::default()),
+        );
+        let point = |bar: usize| Counted {
+            time: main[bar].time,
+            clones: Arc::clone(&clones),
+        };
+        assert!(chart.set_custom_data(id, (0..100).map(point).collect()));
+        chart.set_visible_bars(12);
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        frame(&ctx, &mut chart, 0.1, vec![]);
+        let pane = chart
+            .pane_layout
+            .panes
+            .iter()
+            .find(|pane| pane.members.contains(&id))
+            .unwrap()
+            .rect;
+        let pos = Pos2::new(chart.get_chart_mapping().index_to_x(92.0), pane.center().y);
+        frame(&ctx, &mut chart, 1.0, vec![Event::PointerMoved(pos)]);
+        frame(&ctx, &mut chart, 1.1, vec![]);
+        let hovered = chart
+            .drain_events()
+            .filter_map(|event| match event {
+                ChartEvent::CrosshairMoved(Some(pointer)) => Some(pointer),
+                _ => None,
+            })
+            .last()
+            .expect("the pointer moved inside the pane");
+        let at = hovered.custom_point::<Counted>(id).map(|point| point.time);
+        assert_eq!(at, Some(main[92].time));
+        let before = clones.load(std::sync::atomic::Ordering::Relaxed);
+        for step in 0..10 {
+            frame(&ctx, &mut chart, 2.0 + f64::from(step) * 0.1, vec![]);
+        }
+        let copied = clones.load(std::sync::atomic::Ordering::Relaxed) - before;
+        let moved_after = |chart: &mut Chart, time: f64| {
+            frame(&ctx, chart, time, vec![]);
+            frame(&ctx, chart, time + 0.1, vec![]);
+            chart
+                .drain_events()
+                .filter(|event| matches!(event, ChartEvent::CrosshairMoved(_)))
+                .count()
+        };
+        // A point out of view changes; the one under the pointer stays as it was.
+        assert!(chart.update_custom_data(id, point(10)));
+        let moved = moved_after(&mut chart, 4.0);
+        assert!(chart.update_custom_data(id, point(92)));
+        let replaced = moved_after(&mut chart, 5.0);
+        let seen = (copied, moved, replaced);
+        assert_eq!(seen, (0, 0, 1), "{seen:?}");
+    }
+
+    /// On a price-based chart type, feeding the custom data series leaves the other studies
+    /// drawn, whose values do not depend on its points, and its own value follows its points.
+    #[test]
+    fn custom_updates_keep_other_studies_on_price_based_charts() {
+        use crate::model::{BarData, ChartType, ChartTypeParams};
+        let ctx = egui::Context::default();
+        let bars: Vec<Bar> = [100.0, 130.0, 160.0]
+            .into_iter()
+            .enumerate()
+            .map(|(index, close)| {
+                Bar::from_value(
+                    DateTime::UNIX_EPOCH + chrono::Duration::minutes(index as i64),
+                    close,
+                )
+            })
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+        let (id, _) = band_series(&mut chart);
+        let closes = chart.add_indicator(Box::new(CustomIndicator::new("Close", |bars| {
+            bars.iter()
+                .map(|bar| IndicatorValue::Single(bar.close))
+                .collect()
+        })));
+        chart.set_chart_type(ChartType::Renko);
+        chart.set_chart_type_params(ChartTypeParams {
+            renko_brick_size: 10.0,
+            ..Default::default()
+        });
+        for at in 0..4 {
+            frame(&ctx, &mut chart, f64::from(at), vec![]);
+        }
+        // Bricks of 10 from 100 close at 110, 120, ..., 160, so the third closes at 130.
+        assert_eq!(chart.indicator_value_at(closes, 2), Some((0, 130.0)));
+        let mut seen = Vec::new();
+        for at in 0..3 {
+            let point = Band {
+                time: bars[2].time,
+                values: Some((1.0, 2.0 + f64::from(at))),
+                note: "",
+            };
+            assert!(chart.update_custom_data(id, point));
+            frame(&ctx, &mut chart, 10.0 + f64::from(at), vec![]);
+            seen.push(chart.indicator_value_at(closes, 2));
+        }
+        assert_eq!(seen, [Some((0, 130.0)); 3], "{seen:?}");
+        // Bricks 3 to 5 are formed by the third bar and take its time, where the last point holds
+        // (1, 4), whose current price is its high.
+        assert_eq!(chart.indicator_value_at(id, 5), Some((0, 4.0)));
+    }
+
+    /// Every price of the points in view fits the scale a custom data series is drawn on in the
+    /// main pane: after the study menu moves it there from its own pane, pinned to no scale, and
+    /// with every point in view between two bars.
+    #[test]
+    fn custom_points_fit_their_scale_in_the_main_pane() {
+        let mut ranges = Vec::new();
+        for (pin, on_bar) in [
+            (None, true),
+            (Some(crate::studies::StudyScale::None), true),
+            (None, false),
+        ] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[10.0], &[20.0]);
+            let main = chart.bars(SeriesId::MAIN).to_vec();
+            let (id, _) = band_series(&mut chart);
+            let mut points = vec![Band {
+                time: main[92].time + chrono::TimeDelta::hours(12),
+                values: Some((1400.0, 1500.0)),
+                note: "between two bars",
+            }];
+            if on_bar {
+                points.push(Band {
+                    time: main[90].time,
+                    values: Some((1000.0, 1100.0)),
+                    note: "on a bar",
+                });
+            }
+            assert!(chart.set_custom_data(id, points));
+            chart.set_visible_bars(12);
+            assert!(chart.move_series_to_pane(id, crate::widget::PaneId::MAIN));
+            if let Some(scale) = pin {
+                assert!(chart.set_indicator_scale(id, scale));
+            }
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            frame(&ctx, &mut chart, 0.1, vec![]);
+            let range = chart.series_price_map(id).unwrap().range();
+            ranges.push((range.min, range.max));
+        }
+        let lowest = [1000.0, 1000.0, 1400.0];
+        assert!(
+            (ranges.iter().zip(lowest)).all(|(&(min, max), low)| min <= low && max >= 1500.0),
+            "{ranges:?}"
+        );
     }
 }

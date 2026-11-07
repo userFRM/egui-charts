@@ -1290,16 +1290,41 @@ impl Chart {
         (main, pixel_margins)
     }
 
+    /// Supplies each study the mapping the chart owns: that of its shared scale, or for a study
+    /// in the price pane on its own scale or no scale, its fit with the prices of its primitives.
     pub(in crate::widget) fn update_shared_study_maps(&mut self, rect: Rect) {
         let maps: Vec<_> = self
             .study_ids
             .iter()
             .zip(self.rendered_studies().indicators())
             .map(|(&id, study)| {
-                let crate::studies::StudyScale::Shared(key) = study.scale() else {
-                    return None;
-                };
                 let pane = self.series_pane(id)?;
+                let key = match study.scale() {
+                    crate::studies::StudyScale::Shared(key) => key,
+                    crate::studies::StudyScale::Independent | crate::studies::StudyScale::None
+                        if (pane == self.main_series_pane() || pane == PaneId::MAIN)
+                            && !study.is_volume() =>
+                    {
+                        let prices = self
+                            .primitive_autoscale(id)
+                            .flat_map(|info| [info.price_range.0, info.price_range.1])
+                            .filter(|price| price.is_finite())
+                            .map(|price| (price, price))
+                            .reduce(|(low, high), (lower, higher)| {
+                                (low.min(lower), high.max(higher))
+                            })?;
+                        let coords = self.get_chart_mapping().with_rect(rect);
+                        return Some(
+                            crate::chart::rendering::fit_study_mapping(
+                                study.as_ref(),
+                                &coords,
+                                Some(prices),
+                            )
+                            .price,
+                        );
+                    }
+                    _ => return None,
+                };
                 if pane == self.main_series_pane() {
                     return Some(self.secondary_scale(key).map(
                         self.shared_study_transform(id, study.as_ref(), key),

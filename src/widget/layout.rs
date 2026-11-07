@@ -875,8 +875,6 @@ impl LinkChange {
 #[derive(Default)]
 struct LayoutEdits {
     steps: Arc<Mutex<Vec<(u64, bool)>>>,
-    #[cfg(any(feature = "studies", feature = "drawings"))]
-    next: u64,
 }
 
 impl Clone for LayoutEdits {
@@ -889,10 +887,12 @@ impl Clone for LayoutEdits {
 impl LayoutEdits {
     #[cfg(any(feature = "studies", feature = "drawings"))]
     fn start(&mut self) -> LayoutEditLink {
-        self.next += 1;
+        // Process-wide, so that a clone of a layout, which starts a new queue, never reuses an
+        // id that a chart's history may already hold from the original.
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         LayoutEditLink {
             steps: Arc::clone(&self.steps),
-            id: self.next,
+            id: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         }
     }
 }
@@ -907,7 +907,12 @@ pub(super) struct LayoutEditLink {
 impl LayoutEditLink {
     /// Asks the other charts of the edit to take the same step.
     pub(super) fn request(&self, redo: bool) {
-        self.steps.lock().unwrap().push((self.id, redo));
+        let mut steps = self.steps.lock().unwrap();
+        // The other charts follow the last step asked for this edit.
+        match steps.iter_mut().find(|(id, _)| *id == self.id) {
+            Some(step) => step.1 = redo,
+            None => steps.push((self.id, redo)),
+        }
     }
 }
 
@@ -1177,6 +1182,19 @@ impl ChartLayout {
             self.active = index;
             self.focus_active = true;
         }
+    }
+
+    /// Moves the sync memberships, detached state and drawing links of two slots with their
+    /// charts, for a host that exchanges those charts. Invalid indices are ignored.
+    pub fn swap_slots(&mut self, a: usize, b: usize) {
+        if a.max(b) >= self.groups.len() {
+            return;
+        }
+        self.groups.swap(a, b);
+        self.links.groups.lock().unwrap().swap(a, b);
+        self.detached.swap(a, b);
+        #[cfg(feature = "drawings")]
+        self.drawings.swap_slots(a, b);
     }
 
     /// Assigns the legacy group used by view/drawing links and layout-wide field switches.
