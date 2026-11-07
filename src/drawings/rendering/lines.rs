@@ -98,9 +98,9 @@ impl Drawing {
     }
 
     /// Ends from left to right, or in anchor order on a vertical line, extended to the pane edges
-    /// as configured; `None` below two anchors. A ray, extended line, info line or trend angle
-    /// extends left past its first anchor and right past its second, whichever way it was drawn;
-    /// other lines extend towards the pane's sides.
+    /// as configured; `None` below two anchors. A trend line, ray, extended line, info line or
+    /// trend angle extends left past its first anchor and right past its second, whichever way it
+    /// was drawn; other lines extend towards the pane's sides.
     pub(crate) fn trend_line_ends(&self, rect: Rect) -> Option<(Pos2, Pos2)> {
         use crate::drawings::DrawingToolType as T;
         let &[a, b, ..] = self.points.as_slice() else {
@@ -108,7 +108,7 @@ impl Drawing {
         };
         if matches!(
             self.tool_type,
-            T::Ray | T::ExtendedLine | T::InfoLine | T::TrendAngle
+            T::TrendLine | T::Ray | T::ExtendedLine | T::InfoLine | T::TrendAngle
         ) {
             let first = if self.extend_left {
                 ray_end(b, a, rect)
@@ -1182,12 +1182,12 @@ mod tests {
         }
     }
 
-    /// A new ray's or extended line's text starts in its own blue, which a change of line colour
-    /// leaves alone, and draws the slant it is given.
+    /// A new trend line's, ray's or extended line's text starts in its own blue, which a change of
+    /// line colour leaves alone, and draws the slant it is given.
     #[test]
-    fn ray_and_extended_line_text_keep_their_own_colour_and_slant() {
+    fn line_text_keeps_its_own_colour_and_slant() {
         use crate::drawings::DrawingToolType as T;
-        for tool in [T::Ray, T::ExtendedLine] {
+        for tool in [T::TrendLine, T::Ray, T::ExtendedLine] {
             let mut drawing = Drawing::new(1, tool);
             drawing.points = vec![Pos2::new(100., 200.), Pos2::new(300., 100.)];
             drawing.color = [200, 0, 0, 255];
@@ -1206,9 +1206,9 @@ mod tests {
         }
     }
 
-    /// A ray, extended line, info line or trend angle extends left past its first anchor and right
-    /// past its second, in either drawing order and on a vertical line, and selection follows the
-    /// painted extension.
+    /// A trend line, ray, extended line, info line or trend angle extends left past its first
+    /// anchor and right past its second, in either drawing order and on a vertical line, and
+    /// selection follows the painted extension.
     #[test]
     fn anchor_ordered_lines_extend_past_the_anchor_named_in_paint_and_hit_testing() {
         use crate::drawings::{DrawingToolType as T, services::DrawingInteraction};
@@ -1277,7 +1277,14 @@ mod tests {
         ];
         for ((first, second, left, right, want, on, off), tool) in
             cases.into_iter().flat_map(|case| {
-                [T::Ray, T::ExtendedLine, T::InfoLine, T::TrendAngle].map(|tool| (case, tool))
+                [
+                    T::TrendLine,
+                    T::Ray,
+                    T::ExtendedLine,
+                    T::InfoLine,
+                    T::TrendAngle,
+                ]
+                .map(|tool| (case, tool))
             })
         {
             let mut drawing = Drawing::new(1, tool);
