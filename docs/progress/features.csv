@@ -865,7 +865,7 @@ Terminal,Alerts,Multi-condition alerts,unverified,library,src/model/alert.rs;src
 Terminal,Alerts,Notification: email and plain-text email,incomplete,host,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs,
 Terminal,Alerts,Notification: in-app popup when an alert fires,incomplete,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs;src/ui/widget_bar/panels/alerts_panel.rs;src/services/alert_engine.rs;terminal/src/alerts.rs,
 Terminal,Alerts,Notification: mobile app push,incomplete,host,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs,
-Terminal,Alerts,Notification: webhook,incomplete,host,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs,
+Terminal,Alerts,Notification: webhook,incomplete,host,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs,2377
 Terminal,Alerts,"Price operators: crossing, crossing up, crossing down, greater than, less than",unverified,library,src/model/alert.rs;src/ui/dialogs/alert_dialog/dialog.rs,
 Terminal,Alerts,Quick alert from the price-scale '+' or the chart context menu,unverified,library,src/ui/context_menu/mod.rs;src/chart/rendering/overlays/crosshair.rs;src/chart/rendering/axes/mod.rs;src/config/chart.rs;src/widget/settings/apply.rs;src/ui/context_menu/chart_menus/mod.rs;src/widget/keyboard.rs;terminal/src/alerts.rs;src/widget/frame/mod.rs;examples/demo/controller.rs,2028;2225
 Terminal,Alerts,Server-side evaluation,unverified,host,src/services/alerts.rs;src/ui/widget_bar/panels/alerts_panel.rs,
