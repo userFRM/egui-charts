@@ -599,8 +599,8 @@ impl DrawingStorage {
                         {
                             // Earlier renderers carried these tools' Left and Right towards the
                             // pane's sides and never extended a vertical one. Version 6 was also
-                            // written after that changed; only records without `price_labels` were
-                            // written before.
+                            // written after that changed, always with `price_labels`; trend
+                            // angles saved in the hours before their own change carry it too.
                             let order = (a.ts_ms, a.subms_ns).cmp(&(b.ts_ms, b.subms_ns));
                             let settings = &mut drawing.drawing;
                             match order {
