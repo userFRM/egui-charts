@@ -1381,8 +1381,9 @@ fn paged_trades_without_history_leave_their_first_bar_incomplete() {
 
 /// Hand counts on two-trade bars of buys at 100, one a second: 1 and 2 (volume 3), 3 and 4 (7),
 /// 5 and 6 (11), and the live 7 and 8 (15). A store of seven leaves out the buy of 1 in both
-/// orders, so the first bar draws a candle and the others keep their cells, however many pages
-/// rebuild the footprint afterwards.
+/// orders, and a store of six the buys of 1 and 2, so that the oldest held execution opens the
+/// second bar. Either way the first bar draws a candle and the others keep their cells, however
+/// many pages rebuild the footprint afterwards.
 #[test]
 fn history_page_after_a_store_loss_keeps_the_matched_cells() {
     use crate::model::OrderSide::Buy;
@@ -1410,9 +1411,11 @@ fn history_page_after_a_store_loss_keeps_the_matched_cells() {
             })
             .collect()
     };
-    for (label, live_first) in [
-        ("history page after the loss", false),
-        ("trade page that overflows the store", true),
+    for (label, live_first, capacity) in [
+        ("history page after the loss", false, 7),
+        ("trade page that overflows the store", true, 7),
+        ("history page after the loss of a whole bar", false, 6),
+        ("trade page that leaves out a whole bar", true, 6),
     ] {
         let feed = Arc::new(Script::default());
         let mut chart = fed(&feed, Some("A"));
@@ -1425,7 +1428,7 @@ fn history_page_after_a_store_loss_keeps_the_matched_cells() {
         feed.page().send(page(candles.clone(), false));
         frames.run(&mut chart);
         frames.run(&mut chart);
-        chart.feed_link.as_mut().unwrap().trades = Trades::new(7);
+        chart.feed_link.as_mut().unwrap().trades = Trades::new(capacity);
         let sink = feed.sink();
         let live = |chart: &mut Chart, frames: &mut Frames| {
             for i in 6..8 {

@@ -228,9 +228,10 @@ impl FeedLink {
             flow.drop_through(lost, trades());
         }
         let first = self.unconfirmed_start().or_else(|| {
-            // Without bars to match, paged trades group from the oldest held one.
-            let unmatched = history.is_empty() && !self.trades_from_start;
-            if trade_based && (unmatched || self.trades.lost_until().is_some()) {
+            // Without bars to match, paged trades group from the oldest held one. Matched ones
+            // start after any loss, and live bars carry their own marks.
+            let unsure = !self.trades_from_start || lost.is_some();
+            if trade_based && history.is_empty() && unsure {
                 self.trades.iter().next().map(|trade| trade.ts)
             } else {
                 None
