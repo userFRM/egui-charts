@@ -51,8 +51,8 @@ pub struct VolumeBubblesConfig {
     /// Bubbles with less volume are neither drawn nor scaled over. Without one,
     /// [`Ungrouped`](BubbleGrouping::Ungrouped) draws at most the 20 largest visible trades of at
     /// least the mean plus two standard deviations of the visible trades' sizes, the latest of
-    /// those tied at the 20th size first, and the other groupings draw every bubble. `Some(0.0)`
-    /// draws every trade.
+    /// those tied at the 20th size first, a visible trade being one centred inside the plot in
+    /// price and time, and the other groupings draw every bubble. `Some(0.0)` draws every trade.
     pub min_size_filter: Option<f64>,
     /// Which trades share a bubble.
     pub grouping: BubbleGrouping,
@@ -464,18 +464,20 @@ impl VolumeBubbles {
         } else {
             self.config.max_diameter
         };
+        let ranked = self.config.min_size_filter.is_none()
+            && self.config.grouping == BubbleGrouping::Ungrouped;
+        if ranked {
+            // Larger trades the plot cannot show must not raise the threshold or take the places.
+            let plot = painter.clip_rect();
+            shown.retain(|(x, y, _)| plot.contains(Pos2::new(*x, *y)));
+        }
         let min_size = match self.config.min_size_filter {
             Some(size) => size,
-            None if self.config.grouping == BubbleGrouping::Ungrouped => {
-                std_devs_above_mean(shown.iter().map(|(_, _, b)| b.volume), 2.0)
-            }
+            None if ranked => std_devs_above_mean(shown.iter().map(|(_, _, b)| b.volume), 2.0),
             None => f64::NEG_INFINITY,
         };
         shown.retain(|(_, _, bubble)| bubble.volume >= min_size);
-        if self.config.min_size_filter.is_none()
-            && self.config.grouping == BubbleGrouping::Ungrouped
-            && shown.len() > DEFAULT_BUBBLES
-        {
+        if ranked && shown.len() > DEFAULT_BUBBLES {
             let mut volumes: Vec<f64> = shown.iter().map(|(_, _, b)| b.volume).collect();
             let cut = *volumes
                 .select_nth_unstable_by(DEFAULT_BUBBLES - 1, |a, b| b.total_cmp(a))
@@ -776,6 +778,25 @@ mod tests {
         trades: &[Tick],
         expected: Vec<(f32, f32, f32, Color32, Option<Color32>)>,
     ) {
+        assert_draws_in(
+            egui::Rect::EVERYTHING,
+            name,
+            config,
+            spacing,
+            trades,
+            expected,
+        );
+    }
+
+    /// [`assert_draws`] through a painter clipped to `plot`.
+    fn assert_draws_in(
+        plot: egui::Rect,
+        name: &str,
+        config: VolumeBubblesConfig,
+        spacing: f32,
+        trades: &[Tick],
+        expected: Vec<(f32, f32, f32, Color32, Option<Color32>)>,
+    ) {
         let bars: Vec<_> = (0..5)
             .map(|i| {
                 Bar::new(
@@ -792,7 +813,7 @@ mod tests {
         let bubbles = VolumeBubbles::new(config, BarClock::new(Timeframe::Min1), Some(1.0), trades);
         let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
             bubbles.render(
-                ui.painter(),
+                &ui.painter().with_clip_rect(plot),
                 &bars,
                 spacing,
                 |i| 100.0 + spacing * i as f32,
@@ -1231,6 +1252,39 @@ mod tests {
         ];
         for (name, config, trades, expected) in cases {
             assert_draws(name, config, 80.0, &trades, expected);
+        }
+    }
+
+    /// Guards the ranking of the default rule against a manual price zoom and the edge bars: 25
+    /// trades of size 50 the plot cannot show, above it or in the clipped part of the first bar,
+    /// must not take the 20 places from the five of size 40 inside it. Expected values by hand:
+    /// above the plot, 305 trades stay, 300 of size 1 and 5 of size 40, a mean of 1.64, a deviation
+    /// of 4.95 and a threshold of 11.5; left of it, seconds 0 to 29 of the first bar leave, so 275
+    /// stay and the threshold is 1.71 + 2 × 5.21 = 12.1. Seconds 100 to 104 are 40 to 44 seconds
+    /// into the second bar, at x = 180 + (s / 60 - 1/2) × 80, and the largest of the drawn trades
+    /// takes the maximum diameter.
+    #[test]
+    fn default_bubbles_rank_only_the_trades_inside_the_plot() {
+        let buy = Some(OrderSide::Buy);
+        let config = VolumeBubblesConfig::default();
+        let green = with_opacity(config.buy_color, 128);
+        let expected = [193.333_33, 194.666_67, 196.0, 197.333_33, 198.666_67]
+            .map(|x| (x, 100.0, 40.0, green, None))
+            .to_vec();
+        let zoomed = egui::Rect::from_x_y_ranges(0.0..=1000.0, 80.0..=200.0);
+        let edge_bar = egui::Rect::from_x_y_ranges(100.0..=1000.0, 0.0..=200.0);
+        for (name, plot, large_price) in [
+            ("larger trades above a zoomed plot", zoomed, 150.0),
+            (
+                "larger trades in the clipped part of the first bar",
+                edge_bar,
+                100.0,
+            ),
+        ] {
+            let mut tape = Vec::from_iter((0..300).map(|second| trade(second, 90.0, 1.0, buy)));
+            tape.extend((0..25).map(|second| trade(second, large_price, 50.0, buy)));
+            tape.extend((100..105).map(|second| trade(second, 100.0, 40.0, buy)));
+            assert_draws_in(plot, name, config.clone(), 80.0, &tape, expected.clone());
         }
     }
 
