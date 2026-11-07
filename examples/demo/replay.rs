@@ -1081,12 +1081,8 @@ impl DemoApp {
             }
             ReplayStartAction::SelectBar => self.select_replay_start(),
             ReplayStartAction::SelectDate => {
-                let bars = if self.replay.is_some() {
-                    &self.bars
-                } else {
-                    self.chart.bars(SeriesId::MAIN)
-                };
-                self.replay_start.open(bars.first().map(|bar| bar.time));
+                let first = self.replay_start_bars().first().map(|bar| bar.time);
+                self.replay_start.open(first);
             }
             ReplayStartAction::Resume => {
                 if let Some((session, interval)) = self.replay_session.clone() {
@@ -1116,12 +1112,7 @@ impl DemoApp {
                 }
             }
             choice => {
-                // A running replay hides the history after its cursor from the chart.
-                let bars = if self.replay.is_some() {
-                    &self.bars
-                } else {
-                    self.chart.bars(SeriesId::MAIN)
-                };
+                let bars = self.replay_start_bars();
                 let index = match choice {
                     ReplayStartAction::Date(time) => bars.partition_point(|bar| bar.time < time),
                     ReplayStartAction::Random => {
@@ -1150,21 +1141,29 @@ impl DemoApp {
             return;
         }
         ctx.request_repaint();
-        let bars = self.chart.bars(SeriesId::MAIN);
-        let index = bars
-            .partition_point(|bar| bar.time <= time)
-            .saturating_sub(1);
-        if bars.first().is_none_or(|bar| time < bar.time) || time > bars.last().unwrap().time {
-            return;
-        }
         self.replay_selecting = false;
         // The click picked a bar, not the series under it.
         self.chart.clear_selection();
+        // A trade-by-trade replay shows only the recorded bars, so the time finds the bar.
+        let index = self
+            .replay_start_bars()
+            .partition_point(|bar| bar.time <= time)
+            .saturating_sub(1);
         self.start_replay_at(index);
     }
 
-    /// Starts replay at bar `index` of the main series, as picking that bar does, ending a replay
-    /// already running but keeping its update interval.
+    /// The bars a replay start picks from: a running replay hides the history after its cursor
+    /// from the chart.
+    fn replay_start_bars(&self) -> &[Bar] {
+        if self.replay.is_some() {
+            &self.bars
+        } else {
+            self.chart.bars(SeriesId::MAIN)
+        }
+    }
+
+    /// Starts replay at bar `index` of [`Self::replay_start_bars`], as picking that bar does,
+    /// ending a replay already running but keeping its update interval.
     pub(crate) fn start_replay_at(&mut self, index: usize) {
         let interval =
             (self.replay.is_some() && !self.recording_files.opened).then_some(self.replay_interval);
@@ -1740,6 +1739,63 @@ mod tests {
                 "{timeframe}"
             );
         }
+    }
+
+    /// Bars the chart shows during a market replay, after the frames that build them.
+    fn shown_after_frames(app: &mut DemoApp, ctx: &egui::Context) -> Vec<Bar> {
+        for _ in 0..4 {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    app.chart.show(ui);
+                },
+            )
+            .drop_without_applying_deltas();
+        }
+        app.chart.bars(SeriesId::MAIN).to_vec()
+    }
+
+    /// A click on a bar while a trade-by-trade replay runs restarts it with that bar complete,
+    /// as a click does with candle updates.
+    #[test]
+    fn trade_replay_click_restarts_at_the_clicked_bar() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-10-27T12:05:14Z".parse().unwrap(),
+            true,
+        );
+        super::super::tests::settle(&mut app, &ctx);
+        app.advance_sample_to(app.live.now() + chrono::TimeDelta::seconds(300));
+        // Hand the chart the advanced minutes, which the feed would deliver on later frames.
+        let bars = app.live.snapshot(
+            app.state.timeframe,
+            app.chart.bar_clock(),
+            app.chart.extended_hours(),
+        );
+        app.chart.set_data(SeriesId::MAIN, bars);
+        app.start_replay();
+        app.handle_replay_control(ReplayControlAction::GoToEnd);
+        let trade = Timeframe::Ticks(NonZeroU64::MIN);
+        app.handle_replay_control(ReplayControlAction::SetUpdateInterval(trade));
+        let shown = shown_after_frames(&mut app, &ctx);
+        let traded: Vec<_> = shown.iter().filter(|bar| bar.volume > 0.0).collect();
+        assert!(traded.len() >= 3, "{} bars shown", shown.len());
+        let clicked = traded[traded.len() / 2].time;
+        app.handle_replay_control(ReplayControlAction::Start(ReplayStartAction::SelectBar));
+        app.handle_replay_bar_click(&ctx, clicked);
+        assert_eq!(app.replay_interval, trade);
+        let cutoff = app.chart.replay_time().unwrap();
+        assert!(
+            clicked < cutoff && cutoff <= clicked + chrono::TimeDelta::minutes(1),
+            "clicked the bar at {clicked}, the replay cutoff is {cutoff}"
+        );
     }
 }
 
