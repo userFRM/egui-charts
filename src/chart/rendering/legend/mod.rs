@@ -762,9 +762,15 @@ impl<'a> Legend<'a> {
                         } else {
                             "∅".to_owned()
                         };
-                        // A fully transparent colour holds no RGB, so it has no opaque form.
+                        // The value comes from a source bar, and a transparent colour there hides
+                        // only the segment into it. A plot colour that is itself fully transparent
+                        // holds no RGB, so it has no opaque form.
                         let color = study
-                            .plot_color(index, self.bar_index)
+                            .plot_offset(index)
+                            .checked_neg()
+                            .and_then(|back| self.bar_index.checked_add_signed(back))
+                            .and_then(|source| study.plot_color(index, source))
+                            .filter(|color| color.a() != 0)
                             .or_else(|| study_colors.get(index).copied())
                             .filter(|color| color.a() != 0)
                             .map_or(colors.text, |color| color.to_opaque());
@@ -1715,5 +1721,86 @@ mod layout_tests {
                 assert_eq!(idle, hovered_text, "hover moved readout at {width}");
             }
         }
+    }
+
+    /// A value in the price pane's legend takes the colour its plot shows for that value: a pivot
+    /// level keeps its colour on the first bar of a period, where only the segment from the
+    /// previous period is hidden, and a plot drawn one bar to the right of its source bar takes
+    /// the colour of the source bar its value comes from (`Indicator::plot_color`).
+    #[cfg(feature = "studies")]
+    #[test]
+    fn price_legend_colours_each_value_as_its_plot_shows_it() {
+        use crate::chart::rendering::Legend;
+        use crate::model::Timeframe;
+        use crate::studies::{
+            CustomIndicator, Indicator, IndicatorValue, PivotPoints, PivotTimeframe, palette,
+        };
+        use egui::Color32;
+        // Hourly bars from Monday 5 January 2026, UTC; Tuesday trades 10 higher.
+        let bars: Vec<Bar> = (0..72)
+            .map(|i| {
+                let c = 100.0 + if (24..48).contains(&i) { 10.0 } else { 0.0 } + (i % 5) as f64;
+                let time = Utc.timestamp_opt(1_767_571_200 + i * 3600, 0).unwrap();
+                Bar::new(time, c, c + 1.0, c - 1.0, c, 1.0)
+            })
+            .collect();
+        let mut pivots = PivotPoints::new().with_timeframe(PivotTimeframe::Daily);
+        pivots.set_timeframe(Timeframe::Hour1);
+        pivots.calculate(&bars);
+        // Wednesday's first bar, 48, starts the levels made from Tuesday.
+        assert_ne!(pivots.values().value(0, 47), pivots.values().value(0, 48));
+        let mut shifted = CustomIndicator::new("Shifted", |bars| {
+            (0..bars.len())
+                .map(|i| IndicatorValue::Single(10.0 + i as f64))
+                .collect()
+        })
+        .with_offsets(vec![1])
+        .with_plot_color(|_, bar, _| Some([Color32::RED, Color32::BLUE][bar % 2]));
+        shifted.calculate(&bars);
+        let ctx = Context::default();
+        let instrument = crate::model::Instrument::new("SAMPLE").with_price_decimals(2);
+        let shown = |study: Box<dyn Indicator>, bar: usize| -> Vec<(f64, Color32)> {
+            let studies = vec![study];
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let mut legend = Legend::new("SAMPLE", "1h", &bars[bar]);
+                legend.studies = &studies;
+                legend.instrument = Some(&instrument);
+                legend.show_indicator_inputs = false;
+                legend.show_volume = false;
+                legend.show_ohlc = false;
+                legend.show_change = false;
+                legend.show_change_percent = false;
+                legend.bar_index = bar;
+                legend.show(
+                    ui,
+                    Rect::from_min_size(Pos2::ZERO, egui::vec2(3000.0, 400.0)),
+                );
+            });
+            output.textures_delta.clear();
+            let values = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    Shape::Text(text) => {
+                        let value = text.galley.text().replace(',', "").parse::<f64>().ok()?;
+                        Some((value, text.galley.job.sections[0].format.color))
+                    }
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            values
+        };
+        let levels: Vec<Color32> = shown(Box::new(pivots), 48)
+            .into_iter()
+            .map(|(_, color)| color)
+            .collect();
+        // Bar 5 shows source bar 4, coloured red.
+        let got = (levels, shown(Box::new(shifted), 5));
+        assert_eq!(
+            got,
+            (vec![palette::DARK_ORANGE; 11], vec![(14.0, Color32::RED)]),
+            "{got:?}"
+        );
     }
 }

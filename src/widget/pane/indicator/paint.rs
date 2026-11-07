@@ -500,8 +500,14 @@ impl IndicatorPane {
                     if !job.text.is_empty() {
                         job.append(" ", 0.0, format(text_color));
                     }
+                    // The value comes from a source bar, and a transparent colour there hides
+                    // only the segment into it.
                     let color = indicator
-                        .plot_color(line, bar)
+                        .plot_offset(line)
+                        .checked_neg()
+                        .and_then(|back| bar.checked_add_signed(back))
+                        .and_then(|source| indicator.plot_color(line, source))
+                        .filter(|color| color.a() != 0)
                         .unwrap_or_else(|| indicator.plot_style(line).color);
                     // A fully transparent colour holds no RGB, so it has no opaque form.
                     let color = if color.a() == 0 {
@@ -1168,5 +1174,41 @@ mod tests {
             }
             output.drop_without_applying_deltas();
         }
+    }
+
+    fn bars_from_closes(closes: impl IntoIterator<Item = f64>) -> Vec<Bar> {
+        closes
+            .into_iter()
+            .enumerate()
+            .map(|(i, c)| {
+                let time = chrono::DateTime::from_timestamp(i as i64 * 60, 0).unwrap();
+                Bar::new(time, c, c, c, c, 1.0)
+            })
+            .collect()
+    }
+
+    /// The pane legend colours a value as its plot shows it: a plot drawn one bar to the right of
+    /// its source bar takes the colour of the source bar its value comes from.
+    #[test]
+    fn pane_legend_colours_a_shifted_value_by_its_source_bar() {
+        let mut study = CustomIndicator::new("Shifted", |bars| {
+            (0..bars.len())
+                .map(|i| IndicatorValue::Single(10.0 + i as f64))
+                .collect()
+        })
+        .with_overlay(false)
+        .with_offsets(vec![1])
+        .with_plot_color(|_, bar, _| Some([Color32::RED, Color32::BLUE][bar % 2]));
+        study.calculate(&bars_from_closes([1.0; 8]));
+        let mut pane = IndicatorPane::with_config(IndicatorPaneConfig::default());
+        // Bar 5 shows source bar 4, coloured red.
+        pane.bar_index = Some(5);
+        let job = pane.legend_job(&study, Color32::WHITE, Color32::GRAY, 12.0);
+        let value = job
+            .sections
+            .iter()
+            .find(|s| job.text[s.byte_range.start.0..s.byte_range.end.0].starts_with("14"))
+            .map(|s| s.format.color);
+        assert_eq!(value, Some(Color32::RED), "{value:?} in {}", job.text);
     }
 }
