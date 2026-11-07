@@ -1906,7 +1906,9 @@ mod tests {
     fn undo_keeps_series_added_outside_history() {
         use crate::widget::series::SeriesOptions;
         use crate::widget::settings::ChartSettingsState;
-        let rows: [(&str, fn(&mut Chart, SeriesId) -> Vec<SeriesId>); 6] = [
+        /// Makes the action's change and returns the added series it leaves.
+        type Change = fn(&mut Chart, SeriesId) -> Vec<SeriesId>;
+        let rows: [(&str, Change); 6] = [
             ("settings with a price line colour", |chart, earlier| {
                 let mut settings = ChartSettingsState::from_chart(chart);
                 settings.chart_basic_styles.background_color = Color32::from_rgb(1, 2, 3);

@@ -1530,6 +1530,7 @@ mod tests {
         }
         use Step::*;
         type Shown<'a> = [&'a [(&'a str, f64)]; 2];
+        type Row<'a> = (&'a str, &'a [(usize, Step)], Shown<'a>, Shown<'a>);
         let chart = |storage: &Arc<InMemory>| {
             let mut chart = Chart::new(BarData::from_bars(
                 (0..10)
@@ -1612,7 +1613,7 @@ mod tests {
         let (root_10, new_10): (&[_], &[_]) = (&[("", 10.0)], &[("New", 10.0)]);
         // Per chart, with a storage for each chart and with one for both, worked out by hand: a
         // chart that keeps a copy stores the drawing alone, and charts on one storage read it.
-        let rows: &[(&str, &[(usize, Step)], Shown, Shown)] = &[
+        let rows: &[Row] = &[
             ("keep", &[(b_side, Keep)], [none, top_10], [top_10, top_10]),
             (
                 "keep, undo",
