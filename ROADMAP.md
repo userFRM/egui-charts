@@ -136,7 +136,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [ ] Add a dedicated volatility-index study.
 - [x] ADX-breakout, divergence, key-reversal, intraday and missed-pivot studies.
 - [ ] Add the remaining specialised reversal and ghost-pivot studies.
-- [ ] Complete the remaining style and calculation controls of the built-in studies, including Williams %R, Choppiness Index, Connors RSI, Stochastic and Stochastic RSI.
+- [ ] Complete the remaining style and calculation controls of the built-in studies, including Williams %R, Connors RSI, Stochastic and Stochastic RSI.
 - [ ] Give session and periodic volume profile studies level extension, session hours, period lengths and rows in ticks.
 
 ### Study API and Editing

@@ -672,7 +672,7 @@ Studies,Indicators,Chart Pattern Triangle,unverified,library,src/studies/builtin
 Studies,Indicators,Chart Pattern Triple Bottom,unverified,library,src/studies/builtin/chart_patterns.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Chart Pattern Triple Top,unverified,library,src/studies/builtin/chart_patterns.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Chop Zone,unverified,library,src/studies/builtin/chop_zone.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Choppiness Index,incomplete,library,src/studies/builtin/choppiness.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
+Studies,Indicators,Choppiness Index,unverified,library,src/studies/builtin/choppiness.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/ui/dialogs/indicator_dialog/settings.rs;src/widget/pane/indicator/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Commodity Channel Index,unverified,library,src/studies/builtin/cci.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Connors RSI,incomplete,library,src/studies/builtin/connors_rsi.rs,
 Studies,Indicators,Coppock Curve,unverified,library,src/studies/builtin/coppock.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
