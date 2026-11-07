@@ -509,11 +509,8 @@ impl DrawingStorage {
                             // and pitchforks.
                             match tool {
                                 DrawingToolType::Ray => {
-                                    let reversed = drawing.points.get(..2).is_some_and(|p| {
-                                        (p[0].ts_ms, p[0].subms_ns) > (p[1].ts_ms, p[1].subms_ns)
-                                    });
-                                    drawing.drawing.extend_left = reversed;
-                                    drawing.drawing.extend_right = !reversed;
+                                    drawing.drawing.extend_left = false;
+                                    drawing.drawing.extend_right = true;
                                 }
                                 DrawingToolType::ExtendedLine => {
                                     drawing.drawing.extend_left = true;
@@ -1515,14 +1512,8 @@ mod tests {
                         DrawingStorage::from_json(&saved.to_string()).unwrap();
                     assert!(skipped.is_empty(), "{skipped:?}");
                     let drawing = &mut loaded.drawings[0].drawing;
-                    assert_eq!(
-                        drawing.extend_left,
-                        reversed || tool == DrawingToolType::ExtendedLine
-                    );
-                    assert_eq!(
-                        drawing.extend_right,
-                        !reversed || tool == DrawingToolType::ExtendedLine
-                    );
+                    assert_eq!(drawing.extend_left, tool == DrawingToolType::ExtendedLine);
+                    assert!(drawing.extend_right);
                     drawing.extend_left = false;
                     drawing.extend_right = false;
                     let (again, skipped) =
