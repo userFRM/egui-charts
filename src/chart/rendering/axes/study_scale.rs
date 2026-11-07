@@ -20,6 +20,21 @@ pub(crate) fn study_mapping(study: &dyn Indicator, coords: &ChartMapping) -> Cha
     if study.scale() == StudyScale::Main {
         return coords.clone();
     }
+    if let Some(price) = study.scale_mapping() {
+        return ChartMapping {
+            price: price.with_bounds(coords.rect.top(), coords.rect.bottom()),
+            ..coords.clone()
+        };
+    }
+    fit_study_mapping(study, coords, None)
+}
+
+/// Fit a study's own scale to its visible values, volume profiles, drawing prices and `extra`.
+pub(crate) fn fit_study_mapping(
+    study: &dyn Indicator,
+    coords: &ChartMapping,
+    extra: Option<(f64, f64)>,
+) -> ChartMapping {
     let start = coords.x_to_idx(coords.rect.left()).saturating_sub(1);
     let end = coords.x_to_idx(coords.rect.right()).saturating_add(2);
     let mut low = f64::INFINITY;
@@ -60,6 +75,10 @@ pub(crate) fn study_mapping(study: &dyn Indicator, coords: &ChartMapping) -> Cha
     for price in crate::studies::plots::drawing_prices(study, start..end) {
         low = low.min(price);
         high = high.max(price);
+    }
+    if let Some((lowest, highest)) = extra {
+        low = low.min(lowest);
+        high = high.max(highest);
     }
     if !low.is_finite() {
         low = 0.0;

@@ -21,7 +21,7 @@ use crate::painting::span_cache::{SpanCache, SpanFingerprint};
 use crate::scales::PriceMap;
 use egui::emath::GuiRounding as _;
 use egui::text::{LayoutJob, TextFormat};
-use egui::{Color32, FontId, Painter, Pos2, Rect, Shape, Stroke};
+use egui::{Color32, FontId, Painter, Pos2, Rect, Shape, Stroke, Vec2};
 
 use crate::model::{
     Bar, BarClock, ExchangeSessionProvider, SessionProvider, TPOColorMode, TPOConfig,
@@ -67,7 +67,7 @@ pub struct TpoRenderConfig {
     pub value_area_color: Color32,
     /// Initial Balance bar color
     pub initial_balance_color: Color32,
-    /// Highlight behind rows touched by a single period (with alpha)
+    /// Highlight behind rows touched by a single period and tint of their blocks (with alpha)
     pub single_print_color: Color32,
     /// Default letter color
     pub default_letter_color: Color32,
@@ -393,7 +393,7 @@ pub fn render_live_tpo(
         (base_config, instrument_tick),
         clock,
         (price_map, price_rect, |i| idx_to_coord(i, chart_rect_min_x)),
-        |profile, config, anchor_x, column_width, labels| {
+        |profile, config, anchor_x, column_width, room, labels| {
             draw_session_profile(
                 painter,
                 price_rect,
@@ -403,6 +403,7 @@ pub fn render_live_tpo(
                 &render_config,
                 anchor_x,
                 column_width,
+                room,
                 labels,
                 bullish_color,
                 bearish_color,
@@ -419,7 +420,7 @@ pub(crate) fn visit_profiles(
     (base_config, instrument_tick): (&TPOConfig, Option<f64>),
     clock: &BarClock,
     (price_map, price_rect, idx_to_coord): (&PriceMap, Rect, impl Fn(usize) -> f32),
-    mut visit: impl FnMut(&TPOProfile, &TPOConfig, f32, f32, bool),
+    mut visit: impl FnMut(&TPOProfile, &TPOConfig, f32, f32, f32, bool),
 ) {
     if visible.is_empty() || visible.end > full_data.len() {
         return;
@@ -447,7 +448,9 @@ pub(crate) fn visit_profiles(
         &config,
         &sessions,
         idx_to_coord,
-        |profile, anchor, column, labels| visit(profile, &config, anchor, column, labels),
+        |profile, anchor, column, room, labels| {
+            visit(profile, &config, anchor, column, room, labels)
+        },
     );
 }
 
@@ -478,7 +481,8 @@ fn row_config(
     Some(config)
 }
 
-/// Visit profiles at the same anchors and column widths for painting and hit testing.
+/// Visit profiles at the same anchors and column widths for painting and hit testing, with the
+/// room each has from its anchor to the next session, infinite for the forming one.
 fn place_profiles(
     units: &[(usize, usize, Rc<Vec<TPOProfile>>)],
     full_data: &[Bar],
@@ -486,7 +490,7 @@ fn place_profiles(
     config: &TPOConfig,
     sessions: &ExchangeSessionProvider,
     idx_to_coord: impl Fn(usize) -> f32,
-    mut visit: impl FnMut(&TPOProfile, f32, f32, bool),
+    mut visit: impl FnMut(&TPOProfile, f32, f32, f32, bool),
 ) {
     let balance_room = if config.show_initial_balance_extensions {
         10.0
@@ -571,6 +575,7 @@ fn place_profiles(
             profile,
             anchor_x,
             column.min(fit(width, widest)).max(1.0),
+            width,
             labels,
         );
     }
@@ -611,7 +616,7 @@ pub(crate) fn profile_at(
         &config,
         &sessions,
         |i| mapping.idx_to_x(i),
-        |profile, anchor, column, labels| {
+        |profile, anchor, column, _, labels| {
             let column = column.min(profile_row_height(profile, &mapping.price));
             let price = mapping.y_to_price(pos.y);
             let row = profile.row_price(price);
@@ -631,7 +636,8 @@ pub(crate) fn profile_at(
 }
 
 /// Draw one session's profile anchored at pixel x `anchor_x`, growing rightward in columns of
-/// `column_width` pixels, with its level labels to the left when `labels` is set.
+/// `column_width` pixels, with its level labels to the left when `labels` is set and its
+/// statistics below when they fit the `room` of its session.
 #[allow(clippy::too_many_arguments)]
 fn draw_session_profile(
     painter: &Painter,
@@ -642,6 +648,7 @@ fn draw_session_profile(
     render_config: &TpoRenderConfig,
     anchor_x: f32,
     column_width: f32,
+    room: f32,
     labels: bool,
     bullish_color: Color32,
     bearish_color: Color32,
@@ -683,7 +690,7 @@ fn draw_session_profile(
 
     // Single-print rows are highlighted behind their letter; hovering one names its price.
     if config.show_single_prints {
-        let decimals = (-tick_size.log10()).ceil().clamp(0.0, 8.0) as usize;
+        let decimals = crate::scales::decimals(profile.instrument_tick);
         for &price in &profile.single_prints {
             let (low, high) = profile.row_span(price);
             let top = coords.price_to_y(high);
@@ -750,6 +757,7 @@ fn draw_session_profile(
             continue;
         }
         let is_poc = config.show_poc && (price - profile.poc_price).abs() < tick_size * 0.5;
+        let single_print = config.show_single_prints && profile.tpo_count_at(price) == 1;
         let dimmed = !is_poc && dims_outside_value_area && !profile.is_in_value_area(price);
         let row_tone = if is_poc {
             Some(poc_color)
@@ -785,6 +793,12 @@ fn draw_session_profile(
                 let left = (x - block_width * 0.5).round_to_pixels(pixels_per_point);
                 let right = (x + block_width * 0.5).round_to_pixels(pixels_per_point);
                 let cell = Rect::from_min_max(Pos2::new(left, top), Pos2::new(right, bottom));
+                // An opaque cell hides the highlight behind it, so a single print tints its own cell.
+                let color = if single_print {
+                    color.blend(render_config.single_print_color)
+                } else {
+                    color
+                };
                 painter.rect_filled(cell, 0.0, color);
                 if letters_in_cells {
                     let letter_tone = cell_letter_color(color, &chart);
@@ -1010,6 +1024,97 @@ fn draw_session_profile(
             ));
         }
     }
+
+    if config.show_statistics {
+        draw_statistics(painter, price_rect, coords, profile, anchor_x, room);
+    }
+}
+
+/// Paint the session statistics table with its left edge at `anchor_x`, below the profile's lowest
+/// row or up against the bottom of the plot, unless it is wider than the `room` of its session.
+fn draw_statistics(
+    painter: &Painter,
+    price_rect: Rect,
+    coords: &PriceMap,
+    profile: &TPOProfile,
+    anchor_x: f32,
+    room: f32,
+) {
+    let chart = painter.ctx().active_theme().chart;
+    let decimals = crate::scales::decimals(profile.instrument_tick);
+    let price = |value: f64| format!("{value:.decimals$}");
+    let (below, above) = profile.tpo_counts_around_poc();
+    let rotation = match profile.rotation_factor() {
+        0 => "0".to_owned(),
+        rotation => format!("{rotation:+}"),
+    };
+    let mut rows = vec![
+        ("POC", price(profile.poc_price)),
+        (
+            "VAL / VAH",
+            format!(
+                "{} / {}",
+                price(profile.value_area_low),
+                price(profile.value_area_high)
+            ),
+        ),
+    ];
+    rows.extend(
+        profile
+            .initial_balance_range()
+            .map(|range| ("IB range", price(range))),
+    );
+    rows.push(("TPO below / above", format!("{below} / {above}")));
+    rows.push(("Rotation", rotation));
+    rows.extend(profile.range_extension().map(|(below, above)| {
+        (
+            "IB ext. below / above",
+            format!("{} / {}", price(below), price(above)),
+        )
+    }));
+
+    let font = FontId::proportional(typography::XS);
+    let galleys: Vec<_> = rows
+        .into_iter()
+        .map(|(label, value)| {
+            let label = l10n::text(painter.ctx(), label);
+            (
+                painter.layout_no_wrap(label, font.clone(), chart.axis_text),
+                painter.layout_no_wrap(value, font.clone(), chart.axis_text),
+            )
+        })
+        .collect();
+    let (label_width, value_width, line) = galleys.iter().fold(
+        (0.0_f32, 0.0_f32, 0.0_f32),
+        |(labels, values, line), (label, value)| {
+            (
+                labels.max(label.size().x),
+                values.max(value.size().x),
+                line.max(label.size().y),
+            )
+        },
+    );
+    let (padding, gap) = (Vec2::new(6.0, 4.0), 12.0);
+    let size =
+        Vec2::new(label_width + gap + value_width, line * galleys.len() as f32) + padding * 2.0;
+    if size.x > room {
+        return;
+    }
+
+    let lowest_row = coords
+        .price_to_y(profile.row_span(profile.profile_low).0)
+        .max(coords.price_to_y(profile.row_span(profile.profile_high).1));
+    let top = (lowest_row + 4.0).min(price_rect.bottom() - size.y);
+    let bounds = Rect::from_min_size(Pos2::new(anchor_x, top), size);
+    let painter = painter.with_clip_rect(price_rect);
+    painter.rect_filled(bounds, 4, chart.bg);
+    let inner = bounds.shrink2(padding);
+    for (row, (label, value)) in galleys.into_iter().enumerate() {
+        let y = inner.top() + row as f32 * line;
+        let value_x = inner.right() - value.size().x;
+        painter.galley(Pos2::new(inner.left(), y), label, chart.axis_text);
+        painter.galley(Pos2::new(value_x, y), value, chart.axis_text);
+    }
 }
 
 /// Measure at the POC so logarithmic and inverted scales keep the same geometry.
@@ -1165,6 +1270,7 @@ mod tests {
                 &TpoRenderConfig::default(),
                 40.0,
                 20.0,
+                f32::INFINITY,
                 false,
                 Color32::GREEN,
                 Color32::RED,
@@ -1249,6 +1355,7 @@ mod tests {
                     &TpoRenderConfig::default(),
                     40.0,
                     20.0,
+                    f32::INFINITY,
                     false,
                     Color32::GREEN,
                     Color32::RED,
@@ -1457,6 +1564,7 @@ mod tests {
                                 &render,
                                 10.25,
                                 column,
+                                f32::INFINITY,
                                 false,
                                 Color32::GREEN,
                                 Color32::RED,
@@ -1582,6 +1690,7 @@ mod tests {
                 &render_config,
                 10.0,
                 20.0,
+                f32::INFINITY,
                 true,
                 Color32::GREEN,
                 Color32::RED,
@@ -1627,6 +1736,7 @@ mod tests {
             &render_config,
             10.0,
             20.0,
+            f32::INFINITY,
             false,
             Color32::GREEN,
             Color32::RED,
@@ -1929,7 +2039,7 @@ mod tests {
                 &config,
                 &clock.sessions(),
                 |i| i as f32 * 10.0,
-                |profile, _, _, _| counts.push(profile.tpo_count_at(100.0)),
+                |profile, _, _, _, _| counts.push(profile.tpo_count_at(100.0)),
             );
             assert_eq!(counts, expected, "{range:?}, latest={latest_session_only}");
         }
@@ -2192,6 +2302,273 @@ mod tests {
                     "{visible:?}, {first}"
                 );
             }
+        }
+    }
+
+    /// Three half-hour periods on rows of 1: A 98 to 105, B 101 to 107, C 104 to 108, so rows
+    /// 98, 99, 100 and 108 hold one TPO each.
+    fn three_overlapping_periods() -> Vec<Bar> {
+        let start = chrono::DateTime::parse_from_rfc3339("2024-01-02T14:30:00Z")
+            .unwrap()
+            .to_utc();
+        [(98.0, 105.0), (101.0, 107.0), (104.0, 108.0)]
+            .into_iter()
+            .enumerate()
+            .map(|(i, (low, high))| {
+                Bar::new(
+                    start + Duration::minutes(30 * i as i64),
+                    low,
+                    high,
+                    low,
+                    high,
+                    1.0,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn single_print_highlights_show_on_blocks() {
+        let model = TPOConfig {
+            tick_size: 1.0,
+            ..Default::default()
+        };
+        let profile = to_tpo_profiles(
+            &three_overlapping_periods(),
+            &model,
+            &Timeframe::Min30.into(),
+        )
+        .remove(0);
+        assert_eq!(profile.single_prints, vec![98.0, 99.0, 100.0, 108.0]);
+        let render_config = TpoRenderConfig::default();
+        let rect = Rect::from_x_y_ranges(0.0..=400.0, 0.0..=400.0);
+        // 16 px a point: rows of 16 px, below the 24 px up to which a block fills its row.
+        let coords = PriceMap::new(
+            crate::scales::PriceTransform::default(),
+            crate::scales::PriceRange::new(90.0, 115.0),
+            rect.min.y,
+            rect.max.y,
+            false,
+        );
+        let fills = |display_mode, show_single_prints| {
+            let ctx = egui::Context::default();
+            ctx.begin_pass(egui::RawInput::default());
+            let painter = ctx.layer_painter(egui::LayerId::background());
+            let config = TPOConfig {
+                display_mode,
+                show_single_prints,
+                ..model.clone()
+            };
+            draw_session_profile(
+                &painter,
+                rect,
+                &coords,
+                &profile,
+                &config,
+                &render_config,
+                10.0,
+                20.0,
+                f32::INFINITY,
+                true,
+                Color32::GREEN,
+                Color32::RED,
+            );
+            let mut output = ctx.end_pass();
+            output.textures_delta.clear();
+            output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    Shape::Rect(r) => Some((r.rect, r.fill)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        // The fills that show at a point: the last opaque one and those painted over it.
+        let shown = |fills: &[(Rect, Color32)], p: Pos2| {
+            let over: Vec<_> = fills
+                .iter()
+                .filter(|(r, _)| r.contains(p))
+                .map(|(_, c)| *c)
+                .collect();
+            let from = over.iter().rposition(|c| c.a() == 255).unwrap_or(0);
+            over[from..].to_vec()
+        };
+        // Pixels whose paint changes when single prints are turned on.
+        let marked = |display_mode| {
+            let (on, off) = (fills(display_mode, true), fills(display_mode, false));
+            (0..400)
+                .flat_map(|y| (0..120).map(move |x| Pos2::new(x as f32 + 0.5, y as f32 + 0.5)))
+                .filter(|&p| shown(&on[..], p) != shown(&off[..], p))
+                .count()
+        };
+        // Each single print's cell is one 16 px column of one 16 px row.
+        let half_cells = 4 * 16 * 16 / 2;
+        for display_mode in [TPODisplayMode::Blocks, TPODisplayMode::Both] {
+            let changed = marked(display_mode);
+            assert!(
+                changed >= half_cells,
+                "{display_mode:?}: 4 single prints changed {changed} px, expected {half_cells}"
+            );
+        }
+    }
+
+    #[test]
+    fn single_print_tooltips_name_the_row_price() {
+        // (instrument tick, row height, two half-hour bars as (low, high), price range, single
+        // prints by hand)
+        type Case<'a> = (f64, f64, [(f64, f64); 2], (f64, f64), &'a [&'a str]);
+        let cases: [Case; 3] = [
+            // Rows of one 0.25 tick: only A reaches 110.75.
+            (
+                0.25,
+                0.25,
+                [(110.0, 110.75), (110.0, 110.5)],
+                (109.0, 112.0),
+                &["110.75"],
+            ),
+            // Rows of ten 0.25 ticks from multiples of 2.5: A spans rows 100, 102.5 and 105,
+            // B only row 100.
+            (
+                0.25,
+                2.5,
+                [(100.0, 105.0), (100.0, 102.0)],
+                (95.0, 110.0),
+                &["102.50", "105.00"],
+            ),
+            // Rows of one 1/64 tick: only A reaches 110.03125.
+            (
+                0.015625,
+                0.015625,
+                [(110.0, 110.03125), (110.0, 110.015625)],
+                (109.9, 110.1),
+                &["110.031250"],
+            ),
+        ];
+        let rect = Rect::from_x_y_ranges(0.0..=400.0, 0.0..=400.0);
+        let highlight = TpoRenderConfig::default().single_print_color;
+        for (tick, rows, periods, range, prints) in cases {
+            let bars: Vec<_> = periods
+                .iter()
+                .enumerate()
+                .map(|(i, &(low, high))| {
+                    Bar::new(
+                        chrono::DateTime::UNIX_EPOCH + Duration::minutes(30 * i as i64),
+                        low,
+                        high,
+                        low,
+                        high,
+                        1.0,
+                    )
+                })
+                .collect();
+            let config = TPOConfig {
+                tick_size: rows,
+                show_single_prints: true,
+                ..Default::default()
+            };
+            let coords = PriceMap::new(
+                crate::scales::PriceTransform::default(),
+                crate::scales::PriceRange::new(range.0, range.1),
+                rect.min.y,
+                rect.max.y,
+                false,
+            );
+            let ctx = egui::Context::default();
+            let draw = |events| {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(rect),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        ui.allocate_rect(rect, egui::Sense::hover());
+                        render_live_tpo(
+                            ui.painter(),
+                            rect,
+                            &bars,
+                            0..bars.len(),
+                            1,
+                            &coords,
+                            &config,
+                            Some(tick),
+                            &BarClock::new(Timeframe::Min30),
+                            |i, _| i as f32 * 100.0 + 50.0,
+                            0.0,
+                            Color32::GREEN,
+                            Color32::RED,
+                        )
+                    },
+                );
+                output.textures_delta.clear();
+                output
+            };
+            let rows_lit: Vec<_> = draw(vec![])
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    Shape::Rect(r) if r.fill == highlight => Some(r.rect),
+                    _ => None,
+                })
+                .collect();
+            let mut named = Vec::new();
+            for row in rows_lit {
+                // A new tooltip shows from its second pass.
+                draw(vec![egui::Event::PointerMoved(row.center())]);
+                let hovered = draw(vec![egui::Event::PointerMoved(row.center())]);
+                named.extend(hovered.shapes.iter().filter_map(|s| {
+                    match &s.shape {
+                        Shape::Text(t) => t
+                            .galley
+                            .text()
+                            .strip_prefix("Single print ")
+                            .map(str::to_owned),
+                        _ => None,
+                    }
+                }));
+            }
+            assert_eq!(named, prints, "tick {tick}, rows {rows}");
+        }
+    }
+
+    #[test]
+    fn statistics_draw_only_where_they_fit() {
+        let model = TPOConfig {
+            tick_size: 1.0,
+            ..Default::default()
+        };
+        let profile = to_tpo_profiles(
+            &three_overlapping_periods(),
+            &model,
+            &Timeframe::Min30.into(),
+        )
+        .remove(0);
+        let rect = Rect::from_x_y_ranges(0.0..=400.0, 0.0..=400.0);
+        let coords = PriceMap::new(
+            crate::scales::PriceTransform::default(),
+            crate::scales::PriceRange::new(90.0, 115.0),
+            rect.min.y,
+            rect.max.y,
+            false,
+        );
+        // (left edge, room of its session, drawn)
+        for (anchor, room, drawn) in [
+            (10.0, f32::INFINITY, true),
+            // It would reach the next session's table.
+            (10.0, 20.0, false),
+        ] {
+            let ctx = egui::Context::default();
+            ctx.begin_pass(egui::RawInput::default());
+            let painter = ctx.layer_painter(egui::LayerId::background());
+            draw_statistics(&painter, rect, &coords, &profile, anchor, room);
+            let mut output = ctx.end_pass();
+            output.textures_delta.clear();
+            let painted = output
+                .shapes
+                .iter()
+                .any(|s| matches!(&s.shape, Shape::Text(t) if t.galley.text() == "Rotation"));
+            assert_eq!(painted, drawn, "anchor {anchor}, room {room}");
         }
     }
 }

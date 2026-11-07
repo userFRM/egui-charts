@@ -117,7 +117,8 @@ impl Chart {
     /// last is kept. Drawings retain their timestamps across replacements and interval changes.
     /// The studies are updated from the first bar that changed on the next [`show`](Self::show),
     /// and near the live edge the view follows a new last bar, as with [`update`](Self::update).
-    /// A view scrolled back stays on its bars when older or newer bars arrive.
+    /// A view scrolled back stays on its bars when older or newer bars arrive, and stops with the
+    /// oldest bar in view once the replacement no longer holds them.
     ///
     /// Bar series accept data; unknown ids and study ids are ignored with a warning, and so is
     /// the main series while it is removed from a chart that keeps the original pane.
@@ -181,7 +182,8 @@ impl Chart {
     /// [`feed_state`](Self::feed_state). Drawings move with their bars, studies follow them on the
     /// next [`show`](Self::show), and near the live edge the view follows a new last bar. A view
     /// scrolled back stays on its bars, also when the bars of an added series lay out the time
-    /// scale of a chart without main bars, from the next [`show`](Self::show). A merged bar is
+    /// scale of a chart without main bars, from the next [`show`](Self::show), and stops with the
+    /// oldest bar in view once a bar limit has evicted them. A merged bar is
     /// reported by [`ChartEvent::DataUpdated`](super::ChartEvent::DataUpdated).
     ///
     /// Bar series accept data; unknown ids and study ids are ignored with a warning.
@@ -364,6 +366,7 @@ impl Chart {
         } else {
             #[cfg(feature = "drawings")]
             self.anchor_drawing_points();
+            let right_edge = self.right_edge();
             let mut removed = Vec::new();
             self.state.edit_bars(|bars| {
                 let count = count.min(bars.len());
@@ -393,6 +396,7 @@ impl Chart {
                     *start = start.saturating_sub(removed.len());
                 }
                 self.scroll_animation = None;
+                self.stop_at_oldest_bar(right_edge);
             }
             #[cfg(feature = "drawings")]
             self.project_drawing_points();
@@ -801,7 +805,7 @@ impl Chart {
             // Within ~1.5 bars of the right edge. With fix_right_edge the right offset is clamped
             // to <= 0, so near means no farther than 1.5 bars to the left of the edge.
             near_live: self.state.time_scale().is_near_live_edge(),
-            len: bars.len(),
+            right_edge: self.right_edge(),
             tail: bars.last().cloned(),
         }
     }
@@ -859,11 +863,12 @@ impl Chart {
     fn follow_live_edge(&mut self, before: Edge, clock: &BarClock) {
         let bars = &self.state.data().bars;
         let tail = before.tail.as_ref().zip(bars.last());
-        // Appended only if the last bar moved forward in time: older bars loaded in front make
+        // Appended only if the last bar moved to a later slot, whatever the length: a rolling
+        // window or a bar limit keeps the series from growing. Older bars loaded in front make
         // the series longer and keep its last bar. They need no change of the right offset
         // either, since the bar indices and the base index both grow by their count.
         let appended =
-            bars.len() > before.len && tail.is_some_and(|(old, new)| new.time > old.time);
+            tail.is_some_and(|(old, new)| clock.bar_open(new.time) > clock.bar_open(old.time));
         let whitespace_replaced =
             tail.is_some_and(|(old, new)| old.is_whitespace() && !new.is_whitespace());
         let options = &self.chart_options.time_scale;
@@ -878,16 +883,19 @@ impl Chart {
         } else if !self.state.shows_elements()
             && let Some(tail) = before.tail
         {
-            self.keep_bars_in_view(clock, tail.time);
+            self.keep_bars_in_view(clock, tail.time, before.right_edge);
         }
     }
 
     /// [`follow_live_edge`](Self::follow_live_edge) for the slots an added series gave a chart
-    /// without main bars after `tail`, the last slot before the refresh.
-    pub(super) fn added_slots_arrived(&mut self, tail: DateTime<Utc>) {
-        if !self.state.shows_fallback()
-            || self.state.shown().last().is_none_or(|bar| bar.time <= tail)
-        {
+    /// without main bars after `tail`, the last slot before the refresh, when the view's
+    /// [right edge](Self::right_edge) was at `right_edge`.
+    pub(super) fn added_slots_arrived(&mut self, tail: DateTime<Utc>, right_edge: f64) {
+        if !self.state.shows_fallback() {
+            return;
+        }
+        if self.state.shown().last().is_none_or(|bar| bar.time <= tail) {
+            self.stop_at_oldest_bar(right_edge);
             return;
         }
         if self.chart_options.time_scale.shift_visible_range_on_new_bar
@@ -895,7 +903,7 @@ impl Chart {
         {
             self.scroll_to_live_edge();
         } else {
-            self.keep_bars_in_view(&self.clock(), tail);
+            self.keep_bars_in_view(&self.clock(), tail, right_edge);
         }
     }
 
@@ -908,20 +916,49 @@ impl Chart {
     /// Moves the right offset against the slots after the one of `tail`. The right edge is the
     /// last slot plus the right offset: without this a view scrolled back would move one bar
     /// forward per appended bar. A bar stamped later in the slot of the last bar replaces it
-    /// and appends nothing.
-    fn keep_bars_in_view(&mut self, clock: &BarClock, tail: DateTime<Utc>) {
+    /// and appends nothing. `right_edge` is the view's [right edge](Self::right_edge) before the
+    /// bars changed.
+    fn keep_bars_in_view(&mut self, clock: &BarClock, tail: DateTime<Utc>, right_edge: f64) {
         let tail = clock.bar_open(tail);
         let shown = self.state.shown();
         let appended = shown.len() - shown.partition_point(|bar| clock.bar_open(bar.time) <= tail);
         let time_scale = self.state.time_scale_mut();
         time_scale.set_right_offset(time_scale.right_offset_precise() - appended as f64);
+        self.stop_at_oldest_bar(right_edge);
+    }
+
+    /// The right edge of the view in slots from the oldest shown slot, negative before it.
+    pub(super) fn right_edge(&self) -> f64 {
+        let scale = self.state.time_scale();
+        scale.base_idx() as f64 + scale.right_offset_precise() - scale.position(0.0)
+    }
+
+    /// Stops a time-based view with the oldest bar in view when older bars left it, given its
+    /// right edge `before` they did: a plot that was full of bars stays full, and any other view
+    /// keeps its range until it would show no bars. A view that showed no bars before stays in
+    /// the whitespace where the user left it.
+    fn stop_at_oldest_bar(&mut self, before: f64) {
+        if self.state.shows_elements() || self.state.shown().is_empty() {
+            return;
+        }
+        let right = self.right_edge();
+        let scale = self.state.time_scale_mut();
+        // The right edge with the oldest slot at the left border, as with fix_left_edge.
+        let full = f64::from(scale.width()) / f64::from(scale.bar_spacing()) - 1.0;
+        let last = scale.position(scale.base_idx() as f64) - scale.position(0.0);
+        let stop = full.clamp(0.0, last);
+        // The right edge a stop leaves at `full` can read back a rounding error short of it.
+        let before = before + 1e-6;
+        if right < stop && (before >= full || right < 0.0 && before >= 0.0) {
+            scale.set_right_offset(scale.right_offset_precise() + stop - right);
+        }
     }
 }
 
 /// The bars and the view before the bars change, for [`Chart::bars_changed`].
 struct Edge {
     near_live: bool,
-    len: usize,
+    right_edge: f64,
     tail: Option<Bar>,
 }
 
