@@ -1535,6 +1535,72 @@ mod tests {
         }
     }
 
+    /// Text is drawn at 1 to 256 points (`styles::typography::FONT_SIZES`): a larger high-low
+    /// label is drawn at 256 points, and `Chart::restore` refuses it as it refuses the other font
+    /// sizes in a saved layout. A label size of zero hides the labels and still restores.
+    #[test]
+    #[cfg(feature = "drawings")]
+    fn high_low_label_size_is_bounded_like_other_text() {
+        use crate::model::ChartType;
+        use crate::widget::ChartSnapshot;
+        use crate::widget::test_frames::{frame, shapes};
+        use egui::Color32;
+
+        let bars = || {
+            BarData::from_bars(vec![Bar::new(
+                chrono::DateTime::UNIX_EPOCH,
+                10.0,
+                18.0,
+                8.0,
+                14.0,
+                0.0,
+            )])
+        };
+        let mut chart = Chart::new(bars());
+        chart.set_chart_type(ChartType::HighLow);
+        chart.config_mut().show_volume = false;
+        let saved_at = |size: f32| {
+            let mut saved = serde_json::to_value(chart.snapshot().unwrap()).unwrap();
+            saved["chart_type_params"]["styles"]["high_low"]["label_font_size"] =
+                serde_json::json!(size);
+            saved["settings"]["chart_type_params"]["styles"]["high_low"]["label_font_size"] =
+                serde_json::json!(size);
+            serde_json::from_value::<ChartSnapshot>(saved).unwrap()
+        };
+        // Restored into charts that are never painted: laying the label out at the oversized
+        // size is what the bound exists to prevent.
+        let refused = matches!(
+            Chart::new(bars()).restore(&saved_at(100000.0)),
+            Err(crate::widget::RestoreError::Layout(
+                "Font sizes must be between 1 and 256"
+            ))
+        );
+        let zero_restores = Chart::new(bars()).restore(&saved_at(0.0)).is_ok();
+
+        // A single bar always fits its labels, so the size reaches the painter.
+        let label = Color32::from_rgb(3, 4, 103);
+        let mut params = chart.chart_type_params().clone();
+        params.styles.high_low.label_color = label;
+        params.styles.high_low.label_font_size = 300.0;
+        chart.set_chart_type_params(params);
+        let ctx = Context::default();
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+        let sizes: Vec<f32> = painted
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::Text(t)
+                    if t.galley.text() == "18.00"
+                        && t.galley.job.sections[0].format.color == label =>
+                {
+                    Some(t.galley.job.sections[0].format.font_id.size)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!((refused, zero_restores, sizes), (true, true, vec![256.0]));
+    }
+
     /// A high-low document without the chart type's style printed no price labels, so a layout or
     /// a chart settings template saved then restores without them; a layout saved with the style
     /// keeps its six. Labels are picked by their text and size, whatever their colour.

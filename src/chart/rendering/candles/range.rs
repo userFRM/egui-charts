@@ -99,7 +99,7 @@ fn render_high_low_labels(
         );
         painter.layout_no_wrap(
             label,
-            FontId::proportional(style.label_font_size),
+            FontId::proportional(crate::styles::typography::font_size(style.label_font_size)),
             style.label_color,
         )
     };

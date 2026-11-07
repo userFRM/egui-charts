@@ -416,7 +416,9 @@ pub struct HighLowStyle {
     /// Price label colour. `Color32::PLACEHOLDER`, the default, prints the labels in the price
     /// scale's text colour.
     pub label_color: Color32,
-    /// Price label size in logical points. Non-positive or non-finite sizes hide the labels.
+    /// Price label size in logical points, drawn at 1 to 256 points. `Chart::snapshot` and
+    /// `Chart::restore` refuse a positive size outside that range. Non-positive or non-finite
+    /// sizes hide the labels.
     pub label_font_size: f32,
 }
 
