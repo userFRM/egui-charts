@@ -16,8 +16,12 @@ the sample snapshot. Depth and executions have separate coverage.
 
 On a tick, volume, range or delta interval, the chart matches the executions of its trade pages
 to the bars of its history: a bar shows cells only when the held executions rebuild its open,
-high, low, close and volume, grouped from one of the bars' first executions. A page may start
-anywhere inside a bar; the bars it does not rebuild stay candles, without cells from another bar.
+high, low, close and volume, grouped from one of the bars' first executions. On volume and delta
+intervals a fill split by a boundary opens the next bar with its rest, which the executions cannot
+show, so a grouping there also needs the bar before to close at another price than every execution
+at its start, or the page to end with the last bar before the live executions and rebuild it. A
+page may start anywhere inside a bar; the bars it does not rebuild stay candles, without cells
+from another bar.
 
 <!-- example -->
 
@@ -220,7 +224,7 @@ reaches back to the loss. Custom hosts
 can push chronological events and book loss through the same handle, then call [`calculate`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#tymethod.calculate) or
 [`update`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/trait.Indicator.html#method.update). Cloned studies share their market-data source, which receives each event once.
 Replacing aggregation inputs creates a new source; hosts replay their history, while a chart replays the executions it still retains
-for a newly attached rate study, and for one restored by undo, which then shows the values it would have had if it had stayed. Other studies keep their sources and accumulated bar totals
+for a newly attached rate study, and for one restored by undo, which then shows the values it would have had if it had stayed. On a tick, volume, range or delta interval, once the store has dropped executions, it shows those values on the chart's bars whose executions are all held and leaves the bars that lost one empty. Other studies keep their sources and accumulated bar totals
 when the catalogue changes, including totals of executions that aged out of the raw store.
 Quote and book history before a study was connected must come from the host. Bars alone give
 no substitute values. Counts of orders require fills grouped by order by the host; [`Tick`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/quote/struct.Tick.html) has

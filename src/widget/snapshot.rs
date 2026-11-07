@@ -814,6 +814,13 @@ fn check(
         .chain(snapshot.config.iter().flat_map(|config| {
             std::iter::once(config.watermark_font_size).chain(config.axis_font_size)
         }))
+        .chain(
+            std::iter::once(&snapshot.chart_type_params)
+                .chain(snapshot.settings.chart_type_params.as_ref())
+                .map(|params| params.styles.high_low.label_font_size)
+                // Non-positive sizes hide the labels.
+                .filter(|size| *size > 0.0),
+        )
         .any(|size| !font_sizes.contains(&size))
     {
         return Err(RestoreError::Layout("Font sizes must be between 1 and 256"));

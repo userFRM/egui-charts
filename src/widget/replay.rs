@@ -171,7 +171,9 @@ impl Chart {
     /// [`Self::set_market_replay`] to replay recorded trades, quotes and depth together.
     /// `set_data` and `update` retain
     /// host corrections behind the window. `None` exits, restores all retained bars and quotes,
-    /// and restores the feed's previous pause state. Hosts own source data and session storage.
+    /// and restores the feed's previous pause state; a feed that resumes keeps the restored bars
+    /// and depth history as [`Self::set_feed_paused`] describes. Hosts own source data and session
+    /// storage.
     /// With a market driver attached this dispatches a seek; call outside egui context locks,
     /// as with [`ReplayDriver::seek`].
     pub fn set_replay_time(&mut self, time: Option<DateTime<Utc>>) {

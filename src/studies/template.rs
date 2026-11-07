@@ -1,7 +1,7 @@
 //! Serializable inputs and presentation of studies, alone or as a chart's set.
 
 use crate::studies::{
-    ConfiguredStudy, Indicator, IndicatorFactory, InputValue, StudyScale, StudySettings,
+    ConfiguredStudy, Indicator, IndicatorFactory, InputValue, StudyInput, StudyScale, StudySettings,
 };
 
 /// Serializable inputs and presentation of one study. Hosts may resolve `name` through their
@@ -127,14 +127,24 @@ impl StudyTemplate {
         &self,
         factory: &IndicatorFactory,
     ) -> Result<Box<dyn Indicator>, crate::studies::StudyError> {
-        let upgraded = self.upgraded();
+        // A host study registered under a built-in's name takes its own template as saved,
+        // where an upgrade for that built-in would rename or convert its inputs.
+        let own = factory.create_registered(&self.name);
+        let own_inputs = own.as_ref().map_or_else(Vec::new, |study| study.inputs());
+        let upgraded = self.upgraded(&own_inputs);
         let template = upgraded.as_ref().unwrap_or(self);
-        let study = factory
-            .create_registered(&template.name)
-            .ok_or_else(|| crate::studies::StudyError::UnknownStudy(template.name.clone()))?;
+        let (study, declared) = match own {
+            Some(study) if template.name == self.name => (study, own_inputs),
+            _ => {
+                let study = factory.create_registered(&template.name).ok_or_else(|| {
+                    crate::studies::StudyError::UnknownStudy(template.name.clone())
+                })?;
+                let declared = study.inputs();
+                (study, declared)
+            }
+        };
         // A host study registered under a built-in's name never had the inputs an upgrade adds
         // for that built-in.
-        let declared = study.inputs();
         let template = if template.inputs.iter().all(|(id, _)| {
             self.inputs.iter().any(|(saved, _)| saved == id)
                 || declared.iter().any(|input| input.id == *id)
@@ -165,9 +175,22 @@ impl StudyTemplate {
 
     /// This template under the current input ids of a built-in study whose inputs changed after
     /// it was saved, with inputs added since set to draw what it drew, or `None` when it needs no
-    /// change.
-    fn upgraded(&self) -> Option<Self> {
+    /// change. `own` holds the inputs of the study registered under the saved name; a saved input
+    /// that study takes as saved is neither renamed nor converted.
+    fn upgraded(&self, own: &[StudyInput]) -> Option<Self> {
         let has = |id: &str| self.inputs.iter().any(|(input, _)| input == id);
+        let declares = |id: &str| own.iter().any(|input| input.id == id);
+        // Profile endpoints saved in Unix milliseconds that the study does not take as numbers.
+        let millis = |id: &str, value: &InputValue| match (id, value) {
+            ("start_time" | "end_time", InputValue::Number(ms))
+                if !own
+                    .iter()
+                    .any(|input| input.id == id && input.accepts(value)) =>
+            {
+                Some(*ms)
+            }
+            _ => None,
+        };
         let bands = self
             .inputs
             .iter()
@@ -194,7 +217,7 @@ impl StudyTemplate {
             }
             // Before it averaged highs and lows, MA Channel drew the close average with percentage
             // bands, which Envelopes draws with a simple average.
-            "MA Channel" if has("offset_percent") => {
+            "MA Channel" if has("offset_percent") && !declares("offset_percent") => {
                 template.name = "Envelopes".to_owned();
                 for (id, _) in &mut template.inputs {
                     if id == "offset_percent" {
@@ -291,16 +314,14 @@ impl StudyTemplate {
             }
             // Profile endpoints were Unix milliseconds before they read as UTC dates and times.
             "Vol Profile FR" | "Vol Profile Anchored"
-                if self.inputs.iter().any(|(id, value)| {
-                    matches!(id.as_str(), "start_time" | "end_time")
-                        && matches!(value, InputValue::Number(_))
-                }) =>
+                if self
+                    .inputs
+                    .iter()
+                    .any(|(id, value)| millis(id, value).is_some()) =>
             {
                 for (id, value) in &mut template.inputs {
-                    if let ("start_time" | "end_time", InputValue::Number(ms)) =
-                        (id.as_str(), &*value)
-                    {
-                        *value = InputValue::Text(super::builtin::time_text(*ms));
+                    if let Some(ms) = millis(id, value) {
+                        *value = InputValue::Text(super::builtin::time_text(ms));
                     }
                 }
             }
@@ -709,28 +730,74 @@ mod tests {
     }
 
     /// A host study registered under a built-in's name replaces it (`IndicatorFactory::register`),
-    /// so its own template, which never had the built-in's inputs, restores through that factory.
+    /// so its own template restores through that factory as that study, with the inputs and plots
+    /// it was saved with, also where an upgrade of the built-in's templates adds, renames or
+    /// converts an input.
     #[test]
     fn host_studies_named_like_upgraded_builtins_restore_from_their_templates() {
-        use crate::studies::{CustomIndicator, IndicatorValue};
-        let names = ["RSI", "VWAP", "Trading Sessions"];
+        use crate::studies::{CustomIndicator, IndicatorValue, InputKind};
+        use InputValue::{Length, Number};
+        let millis = || InputKind::Number(0.0, 1e13);
+        let rows = [
+            ("RSI", vec![], 1),
+            ("VWAP", vec![], 1),
+            ("Trading Sessions", vec![], 1),
+            // Built-in templates with `offset_percent` restore as Envelopes, which draws three
+            // lines too.
+            (
+                "MA Channel",
+                vec![
+                    ("period", Length(20), InputKind::Length(1, 500)),
+                    ("offset_percent", Number(2.5), InputKind::Number(0.0, 100.0)),
+                ],
+                3,
+            ),
+            // Built-in templates with numeric endpoints restore them as dates and times.
+            (
+                "Vol Profile FR",
+                vec![
+                    ("start_time", Number(1_772_838_000_500.0), millis()),
+                    ("end_time", Number(1_772_841_600_000.0), millis()),
+                ],
+                1,
+            ),
+            (
+                "Vol Profile Anchored",
+                vec![("start_time", Number(1_772_838_000_500.0), millis())],
+                1,
+            ),
+        ];
         let mut factory = IndicatorFactory::new();
-        for name in names {
+        for (name, inputs, lines) in rows.clone() {
+            let schema: Vec<_> = inputs
+                .into_iter()
+                .map(|(id, value, kind)| StudyInput::new(id, id, value, kind))
+                .collect();
             factory.register(name, move || {
-                Box::new(CustomIndicator::new(name, |bars| {
+                let close = |bars: &[Bar], _: &[StudyInput]| {
                     bars.iter()
                         .map(|bar| IndicatorValue::Single(bar.close))
                         .collect()
-                }))
+                };
+                Box::new(
+                    CustomIndicator::new(name, |_| Vec::new())
+                        .with_line_count(lines)
+                        .with_inputs(schema.clone(), close)
+                        .unwrap(),
+                )
             });
         }
-        for name in names {
+        for (name, inputs, lines) in rows {
             let saved = StudyTemplate::from_study(factory.create(name).unwrap().as_ref());
-            let restored = saved.create_with(&factory).map_err(|e| e.to_string());
-            assert_eq!(
-                restored.map(|study| study.name().to_owned()),
-                Ok(name.into())
-            );
+            let restored = saved
+                .create_with(&factory)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!((restored.name(), restored.line_count()), (name, lines));
+            let restored = restored.inputs();
+            for (id, value, _) in inputs {
+                let input = restored.iter().find(|input| input.id == id);
+                assert_eq!(input.map(|input| &input.value), Some(&value), "{name} {id}");
+            }
         }
     }
 

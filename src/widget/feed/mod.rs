@@ -42,6 +42,8 @@ pub(crate) struct FeedLink {
     pub(super) clock: BarClock,
     /// Hours choice of the retained executions.
     extended_hours: bool,
+    /// Currency or unit of the retained executions, as `extended_hours` is their hours choice.
+    conversion: Option<String>,
     initial_bars: usize,
     /// Whether history is requested adjusted for dividends.
     pub(super) adjusted: bool,
@@ -51,6 +53,12 @@ pub(crate) struct FeedLink {
     wake: Arc<Mutex<Option<ViewportId>>>,
     /// The symbol or timeframe changed: the next `pump` reloads.
     reload_pending: bool,
+    /// The pause ended: the next `pump` reloads, keeping the bars, executions and depth history
+    /// when nothing else changed.
+    resumed: bool,
+    /// Open of the last bar a resume dropped; the bars before it are kept. The new subscription
+    /// drops older executions, and a latest page that starts after it replaces the kept bars.
+    resumed_from: Option<chrono::DateTime<chrono::Utc>>,
     pub(super) paused: bool,
     /// The pause last set with [`Chart::set_feed_paused`]. `paused` also holds while the main
     /// bars take no data or a replay runs.
@@ -148,10 +156,13 @@ impl FeedLink {
             inbox: Arc::default(),
             clock: self.clock.clone(),
             extended_hours: self.extended_hours,
+            conversion: self.conversion.clone(),
             initial_bars: self.initial_bars,
             adjusted: self.adjusted,
             wake: Arc::default(),
             reload_pending: false,
+            resumed: false,
+            resumed_from: None,
             paused: true,
             host_paused: true,
             next_key: 0,
@@ -192,8 +203,8 @@ impl FeedLink {
     /// older than the one before it is left out, as it is when it arrives live. The bar of the
     /// oldest held trade is incomplete until a trade page reports the start of trade history.
     /// On a trade-based interval, paged trades fill only the bars of `history`, the chart's, that
-    /// they rebuild ([`Footprint::push_history`]). With `before`, includes only executions
-    /// strictly before that replay cutoff.
+    /// open before the live executions and that they rebuild ([`Footprint::push_history`]). With
+    /// `before`, includes only executions strictly before that replay cutoff.
     pub(super) fn footprint(
         &self,
         before: Option<chrono::DateTime<chrono::Utc>>,
@@ -212,23 +223,30 @@ impl FeedLink {
         };
         let trades = || held().take_while(|trade| before.is_none_or(|time| trade.ts < time));
         // Paged executions have their own anchor; the sink supplies live allocations below.
-        if !trade_based || self.trades.lost_until().is_none() || self.trades.live().next().is_none()
-        {
-            if trade_based && !history.is_empty() {
-                flow.push_history(&held().collect::<Vec<_>>(), history, before);
-            } else {
-                for trade in trades() {
-                    let _ = flow.push(trade);
-                }
+        let lost = self.trades.lost_until();
+        if trade_based && !history.is_empty() {
+            // An execution at the loss's time may have lost the one that opened its bar.
+            let paged: Vec<_> = held()
+                .filter(|trade| lost.is_none_or(|lost| trade.ts > lost))
+                .collect();
+            // Bars from the first live execution on hold executions the page lacks, so it cannot
+            // end with them.
+            let live = self.trades.live().next().map(|trade| trade.ts);
+            let paged_bars = history.partition_point(|bar| live.is_none_or(|live| bar.time < live));
+            flow.push_history(&paged, &history[..paged_bars], before);
+        } else if !trade_based || lost.is_none() || self.trades.live().next().is_none() {
+            for trade in trades() {
+                let _ = flow.push(trade);
             }
         }
-        if let Some(lost) = self.trades.lost_until() {
+        if let Some(lost) = lost {
             flow.drop_through(lost, trades());
         }
         let first = self.unconfirmed_start().or_else(|| {
-            // Without bars to match, paged trades group from the oldest held one.
-            let unmatched = history.is_empty() && !self.trades_from_start;
-            if trade_based && (unmatched || self.trades.lost_until().is_some()) {
+            // Without bars to match, paged trades group from the oldest held one. Matched ones
+            // start after any loss, and live bars carry their own marks.
+            let unsure = !self.trades_from_start || lost.is_some();
+            if trade_based && history.is_empty() && unsure {
                 self.trades.iter().next().map(|trade| trade.ts)
             } else {
                 None
@@ -301,10 +319,13 @@ impl Chart {
             inbox: Arc::default(),
             clock: BarClock::new(timeframe),
             extended_hours: self.extended_hours,
+            conversion: self.conversion.clone(),
             initial_bars,
             adjusted: false,
             wake: Arc::default(),
             reload_pending: true,
+            resumed: false,
+            resumed_from: None,
             paused: false,
             host_paused: false,
             next_key: 0,
@@ -346,8 +367,14 @@ impl Chart {
     }
 
     /// Suspends feed requests and unsubscribes while the host supplies replay bars by hand.
-    /// Resuming reloads the current symbol and interval, including any trades retained by the
-    /// host. Bars supplied while paused are matched by exact opening time.
+    /// Resuming with the same symbol, interval, hours and conversion keeps the bars, executions
+    /// and depth history the chart holds and loads what the pause missed. The latest page and the
+    /// new subscription rebuild the last bar and add the newer ones, executions a feed replays on
+    /// resubscribing are dropped for the bars kept, and so are the bars it pushes again for them
+    /// until the chart holds a newer one. A latest page that does not reach the kept bars replaces
+    /// them. After any other change, on trade-based intervals and when the pause came before the
+    /// first page arrived, resuming reloads the current symbol and interval. Bars supplied while
+    /// paused are matched by exact opening time.
     /// The feed also stays paused while the main series is removed, and follows this setting
     /// again once undo restores the series. On a chart without the original pane it keeps
     /// following this setting, because the removed series' bars still supply the studies.
@@ -363,14 +390,26 @@ impl Chart {
             && link.paused != paused
         {
             link.paused = paused;
-            link.reload_pending = true;
             if paused {
+                // The bars of a load the pause interrupted are incomplete: resuming reloads them.
+                let first_page = |request: &Request| {
+                    matches!(
+                        request,
+                        Request::History {
+                            scroll_back: false,
+                            ..
+                        }
+                    )
+                };
+                link.reload_pending |= link.pending.iter().any(|(_, r, _)| first_page(r))
+                    || link.retries.iter().any(|(_, r, _)| first_page(r));
                 if let Some(id) = link.subscription.take() {
                     link.inbox.unsubscribe(id);
                     link.feed.unsubscribe(id);
                 }
                 link.pending.clear();
             } else {
+                link.resumed = true;
                 self.study_data.clear_feed();
             }
         }

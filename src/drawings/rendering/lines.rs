@@ -98,9 +98,9 @@ impl Drawing {
     }
 
     /// Ends from left to right, or in anchor order on a vertical line, extended to the pane edges
-    /// as configured; `None` below two anchors. A ray, extended line, info line or trend angle
-    /// extends left past its first anchor and right past its second, whichever way it was drawn;
-    /// other lines extend towards the pane's sides.
+    /// as configured; `None` below two anchors. A trend line, ray, extended line, info line or
+    /// trend angle extends left past its first anchor and right past its second, whichever way it
+    /// was drawn; other lines extend towards the pane's sides.
     pub(crate) fn trend_line_ends(&self, rect: Rect) -> Option<(Pos2, Pos2)> {
         use crate::drawings::DrawingToolType as T;
         let &[a, b, ..] = self.points.as_slice() else {
@@ -108,7 +108,7 @@ impl Drawing {
         };
         if matches!(
             self.tool_type,
-            T::Ray | T::ExtendedLine | T::InfoLine | T::TrendAngle
+            T::TrendLine | T::Ray | T::ExtendedLine | T::InfoLine | T::TrendAngle
         ) {
             let first = if self.extend_left {
                 ray_end(b, a, rect)
@@ -176,64 +176,68 @@ impl Drawing {
         }
     }
 
-    /// Render horizontal line, across the pane whichever bar its anchor is on, with its text placed
-    /// along the pane by the alignment settings. Text written on the line interrupts it, so that
-    /// the line never strikes through the letters.
+    /// Paints a level from `start` to the pane's right edge, with its text placed along the part in
+    /// view by the alignment settings. Text written on the line interrupts it, so that the line
+    /// never strikes through the letters.
+    fn render_level(&self, painter: &egui::Painter, rect: Rect, start: Pos2, stroke: Stroke) {
+        let y = start.y;
+        let right = Pos2::new(rect.max.x, y);
+        let anchor = self.line_text_anchor();
+        // The text stays clear of the part's ends and, on the line, of the line.
+        let margin = DESIGN_TOKENS.spacing.sm;
+        let text_start = start.x.max(rect.min.x) + margin;
+        let text_end = (rect.max.x - margin).max(text_start);
+        let gap = self
+            .text_galley(painter)
+            .filter(|_| anchor.y() == Align::Center)
+            .map(|galley| {
+                anchor
+                    .x()
+                    .align_size_within_range(galley.size().x, text_start..=text_end)
+                    .expand(margin)
+            });
+        if let Some(gap) = gap {
+            if gap.min > start.x {
+                self.styled_segment(painter, start, Pos2::new(gap.min, y), stroke);
+            }
+            if gap.max < right.x {
+                self.styled_segment(painter, Pos2::new(gap.max, y), right, stroke);
+            }
+        } else {
+            self.styled_segment(painter, start, right, stroke);
+        }
+        self.render_aligned_line_text(
+            painter,
+            Pos2::new(text_start, y),
+            Pos2::new(text_end, y),
+            anchor,
+        );
+    }
+
+    /// Render horizontal line, across the pane whichever bar its anchor is on.
     pub(crate) fn render_horizontal_line(
         &self,
         painter: &egui::Painter,
         rect: Rect,
         stroke: Stroke,
     ) {
-        if !self.points.is_empty() {
-            let y = self.points[0].y;
-            let (left, right) = (Pos2::new(rect.min.x, y), Pos2::new(rect.max.x, y));
-            let anchor = self.line_text_anchor();
-            // The text stays clear of the pane's edges and, on the line, of the line.
-            let margin = DESIGN_TOKENS.spacing.sm;
-            let (start, end) = (
-                left + egui::vec2(margin, 0.0),
-                right - egui::vec2(margin, 0.0),
-            );
-            let gap = self
-                .text_galley(painter)
-                .filter(|_| anchor.y() == Align::Center)
-                .map(|galley| {
-                    anchor
-                        .x()
-                        .align_size_within_range(galley.size().x, start.x..=end.x)
-                        .expand(margin)
-                });
-            if let Some(gap) = gap {
-                if gap.min > left.x {
-                    self.styled_segment(painter, left, Pos2::new(gap.min, y), stroke);
-                }
-                if gap.max < right.x {
-                    self.styled_segment(painter, Pos2::new(gap.max, y), right, stroke);
-                }
-            } else {
-                self.styled_segment(painter, left, right, stroke);
-            }
-            self.render_aligned_line_text(painter, start, end, anchor);
+        if let Some(anchor) = self.points.first() {
+            self.render_level(painter, rect, Pos2::new(rect.min.x, anchor.y), stroke);
         }
     }
 
-    /// Render horizontal ray - extends right from start point
+    /// Render horizontal ray, from its anchor to the pane's right edge. A ray starting right of the
+    /// pane has no part in view, for its line or its text.
     pub(crate) fn render_horizontal_ray(
         &self,
         painter: &egui::Painter,
         rect: Rect,
         stroke: Stroke,
     ) {
-        if !self.points.is_empty() {
-            let start = self.points[0];
-            let end = Pos2::new(rect.max.x, start.y);
-            self.styled_segment(painter, start, end, stroke);
-            // A ray starting right of the pane has no part in view to carry its text.
-            if start.x < rect.max.x {
-                let visible_start = Pos2::new(start.x.max(rect.min.x), start.y);
-                self.render_line_text(painter, visible_start, end, true);
-            }
+        if let Some(&start) = self.points.first()
+            && start.x < rect.max.x
+        {
+            self.render_level(painter, rect, start, stroke);
         }
     }
 
@@ -949,10 +953,12 @@ mod tests {
     }
 
     /// In a pane from x = 0 to 500, with a margin of 4 pt and a gap of 1 + 4 pt from a line of width
-    /// 2 at y = 120, the text's named point sits at x = 4, 250 or 496 and y = 125, 120 or 115. Only
-    /// text on the line interrupts it, 4 pt clear of the letters on each side.
+    /// 2 at y = 120, the text's named point sits at x = 4, 250 or 496 and y = 125, 120 or 115. A
+    /// horizontal ray from x = 100 places it within 100 to 500 the same way, at x = 104, 300 or 496,
+    /// and one starting left of the pane within the part in view. Only text on the line interrupts
+    /// it, 4 pt clear of the letters on each side.
     #[test]
-    fn horizontal_line_text_follows_its_settings_and_interrupts_the_line_only_on_it() {
+    fn horizontal_line_and_ray_text_follow_their_settings_and_interrupt_the_line_only_on_it() {
         use crate::drawings::{
             DrawingToolType as T, LineTextHorizontalAlign as H, LineTextVerticalAlign as V,
         };
@@ -961,7 +967,12 @@ mod tests {
         let paint = |drawing: &Drawing| {
             let output = Context::default().run_ui(RawInput::default(), |ui| {
                 let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(500., 400.));
-                drawing.render_horizontal_line(ui.painter(), pane, Stroke::new(2.0, Color32::RED));
+                let stroke = Stroke::new(2.0, Color32::RED);
+                if drawing.tool_type == T::HorizontalLine {
+                    drawing.render_horizontal_line(ui.painter(), pane, stroke);
+                } else {
+                    drawing.render_horizontal_ray(ui.painter(), pane, stroke);
+                }
             });
             let (mut text, mut lines) = (None::<TextShape>, Vec::new());
             for shape in &output.shapes {
@@ -974,53 +985,67 @@ mod tests {
             output.drop_without_applying_deltas();
             (text, lines)
         };
-        let mut drawing = Drawing::new(1, T::HorizontalLine);
-        drawing.points = vec![Pos2::new(50., 120.)];
-        drawing.stroke_width = 2.0;
-        assert_eq!(
-            paint(&drawing).1,
-            [(0., 500.)],
-            "no text leaves the line whole"
-        );
-        drawing.text = Some("Weekly support".into());
-        drawing.italic = true;
-        drawing.text_color = Some([10, 20, 30, 128]);
+        // The tool, its anchor, the line's start, and where the text's named point sits along it.
         #[rustfmt::skip]
-        let cases = [
-            (H::Left, V::Top, A::LEFT_TOP, (4., 125.)),
-            (H::Center, V::Top, A::CENTER_TOP, (250., 125.)),
-            (H::Right, V::Top, A::RIGHT_TOP, (496., 125.)),
-            (H::Left, V::Middle, A::LEFT_CENTER, (4., 120.)),
-            (H::Center, V::Middle, A::CENTER_CENTER, (250., 120.)),
-            (H::Right, V::Middle, A::RIGHT_CENTER, (496., 120.)),
-            (H::Left, V::Bottom, A::LEFT_BOTTOM, (4., 115.)),
-            (H::Center, V::Bottom, A::CENTER_BOTTOM, (250., 115.)),
-            (H::Right, V::Bottom, A::RIGHT_BOTTOM, (496., 115.)),
+        let tools = [
+            (T::HorizontalLine, 50., 0., [4., 250., 496.]),
+            (T::HorizontalRay, 100., 100., [104., 300., 496.]),
+            (T::HorizontalRay, -100., -100., [4., 250., 496.]),
         ];
-        for (horizontal, vertical, anchor, (x, y)) in cases {
-            drawing.line_measurements.text_horizontal_align = horizontal;
-            drawing.line_measurements.text_vertical_align = vertical;
-            let (text, lines) = paint(&drawing);
-            let text = text.unwrap();
-            let at = text.pos + anchor.pos_in_rect(&text.galley.rect).to_vec2();
-            assert!(at.distance(Pos2::new(x, y)) < 1e-3, "{anchor:?}: at {at:?}");
-            let format = &text.galley.job.sections[0].format;
-            assert!(format.italics, "{anchor:?}");
+        for (tool, anchor_x, start, [left, center, right]) in tools {
+            let mut drawing = Drawing::new(1, tool);
+            drawing.points = vec![Pos2::new(anchor_x, 120.)];
+            drawing.stroke_width = 2.0;
             assert_eq!(
-                format.color,
-                Color32::from_rgba_unmultiplied(10, 20, 30, 128),
-                "{anchor:?}"
+                paint(&drawing).1,
+                [(start, 500.)],
+                "no text leaves the line whole"
             );
-            let width = text.galley.size().x;
-            let want = match (vertical, horizontal) {
-                (V::Middle, H::Left) => vec![(width + 8., 500.)],
-                (V::Middle, H::Center) => {
-                    vec![(0., 250. - width / 2. - 4.), (250. + width / 2. + 4., 500.)]
-                }
-                (V::Middle, H::Right) => vec![(0., 492. - width)],
-                _ => vec![(0., 500.)],
-            };
-            assert_eq!(lines, want, "{anchor:?}");
+            drawing.text = Some("Weekly support".into());
+            drawing.italic = true;
+            drawing.text_color = Some([10, 20, 30, 128]);
+            #[rustfmt::skip]
+            let cases = [
+                (H::Left, V::Top, A::LEFT_TOP, (left, 125.)),
+                (H::Center, V::Top, A::CENTER_TOP, (center, 125.)),
+                (H::Right, V::Top, A::RIGHT_TOP, (right, 125.)),
+                (H::Left, V::Middle, A::LEFT_CENTER, (left, 120.)),
+                (H::Center, V::Middle, A::CENTER_CENTER, (center, 120.)),
+                (H::Right, V::Middle, A::RIGHT_CENTER, (right, 120.)),
+                (H::Left, V::Bottom, A::LEFT_BOTTOM, (left, 115.)),
+                (H::Center, V::Bottom, A::CENTER_BOTTOM, (center, 115.)),
+                (H::Right, V::Bottom, A::RIGHT_BOTTOM, (right, 115.)),
+            ];
+            for (horizontal, vertical, anchor, (x, y)) in cases {
+                drawing.line_measurements.text_horizontal_align = horizontal;
+                drawing.line_measurements.text_vertical_align = vertical;
+                let (text, lines) = paint(&drawing);
+                let text = text.unwrap();
+                let at = text.pos + anchor.pos_in_rect(&text.galley.rect).to_vec2();
+                assert!(
+                    at.distance(Pos2::new(x, y)) < 1e-3,
+                    "{tool:?} {anchor:?}: at {at:?}"
+                );
+                let format = &text.galley.job.sections[0].format;
+                assert!(format.italics, "{tool:?} {anchor:?}");
+                assert_eq!(
+                    format.color,
+                    Color32::from_rgba_unmultiplied(10, 20, 30, 128),
+                    "{tool:?} {anchor:?}"
+                );
+                let width = text.galley.size().x;
+                let want = match (vertical, horizontal) {
+                    (V::Middle, H::Left) => vec![(start, x - 4.), (x + width + 4., 500.)],
+                    (V::Middle, H::Center) => {
+                        vec![(start, x - width / 2. - 4.), (x + width / 2. + 4., 500.)]
+                    }
+                    (V::Middle, H::Right) => vec![(start, x - width - 4.)],
+                    _ => vec![(start, 500.)],
+                };
+                // The gap's start at the line's start leaves nothing before the text.
+                let want: Vec<_> = want.into_iter().filter(|(a, b)| a < b).collect();
+                assert_eq!(lines, want, "{tool:?} {anchor:?}");
+            }
         }
     }
 
@@ -1182,12 +1207,12 @@ mod tests {
         }
     }
 
-    /// A new ray's or extended line's text starts in its own blue, which a change of line colour
-    /// leaves alone, and draws the slant it is given.
+    /// A new trend line's, ray's, extended line's or horizontal ray's text starts in its own blue,
+    /// which a change of line colour leaves alone, and draws the slant it is given.
     #[test]
-    fn ray_and_extended_line_text_keep_their_own_colour_and_slant() {
+    fn line_text_keeps_its_own_colour_and_slant() {
         use crate::drawings::DrawingToolType as T;
-        for tool in [T::Ray, T::ExtendedLine] {
+        for tool in [T::TrendLine, T::Ray, T::ExtendedLine, T::HorizontalRay] {
             let mut drawing = Drawing::new(1, tool);
             drawing.points = vec![Pos2::new(100., 200.), Pos2::new(300., 100.)];
             drawing.color = [200, 0, 0, 255];
@@ -1206,9 +1231,9 @@ mod tests {
         }
     }
 
-    /// A ray, extended line, info line or trend angle extends left past its first anchor and right
-    /// past its second, in either drawing order and on a vertical line, and selection follows the
-    /// painted extension.
+    /// A trend line, ray, extended line, info line or trend angle extends left past its first
+    /// anchor and right past its second, in either drawing order and on a vertical line, and
+    /// selection follows the painted extension.
     #[test]
     fn anchor_ordered_lines_extend_past_the_anchor_named_in_paint_and_hit_testing() {
         use crate::drawings::{DrawingToolType as T, services::DrawingInteraction};
@@ -1277,7 +1302,14 @@ mod tests {
         ];
         for ((first, second, left, right, want, on, off), tool) in
             cases.into_iter().flat_map(|case| {
-                [T::Ray, T::ExtendedLine, T::InfoLine, T::TrendAngle].map(|tool| (case, tool))
+                [
+                    T::TrendLine,
+                    T::Ray,
+                    T::ExtendedLine,
+                    T::InfoLine,
+                    T::TrendAngle,
+                ]
+                .map(|tool| (case, tool))
             })
         {
             let mut drawing = Drawing::new(1, tool);
