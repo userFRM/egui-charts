@@ -557,8 +557,11 @@ impl Footprint {
     /// each candidate is tried against the chart's bars instead: an execution first at the time a
     /// bar opens, grouped on from there. A second bar that opens and sums as grouped, or the page
     /// ending exactly with the first, proves the start; one bar alone could be a fill split by
-    /// the bar before it. The newest proven run is kept, so its bars have no gap. Older bars get
-    /// no cells and draw candles. With `before`, adds only the executions strictly before it.
+    /// the bar before it. On volume and delta intervals a second bar proves the start only when
+    /// the bar before closes at another price than every execution at the start's time, and the
+    /// page's end only when it ends with the last of `history`. The newest proven run is kept, so
+    /// its bars have no gap. Older bars get no cells and draw candles. With `before`, adds only
+    /// the executions strictly before it.
     #[cfg(feature = "widget")]
     pub(crate) fn push_history(
         &mut self,
@@ -570,7 +573,7 @@ impl Footprint {
             return;
         };
         let mut newest = Vec::new();
-        let mut at = 0;
+        let (mut at, mut unproven) = (0, 0);
         while at < trades.len() {
             let start = at;
             at += 1;
@@ -580,15 +583,41 @@ impl Footprint {
             let Ok(first) = history.binary_search_by_key(&trades[start].ts, |bar| bar.time) else {
                 continue;
             };
+            // A fill split by a boundary opens the next bar with its rest at its own time. Counted
+            // whole, it can match every later bar while moving part of each boundary fill, so on
+            // volume and delta intervals only the page's end, or a bar before that closes at
+            // another price than every execution at the start's time, proves the start.
+            let whole = !matches!(
+                timeframe,
+                crate::model::Timeframe::Volume(_) | crate::model::Timeframe::Delta(_)
+            ) || first.checked_sub(1).is_some_and(|before| {
+                (trades[start..].iter())
+                    .take_while(|trade| trade.ts == trades[start].ts)
+                    .all(|trade| !near(trade.price, history[before].close))
+            });
+            // Without that proof a start counts only when it ends with the page. Inside the bars
+            // an earlier such start matched, it repeats that grouping or moves a boundary fill,
+            // and neither ends with the page.
+            if !whole && start < unproven {
+                continue;
+            }
             let run = history_run(
                 timeframe,
-                self.tick_size,
+                Some(self.tick_size),
                 &trades[start..],
                 &history[first..],
+                trades[start].size,
+                None,
             );
-            if run.proven {
+            // The page's end pins the split only with the last bar: an earlier one has executions
+            // after the page, and when they sum to the part a grouping moved, it matches as well.
+            let ends = run.end.is_some()
+                && run.parts.last().map(|part| part.1) == history.last().map(|bar| bar.time);
+            if run.proven && (whole || ends) {
                 newest = run.parts;
                 at = start + run.next.max(1);
+            } else if run.proven {
+                unproven = unproven.max(start + run.next);
             }
         }
         for (trade, open, size) in newest {
@@ -717,27 +746,40 @@ impl Footprint {
     }
 }
 
+/// Parts of chart bars: execution, bar open and allocated size.
+#[cfg(feature = "widget")]
+type Parts<'a> = Vec<(&'a Tick, DateTime<Utc>, f64)>;
+
 /// Paged executions grouped along the chart's bars from one start.
 #[cfg(feature = "widget")]
 struct HistoryRun<'a> {
-    /// The parts of the bars that match: execution, bar open and allocated size.
-    parts: Vec<(&'a Tick, DateTime<Utc>, f64)>,
+    /// The parts of the bars that match.
+    parts: Parts<'a>,
     /// Whether they prove the start (see [`Footprint::push_history`]).
     proven: bool,
     /// Index of the first execution of the bar that did not match.
     next: usize,
+    /// The grouping after the last execution, when the page ended with a matched bar.
+    end: Option<super::inbox::TradeBars>,
+}
+
+#[cfg(feature = "widget")]
+fn near(a: f64, b: f64) -> bool {
+    (a - b).abs() <= 1e-9 * a.abs().max(b.abs())
 }
 
 /// Groups `trades` from their first execution along `history`, the bars from the one it opens.
+/// `first` is the part of that execution in this bar, and `previous` the open of the bar before.
 #[cfg(feature = "widget")]
 fn history_run<'a>(
     timeframe: crate::model::Timeframe,
-    tick_size: f64,
+    tick_size: Option<f64>,
     trades: &[&'a Tick],
     history: &[crate::model::Bar],
+    first: f64,
+    previous: Option<DateTime<Utc>>,
 ) -> HistoryRun<'a> {
     use crate::model::Bar;
-    let near = |a: f64, b: f64| (a - b).abs() <= 1e-9 * a.abs().max(b.abs());
     let same = |grouped: &Bar, bar: Option<&Bar>| {
         bar.is_some_and(|bar| {
             grouped.time == bar.time
@@ -749,12 +791,19 @@ fn history_run<'a>(
         })
     };
     let mut bars = super::inbox::TradeBars::default();
+    // A first bar the sink opened right after the bar before opens there again.
+    bars.forming = previous;
+    let opening = (trades.first()).map(|trade| Tick {
+        size: first,
+        ..(**trade).clone()
+    });
     let mut parts = Vec::new();
     let (mut kept, mut matched, mut opened) = (0, 0, 0);
     let mut forming: Option<Bar> = None;
     'trades: for (index, trade) in trades.iter().enumerate() {
         // Older than the one before it: left out, as `Footprint::push` does.
-        let Ok(allocated) = bars.push(timeframe, trade, Some(tick_size)) else {
+        let pushed = opening.as_ref().filter(|_| index == 0).unwrap_or(*trade);
+        let Ok(allocated) = bars.push(timeframe, pushed, tick_size) else {
             continue;
         };
         for (bar, size) in allocated {
@@ -777,6 +826,7 @@ fn history_run<'a>(
             parts,
             proven: true,
             next: trades.len(),
+            end: Some(bars),
         };
     }
     parts.truncate(kept);
@@ -784,7 +834,49 @@ fn history_run<'a>(
         parts,
         proven: matched >= 2,
         next: opened,
+        end: None,
     }
+}
+
+/// Groups the held live executions `trades`, in time order, along `history`, the chart's bars,
+/// from the oldest bar whose parts are all held: the executions are the newest part of the sink's
+/// stream and the chart's bars hold exactly its parts, so the volume held counts them from the
+/// newest. Returns the parts and the grouping after them, or `None` unless they rebuild every bar
+/// through the newest.
+#[cfg(feature = "widget")]
+pub(crate) fn live_run<'a>(
+    timeframe: crate::model::Timeframe,
+    tick_size: Option<f64>,
+    trades: &[&'a Tick],
+    history: &[crate::model::Bar],
+) -> Option<(Parts<'a>, super::inbox::TradeBars)> {
+    let mut left: f64 = trades.iter().map(|trade| trade.size).sum();
+    let mut first = history.len();
+    while let Some(bar) = first.checked_sub(1).map(|index| &history[index]) {
+        if left < bar.volume && !near(left, bar.volume) {
+            break;
+        }
+        left -= bar.volume;
+        first -= 1;
+    }
+    // What is left belongs to the bars before; the next part opens the first bar.
+    let mut through = 0.0;
+    let start = trades.iter().position(|trade| {
+        through += trade.size;
+        through - left > 1e-9 * trade.size
+    })?;
+    let rest = (through - left).min(trades[start].size);
+    let previous = first.checked_sub(1).map(|index| history[index].time);
+    let run = history_run(
+        timeframe,
+        tick_size,
+        &trades[start..],
+        &history[first..],
+        rest,
+        previous,
+    );
+    let end = run.end?;
+    (run.parts.last()?.1 == history.last()?.time).then_some((run.parts, end))
 }
 
 #[cfg(test)]
