@@ -15,7 +15,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Main-series conflation has a configurable physical-pixel threshold or can be disabled. `Chart::prepare_conflation` prepares the shared render cache before a dense view; groups retain price extremes, gaps and per-bar colours and refresh after data, price-source or grouping changes.
 - [x] Heikin-Ashi, Renko, Kagi, line break, point and figure, and range-bar transformations and rendering. Heikin-Ashi retains independent body, border and wick visibility and rising/falling colours; Symbol settings also select original-only scale prices or the default pair of original and transformed closes, and series settings show and change the same colours. These choices persist in layouts and undo; layouts saved before them restore with the original close alone.
 - [x] Renko box sizing and wicks, line-break lookback, and price-based chart parameters are configurable.
-- [x] Market Profile (TPO) uses exchange sessions or calendar days, with letters or blocks, initial balance, point of control, value area and composite profiles; autoscale fits the full displayed distributions and cropped profiles retain their session and central-level readouts. POC, value-area and optional midpoint captions keep a gutter at the first or offscreen session opening, separate nearby levels and reveal their prices on hover.
+- [x] Market Profile (TPO) uses exchange sessions or calendar days, with letters in their blocks by default or plain blocks, initial balance, point of control, value area and composite profiles; autoscale fits the full displayed distributions and cropped profiles retain their session and central-level readouts. POC, value-area and optional midpoint captions keep a gutter at the first or offscreen session opening, separate nearby levels and reveal their prices on hover.
 - [x] Volume Footprint and Session Volume Profile aggregate supplied executions on time, tick, volume, range and delta intervals with an instrument tick size; bars without complete retained executions use candles. Session profiles require `studies`, divide the chart by the chart's hours, the instrument's regular or extended hours, or a daily window of their own in any zone, and group executions into a row count or whole ticks per row; autoscale includes their full price rows after range edits, and manual crops retain session and POC/value-area readouts. Hosts can restrict the chart type menu and favourite strip to declared historical or live executions for the resolved instrument; unavailable favourites stay saved.
 - [ ] Leave bars outside the chosen session hours out of session volume profiles instead of joining them to the session before.
 - [x] Kagi lines change thickness at the shoulder or waist they cross within a continuing leg.
@@ -23,8 +23,8 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Range charts build their bars from the supplied executions, falling back to the OHLC approximation while the chart holds none; `Chart::range_bar_source` reports which one is shown.
 - [x] Volume candle bodies scale with their share of the largest visible volume, narrowing to the wick width at zero volume.
 - [x] HLC area charts draw high, low and close lines with their own colour, width and style, and two fills with their own colour and opacity; high line, low line and each fill can be hidden. The settings persist in layouts and undo. Kagi stroke widths are exposed in the settings.
-- [x] TPO single-print highlights and the midpoint caption and marker are off by default and switch on from the chart's settings or the study's inputs.
-- [ ] Show TPO period letters inside their blocks by default and add a per-session statistics table of initial balance range, rotation factor, counts around the point of control and range extension.
+- [x] TPO profiles can show a statistics table below them with the point of control, value area, initial balance range, TPO counts below and above the point of control, rotation factor and range extension, switched by one setting on the chart type and the study.
+- [x] TPO single-print highlights and the midpoint caption and marker are off by default and switch on from the chart's settings or the study's inputs. Charts and studies saved before the midpoint had a setting restore with it shown.
 
 ### Pan, Zoom and Cursor
 
@@ -343,7 +343,7 @@ The crate renders supplied data and exposes interfaces for application services.
 
 The order below prioritises correctness and complete library workflows. It carries no delivery dates.
 
-1. **Chart rendering and order flow:** leave bars outside session hours out of session profiles, finish pane maximising and scale name tags, TPO letters and session statistics, and the ladder's size mode and highlight tiers.
+1. **Chart rendering and order flow:** leave bars outside session hours out of session profiles, finish pane maximising and scale name tags, and the ladder's size mode and highlight tiers.
 2. **Indicators and drawings:** finish the remaining style and calculation controls of built-in studies, volume profile study settings and the remaining dedicated studies; give drawing tools their own default styles and complete the labels of line drawings.
 3. **Terminal UI:** handle the remaining actions with application interception and move the demo onto `Terminal`; gate order-flow entries on the feed's declarations, add the depth panel and open the study editor and replay trading in the bottom dock; finish the colour popup, quick settings menu and standalone replay toolbar.
 4. **Layouts and snapshots:** restore custom series from snapshots and include symbol navigation in terminal undo.
