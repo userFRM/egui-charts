@@ -212,7 +212,8 @@ pub(super) fn render_columns(
 }
 
 /// Volume candles: body width proportional to the bar's share of `max_volume`, the largest
-/// visible volume. Body, border and wick have their own visibility and colours.
+/// visible volume. Body, border and wick have their own visibility and colours. A bar's own colours
+/// replace them, its body colour also standing in for a border or wick it leaves unset.
 pub(super) fn render_volume_candles(
     price_ctx: &RenderContext,
     volume_ctx: &RenderContext,
@@ -249,6 +250,14 @@ pub(super) fn render_volume_candles(
         } else {
             (style.body_down, style.border_down, style.wick_down)
         };
+        let own = bar.colors.as_deref();
+        let own_body = own.and_then(|own| own.color);
+        let body = own_body.unwrap_or(body);
+        let border = own
+            .and_then(|own| own.border)
+            .or(own_body)
+            .unwrap_or(border);
+        let wick = own.and_then(|own| own.wick).or(own_body).unwrap_or(wick);
         let y = OhlcYCoords::from_bar(bar, &coords);
 
         // A zero or missing volume leaves a body as thin as the wick; without any visible
@@ -625,5 +634,91 @@ mod tests {
             assert_eq!(painted_rects, rects, "{own:?}");
             assert_eq!(painted_wicks, wicks, "{own:?}");
         }
+    }
+
+    /// A bar's own body colour fills its volume candle and colours a border and wicks it leaves
+    /// unset; its own border and wick colours replace the style's. A bar without colours of its
+    /// own keeps the style's, and an opaque border in the colour of its fill paints as the fill
+    /// alone.
+    #[test]
+    fn volume_candles_take_per_bar_colours() {
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(300.0, 100.0));
+        let map = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(0.0, 40.0),
+            0.0,
+            100.0,
+            false,
+        );
+        let colors = StyleColors {
+            bullish: Color32::GREEN,
+            bearish: Color32::RED,
+            text: Color32::WHITE,
+            bullish_border: None,
+            bearish_border: None,
+            bullish_wick: None,
+            bearish_wick: None,
+            candle_border_width: 0.0,
+        };
+        let (own, border, wick) = (
+            Color32::from_rgb(1, 100, 2),
+            Color32::from_rgb(3, 4, 102),
+            Color32::from_rgb(105, 106, 6),
+        );
+        let style = VolumeCandlesStyle::default();
+        let time = chrono::DateTime::UNIX_EPOCH;
+        let mut bars = [
+            Bar::new(time, 10.0, 22.0, 8.0, 20.0, 10.0),
+            Bar::new(time, 30.0, 32.0, 14.0, 16.0, 10.0),
+            Bar::new(time, 10.0, 22.0, 8.0, 20.0, 10.0),
+        ];
+        bars[0].colors = Some(Box::new(BarColors {
+            color: Some(own),
+            ..Default::default()
+        }));
+        bars[1].colors = Some(Box::new(BarColors {
+            border: Some(border),
+            wick: Some(wick),
+            ..Default::default()
+        }));
+        let ctx = Context::default();
+        let output = ctx.run_ui(Default::default(), |_| {
+            let painter = Painter::new(ctx.clone(), LayerId::background(), rect);
+            let context = RenderContext::new(&painter, rect);
+            render_volume_candles(
+                &context,
+                &context,
+                &map,
+                &colors,
+                &bars,
+                &bars,
+                0,
+                20.0,
+                1.0,
+                10.0,
+                0.0,
+                |i, _| 25.0 + i as f32 * 50.0,
+                &style,
+            );
+        });
+        let (mut bodies, mut wicks) = (vec![], vec![]);
+        for shape in &output.shapes {
+            match &shape.shape {
+                Shape::Rect(body) => bodies.push((body.fill, body.stroke.color)),
+                Shape::LineSegment { stroke, .. } => wicks.push(stroke.color),
+                _ => {}
+            }
+        }
+        output.drop_without_applying_deltas();
+        let none = Color32::TRANSPARENT;
+        assert_eq!(
+            bodies,
+            [
+                (own, none),
+                (style.body_down, border),
+                (style.body_up, none)
+            ]
+        );
+        assert_eq!(wicks, [own, own, wick, wick, style.wick_up, style.wick_up]);
     }
 }
