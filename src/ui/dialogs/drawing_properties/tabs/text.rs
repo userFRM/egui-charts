@@ -83,7 +83,10 @@ impl TextTab {
                 return;
             };
             let settings = &mut template.settings;
-            let line_text = settings.tool_type == DrawingToolType::HorizontalLine;
+            let line_text = matches!(
+                settings.tool_type,
+                DrawingToolType::HorizontalLine | DrawingToolType::HorizontalRay
+            );
             if writes && (line_text || settings.tool_type.supports_line_measurements()) {
                 let measurements = &mut settings.line_measurements;
                 let label = ui.label(l10n::text(ui.ctx(), "Horizontal alignment"));
@@ -241,8 +244,8 @@ mod tests {
     use super::*;
     use crate::drawings::Drawing;
 
-    /// A horizontal line, ray or extended line offers its text placement, colour and emphasis; a
-    /// horizontal ray keeps the plain text settings it draws.
+    /// A horizontal line, horizontal ray, ray or extended line offers its text placement, colour and
+    /// emphasis; a vertical line keeps the plain text settings it draws.
     #[test]
     fn line_tools_offer_the_text_settings_they_draw() {
         let chart = crate::Chart::new(crate::model::BarData::default());
@@ -250,7 +253,8 @@ mod tests {
             (DrawingToolType::HorizontalLine, true),
             (DrawingToolType::Ray, true),
             (DrawingToolType::ExtendedLine, true),
-            (DrawingToolType::HorizontalRay, false),
+            (DrawingToolType::HorizontalRay, true),
+            (DrawingToolType::VerticalLine, false),
         ] {
             let mut props = DrawingProps::from_drawing(&Drawing::new(1, tool), &chart);
             let output = egui::Context::default().run_ui(Default::default(), |ui| {
