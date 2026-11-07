@@ -2405,21 +2405,20 @@ mod tests {
         };
         // Each single print's cell is one 16 px column of one 16 px row.
         let half_cells = 4 * 16 * 16 / 2;
-        let letters = marked(TPODisplayMode::Letters);
-        let blocks = marked(TPODisplayMode::Blocks);
-        let both = marked(TPODisplayMode::Both);
-        assert!(
-            blocks >= half_cells && both >= half_cells,
-            "pixels marked by 4 single prints: letters {letters}, blocks {blocks}, \
-             letters and blocks {both}; expected at least {half_cells} on blocks"
-        );
+        for display_mode in [TPODisplayMode::Blocks, TPODisplayMode::Both] {
+            let changed = marked(display_mode);
+            assert!(
+                changed >= half_cells,
+                "{display_mode:?}: 4 single prints changed {changed} px, expected {half_cells}"
+            );
+        }
     }
 
     #[test]
     fn single_print_tooltips_name_the_row_price() {
         // (instrument tick, row height, two half-hour bars as (low, high), price range, single
         // prints by hand)
-        type Case<'a> = (f64, f64, [(f64, f64); 2], (f64, f64), &'a [f64]);
+        type Case<'a> = (f64, f64, [(f64, f64); 2], (f64, f64), &'a [&'a str]);
         let cases: [Case; 3] = [
             // Rows of one 0.25 tick: only A reaches 110.75.
             (
@@ -2427,7 +2426,7 @@ mod tests {
                 0.25,
                 [(110.0, 110.75), (110.0, 110.5)],
                 (109.0, 112.0),
-                &[110.75],
+                &["110.75"],
             ),
             // Rows of ten 0.25 ticks from multiples of 2.5: A spans rows 100, 102.5 and 105,
             // B only row 100.
@@ -2436,7 +2435,7 @@ mod tests {
                 2.5,
                 [(100.0, 105.0), (100.0, 102.0)],
                 (95.0, 110.0),
-                &[102.5, 105.0],
+                &["102.50", "105.00"],
             ),
             // Rows of one 1/64 tick: only A reaches 110.03125.
             (
@@ -2444,13 +2443,11 @@ mod tests {
                 0.015625,
                 [(110.0, 110.03125), (110.0, 110.015625)],
                 (109.9, 110.1),
-                &[110.03125],
+                &["110.031250"],
             ),
         ];
         let rect = Rect::from_x_y_ranges(0.0..=400.0, 0.0..=400.0);
         let highlight = TpoRenderConfig::default().single_print_color;
-        let mut observed = Vec::new();
-        let mut expected = Vec::new();
         for (tick, rows, periods, range, prints) in cases {
             let bars: Vec<_> = periods
                 .iter()
@@ -2532,15 +2529,8 @@ mod tests {
                     }
                 }));
             }
-            let read: Vec<f64> = named.iter().map(|text| text.parse().unwrap()).collect();
-            observed.push((tick, rows, named, read));
-            expected.push((tick, rows, prints.to_vec()));
+            assert_eq!(named, prints, "tick {tick}, rows {rows}");
         }
-        let read: Vec<_> = observed
-            .iter()
-            .map(|(tick, rows, _, read)| (*tick, *rows, read.clone()))
-            .collect();
-        assert_eq!(read, expected, "tooltips {observed:?}");
     }
 
     #[test]
