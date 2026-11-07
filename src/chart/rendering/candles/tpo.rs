@@ -793,9 +793,11 @@ fn draw_session_profile(
                 let left = (x - block_width * 0.5).round_to_pixels(pixels_per_point);
                 let right = (x + block_width * 0.5).round_to_pixels(pixels_per_point);
                 let cell = Rect::from_min_max(Pos2::new(left, top), Pos2::new(right, bottom));
-                // An opaque cell hides the highlight behind it, so a single print tints its own cell.
-                let color = if single_print {
-                    color.blend(render_config.single_print_color)
+                // An opaque cell hides the highlight behind it, so a single print takes the colour
+                // itself: a tint barely shows on a cell dimmed toward a light background. The POC
+                // row keeps its colour, as every row of a one-period profile is a single print.
+                let color = if single_print && !is_poc {
+                    render_config.single_print_color.to_opaque()
                 } else {
                     color
                 };
@@ -2305,6 +2307,33 @@ mod tests {
         }
     }
 
+    /// CIE76 difference of two opaque sRGB colours (D65 white), from the published definitions.
+    fn delta_e76(a: Color32, b: Color32) -> f64 {
+        fn lab(c: Color32) -> [f64; 3] {
+            let [r, g, b] = [c.r(), c.g(), c.b()].map(|v| {
+                let v = f64::from(v) / 255.0;
+                if v <= 0.04045 {
+                    v / 12.92
+                } else {
+                    ((v + 0.055) / 1.055).powf(2.4)
+                }
+            });
+            let f = |t: f64| {
+                if t > 216.0 / 24389.0 {
+                    t.cbrt()
+                } else {
+                    (24389.0 / 27.0 * t + 16.0) / 116.0
+                }
+            };
+            let x = f((0.4124564 * r + 0.3575761 * g + 0.1804375 * b) / 0.95047);
+            let y = f(0.2126729 * r + 0.7151522 * g + 0.0721750 * b);
+            let z = f((0.0193339 * r + 0.1191920 * g + 0.9503041 * b) / 1.08883);
+            [116.0 * y - 16.0, 500.0 * (x - y), 200.0 * (y - z)]
+        }
+        let (a, b) = (lab(a), lab(b));
+        ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
+    }
+
     /// Three half-hour periods on rows of 1: A 98 to 105, B 101 to 107, C 104 to 108, so rows
     /// 98, 99, 100 and 108 hold one TPO each.
     fn three_overlapping_periods() -> Vec<Bar> {
@@ -2350,8 +2379,12 @@ mod tests {
             rect.max.y,
             false,
         );
-        let fills = |display_mode, show_single_prints| {
+        let fills = |theme: &crate::theme::Theme,
+                     profile: &TPOProfile,
+                     display_mode,
+                     show_single_prints| {
             let ctx = egui::Context::default();
+            let _theme = crate::theme::ThemeScope::new(&ctx, theme);
             ctx.begin_pass(egui::RawInput::default());
             let painter = ctx.layer_painter(egui::LayerId::background());
             let config = TPOConfig {
@@ -2363,7 +2396,7 @@ mod tests {
                 &painter,
                 rect,
                 &coords,
-                &profile,
+                profile,
                 &config,
                 &render_config,
                 10.0,
@@ -2384,32 +2417,56 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
         };
-        // The fills that show at a point: the last opaque one and those painted over it.
-        let shown = |fills: &[(Rect, Color32)], p: Pos2| {
-            let over: Vec<_> = fills
+        // The colour a point shows: the last opaque fill there and those painted over it, on the
+        // chart background.
+        let shown = |fills: &[(Rect, Color32)], p: Pos2, bg: Color32| {
+            fills
                 .iter()
                 .filter(|(r, _)| r.contains(p))
-                .map(|(_, c)| *c)
-                .collect();
-            let from = over.iter().rposition(|c| c.a() == 255).unwrap_or(0);
-            over[from..].to_vec()
-        };
-        // Pixels whose paint changes when single prints are turned on.
-        let marked = |display_mode| {
-            let (on, off) = (fills(display_mode, true), fills(display_mode, false));
-            (0..400)
-                .flat_map(|y| (0..120).map(move |x| Pos2::new(x as f32 + 0.5, y as f32 + 0.5)))
-                .filter(|&p| shown(&on[..], p) != shown(&off[..], p))
-                .count()
+                .fold(bg, |under, (_, fill)| under.blend(*fill))
         };
         // Each single print's cell is one 16 px column of one 16 px row.
         let half_cells = 4 * 16 * 16 / 2;
-        for display_mode in [TPODisplayMode::Blocks, TPODisplayMode::Both] {
-            let changed = marked(display_mode);
-            assert!(
-                changed >= half_cells,
-                "{display_mode:?}: 4 single prints changed {changed} px, expected {half_cells}"
-            );
+        let one_period = to_tpo_profiles(
+            &three_overlapping_periods()[..1],
+            &model,
+            &Timeframe::Min30.into(),
+        )
+        .remove(0);
+        assert!(one_period.single_prints.contains(&one_period.poc_price));
+        let poc = Pos2::new(14.0, coords.price_to_y(one_period.poc_price));
+        for theme in [crate::theme::Theme::dark(), crate::theme::Theme::light()] {
+            let bg = theme.chart.bg;
+            for display_mode in [TPODisplayMode::Blocks, TPODisplayMode::Both] {
+                let on = fills(&theme, &profile, display_mode, true);
+                let off = fills(&theme, &profile, display_mode, false);
+                let mut changed = 0;
+                for p in (0..400)
+                    .flat_map(|y| (0..120).map(move |x| Pos2::new(x as f32 + 0.5, y as f32 + 0.5)))
+                {
+                    let (marked, plain) = (shown(&on, p, bg), shown(&off, p, bg));
+                    if marked != plain {
+                        changed += 1;
+                        let difference = delta_e76(marked, plain);
+                        assert!(
+                            difference >= 5.0,
+                            "{display_mode:?} on {bg:?} at {p:?}: {plain:?} to {marked:?} is only \
+                             {difference:.1} dE76"
+                        );
+                    }
+                }
+                assert!(
+                    changed >= half_cells,
+                    "{display_mode:?}: 4 single prints changed {changed} px, expected {half_cells}"
+                );
+
+                // One period makes the POC row a single print too; it must still show the POC.
+                assert_eq!(
+                    shown(&fills(&theme, &one_period, display_mode, true), poc, bg),
+                    shown(&fills(&theme, &one_period, display_mode, false), poc, bg),
+                    "{display_mode:?} on {bg:?}: the POC row of a one-period profile"
+                );
+            }
         }
     }
 
