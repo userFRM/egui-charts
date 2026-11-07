@@ -467,12 +467,14 @@ impl IndicatorPane {
         width
     }
 
-    /// Layout the name, the inputs in `muted` and each value in its plot colour.
+    /// Layout the name, the inputs in `muted` and each value in its plot colour. A value whose
+    /// colour does not read on `background` is drawn in `text_color` after a swatch of it.
     fn legend_job(
         &self,
         indicator: &dyn Indicator,
         text_color: Color32,
         muted: Color32,
+        background: Color32,
         font_size: f32,
     ) -> egui::text::LayoutJob {
         let mut job = egui::text::LayoutJob::default();
@@ -500,8 +502,14 @@ impl IndicatorPane {
                     if !job.text.is_empty() {
                         job.append(" ", 0.0, format(text_color));
                     }
+                    // The value comes from a source bar, and a transparent colour there hides
+                    // only the segment into it.
                     let color = indicator
-                        .plot_color(line, bar)
+                        .plot_offset(line)
+                        .checked_neg()
+                        .and_then(|back| bar.checked_add_signed(back))
+                        .and_then(|source| indicator.plot_color(line, source))
+                        .filter(|color| color.a() != 0)
                         .unwrap_or_else(|| indicator.plot_style(line).color);
                     // A fully transparent colour holds no RGB, so it has no opaque form.
                     let color = if color.a() == 0 {
@@ -509,8 +517,21 @@ impl IndicatorPane {
                     } else {
                         color.to_opaque()
                     };
+                    let readable = crate::theme::contrast(color, background) >= 4.5;
+                    if !readable {
+                        let mut swatch = format(color);
+                        swatch.background = color;
+                        swatch.font_id.size = 8.0;
+                        swatch.valign = egui::Align::Center;
+                        job.append("  ", 0.0, swatch);
+                        job.append(" ", 0.0, format(text_color));
+                    }
                     let label = indicator.format_plot_value(line, value);
-                    job.append(&label, 0.0, format(color));
+                    job.append(
+                        &label,
+                        0.0,
+                        format(if readable { color } else { text_color }),
+                    );
                 }
             }
         }
@@ -585,7 +606,13 @@ impl IndicatorPane {
         text_color: Color32,
     ) -> std::sync::Arc<egui::Galley> {
         let theme = painter.ctx().active_theme();
-        let mut job = self.legend_job(indicator, text_color, theme.ui.text_muted, theme.text.ohlc);
+        let mut job = self.legend_job(
+            indicator,
+            text_color,
+            theme.ui.text_muted,
+            theme.chart.bg,
+            theme.text.ohlc,
+        );
         let controls_width = crate::chart::rendering::controls_width(indicator);
         job.wrap.max_width = (rect.width()
             - controls_width
@@ -869,6 +896,7 @@ mod tests {
                 study.as_ref(),
                 Color32::WHITE,
                 Color32::BLACK,
+                Color32::BLACK,
                 crate::theme::Theme::default().text.ohlc,
             );
             assert!(job.text.contains(expected), "{}", job.text);
@@ -885,6 +913,7 @@ mod tests {
                 let pane_values = pane.legend_job(
                     studies[0].as_ref(),
                     Color32::WHITE,
+                    Color32::BLACK,
                     Color32::BLACK,
                     crate::theme::Theme::default().text.ohlc,
                 );
@@ -986,14 +1015,19 @@ mod tests {
                 );
                 for (i, color) in colors.iter().enumerate() {
                     let value = format!("{:.2}", (i + 1) as f64);
-                    let section = sections
+                    let at = sections
                         .iter()
-                        .find(|s| {
+                        .position(|s| {
                             text.galley.job.text[s.byte_range.start.0..s.byte_range.end.0]
                                 .contains(&value)
                         })
                         .unwrap();
-                    assert_eq!(section.format.color, *color);
+                    if crate::theme::contrast(*color, theme.chart.bg) >= 4.5 {
+                        assert_eq!(sections[at].format.color, *color);
+                    } else {
+                        assert_eq!(sections[at].format.color, theme.ui.text);
+                        assert!(sections[..at].iter().any(|s| s.format.background == *color));
+                    }
                 }
                 assert_eq!(sections[0].format.color, theme.ui.text);
             }
@@ -1053,7 +1087,8 @@ mod tests {
                     min < expected_rate && max > expected_rate && max < expected_rate * 2.0,
                     "{kind:?}: {min}..{max}"
                 );
-                let job = pane.legend_job(&study, Color32::WHITE, Color32::BLACK, 12.0);
+                let job =
+                    pane.legend_job(&study, Color32::WHITE, Color32::BLACK, Color32::BLACK, 12.0);
                 assert!(
                     job.text.contains(&format!("{total} {expected_rate:.2}")),
                     "{}",
@@ -1168,5 +1203,105 @@ mod tests {
             }
             output.drop_without_applying_deltas();
         }
+    }
+
+    fn bars_from_closes(closes: impl IntoIterator<Item = f64>) -> Vec<Bar> {
+        closes
+            .into_iter()
+            .enumerate()
+            .map(|(i, c)| {
+                let time = chrono::DateTime::from_timestamp(i as i64 * 60, 0).unwrap();
+                Bar::new(time, c, c, c, c, 1.0)
+            })
+            .collect()
+    }
+
+    /// The pane legend colours a value as its plot shows it: a plot drawn one bar to the right of
+    /// its source bar takes the colour of the source bar its value comes from, and a transparent
+    /// colour at that bar, which hides only the segment into it, leaves the plot's own colour.
+    #[test]
+    fn pane_legend_colours_a_shifted_value_by_its_source_bar() {
+        let mut study = CustomIndicator::new("Shifted", |bars| {
+            (0..bars.len())
+                .map(|i| IndicatorValue::Single(10.0 + i as f64))
+                .collect()
+        })
+        .with_overlay(false)
+        .with_offsets(vec![1])
+        .with_plot_color(|_, bar, _| Some([Color32::RED, Color32::BLUE][bar % 2]));
+        study.calculate(&bars_from_closes([1.0; 8]));
+        let mut pane = IndicatorPane::with_config(IndicatorPaneConfig::default());
+        // Bar 5 shows source bar 4, coloured red.
+        pane.bar_index = Some(5);
+        let job = pane.legend_job(&study, Color32::WHITE, Color32::GRAY, Color32::BLACK, 12.0);
+        let value = job
+            .sections
+            .iter()
+            .find(|s| job.text[s.byte_range.start.0..s.byte_range.end.0].starts_with("14"))
+            .map(|s| s.format.color);
+        assert_eq!(value, Some(Color32::RED), "{value:?} in {}", job.text);
+        let mut stepped = CustomIndicator::new("Stepped", |bars| {
+            (0..bars.len())
+                .map(|i| IndicatorValue::Single(10.0 + i as f64))
+                .collect()
+        })
+        .with_overlay(false)
+        .with_color(Color32::GREEN)
+        .with_plot_color(|_, bar, _| (bar == 0).then_some(Color32::TRANSPARENT));
+        stepped.calculate(&bars_from_closes([1.0; 8]));
+        pane.bar_index = Some(0);
+        let job = pane.legend_job(
+            &stepped,
+            Color32::WHITE,
+            Color32::GRAY,
+            Color32::BLACK,
+            12.0,
+        );
+        let value = job
+            .sections
+            .iter()
+            .find(|s| job.text[s.byte_range.start.0..s.byte_range.end.0].starts_with("10"))
+            .map(|s| s.format.color);
+        assert_eq!(value, Some(Color32::GREEN), "{value:?} in {}", job.text);
+    }
+
+    /// Every value the pane legend draws in a plot colour reads at 4.5:1 or better on the pane in
+    /// every preset (#580), as the default RSI's two values and MACD's three must.
+    #[test]
+    fn pane_legend_values_in_plot_colours_read_on_every_preset() {
+        let bars = bars_from_closes(
+            (0..60).map(|i| 100.0 + f64::from(i % 7) * if i % 2 == 0 { 1.0 } else { -0.5 }),
+        );
+        let mut rsi = crate::studies::RSI::default();
+        rsi.calculate(&bars);
+        let mut macd = crate::studies::MACD::default();
+        macd.calculate(&bars);
+        assert!(rsi.plot_value(1, 59).is_some() && macd.plot_value(2, 59).is_some());
+        let pane = IndicatorPane::with_config(IndicatorPaneConfig::default());
+        let mut unreadable = Vec::new();
+        for (theme_name, theme) in crate::theme::presets() {
+            for study in [&rsi as &dyn Indicator, &macd] {
+                let job = pane.legend_job(
+                    study,
+                    theme.ui.text,
+                    theme.ui.text_muted,
+                    theme.chart.bg,
+                    12.0,
+                );
+                for section in &job.sections {
+                    let text = &job.text[section.byte_range.start.0..section.byte_range.end.0];
+                    let color = section.format.color;
+                    let ratio = crate::theme::contrast(color, theme.chart.bg);
+                    if !text.trim().is_empty()
+                        && color != theme.ui.text
+                        && color != theme.ui.text_muted
+                        && ratio < 4.5
+                    {
+                        unreadable.push(format!("{theme_name} {} {text} {ratio:.2}", study.name()));
+                    }
+                }
+            }
+        }
+        assert!(unreadable.is_empty(), "{unreadable:?}");
     }
 }

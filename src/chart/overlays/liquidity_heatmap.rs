@@ -19,13 +19,14 @@ const UPPER_CUTOFF_PERCENT: usize = 96;
 const REDRAW_CHANGE: f64 = 0.1;
 
 /// The colour scale over a dark background, by position on the scale, each stop lighter than the
-/// one before. Below the first stop a cell fades out into the background.
+/// one before: blue for thin size, then yellow and orange, white at full intensity. Below the
+/// first stop a cell fades out into the background.
 const SCALE_ON_DARK: [(f32, Color32); 5] = [
     (0.35, Color32::from_rgb(12, 40, 110)),
     (0.65, Color32::from_rgb(24, 100, 190)),
-    (0.85, Color32::from_rgb(70, 190, 225)),
-    (0.95, Color32::from_rgb(200, 235, 190)),
-    (1.0, Color32::from_rgb(255, 235, 90)),
+    (0.8, Color32::from_rgb(150, 135, 30)),
+    (0.92, Color32::from_rgb(240, 120, 20)),
+    (1.0, Color32::WHITE),
 ];
 /// The colour scale over a light background, each stop darker than the one before.
 const SCALE_ON_LIGHT: [(f32, Color32); 4] = [
@@ -771,7 +772,8 @@ mod tests {
     }
 
     /// Guards the scale: over any background each size stands out more than a smaller one, sizes
-    /// near zero fade away, and the colours differ from the candle colours of the themes.
+    /// near zero fade away, and the colours differ from the candle and order tier colours of the
+    /// themes.
     #[test]
     fn scale_contrast_grows_with_size_on_any_background() {
         let themes = [Theme::dark(), Theme::light(), Theme::high_contrast()];
@@ -800,15 +802,41 @@ mod tests {
         }
         for theme in &themes {
             for &(_, color) in scale_stops(theme.chart.bg) {
-                for candle in [theme.chart.candle_up, theme.chart.candle_down] {
+                for other in [
+                    theme.chart.candle_up,
+                    theme.chart.candle_down,
+                    theme.chart.order_notable,
+                    theme.chart.order_large,
+                ] {
                     let distance = (0..3)
-                        .map(|c| color[c].abs_diff(candle[c]) as u32)
+                        .map(|c| color[c].abs_diff(other[c]) as u32)
                         .max()
                         .unwrap();
-                    assert!(distance >= 60, "{color:?} is close to {candle:?}");
+                    assert!(distance >= 60, "{color:?} is close to {other:?}");
                 }
             }
         }
+    }
+
+    /// Guards the hues over the dark theme: past the blues the scale passes through a yellow,
+    /// then an orange, and reaches white at full intensity, so the largest sizes stand apart from
+    /// those one step below.
+    #[test]
+    fn dark_scale_runs_through_yellow_and_orange_to_white() {
+        let stops = scale_stops(Theme::dark().chart.bg);
+        let samples: Vec<_> = (66..=100)
+            .map(|percent| scale_color(stops, percent as f32 / 100.0))
+            .collect();
+        let warm = |c: Color32| c.r() as f32 >= c.b() as f32 + 80.0;
+        let yellow = samples
+            .iter()
+            .position(|&c| warm(c) && c.g() as f32 >= 0.8 * c.r() as f32);
+        let orange = samples.iter().position(|&c| {
+            warm(c) && (0.4 * c.r() as f32..=0.65 * c.r() as f32).contains(&(c.g() as f32))
+        });
+        assert!(yellow.is_some(), "{samples:?}");
+        assert!(orange > yellow, "{samples:?}");
+        assert_eq!(scale_color(stops, 1.0), Color32::WHITE);
     }
 
     /// Guards the best bid and ask: 2 point paths in the bullish and bearish colours, unbroken
