@@ -448,7 +448,7 @@ Order flow,Order flow,Depth ladder session and resettable profiles,unverified,li
 Order flow,Order flow,Depth ladder with configurable visible levels,unverified,library,src/ui/trading/dom.rs;src/ui/trading/mod.rs;src/data/depth.rs,
 Order flow,Order flow,Developing POC line through the session,unverified,library,src/studies/builtin/trade_profile.rs;src/chart/overlays/trade_profile.rs;src/data/footprint.rs;src/widget/trade_profile.rs;src/widget/frame/mod.rs,
 Order flow,Order flow,Diagonal imbalance detection and highlighting,incomplete,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/widget/frame/mod.rs,
-Order flow,Order flow,Execution volume bubbles at trade prices and times,unverified,library,src/widget/feed/mod.rs;src/chart/overlays/volume_bubbles.rs;src/model/clock.rs;src/widget/frame/mod.rs,
+Order flow,Order flow,Execution volume bubbles at trade prices and times,unverified,library,src/widget/feed/mod.rs;src/chart/overlays/volume_bubbles.rs;src/model/clock.rs;src/widget/frame/mod.rs,2301;2302
 Order flow,Order flow,Footprint and session volume profile settings in the chart settings dialog,incomplete,library,src/model/chart_type.rs;src/ui/dialogs/series_settings/tabs/symbol.rs;src/ui/dialogs/chart_settings/tabs/symbol.rs;src/widget/frame/mod.rs;src/widget/trade_profile.rs;src/chart/overlays/footprint.rs;src/chart/overlays/trade_profile.rs,1751
 Order flow,Order flow,Footprint cell colour and intensity modes,incomplete,library,src/chart/overlays/footprint.rs;src/widget/frame/background.rs;src/widget/frame/mod.rs;src/data/footprint.rs;src/model/chart_type.rs;src/ui/dialogs/series_settings/tabs/symbol.rs;src/ui/dialogs/chart_settings/tabs/symbol.rs,
 Order flow,Order flow,Footprint chart type: bid x ask traded volume with opening and closing price ticks,unverified,library,src/data/footprint.rs;src/widget/feed/mod.rs;src/chart/overlays/footprint.rs;src/ui/top_toolbar/components/chart_type_selector.rs;benches/frame_time.rs;src/widget/frame/mod.rs,
@@ -459,7 +459,7 @@ Order flow,Order flow,Footprint price aggregation: automatic by zoom or manual t
 Order flow,Order flow,"Footprint single prints, extremes, clusters and pullbacks with collision-free captions",unverified,library,src/studies/builtin/footprint_studies.rs;src/chart/overlays/footprint.rs;src/widget/frame/mod.rs,
 Order flow,Order flow,Fresh liquidity detector,unverified,library,;src/services/detectors/liquidity.rs;src/services/detectors/depth.rs;src/services/detectors/mod.rs;src/model/signal.rs;src/widget/signals.rs,
 Order flow,Order flow,Footprint trade counts and average trade size,incomplete,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/chart/overlays/mod.rs;src/model/chart_type.rs;src/ui/dialogs/series_settings/tabs/symbol.rs;src/studies/builtin/volume_profile.rs,1754
-Order flow,Order flow,Heatmap colour scaling and intensity controls,unverified,library,src/chart/overlays/liquidity_heatmap.rs;src/widget/feed/mod.rs,
+Order flow,Order flow,Heatmap colour scaling and intensity controls,unverified,library,src/chart/overlays/liquidity_heatmap.rs;src/widget/feed/mod.rs,2300
 Order flow,Order flow,Heatmap depth source and order filters,unverified,library,src/data/orders.rs;src/data/depth_history.rs;src/data/inbox/sink.rs;src/widget/feed/mod.rs;src/chart/overlays/book_profile.rs,
 Order flow,Order flow,Heatmap history retention in memory with manual memory release,incomplete,library,src/data/depth_history.rs;src/widget/feed/mod.rs,
 Order flow,Order flow,Heatmap rendering at scale,unverified,library,src/chart/overlays/liquidity_heatmap.rs;src/data/depth_history.rs;src/data/depth.rs;benches/heatmap.rs;docs/order-flow.md;benches/regression/mod.rs,
@@ -511,7 +511,7 @@ Order flow,Order flow,Value area per bar highlighted on the footprint,unverified
 Order flow,Order flow,Volume POC per bar highlighted in the footprint,unverified,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/widget/frame/mod.rs,
 Order flow,Order flow,Volume bars and delta bars,unverified,library,src/model/timeframe.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/ui/top_toolbar/components/timeframe_selector/mod.rs,
 Order flow,Order flow,Volume bubble colour modes,unverified,library,src/chart/overlays/volume_bubbles.rs,
-Order flow,Order flow,Volume bubble size scaling with screen density and outlier handling,unverified,library,src/chart/overlays/volume_bubbles.rs;src/widget/frame/mod.rs,
+Order flow,Order flow,Volume bubble size scaling with screen density and outlier handling,unverified,library,src/chart/overlays/volume_bubbles.rs;src/widget/frame/mod.rs,2301
 Order flow,Order flow data model,Aggregation of trades into per-bar price levels,unverified,library,src/data/footprint.rs;src/widget/feed/mod.rs;src/data/mod.rs;src/data/order_flow.rs;src/data/inbox/sink.rs,
 Order flow,Order flow data model,Backpressure and per-frame coalescing for high-rate feeds,unverified,library,src/data/inbox/mod.rs;src/widget/feed/mod.rs;src/data/inbox/sink.rs,
 Order flow,Order flow data model,Building bars from trades,unverified,library,src/data/inbox/mod.rs;src/data/mod.rs;src/data/inbox/sink.rs;src/model/clock.rs;src/data/inbox/tests.rs;src/data/merge.rs;src/widget/studies_data.rs;src/widget/feed/mod.rs;src/widget/feed/pump.rs,
