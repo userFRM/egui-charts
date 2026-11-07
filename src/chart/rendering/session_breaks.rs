@@ -90,7 +90,8 @@ pub(crate) fn exchange_session(
     .with_timeframe(timeframe)
 }
 
-/// Shade complete bar slots only where the supplied session identifies extended hours.
+/// Shade complete bar slots only where the supplied session identifies extended hours, and
+/// returns the shaded rects, left to right.
 pub(crate) fn render_extended_hours(
     ctx: &RenderContext,
     bars: &[Bar],
@@ -98,7 +99,8 @@ pub(crate) fn render_extended_hours(
     mapping: &ChartMapping,
     start_idx: usize,
     color: Color32,
-) {
+) -> Vec<egui::Rect> {
+    let mut shaded = Vec::new();
     let mut start = None;
     for i in 0..=bars.len() {
         let extended = bars
@@ -117,9 +119,11 @@ pub(crate) fn render_extended_hours(
             .intersect(ctx.rect);
             if rect.is_positive() {
                 ctx.painter.rect_filled(rect, 0.0, color);
+                shaded.push(rect);
             }
         }
     }
+    shaded
 }
 
 /// Convert a [`LineStyle`] into the dash pattern egui needs.
