@@ -508,6 +508,8 @@ impl Chart {
             // The last bar may have missed trades while paused: the page or the stream rebuilds it.
             let last = self.pop_bars(SeriesId::MAIN, 1);
             link.resumed_from = last.first().map(|bar| link.clock.bar_open(bar.time));
+            // Kept bars from the stream are history now: the latest page counts their trades too.
+            self.from_ticks.clear();
         } else {
             // Timestamp anchors survive the empty interval between history requests.
             self.replace_main_data(Vec::new());

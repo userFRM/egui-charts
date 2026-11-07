@@ -4020,3 +4020,38 @@ fn replay_exit_keeps_live_bars_and_depth() {
         );
     }
 }
+
+/// Resuming keeps the bars the stream built before the pause: the latest page counts their
+/// trades too, also in its newest bar, which must not add them a second time.
+#[test]
+fn resuming_keeps_the_bars_the_stream_built_before_the_pause() {
+    let feed = Arc::new(Script::default());
+    let mut chart = fed(&feed, Some("A"));
+    let mut frames = Frames::new();
+    frames.run(&mut chart);
+    feed.resolve()
+        .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+    feed.page().send(page(bars(5), true));
+    for _ in 0..3 {
+        frames.run(&mut chart);
+    }
+    for bar in &bars(8)[5..] {
+        let fill = Tick::new(bar.time + TimeDelta::seconds(10), bar.close, 1.0, None);
+        feed.sink().push_tick(fill);
+    }
+    for _ in 0..3 {
+        frames.run(&mut chart);
+    }
+    assert_eq!(chart.state.data().bars, bars(8), "streamed");
+    chart.set_feed_paused(true);
+    chart.set_feed_paused(false);
+    frames.run(&mut chart);
+    feed.resolve()
+        .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+    // Completed bars only: minute 7 still forms.
+    feed.page().send(page(bars(7), true));
+    for _ in 0..3 {
+        frames.run(&mut chart);
+    }
+    assert_eq!(chart.state.data().bars, bars(7));
+}
