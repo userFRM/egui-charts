@@ -448,7 +448,7 @@ Order flow,Order flow,Depth ladder session and resettable profiles,unverified,li
 Order flow,Order flow,Depth ladder with configurable visible levels,unverified,library,src/ui/trading/dom.rs;src/ui/trading/mod.rs;src/data/depth.rs,
 Order flow,Order flow,Developing POC line through the session,unverified,library,src/studies/builtin/trade_profile.rs;src/chart/overlays/trade_profile.rs;src/data/footprint.rs;src/widget/trade_profile.rs;src/widget/frame/mod.rs,
 Order flow,Order flow,Diagonal imbalance detection and highlighting,incomplete,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/widget/frame/mod.rs,
-Order flow,Order flow,Execution volume bubbles at trade prices and times,unverified,library,src/widget/feed/mod.rs;src/chart/overlays/volume_bubbles.rs;src/model/clock.rs;src/widget/frame/mod.rs,2301;2302
+Order flow,Order flow,Execution volume bubbles at trade prices and times,unverified,library,src/widget/feed/mod.rs;src/chart/overlays/volume_bubbles.rs;src/model/clock.rs;src/widget/frame/mod.rs,2301;2302;2426
 Order flow,Order flow,Footprint and session volume profile settings in the chart settings dialog,incomplete,library,src/model/chart_type.rs;src/ui/dialogs/series_settings/tabs/symbol.rs;src/ui/dialogs/chart_settings/tabs/symbol.rs;src/widget/frame/mod.rs;src/widget/trade_profile.rs;src/chart/overlays/footprint.rs;src/chart/overlays/trade_profile.rs,1751
 Order flow,Order flow,Footprint cell colour and intensity modes,incomplete,library,src/chart/overlays/footprint.rs;src/widget/frame/background.rs;src/widget/frame/mod.rs;src/data/footprint.rs;src/model/chart_type.rs;src/ui/dialogs/series_settings/tabs/symbol.rs;src/ui/dialogs/chart_settings/tabs/symbol.rs,
 Order flow,Order flow,Footprint chart type: bid x ask traded volume with opening and closing price ticks,unverified,library,src/data/footprint.rs;src/widget/feed/mod.rs;src/chart/overlays/footprint.rs;src/ui/top_toolbar/components/chart_type_selector.rs;benches/frame_time.rs;src/widget/frame/mod.rs,
@@ -512,7 +512,7 @@ Order flow,Order flow,Value area per bar highlighted on the footprint,unverified
 Order flow,Order flow,Volume POC per bar highlighted in the footprint,unverified,library,src/data/footprint.rs;src/chart/overlays/footprint.rs;src/widget/frame/mod.rs,
 Order flow,Order flow,Volume bars and delta bars,unverified,library,src/model/timeframe.rs;src/data/inbox/mod.rs;src/data/inbox/sink.rs;src/ui/top_toolbar/components/timeframe_selector/mod.rs,
 Order flow,Order flow,Volume bubble colour modes,unverified,library,src/chart/overlays/volume_bubbles.rs,
-Order flow,Order flow,Volume bubble size scaling with screen density and outlier handling,unverified,library,src/chart/overlays/volume_bubbles.rs;src/widget/frame/mod.rs,2301
+Order flow,Order flow,Volume bubble size scaling with screen density and outlier handling,unverified,library,src/chart/overlays/volume_bubbles.rs;src/widget/frame/mod.rs,2301;2426
 Order flow,Order flow data model,Aggregation of trades into per-bar price levels,unverified,library,src/data/footprint.rs;src/widget/feed/mod.rs;src/data/mod.rs;src/data/order_flow.rs;src/data/inbox/sink.rs,
 Order flow,Order flow data model,Backpressure and per-frame coalescing for high-rate feeds,unverified,library,src/data/inbox/mod.rs;src/widget/feed/mod.rs;src/data/inbox/sink.rs,
 Order flow,Order flow data model,Building bars from trades,unverified,library,src/data/inbox/mod.rs;src/data/mod.rs;src/data/inbox/sink.rs;src/model/clock.rs;src/data/inbox/tests.rs;src/data/merge.rs;src/widget/studies_data.rs;src/widget/feed/mod.rs;src/widget/feed/pump.rs,
@@ -802,7 +802,7 @@ Studies,Indicators,Volume Weighted Average Price,incomplete,library,src/studies/
 Studies,Indicators,Volume-Weighted Moving Average,incomplete,library,src/studies/builtin/vwma.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Vortex Indicator,incomplete,library,src/studies/builtin/vortex.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Weighted Moving Average,unverified,library,src/studies/builtin/wma.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
-Studies,Indicators,Williams %R,incomplete,library,src/studies/builtin/williams_r.rs;src/studies/builtin/smoothing.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
+Studies,Indicators,Williams %R,incomplete,library,src/studies/builtin/williams_r.rs;src/studies/builtin/smoothing.rs;src/studies/factory/mod.rs;src/studies/settings.rs;src/ui/dialogs/indicator_dialog/settings.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,2410
 Studies,Indicators,Williams Alligator,unverified,library,src/studies/builtin/williams_alligator.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Williams Fractal,verified,library,src/studies/builtin/williams_fractals.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Woodies CCI,incomplete,library,src/studies/builtin/woodies_cci.rs,
