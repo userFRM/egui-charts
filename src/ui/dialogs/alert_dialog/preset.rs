@@ -69,6 +69,9 @@ pub(super) struct AlertPreset {
     pub(super) fields: PresetFields,
     /// The first rule and the additional ones, with zero thresholds and no drawings.
     rules: Vec<AlertRule>,
+    /// The saving chart's names for what `rules` test: studies are numbered per chart, so an id
+    /// alone may name another study elsewhere. Presets saved without names have none.
+    source_names: Vec<(AlertSource, String)>,
     timeframe: Option<Timeframe>,
     additional_timeframes: Vec<Option<Timeframe>>,
     frequency: AlertFrequency,
@@ -82,8 +85,13 @@ pub(super) struct AlertPreset {
 
 impl AlertPreset {
     /// The selected groups of `alert`, whose expiry counts from the start of `now`'s minute, as
-    /// entered times do.
-    pub(super) fn capture(alert: &Alert, fields: PresetFields, now: DateTime<Utc>) -> Self {
+    /// entered times do. `sources` names what its chart offers.
+    pub(super) fn capture(
+        alert: &Alert,
+        sources: &[(AlertSource, String)],
+        fields: PresetFields,
+        now: DateTime<Utc>,
+    ) -> Self {
         let mut preset = Self {
             fields,
             ..Self::default()
@@ -105,6 +113,15 @@ impl AlertPreset {
                         condition: without_thresholds(condition)?,
                     })
                 })
+                .collect();
+            preset.source_names = sources
+                .iter()
+                .filter(|(source, _)| {
+                    preset.rules.iter().any(|rule| {
+                        rule.source == *source || rule.condition.partners().contains(&Some(source))
+                    })
+                })
+                .cloned()
                 .collect();
         }
         if fields.interval {
@@ -138,8 +155,8 @@ impl AlertPreset {
     }
 
     /// Set the selected groups on `alert`, whose subject, levels, drawings and webhook address
-    /// stay. Sources that `sources` no longer offers stay as they are, and a strategy fill alert
-    /// keeps its condition, interval and any frequency it cannot use.
+    /// stay. A stored study that `sources` does not offer under its stored name is not reused, and
+    /// a strategy fill alert keeps its condition, interval and any frequency it cannot use.
     pub(super) fn apply(
         &self,
         alert: &mut Alert,
@@ -158,8 +175,18 @@ impl AlertPreset {
                     _ => alert.additional_conditions.get(index - 1).unwrap_or(&first),
                 };
                 AlertRule {
-                    source: restored_source(&rule.source, &current.source, sources),
-                    condition: restored_condition(&rule.condition, &current.condition, sources),
+                    source: restored_source(
+                        &rule.source,
+                        &current.source,
+                        &self.source_names,
+                        sources,
+                    ),
+                    condition: restored_condition(
+                        &rule.condition,
+                        &current.condition,
+                        &self.source_names,
+                        sources,
+                    ),
                 }
             });
             let restored = rules.next();
@@ -262,6 +289,7 @@ fn without_thresholds(condition: &AlertCondition) -> Option<AlertCondition> {
 fn restored_condition(
     stored: &AlertCondition,
     current: &AlertCondition,
+    names: &[(AlertSource, String)],
     sources: &[(AlertSource, String)],
 ) -> AlertCondition {
     use AlertCondition as C;
@@ -317,7 +345,7 @@ fn restored_condition(
             percent: change,
             bars: *bars,
         },
-        C::Compare { other, comparison } if offered(other, sources) => C::Compare {
+        C::Compare { other, comparison } if offered(other, names, sources) => C::Compare {
             other: other.clone(),
             comparison: *comparison,
         },
@@ -336,20 +364,33 @@ fn restored_condition(
 fn restored_source(
     stored: &AlertSource,
     current: &AlertSource,
+    names: &[(AlertSource, String)],
     sources: &[(AlertSource, String)],
 ) -> AlertSource {
-    if matches!(current, AlertSource::Drawing(_)) || !offered(stored, sources) {
+    if matches!(current, AlertSource::Drawing(_)) || !offered(stored, names, sources) {
         current.clone()
     } else {
         stored.clone()
     }
 }
 
-/// Study identifiers belong to one chart, so a preset can outlive them.
-fn offered(source: &AlertSource, sources: &[(AlertSource, String)]) -> bool {
+/// Study identifiers belong to one chart, so a preset can outlive them or meet them on another
+/// chart. `names` tells which study a stored identifier meant; a preset saved without its name
+/// accepts the identifier only when it is unambiguous.
+fn offered(
+    source: &AlertSource,
+    names: &[(AlertSource, String)],
+    sources: &[(AlertSource, String)],
+) -> bool {
     match source {
         AlertSource::Price | AlertSource::Volume => true,
-        AlertSource::Study { .. } => sources.iter().any(|(offered, _)| offered == source),
+        AlertSource::Study { .. } => {
+            let mut matching = sources.iter().filter(|(offered, _)| offered == source);
+            match names.iter().find(|(named, _)| named == source) {
+                Some(stored) => matching.any(|offered| offered == stored),
+                None => matching.count() == 1,
+            }
+        }
         AlertSource::Drawing(_) => false,
     }
 }
@@ -414,7 +455,7 @@ pub(super) fn from_document(
                             expiry: alert.expires.is_none(),
                             ..PresetFields::default()
                         };
-                        (name, AlertPreset::capture(&alert, fields, now))
+                        (name, AlertPreset::capture(&alert, &[], fields, now))
                     })
                     .collect()
             })
@@ -475,7 +516,7 @@ mod tests {
         ];
         let version_1 = serde_json::json!({"version": 1, "presets": {"Old": alert}}).to_string();
         for preset in [
-            AlertPreset::capture(&alert, PresetFields::default(), now),
+            AlertPreset::capture(&alert, &[], PresetFields::default(), now),
             from_document(&version_1, now)
                 .unwrap()
                 .0
@@ -667,7 +708,7 @@ mod tests {
         for (stored_source, stored, current_source, current, source, condition) in cases {
             let mut saved = Alert::new("OLD", stored.clone());
             saved.source = stored_source;
-            let preset = AlertPreset::capture(&saved, PresetFields::default(), now);
+            let preset = AlertPreset::capture(&saved, &sources, PresetFields::default(), now);
             let mut alert = Alert::new("NEW", current.clone());
             alert.source = current_source;
             preset.apply(&mut alert, &sources, now);
@@ -733,7 +774,7 @@ mod tests {
             alert
         };
         let apply = |saved: &Alert, fields: PresetFields| {
-            let preset = AlertPreset::capture(saved, fields, saved_at);
+            let preset = AlertPreset::capture(saved, &[], fields, saved_at);
             let presets = BTreeMap::from([("P".to_owned(), preset)]);
             let document = to_document(&presets, None).unwrap();
             let mut alert = opened();
@@ -799,7 +840,7 @@ mod tests {
         let mut saved = Alert::new("OLD", AlertCondition::Below(9.0));
         saved.frequency = AlertFrequency::OncePerBarClose;
         saved.timeframe = Some(Timeframe::Hour1);
-        let preset = AlertPreset::capture(&saved, PresetFields::default(), now);
+        let preset = AlertPreset::capture(&saved, &[], PresetFields::default(), now);
         let run = AlertCondition::StrategyFills("run".into());
         let mut alert = Alert::new("NEW", run.clone());
         preset.apply(&mut alert, &[], now);
@@ -808,9 +849,77 @@ mod tests {
         assert_eq!(alert.timeframe, None);
         assert!(alert.is_valid());
         // The run itself is not reusable.
-        let fills = AlertPreset::capture(&Alert::new("OLD", run), PresetFields::default(), now);
+        let fills =
+            AlertPreset::capture(&Alert::new("OLD", run), &[], PresetFields::default(), now);
         let mut alert = Alert::new("NEW", AlertCondition::Above(1.0));
         fills.apply(&mut alert, &[], now);
         assert_eq!(alert.condition, AlertCondition::Above(1.0));
+    }
+
+    /// Charts number their studies from 2, so the first study of any two charts shares an id.
+    #[test]
+    fn a_study_id_of_another_chart_is_not_taken_for_the_stored_plot() {
+        let now = Utc.with_ymd_and_hms(2026, 1, 1, 10, 0, 0).unwrap();
+        let plot = AlertSource::Study {
+            id: "2".into(),
+            output: 0,
+        };
+        let named = |name: &str| (plot.clone(), name.to_owned());
+        let crossing_up_plot = AlertCondition::Compare {
+            other: plot.clone(),
+            comparison: AlertComparison::CrossingUp,
+        };
+        let mut on_plot = Alert::new("OLD", AlertCondition::Above(70.0));
+        on_plot.source = plot.clone();
+        let crossing_plot = Alert::new("OLD", crossing_up_plot.clone());
+        // What this file stored before presets kept the names of their plots.
+        let unnamed = |condition: serde_json::Value, source: serde_json::Value| {
+            let rule = serde_json::json!({"source": source, "condition": condition});
+            let document = serde_json::json!({"version": 2, "presets": {"P": {"rules": [rule]}}});
+            from_document(&document.to_string(), now)
+                .unwrap()
+                .0
+                .remove("P")
+                .unwrap()
+        };
+        let study = serde_json::json!({"Study": {"id": "2", "output": 0}});
+        let unnamed_on_plot = unnamed(serde_json::json!({"Above": 0.0}), study.clone());
+        let unnamed_crossing = unnamed(
+            serde_json::json!({"Compare": {"other": study, "comparison": "CrossingUp"}}),
+            serde_json::json!("Price"),
+        );
+
+        let rsi = [named("RSI: RSI")];
+        let sma = [named("SMA: SMA")];
+        let on_plot = AlertPreset::capture(&on_plot, &rsi, PresetFields::default(), now);
+        let crossing = AlertPreset::capture(&crossing_plot, &sma, PresetFields::default(), now);
+        let macd = [named("MACD: MACD")];
+        let twice = [named("RSI: RSI"), named("MACD: MACD")];
+        let kept_on_level = (AlertSource::Price, AlertCondition::Above(100.0));
+        let crossing_level = (AlertSource::Price, AlertCondition::CrossingUp(100.0));
+        let reused_source = (plot.clone(), AlertCondition::Above(100.0));
+        let reused_other = (AlertSource::Price, crossing_up_plot);
+        let rows: [(&AlertPreset, &[(AlertSource, String)], _); 8] = [
+            // Another chart's study 2 is not the stored one.
+            (&on_plot, &macd, &kept_on_level),
+            (&crossing, &macd, &crossing_level),
+            // The chart that saved the preset still has it.
+            (&on_plot, &rsi, &reused_source),
+            (&crossing, &sma, &reused_other),
+            // Without a stored name only a single candidate can be meant.
+            (&unnamed_on_plot, &macd, &reused_source),
+            (&unnamed_crossing, &macd, &reused_other),
+            (&unnamed_on_plot, &twice, &kept_on_level),
+            (&unnamed_crossing, &twice, &crossing_level),
+        ];
+        for (index, (preset, sources, expected)) in rows.into_iter().enumerate() {
+            let mut alert = Alert::new("NEW", AlertCondition::Crossing(100.0));
+            preset.apply(&mut alert, sources, now);
+            assert_eq!(
+                (&alert.source, &alert.condition),
+                (&expected.0, &expected.1),
+                "row {index}"
+            );
+        }
     }
 }

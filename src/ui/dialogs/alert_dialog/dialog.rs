@@ -373,7 +373,7 @@ impl AlertDialog {
         let mut presets = self.presets.clone();
         presets.insert(
             self.preset_name.trim().into(),
-            AlertPreset::capture(&self.alert, self.preset_fields, now),
+            AlertPreset::capture(&self.alert, &self.sources, self.preset_fields, now),
         );
         self.write_presets(presets);
     }
