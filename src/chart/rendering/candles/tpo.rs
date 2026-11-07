@@ -1031,7 +1031,8 @@ fn draw_session_profile(
 }
 
 /// Paint the session statistics table with its left edge at `anchor_x`, below the profile's lowest
-/// row or up against the bottom of the plot, unless it is wider than the `room` of its session.
+/// row or up against the bottom of the plot, unless it is wider than the `room` of its session or
+/// than the plot to its right.
 fn draw_statistics(
     painter: &Painter,
     price_rect: Rect,
@@ -1097,7 +1098,7 @@ fn draw_statistics(
     let (padding, gap) = (Vec2::new(6.0, 4.0), 12.0);
     let size =
         Vec2::new(label_width + gap + value_width, line * galleys.len() as f32) + padding * 2.0;
-    if size.x > room {
+    if size.x > room.min(price_rect.right() - anchor_x) {
         return;
     }
 
@@ -2540,5 +2541,47 @@ mod tests {
             .map(|(tick, rows, _, read)| (*tick, *rows, read.clone()))
             .collect();
         assert_eq!(read, expected, "tooltips {observed:?}");
+    }
+
+    #[test]
+    fn statistics_draw_only_where_they_fit() {
+        let model = TPOConfig {
+            tick_size: 1.0,
+            ..Default::default()
+        };
+        let profile = to_tpo_profiles(
+            &three_overlapping_periods(),
+            &model,
+            &Timeframe::Min30.into(),
+        )
+        .remove(0);
+        let rect = Rect::from_x_y_ranges(0.0..=400.0, 0.0..=400.0);
+        let coords = PriceMap::new(
+            crate::scales::PriceTransform::default(),
+            crate::scales::PriceRange::new(90.0, 115.0),
+            rect.min.y,
+            rect.max.y,
+            false,
+        );
+        // (left edge, room of its session, drawn)
+        for (anchor, room, drawn) in [
+            (10.0, f32::INFINITY, true),
+            // It would reach the next session's table.
+            (10.0, 20.0, false),
+            // The forming session has endless room, but the values would be cut off by the plot.
+            (380.0, f32::INFINITY, false),
+        ] {
+            let ctx = egui::Context::default();
+            ctx.begin_pass(egui::RawInput::default());
+            let painter = ctx.layer_painter(egui::LayerId::background());
+            draw_statistics(&painter, rect, &coords, &profile, anchor, room);
+            let mut output = ctx.end_pass();
+            output.textures_delta.clear();
+            let painted = output
+                .shapes
+                .iter()
+                .any(|s| matches!(&s.shape, Shape::Text(t) if t.galley.text() == "Rotation"));
+            assert_eq!(painted, drawn, "anchor {anchor}, room {room}");
+        }
     }
 }
