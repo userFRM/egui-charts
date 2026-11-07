@@ -40,9 +40,14 @@ pub(crate) fn to_step(value: f64, step: f64, round: impl Fn(f64) -> f64) -> f64 
 /// Decimals needed to write `step`, such as 2 for 0.25.
 #[cfg(feature = "widget")]
 pub(crate) fn decimals(step: f64) -> usize {
-    let text = format!("{step}");
-    text.split_once('.')
-        .map_or(0, |(_, fraction)| fraction.len())
+    let rounded = format!("{:.14e}", step.abs())
+        .parse::<f64>()
+        .unwrap_or(step.abs());
+    let text = format!("{rounded}");
+    let Some((_, fractional)) = text.split_once('.') else {
+        return 0;
+    };
+    fractional.len()
 }
 
 /// Writes `separator` between the groups of three digits of the integer part of `text`, its
@@ -534,6 +539,15 @@ pub(crate) fn price_decimals(price: f64) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(feature = "widget")]
+    fn decimals_ignore_binary_noise_and_keep_subnormal_precision() {
+        assert_eq!(decimals(0.025 * 3.0), 3);
+        assert_eq!(decimals(5e-324), 324);
+        assert_eq!(decimals(f64::NAN), 0);
+        assert_eq!(decimals(f64::INFINITY), 0);
+    }
 
     #[test]
     fn test_default_formatter() {

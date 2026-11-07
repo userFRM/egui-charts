@@ -2757,4 +2757,82 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn statistics_name_widened_row_prices_exactly() {
+        // One session whose automatic rows (0.025) are widened to 0.075, which is not exact in f64.
+        let start = chrono::DateTime::parse_from_rfc3339("2024-01-02T14:30:00Z")
+            .unwrap()
+            .to_utc();
+        let bars: Vec<_> = [
+            (100.0, 120.0),
+            (120.0, 140.0),
+            (140.0, 160.0),
+            (110.0, 150.0),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (low, high))| {
+            Bar::new(
+                start + Duration::minutes(30 * i as i64),
+                low,
+                high,
+                low,
+                high,
+                1.0,
+            )
+        })
+        .collect();
+        let rect = Rect::from_x_y_ranges(0.0..=400.0, 0.0..=400.0);
+        let coords = PriceMap::new(
+            crate::scales::PriceTransform::default(),
+            crate::scales::PriceRange::new(100.0, 101.0),
+            rect.min.y,
+            rect.max.y,
+            false,
+        );
+        let config = TPOConfig {
+            tick_size: 0.0,
+            show_statistics: true,
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(rect),
+                ..Default::default()
+            },
+            |ui| {
+                ui.allocate_rect(rect, egui::Sense::hover());
+                render_live_tpo(
+                    ui.painter(),
+                    rect,
+                    &bars,
+                    0..bars.len(),
+                    1,
+                    &coords,
+                    &config,
+                    None,
+                    &BarClock::new(Timeframe::Min30),
+                    |i, _| i as f32 * 100.0 + 50.0,
+                    0.0,
+                    Color32::GREEN,
+                    Color32::RED,
+                )
+            },
+        );
+        output.textures_delta.clear();
+        let texts: Vec<String> = output
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                Shape::Text(t) => Some(t.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            texts.iter().any(|t| t == "120.000") && texts.iter().any(|t| t == "110.100 / 145.050"),
+            "statistics texts {texts:?}"
+        );
+    }
 }
