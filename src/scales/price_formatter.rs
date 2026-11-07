@@ -40,22 +40,14 @@ pub(crate) fn to_step(value: f64, step: f64, round: impl Fn(f64) -> f64) -> f64 
 /// Decimals needed to write `step`, such as 2 for 0.25.
 #[cfg(feature = "widget")]
 pub(crate) fn decimals(step: f64) -> usize {
-    // Written with the 15 significant digits an f64 holds, so representation noise such as the
-    // 0.07500000000000001 of a widened row height does not add decimals.
-    let text = format!("{:.14e}", step.abs());
-    let Some((mantissa, exponent)) = text.split_once('e') else {
+    let rounded = format!("{:.14e}", step.abs())
+        .parse::<f64>()
+        .unwrap_or(step.abs());
+    let text = format!("{rounded}");
+    let Some((_, fractional)) = text.split_once('.') else {
         return 0;
     };
-    let exponent: i64 = exponent.parse().unwrap_or(0);
-    let digits: Vec<u8> = mantissa.bytes().filter(u8::is_ascii_digit).collect();
-    let significant = digits
-        .iter()
-        .rposition(|&b| b != b'0')
-        .map_or(0, |last| last + 1);
-    if significant == 0 {
-        return 0;
-    }
-    (significant as i64 - 1 - exponent).max(0) as usize
+    fractional.len()
 }
 
 /// Writes `separator` between the groups of three digits of the integer part of `text`, its
@@ -547,6 +539,15 @@ pub(crate) fn price_decimals(price: f64) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(feature = "widget")]
+    fn decimals_ignore_binary_noise_and_keep_subnormal_precision() {
+        assert_eq!(decimals(0.025 * 3.0), 3);
+        assert_eq!(decimals(5e-324), 324);
+        assert_eq!(decimals(f64::NAN), 0);
+        assert_eq!(decimals(f64::INFINITY), 0);
+    }
 
     #[test]
     fn test_default_formatter() {
