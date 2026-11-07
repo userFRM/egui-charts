@@ -143,7 +143,8 @@ impl TextTab {
                 || line_text
                 || matches!(
                     settings.tool_type,
-                    DrawingToolType::ExtendedLine
+                    DrawingToolType::Ray
+                        | DrawingToolType::ExtendedLine
                         | DrawingToolType::InfoLine
                         | DrawingToolType::TrendAngle
                 ))
@@ -240,13 +241,14 @@ mod tests {
     use super::*;
     use crate::drawings::Drawing;
 
-    /// A horizontal or extended line offers its text placement, colour and emphasis; a horizontal
-    /// ray keeps the plain text settings it draws.
+    /// A horizontal line, ray or extended line offers its text placement, colour and emphasis; a
+    /// horizontal ray keeps the plain text settings it draws.
     #[test]
     fn line_tools_offer_the_text_settings_they_draw() {
         let chart = crate::Chart::new(crate::model::BarData::default());
         for (tool, offered) in [
             (DrawingToolType::HorizontalLine, true),
+            (DrawingToolType::Ray, true),
             (DrawingToolType::ExtendedLine, true),
             (DrawingToolType::HorizontalRay, false),
         ] {

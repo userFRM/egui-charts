@@ -514,7 +514,6 @@ pub trait Primitive: Send {
 
     /// The lowest and highest price the scale of the series must show while it fits itself to
     /// the bars in view, `visible` indexing `bars` as in [`PrimitiveView`]. `None` adds nothing.
-    /// An overlay study on an independent scale fits that scale to its own values only.
     fn autoscale(&self, bars: &[Bar], visible: Range<usize>) -> Option<(f64, f64)> {
         let _ = (bars, visible);
         None
@@ -522,7 +521,7 @@ pub trait Primitive: Send {
 
     /// Prices and extra top/bottom logical pixels to fit on the attached series' pane and
     /// scale. Shared scales take the largest request at each screen edge. Manual ranges
-    /// ignore this contribution. Independent overlay studies retain their own value-only fit.
+    /// ignore this contribution. Independent overlay studies fit the prices without the margins.
     /// The default preserves [`autoscale`](Self::autoscale) with zero extra margins.
     fn autoscale_info(&self, bars: &[Bar], visible: Range<usize>) -> Option<AutoscaleInfo> {
         self.autoscale(bars, visible).map(Into::into)
