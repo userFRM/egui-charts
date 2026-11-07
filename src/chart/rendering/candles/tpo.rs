@@ -67,7 +67,7 @@ pub struct TpoRenderConfig {
     pub value_area_color: Color32,
     /// Initial Balance bar color
     pub initial_balance_color: Color32,
-    /// Highlight behind rows touched by a single period and tint of their blocks (with alpha)
+    /// Highlight behind rows touched by a single period (with alpha); blocks take it opaque
     pub single_print_color: Color32,
     /// Default letter color
     pub default_letter_color: Color32,
