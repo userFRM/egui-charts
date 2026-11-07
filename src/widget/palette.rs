@@ -98,6 +98,13 @@ pub(crate) fn follow_candle_colors(
             *fill = HlcAreaStyle::fill_tint(side(new), alpha);
         }
     }
+    // So does a close line in the rising colour, as documents of the former format draw it.
+    if old
+        .iter()
+        .any(|old| style.close_line.color == old.bullish_color)
+    {
+        style.close_line.color = new.bullish_color;
+    }
 }
 
 /// Replaces every colour of `config` equal to the same colour of one of the `old` palettes by
@@ -200,6 +207,8 @@ mod tests {
         shared.config_mut().bearish_color = egui::Color32::RED;
         shared.chart_type_params.styles.volume_candles.wick_down = egui::Color32::RED;
         shared.chart_type_params.styles.hlc_area.low_line.color = egui::Color32::RED;
+        // Layouts of the former format restore the close line in the rising colour.
+        shared.chart_type_params.styles.hlc_area.close_line.color = Theme::dark().chart.candle_up;
         local.set_theme_override(Some(Theme::high_contrast()));
         for (step, (theme, watermark)) in [
             (Theme::light(), egui::Color32::from_rgb(211, 212, 215)),
@@ -229,6 +238,7 @@ mod tests {
             let hlc_area = &shared.chart_type_params.styles.hlc_area;
             assert_eq!(hlc_area.high_line.color, theme.chart.candle_up);
             assert_eq!(hlc_area.low_line.color, egui::Color32::RED);
+            assert_eq!(hlc_area.close_line.color, theme.chart.candle_up);
             assert_eq!(
                 hlc_area.close_to_low_fill,
                 crate::model::HlcAreaStyle::fill_tint(theme.chart.candle_down, 51)
