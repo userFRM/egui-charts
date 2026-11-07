@@ -789,8 +789,15 @@ impl OrderFlowInput {
     /// interval it rebuilds only a source the sink has not allocated an execution to yet, from the
     /// executions that arrived live. A footprint source that lost some of those waits for the
     /// sink's allocations, leaving out the executions still queued: they open no bar of their own.
+    /// Any other source that lost some is grouped along `history`, the chart's bars, from the
+    /// oldest bar whose executions are all held.
     #[cfg(feature = "widget")]
-    pub(crate) fn replace_trades(&self, clock: &BarClock, trades: &super::trades::Trades) {
+    pub(crate) fn replace_trades(
+        &self,
+        clock: &BarClock,
+        trades: &super::trades::Trades,
+        history: &[crate::model::Bar],
+    ) {
         let footprint = match self.state().source {
             Source::Fixed(
                 OrderFlowKind::TradeRate { .. }
@@ -839,16 +846,32 @@ impl OrderFlowInput {
                 }
             }
             // Paged executions belong to history bars, which the chart did not fold from them.
-            // shortcut: after the store evicts a live execution, a new source starts its trade
-            // bars at the oldest held one; keep the sink's allocations if hosts need it exact.
             let mut sorted: Vec<_> = if trade_based {
-                trades.live().collect()
+                // A gap left by executions dropped before the store ends at the loss's time.
+                trades
+                    .live()
+                    .filter(|trade| lost.is_none_or(|lost| trade.ts > lost))
+                    .collect()
             } else {
                 trades.iter().collect()
             };
             sorted.sort_by_key(|trade| trade.ts);
-            for trade in sorted {
-                self.push_trade(clock, trade);
+            if let Some(timeframe) = clock.timeframe().filter(|_| trade_based && lost.is_some()) {
+                let mut state = self.state();
+                let run = super::footprint::live_run(timeframe, state.tick_size, &sorted, history);
+                if let Some((parts, bars)) = run {
+                    let mut previous: Option<&Tick> = None;
+                    for (trade, open, size) in parts {
+                        let first = previous.is_none_or(|previous| !std::ptr::eq(previous, trade));
+                        state.add_trade(trade, open, size, first);
+                        previous = Some(trade);
+                    }
+                    state.trade_bars = bars;
+                }
+            } else {
+                for trade in sorted {
+                    self.push_trade(clock, trade);
+                }
             }
             if let Some(lost) = lost {
                 let cut = clock.bar_open(lost);
@@ -1641,7 +1664,7 @@ mod tests {
         held.prepend(vec![old, boundary], &mut |_, _| ());
         let rebuilt = OrderFlowInput::new(OrderFlowKind::FlowSum { bars: 1 });
         for input in [&flow, &rebuilt, &footprint] {
-            input.replace_trades(&clock, &held);
+            input.replace_trades(&clock, &held, &[]);
         }
         let live: BTreeMap<_, _> = got[2].iter().copied().collect();
         assert_eq!([flow.values(), rebuilt.values()], [live.clone(), live]);
@@ -1770,7 +1793,7 @@ mod tests {
             let footprint = OrderFlowInput::footprint();
             footprint.set_tick_size(Some(1.0));
             // As the chart connects a new source: rebuilt from its store, then given the queue.
-            footprint.replace_trades(&clock, &held);
+            footprint.replace_trades(&clock, &held, &[]);
             sink.push_tick(buy(1));
             inbox.study_inputs(sink.id, vec![footprint.clone()]);
             sink.push_tick(buy(2));
@@ -2080,7 +2103,7 @@ mod tests {
             seconds: 60,
             instant: 3,
         });
-        rate.replace_trades(&clock, &store);
+        rate.replace_trades(&clock, &store, &[]);
         let values = rate.values();
         assert_eq!(values.keys().copied().collect::<Vec<_>>(), [at(60)]);
         let [total, rolling, instant] = values[&at(60)];
@@ -2091,7 +2114,7 @@ mod tests {
         );
         let footprint = OrderFlowInput::footprint();
         footprint.set_tick_size(Some(1.0));
-        footprint.replace_trades(&clock, &store);
+        footprint.replace_trades(&clock, &store, &[]);
         let flow = footprint.footprints_from(DateTime::<Utc>::MIN_UTC);
         assert_eq!(flow.complete_from, Some(at(60)));
         assert_eq!(flow.bars.keys().copied().collect::<Vec<_>>(), [at(60)]);
