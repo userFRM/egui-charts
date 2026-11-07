@@ -1,18 +1,30 @@
-use super::over_finite_bars;
+use super::smoothing::{SMOOTHING_COLORS, Smoothed, SmoothingType};
 use crate::model::Bar;
 use crate::studies::palette;
-use crate::studies::stepper::{update_window, usable_behind};
+use crate::studies::stepper::Stepper;
 use crate::studies::{Indicator, IndicatorValue, IndicatorValues};
 use egui::Color32;
+use std::collections::VecDeque;
 
 /// Rank Correlation Index (Spearman) - rank correlation of prices vs time index
 /// over a rolling window, scaled to [-100, 100].
 #[derive(Clone)]
 pub struct RankCorrelationIndex {
     period: usize,
+    smoothing: SmoothingType,
+    smoothing_length: usize,
+    smoothing_deviation: f64,
     values: IndicatorValues,
+    stepper: Stepper<Rolling>,
     colors: Vec<Color32>,
     visible: bool,
+}
+
+/// The closes of the last `period` bars with a finite close, and the average of the index.
+#[derive(Clone, Default)]
+struct Rolling {
+    window: VecDeque<f64>,
+    smoothed: Smoothed,
 }
 
 impl RankCorrelationIndex {
@@ -20,16 +32,23 @@ impl RankCorrelationIndex {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(2),
+            smoothing: SmoothingType::None,
+            smoothing_length: 14,
+            smoothing_deviation: 2.0,
             values: IndicatorValues::new(),
-            colors: vec![palette::BLUE],
+            stepper: Stepper::default(),
+            colors: [palette::BLUE]
+                .into_iter()
+                .chain(SMOOTHING_COLORS)
+                .collect(),
             visible: true,
         }
     }
 
     /// Fill average ranks for ties, reusing the sorting and output buffers.
-    fn rank(data: &[Bar], indexed: &mut Vec<(usize, f64)>, ranks: &mut [f64]) {
+    fn rank(closes: &VecDeque<f64>, indexed: &mut Vec<(usize, f64)>, ranks: &mut [f64]) {
         indexed.clear();
-        indexed.extend(data.iter().enumerate().map(|(i, b)| (i, b.close)));
+        indexed.extend(closes.iter().copied().enumerate());
         indexed.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
         let mut i = 0;
         while i < indexed.len() {
@@ -52,49 +71,6 @@ impl Default for RankCorrelationIndex {
     }
 }
 
-impl RankCorrelationIndex {
-    /// The values over `data`, every bar of which has finite inputs.
-    fn compute(&self, data: &[Bar]) -> IndicatorValues {
-        let mut values = IndicatorValues::new();
-        if data.is_empty() {
-            return values;
-        }
-
-        let mut indexed = Vec::with_capacity(self.period.min(data.len()));
-        let mut ranks = vec![0.0; self.period.min(data.len())];
-        for i in 0..data.len() {
-            if i + 1 < self.period {
-                values.push(IndicatorValue::None);
-                continue;
-            }
-
-            let start = i + 1 - self.period;
-            Self::rank(&data[start..=i], &mut indexed, &mut ranks);
-            let n = self.period as f64;
-            let mean = (n + 1.0) / 2.0;
-            let covariance: f64 = ranks
-                .iter()
-                .enumerate()
-                .map(|(i, rank)| (i as f64 + 1.0 - mean) * (rank - mean))
-                .sum();
-            let variance: f64 = ranks.iter().map(|rank| (rank - mean).powi(2)).sum();
-            if variance == 0.0 {
-                values.push(IndicatorValue::None);
-                continue;
-            }
-            // Spearman is Pearson correlation of the ranks, including ties.
-            let spearman = covariance / (variance * n * (n * n - 1.0) / 12.0).sqrt();
-
-            // Scale to [-100, 100]
-            values.push(IndicatorValue::Single(
-                (spearman * 100.0).clamp(-100.0, 100.0),
-            ));
-        }
-
-        values
-    }
-}
-
 impl Indicator for RankCorrelationIndex {
     fn source(&self) -> Option<crate::studies::StudySource> {
         Some(crate::studies::StudySource::Price(
@@ -103,7 +79,12 @@ impl Indicator for RankCorrelationIndex {
     }
 
     crate::studies::inputs::study_inputs!(self;
-        period: length("Period", 2, usize::MAX)
+        period: length("Period", 2, usize::MAX),
+        smoothing: choice("Smoothing", SmoothingType::ALL),
+        smoothing_length: length("Smoothing length", 1, usize::MAX)
+            if smoothing in SmoothingType::WITH_LENGTH,
+        smoothing_deviation: number("Band deviation", 0.0, f64::MAX)
+            if smoothing in SmoothingType::WITH_BANDS
     ; {});
 
     fn name(&self) -> &str {
@@ -119,15 +100,46 @@ impl Indicator for RankCorrelationIndex {
     }
 
     fn update(&mut self, data: &[Bar], from: usize) {
-        let mut values = std::mem::take(&mut self.values);
-        update_window(
-            &mut values,
-            data,
-            from,
-            usable_behind(self.period - 1, |b| b.close.is_finite()),
-            |data| over_finite_bars(data, |b| b.close.is_finite(), |data| self.compute(data)),
+        let (period, kind, length, deviation) = (
+            self.period,
+            self.smoothing,
+            self.smoothing_length,
+            self.smoothing_deviation,
         );
-        self.values = values;
+        let (mut indexed, mut ranks) = (Vec::new(), Vec::new());
+        self.stepper
+            .run(data, from, &mut self.values, |state, bar| {
+                if !bar.close.is_finite() {
+                    return IndicatorValue::None;
+                }
+                state.window.push_back(bar.close);
+                if state.window.len() > period {
+                    state.window.pop_front();
+                }
+                if state.window.len() < period {
+                    return IndicatorValue::None;
+                }
+                ranks.resize(period, 0.0);
+                Self::rank(&state.window, &mut indexed, &mut ranks);
+                let n = period as f64;
+                let mean = (n + 1.0) / 2.0;
+                let covariance: f64 = ranks
+                    .iter()
+                    .enumerate()
+                    .map(|(i, rank)| (i as f64 + 1.0 - mean) * (rank - mean))
+                    .sum();
+                let variance: f64 = ranks.iter().map(|rank| (rank - mean).powi(2)).sum();
+                if variance == 0.0 {
+                    return IndicatorValue::None;
+                }
+                // Spearman is Pearson correlation of the ranks, including ties.
+                let spearman = covariance / (variance * n * (n * n - 1.0) / 12.0).sqrt();
+                // Scale to [-100, 100]
+                let index = (spearman * 100.0).clamp(-100.0, 100.0);
+                state
+                    .smoothed
+                    .next(kind, length, deviation, index, bar.volume)
+            });
     }
 
     fn is_incremental(&self) -> bool {
@@ -143,9 +155,13 @@ impl Indicator for RankCorrelationIndex {
     }
 
     fn set_colors(&mut self, colors: Vec<Color32>) {
-        if !colors.is_empty() {
-            self.colors = colors;
+        for (slot, color) in self.colors.iter_mut().zip(colors) {
+            *slot = color;
         }
+    }
+
+    fn fills(&self) -> Vec<crate::studies::StudyFill> {
+        self.smoothing.fills()
     }
 
     fn is_overlay(&self) -> bool {
@@ -165,6 +181,8 @@ impl Indicator for RankCorrelationIndex {
     }
 
     fn line_names(&self) -> Vec<String> {
-        vec![format!("RankCorr({})", self.period)]
+        let mut names = vec![format!("RankCorr({})", self.period)];
+        names.extend(self.smoothing.line_names("RankCorr MA"));
+        names
     }
 }

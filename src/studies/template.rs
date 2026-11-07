@@ -208,11 +208,24 @@ impl StudyTemplate {
                 }
             }
             // An RSI drew no average and no middle line before it opened with both; the hidden
-            // level keeps the styles saved for the other two.
-            "RSI" if !has("ma_type") => {
-                template
-                    .inputs
-                    .push(("ma_type".to_owned(), InputValue::Choice(0)));
+            // level keeps the styles saved for the other two. Its average then chose from None,
+            // SMA and EMA, under ids of its own, before it took the shared smoothing inputs.
+            "RSI" if !has("smoothing") => {
+                template.inputs.retain(|(id, _)| id != "ma_type");
+                for (id, _) in &mut template.inputs {
+                    if id == "ma_length" {
+                        *id = "smoothing_length".to_owned();
+                    }
+                }
+                let smoothing = self.inputs.iter().find_map(|(id, value)| match value {
+                    InputValue::Choice(2) if id == "ma_type" => Some(3),
+                    InputValue::Choice(choice) if id == "ma_type" => Some(*choice),
+                    _ => None,
+                });
+                template.inputs.push((
+                    "smoothing".to_owned(),
+                    InputValue::Choice(smoothing.unwrap_or(0)),
+                ));
                 if template.settings.levels.len() == 2 {
                     template.settings.levels.push(crate::studies::LevelStyle {
                         value: None,
@@ -594,7 +607,7 @@ mod tests {
         settings.levels[0].value = Some(80.0);
         rsi.apply_settings(&[], settings).unwrap();
         let mut saved = StudyTemplate::from_study(&rsi);
-        saved.inputs.retain(|(id, _)| !id.starts_with("ma_"));
+        saved.inputs.retain(|(id, _)| !id.starts_with("smoothing"));
         saved.settings.levels.truncate(2);
         let restored = saved.create().unwrap();
         assert_eq!(restored.line_count(), 1);
@@ -608,6 +621,27 @@ mod tests {
             [80.0, 30.0, 50.0]
         );
         assert!(!restored.settings().levels[2].visible);
+
+        // Saved with an EMA from the shorter list of types, under the average's earlier ids.
+        let mut older = StudyTemplate::from_study(&RSI::default());
+        older.inputs.retain(|(id, _)| !id.starts_with("smoothing"));
+        older
+            .inputs
+            .push(("ma_type".to_owned(), InputValue::Choice(2)));
+        older
+            .inputs
+            .push(("ma_length".to_owned(), InputValue::Length(5)));
+        let inputs = older.create().unwrap().inputs();
+        let value = |id: &str| {
+            inputs
+                .iter()
+                .find(|input| input.id == id)
+                .unwrap()
+                .value
+                .clone()
+        };
+        assert_eq!(value("smoothing"), InputValue::Choice(3));
+        assert_eq!(value("smoothing_length"), InputValue::Length(5));
 
         // Saved without bands, with an older flag instead of the band inputs, and with bands that
         // were not filled yet.
