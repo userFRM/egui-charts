@@ -1471,17 +1471,18 @@ mod tests {
     /// This chart only, a move out of the folder or a deletion, and undone and redone there, or
     /// undone on the chart it was drawn on. After each, a restart shows what the charts showed,
     /// with or without a later edit on the first chart: the drawing is stored on one chart, never
-    /// on none or both.
+    /// on none or both. A drag is written once, when it ends.
     #[test]
     fn changes_to_a_mirrored_copy_survive_a_restart() {
         use crate::data::Reply;
         use crate::services::{Storage, StoreKind};
         use crate::widget::{ChartLayout, ChartLayoutMode};
+        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::{Arc, Mutex};
 
-        /// Documents held in memory, answered inline.
+        /// Documents held in memory, answered inline, and the number of writes.
         #[derive(Default)]
-        struct InMemory(Mutex<HashMap<(StoreKind, String), String>>);
+        struct InMemory(Mutex<HashMap<(StoreKind, String), String>>, AtomicUsize);
         impl Storage for InMemory {
             fn list(&self, kind: StoreKind, reply: Reply<Vec<String>>) {
                 let names = self
@@ -1504,6 +1505,7 @@ mod tests {
                 reply.send(Ok(document));
             }
             fn save(&self, kind: StoreKind, name: &str, document: String, reply: Reply<()>) {
+                self.1.fetch_add(1, Ordering::Relaxed);
                 self.0
                     .lock()
                     .unwrap()
@@ -1599,12 +1601,12 @@ mod tests {
             })
         };
         let first = |chart: &Chart| chart.drawings().drawings[0].id;
-        let edit = |chart: &mut Chart| {
+        let edit = |chart: &mut Chart, price: f64| {
             let id = first(chart);
             chart.user_action(|chart| {
                 chart.drawings_mut().edit_drawing(id, |drawing| {
-                    drawing.chart_points[0].price = 50.0;
-                    drawing.chart_points[1].price = 52.0;
+                    drawing.chart_points[0].price = price;
+                    drawing.chart_points[1].price = price + 2.0;
                 });
             });
         };
@@ -1754,13 +1756,27 @@ mod tests {
                             Delete => chart.user_action(|chart| {
                                 chart.drawings_mut().delete_drawing(id.unwrap());
                             }),
-                            Edit => edit(chart),
+                            Edit => edit(chart, 50.0),
                             HeldEdit => {
                                 frame(pointer(true), &mut session, &mut a, &mut b);
-                                edit(if side == a_side { &mut a } else { &mut b });
-                                frames(&mut session, &mut a, &mut b);
+                                let writes = storages[0].1.load(Ordering::Relaxed);
+                                // A drag changes the drawing on several frames of one gesture.
+                                for price in [40.0, 50.0] {
+                                    edit(if side == a_side { &mut a } else { &mut b }, price);
+                                    frames(&mut session, &mut a, &mut b);
+                                }
                                 assert!(ctx.input(|i| i.pointer.any_down()), "{name}");
                                 frame(pointer(false), &mut session, &mut a, &mut b);
+                                frames(&mut session, &mut a, &mut b);
+                                // With its own storage, the first chart writes the change once,
+                                // when the gesture ends, as it writes a gesture of its own.
+                                let written = storages[0].1.load(Ordering::Relaxed) - writes;
+                                if !shared && written != 1 {
+                                    failures.push(format!(
+                                        "{name}, edit_first {edit_first}: the first chart wrote \
+                                         its storage {written} times during the gesture"
+                                    ));
+                                }
                             }
                             // A chart that read a storage has nothing to undo, as a row expects.
                             Undo => {
