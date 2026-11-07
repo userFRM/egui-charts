@@ -39,14 +39,9 @@ impl Chart {
         }
         let clip = *self.drawings.pane_clips.get(&drawing.pane)?;
         let timescale = self.state.time_scale();
-        // A drawing names a member of its pane or the pane itself; the main series' pane is painted
-        // without an id.
-        let pane = drawing
-            .pane
-            .map(|id| {
-                self.series_pane(super::SeriesId(id))
-                    .unwrap_or(super::PaneId(id))
-            })
+        // The pane holding the main series is painted without an id.
+        let pane = self
+            .owner_pane(drawing)
             .filter(|pane| *pane != self.main_series_pane());
         let price_member = self.pane_price_member(pane);
         drawing.line_measurement_card_rect(
@@ -1713,49 +1708,65 @@ mod tests {
     }
 
     /// An RSI pane is in RSI points, not in the instrument's quarter-point ticks: an info line
-    /// from 40 to 50 on it rises 10 points, which its readouts must not count as 40 ticks.
+    /// from 40 to 50 on it rises 10 points, which its readouts must not count as 40 ticks. The
+    /// original price pane the main series left empty has no price series either; it paints the
+    /// drawings that name it by its id, 0, which is also the main series' id.
     #[cfg(feature = "ui")]
     #[test]
     fn study_pane_readouts_leave_out_the_instrument_ticks() {
         use crate::studies::RSI;
-        let ctx = Context::default();
-        let mut chart = chart(&[90.0], &[110.0]);
-        chart.set_instrument(Some(
-            crate::model::Instrument::new("TEST").with_tick_size(0.25),
-        ));
-        let rsi = chart.add_indicator(Box::new(RSI::new(14)));
-        let mut line = Drawing::new(1, DrawingToolType::InfoLine);
-        line.chart_points = vec![ChartPoint::new(60.0, 40.0), ChartPoint::new(90.0, 50.0)];
-        line.completed = true;
-        line.pane = Some(rsi.0);
-        chart.drawings_mut().drawings.push(line);
-        let readouts: Vec<String> = [0.0, 0.1]
-            .into_iter()
-            .flat_map(|time| shapes(&ctx, &mut chart, time, vec![]))
-            .filter_map(|shape| match shape {
-                Shape::Text(text) if text.galley.text().contains("bars") => {
-                    Some(text.galley.text().to_owned())
-                }
-                _ => None,
-            })
-            .collect();
-        assert!(!readouts.is_empty(), "no readouts painted");
-        assert!(
-            readouts.iter().all(|text| !text.contains("tick")),
-            "{readouts:?}"
-        );
-        // The card the selection toolbar keeps clear of is the painted one, without ticks too.
-        let card = |chart: &crate::widget::Chart| {
-            let mut card = None;
-            ctx.run_ui(Default::default(), |ui| {
-                card = chart.line_measurement_card_rect(ui, &chart.drawings().drawings[0]);
-            })
-            .drop_without_applying_deltas();
-            card
-        };
-        let with_instrument = card(&chart);
-        chart.set_instrument(None);
-        assert!(with_instrument.is_some());
-        assert_eq!(with_instrument, card(&chart));
+        use crate::widget::{PaneId, SeriesId};
+        for emptied in [false, true] {
+            let ctx = Context::default();
+            let mut chart = chart(&[90.0], &[110.0]);
+            chart.set_instrument(Some(
+                crate::model::Instrument::new("TEST").with_tick_size(0.25),
+            ));
+            let owner = if emptied {
+                chart.config_mut().show_volume = false;
+                let pane = chart.add_pane();
+                assert!(chart.move_series_to_pane(SeriesId::MAIN, pane));
+                // The emptied pane keeps its scale's default range, 0 to 100.
+                PaneId::MAIN.0
+            } else {
+                chart.add_indicator(Box::new(RSI::new(14))).0
+            };
+            let mut line = Drawing::new(1, DrawingToolType::InfoLine);
+            line.chart_points = vec![ChartPoint::new(60.0, 40.0), ChartPoint::new(90.0, 50.0)];
+            line.completed = true;
+            line.pane = Some(owner);
+            chart.drawings_mut().drawings.push(line);
+            let readouts: Vec<String> = [0.0, 0.1]
+                .into_iter()
+                .flat_map(|time| shapes(&ctx, &mut chart, time, vec![]))
+                .filter_map(|shape| match shape {
+                    Shape::Text(text) if text.galley.text().contains("bars") => {
+                        Some(text.galley.text().to_owned())
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                !readouts.is_empty(),
+                "emptied {emptied}: no readouts painted"
+            );
+            assert!(
+                readouts.iter().all(|text| !text.contains("tick")),
+                "emptied {emptied}: {readouts:?}"
+            );
+            // The card the selection toolbar keeps clear of is the painted one, without ticks too.
+            let card = |chart: &crate::widget::Chart| {
+                let mut card = None;
+                ctx.run_ui(Default::default(), |ui| {
+                    card = chart.line_measurement_card_rect(ui, &chart.drawings().drawings[0]);
+                })
+                .drop_without_applying_deltas();
+                card
+            };
+            let with_instrument = card(&chart);
+            chart.set_instrument(None);
+            assert!(with_instrument.is_some(), "emptied {emptied}");
+            assert_eq!(with_instrument, card(&chart), "emptied {emptied}");
+        }
     }
 }
