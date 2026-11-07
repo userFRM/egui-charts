@@ -21,6 +21,8 @@ pub struct StudyProfile {
     pub color: [u8; 4],
     /// Draw at the right of the viewport instead of beside the first source bar.
     pub right_aligned: bool,
+    /// Share of the span, from 0 to 1, that the row with the most volume takes.
+    pub width: f32,
 }
 
 /// Volume shown in each price row of a profile built from bars.
@@ -931,7 +933,10 @@ mod tests {
                         config,
                         [0, 0, 255, 255],
                         100.0..300.0,
-                        crate::painting::volume_profile::ProfileStyle::Study { right_aligned },
+                        crate::painting::volume_profile::ProfileStyle::Study {
+                            right_aligned,
+                            width: 0.9,
+                        },
                         &|price| price as f32 * direction,
                     );
                 });

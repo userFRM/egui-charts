@@ -66,6 +66,8 @@ struct ProfileStudy {
     rows: usize,
     value_area: f64,
     row_size: f64,
+    /// Share of a session's or period's width that its widest row takes.
+    width: f64,
     display: ProfileDisplay,
     start_time: f64,
     end_time: f64,
@@ -164,6 +166,7 @@ impl ProfileStudy {
             rows: rows.max(1),
             value_area: 0.7,
             row_size: 0.0,
+            width: 0.3,
             display: ProfileDisplay::UpDown,
             start_time: -8e15,
             end_time: 8e15,
@@ -282,6 +285,14 @@ impl ProfileStudy {
                 InputKind::Toggle,
             ));
         }
+        if matches!(self.kind, Kind::Session | Kind::Periodic) {
+            inputs.push(StudyInput::new(
+                "width",
+                "Width (%)",
+                InputValue::Number(self.width * 100.0),
+                InputKind::Number(1.0, 100.0),
+            ));
+        }
         inputs
     }
 
@@ -320,6 +331,7 @@ impl ProfileStudy {
             ("period", InputValue::Choice(v)) => self.period = PERIODS[v],
             ("anchor", InputValue::Choice(v)) => self.anchor = ANCHORS[v],
             ("length", InputValue::Length(v)) => self.length = v,
+            ("width", InputValue::Number(v)) => self.width = v / 100.0,
             _ => return Err(crate::studies::StudyError::invalid_input(id)),
         }
         self.values.clear();
@@ -700,6 +712,11 @@ impl ProfileStudy {
             self.colors[3].to_srgba_unmultiplied(),
             self.colors[4].to_srgba_unmultiplied(),
         ]);
+        let width = match self.kind {
+            Kind::Visible => 1.0,
+            Kind::Session | Kind::Periodic => self.width as f32,
+            Kind::Fixed | Kind::Anchored | Kind::Auto => 0.9,
+        };
         let mut cache = self.cache.borrow_mut();
         let mut profiles = Vec::new();
         // Copied once, from the bar before the first profile built here on.
@@ -720,6 +737,7 @@ impl ProfileStudy {
                     config,
                     color: self.colors[0].to_srgba_unmultiplied(),
                     right_aligned: self.kind == Kind::Visible,
+                    width,
                 };
                 profiles.push(plot.clone());
                 cache.retain(|cached| cached.plot.bars != range);
@@ -751,6 +769,7 @@ impl ProfileStudy {
                     config,
                     color: self.colors[0].to_srgba_unmultiplied(),
                     right_aligned: self.kind == Kind::Visible,
+                    width,
                 };
                 profiles.push(plot.clone());
                 cache.retain(|cached| cached.plot.bars != range);
@@ -792,6 +811,7 @@ impl ProfileStudy {
                     config,
                     color: self.colors[0].to_srgba_unmultiplied(),
                     right_aligned: self.kind == Kind::Visible,
+                    width,
                 };
                 profiles.push(plot.clone());
                 cache.retain(|cached| cached.plot.bars != range);
@@ -1862,7 +1882,8 @@ mod rendering_tests {
     }
 
     /// A new session profile paints cyan and pink rows, stronger in the value area, under a 2 px
-    /// point of control in the foreground colour of either theme. Saved colours keep theirs.
+    /// point of control in the foreground colour of either theme. Saved colours keep theirs. Its
+    /// widest row takes 30% of a session that fills the plot, or the share its width input sets.
     #[test]
     fn session_profile_paints_its_default_and_saved_colours() {
         let time = |minute| chrono::DateTime::UNIX_EPOCH + TimeDelta::minutes(minute);
@@ -1893,15 +1914,22 @@ mod rendering_tests {
         ];
         let light = crate::theme::Theme::light();
         let dark = crate::theme::Theme::dark();
-        // Theme, saved colours, the rows outside and inside the value area, and the line colour.
-        for (theme, colors, rows, poc) in [
-            (&light, None, defaults, light.ui.text),
-            (&dark, None, defaults, dark.ui.text),
-            (&light, Some(saved.clone()), stored, saved[0]),
+        // Theme, saved colours, the rows outside and inside the value area, the line colour, the
+        // width input and where the widest row ends: the session spans the plot, 0 to 400.
+        for (theme, colors, rows, poc, width, right_edge) in [
+            (&light, None, defaults, light.ui.text, None, 120.0),
+            (&dark, None, defaults, dark.ui.text, None, 120.0),
+            (&light, Some(saved.clone()), stored, saved[0], None, 120.0),
+            (&light, None, defaults, light.ui.text, Some(90.0), 360.0),
         ] {
             let mut study = VolProfileSession::new(10);
             if let Some(colors) = colors {
                 study.set_colors(colors);
+            }
+            if let Some(width) = width {
+                study
+                    .set_input("width", InputValue::Number(width))
+                    .expect("width");
             }
             study.calculate(&bars);
             let indicators: Vec<Box<dyn Indicator>> = vec![Box::new(study)];
@@ -1913,7 +1941,9 @@ mod rendering_tests {
                 200.0,
                 false,
             );
-            let coords = ChartMapping::new(rect, 40.0, 0, 0, 0.0, price);
+            // A view inside the session: its first bar starts at the plot's left edge and its last
+            // ends past the right.
+            let coords = ChartMapping::new(rect, 200.0, 0, 1, 0.0, price);
             let ctx = egui::Context::default();
             crate::theme::apply_to_egui(&ctx, theme);
             let output = ctx.run_ui(egui::RawInput::default(), |ui| {
@@ -1933,6 +1963,14 @@ mod rendering_tests {
                     _ => None,
                 })
                 .collect();
+            let widest = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Rect(row) => Some(row.rect.right()),
+                    _ => None,
+                })
+                .fold(f32::MIN, f32::max);
             let lines: Vec<_> = output
                 .shapes
                 .iter()
@@ -1942,6 +1980,10 @@ mod rendering_tests {
                 })
                 .collect();
             output.drop_without_applying_deltas();
+            assert!(
+                (widest - right_edge).abs() < 1e-3,
+                "{widest} to {right_edge}"
+            );
             for [r, g, b, a] in rows {
                 // Colours pass through the study's stored and painted forms as Color32 does.
                 let [r, g, b, a] =
