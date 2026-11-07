@@ -1331,6 +1331,53 @@ mod tests {
         }
     }
 
+    /// An edit puts its time on the drawing before it returns: a host that drains the queue and
+    /// saves the drawing it names stores that time, and undoing a later edit made before the
+    /// next paint returns to it.
+    #[test]
+    fn edit_time_reaches_host_saves_and_undo() {
+        use crate::drawings::manager::DrawingSyncAction::UpdateDrawing;
+        let mut stored = StoredDrawing::new("a1", Drawing::new(0, DrawingToolType::HorizontalLine));
+        stored.points = vec![StoredCoord::new(T0, 100.0)];
+        stored.modified_at = 1_000;
+        let mut manager = DrawingManager::new();
+        let id = manager
+            .add_synced_drawing(stored_to_drawing(&stored, time_to_bar, 0))
+            .unwrap();
+        let drawing = |manager: &DrawingManager| {
+            manager
+                .drawings
+                .iter()
+                .find(|d| d.id == id)
+                .unwrap()
+                .clone()
+        };
+
+        let before = chrono::Utc::now().timestamp_millis();
+        manager.edit_drawing(id, |d| d.color = [1, 2, 3, 255]);
+        let edited = drawing(&manager).modified_at;
+        assert!(
+            edited.is_some_and(|time| time >= before),
+            "{edited:?}, edited at {before} or later"
+        );
+        let queued = std::mem::take(&mut *manager.pending_sync.lock().unwrap());
+        assert!(
+            matches!(queued[..], [UpdateDrawing(i)] if i == id),
+            "{queued:?}"
+        );
+        let saved = drawing_to_stored(&drawing(&manager), bar_to_time);
+        assert_eq!(Some(saved.modified_at), edited);
+
+        manager.edit_drawing(id, |d| d.stroke_width = 3.0);
+        assert!(manager.undo());
+        let undone = drawing(&manager);
+        assert_eq!(
+            (undone.color, undone.modified_at),
+            ([1, 2, 3, 255], edited),
+            "the first edit stands, with its time"
+        );
+    }
+
     /// A later session that loads the storage, restores its drawings, copies one, adds one and
     /// saves them all keeps every stored record as it was, with its layer, and stores the copy
     /// and the new drawing under ids of their own, even where a stored id is a number the new
