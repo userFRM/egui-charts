@@ -28,7 +28,9 @@ pub struct AlertDialog {
     pub is_open: bool,
     /// Staged edits. Cancel never submits them.
     pub alert: Alert,
-    /// Host-provided study outputs and drawings, as stable identifiers and display names.
+    /// Host-provided study outputs and drawings, as stable identifiers and display names. Presets
+    /// compare the names to tell a study they store from another chart's study with the same
+    /// identifier.
     pub sources: Vec<(AlertSource, String)>,
     /// Host-provided watchlist identifiers and display names.
     pub watchlists: Vec<(String, String)>,

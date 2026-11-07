@@ -375,7 +375,7 @@ fn restored_condition(
     })
 }
 
-/// The stored source unless the alert watches a drawing or the chart no longer offers it.
+/// The stored source unless the alert watches a drawing or the chart does not offer it.
 fn restored_source(
     stored: &AlertSource,
     current: &AlertSource,
