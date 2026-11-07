@@ -1275,9 +1275,8 @@ mod tests {
                 (300.0, 500.0),
             ),
         ];
-        for ((first, second, left, right, want, on, off), tool) in cases
-            .into_iter()
-            .flat_map(|case| {
+        for ((first, second, left, right, want, on, off), tool) in
+            cases.into_iter().flat_map(|case| {
                 [T::Ray, T::ExtendedLine, T::InfoLine, T::TrendAngle].map(|tool| (case, tool))
             })
         {
@@ -1370,8 +1369,11 @@ mod tests {
                         drawing.points.reverse();
                     }
                     // These tools name their anchors, so the same reach swaps their switches.
-                    (drawing.extend_left, drawing.extend_right) =
-                        if reversed { (right, left) } else { (left, right) };
+                    (drawing.extend_left, drawing.extend_right) = if reversed {
+                        (right, left)
+                    } else {
+                        (left, right)
+                    };
                     drawing.arrow_start_style = ArrowStyle::Square;
                     drawing.arrow_end_style = ArrowStyle::Square;
                     let expected = ends.map(|(x, y)| Pos2::new(x, y));
