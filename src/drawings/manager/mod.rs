@@ -276,9 +276,6 @@ pub struct DrawingManager {
     pub pending_sync: Arc<Mutex<Vec<DrawingSyncAction>>>,
     /// Whether edits emit per-drawing storage notifications.
     pub(crate) sync_enabled: bool,
-    /// When each drawing edited since the last [`Self::apply_edit_times`] was edited. Held apart
-    /// because [`Self::queue`] runs where the drawings are borrowed.
-    edited: Mutex<Vec<(usize, i64)>>,
 }
 
 impl Default for DrawingManager {
@@ -337,7 +334,6 @@ impl DrawingManager {
             curr_timeframe: String::from("1D"),
             eraser_mode: false,
             pending_sync: Arc::new(Mutex::new(Vec::new())),
-            edited: Mutex::new(Vec::new()),
             sync_enabled: true,
         }
     }
@@ -475,8 +471,6 @@ impl DrawingManager {
         &mut self,
         step: fn(&mut HistoryService, &mut Vec<Drawing>) -> Option<usize>,
     ) -> bool {
-        // An undo puts back the edit time of the state it restores, so it must hold the last one.
-        self.apply_edit_times();
         let before: Vec<_> = self
             .drawings
             .iter()
@@ -516,39 +510,15 @@ impl DrawingManager {
         true
     }
 
-    /// Records the edit of a drawing, which [`Self::apply_edit_times`] puts on the drawing.
-    fn stamp(&self, id: usize) {
-        let now = chrono::Utc::now().timestamp_millis();
-        let mut edited = self.edited.lock().unwrap_or_else(|e| e.into_inner());
-        match edited.iter_mut().find(|(edited, _)| *edited == id) {
-            Some(entry) => entry.1 = now,
-            None => edited.push((id, now)),
+    /// Puts the time of an edit on the drawing with the given ID.
+    fn stamp(&mut self, id: usize) {
+        if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id) {
+            drawing.modified_at = Some(chrono::Utc::now().timestamp_millis());
         }
     }
 
-    /// Puts the times of the edits made since the last call on their drawings.
-    pub(crate) fn apply_edit_times(&mut self) {
-        let edited = std::mem::take(self.edited.get_mut().unwrap_or_else(|e| e.into_inner()));
-        for (id, time) in edited {
-            if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id) {
-                drawing.modified_at = Some(time);
-            }
-        }
-    }
-
-    /// The time of a drawing's last edit, including one not applied yet.
-    pub(crate) fn modified_at(&self, drawing: &Drawing) -> Option<i64> {
-        self.edited
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .iter()
-            .find(|(id, _)| *id == drawing.id)
-            .map(|(_, time)| *time)
-            .or(drawing.modified_at)
-    }
-
-    /// Records an edit for the host to save.
-    fn queue(&self, action: DrawingSyncAction) {
+    /// Records an edit for the host to save and puts its time on the drawing.
+    fn queue(&mut self, action: DrawingSyncAction) {
         if let DrawingSyncAction::SaveDrawing(id) | DrawingSyncAction::UpdateDrawing(id) = &action {
             self.stamp(*id);
         }
@@ -639,18 +609,19 @@ impl DrawingManager {
         )
     }
 
-    fn queue_edit(&self, old: &Drawing) {
+    fn queue_edit(&mut self, old: &Drawing) {
         if let Some(drawing) = self.drawings.iter().find(|d| d.id == old.id) {
-            self.queue(match (old.saveable, drawing.saveable) {
+            let action = match (old.saveable, drawing.saveable) {
                 (true, false) => DrawingSyncAction::Delete(sync_id(old)),
                 (false, true) => DrawingSyncAction::SaveDrawing(old.id),
                 _ => DrawingSyncAction::UpdateDrawing(old.id),
-            });
+            };
+            self.queue(action);
         }
     }
 
     /// Queues an update of the drawing with the given ID, if there is one.
-    fn queue_update(&self, id: usize) {
+    fn queue_update(&mut self, id: usize) {
         if self.drawings.iter().any(|d| d.id == id) {
             self.queue(DrawingSyncAction::UpdateDrawing(id));
         }
