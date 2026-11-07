@@ -3152,8 +3152,15 @@ fn order_flow_studies_update_incrementally_between_input_drops() {
             (study.values().len(), study.values().value(0, 10_999))
         })
     };
+    // Each frame comes past the refresh waits so far, which follow the real time a recalculation
+    // took, so the first frame after the drop finds both studies due on any machine.
     for _ in 0..30 {
         frames.run(&mut chart);
+        frames.time = chart
+            .next_refresh
+            .iter()
+            .copied()
+            .fold(frames.time, f64::max);
     }
     let before = record(&chart);
     feed.sink().push_tick(buy(&all[11_000]));

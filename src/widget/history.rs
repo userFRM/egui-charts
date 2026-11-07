@@ -46,6 +46,7 @@ struct Action {
     main_series: Option<MainSeries>,
     main_series_visible: Option<bool>,
     price_targets_visible: Option<bool>,
+    event_visibility: Option<crate::model::EventVisibility>,
     options: Option<ChartOptions>,
     order_flow: Option<FeedDisplay>,
     view: Option<(f32, f32)>,
@@ -79,6 +80,7 @@ impl Action {
             && self.main_series.is_none()
             && self.main_series_visible.is_none()
             && self.price_targets_visible.is_none()
+            && self.event_visibility.is_none()
             && self.options.is_none()
             && self.order_flow.is_none()
             && self.scale.is_none()
@@ -127,12 +129,13 @@ impl FeedDisplay {
 }
 
 /// The added series of one state of the chart: their draw order, display settings and
-/// visibility, the scale of the main series, and the series the other state lacks, whole, with
-/// their price formatters and bar limits.
+/// visibility, the scale, alerts and price line colour of the main series, and the series the
+/// other state lacks, whole, with their price formatters and bar limits.
 struct SeriesSet {
     props: Vec<(SeriesId, SeriesOptions, bool)>,
     main_scale: SeriesScale,
     main_alerts: SeriesAlerts,
+    main_price_line: Option<egui::Color32>,
     held: Vec<HeldSeries>,
 }
 
@@ -146,6 +149,7 @@ impl SeriesSet {
                 .collect(),
             main_scale: chart.main_series_scale,
             main_alerts: chart.main_series_style.alerts,
+            main_price_line: chart.main_series_style.price_line_color,
             held: Vec::new(),
         }
     }
@@ -153,6 +157,7 @@ impl SeriesSet {
     fn same(&self, other: &Self) -> bool {
         self.main_scale == other.main_scale
             && self.main_alerts == other.main_alerts
+            && self.main_price_line == other.main_price_line
             && self.props == other.props
     }
 }
@@ -331,10 +336,11 @@ impl Study {
     }
 }
 
-/// Whether a scale keeps the options, manual range and ratio lock it was captured with. A fitted
-/// range follows the data rather than the action, so it does not count.
+/// Whether a scale keeps the options, precision, manual range and ratio lock it was captured
+/// with. A fitted range follows the data rather than the action, so it does not count.
 fn same_scale(a: &crate::scales::PriceScale, b: &crate::scales::PriceScale) -> bool {
     a.options() == b.options()
+        && a.price_precision() == b.price_precision()
         && a.bar_ratio() == b.bar_ratio()
         && a.is_manual() == b.is_manual()
         && (!a.is_manual() || a.range() == b.range())
@@ -379,6 +385,7 @@ impl Chart {
                 config: Some(self.config.clone()),
                 main_series_visible: Some(self.main_series_visible),
                 price_targets_visible: Some(self.show_price_targets),
+                event_visibility: Some(self.event_visibility.clone()),
                 options: Some(self.chart_options.clone()),
                 order_flow: FeedDisplay::capture(self),
                 view: Some(self.get_time_scale_state()),
@@ -449,6 +456,9 @@ impl Chart {
         }
         if action.price_targets_visible == Some(self.show_price_targets) {
             action.price_targets_visible = None;
+        }
+        if action.event_visibility.as_ref() == Some(&self.event_visibility) {
+            action.event_visibility = None;
         }
         if action.main_series_visible == Some(self.main_series_visible) {
             action.main_series_visible = None;
@@ -730,6 +740,7 @@ impl Chart {
         }
         self.main_series_scale = set.main_scale;
         self.main_series_style.alerts = set.main_alerts;
+        self.main_series_style.price_line_color = set.main_price_line;
         *set = SeriesSet { held, ..now };
         // `set.props` now lists the series shown before the exchange, in draw order.
         for (id, ..) in &set.props {
@@ -900,6 +911,9 @@ impl Chart {
         }
         if let Some(visible) = &mut action.price_targets_visible {
             std::mem::swap(&mut self.show_price_targets, visible);
+        }
+        if let Some(visibility) = &mut action.event_visibility {
+            std::mem::swap(&mut self.event_visibility, visibility);
         }
         // Before the visibility, which an absent main series ignores.
         if let Some(main) = &mut action.main_series {

@@ -207,6 +207,11 @@ fn bar(seconds: i64, close: f64) -> Bar {
     Bar::new(t, close, close, close, close, 1.0)
 }
 
+/// `len` flat one-minute bars from minute `start`.
+fn window(start: i64, len: i64) -> Vec<Bar> {
+    (start..start + len).map(|i| bar(i * 60, 10.0)).collect()
+}
+
 /// Streaming keeps the configured live offset, or the same scrolled-back element.
 #[test]
 fn appended_bars_keep_the_view() {
@@ -301,10 +306,11 @@ fn appended_bars_keep_the_view() {
 
 /// Only filling a whitespace tail may use the whitespace shift policy. Ordinary updates keep
 /// the offset and pending start; appends still follow the new-bar policy. Without following,
-/// one appended bar subtracts one from the offset to keep the same time at the right edge.
+/// one appended bar subtracts one from the offset to keep the same time at the right edge,
+/// also when a window of the same length moves forward by that bar.
 #[test]
 fn bar_updates_obey_live_edge_policies() {
-    for replace in [false, true] {
+    for (replace, rolling) in [(false, false), (true, false), (true, true)] {
         for shift in [false, true] {
             for allow_whitespace in [false, true] {
                 for offset in [19.0, -1.5, -2.0, -30.0] {
@@ -342,6 +348,9 @@ fn bar_updates_obey_live_edge_policies() {
                         }
                         if replace {
                             if append {
+                                if rolling {
+                                    bars.remove(0);
+                                }
                                 bars.push(incoming);
                             } else {
                                 bars[99] = incoming;
@@ -363,7 +372,7 @@ fn bar_updates_obey_live_edge_policies() {
                         assert_eq!(
                             chart.state.time_scale().right_offset(),
                             expected,
-                            "{name}: replace {replace}, shift {shift}, whitespace {allow_whitespace}, offset {offset}"
+                            "{name}: replace {replace}, rolling {rolling}, shift {shift}, whitespace {allow_whitespace}, offset {offset}"
                         );
                         assert_eq!(
                             chart.pending_start_idx,
@@ -375,6 +384,158 @@ fn bar_updates_obey_live_edge_policies() {
             }
         }
     }
+    // Replacements that bring a newer last bar without growing the series, a frame after each.
+    // The right offset stays at its default of 2.5, which a fixed right edge limits to 0.
+    for (name, fix_right_edge, limit, replacements, expected) in [
+        (
+            "rolling window",
+            false,
+            None,
+            (1..=5).map(|start| window(start, 100)).collect::<Vec<_>>(),
+            2.5,
+        ),
+        (
+            "rolling window, fixed right edge",
+            true,
+            None,
+            (1..=5).map(|start| window(start, 100)).collect(),
+            0.0,
+        ),
+        (
+            "bar limit fed the whole history",
+            false,
+            NonZeroUsize::new(100),
+            (101..=105).map(|len| window(0, len)).collect(),
+            2.5,
+        ),
+        (
+            "window replaced by a later window",
+            false,
+            None,
+            vec![window(150, 100)],
+            2.5,
+        ),
+    ] {
+        let options = crate::config::ChartOptions {
+            time_scale: crate::config::TimeScaleOptions {
+                fix_right_edge,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut chart = Chart::new(BarData::from_bars(window(0, 100))).with_chart_options(options);
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut chart, 0.0, Vec::new());
+        chart.set_bar_limit(SeriesId::MAIN, limit);
+        for (step, bars) in replacements.into_iter().enumerate() {
+            chart.set_data(SeriesId::MAIN, bars);
+            frame(&ctx, &mut chart, 1.0 + step as f64, Vec::new());
+            assert_eq!(
+                chart.state.time_scale().right_offset(),
+                expected,
+                "{name}: replacement {step}"
+            );
+        }
+    }
+}
+
+/// A scrolled-back view keeps its time range while it shows held bars, and otherwise stops with
+/// the oldest held bar in view instead of moving into the whitespace before it. At 6 px a bar
+/// the plot of an 800x600 frame holds more than 100 bars, so a view stopped there shows them all.
+#[test]
+fn set_data_newer_window_keeps_a_scrolled_back_view_on_bars() {
+    let ctx = egui::Context::default();
+    let scrolled = |bar_spacing: f32, position: f32| {
+        let options = crate::config::ChartOptions {
+            time_scale: crate::config::TimeScaleOptions {
+                bar_spacing,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut chart = Chart::new(BarData::from_bars(window(0, 100))).with_chart_options(options);
+        frame(&ctx, &mut chart, 0.0, Vec::new());
+        chart.scroll_to_position(position, false);
+        chart
+    };
+
+    // Every new bar follows the old ones: minute 69 at the right edge would be index -31.
+    let mut chart = scrolled(6.0, -30.0);
+    chart.set_data(SeriesId::MAIN, window(100, 100));
+    frame(&ctx, &mut chart, 1.0, Vec::new());
+    assert_eq!(chart.state.time_scale().right_offset(), 0.0);
+    assert_eq!(chart.state.visible_range(), (0, 100));
+
+    // Evictions: bars are shown on every frame, also the one that evicts the bars in view. The
+    // limit of 100 evicts down to 88 at minutes 100, 113, ..., 165, which leaves minutes 78 to
+    // 165 and would put minute 69 at index -9. With all bars in view the next bar follows.
+    let mut chart = scrolled(6.0, -30.0);
+    chart.set_bar_limit(SeriesId::MAIN, NonZeroUsize::new(100));
+    for minute in 100..180 {
+        chart.update(SeriesId::MAIN, bar(minute * 60, 10.0));
+        frame(&ctx, &mut chart, minute as f64, Vec::new());
+        assert!(chart.state.visible_range().1 > 0, "minute {minute}");
+        let expected = match minute {
+            ..165 => -30.0 - (minute - 99) as f32,
+            165 => 0.0,
+            _ => 2.5,
+        };
+        assert_eq!(
+            chart.state.time_scale().right_offset(),
+            expected,
+            "minute {minute}"
+        );
+    }
+    assert_eq!(chart.bars(SeriesId::MAIN)[0], bar(91 * 60, 10.0));
+    assert_eq!(chart.state.visible_range(), (0, 89));
+
+    // A plot full of bars: minute 69 keeps the right edge until the oldest held bar reaches the
+    // left edge, then that bar stays there as the window moves on. At 23 px a bar the right
+    // edge of the stopped view reads back a rounding error short of a full plot.
+    let mut chart = scrolled(23.0, -30.0);
+    let visible = f64::from(chart.state.time_scale().width()) / 23.0;
+    for start in 1..=60 {
+        chart.set_data(SeriesId::MAIN, window(start, 100));
+        frame(&ctx, &mut chart, start as f64, Vec::new());
+        let expected = (-30.0 - start as f64).max(visible - 100.0);
+        let got = chart.state.time_scale().right_offset_precise();
+        assert!(
+            (got - expected).abs() < 1e-6,
+            "start {start}: {got}, not {expected}"
+        );
+    }
+
+    // The same as a bar limit evicts: the third eviction takes the left edge of minute 69's
+    // view. Indices 56, 43 and 30 at the right edge of a plot of about 35 bars, and the 88
+    // bars left fill the plot from its left border.
+    let mut chart = scrolled(20.0, -30.0);
+    let visible = f64::from(chart.state.time_scale().width()) / 20.0;
+    chart.set_bar_limit(SeriesId::MAIN, NonZeroUsize::new(100));
+    for minute in 100..=126 {
+        chart.update(SeriesId::MAIN, bar(minute * 60, 10.0));
+    }
+    frame(&ctx, &mut chart, 200.0, Vec::new());
+    let got = chart.state.time_scale().right_offset_precise();
+    assert!((got - (visible - 88.0)).abs() < 1e-6, "{got}");
+
+    // A view the user parked in the whitespace before the first bar stays there while nothing
+    // is evicted: it showed no bars for a change to take away.
+    let mut chart = scrolled(6.0, -130.0);
+    chart.update(SeriesId::MAIN, bar(100 * 60, 10.0));
+    frame(&ctx, &mut chart, 1.0, Vec::new());
+    assert_eq!(chart.state.time_scale().right_offset(), -131.0);
+    assert_eq!(chart.state.visible_range(), (0, 0));
+
+    // The added series of a chart without main bars share these slots.
+    let mut chart = Chart::new(BarData::from_bars(Vec::new()));
+    let id = chart.add_series(crate::widget::SeriesOptions::default());
+    chart.set_data(id, window(0, 100));
+    frame(&ctx, &mut chart, 0.0, Vec::new());
+    chart.scroll_to_position(-30.0, false);
+    chart.set_data(id, window(100, 100));
+    frame(&ctx, &mut chart, 1.0, Vec::new());
+    assert_eq!(chart.state.time_scale().right_offset(), 0.0);
+    assert_eq!(chart.state.visible_range(), (0, 100));
 }
 
 /// Limits and explicit removal operate on retained replay history and independent series.

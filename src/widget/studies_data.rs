@@ -2142,8 +2142,9 @@ pub(super) mod tests {
 
     /// A study calculated on an SMA of the hourly bars follows it while trades move the current
     /// hourly bar of a one-minute chart, although that SMA has a full recompute waiting on every
-    /// frame. A second apart, longer than any refresh wait, the two take turns at the one full
-    /// recompute per frame, so the study shows a close at most three frames old.
+    /// frame. Each frame comes a second after the last and past every refresh wait, which follows
+    /// the real time a recompute took, so on any machine the two take turns at the one full
+    /// recompute per frame and the study shows a close at most three frames old.
     /// Hand values: hourly closes of 100 and a current close of 200 + frame give an SMA(3) of
     /// (200 + close) / 3, which an SMA(1) repeats; the last of ten frames has a close of 209.
     #[test]
@@ -2168,15 +2169,24 @@ pub(super) mod tests {
         };
         chart.set_indicator_source(child, source).unwrap();
         let ctx = egui::Context::default();
-        for frame in 0..10 {
-            shapes(&ctx, &mut chart, frame as f64, Vec::new());
+        let mut time = 0.0;
+        let mut run = |chart: &mut Chart| {
+            shapes(&ctx, chart, time, Vec::new());
+            time = chart
+                .next_refresh
+                .iter()
+                .copied()
+                .fold(time + 1.0, f64::max);
+        };
+        for _ in 0..10 {
+            run(&mut chart);
         }
         let sink = feed.sink(Timeframe::Hour1);
         let hour: DateTime<chrono::Utc> = "2024-03-15T14:00:00Z".parse().unwrap();
         for frame in 0..10 {
             let close = 200.0 + frame as f64;
             sink.push_bar(Bar::new(hour, 100.0, close, 100.0, close, 1.0));
-            shapes(&ctx, &mut chart, 10.0 + frame as f64, Vec::new());
+            run(&mut chart);
         }
         let (_, study) = chart.indicators().find(|(id, _)| *id == child).unwrap();
         let value = study.values().value(0, study.values().len() - 1);

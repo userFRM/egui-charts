@@ -65,12 +65,6 @@ pub(crate) fn hit_profile(
             && [y_at(va_low), y_at(va_high + 1)]
                 .into_iter()
                 .any(|y| (point.y - y).abs() <= tolerance);
-        let row_share =
-            if crate::painting::volume_profile::measures_view(profile, plot.right_aligned) {
-                1.0
-            } else {
-                0.9
-            };
         let on_row = profile.volume.iter().enumerate().any(|(row, &volume)| {
             let amount = if plot.config.display == ProfileDisplay::Delta {
                 (profile.up[row] - profile.down[row]).abs()
@@ -80,7 +74,8 @@ pub(crate) fn hit_profile(
             if amount <= 0.0 {
                 return false;
             }
-            let width = (amount / profile.volume[poc]) as f32 * (span.end - span.start) * row_share;
+            let width =
+                (amount / profile.volume[poc]) as f32 * (span.end - span.start) * plot.width;
             let left = if plot.right_aligned {
                 span.end - width
             } else {

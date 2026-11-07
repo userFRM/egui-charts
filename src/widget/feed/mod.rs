@@ -683,11 +683,11 @@ impl Chart {
     }
 
     /// Draws the trades the feed sends as bubbles, grouped and coloured as the config says,
-    /// from the next frame, or stops with `None`. By default, nearby bars and price levels merge
-    /// when crowded, and diameters adapt to the available screen space. A chart without a feed
-    /// holds no trades and draws none, and Renko, Kagi, line break, point and figure and range
-    /// charts draw none, since their x axis is not time. Sums every held trade again: call it
-    /// when the settings change, not every frame.
+    /// from the next frame, or stops with `None`. By default, at most the 20 largest visible
+    /// trades that stand out draw, one bubble each. A chart without a feed holds no trades and
+    /// draws none, and Renko, Kagi, line break, point and figure and range charts draw none, since
+    /// their x axis is not time. Sums every held trade again: call it when the settings change,
+    /// not every frame.
     pub fn set_volume_bubbles(&mut self, config: Option<VolumeBubblesConfig>) {
         if let Some(link) = &mut self.feed_link {
             if let Some(config) = &config {
