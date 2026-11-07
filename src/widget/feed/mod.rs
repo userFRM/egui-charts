@@ -212,17 +212,19 @@ impl FeedLink {
         };
         let trades = || held().take_while(|trade| before.is_none_or(|time| trade.ts < time));
         // Paged executions have their own anchor; the sink supplies live allocations below.
-        if !trade_based || self.trades.lost_until().is_none() || self.trades.live().next().is_none()
-        {
-            if trade_based && !history.is_empty() {
-                flow.push_history(&held().collect::<Vec<_>>(), history, before);
-            } else {
-                for trade in trades() {
-                    let _ = flow.push(trade);
-                }
+        let lost = self.trades.lost_until();
+        if trade_based && !history.is_empty() {
+            // An execution at the loss's time may have lost the one that opened its bar.
+            let paged: Vec<_> = held()
+                .filter(|trade| lost.is_none_or(|lost| trade.ts > lost))
+                .collect();
+            flow.push_history(&paged, history, before);
+        } else if !trade_based || lost.is_none() || self.trades.live().next().is_none() {
+            for trade in trades() {
+                let _ = flow.push(trade);
             }
         }
-        if let Some(lost) = self.trades.lost_until() {
+        if let Some(lost) = lost {
             flow.drop_through(lost, trades());
         }
         let first = self.unconfirmed_start().or_else(|| {

@@ -1379,6 +1379,76 @@ fn paged_trades_without_history_leave_their_first_bar_incomplete() {
     assert_eq!(flow.complete_from(), Some(start + TimeDelta::seconds(2)));
 }
 
+/// Hand counts on two-trade bars of buys at 100, one a second: 1 and 2 (volume 3), 3 and 4 (7),
+/// 5 and 6 (11), and the live 7 and 8 (15). A store of seven leaves out the buy of 1 in both
+/// orders, so the first bar draws a candle and the others keep their cells, however many pages
+/// rebuild the footprint afterwards.
+#[test]
+fn history_page_after_a_store_loss_keeps_the_matched_cells() {
+    use crate::model::OrderSide::Buy;
+    let timeframe: Timeframe = "2t".parse().unwrap();
+    let start = bars(1)[0].time;
+    let buy = |i: i64| {
+        Tick::new(
+            start + TimeDelta::seconds(i),
+            100.0,
+            (i + 1) as f64,
+            Some(Buy),
+        )
+    };
+    let tape: Vec<_> = (0..6).map(buy).collect();
+    let candles =
+        crate::data::aggregate_trades_with_tick_size(&tape, timeframe, Some(1.0)).unwrap();
+    let volumes = |chart: &Chart| -> Vec<Option<f64>> {
+        let flow = (chart.feed_link.as_ref().unwrap().footprint.as_ref()).unwrap();
+        let complete = flow.complete_from();
+        (chart.bars(SeriesId::MAIN).iter())
+            .map(|bar| {
+                flow.bar_at(bar.time)
+                    .filter(|_| complete.is_some_and(|from| bar.time >= from))
+                    .map(|cells| cells.volume())
+            })
+            .collect()
+    };
+    for (label, live_first) in [
+        ("history page after the loss", false),
+        ("trade page that overflows the store", true),
+    ] {
+        let feed = Arc::new(Script::default());
+        let mut chart = fed(&feed, Some("A"));
+        chart.set_timeframe(timeframe);
+        chart.set_chart_type(ChartType::VolumeFootprint);
+        let mut frames = Frames::new();
+        frames.run(&mut chart);
+        feed.resolve()
+            .send(Ok(Instrument::new("A").with_tick_size(1.0)));
+        feed.page().send(page(candles.clone(), false));
+        frames.run(&mut chart);
+        frames.run(&mut chart);
+        chart.feed_link.as_mut().unwrap().trades = Trades::new(7);
+        let sink = feed.sink();
+        let live = |chart: &mut Chart, frames: &mut Frames| {
+            for i in 6..8 {
+                sink.push_tick(buy(i));
+                frames.run(chart);
+            }
+        };
+        if live_first {
+            live(&mut chart, &mut frames);
+        }
+        (feed.trades.lock().unwrap().remove(0)).send(Ok(TradePage::new(tape.clone(), false)));
+        frames.run(&mut chart);
+        if !live_first {
+            live(&mut chart, &mut frames);
+        }
+        let kept = vec![None, Some(7.0), Some(11.0), Some(15.0)];
+        assert_eq!(volumes(&chart), kept, "{label}");
+        feed.page().send(page(Vec::new(), true));
+        frames.run(&mut chart);
+        assert_eq!(volumes(&chart), kept, "{label}, after the empty page");
+    }
+}
+
 /// The page answering an interval change holds what traded between the two subscriptions, and
 /// repeating the retained executions does not end the scroll-back for older ones.
 #[test]
