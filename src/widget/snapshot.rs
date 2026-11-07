@@ -423,6 +423,18 @@ impl Chart {
             settings.candle_colors.show_border = style.border_visible;
             settings.candle_colors.show_wick = style.wick_visible;
         }
+        if snapshot.chart_type == crate::model::ChartType::VolumeCandles
+            && settings.chart_type_params.is_none()
+            && snapshot
+                .chart_type_params
+                .styles
+                .volume_candles
+                .is_saved_without_style()
+        {
+            // Settings saved before they named a chart type still hold the body colours.
+            settings.chart_type = snapshot.chart_type;
+            settings.chart_type_params = Some(snapshot.chart_type_params.clone());
+        }
         settings
             .apply_to_chart(self)
             .map_err(RestoreError::Settings)?;

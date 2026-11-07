@@ -533,6 +533,8 @@ fn last_value_colour_follows_the_previous_close_rule() {
         (ChartType::Candles, false, down),
         (ChartType::VolumeCandles, true, up),
         (ChartType::VolumeCandles, false, down),
+        (ChartType::Bars, true, up),
+        (ChartType::Bars, false, down),
     ] {
         for source in [PriceLineSource::LastBar, PriceLineSource::LastVisible] {
             let ctx = egui::Context::default();
@@ -548,6 +550,7 @@ fn last_value_colour_follows_the_previous_close_rule() {
             params.styles.volume_candles.body_down = down;
             params.styles.candles.color_by_previous_close = by_previous_close;
             params.styles.volume_candles.color_by_previous_close = by_previous_close;
+            params.styles.bars.color_by_previous_close = by_previous_close;
             chart.set_chart_type_params(params);
             chart.main_series_style.price_line_source = source;
             frame(&ctx, &mut chart, 0.0, vec![]);
@@ -568,9 +571,13 @@ fn last_value_colour_follows_the_previous_close_rule() {
                 }
                 _ => None,
             });
+            // The open and close ticks of an OHLC bar are horizontal too, and start at its x.
+            let bar_xs = [0.0, 1.0].map(|index| chart.index_to_x(index));
             let line = painted.iter().find_map(|shape| match shape {
                 egui::Shape::LineSegment { points, stroke }
-                    if points[0].y == points[1].y && [up, down].contains(&stroke.color) =>
+                    if points[0].y == points[1].y
+                        && [up, down].contains(&stroke.color)
+                        && !points.iter().any(|point| bar_xs.contains(&Some(point.x))) =>
                 {
                     Some(stroke.color)
                 }
@@ -1133,6 +1140,123 @@ fn added_series_pulses_run_independently_and_stop_repainting() {
         }
         assert!(!ctx.has_requested_repaint());
     }
+}
+
+/// Added volume candles draw a border only at a positive series border width, and at that
+/// width, as added candles do; translucent colours show the border over the body. Volume candles
+/// of the main series keep their Borders switch and their 1.5 point border whatever the
+/// configuration's candle border width holds.
+#[test]
+fn added_volume_candles_draw_borders_at_their_series_width() {
+    let up = Color32::from_rgba_unmultiplied(0, 150, 136, 128);
+    let down = Color32::from_rgba_unmultiplied(242, 54, 69, 128);
+    let widths = |painted: &[egui::Shape]| -> Vec<f32> {
+        painted
+            .iter()
+            .filter_map(|shape| match shape {
+                egui::Shape::Rect(r)
+                    if r.stroke.width > 0.0 && [up, down].contains(&r.stroke.color) =>
+                {
+                    Some(r.stroke.width)
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    // Rising from 10 to 20 and falling from 20 to 10.
+    let mut data = bars(&[20.0, 10.0]);
+    for bar in &mut data {
+        bar.open = 30.0 - bar.close;
+        bar.high = 25.0;
+        bar.low = 5.0;
+    }
+    let ctx = egui::Context::default();
+    let mut chart = Chart::new(BarData::from_bars(bars(&[10.0, 20.0])));
+    let id = chart.add_series(SeriesOptions {
+        chart_type: ChartType::VolumeCandles,
+        up_color: up,
+        down_color: down,
+        ..Default::default()
+    });
+    chart.set_data(id, data.clone());
+    for (at, (width, expected)) in [
+        (0.0, vec![]),
+        (-1.0, vec![]),
+        (f32::NAN, vec![]),
+        (f32::INFINITY, vec![]),
+        (2.0, vec![2.0, 2.0]),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut options = chart.series().next().unwrap().1.clone();
+        options.candle_border_width = width;
+        assert!(chart.set_series_options(id, options));
+        let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, at as f64 * 0.1, vec![]);
+        assert_eq!(widths(&painted), expected, "width {width}");
+    }
+
+    let mut main = Chart::new(BarData::from_bars(data));
+    main.set_chart_type(ChartType::VolumeCandles);
+    main.config_mut().show_volume = false;
+    let mut params = main.chart_type_params().clone();
+    let style = &mut params.styles.volume_candles;
+    (style.border_up, style.border_down) = (up, down);
+    main.set_chart_type_params(params);
+    for (at, width) in [0.0, 3.0].into_iter().enumerate() {
+        main.config_mut().candle_border_width = width;
+        let painted = crate::widget::test_frames::shapes(&ctx, &mut main, at as f64 * 0.1, vec![]);
+        assert_eq!(widths(&painted), [1.5, 1.5], "main width {width}");
+    }
+}
+
+/// A positive series border width sets the border of added hollow candles; at zero they keep
+/// their 1.5 point border in the bar's own border colour, as a rising hollow candle is drawn by its
+/// border alone. Hollow candles of the main series keep 1.5 points whatever the configuration's
+/// candle border width holds.
+#[test]
+fn added_hollow_candles_take_the_series_border_width() {
+    use crate::model::BarColors;
+    let border = Color32::from_rgb(3, 4, 102);
+    let widths = |painted: &[egui::Shape]| -> Vec<f32> {
+        painted
+            .iter()
+            .filter_map(|shape| match shape {
+                egui::Shape::Rect(r) if r.stroke.color == border => Some(r.stroke.width),
+                _ => None,
+            })
+            .collect()
+    };
+    // Both rise, so that both are outlined.
+    let mut data = bars(&[10.0, 20.0]);
+    for bar in &mut data {
+        (bar.open, bar.high, bar.low) = (bar.close - 5.0, bar.close + 1.0, bar.close - 6.0);
+        bar.colors = Some(Box::new(BarColors {
+            border: Some(border),
+            ..Default::default()
+        }));
+    }
+    let ctx = egui::Context::default();
+    let mut chart = Chart::new(BarData::from_bars(bars(&[10.0, 20.0])));
+    let id = chart.add_series(SeriesOptions {
+        chart_type: ChartType::HollowCandles,
+        ..Default::default()
+    });
+    chart.set_data(id, data.clone());
+    for (at, (width, expected)) in [(0.0, 1.5), (3.0, 3.0)].into_iter().enumerate() {
+        let mut options = chart.series().next().unwrap().1.clone();
+        options.candle_border_width = width;
+        assert!(chart.set_series_options(id, options));
+        let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, at as f64 * 0.1, vec![]);
+        assert_eq!(widths(&painted), [expected, expected], "width {width}");
+    }
+
+    let mut main = Chart::new(BarData::from_bars(data));
+    main.set_chart_type(ChartType::HollowCandles);
+    main.config_mut().show_volume = false;
+    main.config_mut().candle_border_width = 3.0;
+    let painted = crate::widget::test_frames::shapes(&ctx, &mut main, 0.0, vec![]);
+    assert_eq!(widths(&painted), [1.5, 1.5]);
 }
 
 /// Added candles keep independent body, wick and inside-border colours in either pane.
