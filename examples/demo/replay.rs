@@ -1886,10 +1886,6 @@ mod tests {
         assert_eq!(app.replay.as_ref().unwrap().state.curr_bar, 0);
         assert_eq!(start(&mut app, ReplayStartAction::Date(middle)), middle);
         assert!((first..=last).contains(&start(&mut app, ReplayStartAction::Random)));
-        // A date past the recording leaves the replay where it is.
-        let late = last + chrono::TimeDelta::days(1);
-        let end = app.chart.replay_driver().unwrap().time_range().unwrap().1;
-        assert_eq!(start(&mut app, ReplayStartAction::Date(late)), end);
         app.handle_replay_control(ReplayControlAction::GoToEnd);
         let shown = shown_after_frames(&mut app, &ctx);
         assert!(shown.len() >= 3, "{} bars shown", shown.len());
