@@ -191,17 +191,10 @@ fn scenes() -> Vec<Scene> {
             vec![
                 ClearStudies,
                 Interval(Timeframe::Min5),
-                Study(|| {
-                    let mut profile = studies::VolProfileSession::default();
-                    profile.set_colors(vec![
-                        egui::Color32::from_rgb(41, 98, 255),
-                        egui::Color32::from_rgba_unmultiplied(38, 166, 154, 65),
-                        egui::Color32::from_rgba_unmultiplied(239, 83, 80, 65),
-                    ]);
-                    Box::new(profile)
-                }),
+                Study(study::<studies::VolProfileSession>),
                 Study(study::<studies::EMA>),
-                Visible(72),
+                // Wide enough bars that the session high's wick clears the profile's data source note.
+                Visible(60),
             ],
         ),
     ]
@@ -275,6 +268,29 @@ fn chart_rect(ctx: &Context) -> Rect {
     r
 }
 
+/// Runs frames until the active chart's feed has delivered its history. Each pane of a layout simulates
+/// its own feed in batches per frame, so a fixed number of frames would stop it partway through the day.
+fn wait_for_history(h: &mut Harness<'static, pointer::CaptureApp>) {
+    let ready = |h: &Harness<'_, pointer::CaptureApp>| {
+        h.state()
+            .chart
+            .feed_state(SeriesId::MAIN)
+            .is_some_and(|state| {
+                state.status == Some(egui_charts::data::FeedStatus::Live) && !state.loading_history
+            })
+    };
+    for _ in 0..2_000 {
+        if ready(h) {
+            break;
+        }
+        h.step();
+    }
+    assert!(
+        ready(h),
+        "sample history must finish before scripting a scene"
+    );
+}
+
 fn prepare(
     scene: &Scene,
     light: bool,
@@ -315,28 +331,8 @@ fn prepare(
             }
         });
     h.run_steps(3);
-    if animated {
-        // Replay and drawings must start from the completed history, including retained executions.
-        let ready = |h: &Harness<'_, pointer::CaptureApp>| {
-            h.state()
-                .chart
-                .feed_state(SeriesId::MAIN)
-                .is_some_and(|state| {
-                    state.status == Some(egui_charts::data::FeedStatus::Live)
-                        && !state.loading_history
-                })
-        };
-        for _ in 0..2_000 {
-            if ready(&h) {
-                break;
-            }
-            h.step();
-        }
-        assert!(
-            ready(&h),
-            "sample history must finish before scripting a scene"
-        );
-    }
+    // Replay and drawings must start from the completed history, including retained executions.
+    wait_for_history(&mut h);
     let ctx = h.ctx.clone();
     if !animated {
         h.state_mut().toggle_panel(RightBarIcon::Notifications);
@@ -369,6 +365,7 @@ fn prepare(
     for step in &scene.steps {
         apply(h.state_mut(), &ctx, step);
         h.run_steps(4);
+        wait_for_history(&mut h);
         match step {
             Step::Position | Step::Limit => {
                 let price = h.state().chart.bars(SeriesId::MAIN).last().unwrap().close;
@@ -380,12 +377,12 @@ fn prepare(
                     if position {
                         OrderType::Market
                     } else {
-                        OrderType::Limit((price * 100.0).round() / 100.0 - 1.8)
+                        OrderType::Limit((price * 100.0).round() / 100.0 - 2.3)
                     },
                 );
                 if position {
                     order.take_profit = Some((price * 100.0).round() / 100.0 + 4.5);
-                    order.stop_loss = Some((price * 100.0).round() / 100.0 - 2.5);
+                    order.stop_loss = Some((price * 100.0).round() / 100.0 - 3.6);
                 }
                 h.state_mut().trading.open_ticket(order);
                 h.run_steps(5);
@@ -405,7 +402,7 @@ fn prepare(
                     SAMPLE,
                     OrderSide::Buy,
                     25.0,
-                    OrderType::Limit((price * 100.0).round() / 100.0 - 0.6),
+                    OrderType::Limit((price * 100.0).round() / 100.0 - 1.6),
                 );
                 order.take_profit = Some((price * 100.0).round() / 100.0 + 1.2);
                 order.stop_loss = Some((price * 100.0).round() / 100.0 - 3.7);
@@ -423,8 +420,8 @@ fn prepare(
                         .advance_sample_to(start + chrono::Duration::minutes(minute));
                     h.run_steps(2);
                 }
-                // The sample feed prints about 110 trades a minute with a heavy tail of sizes, so the
-                // default threshold still draws a bubble every few seconds; keep the largest 0.7%.
+                // The sample feed prints about 110 trades a minute with a heavy tail of sizes. Keep
+                // the largest 0.7% by a fixed size, so a bubble stays while its trade is in view.
                 h.state_mut().chart.set_volume_bubbles(Some(
                     egui_charts::chart::overlays::VolumeBubblesConfig {
                         min_size_filter: Some(120.0),
@@ -473,6 +470,21 @@ fn prepare(
         h.state_mut().activate_chart_slot(0);
         h.run_steps(5);
     }
+    if matches!(scene.name, "layouts" | "chart-types") {
+        let now: chrono::DateTime<chrono::Utc> = "2026-10-27T19:29:50Z".parse().unwrap();
+        for slot in 0..4 {
+            h.state_mut().activate_chart_slot(slot);
+            let chart = &h.state().chart;
+            let last = chart.bars(SeriesId::MAIN).last().unwrap().time;
+            let interval = chart.timeframe().unwrap().duration();
+            assert!(
+                last <= now && now < last + interval,
+                "{} pane {slot} ends at {last}, before the sample clock",
+                scene.name
+            );
+        }
+        h.state_mut().activate_chart_slot(0);
+    }
     if !matches!(scene.name, "layouts" | "chart-types" | "tour") {
         let count = scene.steps.iter().rev().find_map(|s| {
             if let Step::Visible(n) = s {
@@ -495,6 +507,15 @@ fn prepare(
     }
     if matches!(scene.name, "footprint" | "tour") {
         h.state_mut().chart.scroll_to_position(0.5, false);
+    }
+    if matches!(scene.name, "footprint" | "profile") {
+        // Keep the tallest columns and the highest profile rows below the legend.
+        h.state_mut()
+            .chart
+            .price_scale_mut()
+            .options_mut()
+            .scale_margins
+            .top = 0.16;
     }
     // Let feed replies and pane sizes settle before rendering.
     h.run_steps(10);

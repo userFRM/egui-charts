@@ -16,7 +16,7 @@ The tour records 1280×720 logical points at 2 pixels per point, producing 2560�
 
 `regenerate.sh` contains the exact encoding commands. The recorded encoder versions are FFmpeg 6.1.1 and libwebp 1.6.0 (`cwebp` and `img2webp`). Animated WebP uses alternating 33, 33 and 34 millisecond frame delays, exactly 30 frames per second before identical holds are coalesced. The site receives H.264 High and AV1 video at 1920×1080, 60 fps, with 4:2:0 pixels; the MP4 stores its metadata before its media data. The poster retains 2560×1440 pixels. The README receives separate dark and light recordings at 1280×720, 30 fps, and 1280×800 gallery loops at 30 fps. The light recording runs the same actions with the demo's light theme.
 
-The other README images are stills, converted to lossless WebP with the command in the header of `main.rs`:
+The other README images are stills. Every scene waits for the active chart's history after each step, so each pane of a layout ends at the same sample time, and the layout stills assert it. They are converted to lossless WebP with the command in the header of `main.rs`:
 
 ```sh
 cargo run --release --manifest-path docs/capture/Cargo.toml -- /tmp/egui-charts-stills

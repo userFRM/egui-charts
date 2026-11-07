@@ -13,7 +13,7 @@ use egui::{Align2, Color32, CornerRadius, FontFamily, FontId, Painter, Pos2, Rec
 pub(super) use labels::semibold;
 pub(crate) use labels::{price_marks, render_time_grid, tick_decimals, time_axis_marks};
 pub use labels::{render_price_labels, render_price_labels_at_pos, render_time_labels};
-pub(crate) use study_scale::{render_study_axis, study_mapping};
+pub(crate) use study_scale::{fit_study_mapping, render_study_axis, study_mapping};
 
 /// Gap between the plot's right edge and the start of the price axis labels.
 pub(crate) const PRICE_LABEL_GAP: f32 = 8.0;

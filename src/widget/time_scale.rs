@@ -33,7 +33,8 @@ impl Chart {
             .state
             .shows_fallback()
             .then(|| self.state.shown().last().map(|bar| bar.time))
-            .flatten();
+            .flatten()
+            .map(|tail| (tail, self.right_edge()));
         self.state.set_fallback_series(
             self.price_series
                 .iter()
@@ -53,8 +54,8 @@ impl Chart {
                 )
         });
         self.state.time_scale_mut().set_content_range(range);
-        if let Some(tail) = tail {
-            self.added_slots_arrived(tail);
+        if let Some((tail, right_edge)) = tail {
+            self.added_slots_arrived(tail, right_edge);
         }
     }
 

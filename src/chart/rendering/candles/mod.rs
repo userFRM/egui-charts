@@ -650,30 +650,51 @@ mod tests {
                 .iter()
                 .filter(|s| matches!(&s.shape, Shape::Rect(r) if r.fill == single_print))
                 .count();
+            let texts = |wanted: &str| {
+                output
+                    .shapes
+                    .iter()
+                    .filter(|s| matches!(&s.shape, Shape::Text(t) if t.galley.text() == wanted))
+                    .count()
+            };
+            let rotation = (texts("Rotation"), texts("+14"));
             output.drop_without_applying_deltas();
             (
                 letters.into_iter().collect::<String>(),
                 captions,
                 highlights,
+                rotation,
             )
         };
 
-        // Settings saved before the option existed keep the blocks they were saved with.
+        // Settings saved before the options existed keep the blocks and midpoint they were saved
+        // with.
         let saved = serde_json::from_str::<ChartTypeParams>("{}").unwrap();
-        assert_eq!(draw(saved.clone()), (String::new(), 0, 0));
+        assert_eq!(draw(saved.clone()), (String::new(), 1, 0, (0, 0)));
+        // A new chart letters its blocks and leaves the midpoint off.
+        assert_eq!(
+            draw(ChartTypeParams::default()),
+            ("ABCDEFGH".to_owned(), 0, 0, (0, 0))
+        );
         // Eight half-hour bars of one session are the periods A to H.
         let lettered = ChartTypeParams {
             tpo_letters: true,
             ..saved.clone()
         };
         assert_eq!(draw(lettered).0, "ABCDEFGH");
-        let (_, captions, highlights) = draw(ChartTypeParams {
+        let (_, captions, highlights, _) = draw(ChartTypeParams {
             tpo_midpoint: true,
             tpo_single_prints: true,
-            ..saved
+            ..saved.clone()
         });
         assert_eq!(captions, 1);
         assert!(highlights > 0);
+        // Each of the seven periods after the first rises a row at both ends.
+        let statistics = draw(ChartTypeParams {
+            tpo_statistics: true,
+            ..saved
+        });
+        assert_eq!(statistics.3, (1, 1));
     }
 
     #[test]
