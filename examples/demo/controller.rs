@@ -111,23 +111,57 @@ use crate::sampledata::{
     DemoSymbol, SAMPLE_LOGO, SAMPLE_LOGO_SVG, us_equity_session, visible_bars_for_range,
 };
 
+/// The legend caption of a study: what identifies it at a glance, leaving out flags, colours,
+/// free text, zero offsets and values that only make sense next to their labels.
 fn study_input_summary(study: &dyn egui_charts::studies::Indicator) -> String {
-    study
-        .inputs()
+    use egui_charts::studies::{InputKind, InputValue, StudySource};
+    let price = |source: &StudySource| match source {
+        StudySource::Price(price) => Some(format!("{price:?}").to_lowercase()),
+        // The caption has no name for another study's output.
+        _ => None,
+    };
+    let source = study.source();
+    let inputs = study.inputs();
+    let mut caption: Vec<_> = inputs
         .iter()
-        .map(|input| match (&input.kind, &input.value) {
-            (
-                egui_charts::studies::InputKind::Choice(choices),
-                egui_charts::studies::InputValue::Choice(index),
-            ) => choices.get(*index).cloned().unwrap_or_default(),
-            (_, egui_charts::studies::InputValue::Length(value)) => value.to_string(),
-            (_, egui_charts::studies::InputValue::Integer(value)) => value.to_string(),
-            (_, egui_charts::studies::InputValue::Number(value)) => value.to_string(),
-            (_, egui_charts::studies::InputValue::Toggle(value)) => value.to_string(),
-            _ => String::new(),
+        // List sizes and minutes after midnight mean nothing alone; the study's source goes below.
+        .filter(|input| {
+            input.is_shown(&inputs)
+                && !matches!(input.id.as_str(), "band_count" | "event_count")
+                && !matches!(input.kind, InputKind::Length(0, 1439))
+                && (source.is_none() || input.id != "source")
         })
-        .collect::<Vec<_>>()
-        .join(" ")
+        .filter_map(|input| match (&input.kind, &input.value) {
+            (InputKind::Choice(choices), InputValue::Choice(index)) => choices.get(*index).cloned(),
+            (_, InputValue::Length(value)) => (*value != 0).then(|| value.to_string()),
+            (_, InputValue::Integer(value)) => (*value != 0).then(|| value.to_string()),
+            // Single precision reads short and turns an open upper limit into infinity.
+            (_, InputValue::Number(value)) => {
+                let value = *value as f32;
+                (value != 0.0 && value.is_finite()).then(|| value.to_string())
+            }
+            (_, InputValue::Source(value)) => price(value),
+            (_, InputValue::Timeframe(Some(value))) => Some(value.to_string()),
+            (_, InputValue::Symbol(value)) if !value.is_empty() => Some(value.clone()),
+            _ => None,
+        })
+        .collect();
+    // An anchor or session choice identifies the study, which names its price only once edited.
+    let anchored = matches!(
+        inputs.first().map(|input| &input.kind),
+        Some(InputKind::Choice(_))
+    );
+    let edited = inputs
+        .iter()
+        .any(|input| matches!(input.kind, InputKind::Source) && input.value != input.default);
+    if let Some(source) = source
+        .as_ref()
+        .filter(|_| !anchored || edited)
+        .and_then(price)
+    {
+        caption.insert(caption.len().min(1), source);
+    }
+    caption.join(" ")
 }
 
 /// Object-tree ids for studies and added series are offset into a high range so a single
@@ -1005,8 +1039,13 @@ impl DemoApp {
         {
             self.symbol_search.record_symbol(&row);
         }
+        let symbol = DemoSymbol::find(symbol).symbol;
+        // A reload would clear the bars and the heatmap and stop a replay of the shown symbol.
+        if symbol == self.chart.symbol() {
+            return;
+        }
         self.user_action(|app| {
-            app.chart.set_symbol(DemoSymbol::find(symbol).symbol);
+            app.chart.set_symbol(symbol);
             app.sync_symbol();
             app.regenerate_bars();
             // A symbol change invalidates an in-flight replay.
@@ -9628,5 +9667,89 @@ mod tests {
             app.alerts.poll(&ctx, &mut app.toasts);
             assert_eq!(app.alerts.log().len(), 2, "period {period}");
         }
+    }
+
+    /// Selecting the shown symbol changes nothing; selecting another still loads it.
+    #[test]
+    fn reselecting_the_active_symbol_keeps_its_bars() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        settle(&mut app, &ctx);
+        app.live.set_paused(true);
+        let before = app.chart.bars(SeriesId::MAIN).to_vec();
+        assert!(!before.is_empty());
+        let symbol = app.chart.symbol().to_owned();
+        app.switch_symbol(&symbol);
+        for frame in 0..3 {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| eframe::App::ui(&mut *app, ui, &mut eframe::Frame::_new_kittest()),
+            )
+            .drop_without_applying_deltas();
+            let now = app.chart.bars(SeriesId::MAIN);
+            assert_eq!(
+                (now.len(), now.last().map(|bar| bar.time)),
+                (before.len(), before.last().map(|bar| bar.time)),
+                "frame {frame}"
+            );
+        }
+        assert!(!app.live.loading(), "the feed restarted its bootstrap");
+        app.start_replay_at(before.len() / 2);
+        app.switch_symbol(&symbol);
+        assert!(app.replay.is_some(), "the replay of the shown symbol stops");
+        app.switch_symbol("BTCUSD");
+        assert!(app.replay.is_none(), "another symbol stops the replay");
+        settle(&mut app, &ctx);
+        assert_eq!(app.chart.symbol(), "BTCUSD");
+        assert!(!app.chart.bars(SeriesId::MAIN).is_empty());
+    }
+
+    /// Captions name what identifies a study: no flags, empty fields, list sizes or open limits.
+    #[test]
+    fn legend_inputs_leave_out_flags() {
+        let factory = egui_charts::studies::IndicatorFactory::new();
+        let caption =
+            |name: &str| super::study_input_summary(factory.create(name).unwrap().as_ref());
+        for (name, expected) in [
+            ("RSI", "14 close SMA 14"),
+            ("VWAP", "Session 1"),
+            ("Vol Profile Session", "24 70 Up / down"),
+            ("Time Weighted Average Price", "Session"),
+            ("Trend Strength Index", "14 close"),
+            ("Higher Interval Candles", "1D"),
+            ("Accelerator Oscillator", "hl2"),
+        ] {
+            assert_eq!(caption(name), expected);
+        }
+        for name in factory.list() {
+            let caption = caption(&name);
+            assert_eq!(caption.trim(), caption, "{name}");
+            assert!(
+                !caption.contains("  ")
+                    && !caption.contains("true")
+                    && !caption.contains("false")
+                    && !caption.contains("00000"),
+                "{name}: {caption}"
+            );
+        }
+        let mut chart = Chart::new(egui_charts::model::BarData::new());
+        let vwap = chart.add_indicator(factory.create("VWAP").unwrap());
+        let study = chart.indicator_mut(vwap).unwrap();
+        assert_eq!(super::study_input_summary(study), "Session 1");
+        study
+            .set_input(
+                "source",
+                egui_charts::studies::InputValue::Source(egui_charts::studies::StudySource::Price(
+                    egui_charts::model::PriceSource::Close,
+                )),
+            )
+            .unwrap();
+        assert_eq!(super::study_input_summary(study), "Session close 1");
     }
 }
