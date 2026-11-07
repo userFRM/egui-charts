@@ -98,7 +98,7 @@ pub(crate) mod interaction;
 pub(crate) mod keyboard;
 mod layout;
 mod navigation;
-mod palette;
+pub(crate) mod palette;
 pub(crate) mod pan_zoom;
 mod pane;
 #[doc(inline)]

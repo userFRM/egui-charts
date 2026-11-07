@@ -16,9 +16,7 @@ impl Chart {
         }
         let new = ChartConfig::default().with_theme(theme);
         follow_palette(&mut self.config, &old, &new);
-        self.chart_type_params
-            .styles
-            .follow_candle_colors(&old, &new);
+        follow_candle_colors(&mut self.chart_type_params.styles, &old, &new);
         self.inherited_theme = Some(theme.clone());
     }
 
@@ -51,51 +49,53 @@ impl Chart {
     }
 }
 
-impl ChartTypeStyles {
-    /// Replaces every colour of the styles painting from their own colours that is equal to a
-    /// candle colour of one of the `old` palettes by the one of `new`; the others were edited and
-    /// stay.
-    pub(crate) fn follow_candle_colors(&mut self, old: &[ChartConfig], new: &ChartConfig) {
-        // Volume candles paint from their own style, which follows like the chart's candle colours.
-        let style = &mut self.volume_candles;
-        for color in [&mut style.body_up, &mut style.border_up, &mut style.wick_up] {
-            if old.iter().any(|old| *color == old.bullish_color) {
-                *color = new.bullish_color;
-            }
+/// Replaces every colour of the styles painting from their own colours that is equal to a
+/// candle colour of one of the `old` palettes by the one of `new`; the others were edited and
+/// stay.
+pub(crate) fn follow_candle_colors(
+    styles: &mut ChartTypeStyles,
+    old: &[ChartConfig],
+    new: &ChartConfig,
+) {
+    // Volume candles paint from their own style, which follows like the chart's candle colours.
+    let style = &mut styles.volume_candles;
+    for color in [&mut style.body_up, &mut style.border_up, &mut style.wick_up] {
+        if old.iter().any(|old| *color == old.bullish_color) {
+            *color = new.bullish_color;
         }
-        for color in [
-            &mut style.body_down,
-            &mut style.border_down,
-            &mut style.wick_down,
-        ] {
-            if old.iter().any(|old| *color == old.bearish_color) {
-                *color = new.bearish_color;
-            }
+    }
+    for color in [
+        &mut style.body_down,
+        &mut style.border_down,
+        &mut style.wick_down,
+    ] {
+        if old.iter().any(|old| *color == old.bearish_color) {
+            *color = new.bearish_color;
         }
-        // So do the HLC area's high and low lines and fills; a fill keeps its opacity.
-        let style = &mut self.hlc_area;
-        for (line, fill, side) in [
-            (
-                &mut style.high_line.color,
-                &mut style.high_to_close_fill,
-                (|config| config.bullish_color) as fn(&ChartConfig) -> egui::Color32,
-            ),
-            (
-                &mut style.low_line.color,
-                &mut style.close_to_low_fill,
-                |config| config.bearish_color,
-            ),
-        ] {
-            if old.iter().any(|old| *line == side(old)) {
-                *line = side(new);
-            }
-            let alpha = fill.a();
-            if old
-                .iter()
-                .any(|old| *fill == HlcAreaStyle::fill_tint(side(old), alpha))
-            {
-                *fill = HlcAreaStyle::fill_tint(side(new), alpha);
-            }
+    }
+    // So do the HLC area's high and low lines and fills; a fill keeps its opacity.
+    let style = &mut styles.hlc_area;
+    for (line, fill, side) in [
+        (
+            &mut style.high_line.color,
+            &mut style.high_to_close_fill,
+            (|config| config.bullish_color) as fn(&ChartConfig) -> egui::Color32,
+        ),
+        (
+            &mut style.low_line.color,
+            &mut style.close_to_low_fill,
+            |config| config.bearish_color,
+        ),
+    ] {
+        if old.iter().any(|old| *line == side(old)) {
+            *line = side(new);
+        }
+        let alpha = fill.a();
+        if old
+            .iter()
+            .any(|old| *fill == HlcAreaStyle::fill_tint(side(old), alpha))
+        {
+            *fill = HlcAreaStyle::fill_tint(side(new), alpha);
         }
     }
 }

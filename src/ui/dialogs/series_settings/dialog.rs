@@ -166,7 +166,8 @@ impl SeriesSettingsDialog {
                         ..Default::default()
                     };
                     // The theme does not change on Ok, so the chart will not follow it afterwards.
-                    self.settings.chart_type_params.styles.follow_candle_colors(
+                    crate::widget::palette::follow_candle_colors(
+                        &mut self.settings.chart_type_params.styles,
                         &[ChartConfig::default()],
                         &ChartConfig::default().with_theme(&theme),
                     );
