@@ -1028,6 +1028,10 @@ fn draw_session_profile(
     }
 
     if config.show_statistics {
+        // The next session's captions sit in the strip that ends this session's room.
+        let captions =
+            labels && (config.show_poc || config.show_value_area || config.show_midpoint);
+        let room = if captions { room - LABEL_ROOM_PX } else { room };
         draw_statistics(painter, price_rect, coords, profile, anchor_x, room);
     }
 }
@@ -2626,6 +2630,131 @@ mod tests {
                 .iter()
                 .any(|s| matches!(&s.shape, Shape::Text(t) if t.galley.text() == "Rotation"));
             assert_eq!(painted, drawn, "anchor {anchor}, room {room}");
+        }
+    }
+
+    #[test]
+    fn statistics_stay_clear_of_the_next_session_captions() {
+        // Two UTC days of eight half-hour bars, the second trading 11 lower, so its VAH caption
+        // falls at the height of the first day's table.
+        let bars: Vec<_> = [0.0, -11.0]
+            .into_iter()
+            .enumerate()
+            .flat_map(|(day, shift)| {
+                [
+                    (104.0, 110.0),
+                    (102.0, 108.0),
+                    (103.0, 109.0),
+                    (101.0, 107.0),
+                    (104.0, 108.0),
+                    (102.0, 106.0),
+                    (103.0, 107.0),
+                    (101.0, 105.0),
+                ]
+                .into_iter()
+                .enumerate()
+                .map(move |(i, (low, high))| {
+                    let minute = day as i64 * 1440 + i as i64 * 30;
+                    let time = chrono::DateTime::UNIX_EPOCH + Duration::minutes(minute);
+                    Bar::new(
+                        time,
+                        low + shift,
+                        high + shift,
+                        low + shift,
+                        high + shift,
+                        1.0,
+                    )
+                })
+            })
+            .collect();
+        let rect = Rect::from_x_y_ranges(0.0..=800.0, 0.0..=400.0);
+        let coords = PriceMap::new(
+            crate::scales::PriceTransform::default(),
+            crate::scales::PriceRange::new(85.0, 115.0),
+            rect.min.y,
+            rect.max.y,
+            false,
+        );
+        // (px per bar, level captions shown, table drawn if known)
+        let rows = (18..=25)
+            .map(|spacing| (spacing as f32, true, None))
+            .chain([(40.0, true, Some(true)), (23.0, false, Some(true))]);
+        for (spacing, captions, drawn) in rows {
+            let config = TPOConfig {
+                tick_size: 1.0,
+                show_statistics: true,
+                show_poc: captions,
+                show_value_area: captions,
+                ..Default::default()
+            };
+            let ctx = egui::Context::default();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(rect),
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.allocate_rect(rect, egui::Sense::hover());
+                    render_live_tpo(
+                        ui.painter(),
+                        rect,
+                        &bars,
+                        0..bars.len(),
+                        1,
+                        &coords,
+                        &config,
+                        None,
+                        &BarClock::new(Timeframe::Min30),
+                        |i, _| 50.0 + i as f32 * spacing,
+                        0.0,
+                        Color32::GREEN,
+                        Color32::RED,
+                    )
+                },
+            );
+            output.textures_delta.clear();
+            let background = ctx.active_theme().chart.bg;
+            let tables: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    Shape::Rect(r) if r.fill == background => Some(r.rect),
+                    _ => None,
+                })
+                .collect();
+            // The second day's captions, right-aligned 8 px left of its first bar.
+            let caption_right = 50.0 + 8.0 * spacing - 8.0;
+            let captions_drawn: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    Shape::Text(t)
+                        if ["POC", "VAH", "VAL", "Mid"].contains(&t.galley.text())
+                            && (t.pos.x + t.galley.size().x - caption_right).abs() < 0.5 =>
+                    {
+                        Some(Rect::from_min_size(t.pos, t.galley.size()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                captions_drawn.len(),
+                if captions { 3 } else { 0 },
+                "{spacing} px per bar"
+            );
+            for table in &tables {
+                for caption in &captions_drawn {
+                    assert!(
+                        !table.intersects(*caption),
+                        "{spacing} px per bar: table {table:?}, caption {caption:?}"
+                    );
+                }
+            }
+            if let Some(drawn) = drawn {
+                // The first day's table starts at its first bar.
+                let first = tables.iter().any(|table| table.left() == 50.0);
+                assert_eq!(first, drawn, "{spacing} px per bar, captions {captions}");
+            }
         }
     }
 }
