@@ -240,9 +240,32 @@ jobs:
       - name: Run doc tests (no default features)
         if: needs.changes.outputs.docs == 'true'
         run: cargo test --doc --no-default-features
+      # The default mirror of the hosted runners can stall a package download for minutes, so the
+      # packages stay in the Actions cache and a hit downloads nothing. Packages newer than the cached
+      # ones are downloaded as usual, and a new image starts a new entry. The retry and timeout options
+      # bound the mirror waits on a miss.
+      - name: Identify apt package cache
+        if: matrix.os == 'ubuntu-latest' && needs.changes.outputs.native == 'true'
+        id: apt
+        run: echo "key=apt-test-xvfb-xdotool-mesa-vulkan-drivers-libxkbcommon-x11-0-${ImageOS}-${ImageVersion}-v1" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v5
+        if: matrix.os == 'ubuntu-latest' && needs.changes.outputs.native == 'true'
+        id: apt-cache
+        with:
+          path: ~/apt-archives/*.deb
+          key: ${{ steps.apt.outputs.key }}
       - name: Install Linux graphics and window tools
         if: matrix.os == 'ubuntu-latest' && needs.changes.outputs.native == 'true'
-        run: sudo apt-get update && sudo apt-get install -y xvfb xdotool mesa-vulkan-drivers libxkbcommon-x11-0
+        run: |
+          mkdir -p "$HOME/apt-archives/partial"
+          sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=20
+          sudo apt-get install -y -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Dir::Cache::Archives="$HOME/apt-archives" xvfb xdotool mesa-vulkan-drivers libxkbcommon-x11-0
+          sudo chown -R "$USER" "$HOME/apt-archives"
+      - uses: actions/cache/save@v5
+        if: github.ref == 'refs/heads/main' && steps.apt-cache.outputs.cache-primary-key != '' && steps.apt-cache.outputs.cache-hit != 'true'
+        with:
+          path: ~/apt-archives/*.deb
+          key: ${{ steps.apt-cache.outputs.cache-primary-key }}
       - name: Build native demo
         if: matrix.os == 'ubuntu-latest' && needs.changes.outputs.native == 'true'
         env:
@@ -456,9 +479,29 @@ jobs:
           toolchain: 1.95.0
       - uses: Swatinem/rust-cache@v2
         if: needs.changes.outputs.rust == 'true'
+      # Same apt package cache as the test job.
+      - name: Identify apt package cache
+        if: needs.changes.outputs.rust == 'true'
+        id: apt
+        run: echo "key=apt-bare-chart-valgrind-${ImageOS}-${ImageVersion}-v1" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v5
+        if: needs.changes.outputs.rust == 'true'
+        id: apt-cache
+        with:
+          path: ~/apt-archives/*.deb
+          key: ${{ steps.apt.outputs.key }}
       - name: Install Valgrind
         if: needs.changes.outputs.rust == 'true'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends valgrind
+        run: |
+          mkdir -p "$HOME/apt-archives/partial"
+          sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=20
+          sudo apt-get install -y --no-install-recommends -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Dir::Cache::Archives="$HOME/apt-archives" valgrind
+          sudo chown -R "$USER" "$HOME/apt-archives"
+      - uses: actions/cache/save@v5
+        if: github.ref == 'refs/heads/main' && steps.apt-cache.outputs.cache-primary-key != '' && steps.apt-cache.outputs.cache-hit != 'true'
+        with:
+          path: ~/apt-archives/*.deb
+          key: ${{ steps.apt-cache.outputs.cache-primary-key }}
       - name: Build
         if: needs.changes.outputs.rust == 'true'
         env:
@@ -548,9 +591,29 @@ jobs:
         with:
           key: head
           workspaces: . -> target
+      # Same apt package cache as the test job.
+      - name: Identify apt package cache
+        if: needs.changes.outputs.rust == 'true'
+        id: apt
+        run: echo "key=apt-performance-measure-valgrind-${ImageOS}-${ImageVersion}-v1" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v5
+        if: needs.changes.outputs.rust == 'true'
+        id: apt-cache
+        with:
+          path: ~/apt-archives/*.deb
+          key: ${{ steps.apt.outputs.key }}
       - name: Install Valgrind
         if: needs.changes.outputs.rust == 'true'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends valgrind
+        run: |
+          mkdir -p "$HOME/apt-archives/partial"
+          sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=20
+          sudo apt-get install -y --no-install-recommends -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Dir::Cache::Archives="$HOME/apt-archives" valgrind
+          sudo chown -R "$USER" "$HOME/apt-archives"
+      - uses: actions/cache/save@v5
+        if: github.ref == 'refs/heads/main' && steps.apt-cache.outputs.cache-primary-key != '' && steps.apt-cache.outputs.cache-hit != 'true'
+        with:
+          path: ~/apt-archives/*.deb
+          key: ${{ steps.apt-cache.outputs.cache-primary-key }}
       - name: Build the head workload
         if: needs.changes.outputs.rust == 'true'
         run: cargo build --release --locked --bench frame_time --message-format=json-render-diagnostics > performance.json
