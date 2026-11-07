@@ -363,10 +363,11 @@ impl Chart {
     /// Resuming with the same symbol, interval, hours and conversion keeps the bars, executions
     /// and depth history the chart holds and loads what the pause missed. The latest page and the
     /// new subscription rebuild the last bar and add the newer ones, executions a feed replays on
-    /// resubscribing are dropped for the bars kept, and a latest page that does not reach the kept
-    /// bars replaces them. After any other change, on trade-based intervals and when the pause
-    /// came before the first page arrived, resuming reloads the current symbol and interval. Bars
-    /// supplied while paused are matched by exact opening time.
+    /// resubscribing are dropped for the bars kept, and so are the bars it pushes again for them
+    /// until the chart holds a newer one. A latest page that does not reach the kept bars replaces
+    /// them. After any other change, on trade-based intervals and when the pause came before the
+    /// first page arrived, resuming reloads the current symbol and interval. Bars supplied while
+    /// paused are matched by exact opening time.
     /// The feed also stays paused while the main series is removed, and follows this setting
     /// again once undo restores the series. On a chart without the original pane it keeps
     /// following this setting, because the removed series' bars still supply the studies.

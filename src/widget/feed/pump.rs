@@ -261,7 +261,19 @@ impl Chart {
                 link.rebuild_bubbles(&[]);
             }
             if !updates.bars.is_empty() {
-                let incoming = updates.bars.into_values().collect();
+                let mut incoming: Vec<_> = updates.bars.into_values().collect();
+                // A feed may push its bars again on resubscribing: until the chart holds a bar
+                // from the first slot it lacks on, the kept bars stand for the older ones.
+                if let Some(from) = link.resumed_from
+                    && self
+                        .bars(SeriesId::MAIN)
+                        .last()
+                        .is_none_or(|last| link.clock.bar_open(last.time) < from)
+                {
+                    incoming.retain(|(bar, origin)| {
+                        *origin != Origin::Live || link.clock.bar_open(bar.time) >= from
+                    });
+                }
                 let merged = self.apply_by(&link.clock, incoming);
                 self.feed.late_ticks += merged.late_ticks;
                 if merged.first_changed.is_some() {

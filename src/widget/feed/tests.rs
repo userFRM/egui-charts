@@ -3923,8 +3923,8 @@ fn volume_profile_studies_read_the_chart_executions() {
 
 /// Leaving replay keeps the bars and the book history the chart showed before it and rebuilds
 /// only its last bar: from a latest page that reaches the kept bars, from executions the feed
-/// replays on resubscribing without counting those of the kept bars twice, or from a latest
-/// page alone when it starts after them.
+/// replays on resubscribing without counting those of the kept bars twice or letting the bars it
+/// pushes again replace them, or from a latest page alone when it starts after them.
 #[test]
 fn replay_exit_keeps_live_bars_and_depth() {
     let minute = |at: usize| bars(13)[at].time;
@@ -3936,22 +3936,32 @@ fn replay_exit_keeps_live_bars_and_depth() {
             "a page that reaches the kept bars",
             caught_up.clone(),
             vec![],
+            vec![],
             caught_up,
         ),
         (
             "replayed executions",
             bars(5),
+            vec![],
             vec![fill(8, 108.0), fill(9, 109.0)],
+            bars(10),
+        ),
+        (
+            "bars the feed pushes again",
+            bars(5),
+            vec![Bar::new(minute(7), 107.0, 107.0, 107.0, 107.0, 0.5)],
+            vec![fill(9, 109.0)],
             bars(10),
         ),
         (
             "a page that starts after them",
             bars(13)[11..].to_vec(),
             vec![],
+            vec![],
             bars(13)[11..].to_vec(),
         ),
     ];
-    for (case, latest, replayed, expected) in cases {
+    for (case, latest, pushed, replayed, expected) in cases {
         let feed = Arc::new(Script::default());
         let mut chart = fed(&feed, Some("A"));
         chart.set_depth_history(Some(DepthHistory::new(Default::default()).unwrap()));
@@ -4006,6 +4016,9 @@ fn replay_exit_keeps_live_bars_and_depth() {
         feed.resolve()
             .send(Ok(Instrument::new("A").with_tick_size(1.0)));
         frames.run(&mut chart);
+        for bar in pushed {
+            feed.sink().push_bar(bar);
+        }
         for tick in replayed {
             feed.sink().push_tick(tick);
         }
