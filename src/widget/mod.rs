@@ -888,8 +888,8 @@ impl Chart {
     ///
     /// `Some(theme)` also applies its series colours to the chart configuration, and unedited
     /// chart type style colours follow it while edited ones stay. Explicit configuration edits
-    /// made afterwards are kept. `None` follows the host's palette again,
-    /// retaining host-edited colours. `set_theme` clears this override and themes egui.
+    /// made afterwards are kept. `None` follows the host's palette again, retaining host-edited
+    /// colours. `set_theme` clears this override and themes egui.
     pub fn set_theme_override(&mut self, theme: Option<crate::theme::Theme>) {
         if let Some(theme) = &theme {
             self.config = self.config.clone().with_theme(theme);
