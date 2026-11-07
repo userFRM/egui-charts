@@ -662,16 +662,29 @@ impl ChartSettingsState {
             let mut params = chart.chart_type_params().clone();
             let style = &mut params.styles.volume_candles;
             let colors = &self.candle_colors;
-            style.body_visible = colors.show_body;
-            style.border_visible = colors.show_border;
-            style.wick_visible = colors.show_wick;
-            style.color_by_previous_close = colors.color_by_previous_close;
-            style.body_up = colors.body_up;
-            style.body_down = colors.body_down;
-            style.border_up = colors.border_up;
-            style.border_down = colors.border_down;
-            style.wick_up = colors.wick_up;
-            style.wick_down = colors.wick_down;
+            if self
+                .chart_type_params
+                .as_ref()
+                .is_some_and(|saved| saved.styles.volume_candles.is_saved_without_style())
+            {
+                // Settings saved before the style hold the candles' values, of which volume
+                // candles drew only the body colours.
+                *style = crate::model::VolumeCandlesStyle::drawn_before_style(
+                    colors.body_up,
+                    colors.body_down,
+                );
+            } else {
+                style.body_visible = colors.show_body;
+                style.border_visible = colors.show_border;
+                style.wick_visible = colors.show_wick;
+                style.color_by_previous_close = colors.color_by_previous_close;
+                style.body_up = colors.body_up;
+                style.body_down = colors.body_down;
+                style.border_up = colors.border_up;
+                style.border_down = colors.border_down;
+                style.wick_up = colors.wick_up;
+                style.wick_down = colors.wick_down;
+            }
             if chart.chart_type_params() != &params {
                 chart.set_chart_type_params(params);
             }
@@ -1505,6 +1518,178 @@ mod tests {
             let colors = ChartSettingsState::from_chart(&restored).candle_colors;
             assert!(colors.show_body && colors.show_border && colors.show_wick);
         }
+    }
+
+    /// Before volume candles had a style, a layout or chart settings template held the candle
+    /// settings for them and the painter ignored all but the body colours: body and both wicks in
+    /// the body colour of the bar's direction against its open, without a border. Such a document
+    /// restores as it was painted, whatever else its candle settings held. The third bar closes at
+    /// 12.5, below its open of 13 and above the previous close of 11.
+    #[test]
+    #[cfg(feature = "drawings")]
+    fn volume_candle_layout_saved_before_the_style_restores_as_drawn() {
+        use super::super::CandleColorConfig;
+        use crate::model::ChartType;
+        use crate::widget::ChartSnapshot;
+        use crate::widget::test_frames::{frame, shapes};
+        let (up, down) = (Color32::from_rgb(1, 100, 2), Color32::from_rgb(101, 2, 3));
+        let (teal, red) = (
+            Color32::from_rgb(8, 153, 129),
+            Color32::from_rgb(242, 54, 69),
+        );
+        let (border_up, border_down) =
+            (Color32::from_rgb(3, 4, 102), Color32::from_rgb(103, 5, 104));
+        let make = || {
+            let time = chrono::DateTime::UNIX_EPOCH;
+            let mut chart = Chart::new(BarData::from_bars(
+                [
+                    (10.0, 18.0, 8.0, 14.0),
+                    (13.0, 17.0, 8.5, 11.0),
+                    (13.0, 15.0, 10.0, 12.5),
+                ]
+                .into_iter()
+                .enumerate()
+                .map(|(i, (o, h, l, c))| {
+                    Bar::new(time + chrono::Duration::days(i as i64), o, h, l, c, 100.0)
+                })
+                .collect(),
+            ));
+            chart.set_chart_type(ChartType::VolumeCandles);
+            chart.config_mut().show_volume = false;
+            chart
+        };
+        let saved_colors = [
+            CandleColorConfig {
+                color_by_previous_close: false,
+                show_body: true,
+                show_border: false,
+                show_wick: true,
+                body_up: up,
+                body_down: down,
+                border_up: teal,
+                border_down: red,
+                wick_up: teal,
+                wick_down: red,
+            },
+            CandleColorConfig {
+                color_by_previous_close: true,
+                show_body: true,
+                show_border: true,
+                show_wick: false,
+                body_up: up,
+                body_down: down,
+                border_up,
+                border_down,
+                wick_up: teal,
+                wick_down: red,
+            },
+        ];
+        // What each kind of document leaves out of its current form.
+        let strip_layout = |saved: &mut serde_json::Value, what: &str| {
+            let settings = saved["settings"].as_object_mut().unwrap();
+            if what == "settings" {
+                settings.remove("chart_type").unwrap();
+                settings.remove("chart_type_params").unwrap();
+            }
+            for path in ["/chart_type_params", "/settings/chart_type_params"] {
+                let Some(params) = saved.pointer_mut(path) else {
+                    continue;
+                };
+                let params = params.as_object_mut().unwrap();
+                if what == "styles" {
+                    params.remove("styles").unwrap();
+                } else {
+                    let styles = params["styles"].as_object_mut().unwrap();
+                    styles.remove("volume_candles").unwrap();
+                }
+            }
+        };
+        for colors in saved_colors {
+            for what in ["style", "styles", "settings", "template"] {
+                let mut restored = make();
+                if what == "template" {
+                    let mut saved =
+                        serde_json::to_value(ChartSettingsState::from_chart(&make())).unwrap();
+                    saved
+                        .pointer_mut("/chart_type_params/styles")
+                        .unwrap()
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("volume_candles")
+                        .unwrap();
+                    saved["candle_colors"] = serde_json::to_value(&colors).unwrap();
+                    let saved: ChartSettingsState = serde_json::from_value(saved).unwrap();
+                    saved.apply_to_chart(&mut restored).unwrap();
+                } else {
+                    let mut saved = serde_json::to_value(make().snapshot().unwrap()).unwrap();
+                    saved["settings"]["candle_colors"] = serde_json::to_value(&colors).unwrap();
+                    strip_layout(&mut saved, what);
+                    let saved: ChartSnapshot = serde_json::from_value(saved).unwrap();
+                    restored.restore(&saved).unwrap();
+                }
+                let ctx = Context::default();
+                frame(&ctx, &mut restored, 0.0, vec![]);
+                let painted = shapes(&ctx, &mut restored, 0.1, vec![]);
+                let plot = restored.get_rendered_price_rect();
+                let known = [up, down, teal, red, border_up, border_down];
+                let (mut bodies, mut wicks) = (Vec::new(), Vec::new());
+                for shape in painted {
+                    match shape {
+                        Shape::Rect(r)
+                            if plot.contains(r.rect.center()) && known.contains(&r.fill) =>
+                        {
+                            bodies.push((r.fill, r.stroke.width));
+                        }
+                        Shape::LineSegment { points, stroke }
+                            if points[0].x == points[1].x && known.contains(&stroke.color) =>
+                        {
+                            wicks.push(stroke.color);
+                        }
+                        _ => {}
+                    }
+                }
+                assert_eq!(
+                    bodies,
+                    [(up, 0.0), (down, 0.0), (down, 0.0)],
+                    "{what} {colors:?}"
+                );
+                assert_eq!(wicks, [up, up, down, down, down, down], "{what} {colors:?}");
+                let shown = ChartSettingsState::from_chart(&restored).candle_colors;
+                assert_eq!(
+                    shown,
+                    CandleColorConfig {
+                        color_by_previous_close: false,
+                        show_body: true,
+                        show_border: false,
+                        show_wick: true,
+                        body_up: up,
+                        body_down: down,
+                        border_up: up,
+                        border_down: down,
+                        wick_up: up,
+                        wick_down: down,
+                    },
+                    "{what} {colors:?}"
+                );
+                // Settings read from the restored chart are no longer those of an old document.
+                let mut edited = ChartSettingsState::from_chart(&restored);
+                edited.candle_colors.wick_up = teal;
+                edited.apply_to_chart(&mut restored).unwrap();
+                let style = &restored.chart_type_params().styles.volume_candles;
+                assert_eq!(style.wick_up, teal, "{what} {colors:?}");
+            }
+        }
+        // A layout of another chart type has nothing of the old drawing to keep.
+        let mut other = make();
+        other.set_chart_type(ChartType::Candles);
+        let mut saved = serde_json::to_value(other.snapshot().unwrap()).unwrap();
+        strip_layout(&mut saved, "style");
+        let saved: ChartSnapshot = serde_json::from_value(saved).unwrap();
+        other.restore(&saved).unwrap();
+        assert_eq!(
+            other.chart_type_params().styles.volume_candles,
+            crate::model::VolumeCandlesStyle::default()
+        );
     }
 
     /// The default price labels are printed in the price scale's text colour, so they read at the
