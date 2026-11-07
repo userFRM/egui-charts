@@ -732,6 +732,19 @@ impl IndicatorPane {
             max_val = max_val.max(price);
         }
 
+        if self.config.show_zones {
+            // A hidden level is transparent and no longer holds the scale open.
+            for (level, ..) in self
+                .config
+                .zones
+                .iter()
+                .filter(|zone| zone.1 != egui::Color32::TRANSPARENT)
+            {
+                min_val = min_val.min(*level);
+                max_val = max_val.max(*level);
+            }
+        }
+
         if min_val != f64::MAX
             && (0..indicator.line_count()).any(|line| {
                 let plot = indicator.plot_style(line);
@@ -792,5 +805,35 @@ mod tests {
         settings.plots[0].visible = false;
         study.apply_settings(&[], settings).unwrap();
         assert_eq!(pane.calculate_y_range(&study, &(0..3)), (0.0, 100.0));
+    }
+
+    /// A fitted pane keeps a study's levels in view when its values lie between them, and a
+    /// hidden level no longer holds the scale open.
+    #[test]
+    fn fitted_panes_keep_visible_levels_in_view() {
+        let bars: Vec<_> = [(10.0, 8.0, 9.0), (12.0, 9.0, 11.0), (11.0, 7.0, 8.0)]
+            .into_iter()
+            .enumerate()
+            .map(|(i, (high, low, close))| {
+                let time = chrono::DateTime::from_timestamp(i as i64 * 60, 0).unwrap();
+                Bar::new(time, high, high, low, close, 1.0)
+            })
+            .collect();
+        let mut study =
+            crate::studies::ConfiguredStudy::new(Box::new(crate::studies::ChoppinessIndex::new(2)));
+        study.calculate(&bars);
+        let fit = |study: &crate::studies::ConfiguredStudy| {
+            IndicatorPane::with_config(IndicatorPaneConfig::from_study(study))
+                .calculate_y_range(study, &(0..3))
+        };
+        // The only value, 48.54, lies between the levels at 61.8 and 38.2.
+        let (low, high) = fit(&study);
+        assert!(low < 38.2 && high > 61.8, "{low}..{high}");
+
+        let mut settings = study.settings();
+        settings.levels[0].visible = false;
+        study.apply_settings(&[], settings).unwrap();
+        let (low, high) = fit(&study);
+        assert!(low < 38.2 && high < 61.8, "{low}..{high}");
     }
 }

@@ -33,7 +33,7 @@
 //!
 //! Drawings are grouped by symbol into a `DrawingStorage` container that
 //! includes a format version, metadata, and an optional timeframe filter.
-//! Loading migrates versions 1 to 5, rejects versions it does not know and
+//! Loading migrates earlier versions, rejects versions it does not know and
 //! skips any drawing it cannot read
 //! (see [`from_json`](crate::drawings::persistence::DrawingStorage::from_json)).
 
@@ -322,15 +322,18 @@ impl Default for StorageMetadata {
 }
 
 impl DrawingStorage {
-    /// Current storage format version. Version 6 draws arrow marks in their own colour; earlier
-    /// versions load in the colour they were drawn in. Version 5 gives Elliott double and triple
+    /// Current storage format version. Version 8 extends a trend line past the anchor its Left or
+    /// Right names; those saved before that change load with the reach they were drawn with.
+    /// Version 7 does the same for an info line or trend angle. Version 6 draws arrow marks in
+    /// their own colour; earlier versions load in the colour they were drawn in. Version 5 gives
+    /// Elliott double and triple
     /// combinations an unlabelled start point; earlier versions load with a start point on their
     /// first anchor.
     /// Version 4 draws brushes and highlighters at their stored width and opacity; earlier
     /// versions load at the width and opacity their strokes were drawn at. Version 3 preserves
     /// editable ray and extended-line extensions; versions 1 and 2 migrate to their former
     /// rendered reach when loaded.
-    pub const CURRENT_VERSION: u32 = 6;
+    pub const CURRENT_VERSION: u32 = 8;
 
     /// Create new storage for a symbol
     pub fn new(symbol: impl Into<String>) -> Self {
@@ -440,7 +443,7 @@ impl DrawingStorage {
         serde_json::to_string_pretty(self).map_err(SaveError::Json)
     }
 
-    /// Deserialize from JSON, migrating versions 1 to 5 to the current format.
+    /// Deserialize from JSON, migrating earlier versions to the current format.
     /// Fails as a whole with a [`LoadError`]: [`LoadError::Json`] for invalid JSON or a missing
     /// or invalid version, symbol, timeframe or metadata, and [`LoadError::UnsupportedVersion`]
     /// for a version this release does not know. A
@@ -500,6 +503,9 @@ impl DrawingStorage {
             .enumerate()
             .filter_map(|(index, value)| {
                 let id = value.get("id").and_then(|id| id.as_str()).map(String::from);
+                let has_price_labels = value
+                    .pointer("/drawing/line_measurements/price_labels")
+                    .is_some();
                 load(value)
                     .and_then(|mut drawing| {
                         // Before the id check, so that a skipped drawing does not claim its id.
@@ -585,6 +591,32 @@ impl DrawingStorage {
                                 } else if tool == DrawingToolType::ArrowMarkDown {
                                     settings.color = [242, 54, 69, 255];
                                 }
+                            }
+                        }
+                        if ((version < 7
+                            && matches!(tool, T::InfoLine | T::TrendAngle)
+                            && !has_price_labels)
+                            || (version < 8 && tool == T::TrendLine))
+                            && let [a, b, ..] = drawing.points.as_slice()
+                        {
+                            // Earlier renderers carried these tools' Left and Right towards the
+                            // pane's sides and never extended a vertical one. Version 6 was also
+                            // written after that changed for info lines and trend angles, always
+                            // with `price_labels`; trend angles saved in the hours before their
+                            // own change carry it too. Trend lines never had the later meaning
+                            // before version 8, so every earlier file converts.
+                            let order = (a.ts_ms, a.subms_ns).cmp(&(b.ts_ms, b.subms_ns));
+                            let settings = &mut drawing.drawing;
+                            match order {
+                                std::cmp::Ordering::Greater => std::mem::swap(
+                                    &mut settings.extend_left,
+                                    &mut settings.extend_right,
+                                ),
+                                std::cmp::Ordering::Equal => {
+                                    settings.extend_left = false;
+                                    settings.extend_right = false;
+                                }
+                                std::cmp::Ordering::Less => {}
                             }
                         }
                         match (tool, drawing.points.as_slice()) {
@@ -1572,6 +1604,52 @@ mod tests {
             }
         }
 
+        // Before version 8 a trend line's Left and Right named the pane's sides, and a vertical
+        // one never extended, including in version 7 files. Loading keeps its reach once; version 8
+        // loads as saved.
+        let (forward, reversed, vertical) = ([0, 1], [1, 0], [0, 0]);
+        for (version, anchors, saved_flags, want) in [
+            (6, forward, (false, true), (false, true)),
+            (6, reversed, (false, true), (true, false)),
+            (6, reversed, (true, false), (false, true)),
+            (6, reversed, (true, true), (true, true)),
+            (6, vertical, (false, true), (false, false)),
+            (6, vertical, (true, true), (false, false)),
+            (7, reversed, (false, true), (true, false)),
+            (7, vertical, (true, true), (false, false)),
+            (8, reversed, (false, true), (false, true)),
+            (8, vertical, (false, true), (false, true)),
+        ] {
+            let mut saved: serde_json::Value =
+                serde_json::from_str(include_str!("fixtures/storage_v2.json")).unwrap();
+            saved["version"] = version.into();
+            let records = saved["drawings"].as_array_mut().unwrap();
+            records.truncate(1);
+            let points = records[0]["points"].as_array().unwrap().clone();
+            records[0]["points"] = anchors.map(|i| points[i].clone()).to_vec().into();
+            let settings = &mut records[0]["drawing"];
+            settings["tool_type"] = serde_json::to_value(DrawingToolType::TrendLine).unwrap();
+            (settings["extend_left"], settings["extend_right"]) =
+                (saved_flags.0.into(), saved_flags.1.into());
+            let (loaded, skipped) = DrawingStorage::from_json(&saved.to_string()).unwrap();
+            assert!(skipped.is_empty(), "v{version} {anchors:?}: {skipped:?}");
+            let flags = |storage: &DrawingStorage| {
+                let drawing = &storage.drawings[0].drawing;
+                (drawing.extend_left, drawing.extend_right)
+            };
+            assert_eq!(
+                flags(&loaded),
+                want,
+                "v{version} {anchors:?} {saved_flags:?}"
+            );
+            let (again, _) = DrawingStorage::from_json(&loaded.to_json().unwrap()).unwrap();
+            assert_eq!(
+                flags(&again),
+                want,
+                "v{version} {anchors:?}: converted twice"
+            );
+        }
+
         // Before version 6 up and down marks were drawn green and red; a fill replaced
         // every mark's body colour. Loading keeps that colour once, including its alpha.
         for (version, tool, fill, want) in [
@@ -1955,10 +2033,10 @@ mod tests {
         assert!(!visibility.show_on_all);
         assert!(visibility.is_visible_on("2h") && !visibility.is_visible_on("1D"));
 
-        let error = DrawingStorage::from_json(&current.replace("\"version\": 6", "\"version\": 7"))
+        let error = DrawingStorage::from_json(&current.replace("\"version\": 8", "\"version\": 9"))
             .unwrap_err();
         assert!(
-            matches!(&error, LoadError::UnsupportedVersion { found: 7, supported } if *supported == (1..=6)),
+            matches!(&error, LoadError::UnsupportedVersion { found: 9, supported } if *supported == (1..=8)),
             "{error}"
         );
     }
@@ -2194,5 +2272,76 @@ mod tests {
                 ("2", DrawingToolType::Ray, 20)
             ]
         );
+    }
+
+    /// Asserts that `tool` restores the reach it was saved with, from a record saved with one
+    /// flag set, drawn either way or at one time, after one and two loads.
+    fn assert_saved_extension_side(tool: DrawingToolType) {
+        use std::cmp::Ordering::{Equal, Greater, Less};
+        const LEFT: (bool, bool) = (true, false);
+        const RIGHT: (bool, bool) = (false, true);
+        const NEITHER: (bool, bool) = (false, false);
+        let current = serde_json::to_value(LineMeasurements::default()).unwrap();
+        let mut earlier = current.clone();
+        for key in [
+            "price_labels",
+            "text_horizontal_align",
+            "text_vertical_align",
+        ] {
+            earlier.as_object_mut().unwrap().remove(key);
+        }
+        // What a record saved with Right set loads with, by the order of its anchors.
+        for (version, measurements, forward, reversed, vertical) in [
+            (6, None, RIGHT, LEFT, NEITHER),
+            (6, Some(&earlier), RIGHT, LEFT, NEITHER),
+            (6, Some(&current), RIGHT, RIGHT, RIGHT),
+            (7, None, RIGHT, RIGHT, RIGHT),
+        ] {
+            for (order, want) in [(Less, forward), (Greater, reversed), (Equal, vertical)] {
+                for (saved_flags, want) in [(RIGHT, want), (LEFT, (want.1, want.0))] {
+                    let mut saved: serde_json::Value =
+                        serde_json::from_str(include_str!("fixtures/storage_v2.json")).unwrap();
+                    saved["version"] = version.into();
+                    let records = saved["drawings"].as_array_mut().unwrap();
+                    records.truncate(1);
+                    let record = &mut records[0];
+                    let settings = &mut record["drawing"];
+                    settings["tool_type"] = serde_json::to_value(tool).unwrap();
+                    (settings["extend_left"], settings["extend_right"]) =
+                        (saved_flags.0.into(), saved_flags.1.into());
+                    if let Some(measurements) = measurements {
+                        settings["line_measurements"] = measurements.clone();
+                    }
+                    let points = record["points"].as_array_mut().unwrap();
+                    points.truncate(2);
+                    match order {
+                        Less => {}
+                        Greater => points.swap(0, 1),
+                        Equal => points[1]["ts_ms"] = points[0]["ts_ms"].clone(),
+                    }
+                    let (once, skipped) = DrawingStorage::from_json(&saved.to_string()).unwrap();
+                    assert!(skipped.is_empty(), "{skipped:?}");
+                    let (twice, _) = DrawingStorage::from_json(&once.to_json().unwrap()).unwrap();
+                    for loaded in [&once, &twice] {
+                        let drawing = &loaded.drawings[0].drawing;
+                        assert_eq!(
+                            (drawing.extend_left, drawing.extend_right),
+                            want,
+                            "{tool:?} v{version} {order:?} saved {saved_flags:?} {measurements:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn trend_angle_saved_right_to_left_keeps_its_extension_side() {
+        assert_saved_extension_side(DrawingToolType::TrendAngle);
+    }
+
+    #[test]
+    fn info_line_saved_right_to_left_keeps_its_extension_side() {
+        assert_saved_extension_side(DrawingToolType::InfoLine);
     }
 }
