@@ -525,6 +525,11 @@ mod tests {
             );
             assert_eq!(labels.contains(&"Price"), price, "{tool:?}");
             assert_eq!(labels.contains(&"Time"), time, "{tool:?}");
+            assert_eq!(
+                labels.contains(&"Through all panes"),
+                tool == T::VerticalLine,
+                "{tool:?}"
+            );
             for label in [
                 "Middle point",
                 "Keep statistics visible",
