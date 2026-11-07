@@ -77,7 +77,8 @@ pub struct ChartPointer {
 #[derive(Debug, Clone)]
 struct CustomPointAt {
     series: SeriesId,
-    /// Points have no equality of their own; any change of the series' data counts as a change.
+    /// Points have no equality of their own: the revision of the point under the cursor, renewed
+    /// when the host supplies that point again.
     revision: u64,
     point: std::sync::Arc<dyn std::any::Any + Send + Sync>,
 }
@@ -796,11 +797,19 @@ impl Chart {
                 })
                 .collect(),
             custom_points: time.map_or_else(Vec::new, |time| {
+                let previous = self.host_events.pointer.as_ref();
+                let previous = previous.map_or(&[][..], |pointer| &pointer.custom_points);
                 self.custom_points_at(time)
-                    .map(|(series, revision, point)| CustomPointAt {
-                        series,
-                        revision,
-                        point,
+                    .map(|(series, revision, copy)| {
+                        let kept = previous
+                            .iter()
+                            .find(|point| point.series == series && point.revision == revision);
+                        CustomPointAt {
+                            series,
+                            revision,
+                            point: kept
+                                .map_or_else(copy, |kept| std::sync::Arc::clone(&kept.point)),
+                        }
                     })
                     .collect()
             }),

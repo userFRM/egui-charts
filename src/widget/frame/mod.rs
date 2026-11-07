@@ -1214,7 +1214,7 @@ impl Chart {
                     (&config, tick),
                     &clock,
                     (&map, price_rect, |i| mapping.idx_to_x(i)),
-                    |profile, _, anchor, _, _| {
+                    |profile, _, anchor, _, _, _| {
                         if anchor >= price_rect.right() {
                             return;
                         }
@@ -1471,7 +1471,7 @@ impl Chart {
                 time_coords.start_idx,
             );
         }
-        if time_based
+        let extended_hours = if time_based
             && host_scale.is_none()
             && session_tf.duration_ms() < crate::model::Timeframe::Day1.duration_ms()
             && self.config.show_extended_hours
@@ -1481,7 +1481,7 @@ impl Chart {
             } else {
                 self.config.extended_hours_color
             };
-            rendering::render_extended_hours(
+            let shaded = rendering::render_extended_hours(
                 &session_ctx,
                 time_data,
                 &exchange_session,
@@ -1489,7 +1489,10 @@ impl Chart {
                 time_coords.start_idx,
                 color,
             );
-        }
+            (shaded, color)
+        } else {
+            (Vec::new(), egui::Color32::TRANSPARENT)
+        };
 
         // Render chart type with clipping to prevent bars from overlapping axes
         // CRITICAL: Use chart_rect.width() for consistency with drawing coordinate system
@@ -3157,6 +3160,7 @@ impl Chart {
                 legend.day_change =
                     session_closes.filter(|_| values && self.config.show_last_day_change);
                 legend.study_backdrop = self.config.indicator_backdrop_opacity;
+                legend.extended_hours = (&extended_hours.0, extended_hours.1);
                 let inputs: Vec<_> = self.study_inputs.iter().map(String::as_str).collect();
                 legend.study_inputs = &inputs;
                 legend.previous_close =
@@ -3272,7 +3276,7 @@ impl Chart {
                 ),
                 &bar_clock,
                 (&price_map, price_rect, |i| coords.idx_to_x(i)),
-                |profile, config, anchor, column, _| {
+                |profile, config, anchor, column, _, _| {
                     let cropped = [
                         profile.row_span(profile.profile_low).0,
                         profile.row_span(profile.profile_high).1,

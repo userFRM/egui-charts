@@ -794,6 +794,7 @@ mod tests {
                 flow.volume_bubbles.scaling_mode = BubbleScalingMode::SquareRoot;
                 flow.volume_bubbles.min_size_filter = Some(3.0);
                 flow.volume_bubbles.clamp_std_devs = clamp_std_devs;
+                flow.volume_bubbles.shaded = false;
                 settings.apply_to_chart(&mut chart).unwrap();
                 assert_eq!(chart.chart_type(), kind);
                 assert_eq!(
@@ -820,6 +821,21 @@ mod tests {
                 assert_eq!(
                     ChartSettingsState::from_chart(&chart).order_flow,
                     settings.order_flow
+                );
+                // Settings saved before the flat style existed take the shaded default.
+                let mut unshaded = json.clone();
+                unshaded["settings"]["order_flow"]["volume_bubbles"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("shaded");
+                chart
+                    .restore(&serde_json::from_value(unshaded).unwrap())
+                    .unwrap();
+                assert!(
+                    ChartSettingsState::from_chart(&chart)
+                        .order_flow
+                        .volume_bubbles
+                        .shaded
                 );
                 let mut legacy = json;
                 legacy["settings"]

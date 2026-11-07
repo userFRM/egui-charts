@@ -621,6 +621,7 @@ impl IndicatorPane {
                 ui,
                 row,
                 controls,
+                true,
                 response.id.with("study_controls"),
                 indicator,
             )

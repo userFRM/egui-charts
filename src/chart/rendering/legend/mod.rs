@@ -143,6 +143,9 @@ pub struct Legend<'a> {
     /// Groups the thousands of built-in price values; the chart sets it from
     /// `ChartConfig::thousands_sep`.
     pub(crate) thousands_sep: Option<char>,
+    /// The rects the chart shades as extended hours under the legend, left to right, and their
+    /// shading. The chart sets it.
+    pub(crate) extended_hours: (&'a [Rect], Color32),
 }
 
 impl<'a> Legend<'a> {
@@ -179,6 +182,7 @@ impl<'a> Legend<'a> {
             study_backdrop: 0.6,
             quantity: None,
             thousands_sep: None,
+            extended_hours: (&[], Color32::TRANSPARENT),
         }
     }
 
@@ -242,6 +246,10 @@ impl<'a> Legend<'a> {
             bounds,
             colors,
             (first_row_end - theme.spacing.lg).min(bounds.right()),
+            (
+                self.extended_hours.0,
+                theme.chart.bg.blend(self.extended_hours.1),
+            ),
         );
         #[cfg(feature = "icons")]
         let (title_start, title_end) = (layout.pos, layout.row_end);
@@ -492,7 +500,7 @@ impl<'a> Legend<'a> {
                     Stroke::new(1.0, theme.ui.accent),
                     egui::StrokeKind::Inside,
                 );
-                painter.rect_filled(controls, 0.0, theme.chart.bg);
+                painter.add(layout.fill(controls, theme.chart.bg));
                 let flag_response = ui.interact(flag, id.with("flag"), Sense::click());
                 crate::icons::icons::FLAG_MARK
                     .as_image_tinted(
@@ -762,9 +770,15 @@ impl<'a> Legend<'a> {
                         } else {
                             "∅".to_owned()
                         };
-                        // A fully transparent colour holds no RGB, so it has no opaque form.
+                        // The value comes from a source bar, and a transparent colour there hides
+                        // only the segment into it. A plot colour that is itself fully transparent
+                        // holds no RGB, so it has no opaque form.
                         let color = study
-                            .plot_color(index, self.bar_index)
+                            .plot_offset(index)
+                            .checked_neg()
+                            .and_then(|back| self.bar_index.checked_add_signed(back))
+                            .and_then(|source| study.plot_color(index, source))
+                            .filter(|color| color.a() != 0)
                             .or_else(|| study_colors.get(index).copied())
                             .filter(|color| color.a() != 0)
                             .map_or(colors.text, |color| color.to_opaque());
@@ -787,8 +801,14 @@ impl<'a> Legend<'a> {
                     .intersect(bounds);
                 // The next row's backdrop goes under this row's outline, which reaches into it.
                 layout.new_row();
-                let (responses, menu) =
-                    study_controls(ui, row, controls, id.with(("study", index)), study.as_ref());
+                let (responses, menu) = study_controls(
+                    ui,
+                    row,
+                    controls,
+                    false,
+                    id.with(("study", index)),
+                    study.as_ref(),
+                );
                 for (response, intent) in responses.iter().zip([
                     StudyAction::ToggleVisibility(index),
                     StudyAction::Settings(index),
@@ -962,6 +982,8 @@ struct Layout<'a> {
     background: egui::layers::ShapeIdx,
     /// Fill of the current row's background.
     backdrop: Color32,
+    /// The rects shaded as extended hours and the background as shaded there.
+    tint: (&'a [Rect], Color32),
     colors: &'a StyleColors,
 }
 
@@ -971,6 +993,7 @@ impl<'a> Layout<'a> {
         bounds: Rect,
         colors: &'a StyleColors,
         first_row_end: f32,
+        tint: (&'a [Rect], Color32),
     ) -> Self {
         Self {
             painter,
@@ -980,8 +1003,46 @@ impl<'a> Layout<'a> {
             height: 24.0,
             background: painter.add(egui::Shape::Noop),
             backdrop: painter.ctx().active_theme().chart.bg,
+            tint,
             colors,
         }
+    }
+
+    /// `rect` in `fill`, the chart background at some opacity, and over the extended hours shading
+    /// in the shaded background at the same opacity, so each part matches the plot beneath.
+    fn fill(&self, rect: Rect, fill: Color32) -> egui::Shape {
+        let (shaded, color) = self.tint;
+        let color = color.gamma_multiply_u8(fill.a());
+        let mut parts = Vec::new();
+        let mut left = rect.left();
+        // The parts are disjoint: a shaded part laid over a translucent fill would apply the
+        // opacity twice.
+        for part in shaded
+            .iter()
+            .map(|shaded| rect.intersect(*shaded))
+            .filter(Rect::is_positive)
+        {
+            parts.push((
+                Rect::from_x_y_ranges(left..=part.left(), rect.y_range()),
+                fill,
+            ));
+            parts.push((part, color));
+            left = part.right();
+        }
+        if parts.is_empty() {
+            return egui::Shape::rect_filled(rect, 0.0, fill);
+        }
+        parts.push((
+            Rect::from_x_y_ranges(left..=rect.right(), rect.y_range()),
+            fill,
+        ));
+        egui::Shape::Vec(
+            parts
+                .into_iter()
+                .filter(|(part, _)| part.is_positive())
+                .map(|(part, fill)| egui::Shape::rect_filled(part, 0.0, fill))
+                .collect(),
+        )
     }
 
     fn new_row(&mut self) {
@@ -1011,24 +1072,22 @@ impl<'a> Layout<'a> {
         let rect = self.reserve_space(size);
         self.painter.set(
             self.background,
-            egui::Shape::rect_filled(
+            self.fill(
                 Rect::from_min_max(
                     Pos2::new(self.bounds.left() - 2.0, self.pos.y),
                     Pos2::new(rect.right() + 4.0, self.pos.y + self.height),
                 )
                 .intersect(self.bounds.expand(2.0)),
-                0.0,
                 self.backdrop,
             ),
         );
         let background = self.painter.ctx().active_theme().chart.bg;
         if self.backdrop != background {
             // Profiles can be opaque or contain letters; protect the full content bounds.
-            self.painter.rect_filled(
+            self.painter.add(self.fill(
                 rect.expand(2.0).intersect(self.bounds.expand(2.0)),
-                0.0,
                 background,
-            );
+            ));
         }
         rect
     }
@@ -1713,6 +1772,168 @@ mod layout_tests {
                 hovered.drop_without_applying_deltas();
                 output.drop_without_applying_deltas();
                 assert_eq!(idle, hovered_text, "hover moved readout at {width}");
+            }
+        }
+    }
+
+    /// A value in the price pane's legend takes the colour its plot shows for that value: a pivot
+    /// level keeps its colour on the first bar of a period, where only the segment from the
+    /// previous period is hidden, and a plot drawn one bar to the right of its source bar takes
+    /// the colour of the source bar its value comes from (`Indicator::plot_color`).
+    #[cfg(feature = "studies")]
+    #[test]
+    fn price_legend_colours_each_value_as_its_plot_shows_it() {
+        use crate::chart::rendering::Legend;
+        use crate::model::Timeframe;
+        use crate::studies::{
+            CustomIndicator, Indicator, IndicatorValue, PivotPoints, PivotTimeframe, palette,
+        };
+        use egui::Color32;
+        // Hourly bars from Monday 5 January 2026, UTC; Tuesday trades 10 higher.
+        let bars: Vec<Bar> = (0..72)
+            .map(|i| {
+                let c = 100.0 + if (24..48).contains(&i) { 10.0 } else { 0.0 } + (i % 5) as f64;
+                let time = Utc.timestamp_opt(1_767_571_200 + i * 3600, 0).unwrap();
+                Bar::new(time, c, c + 1.0, c - 1.0, c, 1.0)
+            })
+            .collect();
+        let mut pivots = PivotPoints::new().with_timeframe(PivotTimeframe::Daily);
+        pivots.set_timeframe(Timeframe::Hour1);
+        pivots.calculate(&bars);
+        // Wednesday's first bar, 48, starts the levels made from Tuesday.
+        assert_ne!(pivots.values().value(0, 47), pivots.values().value(0, 48));
+        let mut shifted = CustomIndicator::new("Shifted", |bars| {
+            (0..bars.len())
+                .map(|i| IndicatorValue::Single(10.0 + i as f64))
+                .collect()
+        })
+        .with_offsets(vec![1])
+        .with_plot_color(|_, bar, _| Some([Color32::RED, Color32::BLUE][bar % 2]));
+        shifted.calculate(&bars);
+        let ctx = Context::default();
+        let instrument = crate::model::Instrument::new("SAMPLE").with_price_decimals(2);
+        let shown = |study: Box<dyn Indicator>, bar: usize| -> Vec<(f64, Color32)> {
+            let studies = vec![study];
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let mut legend = Legend::new("SAMPLE", "1h", &bars[bar]);
+                legend.studies = &studies;
+                legend.instrument = Some(&instrument);
+                legend.show_indicator_inputs = false;
+                legend.show_volume = false;
+                legend.show_ohlc = false;
+                legend.show_change = false;
+                legend.show_change_percent = false;
+                legend.bar_index = bar;
+                legend.show(
+                    ui,
+                    Rect::from_min_size(Pos2::ZERO, egui::vec2(3000.0, 400.0)),
+                );
+            });
+            output.textures_delta.clear();
+            let values = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    Shape::Text(text) => {
+                        let value = text.galley.text().replace(',', "").parse::<f64>().ok()?;
+                        Some((value, text.galley.job.sections[0].format.color))
+                    }
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            values
+        };
+        let levels: Vec<Color32> = shown(Box::new(pivots), 48)
+            .into_iter()
+            .map(|(_, color)| color)
+            .collect();
+        // Bar 5 shows source bar 4, coloured red.
+        let got = (levels, shown(Box::new(shifted), 5));
+        assert_eq!(
+            got,
+            (vec![palette::DARK_ORANGE; 11], vec![(14.0, Color32::RED)]),
+            "{got:?}"
+        );
+    }
+
+    /// Each part of a row's backdrop takes the background as shaded beneath it, opaque and at the
+    /// study opacity, so a row crossing the edge of the extended hours shading shows no box on
+    /// either side of it. The shaded colours are worked out by hand: the background times
+    /// (255 - 40) / 255 plus the tint, then 153 / 255 for the 60% study rows.
+    #[test]
+    fn legend_rows_take_the_extended_hours_tint_beneath_them() {
+        use crate::chart::rendering::Legend;
+        use egui::Color32;
+        fn unstroked(shape: &Shape, rects: &mut Vec<(Rect, Color32)>) {
+            match shape {
+                Shape::Rect(rect) if rect.stroke.width == 0.0 => rects.push((rect.rect, rect.fill)),
+                Shape::Vec(shapes) => shapes.iter().for_each(|shape| unstroked(shape, rects)),
+                _ => {}
+            }
+        }
+        for (theme, plain, plain_study, tinted, tinted_study) in [
+            (
+                crate::theme::Theme::light(),
+                Color32::WHITE,
+                Color32::from_rgba_premultiplied(153, 153, 153, 153),
+                Color32::from_rgb(215, 215, 255),
+                Color32::from_rgba_premultiplied(129, 129, 153, 153),
+            ),
+            (
+                crate::theme::Theme::dark(),
+                Color32::BLACK,
+                Color32::from_rgba_premultiplied(0, 0, 0, 153),
+                Color32::from_rgb(0, 0, 40),
+                Color32::from_rgba_premultiplied(0, 0, 24, 153),
+            ),
+        ] {
+            let ctx = Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let bar = Bar::new(Utc.timestamp_opt(0, 0).unwrap(), 1.0, 1.0, 1.0, 1.0, 240.0);
+            let shaded = [Rect::from_min_max(Pos2::ZERO, Pos2::new(30.0, 600.0))];
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let mut legend = Legend::new("SAMPLE", "1m", &bar);
+                legend.extended_hours = (&shaded, Color32::from_rgba_premultiplied(0, 0, 40, 40));
+                legend.show(
+                    ui,
+                    Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0)),
+                );
+            });
+            output.textures_delta.clear();
+            let mut rects = Vec::new();
+            for shape in &output.shapes {
+                unstroked(&shape.shape, &mut rects);
+            }
+            output.drop_without_applying_deltas();
+            let filled = |fill: Color32| -> Vec<Rect> {
+                rects
+                    .iter()
+                    .filter(|(_, color)| *color == fill)
+                    .map(|(rect, _)| *rect)
+                    .collect()
+            };
+            for (plain, tinted) in [(plain, tinted), (plain_study, tinted_study)] {
+                let (plain, tinted) = (filled(plain), filled(tinted));
+                for rect in &plain {
+                    assert!(
+                        rect.left() >= 30.0,
+                        "plain backdrop under the tint at {rect:?}"
+                    );
+                }
+                for rect in &tinted {
+                    assert!(
+                        rect.right() <= 30.0,
+                        "tinted backdrop past the tint at {rect:?}"
+                    );
+                }
+                assert!(
+                    tinted.iter().any(|tinted| tinted.right() == 30.0
+                        && plain.iter().any(
+                            |plain| plain.left() == 30.0 && plain.y_range() == tinted.y_range()
+                        )),
+                    "no row meets at the tint's edge: {plain:?} {tinted:?}"
+                );
             }
         }
     }

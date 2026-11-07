@@ -704,13 +704,25 @@ pub struct ChartTypeParams {
     pub tpo_split_sessions: bool,
     /// TPO: highlight the rows touched by a single period.
     pub tpo_single_prints: bool,
-    /// TPO: caption and mark the middle of each profile's range.
+    /// TPO: caption and mark the middle of each profile's range. Off for a new chart; settings
+    /// saved without the field show it, as every profile did before the setting.
+    #[serde(default = "tpo_midpoint_drawn")]
     pub tpo_midpoint: bool,
-    /// TPO: paint each period's letter inside its block.
+    /// TPO: paint each period's letter inside its block. On for a new chart; settings saved
+    /// without the field keep blocks.
+    // Settings saved before the field existed were drawn as blocks, so a missing field reads false.
+    #[serde(default)]
     pub tpo_letters: bool,
+    /// TPO: draw the session statistics table below each profile.
+    pub tpo_statistics: bool,
     /// TPO: sessions combined into one profile, as in
     /// [`TPOConfig::composites`](super::TPOConfig::composites).
     pub tpo_composites: Vec<std::ops::RangeInclusive<chrono::DateTime<chrono::Utc>>>,
+}
+
+/// What a missing `tpo_midpoint` reads: every profile drew its midpoint before it had a setting.
+fn tpo_midpoint_drawn() -> bool {
+    true
 }
 
 impl Default for ChartTypeParams {
@@ -776,7 +788,8 @@ impl Default for ChartTypeParams {
             tpo_split_sessions: false,
             tpo_single_prints: false,
             tpo_midpoint: false,
-            tpo_letters: false,
+            tpo_letters: true,
+            tpo_statistics: false,
             tpo_composites: Vec::new(),
         }
     }
@@ -797,6 +810,7 @@ impl ChartTypeParams {
             split_sessions: self.tpo_split_sessions,
             show_single_prints: self.tpo_single_prints,
             show_midpoint: self.tpo_midpoint,
+            show_statistics: self.tpo_statistics,
             display_mode: if self.tpo_letters {
                 super::TPODisplayMode::Both
             } else {
@@ -890,6 +904,7 @@ mod tests {
             "footprint_value_area": 0.010003969988090037,
             "footprint_statistics": true, "footprint_statistics_rows": ["Volume", "Delta", "Trades", "AverageSize"],
             "footprint_colors": [[12, 34, 56, 255], null, null, null],
+            "tpo_letters": false,
             "profile": {"mode": "Volume", "value_area": 0.5, "developing_poc": true,
                 "developing_value_area": true, "extend_poc": true, "extend_vah": true,
                 "extend_val": true,
@@ -933,6 +948,7 @@ mod tests {
         let legacy = serde_json::to_value(legacy).unwrap();
         assert_eq!(legacy["footprint_statistics"], false);
         assert_eq!(legacy["footprint_row_ticks"], 0);
+        assert_eq!(legacy["tpo_letters"], false);
         assert_eq!(
             legacy["footprint_colors"],
             serde_json::json!([null, null, null, null])
@@ -1039,13 +1055,14 @@ mod tests {
                 1.0,
             ),
         ];
-        for (saved, minutes, high, enabled, marked) in [
+        for (saved, minutes, high, enabled, single_prints, midpoint) in [
             (
                 r#"{"tpo_initial_balance_minutes":30,"tpo_poor_highs_lows":true,"tpo_initial_balance_extensions":true}"#,
                 30,
                 102.0,
                 true,
                 false,
+                true,
             ),
             (
                 r#"{"tpo_period_minutes":30,"tpo_row_ticks":1}"#,
@@ -1053,6 +1070,7 @@ mod tests {
                 104.0,
                 false,
                 false,
+                true,
             ),
             (
                 r#"{"tpo_single_prints":true,"tpo_midpoint":true}"#,
@@ -1060,13 +1078,22 @@ mod tests {
                 104.0,
                 false,
                 true,
+                true,
+            ),
+            (
+                r#"{"tpo_single_prints":true,"tpo_midpoint":false}"#,
+                60,
+                104.0,
+                false,
+                true,
+                false,
             ),
         ] {
             let params: ChartTypeParams = serde_json::from_str(saved).unwrap();
             let config = params.tpo_config(Some(1.0));
             assert_eq!(config.initial_balance_minutes, minutes);
-            assert_eq!(config.show_single_prints, marked);
-            assert_eq!(config.show_midpoint, marked);
+            assert_eq!(config.show_single_prints, single_prints);
+            assert_eq!(config.show_midpoint, midpoint);
             let profiles = to_tpo_profiles(&bars, &config, &Timeframe::Min30.into());
             assert_eq!(
                 (
@@ -1079,8 +1106,8 @@ mod tests {
             assert_eq!(saved["tpo_initial_balance_minutes"], minutes);
             assert_eq!(saved["tpo_poor_highs_lows"], enabled);
             assert_eq!(saved["tpo_initial_balance_extensions"], enabled);
-            assert_eq!(saved["tpo_single_prints"], marked);
-            assert_eq!(saved["tpo_midpoint"], marked);
+            assert_eq!(saved["tpo_single_prints"], single_prints);
+            assert_eq!(saved["tpo_midpoint"], midpoint);
             assert_eq!(
                 serde_json::from_value::<ChartTypeParams>(saved).unwrap(),
                 params

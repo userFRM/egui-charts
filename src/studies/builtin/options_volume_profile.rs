@@ -735,6 +735,7 @@ impl Indicator for OptionsVolumeProfile {
             config,
             color: self.colors[0].to_srgba_unmultiplied(),
             right_aligned: true,
+            width: 0.9,
         }]
     }
     fn colors(&self) -> Vec<Color32> {
@@ -1523,6 +1524,7 @@ mod tests {
                                     100.0..300.0,
                                     crate::painting::volume_profile::ProfileStyle::Study {
                                         right_aligned: true,
+                                        width: 0.9,
                                     },
                                     &|price| 300.0 + direction * (price - 105.0) as f32,
                                 );

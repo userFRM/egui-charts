@@ -424,13 +424,14 @@ pub trait Indicator: Send {
         }
     }
 
-    /// Price mapping supplied by the chart for a shared scale, independent of pane bounds.
-    /// Custom presentation implementations can retain it to support shared scales.
+    /// Price mapping supplied by the chart, independent of pane bounds: for a shared scale, and
+    /// for a study in the price pane on its own scale or no scale whose chart primitives add
+    /// prices to its fit. Custom presentation implementations can retain it to support these.
     fn scale_mapping(&self) -> Option<crate::scales::PriceMap> {
         None
     }
 
-    /// Updates the chart's shared-scale mapping. `None` restores the ordinary pane mapping.
+    /// Updates the chart-supplied mapping. `None` restores the ordinary pane mapping.
     fn set_scale_mapping(&mut self, mapping: Option<crate::scales::PriceMap>) {
         let _ = mapping;
     }

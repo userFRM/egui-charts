@@ -423,8 +423,8 @@ fn prepare(
                         .advance_sample_to(start + chrono::Duration::minutes(minute));
                     h.run_steps(2);
                 }
-                // The sample feed prints about 110 trades a minute with a heavy tail of sizes, so the
-                // default threshold still draws a bubble every few seconds; keep the largest 0.7%.
+                // The sample feed prints about 110 trades a minute with a heavy tail of sizes. Keep
+                // the largest 0.7% by a fixed size, so a bubble stays while its trade is in view.
                 h.state_mut().chart.set_volume_bubbles(Some(
                     egui_charts::chart::overlays::VolumeBubblesConfig {
                         min_size_filter: Some(120.0),
