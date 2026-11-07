@@ -1,6 +1,6 @@
 //! Style tab - color, line width, line style.
 
-use crate::drawings::{ArrowStyle, LineMeasurementPosition};
+use crate::drawings::{ArrowStyle, Drawing, LineMeasurementPosition};
 use crate::localization as l10n;
 use crate::model::LineStyle;
 use egui::{Color32, Role, Sense, Stroke, StrokeKind, Ui, Vec2, WidgetInfo};
@@ -119,7 +119,7 @@ impl StyleTab {
                 }
             }
 
-            if tool.is_some_and(|tool| tool.supports_fill()) {
+            if let Some(tool) = tool.filter(|tool| tool.supports_fill()) {
                 let label = ui.label(l10n::text(ui.ctx(), "Fill"));
                 ui.checkbox(&mut props.fill_enabled, l10n::text(ui.ctx(), "Enable fill"))
                     .labelled_by(label.id);
@@ -127,10 +127,10 @@ impl StyleTab {
 
                 if props.fill_enabled {
                     ui.label(l10n::text(ui.ctx(), "Fill color"));
-                    // A first fill is a light tint of the line colour.
                     let fill = props.fill_color.unwrap_or_else(|| {
-                        let [r, g, b, _] = props.color.to_srgba_unmultiplied();
-                        Color32::from_rgba_unmultiplied(r, g, b, 51)
+                        let [r, g, b, a] =
+                            Drawing::first_fill(tool, props.color.to_srgba_unmultiplied());
+                        Color32::from_rgba_unmultiplied(r, g, b, a)
                     });
                     props.fill_color = Some(fill);
                     if let Some(picked) = color_swatch(ui, fill_picker, fill, "drawing_props_fill")
@@ -282,10 +282,42 @@ fn line_width_row(ui: &mut Ui, width: &mut f32) {
 mod tests {
     use super::*;
     use crate::Chart;
-    use crate::drawings::{Drawing, DrawingToolType};
+    use crate::drawings::DrawingToolType;
     use crate::model::BarData;
     use crate::ui_kit::color_picker::MAIN_COLORS;
     use egui::{Context, Event, Modifiers, PointerButton, Pos2, Rect, Shape};
+
+    /// Switching Fill on starts from the tool's own fill where it differs from its line, as on
+    /// the regression trend's upper band and the sector, and from a tint of the line elsewhere.
+    #[test]
+    fn enabling_fill_starts_from_the_tool_fill_or_a_tint_of_the_line() {
+        let line = Color32::from_rgb(10, 20, 30);
+        let blue = Color32::from_rgba_unmultiplied(41, 98, 255, 51);
+        let tint = Color32::from_rgba_unmultiplied(10, 20, 30, 51);
+        for (tool, fill) in [
+            (DrawingToolType::RegressionTrend, blue),
+            (DrawingToolType::Sector, blue),
+            (DrawingToolType::ParallelChannel, tint),
+            (DrawingToolType::Brush, tint),
+        ] {
+            let chart = Chart::new(BarData::new());
+            let mut drawing = Drawing::new(0, tool);
+            drawing.fill_color = None;
+            let mut props = DrawingProps::from_drawing(&drawing, &chart);
+            props.fill_enabled = true;
+            props.color = line;
+            let ctx = Context::default();
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+                    ..Default::default()
+                },
+                |ui| StyleTab::show(ui, &mut props, &mut Default::default()),
+            );
+            output.drop_without_applying_deltas();
+            assert_eq!(props.fill_color, Some(fill), "{tool:?}");
+        }
+    }
 
     /// A palette swatch recolours a highlighter without making its stroke opaque.
     #[test]
