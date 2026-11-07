@@ -141,10 +141,10 @@ impl AlertDelivery {
     pub fn is_valid(&self) -> bool {
         let url = self.webhook_url.trim();
         !self.webhook
-            || url
-                .strip_prefix("https://")
-                .or_else(|| url.strip_prefix("http://"))
-                .is_some_and(|rest| !rest.is_empty())
+            || url.split_once("://").is_some_and(|(scheme, rest)| {
+                (scheme.eq_ignore_ascii_case("https") || scheme.eq_ignore_ascii_case("http"))
+                    && !rest.is_empty()
+            })
     }
 }
 
@@ -1018,7 +1018,35 @@ mod tests {
     #[test]
     fn saved_alerts_require_finite_levels_ordered_channels_and_positive_lookbacks() {
         type Edit = fn(&mut Alert);
-        let rows: [(Edit, bool); 29] = [
+        let rows: [(Edit, bool); 33] = [
+            (
+                |a| {
+                    a.delivery.webhook = true;
+                    a.delivery.webhook_url = "HTTPS://hooks.example.com/alert".into();
+                },
+                true,
+            ),
+            (
+                |a| {
+                    a.delivery.webhook = true;
+                    a.delivery.webhook_url = "Http://10.0.0.2/hook".into();
+                },
+                true,
+            ),
+            (
+                |a| {
+                    a.delivery.webhook = true;
+                    a.delivery.webhook_url = "ftp://hooks.example.com".into();
+                },
+                false,
+            ),
+            (
+                |a| {
+                    a.delivery.webhook = true;
+                    a.delivery.webhook_url = "https://".into();
+                },
+                false,
+            ),
             (
                 |a| a.condition = AlertCondition::StrategyFills("run".into()),
                 true,

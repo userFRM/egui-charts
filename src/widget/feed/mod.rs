@@ -42,6 +42,8 @@ pub(crate) struct FeedLink {
     pub(super) clock: BarClock,
     /// Hours choice of the retained executions.
     extended_hours: bool,
+    /// Currency or unit of the retained executions, as `extended_hours` is their hours choice.
+    conversion: Option<String>,
     initial_bars: usize,
     /// Whether history is requested adjusted for dividends.
     pub(super) adjusted: bool,
@@ -51,6 +53,12 @@ pub(crate) struct FeedLink {
     wake: Arc<Mutex<Option<ViewportId>>>,
     /// The symbol or timeframe changed: the next `pump` reloads.
     reload_pending: bool,
+    /// The pause ended: the next `pump` reloads, keeping the bars, executions and depth history
+    /// when nothing else changed.
+    resumed: bool,
+    /// Open of the last bar a resume dropped; the bars before it are kept. The new subscription
+    /// drops older executions, and a latest page that starts after it replaces the kept bars.
+    resumed_from: Option<chrono::DateTime<chrono::Utc>>,
     pub(super) paused: bool,
     /// The pause last set with [`Chart::set_feed_paused`]. `paused` also holds while the main
     /// bars take no data or a replay runs.
@@ -148,10 +156,13 @@ impl FeedLink {
             inbox: Arc::default(),
             clock: self.clock.clone(),
             extended_hours: self.extended_hours,
+            conversion: self.conversion.clone(),
             initial_bars: self.initial_bars,
             adjusted: self.adjusted,
             wake: Arc::default(),
             reload_pending: false,
+            resumed: false,
+            resumed_from: None,
             paused: true,
             host_paused: true,
             next_key: 0,
@@ -308,10 +319,13 @@ impl Chart {
             inbox: Arc::default(),
             clock: BarClock::new(timeframe),
             extended_hours: self.extended_hours,
+            conversion: self.conversion.clone(),
             initial_bars,
             adjusted: false,
             wake: Arc::default(),
             reload_pending: true,
+            resumed: false,
+            resumed_from: None,
             paused: false,
             host_paused: false,
             next_key: 0,
@@ -353,8 +367,14 @@ impl Chart {
     }
 
     /// Suspends feed requests and unsubscribes while the host supplies replay bars by hand.
-    /// Resuming reloads the current symbol and interval, including any trades retained by the
-    /// host. Bars supplied while paused are matched by exact opening time.
+    /// Resuming with the same symbol, interval, hours and conversion keeps the bars, executions
+    /// and depth history the chart holds and loads what the pause missed. The latest page and the
+    /// new subscription rebuild the last bar and add the newer ones, executions a feed replays on
+    /// resubscribing are dropped for the bars kept, and so are the bars it pushes again for them
+    /// until the chart holds a newer one. A latest page that does not reach the kept bars replaces
+    /// them. After any other change, on trade-based intervals and when the pause came before the
+    /// first page arrived, resuming reloads the current symbol and interval. Bars supplied while
+    /// paused are matched by exact opening time.
     /// The feed also stays paused while the main series is removed, and follows this setting
     /// again once undo restores the series. On a chart without the original pane it keeps
     /// following this setting, because the removed series' bars still supply the studies.
@@ -370,14 +390,26 @@ impl Chart {
             && link.paused != paused
         {
             link.paused = paused;
-            link.reload_pending = true;
             if paused {
+                // The bars of a load the pause interrupted are incomplete: resuming reloads them.
+                let first_page = |request: &Request| {
+                    matches!(
+                        request,
+                        Request::History {
+                            scroll_back: false,
+                            ..
+                        }
+                    )
+                };
+                link.reload_pending |= link.pending.iter().any(|(_, r, _)| first_page(r))
+                    || link.retries.iter().any(|(_, r, _)| first_page(r));
                 if let Some(id) = link.subscription.take() {
                     link.inbox.unsubscribe(id);
                     link.feed.unsubscribe(id);
                 }
                 link.pending.clear();
             } else {
+                link.resumed = true;
                 self.study_data.clear_feed();
             }
         }
