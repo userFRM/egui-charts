@@ -593,6 +593,7 @@ impl Drawing {
 
     /// The fill a `tool` drawing takes when Fill is switched on: its own default where that is not
     /// a tint of its line, as on the regression trend's upper band, otherwise `line` at 20%.
+    #[cfg(feature = "ui")]
     pub(crate) fn first_fill(tool: DrawingToolType, line: [u8; 4]) -> [u8; 4] {
         let style = default_style(tool);
         match style.fill {
