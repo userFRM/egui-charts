@@ -1537,7 +1537,8 @@ mod tests {
 
     /// Text is drawn at 1 to 256 points (`styles::typography::FONT_SIZES`): a larger high-low
     /// label is drawn at 256 points, and `Chart::restore` refuses it as it refuses the other font
-    /// sizes in a saved layout. A label size of zero hides the labels and still restores.
+    /// sizes in a saved layout, and `Chart::snapshot` refuses a chart that holds one. Label sizes of
+    /// zero or below hide the labels and still restore.
     #[test]
     #[cfg(feature = "drawings")]
     fn high_low_label_size_is_bounded_like_other_text() {
@@ -1569,13 +1570,17 @@ mod tests {
         };
         // Restored into charts that are never painted: laying the label out at the oversized
         // size is what the bound exists to prevent.
-        let refused = matches!(
-            Chart::new(bars()).restore(&saved_at(100000.0)),
-            Err(crate::widget::RestoreError::Layout(
-                "Font sizes must be between 1 and 256"
-            ))
-        );
-        let zero_restores = Chart::new(bars()).restore(&saved_at(0.0)).is_ok();
+        let refused = [100000.0, 0.5].into_iter().all(|size| {
+            matches!(
+                Chart::new(bars()).restore(&saved_at(size)),
+                Err(crate::widget::RestoreError::Layout(
+                    "Font sizes must be between 1 and 256"
+                ))
+            )
+        });
+        let hidden_restore = [0.0, -3.0]
+            .into_iter()
+            .all(|size| Chart::new(bars()).restore(&saved_at(size)).is_ok());
 
         // A single bar always fits its labels, so the size reaches the painter.
         let label = Color32::from_rgb(3, 4, 103);
@@ -1583,6 +1588,7 @@ mod tests {
         params.styles.high_low.label_color = label;
         params.styles.high_low.label_font_size = 300.0;
         chart.set_chart_type_params(params);
+        let snapshot_refused = chart.snapshot().is_err();
         let ctx = Context::default();
         frame(&ctx, &mut chart, 0.0, vec![]);
         let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
@@ -1598,7 +1604,10 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!((refused, zero_restores, sizes), (true, true, vec![256.0]));
+        assert_eq!(
+            (refused, hidden_restore, snapshot_refused, sizes),
+            (true, true, true, vec![256.0])
+        );
     }
 
     /// A high-low document without the chart type's style printed no price labels, so a layout or
