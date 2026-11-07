@@ -257,8 +257,20 @@ impl ChartSettingsState {
             .and_then(|style| style.price_line_color);
         settings.scales_and_lines.lock_price_to_bar_ratio =
             chart.state().price_scale().bar_ratio_locked();
-        settings.scales_and_lines.price_to_bar_ratio =
-            chart.state().price_scale().bar_ratio().unwrap_or(1.0);
+        // An unlocked chart offers the ratio of the view it shows, which ticking the lock keeps; one
+        // not drawn yet has no view and offers 1.
+        let mut view = chart.state().price_scale().clone();
+        view.set_bar_ratio_locked(
+            true,
+            chart.state().time_scale().bar_spacing(),
+            chart.get_rendered_price_rect().height(),
+        );
+        settings.scales_and_lines.price_to_bar_ratio = chart
+            .state()
+            .price_scale()
+            .bar_ratio()
+            .or(view.bar_ratio())
+            .unwrap_or(1.0);
         settings.scales_and_lines.show_last_price_label = config.show_symbol_last_val;
         settings.scales_and_lines.show_price_line = config.show_price_line;
         settings.scales_and_lines.show_prev_close_label = config.show_symbol_prev_close;
@@ -2411,5 +2423,35 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Ticking the ratio lock in the settings of an unlocked chart, as the dialog does, locks the
+    /// view the chart shows, as switching on the configuration's lock does.
+    #[test]
+    fn locking_the_ratio_in_settings_keeps_the_view() {
+        use crate::widget::test_frames::frame;
+        let start = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let bars = (0..50)
+            .map(|i| {
+                let close = (10.0 + (i % 5) as f64) / 1000.0;
+                let time = start + chrono::Duration::minutes(i);
+                Bar::new(time, close, 0.016, 0.009, close, 1.0)
+            })
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars));
+        chart.set_timeframe(crate::model::Timeframe::Min1);
+        chart.config_mut().show_volume = false;
+        let ctx = Context::default();
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let mut settings = ChartSettingsState::from_chart(&chart);
+        settings.scales_and_lines.lock_price_to_bar_ratio = true;
+        // The dialog turns auto scale off with the lock.
+        settings.scales_and_lines.auto_scale = false;
+        chart.user_action(|chart| settings.apply_to_chart(chart).unwrap());
+        frame(&ctx, &mut chart, 1.0, vec![]);
+        let range = chart.state().price_scale().range();
+        // The bars span 0.009 to 0.016: ten times the span they are fitted in is below 0.0875,
+        // while one price unit per bar spans the plot's height in bar widths, about 91.
+        assert!(range.max - range.min < 0.0875, "{range:?}");
     }
 }
