@@ -947,6 +947,8 @@ impl Chart {
         let full = f64::from(scale.width()) / f64::from(scale.bar_spacing()) - 1.0;
         let last = scale.position(scale.base_idx() as f64) - scale.position(0.0);
         let stop = full.clamp(0.0, last);
+        // The right edge a stop leaves at `full` can read back a rounding error short of it.
+        let before = before + 1e-6;
         if right < stop && (before >= full || right < 0.0 && before >= 0.0) {
             scale.set_right_offset(scale.right_offset_precise() + stop - right);
         }

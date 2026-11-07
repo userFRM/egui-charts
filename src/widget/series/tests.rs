@@ -490,9 +490,10 @@ fn set_data_newer_window_keeps_a_scrolled_back_view_on_bars() {
     assert_eq!(chart.state.visible_range(), (0, 89));
 
     // A plot full of bars: minute 69 keeps the right edge until the oldest held bar reaches the
-    // left edge, then that bar stays there as the window moves on.
-    let mut chart = scrolled(20.0, -30.0);
-    let visible = f64::from(chart.state.time_scale().width()) / 20.0;
+    // left edge, then that bar stays there as the window moves on. At 23 px a bar the right
+    // edge of the stopped view reads back a rounding error short of a full plot.
+    let mut chart = scrolled(23.0, -30.0);
+    let visible = f64::from(chart.state.time_scale().width()) / 23.0;
     for start in 1..=60 {
         chart.set_data(SeriesId::MAIN, window(start, 100));
         frame(&ctx, &mut chart, start as f64, Vec::new());
