@@ -109,7 +109,7 @@ pub(super) fn render_hollow_candles(
     style: &HollowStyle,
 ) {
     let coords = *price_scale;
-    let border_width = DESIGN_TOKENS.stroke.medium;
+    let border_width = border_width(colors);
     // At most two wicks, a fill and a border per bar, under one paint list lock.
     let mut shapes = Vec::with_capacity(4 * visible_data.len());
 

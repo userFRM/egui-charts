@@ -2042,13 +2042,16 @@ impl Chart {
                 } else {
                     self.chart_type
                 };
-                // Main volume candles have a Borders switch and the painter's stroke; the
-                // configured border width is for plain candles.
+                // Main hollow and volume candles have a Borders switch and the painter's stroke;
+                // the configured border width is for plain candles.
                 let without_width = StyleColors {
                     candle_border_width: 0.0,
                     ..colors
                 };
-                if series_type == ChartType::VolumeCandles {
+                if matches!(
+                    series_type,
+                    ChartType::HollowCandles | ChartType::VolumeCandles
+                ) {
                     data.colors = &without_width;
                 }
                 let paint_series =

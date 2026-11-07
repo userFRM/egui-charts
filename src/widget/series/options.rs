@@ -66,6 +66,8 @@ pub struct SeriesOptions {
     pub down_color: Color32,
     /// Candle border width in logical points, drawn inside the body. Defaults to zero;
     /// non-positive or non-finite widths disable borders, including per-bar border colours.
+    /// Hollow candles keep a 1.5 point border at such widths, in the bar's own border colour when
+    /// it has one, since a rising hollow candle is drawn by its border alone.
     #[serde(default)]
     pub candle_border_width: f32,
     /// Line, Step line and Line with markers style. `None` uses `color` and `width`,

@@ -1210,6 +1210,55 @@ fn added_volume_candles_draw_borders_at_their_series_width() {
     }
 }
 
+/// A positive series border width sets the border of added hollow candles; at zero they keep
+/// their 1.5 point border in the bar's own border colour, as a rising hollow candle is drawn by its
+/// border alone. Hollow candles of the main series keep 1.5 points whatever the configuration's
+/// candle border width holds.
+#[test]
+fn added_hollow_candles_take_the_series_border_width() {
+    use crate::model::BarColors;
+    let border = Color32::from_rgb(3, 4, 102);
+    let widths = |painted: &[egui::Shape]| -> Vec<f32> {
+        painted
+            .iter()
+            .filter_map(|shape| match shape {
+                egui::Shape::Rect(r) if r.stroke.color == border => Some(r.stroke.width),
+                _ => None,
+            })
+            .collect()
+    };
+    // Both rise, so that both are outlined.
+    let mut data = bars(&[10.0, 20.0]);
+    for bar in &mut data {
+        (bar.open, bar.high, bar.low) = (bar.close - 5.0, bar.close + 1.0, bar.close - 6.0);
+        bar.colors = Some(Box::new(BarColors {
+            border: Some(border),
+            ..Default::default()
+        }));
+    }
+    let ctx = egui::Context::default();
+    let mut chart = Chart::new(BarData::from_bars(bars(&[10.0, 20.0])));
+    let id = chart.add_series(SeriesOptions {
+        chart_type: ChartType::HollowCandles,
+        ..Default::default()
+    });
+    chart.set_data(id, data.clone());
+    for (at, (width, expected)) in [(0.0, 1.5), (3.0, 3.0)].into_iter().enumerate() {
+        let mut options = chart.series().next().unwrap().1.clone();
+        options.candle_border_width = width;
+        assert!(chart.set_series_options(id, options));
+        let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, at as f64 * 0.1, vec![]);
+        assert_eq!(widths(&painted), [expected, expected], "width {width}");
+    }
+
+    let mut main = Chart::new(BarData::from_bars(data));
+    main.set_chart_type(ChartType::HollowCandles);
+    main.config_mut().show_volume = false;
+    main.config_mut().candle_border_width = 3.0;
+    let painted = crate::widget::test_frames::shapes(&ctx, &mut main, 0.0, vec![]);
+    assert_eq!(widths(&painted), [1.5, 1.5]);
+}
+
 /// Added candles keep independent body, wick and inside-border colours in either pane.
 /// A zero width suppresses the border even when the bar supplies its colour.
 #[test]
