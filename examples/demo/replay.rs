@@ -1048,23 +1048,30 @@ impl DemoApp {
             ctx.request_repaint();
         } else if !egui::Popup::is_any_open(ctx)
             && let Some(pointer) = ctx.pointer_hover_pos()
+            && let Some(index) = self.replay_start_bar(pointer)
         {
             let plot = self.chart.get_rendered_price_rect();
-            let shown = self.chart.state().shown().len();
-            if plot.contains(pointer) && shown > 0 {
-                let map = self.chart.get_chart_mapping();
-                let x = map.idx_to_x(map.x_to_idx(pointer.x).min(shown - 1));
-                let layer = egui::LayerId::new(
-                    egui::Order::Foreground,
-                    egui::Id::NULL.with("replay_start_line"),
-                );
-                paint_start_line(
-                    &ctx.layer_painter(layer).with_clip_rect(plot),
-                    plot,
-                    egui::pos2(x, pointer.y),
-                );
-            }
+            let x = self.chart.get_chart_mapping().idx_to_x(index);
+            let layer = egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::NULL.with("replay_start_line"),
+            );
+            paint_start_line(
+                &ctx.layer_painter(layer).with_clip_rect(plot),
+                plot,
+                egui::pos2(x, pointer.y),
+            );
         }
+    }
+
+    /// The shown bar the start line marks and a click starts at, for a pointer anywhere in the
+    /// rendered price pane, its volume band included: the bar under it, or the last bar after it.
+    pub(super) fn replay_start_bar(&self, pointer: egui::Pos2) -> Option<usize> {
+        let shown = self.chart.state().shown().len();
+        (shown > 0 && self.chart.get_rendered_price_rect().contains(pointer)).then(|| {
+            let index = self.chart.get_chart_mapping().x_to_idx(pointer.x);
+            index.min(shown - 1)
+        })
     }
 
     fn cancel_replay_selection(&mut self) {
