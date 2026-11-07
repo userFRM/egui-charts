@@ -81,9 +81,11 @@ impl ReplayStartPicker {
 pub fn paint_start_line(painter: &Painter, plot: Rect, pointer: Pos2) {
     let theme = painter.ctx().active_theme();
     let color = theme.ui.accent;
+    // A plot shorter than the mark centres it.
+    let half = (plot.height() / 2.0).min(12.0);
     let center = pos2(
         pointer.x,
-        pointer.y.clamp(plot.top() + 12.0, plot.bottom() - 12.0),
+        pointer.y.clamp(plot.top() + half, plot.bottom() - half),
     );
     painter.vline(center.x, plot.y_range(), Stroke::new(1.0, color));
     painter.circle_filled(center, 11.0, theme.chart.bg);
@@ -98,5 +100,35 @@ pub fn paint_start_line(painter: &Painter, plot: Rect, pointer: Pos2) {
             ],
             stroke,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A price pane shorter than the scissors still gets the line through the bar under the
+    /// pointer, with the scissors centred on it.
+    #[test]
+    fn start_line_on_a_plot_shorter_than_its_mark() {
+        for (height, marked) in [(0.0, None), (20.0, Some(pos2(150.0, 110.0)))] {
+            let plot = Rect::from_min_size(pos2(0.0, 100.0), Vec2::new(300.0, height));
+            let ctx = egui::Context::default();
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                paint_start_line(ui.painter(), plot, pos2(150.0, 101.0));
+            });
+            if let Some(marked) = marked {
+                assert!(output.shapes.iter().any(|shape| matches!(
+                    &shape.shape,
+                    egui::Shape::LineSegment { points, .. }
+                        if points[0].x == marked.x && points[1].x == marked.x
+                )));
+                assert!(output.shapes.iter().any(|shape| matches!(
+                    &shape.shape,
+                    egui::Shape::Circle(circle) if circle.center == marked
+                )));
+            }
+            output.drop_without_applying_deltas();
+        }
     }
 }
