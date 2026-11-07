@@ -227,6 +227,7 @@ impl SeriesOptions {
                     border_down: self.down_color,
                     wick_up: self.up_color,
                     wick_down: self.down_color,
+                    border_visible: self.candle_border_width > 0.0,
                     ..Default::default()
                 },
                 hlc_area: crate::model::HlcAreaStyle::with_colors(self.up_color, self.down_color),

@@ -10,6 +10,16 @@ use crate::scales::PriceMap;
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rect, Stroke};
 
+/// The border width of hollow and volume candles: an added series' positive width, otherwise the
+/// design's. The main series paints them with a width of zero.
+fn border_width(colors: &StyleColors) -> f32 {
+    if colors.candle_border_width.is_finite() && colors.has_border() {
+        colors.candle_border_width
+    } else {
+        DESIGN_TOKENS.stroke.medium
+    }
+}
+
 pub(super) fn render_candles(
     price_ctx: &RenderContext,
     volume_ctx: &RenderContext,
@@ -230,7 +240,7 @@ pub(super) fn render_volume_candles(
     style: &VolumeCandlesStyle,
 ) {
     let coords = *price_scale;
-    let border_width = DESIGN_TOKENS.stroke.medium;
+    let border_width = border_width(colors);
     // At most two wicks, a fill and a border per bar, under one paint list lock.
     let mut shapes = Vec::with_capacity(4 * visible_data.len());
 
@@ -286,7 +296,7 @@ pub(super) fn render_volume_candles(
     price_ctx.painter.extend(shapes);
 
     // Volume candles don't show separate volume bars
-    let _ = (volume_ctx, colors);
+    let _ = volume_ctx;
 }
 
 #[cfg(test)]
