@@ -593,6 +593,8 @@ mod tests {
                 price_labels: true,
                 text_horizontal_align: crate::drawings::LineTextHorizontalAlign::Right,
                 text_vertical_align: crate::drawings::LineTextVerticalAlign::Top,
+                text_orientation: crate::drawings::LineTextOrientation::Horizontal,
+                across_panes: true,
             };
             settings.line_measurements = measurements;
             settings.bars_pattern = Some(crate::drawings::BarsPatternConfig {

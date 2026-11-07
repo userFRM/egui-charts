@@ -473,6 +473,15 @@ impl DrawingManager {
             if self.pane_members.contains(&drawing.pane) {
                 drawing.update_screen_coords(bar_to_x, price_to_y);
                 drawing.update_pane_coords(self.pane_rect);
+            } else if drawing.reaches_other_panes()
+                && let Some(anchor) = drawing.chart_points.first()
+            {
+                // Its time maps to this pane too; its price belongs to its own pane's scale.
+                let y = drawing
+                    .points
+                    .first()
+                    .map_or(self.pane_rect.center().y, |p| p.y);
+                drawing.points = vec![egui::Pos2::new(bar_to_x(anchor.bar_idx), y)];
             }
         }
     }
