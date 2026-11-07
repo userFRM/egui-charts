@@ -890,7 +890,7 @@ Terminal,Replay,Continue the last replay session after a reload,incomplete,libra
 Terminal,Replay,Drawings stay in place during replay,verified,library,src/widget/replay.rs;src/widget/series/mod.rs;src/widget/anchors.rs,
 Terminal,Replay,Hide future bars and reveal them one at a time,unverified,library,src/ui/replay/mod.rs;src/widget/replay.rs,
 Terminal,Replay,Indicators recompute on replayed bars only,incomplete,library,src/widget/replay.rs;src/widget/studies_data.rs;src/studies/settings.rs;src/widget/studies.rs;src/widget/series/mod.rs;src/widget/export.rs;src/widget/frame/mod.rs,
-Terminal,Replay,Jump to real time / exit replay and restore full data,unverified,library,src/widget/replay.rs,
+Terminal,Replay,Jump to real time / exit replay and restore full data,unverified,library,src/widget/replay.rs;src/widget/feed/mod.rs;src/widget/feed/pump.rs;src/data/inbox/mod.rs,
 Terminal,Replay,Pick the start bar by clicking on the chart,unverified,library,src/ui/replay/start.rs;src/ui/replay/floating.rs;examples/demo/replay.rs,
 Terminal,Replay,Play / pause autoplay,incomplete,library,src/ui/replay/mod.rs;src/ui/replay/state.rs;src/data/replay.rs;src/widget/replay.rs,
 Terminal,Replay,Playback speed,unverified,library,src/ui/replay/floating.rs;src/ui/replay/mod.rs;src/ui/replay/state.rs;src/data/replay.rs,
