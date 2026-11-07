@@ -731,6 +731,32 @@ impl SettingsDialog {
                 self.settings.chart_type = kind;
                 self.settings.chart_type_params = params;
                 self.settings.price_source = source;
+                // A template saved before volume candles had a style shows what they drew, which
+                // Ok then applies with any edits made before it.
+                if kind == crate::model::ChartType::VolumeCandles
+                    && let Some(params) = &mut self.settings.chart_type_params
+                    && (template.chart_type_params.is_none()
+                        || params.styles.volume_candles.is_saved_without_style())
+                {
+                    let colors = &mut self.settings.candle_colors;
+                    let style = crate::model::VolumeCandlesStyle::drawn_before_style(
+                        colors.body_up,
+                        colors.body_down,
+                    );
+                    *colors = crate::widget::settings::CandleColorConfig {
+                        color_by_previous_close: style.color_by_previous_close,
+                        show_body: style.body_visible,
+                        show_border: style.border_visible,
+                        show_wick: style.wick_visible,
+                        body_up: style.body_up,
+                        body_down: style.body_down,
+                        border_up: style.border_up,
+                        border_down: style.border_down,
+                        wick_up: style.wick_up,
+                        wick_down: style.wick_down,
+                    };
+                    params.styles.volume_candles = style;
+                }
                 self.template_name = name.clone();
                 self.update_color_pickers_from_settings();
                 action = SettingsAction::LoadTemplate(name.clone());
@@ -1464,6 +1490,114 @@ mod tests {
                     "{tops:?}"
                 );
             }
+        }
+    }
+
+    /// A template saved before volume candles had a style, with or without chart type
+    /// parameters, holds the candle settings of the candles chart type, of which volume candles
+    /// drew only the body colours. Loaded for a volume candles chart it shows them as drawn, the
+    /// body colours on the body and both wicks without a border, and an edit made before Ok
+    /// applies.
+    #[test]
+    fn old_templates_load_volume_candles_as_drawn_and_keep_edits() {
+        use crate::model::{Bar, BarData, ChartType};
+        use crate::widget::settings::CandleColorConfig;
+        let (up, down) = (Color32::from_rgb(1, 100, 2), Color32::from_rgb(101, 2, 3));
+        let (border, wick) = (Color32::from_rgb(3, 4, 102), Color32::from_rgb(105, 106, 6));
+        for (parent, entry) in [
+            ("/chart_type_params/styles", "volume_candles"),
+            ("", "chart_type_params"),
+        ] {
+            let mut chart = crate::Chart::new(BarData::from_bars(vec![Bar::new(
+                chrono::DateTime::UNIX_EPOCH,
+                10.0,
+                18.0,
+                8.0,
+                14.0,
+                100.0,
+            )]));
+            chart.set_chart_type(ChartType::VolumeCandles);
+            let mut saved = serde_json::to_value(ChartSettingsState::from_chart(&chart)).unwrap();
+            let object = saved.pointer_mut(parent).unwrap().as_object_mut().unwrap();
+            object.remove(entry).unwrap();
+            saved["candle_colors"] = serde_json::to_value(CandleColorConfig {
+                color_by_previous_close: true,
+                show_body: true,
+                show_border: true,
+                show_wick: false,
+                body_up: up,
+                body_down: down,
+                border_up: border,
+                border_down: border,
+                wick_up: wick,
+                wick_down: wick,
+            })
+            .unwrap();
+            let mut dialog = SettingsDialog::new();
+            dialog
+                .templates
+                .save("Old", serde_json::from_value(saved).unwrap())
+                .unwrap();
+            dialog.open(ChartSettingsState::from_chart(&chart));
+            let ctx = Context::default();
+            let mut item = None;
+            for step in 0..4 {
+                let events = match (step, item) {
+                    (2, Some(pos)) | (3, Some(pos)) => vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            pressed: step == 2,
+                            button: egui::PointerButton::Primary,
+                            modifiers: Default::default(),
+                        },
+                    ],
+                    _ => vec![],
+                };
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        dialog.draw_template_item(
+                            ui,
+                            &Theme::light(),
+                            "Old".into(),
+                            SettingsAction::None,
+                        );
+                    },
+                );
+                item = item.or(output.shapes.iter().find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == "Old" => {
+                        Some(text.pos + text.galley.size() / 2.0)
+                    }
+                    _ => None,
+                }));
+                output.drop_without_applying_deltas();
+            }
+            assert_eq!(dialog.template_name, "Old", "{entry}");
+            assert_eq!(
+                dialog.settings().candle_colors,
+                CandleColorConfig {
+                    color_by_previous_close: false,
+                    show_body: true,
+                    show_border: false,
+                    show_wick: true,
+                    body_up: up,
+                    body_down: down,
+                    border_up: up,
+                    border_down: down,
+                    wick_up: up,
+                    wick_down: down,
+                },
+                "{entry}"
+            );
+            dialog.settings.candle_colors.show_border = true;
+            dialog.settings().apply_to_chart(&mut chart).unwrap();
+            let style = &chart.chart_type_params().styles.volume_candles;
+            assert!(style.border_visible, "{entry}");
+            assert_eq!([style.border_up, style.wick_down], [up, down], "{entry}");
         }
     }
 }

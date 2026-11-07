@@ -426,6 +426,24 @@ impl Chart {
         settings
             .apply_to_chart(self)
             .map_err(RestoreError::Settings)?;
+        if snapshot.chart_type == crate::model::ChartType::VolumeCandles
+            && settings.chart_type_params.is_none()
+            && snapshot
+                .chart_type_params
+                .styles
+                .volume_candles
+                .is_saved_without_style()
+        {
+            // Settings saved before they named a chart type apply as candle settings, of which
+            // volume candles drew only the body colours.
+            let colors = &settings.candle_colors;
+            let mut params = self.chart_type_params.clone();
+            params.styles.volume_candles = crate::model::VolumeCandlesStyle::drawn_before_style(
+                colors.body_up,
+                colors.body_down,
+            );
+            self.set_chart_type_params(params);
+        }
         if let Some(config) = &snapshot.config {
             self.config = config.clone();
             // Layouts saved before the description followed the symbol held it as fixed text.

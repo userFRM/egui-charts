@@ -456,6 +456,44 @@ pub struct VolumeCandlesStyle {
     pub wick_down: Color32,
 }
 
+impl VolumeCandlesStyle {
+    /// Stands for the style of a document saved before it existed: volume candles drew without a
+    /// border then, and transparent border colours tell it from a saved style, which offers them
+    /// with borders on. Applying the document's settings replaces it through
+    /// [`Self::drawn_before_style`], and `Chart::set_chart_type_params` takes the defaults for it,
+    /// so no chart keeps it.
+    fn saved_without_style() -> Self {
+        Self {
+            border_visible: false,
+            border_up: Color32::TRANSPARENT,
+            border_down: Color32::TRANSPARENT,
+            ..Self::default()
+        }
+    }
+
+    /// Whether this is the style of a document saved before it existed.
+    #[cfg(feature = "widget")]
+    pub(crate) fn is_saved_without_style(&self) -> bool {
+        *self == Self::saved_without_style()
+    }
+
+    /// How volume candles drew before they had this style: body and both wicks in the rising or
+    /// falling body colour, by the close against the open, without a border.
+    #[cfg(feature = "widget")]
+    pub(crate) fn drawn_before_style(up: Color32, down: Color32) -> Self {
+        Self {
+            border_visible: false,
+            body_up: up,
+            body_down: down,
+            border_up: up,
+            border_down: down,
+            wick_up: up,
+            wick_down: down,
+            ..Self::default()
+        }
+    }
+}
+
 impl Default for VolumeCandlesStyle {
     fn default() -> Self {
         let up = DESIGN_TOKENS.semantic.extended.bullish;
@@ -560,7 +598,9 @@ pub struct ChartTypeStyles {
     pub candles: CandlesStyle,
     /// Hollow candles chart.
     pub hollow: HollowStyle,
-    /// Volume candles chart.
+    /// Volume candles chart. Documents saved before this style restore as they were drawn, in
+    /// their saved body colours without a border.
+    #[serde(default = "VolumeCandlesStyle::saved_without_style")]
     pub volume_candles: VolumeCandlesStyle,
     /// Heikin-Ashi chart. Documents saved before this style restore with their original close
     /// alone on the scale, as they were drawn.
@@ -622,6 +662,7 @@ impl ChartTypeStyles {
     /// The styles of a document saved before chart types had styles of their own.
     pub(super) fn saved_without_styles() -> Self {
         Self {
+            volume_candles: VolumeCandlesStyle::saved_without_style(),
             heikin: HeikinStyle::saved_without_style(),
             high_low: HighLowStyle::saved_without_style(),
             ..Self::default()

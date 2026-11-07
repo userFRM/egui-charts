@@ -284,6 +284,8 @@ pub struct ScalesAndLinesSettings {
     /// Lock scale units per bar to `price_to_bar_ratio`.
     pub lock_price_to_bar_ratio: bool,
     /// Positive scale units per bar while locked; log scales use natural logarithms of prices.
+    /// Read from a chart that is not locked, it is the ratio of the view the chart shows, so ticking
+    /// the lock keeps that view; 1 for a chart not drawn yet.
     pub price_to_bar_ratio: f64,
     /// Last price tag and line colour, or the candle direction colour when unset.
     pub symbol_price_color: Option<Color32>,

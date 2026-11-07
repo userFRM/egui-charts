@@ -742,6 +742,17 @@ impl Chart {
                     &mut style.wick_down,
                 ])
             }
+            ChartType::VolumeCandles => {
+                let style = &mut styles.volume_candles;
+                Some([
+                    &mut style.body_up,
+                    &mut style.body_down,
+                    &mut style.border_up,
+                    &mut style.border_down,
+                    &mut style.wick_up,
+                    &mut style.wick_down,
+                ])
+            }
             _ => None,
         }
     }
@@ -751,11 +762,11 @@ impl Chart {
     /// Copies candlestick colors (bullish/bearish fill, border, wick) and the
     /// price source field from the given [`SeriesSettings`] into the chart's
     /// [`ChartConfig`], and its scale mode and inversion into the main price
-    /// scale. Settings of a Heikin-Ashi or hollow candles chart keep their candle colors
-    /// in that chart type's style instead, a `None` border or wick meaning the body color,
-    /// and these colors win over the same colors in `chart_type_params`. A new scale mode
-    /// returns the scale to auto-scaling and clears the zoom history, whose ranges are in
-    /// the old mode's units. Call this when the user changes series appearance in a
+    /// scale. Settings of a Heikin-Ashi, hollow candles or volume candles chart keep their
+    /// candle colors in that chart type's style instead, a `None` border or wick meaning the
+    /// body color, and these colors win over the same colors in `chart_type_params`. A new
+    /// scale mode returns the scale to auto-scaling and clears the zoom history, whose ranges
+    /// are in the old mode's units. Call this when the user changes series appearance in a
     /// settings dialog.
     pub fn apply_series_settings(&mut self, settings: &SeriesSettings) {
         let mut params = settings.chart_type_params.clone();
