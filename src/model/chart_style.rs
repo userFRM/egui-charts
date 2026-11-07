@@ -234,9 +234,9 @@ fn read_hlc_area<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<HlcAreaStyle, D::Error> {
     #[derive(Deserialize)]
-    #[serde(untagged)]
+    #[serde(untagged, deny_unknown_fields)]
     enum Saved {
-        // The former serializer always wrote both fields, and a current entry has neither.
+        // The former serializer wrote exactly these fields, and a current entry has neither.
         Former { fill_opacity: f32, line_width: f32 },
         Current(HlcAreaStyle),
     }
@@ -663,5 +663,18 @@ mod tests {
                 assert_eq!(restored_point[key], point[key]);
             }
         }
+    }
+
+    /// The former serializer wrote only `fill_opacity` and `line_width`, so an HLC area entry
+    /// holding current fields beside them was saved since and keeps their values.
+    #[test]
+    fn hlc_area_entry_with_current_fields_keeps_them_beside_former_ones() {
+        let mut saved = ChartTypeStyles::default();
+        saved.hlc_area.close_line.width = 3.5;
+        let mut json = serde_json::to_value(&saved).unwrap();
+        json["hlc_area"]["fill_opacity"] = serde_json::json!(0.5);
+        json["hlc_area"]["line_width"] = serde_json::json!(4.0);
+        let read: ChartTypeStyles = serde_json::from_value(json).unwrap();
+        assert_eq!(read.hlc_area, saved.hlc_area);
     }
 }
