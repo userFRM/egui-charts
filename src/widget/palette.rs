@@ -254,4 +254,51 @@ mod tests {
             assert!(matches, "theme text size for {prefix}");
         }
     }
+
+    /// Both calls follow unedited chart type style colours as a theme change through the context
+    /// does, and keep edited ones. The light preset's colours go to the high contrast preset's.
+    #[test]
+    fn set_theme_recolours_unedited_hlc_area_colours() {
+        use egui::Color32;
+        const EDITED: Color32 = Color32::from_rgb(1, 2, 3);
+        let up = Color32::from_rgb(0, 220, 130);
+        let down = Color32::from_rgb(255, 95, 95);
+        let to = Theme::high_contrast();
+        for via_override in [false, true] {
+            for edited in [false, true] {
+                let ctx = egui::Context::default();
+                apply_to_egui(&ctx, &Theme::light());
+                let mut chart = chart(&[100.0], &[110.0]);
+                chart.set_chart_type(crate::model::ChartType::HlcArea);
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                if edited {
+                    let styles = &mut chart.chart_type_params.styles;
+                    styles.hlc_area.high_line.color = EDITED;
+                    styles.volume_candles.wick_up = EDITED;
+                }
+                if via_override {
+                    chart.set_theme_override(Some(to.clone()));
+                } else {
+                    chart.set_theme(&ctx, &to);
+                }
+                frame(&ctx, &mut chart, 1.0, vec![]);
+                assert_eq!(chart.config().bullish_color, up);
+                let hlc_area = &chart.chart_type_params.styles.hlc_area;
+                assert_eq!(hlc_area.high_line.color, if edited { EDITED } else { up });
+                assert_eq!(hlc_area.low_line.color, down);
+                assert_eq!(
+                    hlc_area.high_to_close_fill,
+                    Color32::from_rgba_unmultiplied(0, 220, 130, 51)
+                );
+                assert_eq!(
+                    hlc_area.close_to_low_fill,
+                    Color32::from_rgba_unmultiplied(255, 95, 95, 51)
+                );
+                let volume_candles = &chart.chart_type_params.styles.volume_candles;
+                assert_eq!(volume_candles.body_up, up);
+                assert_eq!(volume_candles.wick_up, if edited { EDITED } else { up });
+                assert_eq!(volume_candles.wick_down, down);
+            }
+        }
+    }
 }

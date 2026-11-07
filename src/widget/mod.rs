@@ -873,25 +873,27 @@ impl Chart {
 
     /// Apply a theme to this chart and to the UI in `ctx`, without changing data or pan and zoom.
     ///
-    /// Other charts sharing the context follow the active theme on their next frame, keeping
-    /// colours the host has edited and any per-chart theme override.
+    /// Unedited chart type style colours follow the theme; edited ones stay. Other charts sharing
+    /// the context follow the active theme on their next frame, keeping colours the host has
+    /// edited and any per-chart theme override.
     pub fn set_theme(&mut self, ctx: &egui::Context, theme: &crate::theme::Theme) {
         self.config = self.config.clone().with_theme(theme);
         self.theme_override = None;
-        self.inherited_theme = Some(theme.clone());
+        self.follow_chart_theme(theme);
         crate::theme::apply_to_egui(ctx, theme);
         ctx.request_repaint();
     }
 
     /// Overrides this chart's palette and text sizes without changing sibling charts or egui.
     ///
-    /// `Some(theme)` also applies its series colours to the chart configuration. Explicit
-    /// configuration edits made afterwards are kept. `None` follows the host's palette again,
+    /// `Some(theme)` also applies its series colours to the chart configuration, and unedited
+    /// chart type style colours follow it while edited ones stay. Explicit configuration edits
+    /// made afterwards are kept. `None` follows the host's palette again,
     /// retaining host-edited colours. `set_theme` clears this override and themes egui.
     pub fn set_theme_override(&mut self, theme: Option<crate::theme::Theme>) {
         if let Some(theme) = &theme {
             self.config = self.config.clone().with_theme(theme);
-            self.inherited_theme = Some(theme.clone());
+            self.follow_chart_theme(theme);
         }
         self.theme_override = theme;
     }
