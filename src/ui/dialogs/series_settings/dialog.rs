@@ -166,11 +166,10 @@ impl SeriesSettingsDialog {
                         ..Default::default()
                     };
                     // The theme does not change on Ok, so the chart will not follow it afterwards.
-                    let palette = ChartConfig::default();
-                    self.settings
-                        .chart_type_params
-                        .styles
-                        .follow_candle_colors(&[palette.clone()], &palette.with_theme(&theme));
+                    self.settings.chart_type_params.styles.follow_candle_colors(
+                        &[ChartConfig::default()],
+                        &ChartConfig::default().with_theme(&theme),
+                    );
                 }
             });
         if ok && let Some(id) = self.series_id {

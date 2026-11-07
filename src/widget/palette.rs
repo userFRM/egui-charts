@@ -87,14 +87,14 @@ impl ChartTypeStyles {
             ),
         ] {
             if old.iter().any(|old| *line == side(old)) {
-                *line = side(&new);
+                *line = side(new);
             }
             let alpha = fill.a();
             if old
                 .iter()
                 .any(|old| *fill == HlcAreaStyle::fill_tint(side(old), alpha))
             {
-                *fill = HlcAreaStyle::fill_tint(side(&new), alpha);
+                *fill = HlcAreaStyle::fill_tint(side(new), alpha);
             }
         }
     }
