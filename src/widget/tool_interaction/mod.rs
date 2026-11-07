@@ -1713,7 +1713,7 @@ mod tests {
     }
 
     /// An RSI pane is in RSI points, not in the instrument's quarter-point ticks: an info line
-    /// from 40 to 50 on it rises 10 points, which are no number of the instrument's ticks.
+    /// from 40 to 50 on it rises 10 points, which its readouts must not count as 40 ticks.
     #[cfg(feature = "ui")]
     #[test]
     fn study_pane_readouts_leave_out_the_instrument_ticks() {
