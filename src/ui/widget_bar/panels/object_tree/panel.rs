@@ -343,7 +343,7 @@ impl ObjectTreePanel {
             .show(ui, |ui| {
                 for mut symbol in inventory {
                     if let Some(sort) = self.state.drawing_sort.get(&symbol.symbol) {
-                        symbol.sort(*sort);
+                        symbol.sort_by_shown_names(*sort, |name| l10n::text(ui.ctx(), name));
                     }
                     ui.push_id(&symbol.symbol, |ui| {
                         self.show_symbol_row(ui, &symbol, action);
@@ -1043,6 +1043,31 @@ mod tests {
             [("AAA".to_owned(), crate::config::DrawingSort::Name)].into()
         );
         assert!(!rows(&h), "alphabetical, ignoring case");
+
+        // Names go by the text the rows show, in the host's language.
+        for tool in [DrawingToolType::TrendLine, DrawingToolType::Ray] {
+            let mut drawing = Drawing::new(0, tool);
+            drawing.chart_points = vec![ChartPoint::new(1.0, 100.0), ChartPoint::new(2.0, 110.0)];
+            drawing.completed = true;
+            h.state_mut()
+                .2
+                .drawings_mut()
+                .add_synced_drawing(drawing)
+                .unwrap();
+        }
+        l10n::set_translator(&h.ctx, |english| match english {
+            "Trend Line" => Some("Ligne de tendance".into()),
+            "Ray" => Some("Rayon".into()),
+            _ => None,
+        });
+        h.run();
+        let top = |name: &str| h.get_by_label(name).rect().top();
+        assert!(
+            top("Ligne de tendance") < top("Rayon"),
+            "shown A to Z: Ligne de tendance at {}, Rayon at {}",
+            top("Ligne de tendance"),
+            top("Rayon")
+        );
 
         h.get_by_label("Delete AAA drawings").click();
         h.run();

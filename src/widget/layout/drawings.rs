@@ -336,12 +336,25 @@ impl SymbolDrawings {
     /// Orders the drawings by `sort`. Equal names and edit times fall back to the stored
     /// identity of the drawings, so that the order is the same after a layout is restored.
     pub fn sort(&mut self, sort: DrawingSort) {
+        self.sort_by_shown_names(sort, |name| name.to_owned());
+    }
+
+    /// Orders the drawings as [`Self::sort`] does, by the names `shown` gives them.
+    pub(crate) fn sort_by_shown_names(
+        &mut self,
+        sort: DrawingSort,
+        shown: impl Fn(&str) -> String,
+    ) {
         self.drawings.sort_by_cached_key(|drawing| {
             let time = match sort {
                 DrawingSort::Name => None,
                 DrawingSort::LastModified => Some(Reverse(drawing.modified_at)),
             };
-            (time, drawing.name().to_lowercase(), drawing.id.clone())
+            (
+                time,
+                shown(drawing.name()).to_lowercase(),
+                drawing.id.clone(),
+            )
         });
     }
 }
