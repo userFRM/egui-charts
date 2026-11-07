@@ -1015,4 +1015,73 @@ mod tests {
             }
         }
     }
+
+    /// Choosing a palette colour for an HLC area fill keeps the fill's opacity, which has no
+    /// control of its own. Expected: white at the seeded alpha of 51.
+    #[test]
+    fn palette_colour_keeps_the_hlc_fill_opacity() {
+        use crate::model::{ChartTypeParams, HlcAreaStyle, LinePlotStyle};
+        use egui::accesskit::Role;
+        use egui::{Color32, Vec2};
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let line = |r| LinePlotStyle {
+            color: Color32::from_rgb(r, 2, 3),
+            ..Default::default()
+        };
+        let fill = Color32::from_rgba_unmultiplied(0, 50, 200, 51);
+        let mut params = ChartTypeParams::default();
+        params.styles.hlc_area = HlcAreaStyle {
+            high_line: line(101),
+            low_line: line(102),
+            close_line: line(103),
+            high_to_close_fill: fill,
+            close_to_low_fill: Color32::from_rgba_unmultiplied(200, 50, 0, 51),
+            ..Default::default()
+        };
+        let mut dialog = SettingsDialog::new();
+        dialog.set_control_visible(crate::ui::Control::Templates, false);
+        dialog.open(ChartSettingsState {
+            chart_type: ChartType::HlcArea,
+            chart_type_params: Some(params),
+            ..Default::default()
+        });
+        let theme = Theme::light();
+        let setup_theme = theme.clone();
+        let mut harness = Harness::builder()
+            .with_context_setup(move |ctx| {
+                egui_extras::install_image_loaders(ctx);
+                crate::theme::apply_to_egui(ctx, &setup_theme);
+            })
+            .with_size(Vec2::new(1440.0, 900.0))
+            .build_ui_state(
+                move |ui, (dialog, accepted): &mut (SettingsDialog, _)| {
+                    if let SettingsAction::Apply(settings) = dialog.show(ui.ctx(), &theme) {
+                        *accepted = Some(settings);
+                    }
+                },
+                (dialog, None),
+            );
+        harness.run();
+        harness
+            .get_by_role_and_label(Role::ColorWell, "#0032C8")
+            .click();
+        harness.run();
+        harness
+            .get_by_role_and_label(Role::ColorWell, "#FFFFFF")
+            .click();
+        harness.run();
+        harness.get_by_label("Ok").click();
+        harness.run();
+        let (_, accepted) = harness.state();
+        let accepted: &ChartSettingsState = accepted.as_ref().expect("accepted");
+        let picked = accepted
+            .chart_type_params
+            .as_ref()
+            .unwrap()
+            .styles
+            .hlc_area
+            .high_to_close_fill;
+        assert_eq!(picked.to_srgba_unmultiplied(), [255, 255, 255, 51]);
+    }
 }

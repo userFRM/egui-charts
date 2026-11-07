@@ -8,6 +8,7 @@ use crate::model::{
     ProfileRows, ProfileSession, TimezoneId,
 };
 use crate::theme::ThemeExt;
+use crate::ui_kit::color_picker::keep_opacity;
 use crate::ui_kit::ext::UiExt;
 use crate::ui_kit::{ColorPicker, ColorPickerState, FormGrid};
 use chrono::{NaiveTime, Timelike};
@@ -1017,9 +1018,12 @@ impl SymbolTab {
         if !state.is_open {
             state.sel_color = *color;
         }
+        let custom = state.custom_mode;
         let picked = ColorPicker::new(&mut state, id).show(ui).inner;
         if let Some(selected) = picked {
-            *color = selected;
+            // Palette swatches are opaque, so a swatch keeps the colour's opacity unless the Custom
+            // editor set it.
+            *color = keep_opacity(selected, *color, custom || state.custom_mode);
         }
         ui.data_mut(|data| data.insert_temp(id, state));
         picked.is_some()
