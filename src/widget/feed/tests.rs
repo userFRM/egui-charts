@@ -1618,20 +1618,33 @@ fn split_fill_boundaries_draw_only_a_bars_own_executions() {
             Tick::new(start + TimeDelta::milliseconds(i), price, size, Some(side))
         })
         .collect();
-    let timeframe: Timeframe = "10v".parse().unwrap();
-    let mut whole = Footprint::new(BarClock::new(timeframe), 1.0, 1).unwrap();
+    // Each bar takes the next 10 of volume, splitting the fill that crosses it.
+    let mut own = vec![std::collections::BTreeMap::new()];
+    let mut volume = 0.0;
     for trade in &fractional {
-        whole.push(trade).unwrap();
+        let level = trade.price as i64;
+        let mut left = trade.size;
+        while left > 0.0 {
+            let part = left.min(10.0 - volume);
+            let cell = (own.last_mut().unwrap())
+                .entry(level)
+                .or_insert((level, 0.0, 0.0));
+            if trade.side == Some(Sell) {
+                cell.1 += part;
+            } else {
+                cell.2 += part;
+            }
+            (volume, left) = (volume + part, left - part);
+            if volume == 10.0 {
+                own.push(std::collections::BTreeMap::new());
+                volume = 0.0;
+            }
+        }
     }
-    let fractional_cells: Vec<PagedCells> =
-        crate::data::aggregate_trades_with_tick_size(&fractional, timeframe, Some(1.0))
-            .unwrap()
-            .iter()
-            .map(|bar| {
-                let cells = whole.bar_at(bar.time).unwrap().levels.values();
-                Some(cells.map(|cell| (cell.level, cell.bid, cell.ask)).collect())
-            })
-            .collect();
+    let fractional_cells: Vec<PagedCells> = (own.into_iter())
+        .filter(|cells| !cells.is_empty())
+        .map(|cells| Some(cells.into_values().collect()))
+        .collect();
     let rows = [
         (
             "10v",
