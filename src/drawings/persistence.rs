@@ -322,9 +322,9 @@ impl Default for StorageMetadata {
 }
 
 impl DrawingStorage {
-    /// Current storage format version. Version 7 extends a trend angle past the anchor its Left or
-    /// Right names; trend angles saved before that change load with the reach they were drawn
-    /// with. Version 6 draws arrow marks in their own colour; earlier
+    /// Current storage format version. Version 7 extends an info line or trend angle past the
+    /// anchor its Left or Right names; those saved before that change load with the reach they
+    /// were drawn with. Version 6 draws arrow marks in their own colour; earlier
     /// versions load in the colour they were drawn in. Version 5 gives Elliott double and triple
     /// combinations an unlabelled start point; earlier versions load with a start point on their
     /// first anchor.
@@ -593,11 +593,11 @@ impl DrawingStorage {
                             }
                         }
                         if version < 7
-                            && tool == T::TrendAngle
+                            && matches!(tool, T::InfoLine | T::TrendAngle)
                             && !has_price_labels
                             && let [a, b, ..] = drawing.points.as_slice()
                         {
-                            // Earlier renderers carried a trend angle's Left and Right towards the
+                            // Earlier renderers carried these tools' Left and Right towards the
                             // pane's sides and never extended a vertical one. Version 6 was also
                             // written after that changed; only records without `price_labels` were
                             // written before.
@@ -2241,5 +2241,10 @@ mod tests {
     #[test]
     fn trend_angle_saved_right_to_left_keeps_its_extension_side() {
         assert_saved_extension_side(DrawingToolType::TrendAngle);
+    }
+
+    #[test]
+    fn info_line_saved_right_to_left_keeps_its_extension_side() {
+        assert_saved_extension_side(DrawingToolType::InfoLine);
     }
 }
