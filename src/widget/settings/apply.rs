@@ -1607,7 +1607,8 @@ mod tests {
     /// Before volume candles had a style, a layout or chart settings template held the candle
     /// settings for them and the painter ignored all but the body colours: body and both wicks in
     /// the body colour of the bar's direction against its open, without a border. Such a document
-    /// restores as it was painted, whatever else its candle settings held. The third bar closes at
+    /// restores as it was painted, whatever else its candle settings held, and a layout without a
+    /// configuration still gives it the candle colours of its settings. The third bar closes at
     /// 12.5, below its open of 13 and above the previous close of 11.
     #[test]
     #[cfg(feature = "drawings")]
@@ -1671,9 +1672,14 @@ mod tests {
         // What each kind of document leaves out of its current form.
         let strip_layout = |saved: &mut serde_json::Value, what: &str| {
             let settings = saved["settings"].as_object_mut().unwrap();
-            if what == "settings" {
+            if what == "settings" || what == "version 1" {
                 settings.remove("chart_type").unwrap();
                 settings.remove("chart_type_params").unwrap();
+            }
+            if what == "version 1" {
+                let layout = saved.as_object_mut().unwrap();
+                layout.remove("config").unwrap();
+                layout.remove("options").unwrap();
             }
             for path in ["/chart_type_params", "/settings/chart_type_params"] {
                 let Some(params) = saved.pointer_mut(path) else {
@@ -1689,7 +1695,7 @@ mod tests {
             }
         };
         for colors in saved_colors {
-            for what in ["style", "styles", "settings", "template"] {
+            for what in ["style", "styles", "settings", "version 1", "template"] {
                 let mut restored = make();
                 if what == "template" {
                     let mut saved =
@@ -1710,6 +1716,16 @@ mod tests {
                     strip_layout(&mut saved, what);
                     let saved: ChartSnapshot = serde_json::from_value(saved).unwrap();
                     restored.restore(&saved).unwrap();
+                    if what == "version 1" {
+                        // A layout without a configuration gives it the candle colours of its
+                        // settings, as it did before.
+                        let config = restored.config();
+                        assert_eq!(
+                            (config.bullish_color, config.bearish_color),
+                            (up, down),
+                            "{colors:?}"
+                        );
+                    }
                 }
                 let ctx = Context::default();
                 frame(&ctx, &mut restored, 0.0, vec![]);
