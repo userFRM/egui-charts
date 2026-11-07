@@ -506,19 +506,17 @@ fn set_data_newer_window_keeps_a_scrolled_back_view_on_bars() {
     }
 
     // The same as a bar limit evicts: the third eviction takes the left edge of minute 69's
-    // view. Indices 56, 43 and 30 at the right edge of a plot of about 35 bars.
+    // view. Indices 56, 43 and 30 at the right edge of a plot of about 35 bars, and the 88
+    // bars left fill the plot from its left border.
     let mut chart = scrolled(20.0, -30.0);
+    let visible = f64::from(chart.state.time_scale().width()) / 20.0;
     chart.set_bar_limit(SeriesId::MAIN, NonZeroUsize::new(100));
     for minute in 100..=126 {
         chart.update(SeriesId::MAIN, bar(minute * 60, 10.0));
     }
     frame(&ctx, &mut chart, 200.0, Vec::new());
-    assert_eq!(chart.state.visible_range().0, 0);
-    assert!(
-        chart.state.visible_range().1 > 30,
-        "{:?}",
-        chart.state.visible_range()
-    );
+    let got = chart.state.time_scale().right_offset_precise();
+    assert!((got - (visible - 88.0)).abs() < 1e-6, "{got}");
 
     // A view the user parked in the whitespace before the first bar stays there while nothing
     // is evicted: it showed no bars for a change to take away.
