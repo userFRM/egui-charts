@@ -183,11 +183,11 @@ pub struct Drawing {
     /// Border colour of annotation boxes; `None` uses the drawing colour.
     #[serde(default)]
     pub border_color: Option<[u8; 4]>,
-    /// Extend line to left edge; a ray, extended line, info line or trend angle extends past its
-    /// first anchor, whichever way it was drawn
+    /// Extend line to left edge; a trend line, ray, extended line, info line or trend angle
+    /// extends past its first anchor, whichever way it was drawn
     pub extend_left: bool,
-    /// Extend line to right edge; a ray, extended line, info line or trend angle extends past its
-    /// second anchor, whichever way it was drawn
+    /// Extend line to right edge; a trend line, ray, extended line, info line or trend angle
+    /// extends past its second anchor, whichever way it was drawn
     pub extend_right: bool,
     /// Arrow style at start of line
     pub arrow_start_style: ArrowStyle,
@@ -206,8 +206,8 @@ pub struct Drawing {
 
     // === Tool-specific configuration (None uses the defaults) ===
     /// Readouts, midpoint, price labels and text placement of a trend line, ray, extended line,
-    /// info line or trend angle, and the text placement of a horizontal line. Other tools ignore
-    /// these settings.
+    /// info line or trend angle, and the text placement of a horizontal line or ray. Other tools
+    /// ignore these settings.
     #[serde(default = "LineMeasurements::left_out")]
     pub line_measurements: LineMeasurements,
     /// Quantity of the long and short position tools
@@ -499,10 +499,12 @@ impl Drawing {
             text_color: match tool_type {
                 DrawingToolType::Note | DrawingToolType::Callout => Some(WHITE),
                 // Independent of the line, which can change colour without its text.
-                DrawingToolType::Ray
+                DrawingToolType::TrendLine
+                | DrawingToolType::Ray
                 | DrawingToolType::ExtendedLine
                 | DrawingToolType::InfoLine
-                | DrawingToolType::HorizontalLine => Some(BLUE),
+                | DrawingToolType::HorizontalLine
+                | DrawingToolType::HorizontalRay => Some(BLUE),
                 _ => None,
             },
             background: !plain_text,

@@ -8,6 +8,7 @@ use crate::model::{
     ProfileRows, ProfileSession, TimezoneId,
 };
 use crate::theme::ThemeExt;
+use crate::ui_kit::color_picker::keep_opacity;
 use crate::ui_kit::ext::UiExt;
 use crate::ui_kit::{ColorPicker, ColorPickerState, FormGrid};
 use chrono::{NaiveTime, Timelike};
@@ -870,7 +871,17 @@ impl SymbolTab {
     fn high_low(ui: &mut Ui, style: &mut HighLowStyle) {
         Self::fill_row(ui, "Bar colour", &mut style.bar_color);
         Self::switch(ui, "Price labels", &mut style.labels_visible);
-        Self::fill_row(ui, "Label colour", &mut style.label_color);
+        ui.label(l10n::text(ui.ctx(), "Label colour"));
+        // The default that follows the theme shows as the colour it prints in, until one is picked.
+        let mut shown = if style.label_color == Color32::PLACEHOLDER {
+            ui.active_theme().chart.axis_text
+        } else {
+            style.label_color
+        };
+        if Self::color_picker(ui, &mut shown) {
+            style.label_color = shown;
+        }
+        ui.end_row();
         let label = ui.label(l10n::text(ui.ctx(), "Label size"));
         ui.label_inputs_by(label.id, |ui| {
             ui.combo_select(
@@ -1011,9 +1022,12 @@ impl SymbolTab {
         if !state.is_open {
             state.sel_color = *color;
         }
+        let custom = state.custom_mode;
         let picked = ColorPicker::new(&mut state, id).show(ui).inner;
         if let Some(selected) = picked {
-            *color = selected;
+            // Palette swatches are opaque, so a swatch keeps the colour's opacity unless the Custom
+            // editor set it.
+            *color = keep_opacity(selected, *color, custom || state.custom_mode);
         }
         ui.data_mut(|data| data.insert_temp(id, state));
         picked.is_some()

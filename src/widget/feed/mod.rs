@@ -203,8 +203,8 @@ impl FeedLink {
     /// older than the one before it is left out, as it is when it arrives live. The bar of the
     /// oldest held trade is incomplete until a trade page reports the start of trade history.
     /// On a trade-based interval, paged trades fill only the bars of `history`, the chart's, that
-    /// they rebuild ([`Footprint::push_history`]). With `before`, includes only executions
-    /// strictly before that replay cutoff.
+    /// open before the live executions and that they rebuild ([`Footprint::push_history`]). With
+    /// `before`, includes only executions strictly before that replay cutoff.
     pub(super) fn footprint(
         &self,
         before: Option<chrono::DateTime<chrono::Utc>>,
@@ -223,23 +223,30 @@ impl FeedLink {
         };
         let trades = || held().take_while(|trade| before.is_none_or(|time| trade.ts < time));
         // Paged executions have their own anchor; the sink supplies live allocations below.
-        if !trade_based || self.trades.lost_until().is_none() || self.trades.live().next().is_none()
-        {
-            if trade_based && !history.is_empty() {
-                flow.push_history(&held().collect::<Vec<_>>(), history, before);
-            } else {
-                for trade in trades() {
-                    let _ = flow.push(trade);
-                }
+        let lost = self.trades.lost_until();
+        if trade_based && !history.is_empty() {
+            // An execution at the loss's time may have lost the one that opened its bar.
+            let paged: Vec<_> = held()
+                .filter(|trade| lost.is_none_or(|lost| trade.ts > lost))
+                .collect();
+            // Bars from the first live execution on hold executions the page lacks, so it cannot
+            // end with them.
+            let live = self.trades.live().next().map(|trade| trade.ts);
+            let paged_bars = history.partition_point(|bar| live.is_none_or(|live| bar.time < live));
+            flow.push_history(&paged, &history[..paged_bars], before);
+        } else if !trade_based || lost.is_none() || self.trades.live().next().is_none() {
+            for trade in trades() {
+                let _ = flow.push(trade);
             }
         }
-        if let Some(lost) = self.trades.lost_until() {
+        if let Some(lost) = lost {
             flow.drop_through(lost, trades());
         }
         let first = self.unconfirmed_start().or_else(|| {
-            // Without bars to match, paged trades group from the oldest held one.
-            let unmatched = history.is_empty() && !self.trades_from_start;
-            if trade_based && (unmatched || self.trades.lost_until().is_some()) {
+            // Without bars to match, paged trades group from the oldest held one. Matched ones
+            // start after any loss, and live bars carry their own marks.
+            let unsure = !self.trades_from_start || lost.is_some();
+            if trade_based && history.is_empty() && unsure {
                 self.trades.iter().next().map(|trade| trade.ts)
             } else {
                 None
