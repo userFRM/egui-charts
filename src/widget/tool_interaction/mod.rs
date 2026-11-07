@@ -39,15 +39,23 @@ impl Chart {
         }
         let clip = *self.drawings.pane_clips.get(&drawing.pane)?;
         let timescale = self.state.time_scale();
+        // A drawing names a member of its pane or the pane itself; the main series' pane is painted
+        // without an id.
+        let pane = drawing
+            .pane
+            .map(|id| {
+                self.series_pane(super::SeriesId(id))
+                    .unwrap_or(super::PaneId(id))
+            })
+            .filter(|pane| *pane != self.main_series_pane());
+        let price_member = self.pane_price_member(pane);
         drawing.line_measurement_card_rect(
             &ui.painter().with_clip_rect(clip),
             &ChartView {
-                price_formatter: self.series_price_formatter(
-                    drawing.pane.map_or(super::SeriesId::MAIN, super::SeriesId),
-                ),
+                price_formatter: price_member.and_then(|id| self.series_price_formatter(id)),
                 time_formatter: None,
                 bar_seconds: 0,
-                instrument: self.instrument(),
+                instrument: price_member.and(self.instrument()),
                 bars: self.state.shown(),
                 revision: self.state.revision(),
                 bar_to_x: &|bar| timescale.idx_to_coord_precise(bar, clip.min.x, clip.width()),
@@ -60,6 +68,27 @@ impl Chart {
                 finer: &[],
             },
         )
+    }
+
+    /// The price series whose axis `pane`'s drawings share: the main series in the main pane, else
+    /// the pane's first visible price series. `None` in a pane of studies only, whose drawings keep
+    /// their own units, without a series' formatter or the instrument's pips, ticks and precision.
+    fn pane_price_member(&self, pane: Option<super::PaneId>) -> Option<super::SeriesId> {
+        let Some(pane) = pane else {
+            return Some(super::SeriesId::MAIN);
+        };
+        self.pane_layout
+            .panes
+            .iter()
+            .find(|p| p.id == pane)?
+            .members
+            .iter()
+            .copied()
+            .find(|id| {
+                self.price_series
+                    .iter()
+                    .any(|item| item.id == *id && item.visible)
+            })
     }
 
     /// The interval drawings measure on time-based charts with a time axis.
@@ -425,23 +454,8 @@ impl Chart {
             self.timeframe,
             self.replay_time(),
         );
-        // Match the pane's shared price axis; study-only panes keep their own units.
-        let price_formatter = match pane {
-            None => self.series_price_formatter(super::SeriesId::MAIN),
-            Some(pane) => self
-                .pane_layout
-                .panes
-                .iter()
-                .find(|p| p.id == pane)
-                .and_then(|p| {
-                    p.members.iter().find(|id| {
-                        self.price_series
-                            .iter()
-                            .any(|item| item.id == **id && item.visible)
-                    })
-                })
-                .and_then(|id| self.series_price_formatter(*id)),
-        };
+        let price_member = self.pane_price_member(pane);
+        let price_formatter = price_member.and_then(|id| self.series_price_formatter(id));
         // Drawings write dates as the crosshair labels the same bar; a host horizontal scale has
         // no dates.
         // Render existing drawings against the chart's bars
@@ -449,7 +463,7 @@ impl Chart {
             price_formatter,
             time_formatter: self.horizontal_scale.is_none().then_some(time_format.0),
             bar_seconds: time_format.1,
-            instrument: self.instrument(),
+            instrument: price_member.and(self.instrument()),
             bars: self.state.shown(),
             revision: self.state.revision(),
             bar_to_x: &bar_to_x,
@@ -1696,5 +1710,52 @@ mod tests {
             );
             assert_eq!((painted, hit), (shown, shown), "{interval:?} {kind:?}");
         }
+    }
+
+    /// An RSI pane is in RSI points, not in the instrument's quarter-point ticks: an info line
+    /// from 40 to 50 on it rises 10 points, which are no number of the instrument's ticks.
+    #[cfg(feature = "ui")]
+    #[test]
+    fn study_pane_readouts_leave_out_the_instrument_ticks() {
+        use crate::studies::RSI;
+        let ctx = Context::default();
+        let mut chart = chart(&[90.0], &[110.0]);
+        chart.set_instrument(Some(
+            crate::model::Instrument::new("TEST").with_tick_size(0.25),
+        ));
+        let rsi = chart.add_indicator(Box::new(RSI::new(14)));
+        let mut line = Drawing::new(1, DrawingToolType::InfoLine);
+        line.chart_points = vec![ChartPoint::new(60.0, 40.0), ChartPoint::new(90.0, 50.0)];
+        line.completed = true;
+        line.pane = Some(rsi.0);
+        chart.drawings_mut().drawings.push(line);
+        let readouts: Vec<String> = [0.0, 0.1]
+            .into_iter()
+            .flat_map(|time| shapes(&ctx, &mut chart, time, vec![]))
+            .filter_map(|shape| match shape {
+                Shape::Text(text) if text.galley.text().contains("bars") => {
+                    Some(text.galley.text().to_owned())
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(!readouts.is_empty(), "no readouts painted");
+        assert!(
+            readouts.iter().all(|text| !text.contains("tick")),
+            "{readouts:?}"
+        );
+        // The card the selection toolbar keeps clear of is the painted one, without ticks too.
+        let card = |chart: &crate::widget::Chart| {
+            let mut card = None;
+            ctx.run_ui(Default::default(), |ui| {
+                card = chart.line_measurement_card_rect(ui, &chart.drawings().drawings[0]);
+            })
+            .drop_without_applying_deltas();
+            card
+        };
+        let with_instrument = card(&chart);
+        chart.set_instrument(None);
+        assert!(with_instrument.is_some());
+        assert_eq!(with_instrument, card(&chart));
     }
 }
