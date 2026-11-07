@@ -442,7 +442,8 @@ impl DemoApp {
         self.stop_replay();
         self.live_was_paused = self.live.paused();
         self.live.set_paused(true);
-        self.bars = self.chart.bars(SeriesId::MAIN).to_vec();
+        // Starts chosen on the replay bar pick from the recording; Exit replay restores the history.
+        self.bars = loaded.bars.clone();
         self.state.replay_active = true;
         self.replay_control.set_symbol(&self.state.symbol);
         self.replay_control.show_control();
@@ -773,6 +774,9 @@ impl DemoApp {
             self.replay_slots.clear();
             self.chart.set_feed_paused(false);
             self.live.set_paused(self.live_was_paused);
+            if self.recording_files.opened {
+                self.bars = self.chart.bars(SeriesId::MAIN).to_vec();
+            }
             self.recording_files.opened = false;
             if market {
                 self.refresh_strategy_signals();
@@ -1044,23 +1048,30 @@ impl DemoApp {
             ctx.request_repaint();
         } else if !egui::Popup::is_any_open(ctx)
             && let Some(pointer) = ctx.pointer_hover_pos()
+            && let Some(index) = self.replay_start_bar(pointer)
         {
             let plot = self.chart.get_rendered_price_rect();
-            let shown = self.chart.state().shown().len();
-            if plot.contains(pointer) && shown > 0 {
-                let map = self.chart.get_chart_mapping();
-                let x = map.idx_to_x(map.x_to_idx(pointer.x).min(shown - 1));
-                let layer = egui::LayerId::new(
-                    egui::Order::Foreground,
-                    egui::Id::NULL.with("replay_start_line"),
-                );
-                paint_start_line(
-                    &ctx.layer_painter(layer).with_clip_rect(plot),
-                    plot,
-                    egui::pos2(x, pointer.y),
-                );
-            }
+            let x = self.chart.get_chart_mapping().idx_to_x(index);
+            let layer = egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::NULL.with("replay_start_line"),
+            );
+            paint_start_line(
+                &ctx.layer_painter(layer).with_clip_rect(plot),
+                plot,
+                egui::pos2(x, pointer.y),
+            );
         }
+    }
+
+    /// The shown bar the start line marks and a click starts at, for a pointer anywhere in the
+    /// rendered price pane, its volume band included: the bar under it, or the last bar after it.
+    pub(super) fn replay_start_bar(&self, pointer: egui::Pos2) -> Option<usize> {
+        let shown = self.chart.state().shown().len();
+        (shown > 0 && self.chart.get_rendered_price_rect().contains(pointer)).then(|| {
+            let index = self.chart.get_chart_mapping().x_to_idx(pointer.x);
+            index.min(shown - 1)
+        })
     }
 
     fn cancel_replay_selection(&mut self) {
@@ -1081,12 +1092,8 @@ impl DemoApp {
             }
             ReplayStartAction::SelectBar => self.select_replay_start(),
             ReplayStartAction::SelectDate => {
-                let bars = if self.replay.is_some() {
-                    &self.bars
-                } else {
-                    self.chart.bars(SeriesId::MAIN)
-                };
-                self.replay_start.open(bars.first().map(|bar| bar.time));
+                let first = self.replay_start_bars().first().map(|bar| bar.time);
+                self.replay_start.open(first);
             }
             ReplayStartAction::Resume => {
                 if let Some((session, interval)) = self.replay_session.clone() {
@@ -1116,12 +1123,7 @@ impl DemoApp {
                 }
             }
             choice => {
-                // A running replay hides the history after its cursor from the chart.
-                let bars = if self.replay.is_some() {
-                    &self.bars
-                } else {
-                    self.chart.bars(SeriesId::MAIN)
-                };
+                let bars = self.replay_start_bars();
                 let index = match choice {
                     ReplayStartAction::Date(time) => bars.partition_point(|bar| bar.time < time),
                     ReplayStartAction::Random => {
@@ -1150,24 +1152,52 @@ impl DemoApp {
             return;
         }
         ctx.request_repaint();
-        let bars = self.chart.bars(SeriesId::MAIN);
-        let index = bars
-            .partition_point(|bar| bar.time <= time)
-            .saturating_sub(1);
-        if bars.first().is_none_or(|bar| time < bar.time) || time > bars.last().unwrap().time {
-            return;
-        }
         self.replay_selecting = false;
         // The click picked a bar, not the series under it.
         self.chart.clear_selection();
+        if self.recording_files.opened {
+            // Its bars are executions: the clicked bar ends at its last one, or a quiet bar at its
+            // open.
+            // shortcut: a tick bar opens at its first execution, so a click on one goes there;
+            // count the bar's executions if tick charts need it whole.
+            let clock = self.chart.bar_clock();
+            let end = self
+                .bars
+                .partition_point(|bar| clock.bar_open(bar.time) <= time);
+            let last = self.bars[..end]
+                .last()
+                .map_or(time, |bar| bar.time.max(time));
+            return self.seek_recording(last);
+        }
+        // A trade-by-trade replay shows only the recorded bars, so the time finds the bar.
+        let index = self
+            .replay_start_bars()
+            .partition_point(|bar| bar.time <= time)
+            .saturating_sub(1);
         self.start_replay_at(index);
     }
 
-    /// Starts replay at bar `index` of the main series, as picking that bar does, ending a replay
-    /// already running but keeping its update interval.
+    /// The bars a replay start picks from: a running replay hides the history after its cursor
+    /// from the chart.
+    fn replay_start_bars(&self) -> &[Bar] {
+        if self.replay.is_some() {
+            &self.bars
+        } else {
+            self.chart.bars(SeriesId::MAIN)
+        }
+    }
+
+    /// Starts replay at bar `index` of [`Self::replay_start_bars`], as picking that bar does,
+    /// ending a replay already running but keeping its update interval. An open recording stays
+    /// open and moves to that execution.
     pub(crate) fn start_replay_at(&mut self, index: usize) {
-        let interval =
-            (self.replay.is_some() && !self.recording_files.opened).then_some(self.replay_interval);
+        if self.recording_files.opened {
+            if let Some(time) = self.bars.get(index).map(|bar| bar.time) {
+                self.seek_recording(time);
+            }
+            return;
+        }
+        let interval = self.replay.is_some().then_some(self.replay_interval);
         self.stop_replay();
         self.start_replay();
         if let Some(replay) = &mut self.replay {
@@ -1177,6 +1207,31 @@ impl DemoApp {
         if let Some(interval) = interval {
             self.set_replay_interval(interval);
         }
+    }
+
+    /// Restarts the open recording paused at `time`, kept within its executions, with a fresh
+    /// paper account as any replay start has.
+    fn seek_recording(&mut self, time: DateTime<Utc>) {
+        let clock = source_clock(&self.chart, self.replay_interval);
+        let (Some(driver), Some(replay), Some(first)) = (
+            self.chart.replay_driver().cloned(),
+            self.replay.as_mut(),
+            self.bars.first(),
+        ) else {
+            return;
+        };
+        let Some((_, last)) = driver.time_range() else {
+            return;
+        };
+        let time = time.clamp(first.time, last);
+        driver.seek(time);
+        replay.handle_action(ReplayAction::Pause);
+        replay.seek_cutoff(time + chrono::TimeDelta::nanoseconds(1), &clock);
+        self.replay_start.is_open = false;
+        self.replay_selecting = false;
+        self.replay_applied = None;
+        self.replay_control.show_control();
+        self.push_market_replay_window();
     }
 }
 
@@ -1740,6 +1795,120 @@ mod tests {
                 "{timeframe}"
             );
         }
+    }
+
+    /// Bars the chart shows during a market replay, after the frames that build them.
+    fn shown_after_frames(app: &mut DemoApp, ctx: &egui::Context) -> Vec<Bar> {
+        for _ in 0..4 {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    app.chart.show(ui);
+                },
+            )
+            .drop_without_applying_deltas();
+        }
+        app.chart.bars(SeriesId::MAIN).to_vec()
+    }
+
+    /// A click on a bar while a trade-by-trade replay runs restarts it with that bar complete,
+    /// as a click does with candle updates.
+    #[test]
+    fn trade_replay_click_restarts_at_the_clicked_bar() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-10-27T12:05:14Z".parse().unwrap(),
+            true,
+        );
+        super::super::tests::settle(&mut app, &ctx);
+        app.advance_sample_to(app.live.now() + chrono::TimeDelta::seconds(300));
+        // Hand the chart the advanced minutes, which the feed would deliver on later frames.
+        let bars = app.live.snapshot(
+            app.state.timeframe,
+            app.chart.bar_clock(),
+            app.chart.extended_hours(),
+        );
+        app.chart.set_data(SeriesId::MAIN, bars);
+        app.start_replay();
+        app.handle_replay_control(ReplayControlAction::GoToEnd);
+        let trade = Timeframe::Ticks(NonZeroU64::MIN);
+        app.handle_replay_control(ReplayControlAction::SetUpdateInterval(trade));
+        let shown = shown_after_frames(&mut app, &ctx);
+        let traded: Vec<_> = shown.iter().filter(|bar| bar.volume > 0.0).collect();
+        assert!(traded.len() >= 3, "{} bars shown", shown.len());
+        let clicked = traded[traded.len() / 2].time;
+        app.handle_replay_control(ReplayControlAction::Start(ReplayStartAction::SelectBar));
+        app.handle_replay_bar_click(&ctx, clicked);
+        assert_eq!(app.replay_interval, trade);
+        let cutoff = app.chart.replay_time().unwrap();
+        assert!(
+            clicked < cutoff && cutoff <= clicked + chrono::TimeDelta::minutes(1),
+            "clicked the bar at {clicked}, the replay cutoff is {cutoff}"
+        );
+    }
+
+    /// Starts chosen on the replay bar while an imported recording replays stay in that recording
+    /// and place its clock at the chosen execution or bar, until Exit replay.
+    #[test]
+    fn recording_replay_starts_stay_in_the_recording() {
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new_at(
+            &eframe::CreationContext::_new_kittest(ctx.clone()),
+            "2026-10-27T12:05:14Z".parse().unwrap(),
+            true,
+        );
+        super::super::tests::settle(&mut app, &ctx);
+        app.advance_sample_to(app.live.now() + chrono::TimeDelta::seconds(180));
+        let mut events = Vec::new();
+        app.live.read_recording(&mut events);
+        let bytes = recording_bytes(&app.live.instrument(), &events).unwrap();
+        let mut import = RecordingImport::new(bytes).unwrap();
+        while !import.read_batch().unwrap() {}
+        let loaded = import.finish().unwrap();
+        let executions: Vec<_> = loaded.bars.iter().map(|bar| bar.time).collect();
+        let (first, middle, last) = (
+            executions[0],
+            executions[executions.len() / 2],
+            *executions.last().unwrap(),
+        );
+        app.open_recording(loaded).unwrap();
+        let start = |app: &mut DemoApp, action| {
+            app.handle_replay_control(ReplayControlAction::GoToEnd);
+            app.handle_replay_control(ReplayControlAction::Start(action));
+            assert!(app.recording_files.opened, "{action:?}");
+            app.chart.replay_driver().unwrap().time()
+        };
+        assert_eq!(start(&mut app, ReplayStartAction::First), first);
+        assert_eq!(app.replay.as_ref().unwrap().state.curr_bar, 0);
+        assert_eq!(start(&mut app, ReplayStartAction::Date(middle)), middle);
+        assert!((first..=last).contains(&start(&mut app, ReplayStartAction::Random)));
+        app.handle_replay_control(ReplayControlAction::GoToEnd);
+        let shown = shown_after_frames(&mut app, &ctx);
+        assert!(shown.len() >= 3, "{} bars shown", shown.len());
+        let clicked = shown[shown.len() / 2].time;
+        start(&mut app, ReplayStartAction::SelectBar);
+        app.handle_replay_bar_click(&ctx, clicked);
+        assert!(!app.replay_selecting && app.recording_files.opened);
+        let cutoff = app.chart.replay_time().unwrap();
+        assert!(
+            clicked < cutoff && cutoff <= clicked + chrono::TimeDelta::minutes(1),
+            "clicked the bar at {clicked}, the replay cutoff is {cutoff}"
+        );
+        assert_eq!(
+            shown_after_frames(&mut app, &ctx).last().unwrap().time,
+            clicked
+        );
+        // Exit replay closes the recording and leaves the live history in the demo's bars.
+        app.stop_replay();
+        assert!(!app.recording_files.opened && app.chart.replay_driver().is_none());
+        assert_eq!(app.bars, app.chart.bars(SeriesId::MAIN));
     }
 }
 

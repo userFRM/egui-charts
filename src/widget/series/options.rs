@@ -55,12 +55,14 @@ pub struct SeriesOptions {
     /// (range bars, Renko, Kagi, Line Break, Point and Figure) and TPO profiles are drawn as
     /// [`ChartType::Line`] and read back as such.
     pub chart_type: ChartType,
-    /// Colour of the line, step, marker, area and high-low types, the legend and the last-value
-    /// tag of the types drawn from the close.
+    /// Colour of the line, step, marker, area and high-low types, the legend, and the last-value
+    /// tag and price line of the high-low type and the types drawn from the close.
     pub color: Color32,
-    /// Rising bars of the OHLC and column types, and the baseline type above its base.
+    /// Rising bars of the OHLC and column types, and the baseline type above its base. High-low
+    /// bars do not use it.
     pub up_color: Color32,
-    /// Falling bars of the OHLC and column types, and the baseline type below its base.
+    /// Falling bars of the OHLC and column types, and the baseline type below its base. High-low
+    /// bars do not use it.
     pub down_color: Color32,
     /// Candle border width in logical points, drawn inside the body. Defaults to zero;
     /// non-positive or non-finite widths disable borders, including per-bar border colours.
@@ -306,15 +308,17 @@ impl PriceSeries {
         }
     }
 
-    /// The last-value tag colour: the bar's own colour, or its direction for the OHLC types.
+    /// The last-value tag colour: the bar's own colour, or its direction for the OHLC types except
+    /// high-low, whose bars share `color`.
     pub(in crate::widget) fn value_color(&self, bar: &Bar) -> Color32 {
         if let Some(color) = bar.colors.as_ref().and_then(|own| own.color) {
             return color;
         }
-        match self.options.chart_type.uses_ohlc() {
-            true if bar.close >= bar.open => self.options.up_color,
-            true => self.options.down_color,
-            false => self.options.color,
+        match self.options.chart_type {
+            ChartType::HighLow => self.options.color,
+            kind if kind.uses_ohlc() && bar.close >= bar.open => self.options.up_color,
+            kind if kind.uses_ohlc() => self.options.down_color,
+            _ => self.options.color,
         }
     }
 }

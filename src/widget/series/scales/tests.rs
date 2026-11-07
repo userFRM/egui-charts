@@ -4569,3 +4569,55 @@ fn unpainted_study_axis_in_a_secondary_pane_has_no_scale() {
     let right = chart.pane_price_scale(pane, SeriesScale::Right);
     assert!(!std::ptr::eq(chart.pane_scale(pane, left).unwrap(), right));
 }
+
+/// An added high-low series paints every bar in its `color`, so its last-value tag takes that
+/// colour too, as the main high-low series' last-price label takes its bar colour. An added
+/// candles series still tags its last value by the bar's direction.
+#[test]
+fn added_high_low_series_tags_its_last_value_in_its_bar_colour() {
+    let start = "2024-01-01T00:00:00Z"
+        .parse::<chrono::DateTime<Utc>>()
+        .unwrap();
+    // A falling bar, then a rising last bar.
+    let data: Vec<Bar> = [(13.0, 17.0, 8.5, 11.0), (10.0, 18.0, 8.0, 14.0)]
+        .iter()
+        .enumerate()
+        .map(|(i, &(o, h, l, c))| Bar::new(start + TimeDelta::minutes(i as i64), o, h, l, c, 1.0))
+        .collect();
+    let (color, up, down) = (
+        Color32::from_rgb(1, 2, 101),
+        Color32::from_rgb(1, 100, 2),
+        Color32::from_rgb(101, 2, 3),
+    );
+    for (chart_type, tagged) in [(ChartType::HighLow, color), (ChartType::Candles, up)] {
+        let ctx = egui::Context::default();
+        let mut chart = Chart::new(BarData::from_bars(data.clone()));
+        let id = chart.add_series(SeriesOptions {
+            chart_type,
+            color,
+            up_color: up,
+            down_color: down,
+            ..Default::default()
+        });
+        chart.set_data(id, data.clone());
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 0.1, vec![]);
+        let tag = chart
+            .series_last_value(id, PriceLineSource::LastBar)
+            .map(|value| value.color);
+        assert_eq!(tag, Some(tagged), "{chart_type:?} last-value tag colour");
+        if chart_type == ChartType::HighLow {
+            let plot = chart.get_rendered_price_rect();
+            let bars_in = |fill: Color32| {
+                painted
+                    .iter()
+                    .filter(|shape| {
+                        matches!(shape, egui::Shape::Rect(r)
+                            if r.fill == fill && plot.contains(r.rect.center()))
+                    })
+                    .count()
+            };
+            assert_eq!((bars_in(color), bars_in(up)), (2, 0), "high-low bars");
+        }
+    }
+}
