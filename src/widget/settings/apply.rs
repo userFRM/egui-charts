@@ -106,6 +106,14 @@ impl std::error::Error for ChartSettingsError {
     }
 }
 
+/// Stores `color` in an optional colour unless the colour, with `fallback` for `None`, already
+/// resolves to it, so that the state read from a chart applies back unchanged.
+fn set_unless_resolved(current: &mut Option<Color32>, fallback: Color32, color: Color32) {
+    if current.unwrap_or(fallback) != color {
+        *current = Some(color);
+    }
+}
+
 impl ChartSettingsState {
     /// Read the chart's current display settings. Host-managed trading and alert groups
     /// retain defaults; hosts preserve their current values when refreshing chart settings.
@@ -463,10 +471,26 @@ impl ChartSettingsState {
         ) {
             config.bullish_color = self.candle_colors.body_up;
             config.bearish_color = self.candle_colors.body_down;
-            config.bullish_border_color = Some(self.candle_colors.border_up);
-            config.bearish_border_color = Some(self.candle_colors.border_down);
-            config.bullish_wick_color = Some(self.candle_colors.wick_up);
-            config.bearish_wick_color = Some(self.candle_colors.wick_down);
+            set_unless_resolved(
+                &mut config.bullish_border_color,
+                config.bullish_color,
+                self.candle_colors.border_up,
+            );
+            set_unless_resolved(
+                &mut config.bearish_border_color,
+                config.bearish_color,
+                self.candle_colors.border_down,
+            );
+            set_unless_resolved(
+                &mut config.bullish_wick_color,
+                config.bullish_border_color.unwrap_or(config.bullish_color),
+                self.candle_colors.wick_up,
+            );
+            set_unless_resolved(
+                &mut config.bearish_wick_color,
+                config.bearish_border_color.unwrap_or(config.bearish_color),
+                self.candle_colors.wick_down,
+            );
             // Borders keep a width the host chose and take a hairline when switched on.
             if !self.candle_colors.show_border {
                 config.candle_border_width = 0.0;
@@ -531,7 +555,11 @@ impl ChartSettingsState {
         config.show_bid_ask = self.scales_and_lines.show_bid_ask;
         config.show_high_low = self.scales_and_lines.show_high_low;
 
-        config.vertical_grid_color = Some(self.grid_lines.vertical_color);
+        set_unless_resolved(
+            &mut config.vertical_grid_color,
+            config.grid_color,
+            self.grid_lines.vertical_color,
+        );
         let resolved = |color| {
             if color == Color32::PLACEHOLDER {
                 config.background_color
@@ -1199,6 +1227,50 @@ mod tests {
                 assert_eq!(chart.chart_type_params().styles.high_low, style);
             }
         }
+    }
+
+    /// The state read from a chart applies back without changing its configuration, so pressing
+    /// Ok without edits adds no undo step; colours that fell back to another stay unset. A colour
+    /// left as shown while the one it fell back to changes keeps what it showed.
+    #[test]
+    fn unedited_settings_apply_records_no_undo() {
+        let bars = || {
+            BarData::from_bars(vec![Bar::new(
+                chrono::DateTime::UNIX_EPOCH,
+                10.0,
+                18.0,
+                8.0,
+                14.0,
+                0.0,
+            )])
+        };
+        let mut chart = Chart::new(bars());
+        let before = chart.config().clone();
+        chart.user_action(|chart| {
+            ChartSettingsState::from_chart(chart)
+                .apply_to_chart(chart)
+                .unwrap();
+        });
+        assert_eq!(chart.config(), &before);
+        assert!(!chart.can_undo());
+
+        let body = Color32::from_rgb(1, 100, 2);
+        let grid = Color32::from_rgb(3, 4, 102);
+        let (old_body, old_grid) = (before.bullish_color, before.grid_color);
+        let mut settings = ChartSettingsState::from_chart(&chart);
+        settings.candle_colors.body_up = body;
+        settings.grid_lines.horizontal_color = grid;
+        chart.user_action(|chart| settings.apply_to_chart(chart).unwrap());
+        let config = chart.config();
+        assert_eq!(config.bullish_color, body);
+        assert_eq!(config.bullish_border_color, Some(old_body));
+        assert_eq!(
+            config.bullish_wick_color.or(config.bullish_border_color),
+            Some(old_body)
+        );
+        assert_eq!(config.grid_color, grid);
+        assert_eq!(config.vertical_grid_color, Some(old_grid));
+        assert!(chart.can_undo());
     }
 
     /// Hollow candles colour by the close against the previous close, and are hollow when the
