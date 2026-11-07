@@ -32,12 +32,14 @@
 //!
 //! # RSI-based moving average
 //!
-//! [`RSI::default`] also draws a 14-bar simple average of the RSI for reading crossovers, whose
-//! type (none, SMA or EMA) and length are inputs. [`RSI::new`] starts without it.
+//! [`RSI::default`] also draws a 14-bar simple average of the RSI for reading crossovers. Its type
+//! input offers none, SMA, SMA with Bollinger Bands, EMA, SMMA (RMA), WMA and VWMA, with the length
+//! and the band deviation as inputs of their own. [`RSI::new`] starts without it.
 //!
 //! # Default colour
 //!
-//! Purple (#7E57C2), with a one-pixel line, and the average yellow (#FDD835).
+//! Purple (#7E57C2), with a one-pixel line, the average yellow (#FDD835) and its bands green
+//! (#4CAF50).
 //!
 //! # Example
 //!
@@ -52,7 +54,7 @@
 //! assert!(matches!(rsi.values().to_rows()[14], IndicatorValue::Single(_)));
 //! ```
 
-use super::price_oscillator::{Mean, OscillatorAverage};
+use super::smoothing::{SMOOTHING_COLORS, Smoothed, SmoothingType};
 use crate::model::Bar;
 use crate::studies::palette;
 use crate::studies::stepper::Stepper;
@@ -66,31 +68,22 @@ use egui::Color32;
 #[derive(Clone)]
 pub struct RSI {
     period: usize,
-    ma_type: MaType,
-    ma_length: usize,
+    smoothing: SmoothingType,
+    smoothing_length: usize,
+    smoothing_deviation: f64,
     values: IndicatorValues,
     stepper: Stepper<Averaged>,
     color: Color32,
-    ma_color: Color32,
+    smoothing_colors: [Color32; 3],
     fill_color: Color32,
     visible: bool,
-}
-
-/// The moving average of the RSI that the study draws with it. The variants' names are the
-/// choices the MA type input lists.
-#[allow(clippy::upper_case_acronyms)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum MaType {
-    None,
-    SMA,
-    EMA,
 }
 
 /// The RSI and the average of its values.
 #[derive(Clone, Default)]
 struct Averaged {
     rsi: State,
-    mean: Mean,
+    smoothed: Smoothed,
 }
 
 #[derive(Clone)]
@@ -160,12 +153,13 @@ impl RSI {
     pub fn new(period: usize) -> Self {
         Self {
             period: period.max(1),
-            ma_type: MaType::None,
-            ma_length: 14,
+            smoothing: SmoothingType::None,
+            smoothing_length: 14,
+            smoothing_deviation: 2.0,
             values: IndicatorValues::new(),
             stepper: Stepper::default(),
             color: palette::PURPLE,
-            ma_color: palette::YELLOW,
+            smoothing_colors: SMOOTHING_COLORS,
             fill_color: palette::PURPLE.gamma_multiply_u8(26),
             visible: true,
         }
@@ -182,7 +176,7 @@ impl RSI {
 impl Default for RSI {
     fn default() -> Self {
         Self {
-            ma_type: MaType::SMA,
+            smoothing: SmoothingType::Sma,
             ..Self::new(14)
         }
     }
@@ -201,8 +195,11 @@ impl Indicator for RSI {
 
     crate::studies::inputs::study_inputs!(self;
         period: length("Period", 1, usize::MAX),
-        ma_type: choice("MA type", [MaType::None, MaType::SMA, MaType::EMA]),
-        ma_length: length("MA length", 1, usize::MAX)
+        smoothing: choice("Smoothing", SmoothingType::ALL),
+        smoothing_length: length("Smoothing length", 1, usize::MAX)
+            if smoothing in SmoothingType::WITH_LENGTH,
+        smoothing_deviation: number("Band deviation", 0.0, f64::MAX)
+            if smoothing in SmoothingType::WITH_BANDS
     ; {});
 
     fn name(&self) -> &str {
@@ -222,20 +219,19 @@ impl Indicator for RSI {
     }
 
     fn update(&mut self, data: &[Bar], from: usize) {
-        let (period, ma_type, ma_length) = (self.period, self.ma_type, self.ma_length);
+        let (period, kind, length, deviation) = (
+            self.period,
+            self.smoothing,
+            self.smoothing_length,
+            self.smoothing_deviation,
+        );
         self.stepper
             .run(data, from, &mut self.values, |state, bar| {
-                let value = state.rsi.next(bar, period);
-                let average = match ma_type {
-                    MaType::None => return value,
-                    MaType::SMA => OscillatorAverage::Simple,
-                    MaType::EMA => OscillatorAverage::Exponential,
-                };
-                match value {
-                    IndicatorValue::Single(rsi) => IndicatorValue::Multiple(vec![
-                        rsi,
-                        state.mean.next(average, rsi, ma_length),
-                    ]),
+                match state.rsi.next(bar, period) {
+                    // Without an average the value passes through, so skip the call on every bar.
+                    IndicatorValue::Single(rsi) if kind != SmoothingType::None => state
+                        .smoothed
+                        .next(kind, length, deviation, rsi, bar.volume),
                     other => other,
                 }
             });
@@ -249,16 +245,23 @@ impl Indicator for RSI {
         &self.values
     }
 
-    /// The RSI, the average and the band between the levels.
+    /// The RSI, the average, its upper and lower band, and the band between the levels.
     fn colors(&self) -> Vec<Color32> {
-        vec![self.color, self.ma_color, self.fill_color]
+        let [average, upper, lower] = self.smoothing_colors;
+        vec![self.color, average, upper, lower, self.fill_color]
+    }
+
+    fn fills(&self) -> Vec<crate::studies::StudyFill> {
+        self.smoothing.fills()
     }
 
     fn set_colors(&mut self, colors: Vec<Color32>) {
         if !colors.is_empty() {
             self.color = colors[0];
-            self.ma_color = colors.get(1).copied().unwrap_or(self.ma_color);
-            self.fill_color = colors.get(2).copied().unwrap_or_else(|| {
+            for (slot, color) in self.smoothing_colors.iter_mut().zip(&colors[1..]) {
+                *slot = *color;
+            }
+            self.fill_color = colors.get(4).copied().unwrap_or_else(|| {
                 Color32::from_rgba_unmultiplied(self.color.r(), self.color.g(), self.color.b(), 16)
             });
         }
@@ -294,14 +297,12 @@ impl Indicator for RSI {
     }
 
     fn line_count(&self) -> usize {
-        if self.ma_type == MaType::None { 1 } else { 2 }
+        1 + self.smoothing.lines()
     }
 
     fn line_names(&self) -> Vec<String> {
         let mut names = vec![format!("RSI({})", self.period)];
-        if self.ma_type != MaType::None {
-            names.push("RSI-based MA".to_owned());
-        }
+        names.extend(self.smoothing.line_names("RSI-based MA"));
         names
     }
 }
@@ -366,26 +367,26 @@ mod tests {
     #[test]
     fn the_average_of_the_rsi_follows_its_inputs() {
         let bars = bars_from_closes(&[1.0, 2.0, 1.0, 2.0, 3.0]);
-        for (ma_type, want) in [
+        for (smoothing, want) in [
             (1, [50.0, 50.0, 100.0]),
-            (2, [50.0, 250.0 / 3.0, 850.0 / 9.0]),
+            (3, [50.0, 250.0 / 3.0, 850.0 / 9.0]),
         ] {
             let mut study = RSI::default();
             study
                 .set_input("period", crate::studies::InputValue::Length(1))
                 .unwrap();
             study
-                .set_input("ma_length", crate::studies::InputValue::Length(2))
+                .set_input("smoothing_length", crate::studies::InputValue::Length(2))
                 .unwrap();
             study
-                .set_input("ma_type", crate::studies::InputValue::Choice(ma_type))
+                .set_input("smoothing", crate::studies::InputValue::Choice(smoothing))
                 .unwrap();
             study.calculate(&bars);
             assert_eq!(study.values().value(0, 1), Some(100.0));
             assert_eq!(study.plot_value(1, 1), None);
             for (bar, want) in (2..).zip(want) {
                 let got = study.values().value(1, bar).unwrap();
-                assert!((got - want).abs() < 1e-9, "{ma_type} bar {bar}: {got}");
+                assert!((got - want).abs() < 1e-9, "{smoothing} bar {bar}: {got}");
             }
         }
 
@@ -401,7 +402,7 @@ mod tests {
         assert_eq!(study.plot_value(1, 26), None);
         assert!(study.plot_value(1, 27).is_some());
         study
-            .set_input("ma_type", crate::studies::InputValue::Choice(0))
+            .set_input("smoothing", crate::studies::InputValue::Choice(0))
             .unwrap();
         assert_eq!(study.line_count(), 1);
     }
