@@ -181,9 +181,13 @@ impl DrawingProps {
             return Err("Drawing anchors changed; reopen its properties");
         }
         let selected = chart.drawings().is_selected(id.0);
-        let fill = self
-            .fill_enabled
-            .then(|| self.fill_color.unwrap_or(self.color.gamma_multiply(0.2)));
+        let fill = self.fill_enabled.then(|| {
+            self.fill_color.unwrap_or_else(|| {
+                let [r, g, b, a] =
+                    Drawing::first_fill(target.tool_type, self.color.to_srgba_unmultiplied());
+                Color32::from_rgba_unmultiplied(r, g, b, a)
+            })
+        });
         let mut edits = Vec::new();
         for mut drawing in chart
             .drawings()

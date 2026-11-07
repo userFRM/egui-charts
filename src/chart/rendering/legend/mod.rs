@@ -447,7 +447,7 @@ impl<'a> Legend<'a> {
             let controls = if layout.pos.x + size.x > title_end {
                 Rect::from_min_size(
                     Pos2::new(
-                        title_end - size.x,
+                        (title_end - size.x).max(bounds.left()),
                         layout.pos.y + (layout.height - size.y) / 2.0,
                     ),
                     size,
