@@ -183,6 +183,15 @@ impl Inbox {
         }
     }
 
+    /// Drops as late the executions `id` receives before `time`, which bars the chart kept
+    /// over a pause already count.
+    #[cfg(feature = "widget")]
+    pub(crate) fn drop_trades_before(&self, id: SubscriptionId, time: DateTime<Utc>) {
+        if let Some(live) = self.state().subscriptions.get_mut(&id) {
+            live.last_trade = live.last_trade.max(Some(time));
+        }
+    }
+
     /// Connects active stream studies before their inputs are coalesced for the frame.
     #[cfg(any(feature = "widget", feature = "alert-engine"))]
     pub(crate) fn study_inputs(

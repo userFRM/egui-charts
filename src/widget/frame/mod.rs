@@ -1214,7 +1214,7 @@ impl Chart {
                     (&config, tick),
                     &clock,
                     (&map, price_rect, |i| mapping.idx_to_x(i)),
-                    |profile, _, anchor, _, _| {
+                    |profile, _, anchor, _, _, _| {
                         if anchor >= price_rect.right() {
                             return;
                         }
@@ -3276,7 +3276,7 @@ impl Chart {
                 ),
                 &bar_clock,
                 (&price_map, price_rect, |i| coords.idx_to_x(i)),
-                |profile, config, anchor, column, _| {
+                |profile, config, anchor, column, _, _| {
                     let cropped = [
                         profile.row_span(profile.profile_low).0,
                         profile.row_span(profile.profile_high).1,
