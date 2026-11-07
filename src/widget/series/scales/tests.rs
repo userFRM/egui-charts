@@ -533,6 +533,8 @@ fn last_value_colour_follows_the_previous_close_rule() {
         (ChartType::Candles, false, down),
         (ChartType::VolumeCandles, true, up),
         (ChartType::VolumeCandles, false, down),
+        (ChartType::Bars, true, up),
+        (ChartType::Bars, false, down),
     ] {
         for source in [PriceLineSource::LastBar, PriceLineSource::LastVisible] {
             let ctx = egui::Context::default();
@@ -548,6 +550,7 @@ fn last_value_colour_follows_the_previous_close_rule() {
             params.styles.volume_candles.body_down = down;
             params.styles.candles.color_by_previous_close = by_previous_close;
             params.styles.volume_candles.color_by_previous_close = by_previous_close;
+            params.styles.bars.color_by_previous_close = by_previous_close;
             chart.set_chart_type_params(params);
             chart.main_series_style.price_line_source = source;
             frame(&ctx, &mut chart, 0.0, vec![]);
@@ -568,9 +571,13 @@ fn last_value_colour_follows_the_previous_close_rule() {
                 }
                 _ => None,
             });
+            // The open and close ticks of an OHLC bar are horizontal too, and start at its x.
+            let bar_xs = [0.0, 1.0].map(|index| chart.index_to_x(index));
             let line = painted.iter().find_map(|shape| match shape {
                 egui::Shape::LineSegment { points, stroke }
-                    if points[0].y == points[1].y && [up, down].contains(&stroke.color) =>
+                    if points[0].y == points[1].y
+                        && [up, down].contains(&stroke.color)
+                        && !points.iter().any(|point| bar_xs.contains(&Some(point.x))) =>
                 {
                     Some(stroke.color)
                 }
