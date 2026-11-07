@@ -16,15 +16,17 @@ use super::{ObjectTreeAction, ObjectTreeConfig, ObjectTreeState, SourceItem, Sou
 /// The drag payload of a folder row: the folder's path.
 struct FolderDrag(Vec<String>);
 
-/// The outermost folders whose drawings are all selected.
+/// The outermost folders whose drawings are all selected, leaving out those that contain
+/// `target`, which stay; their fully selected subfolders are taken instead.
 pub(super) fn selected_folders(
     state: &ObjectTreeState,
     sources: &[SourceItem],
+    target: &[String],
 ) -> Vec<Vec<String>> {
     let mut selected: Vec<Vec<String>> = Vec::new();
     // Tree order puts a folder ahead of its descendants.
     for path in &state.folders {
-        if selected.iter().any(|outer| path.starts_with(outer)) {
+        if target.starts_with(path) || selected.iter().any(|outer| path.starts_with(outer)) {
             continue;
         }
         let mut members = sources
