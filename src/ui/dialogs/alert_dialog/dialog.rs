@@ -28,7 +28,9 @@ pub struct AlertDialog {
     pub is_open: bool,
     /// Staged edits. Cancel never submits them.
     pub alert: Alert,
-    /// Host-provided study outputs and drawings, as stable identifiers and display names.
+    /// Host-provided study outputs and drawings, as stable identifiers and display names. Presets
+    /// compare the names to tell a study they store from another chart's study with the same
+    /// identifier.
     pub sources: Vec<(AlertSource, String)>,
     /// Host-provided watchlist identifiers and display names.
     pub watchlists: Vec<(String, String)>,
@@ -134,10 +136,9 @@ impl AlertDialog {
     /// Open a fresh price alert at the last or hovered price, discarding earlier cancelled edits.
     /// It starts with the schedule of the latest saved alert that had one, if any.
     pub fn open(&mut self, symbol: String, price: f64) {
-        self.edit(Alert::new(symbol, AlertCondition::Crossing(price)));
-        if let Some(schedule) = self.last_schedule.clone() {
-            self.set_schedule_fields(Some(&schedule));
-        }
+        let mut alert = Alert::new(symbol, AlertCondition::Crossing(price));
+        alert.schedule = self.last_schedule.clone().map(Box::new);
+        self.edit(alert);
     }
 
     /// Stage an existing alert, retaining its host identifier and status when saved.
@@ -373,7 +374,7 @@ impl AlertDialog {
         let mut presets = self.presets.clone();
         presets.insert(
             self.preset_name.trim().into(),
-            AlertPreset::capture(&self.alert, self.preset_fields, now),
+            AlertPreset::capture(&self.alert, &self.sources, self.preset_fields, now),
         );
         self.write_presets(presets);
     }
@@ -1927,6 +1928,41 @@ mod tests {
     }
 
     #[test]
+    fn reset_keeps_the_schedule_a_new_alert_opened_with() {
+        let ctx = Context::default();
+        let mut dialog = AlertDialog::new();
+        let reset = |dialog: &mut AlertDialog| {
+            ctx.run_ui(Default::default(), |ui| dialog.form(ui))
+                .drop_without_applying_deltas();
+            dialog.scheduled = false;
+            dialog.reset();
+            dialog.schedule().unwrap()
+        };
+        dialog.open("AAPL".into(), 1.0);
+        dialog.scheduled = true;
+        dialog.schedule_zone = "UTC".into();
+        dialog.schedule_days[0] = true;
+        dialog.schedule_windows = vec![["09:00".into(), "17:00".into()]];
+        let schedule = dialog.schedule().unwrap().unwrap();
+        dialog.alert.schedule = Some(Box::new(schedule.clone()));
+        dialog.remember_schedule();
+
+        dialog.open("AAPL".into(), 1.0);
+        assert_eq!(reset(&mut dialog), Some(schedule.clone()));
+        // An edited alert returns to its own schedule, or to none.
+        let own = NotificationSchedule {
+            days: vec![chrono::Weekday::Tue],
+            ..schedule
+        };
+        let mut alert = Alert::new("AAPL", AlertCondition::Crossing(1.0));
+        dialog.edit(alert.clone());
+        assert_eq!(reset(&mut dialog), None);
+        alert.schedule = Some(Box::new(own.clone()));
+        dialog.edit(alert);
+        assert_eq!(reset(&mut dialog), Some(own));
+    }
+
+    #[test]
     fn a_start_must_precede_the_expiry() {
         let mut dialog = AlertDialog::new();
         assert_eq!(dialog.start(None), Ok(None));
@@ -2017,6 +2053,10 @@ mod tests {
             restored.alert.frequency,
             AlertFrequency::OncePerBarClose,
             "frequency left out of the replacement stays"
+        );
+        assert_eq!(
+            restored.alert.name, "Breakout",
+            "the replacement holds the name it selected"
         );
         restored.reset();
         assert_eq!(restored.alert, opened);

@@ -40,7 +40,8 @@ use std::rc::Rc;
 /// the regression trend, the position and forecast results and the bars
 /// pattern are computed from these bars.
 pub struct ChartView<'a> {
-    /// Instrument metadata supplied by the host or feed, for tick and pip measurements.
+    /// Instrument metadata supplied by the host or feed, for tick and pip measurements. `None` in
+    /// a pane without a visible price series, whose values are not prices.
     pub instrument: Option<&'a crate::model::Instrument>,
     /// The host's raw-price formatter for the series the drawings belong to, from
     /// [`Chart::set_series_formatter`](crate::Chart::set_series_formatter) or else

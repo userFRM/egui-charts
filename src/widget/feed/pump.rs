@@ -88,7 +88,7 @@ impl Chart {
         if link.clock != clock {
             link.reload_pending = true;
         }
-        if link.reload_pending {
+        if link.reload_pending || link.resumed {
             self.reload(&mut link, clock);
         }
         // The chart's own viewport, also after it moved to another: off the UI thread
@@ -250,6 +250,7 @@ impl Chart {
                 self.bar_close_time = None;
                 self.server_time_offset = None;
                 self.replace_main_data(Vec::new());
+                link.resumed_from = None;
                 self.quote = None;
                 self.session_quote = None;
                 link.trades = Trades::new(TRADE_CAPACITY);
@@ -260,7 +261,19 @@ impl Chart {
                 link.rebuild_bubbles(&[]);
             }
             if !updates.bars.is_empty() {
-                let incoming = updates.bars.into_values().collect();
+                let mut incoming: Vec<_> = updates.bars.into_values().collect();
+                // A feed may push its bars again on resubscribing: until the chart holds a bar
+                // from the first slot it lacks on, the kept bars stand for the older ones.
+                if let Some(from) = link.resumed_from
+                    && self
+                        .bars(SeriesId::MAIN)
+                        .last()
+                        .is_none_or(|last| link.clock.bar_open(last.time) < from)
+                {
+                    incoming.retain(|(bar, origin)| {
+                        *origin != Origin::Live || link.clock.bar_open(bar.time) >= from
+                    });
+                }
                 let merged = self.apply_by(&link.clock, incoming);
                 self.feed.late_ticks += merged.late_ticks;
                 if merged.first_changed.is_some() {
@@ -429,11 +442,17 @@ impl Chart {
     }
 
     /// Reloads bars and the subscription, retaining executions for a new interval on the same
-    /// feed key.
+    /// feed key, and the bars, executions and depth history when only a pause ended.
     fn reload(&mut self, link: &mut FeedLink, clock: BarClock) {
+        // A resume alone keeps what the chart holds. A trade-based bar cannot be rebuilt from a
+        // time, so that interval reloads as before.
+        let resumed = std::mem::take(&mut link.resumed)
+            && !link.reload_pending
+            && !clock.timeframe().is_some_and(|tf| tf.is_trade_based());
         link.reload_pending = false;
-        let mut retain_trades = link.clock != clock
+        let mut retain_trades = (resumed || link.clock != clock)
             && link.extended_hours == self.extended_hours
+            && link.conversion == self.conversion
             && link.clock.sessions().with_timeframe(Timeframe::Min1)
                 == clock.sessions().with_timeframe(Timeframe::Min1)
             && link.instrument.is_some();
@@ -457,6 +476,7 @@ impl Chart {
                 .as_ref()
                 .is_some_and(|i| i.symbol == self.symbol);
         }
+        let resume = resumed && retain_trades;
         // The feed-wide answer does not depend on the symbol or interval.
         let feed_wide = |request: &Request| matches!(request, Request::Capabilities);
         link.pending.retain(|(_, request, _)| feed_wide(request));
@@ -473,6 +493,7 @@ impl Chart {
             link.trades = Trades::new(TRADE_CAPACITY);
         }
         link.extended_hours = self.extended_hours;
+        link.conversion = self.conversion.clone();
         for study in self.studies.indicators() {
             for input in study.order_flow_inputs() {
                 input.clear();
@@ -483,7 +504,9 @@ impl Chart {
         link.time = None;
         link.order_book = None;
         link.order_queue = None;
-        link.depth_history.iter_mut().for_each(DepthHistory::clear);
+        if !resume {
+            link.depth_history.iter_mut().for_each(DepthHistory::clear);
+        }
         link.depth_complete = false;
         (link.bar_cursor, link.trade_cursor, link.depth_cursor) = (None, None, None);
         link.trades_complete = false;
@@ -493,8 +516,17 @@ impl Chart {
         let timeframe = self.timeframe.unwrap_or_default();
         link.clock = clock;
         link.rebuild_bubbles(&[]);
-        // Timestamp anchors survive the empty interval between history requests.
-        self.replace_main_data(Vec::new());
+        if resume {
+            // The last bar may have missed trades while paused: the page or the stream rebuilds it.
+            let last = self.pop_bars(SeriesId::MAIN, 1);
+            link.resumed_from = last.first().map(|bar| link.clock.bar_open(bar.time));
+            // Kept bars from the stream are history now: the latest page counts their trades too.
+            self.from_ticks.clear();
+        } else {
+            // Timestamp anchors survive the empty interval between history requests.
+            self.replace_main_data(Vec::new());
+            link.resumed_from = None;
+        }
         self.feed = FeedState::default();
         if link.capabilities.is_none() && link.pending.is_empty() && link.retries.is_empty() {
             let reply = link.reply(Request::Capabilities);
@@ -540,6 +572,7 @@ impl Chart {
         link.pending.retain(|(_, request, _)| !history(request));
         link.retries.retain(|(_, request, _)| !history(request));
         self.replace_main_data(Vec::new());
+        link.resumed_from = None;
         self.feed.loading_history = false;
         self.feed.last_error = Some(FeedError::NotSupported);
     }
@@ -576,6 +609,10 @@ impl Chart {
             TRADE_CAPACITY,
             tick_size,
         );
+        // A feed may replay retained executions on resubscribing: the kept bars count them.
+        if let Some(from) = link.resumed_from {
+            link.inbox.drop_trades_before(sink.id, from);
+        }
         let config = link.depth_history.as_ref().map(|h| h.config().clone());
         link.inbox.sample_depth(sink.id, config);
         link.inbox.study_inputs(
@@ -633,6 +670,21 @@ impl Chart {
                 "the feed of {} sent bars at or after the requested before; those bars were dropped",
                 self.symbol
             );
+        }
+        // Kept bars that end before the latest page would leave a hole scroll-back never fills.
+        if !scroll_back
+            && let Some(from) = link.resumed_from
+            && page
+                .bars
+                .iter()
+                .map(|bar| link.clock.bar_open(bar.time))
+                .min()
+                .is_some_and(|oldest| oldest > from)
+        {
+            let kept = self
+                .bars(SeriesId::MAIN)
+                .partition_point(|bar| link.clock.bar_open(bar.time) < from);
+            self.remove_oldest_bars(SeriesId::MAIN, kept);
         }
         let oldest = self.bars(SeriesId::MAIN).first().map(|bar| bar.time);
         let empty = page.bars.is_empty();
