@@ -132,10 +132,21 @@ impl StudyTemplate {
         let study = factory
             .create_registered(&template.name)
             .ok_or_else(|| crate::studies::StudyError::UnknownStudy(template.name.clone()))?;
+        // A host study registered under a built-in's name never had the inputs an upgrade adds
+        // for that built-in.
+        let declared = study.inputs();
+        let template = if template.inputs.iter().all(|(id, _)| {
+            self.inputs.iter().any(|(saved, _)| saved == id)
+                || declared.iter().any(|input| input.id == *id)
+        }) {
+            template
+        } else {
+            self
+        };
         // Automatic drawings saved before their swings could follow volatility used the fixed
         // percentage they were saved with.
         let saved = |id| template.inputs.iter().any(|(saved, _)| saved == id);
-        let percent_swings = (study.inputs().iter().any(|input| input.id == "swing_size")
+        let percent_swings = (declared.iter().any(|input| input.id == "swing_size")
             && !saved("swing_size")
             && saved("deviation_percent"))
         .then(|| ("swing_size".to_owned(), InputValue::Choice(1)));
@@ -214,14 +225,39 @@ impl StudyTemplate {
                     .push(("midpoint".to_owned(), InputValue::Toggle(true)));
             }
             // An RSI drew no average and no middle line before it opened with both; the hidden
-            // level keeps the styles saved for the other two.
-            "RSI" if !has("ma_type") => {
-                template
-                    .inputs
-                    .push(("ma_type".to_owned(), InputValue::Choice(0)));
-                if template.settings.levels.len() == 2 {
+            // level keeps the styles saved for the other two and stays within their band. Its
+            // average then chose from None, SMA and EMA, under ids of its own, before it took the
+            // shared smoothing inputs.
+            "RSI" if !has("smoothing") => {
+                template.inputs.retain(|(id, _)| id != "ma_type");
+                for (id, _) in &mut template.inputs {
+                    if id == "ma_length" {
+                        *id = "smoothing_length".to_owned();
+                    }
+                }
+                let smoothing = self.inputs.iter().find_map(|(id, value)| match value {
+                    InputValue::Choice(2) if id == "ma_type" => Some(3),
+                    InputValue::Choice(choice) if id == "ma_type" => Some(*choice),
+                    _ => None,
+                });
+                template.inputs.push((
+                    "smoothing".to_owned(),
+                    InputValue::Choice(smoothing.unwrap_or(0)),
+                ));
+                let declared = crate::studies::RSI::new(14);
+                if template.settings.levels.is_empty() {
+                    let (levels, fill, color) = super::settings::declared_levels(&declared);
+                    template.settings.levels = levels.into_iter().take(2).collect();
+                    template.settings.fill_between_levels = fill;
+                    template.settings.level_fill_color = color;
+                }
+                if let [upper, lower] = template.settings.levels[..] {
+                    let pane = declared.pane();
+                    let upper = upper.value.unwrap_or(pane.levels[0].0);
+                    let lower = lower.value.unwrap_or(pane.levels[1].0);
+                    let band = upper.min(lower)..=upper.max(lower);
                     template.settings.levels.push(crate::studies::LevelStyle {
-                        value: None,
+                        value: (!band.contains(&pane.levels[2].0)).then_some(upper),
                         color: crate::studies::palette::MUTED,
                         pattern: crate::model::LineStyle::Dashed,
                         width: 1.0,
@@ -237,14 +273,21 @@ impl StudyTemplate {
                         .inputs
                         .push(("band_count".to_owned(), InputValue::Length(0)));
                 }
-                template.settings.fills = vec![
-                    crate::studies::FillStyle {
-                        color: egui::Color32::TRANSPARENT,
+                // Hidden, each fill keeps the colour its band is filled in once shown. Each band
+                // draws two of the saved lines, so their number also bounds a corrupt band count.
+                template.settings.fills = (0..bands.min(self.settings.plots.len()))
+                    .map(|band| crate::studies::FillStyle {
+                        color: self
+                            .settings
+                            .plots
+                            .get(1 + 2 * band)
+                            .map_or(egui::Color32::TRANSPARENT, |plot| {
+                                plot.color.gamma_multiply_u8(13)
+                            }),
                         inverted_color: None,
                         visible: false,
-                    };
-                    bands
-                ];
+                    })
+                    .collect();
             }
             // Profile endpoints were Unix milliseconds before they read as UTC dates and times.
             "Vol Profile FR" | "Vol Profile Anchored"
@@ -611,7 +654,7 @@ mod tests {
         settings.levels[0].value = Some(80.0);
         rsi.apply_settings(&[], settings).unwrap();
         let mut saved = StudyTemplate::from_study(&rsi);
-        saved.inputs.retain(|(id, _)| !id.starts_with("ma_"));
+        saved.inputs.retain(|(id, _)| !id.starts_with("smoothing"));
         saved.settings.levels.truncate(2);
         let restored = saved.create().unwrap();
         assert_eq!(restored.line_count(), 1);
@@ -625,6 +668,27 @@ mod tests {
             [80.0, 30.0, 50.0]
         );
         assert!(!restored.settings().levels[2].visible);
+
+        // Saved with an EMA from the shorter list of types, under the average's earlier ids.
+        let mut older = StudyTemplate::from_study(&RSI::default());
+        older.inputs.retain(|(id, _)| !id.starts_with("smoothing"));
+        older
+            .inputs
+            .push(("ma_type".to_owned(), InputValue::Choice(2)));
+        older
+            .inputs
+            .push(("ma_length".to_owned(), InputValue::Length(5)));
+        let inputs = older.create().unwrap().inputs();
+        let value = |id: &str| {
+            inputs
+                .iter()
+                .find(|input| input.id == id)
+                .unwrap()
+                .value
+                .clone()
+        };
+        assert_eq!(value("smoothing"), InputValue::Choice(3));
+        assert_eq!(value("smoothing_length"), InputValue::Length(5));
 
         // Saved without bands, with an older flag instead of the band inputs, and with bands that
         // were not filled yet.
@@ -642,6 +706,119 @@ mod tests {
         // Saved since then, a filled band stays filled.
         let filled = StudyTemplate::from_study(&bands).create().unwrap();
         assert_eq!(filled.fills().len(), 2);
+    }
+
+    /// A host study registered under a built-in's name replaces it (`IndicatorFactory::register`),
+    /// so its own template, which never had the built-in's inputs, restores through that factory.
+    #[test]
+    fn host_studies_named_like_upgraded_builtins_restore_from_their_templates() {
+        use crate::studies::{CustomIndicator, IndicatorValue};
+        let names = ["RSI", "VWAP", "Trading Sessions"];
+        let mut factory = IndicatorFactory::new();
+        for name in names {
+            factory.register(name, move || {
+                Box::new(CustomIndicator::new(name, |bars| {
+                    bars.iter()
+                        .map(|bar| IndicatorValue::Single(bar.close))
+                        .collect()
+                }))
+            });
+        }
+        for name in names {
+            let saved = StudyTemplate::from_study(factory.create(name).unwrap().as_ref());
+            let restored = saved.create_with(&factory).map_err(|e| e.to_string());
+            assert_eq!(
+                restored.map(|study| study.name().to_owned()),
+                Ok(name.into())
+            );
+        }
+    }
+
+    /// An RSI saved before it had a middle level draws the lines and band it was saved with. With
+    /// its levels edited to 40 and 20 it draws those two and fills from 20 to 40; saved before
+    /// levels were editable it draws 70 and 30 and fills between them. Both fill in the RSI's band
+    /// colour.
+    #[test]
+    fn rsi_saved_before_the_middle_level_draws_its_saved_levels_and_band() {
+        let mut edited = ConfiguredStudy::new(Box::new(RSI::new(14)));
+        let mut settings = edited.settings();
+        settings.levels[0].value = Some(40.0);
+        settings.levels[1].value = Some(20.0);
+        edited.apply_settings(&[], settings).unwrap();
+        let mut edited = StudyTemplate::from_study(&edited);
+        edited.inputs.retain(|(id, _)| !id.starts_with("smoothing"));
+        edited.settings.levels.truncate(2);
+        // Settings of that age had no level fields, which read as their serde defaults.
+        let mut older = StudyTemplate::from_study(&RSI::new(14));
+        older.inputs.retain(|(id, _)| !id.starts_with("smoothing"));
+        older.settings.levels.clear();
+        older.settings.fill_between_levels = false;
+        older.settings.level_fill_color = Color32::default();
+        // The lines drawn, the band, which a hidden level still bounds, and its fill.
+        let drawn = |template: &StudyTemplate| {
+            let study = template.create().unwrap();
+            let pane = study.pane();
+            let lines: Vec<f64> = pane
+                .levels
+                .iter()
+                .filter(|level| level.1 != Color32::TRANSPARENT)
+                .map(|level| level.0)
+                .collect();
+            let values = pane.levels.iter().map(|level| level.0);
+            let band = (
+                values.clone().fold(f64::INFINITY, f64::min),
+                values.fold(f64::NEG_INFINITY, f64::max),
+            );
+            (
+                lines,
+                band,
+                pane.fill_between_levels,
+                study.level_fill_color(),
+            )
+        };
+        let fill = RSI::new(14).level_fill_color();
+        assert_eq!(
+            [drawn(&edited), drawn(&older)],
+            [
+                (vec![40.0, 20.0], (20.0, 40.0), true, fill),
+                (vec![70.0, 30.0], (30.0, 70.0), true, fill),
+            ]
+        );
+    }
+
+    /// A VWAP saved with a band before bands were filled restores with its fill hidden; shown
+    /// again, the fill takes the band colour at 5% opacity, as on a VWAP added now.
+    #[test]
+    fn vwap_saved_before_its_fill_shows_the_band_colour_once_the_fill_is_shown() {
+        let mut saved = StudyTemplate::from_study(&VolumeWeightedAvgPrice::default());
+        saved.settings.fills.clear();
+        let mut study = saved.create().unwrap();
+        assert!(study.fills().is_empty());
+        let mut settings = study.settings();
+        settings.fills[0].visible = true;
+        study.apply_settings(&[], settings).unwrap();
+        let colors: Vec<Color32> = study.fills().iter().map(|fill| fill.color).collect();
+        assert_eq!(
+            colors,
+            [crate::studies::palette::GREEN.gamma_multiply_u8(13)]
+        );
+    }
+
+    /// A VWAP template with a band count no VWAP accepts fails to restore like any invalid input,
+    /// instead of sizing its band styles by that count.
+    #[test]
+    fn vwap_templates_with_a_corrupt_band_count_fail_to_restore() {
+        let mut saved = StudyTemplate::from_study(&VolumeWeightedAvgPrice::default());
+        saved.settings.fills.clear();
+        for (id, value) in &mut saved.inputs {
+            if id == "band_count" {
+                *value = InputValue::Length(usize::MAX);
+            }
+        }
+        assert!(matches!(
+            saved.create(),
+            Err(crate::studies::StudyError::InvalidInput { id, .. }) if id == "band_count"
+        ));
     }
 
     /// Templates and layouts saved before the channel studies' inputs changed load and draw the
