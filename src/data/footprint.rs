@@ -572,7 +572,7 @@ impl Footprint {
             return;
         };
         let mut newest = Vec::new();
-        let mut at = 0;
+        let (mut at, mut unproven) = (0, 0);
         while at < trades.len() {
             let start = at;
             at += 1;
@@ -582,6 +582,24 @@ impl Footprint {
             let Ok(first) = history.binary_search_by_key(&trades[start].ts, |bar| bar.time) else {
                 continue;
             };
+            // A fill split by a boundary opens the next bar with its rest at its own time. Counted
+            // whole, it can match every later bar while moving part of each boundary fill, so on
+            // volume and delta intervals only the page's end, or a bar before that closes at
+            // another price than every execution at the start's time, proves the start.
+            let whole = !matches!(
+                timeframe,
+                crate::model::Timeframe::Volume(_) | crate::model::Timeframe::Delta(_)
+            ) || first.checked_sub(1).is_some_and(|before| {
+                (trades[start..].iter())
+                    .take_while(|trade| trade.ts == trades[start].ts)
+                    .all(|trade| !near(trade.price, history[before].close))
+            });
+            // Without that proof a start counts only when it ends with the page. Inside the bars
+            // an earlier such start matched, it repeats that grouping or moves a boundary fill,
+            // and neither ends with the page.
+            if !whole && start < unproven {
+                continue;
+            }
             let run = history_run(
                 timeframe,
                 Some(self.tick_size),
@@ -590,23 +608,11 @@ impl Footprint {
                 trades[start].size,
                 None,
             );
-            // A fill split by a boundary opens the next bar with its rest at its own time. Counted
-            // whole, it can match every later bar while moving part of each boundary fill, so on
-            // volume and delta intervals only the page's end, or a bar before that closes at
-            // another price than every execution at the start's time, proves the start.
-            let whole = run.end.is_some()
-                || !matches!(
-                    timeframe,
-                    crate::model::Timeframe::Volume(_) | crate::model::Timeframe::Delta(_)
-                )
-                || first.checked_sub(1).is_some_and(|before| {
-                    (trades[start..].iter())
-                        .take_while(|trade| trade.ts == trades[start].ts)
-                        .all(|trade| !near(trade.price, history[before].close))
-                });
-            if run.proven && whole {
+            if run.proven && (whole || run.end.is_some()) {
                 newest = run.parts;
                 at = start + run.next.max(1);
+            } else if run.proven {
+                unproven = unproven.max(start + run.next);
             }
         }
         for (trade, open, size) in newest {
