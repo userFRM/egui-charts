@@ -1158,6 +1158,8 @@ impl DemoApp {
         if self.recording_files.opened {
             // Its bars are executions: the clicked bar ends at its last one, or a quiet bar at its
             // open.
+            // shortcut: a tick bar opens at its first execution, so a click on one goes there;
+            // count the bar's executions if tick charts need it whole.
             let clock = self.chart.bar_clock();
             let end = self
                 .bars
@@ -1186,7 +1188,8 @@ impl DemoApp {
     }
 
     /// Starts replay at bar `index` of [`Self::replay_start_bars`], as picking that bar does,
-    /// ending a replay already running but keeping its update interval.
+    /// ending a replay already running but keeping its update interval. An open recording stays
+    /// open and moves to that execution.
     pub(crate) fn start_replay_at(&mut self, index: usize) {
         if self.recording_files.opened {
             if let Some(time) = self.bars.get(index).map(|bar| bar.time) {
@@ -1902,7 +1905,7 @@ mod tests {
             shown_after_frames(&mut app, &ctx).last().unwrap().time,
             clicked
         );
-        // Exit replay gives the live history back to the next start.
+        // Exit replay closes the recording and leaves the live history in the demo's bars.
         app.stop_replay();
         assert!(!app.recording_files.opened && app.chart.replay_driver().is_none());
         assert_eq!(app.bars, app.chart.bars(SeriesId::MAIN));
