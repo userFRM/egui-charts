@@ -1174,9 +1174,9 @@ mod tests {
         }
     }
 
-    /// A collapsed folder is still collapsed after the tree showed rows without it for a frame,
-    /// as when one panel follows the active chart of a layout and the user selects another chart
-    /// and then comes back.
+    /// A collapsed folder is still collapsed after the tree showed rows without it, and after
+    /// Collapse all or Expand all there, as when one panel follows the active chart of a layout
+    /// and the user selects another chart and then comes back.
     #[test]
     fn collapsed_folder_survives_rows_of_another_chart() {
         use crate::drawings::DrawingToolType;
@@ -1190,20 +1190,37 @@ mod tests {
         let mut panel = ObjectTreePanel::new();
         let mut level = SourceItem::drawing(1, DrawingToolType::HorizontalLine, egui::Color32::RED);
         level.folder = vec!["Levels".into()];
-        let other = SourceItem::drawing(2, DrawingToolType::TrendLine, egui::Color32::RED);
+        let mut other = SourceItem::drawing(2, DrawingToolType::TrendLine, egui::Color32::RED);
+        other.folder = vec!["Zones".into()];
         show(&mut panel, &mut [level.clone()][..]);
         // What the folder row's toggle does.
         panel
             .state_mut()
             .collapsed_folders
             .insert(vec!["Levels".into()]);
-        show(&mut panel, &mut [other][..]);
-        show(&mut panel, &mut [level][..]);
+        show(&mut panel, &mut [other.clone()][..]);
+        show(&mut panel, &mut [level.clone()][..]);
+        let levels = vec!["Levels".to_owned()];
+        let zones = vec!["Zones".to_owned()];
         let collapsed: Vec<_> = panel.state().collapsed_folders.iter().collect();
         assert_eq!(
             collapsed,
-            [&vec!["Levels".to_owned()]],
+            [&levels],
             "collapsed folders after showing another chart's rows: {collapsed:?}"
         );
+
+        show(&mut panel, &mut [other.clone()][..]);
+        // What Collapse all in the header does.
+        panel.state_mut().collapse_all_groups();
+        show(&mut panel, &mut [level.clone()][..]);
+        let collapsed: Vec<_> = panel.state().collapsed_folders.iter().collect();
+        assert_eq!(collapsed, [&levels, &zones], "after Collapse all elsewhere");
+
+        show(&mut panel, &mut [other][..]);
+        // What Expand all in the header does.
+        panel.state_mut().expand_all_groups();
+        show(&mut panel, &mut [level][..]);
+        let collapsed: Vec<_> = panel.state().collapsed_folders.iter().collect();
+        assert_eq!(collapsed, [&levels], "after Expand all elsewhere");
     }
 }
