@@ -130,9 +130,12 @@ impl FeedDisplay {
 
 /// The added series of one state of the chart: their draw order, display settings and
 /// visibility, the scale, alerts and price line colour of the main series, and the series the
-/// other state lacks, whole, with their price formatters and bar limits.
+/// other state lacks, whole, with their price formatters and bar limits. A series in neither
+/// state was added outside history, and an exchange leaves it alone.
 struct SeriesSet {
     props: Vec<(SeriesId, SeriesOptions, bool)>,
+    /// The added series of the other state.
+    other: Vec<SeriesId>,
     main_scale: SeriesScale,
     main_alerts: SeriesAlerts,
     main_price_line: Option<egui::Color32>,
@@ -147,11 +150,16 @@ impl SeriesSet {
                 .iter()
                 .map(|item| (item.id, item.options.clone(), item.visible))
                 .collect(),
+            other: Vec::new(),
             main_scale: chart.main_series_scale,
             main_alerts: chart.main_series_style.alerts,
             main_price_line: chart.main_series_style.price_line_color,
             held: Vec::new(),
         }
+    }
+
+    fn ids(&self) -> Vec<SeriesId> {
+        self.props.iter().map(|(id, ..)| *id).collect()
     }
 
     fn same(&self, other: &Self) -> bool {
@@ -451,9 +459,11 @@ impl Chart {
             action.symbol = None;
         }
         if let Some(before) = &mut action.series {
-            if before.same(&SeriesSet::capture(self)) {
+            let after = SeriesSet::capture(self);
+            if before.same(&after) {
                 action.series = None;
             } else {
+                before.other = after.ids();
                 before.held = pending
                     .removed_series
                     .into_iter()
@@ -730,14 +740,16 @@ impl Chart {
     }
 
     /// Exchanges the added series with those of `set`. A series the chart lacks comes from the
-    /// set whole, and one the set lacks goes into it, so the exchange reverses itself.
+    /// set whole, and one that only the set's other state has goes into it, so the exchange
+    /// reverses itself. A series in neither state stays, after the others.
     fn swap_series(&mut self, set: &mut SeriesSet) {
-        let now = SeriesSet::capture(self);
+        let mut now = SeriesSet::capture(self);
+        let restored = set.ids();
         let mut pool = std::mem::take(&mut self.price_series);
         let mut held = std::mem::take(&mut set.held);
         for (id, options, visible) in set.props.drain(..) {
             let mut item = if let Some(at) = pool.iter().position(|item| item.id == id) {
-                pool.swap_remove(at)
+                pool.remove(at)
             } else if let Some(at) = held.iter().position(|item| item.series.id == id) {
                 self.restore_series(held.swap_remove(at))
             } else {
@@ -748,25 +760,35 @@ impl Chart {
             item.revision = crate::model::next_revision();
             self.price_series.push(item);
         }
-        // The series the set lacks leave the chart with their formatters and limits.
         for item in pool {
-            held.push(self.hold_series(item));
+            if set.other.contains(&item.id) {
+                // They leave the chart with their formatters and limits.
+                held.push(self.hold_series(item));
+            } else {
+                self.price_series.push(item);
+            }
         }
         self.main_series_scale = set.main_scale;
         self.main_series_style.alerts = set.main_alerts;
         self.main_series_style.price_line_color = set.main_price_line;
-        *set = SeriesSet { held, ..now };
-        // `set.props` now lists the series shown before the exchange, in draw order.
-        for (id, ..) in &set.props {
+        // `now.props` lists the series shown before the exchange, in draw order.
+        for (id, ..) in &now.props {
             if self.price_series.iter().all(|item| item.id != *id) {
                 self.host_events.push(ChartEvent::SeriesRemoved(*id));
             }
         }
         for item in &self.price_series {
-            if set.props.iter().all(|(id, ..)| *id != item.id) {
+            if now.props.iter().all(|(id, ..)| *id != item.id) {
                 self.host_events.push(ChartEvent::SeriesAdded(item.id));
             }
         }
+        now.props
+            .retain(|(id, ..)| restored.contains(id) || set.other.contains(id));
+        *set = SeriesSet {
+            held,
+            other: restored,
+            ..now
+        };
         if let Some(ChartElementId::Series(id)) = self.selection.selected_id()
             && self.price_series.iter().all(|item| item.id != id)
         {
@@ -1874,6 +1896,92 @@ mod tests {
         assert!(chart.redo());
         assert_eq!(chart.series_settings().alerts, main_alerts);
         assert_eq!(chart.series_style(other).unwrap().alerts, other_alerts);
+    }
+
+    /// A series the host adds after an action, outside history, is no part of it: undoing and
+    /// redoing that action leave it in the chart after the action's series, with the options the
+    /// host gave it and no series events, while the series the action added or removed still
+    /// leave and come back.
+    #[test]
+    fn undo_keeps_series_added_outside_history() {
+        use crate::widget::series::SeriesOptions;
+        use crate::widget::settings::ChartSettingsState;
+        let rows: [(&str, fn(&mut Chart, SeriesId) -> Vec<SeriesId>); 6] = [
+            ("settings with a price line colour", |chart, earlier| {
+                let mut settings = ChartSettingsState::from_chart(chart);
+                settings.chart_basic_styles.background_color = Color32::from_rgb(1, 2, 3);
+                settings.scales_and_lines.symbol_price_color = Some(Color32::GOLD);
+                settings.apply_to_chart(chart).unwrap();
+                vec![earlier]
+            }),
+            ("main series alerts", |chart, earlier| {
+                let mut settings = chart.series_settings();
+                settings.alerts.color = Color32::RED;
+                chart.apply_series_settings(&settings);
+                vec![earlier]
+            }),
+            ("main series scale", |chart, earlier| {
+                assert!(chart.set_series_scale(SeriesId::MAIN, SeriesScale::Left));
+                vec![earlier]
+            }),
+            ("edit of an added series", |chart, earlier| {
+                assert!(chart.set_series_visible(earlier, false));
+                vec![earlier]
+            }),
+            ("an added series", |chart, earlier| {
+                vec![earlier, chart.add_series(SeriesOptions::default())]
+            }),
+            ("a removed series", |chart, earlier| {
+                assert!(chart.remove_series(earlier));
+                vec![]
+            }),
+        ];
+        for (name, action) in rows {
+            let mut chart = chart(&[1.0], &[2.0]);
+            let earlier = chart.add_series(SeriesOptions::default());
+            let after = chart.user_action(|chart| action(chart, earlier));
+            let host = chart.add_series(SeriesOptions::default());
+            chart.set_series_visible(host, false);
+            chart.drain_events().for_each(drop);
+            let order = |chart: &Chart| chart.series().map(|(id, _)| id).collect::<Vec<_>>();
+            let events = |chart: &mut Chart| {
+                chart
+                    .drain_events()
+                    .filter(|event| {
+                        matches!(
+                            event,
+                            ChartEvent::SeriesAdded(_) | ChartEvent::SeriesRemoved(_)
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            };
+            // Undo goes from the series the action left to the one it found, and redo back.
+            let added = after.iter().copied().filter(|id| *id != earlier);
+            let removed = (!after.contains(&earlier)).then_some(earlier);
+            let undone: Vec<_> = added
+                .clone()
+                .map(ChartEvent::SeriesRemoved)
+                .chain(removed.map(ChartEvent::SeriesAdded))
+                .collect();
+            let redone: Vec<_> = removed
+                .map(ChartEvent::SeriesRemoved)
+                .into_iter()
+                .chain(added.map(ChartEvent::SeriesAdded))
+                .collect();
+
+            assert!(chart.undo(), "{name}");
+            assert_eq!(order(&chart), [earlier, host], "{name}: order after undo");
+            assert_eq!(events(&mut chart), undone, "{name}: events of the undo");
+            assert!(!chart.is_series_visible(host), "{name}: options after undo");
+
+            chart.set_series_visible(host, true);
+            assert!(chart.redo(), "{name}");
+            let mut shown = after.clone();
+            shown.push(host);
+            assert_eq!(order(&chart), shown, "{name}: order after redo");
+            assert_eq!(events(&mut chart), redone, "{name}: events of the redo");
+            assert!(chart.is_series_visible(host), "{name}: options after redo");
+        }
     }
 
     /// Feed display edits undo without turning inherited book visibility into an override.
