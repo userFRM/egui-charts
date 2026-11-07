@@ -558,6 +558,7 @@ impl Chart {
         link.pending.retain(|(_, request, _)| !history(request));
         link.retries.retain(|(_, request, _)| !history(request));
         self.replace_main_data(Vec::new());
+        link.resumed_from = None;
         self.feed.loading_history = false;
         self.feed.last_error = Some(FeedError::NotSupported);
     }
