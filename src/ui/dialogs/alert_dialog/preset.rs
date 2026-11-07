@@ -69,6 +69,9 @@ pub(super) struct AlertPreset {
     pub(super) fields: PresetFields,
     /// The first rule and the additional ones, with zero thresholds and no drawings.
     rules: Vec<AlertRule>,
+    /// The saving chart's names for what `rules` test: studies are numbered per chart, so an id
+    /// alone may name another study elsewhere. Presets saved without names have none.
+    source_names: Vec<(AlertSource, String)>,
     timeframe: Option<Timeframe>,
     additional_timeframes: Vec<Option<Timeframe>>,
     frequency: AlertFrequency,
@@ -82,8 +85,13 @@ pub(super) struct AlertPreset {
 
 impl AlertPreset {
     /// The selected groups of `alert`, whose expiry counts from the start of `now`'s minute, as
-    /// entered times do.
-    pub(super) fn capture(alert: &Alert, fields: PresetFields, now: DateTime<Utc>) -> Self {
+    /// entered times do. `sources` names what its chart offers.
+    pub(super) fn capture(
+        alert: &Alert,
+        sources: &[(AlertSource, String)],
+        fields: PresetFields,
+        now: DateTime<Utc>,
+    ) -> Self {
         let mut preset = Self {
             fields,
             ..Self::default()
@@ -105,6 +113,15 @@ impl AlertPreset {
                         condition: without_thresholds(condition)?,
                     })
                 })
+                .collect();
+            preset.source_names = sources
+                .iter()
+                .filter(|(source, _)| {
+                    preset.rules.iter().any(|rule| {
+                        rule.source == *source || rule.condition.partners().contains(&Some(source))
+                    })
+                })
+                .cloned()
                 .collect();
         }
         if fields.interval {
@@ -137,9 +154,11 @@ impl AlertPreset {
         preset
     }
 
-    /// Set the selected groups on `alert`, whose subject, levels, drawings and webhook address
-    /// stay. Sources that `sources` no longer offers stay as they are, and a strategy fill alert
-    /// keeps its condition, interval and any frequency it cannot use.
+    /// Set the selected groups on `alert`, whose subject, levels, drawings, compared plots and
+    /// webhook address stay. A rule stays whole where its stored operator would drop the drawings
+    /// or plots it tests or needs levels it lacks. A stored study that `sources` does not offer
+    /// under its stored name is not reused, and a strategy fill alert keeps its condition, interval
+    /// and any frequency it cannot use.
     pub(super) fn apply(
         &self,
         alert: &mut Alert,
@@ -153,13 +172,29 @@ impl AlertPreset {
                 condition: alert.condition.clone(),
             };
             let mut rules = self.rules.iter().enumerate().map(|(index, rule)| {
-                let current = match index {
-                    0 => &first,
-                    _ => alert.additional_conditions.get(index - 1).unwrap_or(&first),
+                let own = match index {
+                    0 => Some(&first),
+                    _ => alert.additional_conditions.get(index - 1),
                 };
-                AlertRule {
-                    source: restored_source(&rule.source, &current.source, sources),
-                    condition: restored_condition(&rule.condition, &current.condition, sources),
+                // A rule the alert does not have yet takes the first one's values.
+                let current = own.unwrap_or(&first);
+                match restored_condition(
+                    &rule.condition,
+                    &current.condition,
+                    own.is_some(),
+                    &self.source_names,
+                    sources,
+                ) {
+                    Some(condition) => AlertRule {
+                        source: restored_source(
+                            &rule.source,
+                            &current.source,
+                            &self.source_names,
+                            sources,
+                        ),
+                        condition,
+                    },
+                    None => current.clone(),
                 }
             });
             let restored = rules.next();
@@ -257,58 +292,64 @@ fn without_thresholds(condition: &AlertCondition) -> Option<AlertCondition> {
     })
 }
 
-/// A stored operator with the thresholds or drawings of `current`. Without matching ones it takes
-/// the values the condition menu seeds.
+/// A stored operator with the thresholds, drawings or plots of `current`, where a single level
+/// seeds a channel as the condition menu does. `None` for a rule that `replaces` `current` when
+/// the operator would drop the drawings or plots it tests or needs levels it lacks. A rule the
+/// alert does not have yet only takes `current`'s values, or the ones the condition menu seeds.
 fn restored_condition(
     stored: &AlertCondition,
     current: &AlertCondition,
+    replaces: bool,
+    names: &[(AlertSource, String)],
     sources: &[(AlertSource, String)],
-) -> AlertCondition {
+) -> Option<AlertCondition> {
     use AlertCondition as C;
-    let (lower, upper) = match current {
+    let levels = match current {
         C::EnteringChannel { lower, upper }
         | C::ExitingChannel { lower, upper }
         | C::InsideChannel { lower, upper }
-        | C::OutsideChannel { lower, upper } => (*lower, *upper),
-        _ => {
-            let level = current.level().unwrap_or(0.0);
-            (level, level + 1.0)
-        }
-    };
-    let level = current.level().unwrap_or(lower);
-    let to_level = |comparison| match current {
-        C::Compare {
-            other: other @ AlertSource::Drawing(_),
-            ..
-        } => C::Compare {
+        | C::OutsideChannel { lower, upper } => Some((*lower, *upper)),
+        _ => current.level().map(|level| (level, level + 1.0)),
+    }
+    .or((!replaces).then_some((0.0, 1.0)));
+    let to_level = |comparison| match (current, levels) {
+        (C::Compare { other, .. }, _) => Some(C::Compare {
             other: other.clone(),
             comparison,
-        },
-        _ => level_condition(comparison, level),
+        }),
+        (_, Some((level, _))) => Some(level_condition(comparison, level)),
+        _ => None,
     };
-    let to_channel = |comparison| match current {
-        C::Channel { boundaries, .. } => C::Channel {
+    let to_channel = |comparison| match (current, levels) {
+        (C::Channel { boundaries, .. }, _) => Some(C::Channel {
             boundaries: boundaries.clone(),
             comparison,
-        },
-        _ => channel_condition(comparison, lower, upper),
+        }),
+        (_, Some((lower, upper))) => Some(channel_condition(comparison, lower, upper)),
+        _ => None,
     };
+    let compares = replaces && current.partners()[0].is_some();
     let change = match current {
         C::MovingBy { value, .. } => *value,
         C::MovingByPercent { percent, .. } => *percent,
         _ => 1.0,
     };
-    match stored {
-        C::StrategyFills(_) | C::Channel { .. } => current.clone(),
-        C::Crossing(_) => to_level(AlertComparison::Crossing),
-        C::CrossingUp(_) => to_level(AlertComparison::CrossingUp),
-        C::CrossingDown(_) => to_level(AlertComparison::CrossingDown),
-        C::Above(_) => to_level(AlertComparison::Above),
-        C::Below(_) => to_level(AlertComparison::Below),
-        C::EnteringChannel { .. } => to_channel(AlertChannelComparison::Entering),
-        C::ExitingChannel { .. } => to_channel(AlertChannelComparison::Exiting),
-        C::InsideChannel { .. } => to_channel(AlertChannelComparison::Inside),
-        C::OutsideChannel { .. } => to_channel(AlertChannelComparison::Outside),
+    Some(match stored {
+        C::StrategyFills(_) | C::Channel { .. } => return None,
+        C::MovingBy { .. } | C::MovingByPercent { .. } | C::VolumeAboveAverage { .. }
+            if compares =>
+        {
+            return None;
+        }
+        C::Crossing(_) => to_level(AlertComparison::Crossing)?,
+        C::CrossingUp(_) => to_level(AlertComparison::CrossingUp)?,
+        C::CrossingDown(_) => to_level(AlertComparison::CrossingDown)?,
+        C::Above(_) => to_level(AlertComparison::Above)?,
+        C::Below(_) => to_level(AlertComparison::Below)?,
+        C::EnteringChannel { .. } => to_channel(AlertChannelComparison::Entering)?,
+        C::ExitingChannel { .. } => to_channel(AlertChannelComparison::Exiting)?,
+        C::InsideChannel { .. } => to_channel(AlertChannelComparison::Inside)?,
+        C::OutsideChannel { .. } => to_channel(AlertChannelComparison::Outside)?,
         C::MovingBy { bars, .. } => C::MovingBy {
             value: change,
             bars: *bars,
@@ -317,11 +358,13 @@ fn restored_condition(
             percent: change,
             bars: *bars,
         },
-        C::Compare { other, comparison } if offered(other, sources) => C::Compare {
-            other: other.clone(),
-            comparison: *comparison,
-        },
-        C::Compare { comparison, .. } => to_level(*comparison),
+        C::Compare { other, comparison } if !compares && offered(other, names, sources) => {
+            C::Compare {
+                other: other.clone(),
+                comparison: *comparison,
+            }
+        }
+        C::Compare { comparison, .. } => to_level(*comparison)?,
         C::VolumeAboveAverage { bars, .. } => C::VolumeAboveAverage {
             multiplier: match current {
                 C::VolumeAboveAverage { multiplier, .. } => *multiplier,
@@ -329,27 +372,40 @@ fn restored_condition(
             },
             bars: *bars,
         },
-    }
+    })
 }
 
-/// The stored source unless the alert watches a drawing or the chart no longer offers it.
+/// The stored source unless the alert watches a drawing or the chart does not offer it.
 fn restored_source(
     stored: &AlertSource,
     current: &AlertSource,
+    names: &[(AlertSource, String)],
     sources: &[(AlertSource, String)],
 ) -> AlertSource {
-    if matches!(current, AlertSource::Drawing(_)) || !offered(stored, sources) {
+    if matches!(current, AlertSource::Drawing(_)) || !offered(stored, names, sources) {
         current.clone()
     } else {
         stored.clone()
     }
 }
 
-/// Study identifiers belong to one chart, so a preset can outlive them.
-fn offered(source: &AlertSource, sources: &[(AlertSource, String)]) -> bool {
+/// Study identifiers belong to one chart, so a preset can outlive them or meet them on another
+/// chart. `names` tells which study a stored identifier meant; a preset saved without its name
+/// accepts the identifier only when it is unambiguous.
+fn offered(
+    source: &AlertSource,
+    names: &[(AlertSource, String)],
+    sources: &[(AlertSource, String)],
+) -> bool {
     match source {
         AlertSource::Price | AlertSource::Volume => true,
-        AlertSource::Study { .. } => sources.iter().any(|(offered, _)| offered == source),
+        AlertSource::Study { .. } => {
+            let mut matching = sources.iter().filter(|(offered, _)| offered == source);
+            match names.iter().find(|(named, _)| named == source) {
+                Some(stored) => matching.any(|offered| offered == stored),
+                None => matching.count() == 1,
+            }
+        }
         AlertSource::Drawing(_) => false,
     }
 }
@@ -414,7 +470,7 @@ pub(super) fn from_document(
                             expiry: alert.expires.is_none(),
                             ..PresetFields::default()
                         };
-                        (name, AlertPreset::capture(&alert, fields, now))
+                        (name, AlertPreset::capture(&alert, &[], fields, now))
                     })
                     .collect()
             })
@@ -475,7 +531,7 @@ mod tests {
         ];
         let version_1 = serde_json::json!({"version": 1, "presets": {"Old": alert}}).to_string();
         for preset in [
-            AlertPreset::capture(&alert, PresetFields::default(), now),
+            AlertPreset::capture(&alert, &[], PresetFields::default(), now),
             from_document(&version_1, now)
                 .unwrap()
                 .0
@@ -515,6 +571,18 @@ mod tests {
         let drawing = |id: &str| AlertSource::Drawing(id.into());
         let compare = |other, comparison| C::Compare { other, comparison };
         let boundaries = Box::new([drawing("a#1"), drawing("a#2")]);
+        let channel = C::Channel {
+            boundaries: boundaries.clone(),
+            comparison: AlertChannelComparison::Entering,
+        };
+        let moving = C::MovingBy {
+            value: 3.0,
+            bars: 1,
+        };
+        let volume = C::VolumeAboveAverage {
+            multiplier: 2.0,
+            bars: 20,
+        };
         let gone = AlertSource::Study {
             id: "gone".into(),
             output: 0,
@@ -644,15 +712,107 @@ mod tests {
                     comparison: AlertChannelComparison::Exiting,
                 },
                 price.clone(),
-                C::Channel {
-                    boundaries: boundaries.clone(),
-                    comparison: AlertChannelComparison::Entering,
-                },
+                channel.clone(),
                 price.clone(),
                 C::Channel {
                     boundaries,
                     comparison: AlertChannelComparison::Exiting,
                 },
+            ),
+            // A comparison keeps what it compares with and takes the stored relationship.
+            (
+                price.clone(),
+                C::CrossingUp(9.0),
+                price.clone(),
+                compare(study(), AlertComparison::Crossing),
+                price.clone(),
+                compare(study(), AlertComparison::CrossingUp),
+            ),
+            (
+                price.clone(),
+                compare(study(), AlertComparison::Below),
+                price.clone(),
+                compare(drawing("new"), AlertComparison::Crossing),
+                price.clone(),
+                compare(drawing("new"), AlertComparison::Below),
+            ),
+            // An operator that cannot use the drawings or plots leaves the rule as it is.
+            (
+                price.clone(),
+                C::Above(9.0),
+                price.clone(),
+                channel.clone(),
+                price.clone(),
+                channel.clone(),
+            ),
+            (
+                price.clone(),
+                compare(study(), AlertComparison::Below),
+                price.clone(),
+                channel.clone(),
+                price.clone(),
+                channel.clone(),
+            ),
+            (
+                AlertSource::Volume,
+                C::VolumeAboveAverage {
+                    multiplier: 9.0,
+                    bars: 7,
+                },
+                price.clone(),
+                channel.clone(),
+                price.clone(),
+                channel,
+            ),
+            (
+                price.clone(),
+                C::InsideChannel {
+                    lower: 1.0,
+                    upper: 2.0,
+                },
+                price.clone(),
+                compare(drawing("new"), AlertComparison::Crossing),
+                price.clone(),
+                compare(drawing("new"), AlertComparison::Crossing),
+            ),
+            (
+                price.clone(),
+                C::MovingBy {
+                    value: 9.0,
+                    bars: 7,
+                },
+                price.clone(),
+                compare(study(), AlertComparison::Crossing),
+                price.clone(),
+                compare(study(), AlertComparison::Crossing),
+            ),
+            // So does one that needs a level the condition does not have.
+            (
+                price.clone(),
+                C::Above(9.0),
+                price.clone(),
+                moving.clone(),
+                price.clone(),
+                moving.clone(),
+            ),
+            (
+                price.clone(),
+                compare(gone.clone(), AlertComparison::Below),
+                price.clone(),
+                moving.clone(),
+                price.clone(),
+                moving,
+            ),
+            (
+                AlertSource::Volume,
+                C::InsideChannel {
+                    lower: 1.0,
+                    upper: 2.0,
+                },
+                AlertSource::Volume,
+                volume.clone(),
+                AlertSource::Volume,
+                volume,
             ),
             (
                 study(),
@@ -667,7 +827,7 @@ mod tests {
         for (stored_source, stored, current_source, current, source, condition) in cases {
             let mut saved = Alert::new("OLD", stored.clone());
             saved.source = stored_source;
-            let preset = AlertPreset::capture(&saved, PresetFields::default(), now);
+            let preset = AlertPreset::capture(&saved, &sources, PresetFields::default(), now);
             let mut alert = Alert::new("NEW", current.clone());
             alert.source = current_source;
             preset.apply(&mut alert, &sources, now);
@@ -733,7 +893,7 @@ mod tests {
             alert
         };
         let apply = |saved: &Alert, fields: PresetFields| {
-            let preset = AlertPreset::capture(saved, fields, saved_at);
+            let preset = AlertPreset::capture(saved, &[], fields, saved_at);
             let presets = BTreeMap::from([("P".to_owned(), preset)]);
             let document = to_document(&presets, None).unwrap();
             let mut alert = opened();
@@ -799,7 +959,7 @@ mod tests {
         let mut saved = Alert::new("OLD", AlertCondition::Below(9.0));
         saved.frequency = AlertFrequency::OncePerBarClose;
         saved.timeframe = Some(Timeframe::Hour1);
-        let preset = AlertPreset::capture(&saved, PresetFields::default(), now);
+        let preset = AlertPreset::capture(&saved, &[], PresetFields::default(), now);
         let run = AlertCondition::StrategyFills("run".into());
         let mut alert = Alert::new("NEW", run.clone());
         preset.apply(&mut alert, &[], now);
@@ -808,9 +968,139 @@ mod tests {
         assert_eq!(alert.timeframe, None);
         assert!(alert.is_valid());
         // The run itself is not reusable.
-        let fills = AlertPreset::capture(&Alert::new("OLD", run), PresetFields::default(), now);
+        let fills =
+            AlertPreset::capture(&Alert::new("OLD", run), &[], PresetFields::default(), now);
         let mut alert = Alert::new("NEW", AlertCondition::Above(1.0));
         fills.apply(&mut alert, &[], now);
         assert_eq!(alert.condition, AlertCondition::Above(1.0));
+    }
+
+    /// Rules that a preset adds to an alert with fewer rules replace nothing, so the drawing the
+    /// first rule compares with does not keep them from their stored operators or plots.
+    #[test]
+    fn rules_a_preset_adds_take_their_stored_operators() {
+        use AlertCondition as C;
+        let now = Utc.with_ymd_and_hms(2026, 1, 1, 10, 0, 0).unwrap();
+        let sources = [(study(), "RSI signal".to_owned())];
+        let rule = |source, condition| AlertRule { source, condition };
+        let crossing_up_plot = C::Compare {
+            other: study(),
+            comparison: AlertComparison::CrossingUp,
+        };
+        let mut saved = Alert::new("OLD", C::Above(9.0));
+        saved.additional_conditions = vec![
+            rule(
+                AlertSource::Volume,
+                C::VolumeAboveAverage {
+                    multiplier: 9.0,
+                    bars: 7,
+                },
+            ),
+            rule(AlertSource::Price, crossing_up_plot.clone()),
+            rule(
+                AlertSource::Price,
+                C::InsideChannel {
+                    lower: 1.0,
+                    upper: 2.0,
+                },
+            ),
+        ];
+        let preset = AlertPreset::capture(&saved, &sources, PresetFields::default(), now);
+        let mut alert = Alert::new(
+            "NEW",
+            C::Compare {
+                other: AlertSource::Drawing("line".into()),
+                comparison: AlertComparison::Below,
+            },
+        );
+        preset.apply(&mut alert, &sources, now);
+        // The first rule has no level for them, so they take the values the condition menu seeds.
+        assert_eq!(
+            alert.additional_conditions,
+            [
+                rule(
+                    AlertSource::Volume,
+                    C::VolumeAboveAverage {
+                        multiplier: 2.0,
+                        bars: 7,
+                    },
+                ),
+                rule(AlertSource::Price, crossing_up_plot),
+                rule(
+                    AlertSource::Price,
+                    C::InsideChannel {
+                        lower: 0.0,
+                        upper: 1.0,
+                    },
+                ),
+            ]
+        );
+    }
+
+    /// Charts number their studies from 2, so the first study of any two charts shares an id.
+    #[test]
+    fn a_study_id_of_another_chart_is_not_taken_for_the_stored_plot() {
+        let now = Utc.with_ymd_and_hms(2026, 1, 1, 10, 0, 0).unwrap();
+        let plot = AlertSource::Study {
+            id: "2".into(),
+            output: 0,
+        };
+        let named = |name: &str| (plot.clone(), name.to_owned());
+        let crossing_up_plot = AlertCondition::Compare {
+            other: plot.clone(),
+            comparison: AlertComparison::CrossingUp,
+        };
+        let mut on_plot = Alert::new("OLD", AlertCondition::Above(70.0));
+        on_plot.source = plot.clone();
+        let crossing_plot = Alert::new("OLD", crossing_up_plot.clone());
+        // What this file stored before presets kept the names of their plots.
+        let unnamed = |condition: serde_json::Value, source: serde_json::Value| {
+            let rule = serde_json::json!({"source": source, "condition": condition});
+            let document = serde_json::json!({"version": 2, "presets": {"P": {"rules": [rule]}}});
+            from_document(&document.to_string(), now)
+                .unwrap()
+                .0
+                .remove("P")
+                .unwrap()
+        };
+        let study = serde_json::json!({"Study": {"id": "2", "output": 0}});
+        let unnamed_on_plot = unnamed(serde_json::json!({"Above": 0.0}), study.clone());
+        let unnamed_crossing = unnamed(
+            serde_json::json!({"Compare": {"other": study, "comparison": "CrossingUp"}}),
+            serde_json::json!("Price"),
+        );
+
+        let rsi = [named("RSI: RSI")];
+        let sma = [named("SMA: SMA")];
+        let on_plot = AlertPreset::capture(&on_plot, &rsi, PresetFields::default(), now);
+        let crossing = AlertPreset::capture(&crossing_plot, &sma, PresetFields::default(), now);
+        let macd = [named("MACD: MACD")];
+        let twice = [named("RSI: RSI"), named("MACD: MACD")];
+        let kept_on_level = (AlertSource::Price, AlertCondition::Above(100.0));
+        let crossing_level = (AlertSource::Price, AlertCondition::CrossingUp(100.0));
+        let reused_source = (plot.clone(), AlertCondition::Above(100.0));
+        let reused_other = (AlertSource::Price, crossing_up_plot);
+        let rows: [(&AlertPreset, &[(AlertSource, String)], _); 8] = [
+            // Another chart's study 2 is not the stored one.
+            (&on_plot, &macd, &kept_on_level),
+            (&crossing, &macd, &crossing_level),
+            // The chart that saved the preset still has it.
+            (&on_plot, &rsi, &reused_source),
+            (&crossing, &sma, &reused_other),
+            // Without a stored name only a single candidate can be meant.
+            (&unnamed_on_plot, &macd, &reused_source),
+            (&unnamed_crossing, &macd, &reused_other),
+            (&unnamed_on_plot, &twice, &kept_on_level),
+            (&unnamed_crossing, &twice, &crossing_level),
+        ];
+        for (index, (preset, sources, expected)) in rows.into_iter().enumerate() {
+            let mut alert = Alert::new("NEW", AlertCondition::Crossing(100.0));
+            preset.apply(&mut alert, sources, now);
+            assert_eq!(
+                (&alert.source, &alert.condition),
+                (&expected.0, &expected.1),
+                "row {index}"
+            );
+        }
     }
 }

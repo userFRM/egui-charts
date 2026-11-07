@@ -218,6 +218,12 @@ impl StudyTemplate {
                         .push((id.to_owned(), InputValue::Toggle(false)));
                 }
             }
+            // Every TPO profile drew its midpoint before it had a setting.
+            "Time Price Opportunity" if !has("midpoint") => {
+                template
+                    .inputs
+                    .push(("midpoint".to_owned(), InputValue::Toggle(true)));
+            }
             // An RSI drew no average and no middle line before it opened with both; the hidden
             // level keeps the styles saved for the other two and stays within their band. Its
             // average then chose from None, SMA and EMA, under ids of its own, before it took the
@@ -580,6 +586,17 @@ mod tests {
                 "Trading Sessions",
                 vec![("boxes", Toggle(true))],
                 vec![("boxes", Toggle(true)), ("name_labels", Toggle(true))],
+            ),
+            // Saved before the midpoint had a setting, when every profile drew it.
+            (
+                "Time Price Opportunity",
+                vec![("display", Choice(1))],
+                vec![("display", Choice(1)), ("midpoint", Toggle(true))],
+            ),
+            (
+                "Time Price Opportunity",
+                vec![("midpoint", Toggle(false))],
+                vec![("midpoint", Toggle(false))],
             ),
             // Saved as Unix milliseconds before the endpoints read as UTC dates and times.
             (
