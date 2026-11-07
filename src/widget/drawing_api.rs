@@ -105,8 +105,8 @@ impl Chart {
     }
 
     /// Replaces a trend line's, ray's, extended line's, info line's or trend angle's readouts,
-    /// midpoint, price labels and text placement as one undoable edit. A horizontal line draws
-    /// only the text placement. Unknown, locked and other drawing types leave drawings and
+    /// midpoint, price labels and text placement as one undoable edit. A horizontal line or ray
+    /// draws only the text placement. Unknown, locked and other drawing types leave drawings and
     /// history untouched.
     pub fn set_line_measurements(
         &mut self,
@@ -123,10 +123,14 @@ impl Chart {
             return Err(DrawingError::Locked(id));
         }
         if !(drawing.tool_type.supports_line_measurements()
-            || drawing.tool_type == crate::drawings::DrawingToolType::HorizontalLine)
+            || matches!(
+                drawing.tool_type,
+                crate::drawings::DrawingToolType::HorizontalLine
+                    | crate::drawings::DrawingToolType::HorizontalRay
+            ))
         {
             return Err(DrawingError::Invalid(
-                "Drawing is not a trend line, ray, extended line, info line, trend angle or horizontal line",
+                "Drawing is not a trend line, ray, extended line, info line, trend angle, horizontal line or horizontal ray",
             ));
         }
         self.user_action(|chart| {
@@ -472,6 +476,7 @@ mod tests {
             T::InfoLine,
             T::TrendAngle,
             T::HorizontalLine,
+            T::HorizontalRay,
         ] {
             chart.drawings_mut().drawings[0].tool_type = tool;
             chart.drawings_mut().drawings[0].line_measurements = measurements;
