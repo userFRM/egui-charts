@@ -614,7 +614,7 @@ impl Chart {
         self.swap_formatter(SeriesId::MAIN, &mut main.formatter);
         self.follow_feed_pause();
         if self.main_series_present {
-            // The resumed feed's reload empties the bars until its page arrives.
+            // A resumed feed that reloads empties the bars until its page arrives.
             if self.feed_link.as_ref().is_some_and(|link| !link.paused) {
                 main.bars = self.state.data().bars.clone();
             }
