@@ -2439,7 +2439,7 @@ mod tests {
         .remove(0);
         assert!(one_period.single_prints.contains(&one_period.poc_price));
         let poc = Pos2::new(14.0, coords.price_to_y(one_period.poc_price));
-        for theme in [crate::theme::Theme::dark(), crate::theme::Theme::light()] {
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
             let bg = theme.chart.bg;
             for display_mode in [TPODisplayMode::Blocks, TPODisplayMode::Both] {
                 let on = fills(&theme, &profile, display_mode, true);
