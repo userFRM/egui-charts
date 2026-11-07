@@ -1250,7 +1250,13 @@ mod tests {
         .with_plot_color(|_, bar, _| (bar == 0).then_some(Color32::TRANSPARENT));
         stepped.calculate(&bars_from_closes([1.0; 8]));
         pane.bar_index = Some(0);
-        let job = pane.legend_job(&stepped, Color32::WHITE, Color32::GRAY, Color32::BLACK, 12.0);
+        let job = pane.legend_job(
+            &stepped,
+            Color32::WHITE,
+            Color32::GRAY,
+            Color32::BLACK,
+            12.0,
+        );
         let value = job
             .sections
             .iter()
