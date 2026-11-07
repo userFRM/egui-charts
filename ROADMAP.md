@@ -22,7 +22,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Point and figure charts take a high/low or close-only source from chart parameters and settings.
 - [x] Range charts build their bars from the supplied executions, falling back to the OHLC approximation while the chart holds none; `Chart::range_bar_source` reports which one is shown.
 - [x] Volume candle bodies scale with their share of the largest visible volume, narrowing to the wick width at zero volume.
-- [x] HLC area charts draw high, low and close lines with their own colour, width and style, and two fills with their own colour and opacity; high line, low line and each fill can be hidden. The settings persist in layouts and undo. Kagi stroke widths are exposed in the settings.
+- [x] HLC area charts draw high, low and close lines with their own colour, width and style, and two fills with their own colour and opacity; high line, low line and each fill can be hidden. The settings persist in layouts and undo, and layouts and chart templates saved with the former fill opacity and close line width restore as they were drawn. Kagi stroke widths are exposed in the settings.
 - [x] TPO profiles can show a statistics table below them with the point of control, value area, initial balance range, TPO counts below and above the point of control, rotation factor and range extension, switched by one setting on the chart type and the study.
 - [x] TPO single-print highlights and the midpoint caption and marker are off by default and switch on from the chart's settings or the study's inputs. Charts and studies saved before the midpoint had a setting restore with it shown.
 

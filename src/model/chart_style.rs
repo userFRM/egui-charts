@@ -4,6 +4,7 @@ use crate::model::{LineStyle, PriceSource};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 use serde::{Deserialize, Serialize};
+use std::cell::Cell;
 
 /// How a series line connects its points.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -184,6 +185,76 @@ impl HlcAreaStyle {
     pub(crate) fn fill_tint(color: Color32, alpha: u8) -> Color32 {
         Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha)
     }
+
+    /// The style drawing what a saved entry of the former format drew: both fills at
+    /// `fill_opacity` in `up` and `down`, the close line at `line_width` in `up`, and no high or
+    /// low line.
+    pub(crate) fn former(fill_opacity: f32, line_width: f32, up: Color32, down: Color32) -> Self {
+        // `as u8` saturates and maps NaN to 0.
+        let alpha = (fill_opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
+        Self {
+            high_line_visible: false,
+            low_line_visible: false,
+            close_line: LinePlotStyle {
+                color: up,
+                width: line_width,
+                ..Default::default()
+            },
+            high_to_close_fill: Self::fill_tint(up, alpha),
+            close_to_low_fill: Self::fill_tint(down, alpha),
+            ..Self::with_colors(up, down)
+        }
+    }
+
+    /// Forgets the entry of the former format noted on this thread.
+    #[cfg(feature = "widget")]
+    pub(crate) fn forget_former() {
+        FORMER_HLC_AREA.set(None);
+    }
+
+    /// Draws this style, the last one read on this thread, in the candle colours of the document
+    /// holding it if it was saved in the former format, which took them from the chart.
+    #[cfg(feature = "widget")]
+    pub(crate) fn fill_former(&mut self, up: Color32, down: Color32) {
+        if let Some((fill_opacity, line_width)) = FORMER_HLC_AREA.take() {
+            *self = Self::former(fill_opacity, line_width, up, down);
+        }
+    }
+}
+
+thread_local! {
+    /// The `fill_opacity` and `line_width` of the entry of the former format last read on this
+    /// thread.
+    static FORMER_HLC_AREA: Cell<Option<(f32, f32)>> = const { Cell::new(None) };
+}
+
+/// Reads a saved HLC area entry. One of the former format notes its fields for the document
+/// holding it and reads in the token colours, the colours of a style read without its settings.
+fn read_hlc_area<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<HlcAreaStyle, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Saved {
+        // The former serializer always wrote both fields, and a current entry has neither.
+        Former { fill_opacity: f32, line_width: f32 },
+        Current(HlcAreaStyle),
+    }
+    Ok(match Saved::deserialize(deserializer)? {
+        Saved::Former {
+            fill_opacity,
+            line_width,
+        } => {
+            FORMER_HLC_AREA.set(Some((fill_opacity, line_width)));
+            HlcAreaStyle::former(
+                fill_opacity,
+                line_width,
+                DESIGN_TOKENS.semantic.extended.bullish,
+                DESIGN_TOKENS.semantic.extended.bearish,
+            )
+        }
+        Saved::Current(style) => style,
+    })
 }
 
 impl Default for HlcAreaStyle {
@@ -479,7 +550,9 @@ pub struct ChartTypeStyles {
     pub area: AreaStyle,
     /// Baseline chart.
     pub baseline: BaselineStyle,
-    /// HLC area chart.
+    /// HLC area chart. Documents saved with its former `fill_opacity` and `line_width` restore as
+    /// they were drawn.
+    #[serde(deserialize_with = "read_hlc_area")]
     pub hlc_area: HlcAreaStyle,
     /// Candles chart.
     pub candles: CandlesStyle,

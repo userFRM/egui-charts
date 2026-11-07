@@ -1577,4 +1577,90 @@ mod tests {
             "removed, redone, emptied, restored"
         );
     }
+
+    /// An HLC area layout or template saved before the style held each line and fill restores as
+    /// it was drawn: fills in the saved candle colours at alpha round(0.5 * 255) = 128, the close
+    /// line in the rising colour at width 4, and no line in the current default colours.
+    #[test]
+    fn hlc_area_layout_saved_before_its_style_restores_as_drawn() {
+        use egui::epaint::ColorMode;
+        use egui::{Color32, Shape};
+        let (up, down) = (Color32::from_rgb(1, 100, 2), Color32::from_rgb(101, 2, 3));
+        let bars: Vec<_> = [
+            (10.0, 18.0, 8.0, 16.0),
+            (16.0, 20.0, 11.0, 12.0),
+            (12.0, 15.0, 9.0, 14.0),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (open, high, low, close))| {
+            let time = Utc
+                .timestamp_opt(1_700_000_000 + i as i64 * 86_400, 0)
+                .unwrap();
+            Bar::new(time, open, high, low, close, 0.0)
+        })
+        .collect();
+        let mut saved = Chart::new(BarData::from_bars(bars.clone()));
+        saved.set_chart_type(ChartType::HlcArea);
+        saved.config_mut().show_volume = false;
+        saved.config_mut().bullish_color = up;
+        saved.config_mut().bearish_color = down;
+        let former = serde_json::json!({"fill_opacity": 0.5, "line_width": 4.0});
+        for template in [false, true] {
+            let mut chart = Chart::new(BarData::from_bars(bars.clone()));
+            if template {
+                let mut json =
+                    serde_json::to_value(ChartSettingsState::from_chart(&saved)).unwrap();
+                json["chart_type_params"]["styles"]["hlc_area"] = former.clone();
+                let settings: ChartSettingsState = serde_json::from_value(json).unwrap();
+                chart.set_chart_type(ChartType::HlcArea);
+                chart.config_mut().show_volume = false;
+                settings.apply_to_chart(&mut chart).unwrap();
+            } else {
+                let mut json = serde_json::to_value(saved.snapshot().unwrap()).unwrap();
+                json["chart_type_params"]["styles"]["hlc_area"] = former.clone();
+                json["settings"]["chart_type_params"]["styles"]["hlc_area"] = former.clone();
+                let snapshot: ChartSnapshot = serde_json::from_value(json).unwrap();
+                chart.restore(&snapshot).unwrap();
+            }
+            let ctx = egui::Context::default();
+            crate::widget::test_frames::shapes(&ctx, &mut chart, 0.0, vec![]);
+            let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 1.0, vec![]);
+            let filled = |color| {
+                painted
+                    .iter()
+                    .any(|s| matches!(s, Shape::Path(p) if p.fill == color))
+            };
+            let widths = |color| -> Vec<f32> {
+                painted
+                    .iter()
+                    .filter_map(|s| match s {
+                        Shape::Path(p)
+                            if p.stroke.width > 0.0
+                                && p.stroke.color == ColorMode::Solid(color) =>
+                        {
+                            Some(p.stroke.width)
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            };
+            assert!(filled(Color32::from_rgba_unmultiplied(1, 100, 2, 128)));
+            assert!(filled(Color32::from_rgba_unmultiplied(101, 2, 3, 128)));
+            assert!(widths(up).contains(&4.0));
+            for default in [
+                Color32::from_rgb(8, 153, 129),
+                Color32::from_rgb(242, 54, 69),
+                Color32::from_rgb(134, 137, 147),
+            ] {
+                assert_eq!(widths(default), Vec::<f32>::new());
+            }
+            // The Symbol settings show what is drawn.
+            let settings = ChartSettingsState::from_chart(&chart);
+            let style = settings.chart_type_params.unwrap().styles.hlc_area;
+            assert!(!style.high_line_visible && !style.low_line_visible);
+            assert_eq!((style.close_line.color, style.close_line.width), (up, 4.0));
+            assert_eq!(style.close_to_low_fill.a(), 128);
+        }
+    }
 }
