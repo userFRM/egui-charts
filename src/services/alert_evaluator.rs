@@ -45,6 +45,8 @@ struct Evaluation {
     timeframe: Timeframe,
     inputs: AlertInputs,
     studies: Vec<(usize, Box<dyn Indicator>)>,
+    /// Studies the conditions of this interval test, with the studies they take as input.
+    tested: HashSet<usize>,
     error: Option<String>,
     initialized: bool,
     ready: bool,
@@ -101,6 +103,7 @@ impl Evaluation {
             start: inputs.start,
             inputs,
             studies: Vec::new(),
+            tested,
             error: None,
             initialized: false,
             ready: false,
@@ -127,7 +130,7 @@ impl Evaluation {
             })();
             match restored {
                 Ok(study) => result.studies.push(study),
-                Err(error) if tested.contains(&id) => result.error = Some(error),
+                Err(error) if result.tested.contains(&id) => result.error = Some(error),
                 // A study only the message reads and that cannot be made reads `NaN`, instead of
                 // stopping the alert's other studies.
                 Err(_) => {}
@@ -243,6 +246,25 @@ impl Evaluation {
                 })
             })
             .collect()
+    }
+
+    /// Whether these study histories hold the run back. One still loading does. One that stopped
+    /// for good does only for a study a condition tests: a study only the message reads gives
+    /// what it can without that history.
+    fn waiting(
+        &self,
+        symbol: &str,
+        requests: &[(StudyDataRequest, DateTime<Utc>)],
+        feeds: &HashMap<Subject, AlertFeed>,
+    ) -> bool {
+        requests.iter().any(|(request, _)| {
+            let reader = &feeds[&self.subject(symbol, Some(request))];
+            !reader.ready()
+                && (!reader.stopped()
+                    || self.studies.iter().any(|(id, study)| {
+                        self.tested.contains(id) && study.data_requests().contains(request)
+                    }))
+        })
     }
 }
 
@@ -392,10 +414,7 @@ impl AlertEvaluator {
                 }
                 reader.set_inputs(inputs);
             }
-            if requests
-                .iter()
-                .any(|(request, _)| !self.feeds[&run.subject(symbol, Some(request))].ready())
-            {
+            if run.waiting(symbol, &requests, &self.feeds) {
                 continue;
             }
             let reader = &self.feeds[&subject];
@@ -425,10 +444,7 @@ impl AlertEvaluator {
                     .or_insert_with(|| subject.open(self.feed.clone()))
                     .require_start(*start);
             }
-            if reaches
-                .iter()
-                .any(|(request, _)| !self.feeds[&run.subject(symbol, Some(request))].ready())
-            {
+            if run.waiting(symbol, &reaches, &self.feeds) {
                 continue;
             }
             run.ready = true;
@@ -539,7 +555,9 @@ impl AlertEvaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::{HistoryPage, Reply, Subscription, SubscriptionId};
+    use crate::data::{
+        HistoryPage, MetricPage, MetricPoint, MetricRequest, Reply, Subscription, SubscriptionId,
+    };
     use crate::model::AlertStatus;
     use std::sync::Mutex;
 
@@ -557,6 +575,9 @@ mod tests {
 
     impl Datafeed for Feed {
         fn history(&self, request: HistoryRequest, reply: Reply<HistoryPage>) {
+            if request.symbol == "NO_CANDLES" && request.timeframe == Timeframe::Min1 {
+                return reply.send(Err(FeedError::NotSupported));
+            }
             let bars = if request.timeframe == Timeframe::Min5 {
                 vec![bar(-5, 50.0), bar(0, 150.0)]
             } else {
@@ -572,6 +593,21 @@ mod tests {
 
         fn unsubscribe(&self, id: SubscriptionId) {
             self.stopped.lock().unwrap().push(id);
+        }
+
+        /// Only the symbol `HELD` has a metric: 42 from minute 0.
+        fn metric_history(&self, request: MetricRequest, reply: Reply<MetricPage>) {
+            reply.send(if request.symbol == "HELD" {
+                Ok(MetricPage {
+                    points: vec![MetricPoint {
+                        time: bar(0, 0.0).time,
+                        value: 42.0,
+                    }],
+                    end_of_history: true,
+                })
+            } else {
+                Err(FeedError::NotSupported)
+            });
         }
     }
 
@@ -880,6 +916,95 @@ mod tests {
             fired_messages(Arc::new(Feed::default()), &factory, alert),
             ["300 mean 250 NaN NaN NaN"]
         );
+    }
+
+    /// A watchlist alert on a study whose extra history the feed answers with `NotSupported` for
+    /// one member. The closes are 200 and 300, with volume 10 each. Without its metric the first
+    /// study reads `NaN`. Without one-minute candles the second study falls back to the volume of
+    /// the five-hour bars, so waiting is all that keeps a condition from testing that estimate:
+    /// the two candles sum to the 20 `HELD` shows, and `NO_CANDLES` would read the same.
+    #[test]
+    fn stopped_history_holds_an_alert_only_for_a_study_a_condition_tests() {
+        let mut factory = IndicatorFactory::new();
+        factory.register("Metric", || {
+            Box::new(crate::studies::MetricStudy::new(
+                crate::data::MetricSeries {
+                    id: "oi".into(),
+                    name: "Open interest".into(),
+                    unit: String::new(),
+                    format: crate::scales::StudyFormat::Volume,
+                },
+            ))
+        });
+        factory.register("Volume", || Box::new(crate::studies::Volume24h::new()));
+        let five_hours = Timeframe::Custom(std::num::NonZeroU64::new(18_000).unwrap());
+        let tested = AlertSource::Study {
+            id: "7".into(),
+            output: 0,
+        };
+        for (study, timeframe, source, threshold, lacking, expected) in [
+            (
+                "Metric",
+                Timeframe::Min1,
+                AlertSource::Price,
+                250.0,
+                "LACKING",
+                vec!["HELD 300 42", "LACKING 300 NaN"],
+            ),
+            (
+                "Volume",
+                five_hours,
+                tested,
+                0.0,
+                "NO_CANDLES",
+                vec!["HELD 300 20"],
+            ),
+        ] {
+            let mut alert = Alert::new("HELD", crate::model::AlertCondition::Above(threshold));
+            alert.source = source;
+            alert.timeframe = Some(timeframe);
+            alert.watchlist = Some("list".into());
+            alert.message = "{{ticker}} {{close}} {{plot_7_0}}".into();
+            alert.inputs = Some(Box::new(AlertInputs {
+                studies: vec![crate::model::AlertStudy {
+                    id: 7,
+                    name: study.into(),
+                    inputs: Vec::new(),
+                }],
+                ..Default::default()
+            }));
+            let delivered = Arc::new(Mutex::new(Vec::new()));
+            let sink = delivered.clone();
+            let engine = AlertEngine::new()
+                .with_alerts(vec![alert])
+                .on_trigger(move |_, event| {
+                    if let crate::services::AlertEvent::TriggeredForSymbol { message, .. } = event {
+                        sink.lock().unwrap().push(message.clone());
+                    }
+                });
+            engine.set_watchlist("list", vec!["HELD".into(), lacking.into()]);
+            let mut evaluator = AlertEvaluator::new(Arc::new(Feed::default()));
+            #[cfg(feature = "ui")]
+            let ctx = egui::Context::default();
+            let mut errors = Vec::new();
+            for _ in 0..6 {
+                errors.extend(evaluator.poll(
+                    &engine,
+                    &factory,
+                    &[],
+                    #[cfg(feature = "ui")]
+                    &ctx,
+                    DateTime::from_timestamp(1000, 0).unwrap(),
+                ));
+            }
+            let mut delivered = delivered.lock().unwrap().clone();
+            delivered.sort();
+            assert_eq!(delivered, expected);
+            assert!(
+                matches!(errors.as_slice(), [FeedError::NotSupported]),
+                "reported once: {errors:?}"
+            );
+        }
     }
 
     /// A feed that keys symbols without a venue prefix and reports the exchange when it

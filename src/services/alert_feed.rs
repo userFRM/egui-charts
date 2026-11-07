@@ -226,6 +226,12 @@ impl AlertFeed {
         self.ready
     }
 
+    /// Whether a request failed for good, so this reader sends no further request.
+    #[cfg(feature = "studies")]
+    pub(super) fn stopped(&self) -> bool {
+        self.stopped
+    }
+
     /// Calendar shared by history, streaming aggregation and study calculation.
     pub fn clock(&self) -> &crate::model::BarClock {
         &self.request.clock
