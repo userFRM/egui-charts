@@ -220,6 +220,20 @@ impl ChartHistory {
         }
     }
 
+    /// Makes every state of drawing `id` that an undo or redo of the shown symbol's actions can
+    /// bring back saveable, once the drawing is stored on this chart, so that neither leaves it
+    /// stored nowhere.
+    #[cfg(feature = "drawings")]
+    pub(super) fn keep_saveable(&mut self, id: usize) {
+        // An action's drawings belong to the symbol shown while it is on top of its stack; those
+        // past a symbol change are another symbol's, whose ids are their own.
+        for stack in [&mut self.undo, &mut self.redo] {
+            for action in stack.iter_mut().rev().take_while(|a| a.symbol.is_none()) {
+                action.drawings.keep_saveable(id);
+            }
+        }
+    }
+
     pub(super) fn record_sizes(&mut self, change: super::layout::SizeChange) {
         self.push(Action {
             layout_sizes: Some(change),

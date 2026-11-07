@@ -165,11 +165,21 @@ impl DrawingLinks {
                                 charts[slot].history.drawing_edits += 1;
                             }
                         }
+                        // A copy, as one added below, while the chart of the changed drawing
+                        // stores it: an undo on that chart can bring back a stored original that
+                        // this chart stores too.
+                        let copy_only = charts[slot].keeps_stored_drawings()
+                            && charts[key.0].keeps_stored_drawings()
+                            && charts[key.0]
+                                .drawings()
+                                .drawings
+                                .iter()
+                                .any(|d| d.id == key.1 && d.saveable);
                         charts[slot].drawings_mut().drag_edit_drawing(id, |target| {
                             copy.id = target.id;
                             copy.stored_id.clone_from(&target.stored_id);
                             copy.created_at = target.created_at;
-                            copy.saveable = target.saveable;
+                            copy.saveable = target.saveable && !copy_only;
                             *target = copy;
                         });
                     } else {
@@ -193,16 +203,19 @@ impl DrawingLinks {
                     charts[slot].drawings_mut().delete_drawing(id);
                 }
             }
-            // The copy that stays is now the only instance, so it is stored where it is.
-            if saveable
-                && let Some(kept) = charts[key.0]
+            // The copy that stays, or the one deleted, is now the only instance, so it is stored
+            // where it is, also when an undo or redo on its chart brings it back.
+            if saveable {
+                charts[key.0].history.keep_saveable(key.1);
+                if let Some(kept) = charts[key.0]
                     .drawings_mut()
                     .drawings
                     .iter_mut()
                     .find(|d| d.id == key.1 && !d.saveable)
-            {
-                kept.saveable = true;
-                charts[key.0].history.drawing_edits += 1;
+                {
+                    kept.saveable = true;
+                    charts[key.0].history.drawing_edits += 1;
+                }
             }
         }
         if !pointer_down {
@@ -752,9 +765,13 @@ mod tests {
 
     /// Through the layout, without storage: a drawing and its copy on a chart of another
     /// interval are listed once, also once neither chart shows them, and deleting a symbol
-    /// leaves the others, takes locked drawings along and comes back in one undo.
+    /// leaves the others, takes locked drawings along and comes back in one undo. With a storage
+    /// per chart, that undo also stores the copy it brings back.
     #[test]
     fn inventory_lists_each_drawing_once_and_deletes_one_symbol_with_undo() {
+        use crate::services::document::tests::Revised;
+        use crate::widget::ChartLayoutMode;
+
         let (mut a, mut b) = (bars(60), bars(120));
         a.set_symbol("AAA");
         b.set_symbol("AAA");
@@ -831,6 +848,64 @@ mod tests {
         assert_eq!(
             names(&layout, &[&mut c, &mut d]),
             listed(&[("AAA", &["Top", "Under"])])
+        );
+
+        // Each chart with its own storage, the copy on the active chart: deleting the symbol
+        // deletes the copy and leaves the original to the mirror, so the stored drawing moves to
+        // the copy, and the undo there brings it back stored.
+        let storages = [Arc::new(Revised::default()), Arc::new(Revised::default())];
+        let charts = || {
+            storages.each_ref().map(|storage| {
+                let mut chart = bars(60);
+                chart.set_symbol("AAA");
+                chart.set_storage(storage.clone());
+                chart
+            })
+        };
+        let layout = || ChartLayout {
+            mode: ChartLayoutMode::TwoHorizontal,
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let frames = |layout: &mut ChartLayout, charts: &mut [Chart; 2]| {
+            for _ in 0..4 {
+                ctx.run_ui(egui::RawInput::default(), |ui| {
+                    layout.show(ui, &mut charts.each_mut());
+                })
+                .drop_without_applying_deltas();
+            }
+        };
+        let counts = |charts: &[Chart; 2]| {
+            charts
+                .each_ref()
+                .map(|chart| chart.drawings().drawings.len())
+        };
+        let top = ["Top".to_owned()];
+        let mut session = layout();
+        let mut shown = charts();
+        frames(&mut session, &mut shown);
+        shown[1].user_action(|chart| {
+            let id = chart.drawings_mut().add_drawing(line("Drawn")).unwrap();
+            assert!(chart.drawings_mut().move_to_folder(&[id], &[], &top));
+            assert!(
+                chart
+                    .drawings_mut()
+                    .set_folder_sync(&top, Some(FolderSync::Layout))
+            );
+        });
+        frames(&mut session, &mut shown);
+        assert_eq!(counts(&shown), [1, 1], "mirrored");
+        assert!(session.delete_symbol_drawings(&mut shown.each_mut(), "AAA"));
+        frames(&mut session, &mut shown);
+        assert_eq!(counts(&shown), [0, 0], "deleted");
+        assert!(shown[0].undo());
+        frames(&mut session, &mut shown);
+        let mut restarted = charts();
+        frames(&mut layout(), &mut restarted);
+        assert_eq!(
+            (counts(&shown), counts(&restarted)),
+            ([1, 1], [1, 1]),
+            "after the undo and after a restart"
         );
     }
 
@@ -1442,6 +1517,7 @@ mod tests {
             Delete,
             Edit,
             HeldEdit,
+            File,
             Undo,
             Redo,
         }
@@ -1531,6 +1607,36 @@ mod tests {
         // chart that keeps a copy stores the drawing alone, and charts on one storage read it.
         let rows: &[(&str, &[(usize, Step)], Shown, Shown)] = &[
             ("keep", &[(b_side, Keep)], [none, top_10], [top_10, top_10]),
+            (
+                "keep, undo",
+                &[(b_side, Keep), (b_side, Undo)],
+                [top_10, top_10],
+                [top_10, top_10],
+            ),
+            (
+                "root, undo",
+                &[(b_side, ToRoot), (b_side, Undo)],
+                [top_10, top_10],
+                [top_10, top_10],
+            ),
+            (
+                "group, undo",
+                &[(b_side, Group), (b_side, Undo)],
+                [top_10, top_10],
+                [top_10, top_10],
+            ),
+            (
+                "delete, undo",
+                &[(b_side, Delete), (b_side, Undo)],
+                [top_10, top_10],
+                [top_10, top_10],
+            ),
+            (
+                "file on A, keep, undo on A",
+                &[(a_side, File), (b_side, Keep), (a_side, Undo)],
+                [top_10, top_10],
+                [&[("Top/Sub", 10.0)], &[("Top/Sub", 10.0)]],
+            ),
             (
                 "keep, undo, redo",
                 &[(b_side, Keep), (b_side, Undo), (b_side, Redo)],
@@ -1628,6 +1734,13 @@ mod tests {
                                     &[id.unwrap()],
                                     &[],
                                     &filed(&["New"]),
+                                );
+                            }),
+                            File => chart.user_action(|chart| {
+                                chart.drawings_mut().move_to_folder(
+                                    &[id.unwrap()],
+                                    &[],
+                                    &filed(&["Top", "Sub"]),
                                 );
                             }),
                             Delete => chart.user_action(|chart| {
