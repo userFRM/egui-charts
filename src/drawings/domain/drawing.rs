@@ -183,11 +183,11 @@ pub struct Drawing {
     /// Border colour of annotation boxes; `None` uses the drawing colour.
     #[serde(default)]
     pub border_color: Option<[u8; 4]>,
-    /// Extend line to left edge; an extended line, info line or trend angle extends past its first
-    /// anchor, whichever way it was drawn
+    /// Extend line to left edge; a ray, extended line, info line or trend angle extends past its
+    /// first anchor, whichever way it was drawn
     pub extend_left: bool,
-    /// Extend line to right edge; an extended line, info line or trend angle extends past its second
-    /// anchor, whichever way it was drawn
+    /// Extend line to right edge; a ray, extended line, info line or trend angle extends past its
+    /// second anchor, whichever way it was drawn
     pub extend_right: bool,
     /// Arrow style at start of line
     pub arrow_start_style: ArrowStyle,
@@ -499,7 +499,8 @@ impl Drawing {
             text_color: match tool_type {
                 DrawingToolType::Note | DrawingToolType::Callout => Some(WHITE),
                 // Independent of the line, which can change colour without its text.
-                DrawingToolType::ExtendedLine
+                DrawingToolType::Ray
+                | DrawingToolType::ExtendedLine
                 | DrawingToolType::InfoLine
                 | DrawingToolType::HorizontalLine => Some(BLUE),
                 _ => None,

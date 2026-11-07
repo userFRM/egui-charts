@@ -489,6 +489,35 @@ mod tests {
         assert_eq!(names(charts[2]), ["SMA", "SMA"]);
     }
 
+    /// A copy made through a clone of the layout has its own id, so undoing it leaves the copies
+    /// made through the original alone.
+    #[test]
+    fn copy_through_a_cloned_layout_undoes_only_itself() {
+        let (mut a, mut b, mut c) = (chart(50), chart(50), chart(50));
+        let sma = a.add_indicator(Box::new(SMA::new(7)));
+        let rsi = a.add_indicator(Box::new(RSI::new(5)));
+        let factory = IndicatorFactory::new();
+        let mut layout = layout();
+        let mut charts = [&mut a, &mut b, &mut c];
+        layout.apply_copy(&mut charts, 0, &LayoutCopy::Study(sma), &factory);
+        assert_eq!(names(charts[1]), ["SMA"]);
+        assert_eq!(names(charts[2]), ["SMA"]);
+
+        // The host replaces the layout with a clone, and slot 2 takes no more studies.
+        let mut clone = layout.clone();
+        charts[2].set_study_limit(Some(1));
+        let issues = clone.apply_copy(&mut charts, 0, &LayoutCopy::Study(rsi), &factory);
+        assert!(issues.iter().any(|i| i.slot == 2), "slot 2 is at its limit");
+        assert_eq!(names(charts[1]), ["SMA", "RSI"]);
+        assert_eq!(names(charts[2]), ["SMA"]);
+
+        assert!(charts[1].undo(), "the target undoes the RSI copy");
+        show(&mut clone, &mut charts);
+        show(&mut layout, &mut charts);
+        assert_eq!(names(charts[1]), ["SMA"]);
+        assert_eq!(names(charts[2]), ["SMA"]);
+    }
+
     /// The set replaces what each chart had, keeping links and shared panes; only the charts of
     /// the preset take it.
     #[test]
