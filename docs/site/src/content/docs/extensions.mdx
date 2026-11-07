@@ -135,8 +135,7 @@ mapping is the main pane's mapping. Use time or x there, rather than its study's
 [`autoscale`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/chart/primitives/trait.Primitive.html#method.autoscale)
 returns an optional `(minimum, maximum)` in data values to widen the series'
 automatic price fit. `None` adds nothing. It does not change a manual range.
-An overlay study on an independent scale fits that scale to its study values
-only. The [custom-series scene](/egui-charts/docs/extensions/custom-series/) includes zero so
+The [custom-series scene](/egui-charts/docs/extensions/custom-series/) includes zero so
 that lollipop stems remain inside their pane's automatic range.
 
 Graphics of a fixed pixel size need room that does not scale with prices. Override
@@ -149,7 +148,8 @@ the price range plus
 [`AutoscaleProvider::with_margins`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/model/struct.AutoscaleProvider.html#method.with_margins).
 Each pane and scale keeps the largest request at each screen edge and adds it to
 the scale's fractional margins, so the clearance holds after a resize or a price
-change. A pane too short for the request keeps its ordinary fit.
+change. Independent overlay studies fit the prices without the margins. A pane
+too short for the request keeps its ordinary fit.
 
 ## Hit testing and host actions
 

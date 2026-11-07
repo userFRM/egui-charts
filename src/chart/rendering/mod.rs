@@ -29,7 +29,8 @@ mod watermark;
 pub(crate) use crate::painting::dashed_line::{draw_dashed_line, draw_dashed_polyline};
 pub use alert_levels::{alert_shortcut_price, render_alert_levels};
 pub(crate) use axes::{
-    price_marks, render_study_axis, render_time_grid, study_mapping, time_axis_marks,
+    fit_study_mapping, price_marks, render_study_axis, render_time_grid, study_mapping,
+    time_axis_marks,
 };
 pub use axes::{
     render_axis_currency, render_price_labels, render_price_labels_at_pos, render_price_line,
