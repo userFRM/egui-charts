@@ -1558,7 +1558,8 @@ mod tests {
         }
 
         // Before version 8 a trend line's Left and Right named the pane's sides, and a vertical
-        // one never extended. Loading keeps its reach once; version 8 loads as saved.
+        // one never extended, including in version 7 files. Loading keeps its reach once; version 8
+        // loads as saved.
         let (forward, reversed, vertical) = ([0, 1], [1, 0], [0, 0]);
         for (version, anchors, saved_flags, want) in [
             (6, forward, (false, true), (false, true)),
@@ -1567,7 +1568,8 @@ mod tests {
             (6, reversed, (true, true), (true, true)),
             (6, vertical, (false, true), (false, false)),
             (6, vertical, (true, true), (false, false)),
-            (2, reversed, (false, true), (true, false)),
+            (7, reversed, (false, true), (true, false)),
+            (7, vertical, (true, true), (false, false)),
             (8, reversed, (false, true), (false, true)),
             (8, vertical, (false, true), (false, true)),
         ] {
