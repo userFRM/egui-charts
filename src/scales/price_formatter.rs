@@ -40,9 +40,22 @@ pub(crate) fn to_step(value: f64, step: f64, round: impl Fn(f64) -> f64) -> f64 
 /// Decimals needed to write `step`, such as 2 for 0.25.
 #[cfg(feature = "widget")]
 pub(crate) fn decimals(step: f64) -> usize {
-    let text = format!("{step}");
-    text.split_once('.')
-        .map_or(0, |(_, fraction)| fraction.len())
+    // Written with the 15 significant digits an f64 holds, so representation noise such as the
+    // 0.07500000000000001 of a widened row height does not add decimals.
+    let text = format!("{:.14e}", step.abs());
+    let Some((mantissa, exponent)) = text.split_once('e') else {
+        return 0;
+    };
+    let exponent: i64 = exponent.parse().unwrap_or(0);
+    let digits: Vec<u8> = mantissa.bytes().filter(u8::is_ascii_digit).collect();
+    let significant = digits
+        .iter()
+        .rposition(|&b| b != b'0')
+        .map_or(0, |last| last + 1);
+    if significant == 0 {
+        return 0;
+    }
+    (significant as i64 - 1 - exponent).max(0) as usize
 }
 
 /// Writes `separator` between the groups of three digits of the integer part of `text`, its
