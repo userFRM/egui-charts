@@ -721,7 +721,7 @@ impl TPOProfile {
     /// Height of the initial balance, or `None` for a profile without one.
     pub fn initial_balance_range(&self) -> Option<f64> {
         (self.initial_balance_high != f64::MIN)
-            .then(|| self.initial_balance_high - self.initial_balance_low)
+            .then_some(self.initial_balance_high - self.initial_balance_low)
     }
 
     /// TPOs of the rows below and of the rows above the point of control's row, `(below, above)`.
