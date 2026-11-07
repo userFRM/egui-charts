@@ -284,8 +284,9 @@ fn without_thresholds(condition: &AlertCondition) -> Option<AlertCondition> {
     })
 }
 
-/// A stored operator with the thresholds or drawings of `current`. Without matching ones it takes
-/// the values the condition menu seeds.
+/// A stored operator with the thresholds, drawings or plots of `current`. A single level seeds a
+/// channel as the condition menu does, and an operator that cannot use what `current` tests leaves
+/// it unchanged.
 fn restored_condition(
     stored: &AlertCondition,
     current: &AlertCondition,
@@ -293,34 +294,30 @@ fn restored_condition(
     sources: &[(AlertSource, String)],
 ) -> AlertCondition {
     use AlertCondition as C;
-    let (lower, upper) = match current {
+    let levels = match current {
         C::EnteringChannel { lower, upper }
         | C::ExitingChannel { lower, upper }
         | C::InsideChannel { lower, upper }
-        | C::OutsideChannel { lower, upper } => (*lower, *upper),
-        _ => {
-            let level = current.level().unwrap_or(0.0);
-            (level, level + 1.0)
-        }
+        | C::OutsideChannel { lower, upper } => Some((*lower, *upper)),
+        _ => current.level().map(|level| (level, level + 1.0)),
     };
-    let level = current.level().unwrap_or(lower);
-    let to_level = |comparison| match current {
-        C::Compare {
-            other: other @ AlertSource::Drawing(_),
-            ..
-        } => C::Compare {
+    let to_level = |comparison| match (current, levels) {
+        (C::Compare { other, .. }, _) => C::Compare {
             other: other.clone(),
             comparison,
         },
-        _ => level_condition(comparison, level),
+        (_, Some((level, _))) => level_condition(comparison, level),
+        _ => current.clone(),
     };
-    let to_channel = |comparison| match current {
-        C::Channel { boundaries, .. } => C::Channel {
+    let to_channel = |comparison| match (current, levels) {
+        (C::Channel { boundaries, .. }, _) => C::Channel {
             boundaries: boundaries.clone(),
             comparison,
         },
-        _ => channel_condition(comparison, lower, upper),
+        (_, Some((lower, upper))) => channel_condition(comparison, lower, upper),
+        _ => current.clone(),
     };
+    let compares = current.partners()[0].is_some();
     let change = match current {
         C::MovingBy { value, .. } => *value,
         C::MovingByPercent { percent, .. } => *percent,
@@ -328,6 +325,11 @@ fn restored_condition(
     };
     match stored {
         C::StrategyFills(_) | C::Channel { .. } => current.clone(),
+        C::MovingBy { .. } | C::MovingByPercent { .. } | C::VolumeAboveAverage { .. }
+            if compares =>
+        {
+            current.clone()
+        }
         C::Crossing(_) => to_level(AlertComparison::Crossing),
         C::CrossingUp(_) => to_level(AlertComparison::CrossingUp),
         C::CrossingDown(_) => to_level(AlertComparison::CrossingDown),
@@ -345,10 +347,12 @@ fn restored_condition(
             percent: change,
             bars: *bars,
         },
-        C::Compare { other, comparison } if offered(other, names, sources) => C::Compare {
-            other: other.clone(),
-            comparison: *comparison,
-        },
+        C::Compare { other, comparison } if !compares && offered(other, names, sources) => {
+            C::Compare {
+                other: other.clone(),
+                comparison: *comparison,
+            }
+        }
         C::Compare { comparison, .. } => to_level(*comparison),
         C::VolumeAboveAverage { bars, .. } => C::VolumeAboveAverage {
             multiplier: match current {
@@ -556,6 +560,18 @@ mod tests {
         let drawing = |id: &str| AlertSource::Drawing(id.into());
         let compare = |other, comparison| C::Compare { other, comparison };
         let boundaries = Box::new([drawing("a#1"), drawing("a#2")]);
+        let channel = C::Channel {
+            boundaries: boundaries.clone(),
+            comparison: AlertChannelComparison::Entering,
+        };
+        let moving = C::MovingBy {
+            value: 3.0,
+            bars: 1,
+        };
+        let volume = C::VolumeAboveAverage {
+            multiplier: 2.0,
+            bars: 20,
+        };
         let gone = AlertSource::Study {
             id: "gone".into(),
             output: 0,
@@ -685,15 +701,107 @@ mod tests {
                     comparison: AlertChannelComparison::Exiting,
                 },
                 price.clone(),
-                C::Channel {
-                    boundaries: boundaries.clone(),
-                    comparison: AlertChannelComparison::Entering,
-                },
+                channel.clone(),
                 price.clone(),
                 C::Channel {
                     boundaries,
                     comparison: AlertChannelComparison::Exiting,
                 },
+            ),
+            // A comparison keeps what it compares with and takes the stored relationship.
+            (
+                price.clone(),
+                C::CrossingUp(9.0),
+                price.clone(),
+                compare(study(), AlertComparison::Crossing),
+                price.clone(),
+                compare(study(), AlertComparison::CrossingUp),
+            ),
+            (
+                price.clone(),
+                compare(study(), AlertComparison::Below),
+                price.clone(),
+                compare(drawing("new"), AlertComparison::Crossing),
+                price.clone(),
+                compare(drawing("new"), AlertComparison::Below),
+            ),
+            // An operator that cannot use the drawings or plots leaves the condition as it is.
+            (
+                price.clone(),
+                C::Above(9.0),
+                price.clone(),
+                channel.clone(),
+                price.clone(),
+                channel.clone(),
+            ),
+            (
+                price.clone(),
+                compare(study(), AlertComparison::Below),
+                price.clone(),
+                channel.clone(),
+                price.clone(),
+                channel.clone(),
+            ),
+            (
+                price.clone(),
+                C::VolumeAboveAverage {
+                    multiplier: 9.0,
+                    bars: 7,
+                },
+                price.clone(),
+                channel.clone(),
+                price.clone(),
+                channel,
+            ),
+            (
+                price.clone(),
+                C::InsideChannel {
+                    lower: 1.0,
+                    upper: 2.0,
+                },
+                price.clone(),
+                compare(drawing("new"), AlertComparison::Crossing),
+                price.clone(),
+                compare(drawing("new"), AlertComparison::Crossing),
+            ),
+            (
+                price.clone(),
+                C::MovingBy {
+                    value: 9.0,
+                    bars: 7,
+                },
+                price.clone(),
+                compare(study(), AlertComparison::Crossing),
+                price.clone(),
+                compare(study(), AlertComparison::Crossing),
+            ),
+            // So does one that needs a level the condition does not have.
+            (
+                price.clone(),
+                C::Above(9.0),
+                price.clone(),
+                moving.clone(),
+                price.clone(),
+                moving.clone(),
+            ),
+            (
+                price.clone(),
+                compare(gone.clone(), AlertComparison::Below),
+                price.clone(),
+                moving.clone(),
+                price.clone(),
+                moving,
+            ),
+            (
+                AlertSource::Volume,
+                C::InsideChannel {
+                    lower: 1.0,
+                    upper: 2.0,
+                },
+                AlertSource::Volume,
+                volume.clone(),
+                AlertSource::Volume,
+                volume,
             ),
             (
                 study(),
