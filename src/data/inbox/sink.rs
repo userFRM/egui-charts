@@ -552,8 +552,8 @@ impl TakenIds {
 }
 
 /// The part of `remaining` that fills a bar up to `room`. A fill that reaches the room within
-/// the rounding of its sum (see [`crate::data::footprint::meets_threshold`]) takes all of itself, so the
-/// bar closes on it and the next execution opens the next bar whole.
+/// the rounding of its sum (see [`crate::data::footprint::meets_threshold`]) takes all of
+/// itself, so the bar closes on it and the next execution opens the next bar whole.
 fn fill_to(remaining: f64, room: f64, limit: f64) -> f64 {
     if remaining <= room + limit * 1e-9 {
         remaining
