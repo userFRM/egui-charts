@@ -1072,6 +1072,62 @@ mod tests {
         }
     }
 
+    /// Sizes of 0.1 and 0.2 do not sum exactly to their threshold, so a fill that reaches the
+    /// threshold must close the bar whole. A fill that crosses it by more than the rounding is
+    /// still split.
+    #[test]
+    fn fractional_fills_that_reach_the_threshold_close_the_bar() {
+        use OrderSide::Buy;
+        let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let at = |seconds: i64| start + TimeDelta::seconds(seconds);
+        let fill = |seconds, price, size| Tick::new(at(seconds), price, size, Some(Buy));
+        let summary = |flow: &Footprint| {
+            flow.bars()
+                .values()
+                .map(|bar| (bar.trades(), bar.levels.keys().copied().collect::<Vec<_>>()))
+                .collect::<Vec<_>>()
+        };
+        for interval in ["1v", "1delta"] {
+            let clock = || BarClock::new(interval.parse().unwrap());
+            let mut ten = Footprint::new(clock(), 1.0, 1).unwrap();
+            for second in 0..10 {
+                ten.push(&fill(second, 100.0, 0.1)).unwrap();
+            }
+            ten.push(&fill(10, 101.0, 0.1)).unwrap();
+            assert_eq!(
+                summary(&ten),
+                [(10, vec![100]), (1, vec![101])],
+                "{interval}: ten buys of 0.1"
+            );
+            let mut stepped = Footprint::new(clock(), 1.0, 1).unwrap();
+            for (second, (price, size)) in [
+                (100.0, 0.1),
+                (101.0, 0.2),
+                (102.0, 0.3),
+                (103.0, 0.4),
+                (104.0, 0.5),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                stepped.push(&fill(second as i64, price, size)).unwrap();
+            }
+            assert_eq!(
+                summary(&stepped),
+                [(4, vec![100, 101, 102, 103]), (1, vec![104])],
+                "{interval}: sizes of 0.1 to 0.5"
+            );
+            let mut crossing = Footprint::new(clock(), 1.0, 1).unwrap();
+            crossing.push(&fill(0, 100.0, 0.6)).unwrap();
+            crossing.push(&fill(1, 101.0, 0.6)).unwrap();
+            assert_eq!(
+                summary(&crossing),
+                [(2, vec![100, 101]), (1, vec![101])],
+                "{interval}: a fill crossing by more than the rounding is split"
+            );
+        }
+    }
+
     /// 2 + 6 + 4 + 8 = 20 from four executions, so the mean is 5. A size filter from 5
     /// upward retains 6 and 8: volume 14, two executions, mean 7.
     #[test]
