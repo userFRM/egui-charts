@@ -551,6 +551,17 @@ impl TakenIds {
     }
 }
 
+/// The part of `remaining` that fills a bar up to `room`. A fill that reaches the room within
+/// the rounding of its sum (see [`crate::data::footprint::meets_threshold`]) takes all of
+/// itself, so the bar closes on it and the next execution opens the next bar whole.
+fn fill_to(remaining: f64, room: f64, limit: f64) -> f64 {
+    if remaining <= room + limit * 1e-9 {
+        remaining
+    } else {
+        room
+    }
+}
+
 /// Exact execution allocations shared by chart bars and standalone stream inputs.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct TradeBars {
@@ -598,10 +609,18 @@ impl TradeBars {
                 current.clone().ok_or(())?
             };
             let size = match timeframe {
-                Timeframe::Volume(limit) => remaining.min(limit.get() as f64 - old.volume),
+                Timeframe::Volume(limit) => fill_to(
+                    remaining,
+                    limit.get() as f64 - old.volume,
+                    limit.get() as f64,
+                ),
                 Timeframe::Delta(limit) => match tick.side {
-                    Some(OrderSide::Buy) => remaining.min(limit.get() as f64 - delta),
-                    Some(OrderSide::Sell) => remaining.min(limit.get() as f64 + delta),
+                    Some(OrderSide::Buy) => {
+                        fill_to(remaining, limit.get() as f64 - delta, limit.get() as f64)
+                    }
+                    Some(OrderSide::Sell) => {
+                        fill_to(remaining, limit.get() as f64 + delta, limit.get() as f64)
+                    }
                     None => remaining,
                 },
                 _ => remaining,
@@ -617,8 +636,12 @@ impl TradeBars {
             };
             closed = match timeframe {
                 Timeframe::Ticks(limit) => count + 1 >= limit.get(),
-                Timeframe::Volume(limit) => bar.volume >= limit.get() as f64,
-                Timeframe::Delta(limit) => delta.abs() >= limit.get() as f64,
+                Timeframe::Volume(limit) => {
+                    crate::data::footprint::meets_threshold(bar.volume, limit.get() as f64)
+                }
+                Timeframe::Delta(limit) => {
+                    crate::data::footprint::meets_threshold(delta.abs(), limit.get() as f64)
+                }
                 Timeframe::Range(ticks) => {
                     let tick_size = tick_size.filter(|s| s.is_finite() && *s > 0.0).ok_or(())?;
                     let range = ticks.get() as f64 * tick_size;
