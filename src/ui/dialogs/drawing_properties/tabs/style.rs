@@ -30,6 +30,11 @@ impl StyleTab {
             if let Some(color) = color_swatch(ui, color_picker, props.color, "drawing_props_color")
             {
                 props.color = keep_opacity(color, props.color, color_picker.custom_mode);
+                if let Some(template) = &mut props.tool_settings {
+                    // Keep the palette's RGB before translucent paint premultiplies it.
+                    let [r, g, b, _] = color.to_srgba_unmultiplied();
+                    template.settings.color = [r, g, b, props.color.a()];
+                }
             }
             ui.end_row();
 
@@ -365,5 +370,98 @@ mod tests {
         ]);
         let [r, g, b, _] = swatch.to_srgba_unmultiplied();
         assert_eq!(props.color, Color32::from_rgba_unmultiplied(r, g, b, 51));
+    }
+
+    /// A palette swatch picked in the Style tab of one drawing in a selection recolours every
+    /// selected drawing and leaves each at its own opacity: a trend line stays opaque and a
+    /// highlighter stays at 51, whichever of the two the dialog was opened on.
+    #[test]
+    fn palette_colour_on_a_selection_keeps_each_line_opacity() {
+        let swatch = MAIN_COLORS[3];
+        let [r, g, b, _] = swatch.to_srgba_unmultiplied();
+        let mut observed = Vec::new();
+        for opened in [1, 2] {
+            let ctx = Context::default();
+            ctx.global_style_mut(|style| style.animation_time = 0.0);
+            let mut chart = Chart::new(BarData::new());
+            let highlighter = Drawing::new(1, DrawingToolType::Highlighter);
+            let line = Drawing::new(2, DrawingToolType::TrendLine);
+            assert_eq!((highlighter.color[3], line.color[3]), (51, 255));
+            chart.drawings_mut().drawings = vec![highlighter, line];
+            chart.drawings_mut().select_drawings([1, 2]);
+            let target = chart.drawings().drawings[opened - 1].clone();
+            let mut props = DrawingProps::from_drawing(&target, &chart);
+            let mut pickers: [ColorPickerState; 2] = Default::default();
+            pickers[0].is_open = true;
+            let mut frame = |events| {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            Pos2::ZERO,
+                            egui::vec2(1440.0, 900.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| StyleTab::show(ui, &mut props, &mut pickers),
+                );
+                let well = output.shapes.iter().find_map(|s| match &s.shape {
+                    Shape::Rect(r) if r.fill == swatch => Some(r.rect.center()),
+                    _ => None,
+                });
+                output.drop_without_applying_deltas();
+                well
+            };
+            frame(vec![]);
+            let pos = frame(vec![]).expect("the palette shows the swatch");
+            frame(vec![
+                Event::PointerMoved(pos),
+                Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Modifiers::NONE,
+                },
+                Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Modifiers::NONE,
+                },
+            ]);
+            props
+                .apply_to_chart(
+                    crate::ui::dialogs::drawing_properties::actions::DrawingId(opened),
+                    &mut chart,
+                )
+                .unwrap();
+            observed.push(
+                chart
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .map(|d| d.color)
+                    .collect::<Vec<_>>(),
+            );
+            let mut custom =
+                DrawingProps::from_drawing(&chart.drawings().drawings[opened - 1], &chart);
+            custom.color = Color32::from_rgba_unmultiplied(255, 255, 255, 128);
+            custom
+                .apply_to_chart(
+                    crate::ui::dialogs::drawing_properties::actions::DrawingId(opened),
+                    &mut chart,
+                )
+                .unwrap();
+            assert!(
+                chart
+                    .drawings()
+                    .drawings
+                    .iter()
+                    .all(|d| d.color == [255, 255, 255, 128]),
+                "an edited opacity applies to the entire selection"
+            );
+        }
+        let expected = vec![[r, g, b, 51], [r, g, b, 255]];
+        assert_eq!(observed, vec![expected.clone(), expected]);
     }
 }

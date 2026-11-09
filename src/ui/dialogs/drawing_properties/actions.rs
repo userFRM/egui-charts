@@ -110,6 +110,18 @@ impl DrawingProps {
         }
     }
 
+    /// Exact saved or picked RGBA when it encodes the current paint colour, otherwise the editor's.
+    pub(super) fn color_rgba(&self) -> [u8; 4] {
+        self.tool_settings
+            .as_ref()
+            .map(|template| &template.settings)
+            .filter(|settings| settings.color32() == self.color)
+            .map_or_else(
+                || self.color.to_srgba_unmultiplied(),
+                |settings| settings.color,
+            )
+    }
+
     /// Validate and apply one undoable edit to the unlocked selection. A value that differs from
     /// drawing `id`'s, which these properties were read from, was edited, and only edited values
     /// change the drawings: text only those that show text, tool inputs only drawings of the same
@@ -205,8 +217,14 @@ impl DrawingProps {
         {
             // The dialog opened with the target's values: one that differs from them was edited,
             // and only edited values are written, so each drawing keeps the rest of its own.
-            if self.color != target.color32() {
-                drawing.color = self.color.to_srgba_unmultiplied();
+            let [r, g, b, a] = self.color_rgba();
+            if [r, g, b, a] != target.color {
+                let alpha = if a == target.color[3] {
+                    drawing.color[3]
+                } else {
+                    a
+                };
+                drawing.color = [r, g, b, alpha];
             }
             if self.line_width != target.stroke_width {
                 drawing.stroke_width = self.line_width;
