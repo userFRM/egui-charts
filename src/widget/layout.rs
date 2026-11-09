@@ -1908,7 +1908,7 @@ impl ChartLayout {
         let range = charts[self.active].visible_time_range();
         let source = charts[self.active].sync_source();
         for (index, chart) in charts.iter_mut().take(count).enumerate() {
-            chart.set_synced_crosshair(None, None);
+            chart.restore_host_crosshair();
             if self.sync.sync_crosshair
                 && let Some(source) = hovered
                 && index != source
@@ -3174,6 +3174,92 @@ mod tests {
         layout.set_detached(1, false);
         frame(&mut layout, &mut charts, vec![]);
         assert!(!layout.is_detached(1));
+    }
+
+    #[test]
+    fn layout_keeps_a_crosshair_position_set_from_code() {
+        use super::super::{SeriesId, SeriesOptions};
+
+        for sync_crosshair in [false, true] {
+            for setter in [0, 1, 2] {
+                let ctx = egui::Context::default();
+                let mut layout = ChartLayout {
+                    mode: ChartLayoutMode::TwoHorizontal,
+                    ..Default::default()
+                };
+                layout.sync.sync_crosshair = sync_crosshair;
+                let mut charts = [chart(60), chart(60)];
+                let series = charts[1].add_series(SeriesOptions::default());
+                let bars = charts[1].bars(SeriesId::MAIN).to_vec();
+                charts[1].set_data(series, bars);
+                let mut time = 0.0;
+                let mut frame = |layout: &mut ChartLayout, charts: &mut [Chart], events| {
+                    time += 0.1;
+                    ctx.run_ui(
+                        RawInput {
+                            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))),
+                            time: Some(time),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            layout.show(ui, &mut charts.iter_mut().collect::<Vec<_>>());
+                        },
+                    )
+                    .textures_delta
+                    .clear();
+                };
+                frame(&mut layout, &mut charts, vec![]);
+                let selected = charts[1].bars(SeriesId::MAIN)[50].time;
+                match setter {
+                    0 => charts[1].set_crosshair_position(Some((selected, 10.5))),
+                    1 => charts[1].set_synced_crosshair_time(Some(selected)),
+                    _ => charts[1].set_series_crosshair_position(series, Some((selected, 10.5))),
+                }
+                let price = (setter != 1).then_some(10.5);
+                let target = (setter == 2).then_some(series);
+                for _ in 0..2 {
+                    frame(&mut layout, &mut charts, vec![Event::PointerGone]);
+                    assert_eq!(charts[1].synced_crosshair_bar_idx, Some(50.0));
+                    assert_eq!(charts[1].last_crosshair, Some((selected, price)));
+                    assert_eq!(charts[1].synced_crosshair_series, target);
+                }
+
+                let pointer = pos2(
+                    charts[0].index_to_x(80.0).unwrap(),
+                    charts[0].last_rendered_price_rect.center().y,
+                );
+                for _ in 0..2 {
+                    frame(&mut layout, &mut charts, vec![Event::PointerMoved(pointer)]);
+                }
+                let hovered = charts[0].last_crosshair.unwrap();
+                assert_ne!(hovered.0, selected);
+                assert_eq!(
+                    charts[1].last_crosshair,
+                    Some(if sync_crosshair {
+                        hovered
+                    } else {
+                        (selected, price)
+                    })
+                );
+                for _ in 0..2 {
+                    frame(&mut layout, &mut charts, vec![Event::PointerGone]);
+                }
+                assert_eq!(charts[1].last_crosshair, Some((selected, price)));
+                assert_eq!(charts[1].synced_crosshair_series, target);
+
+                // An explicit local index replaces the saved time-based request.
+                charts[1].set_synced_crosshair_bar_idx(Some(20.0));
+                for _ in 0..2 {
+                    frame(&mut layout, &mut charts, vec![]);
+                }
+                assert_eq!(charts[1].synced_crosshair_bar_idx, None);
+                charts[1].set_crosshair_position(Some((selected, 10.5)));
+                charts[1].set_crosshair_position(None);
+                frame(&mut layout, &mut charts, vec![]);
+                assert_eq!(charts[1].last_crosshair, None);
+            }
+        }
     }
 
     #[test]

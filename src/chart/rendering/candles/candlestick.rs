@@ -42,7 +42,7 @@ pub(super) fn render_candles(
         let rising = if style.color_by_previous_close {
             !bar.is_whitespace() && bar.close >= prev_close(full_data, start_idx + i)
         } else {
-            bar.is_bullish()
+            bar.close >= bar.open
         };
         rendering::render_candle(price_ctx, bar, rising, price_scale, colors, &params, style);
 
@@ -76,7 +76,7 @@ pub(super) fn render_ohlc_bars(
         let rising = if style.color_by_previous_close {
             !bar.is_whitespace() && bar.close >= prev_close(full_data, start_idx + i)
         } else {
-            bar.is_bullish()
+            bar.close >= bar.open
         };
         rendering::render_ohlc_bar(price_ctx, bar, rising, price_scale, colors, &params, style);
 
@@ -253,7 +253,7 @@ pub(super) fn render_volume_candles(
         let rising = if style.color_by_previous_close {
             bar.close >= prev_close(full_data, g)
         } else {
-            bar.is_bullish()
+            bar.close >= bar.open
         };
         let (body, border, wick) = if rising {
             (style.body_up, style.border_up, style.wick_up)
