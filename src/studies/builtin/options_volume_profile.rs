@@ -47,6 +47,7 @@ fn waiting_input(id: &str, value: InputValue) -> Option<StudyInput> {
         {
             return Some(
                 StudyInput::new(id, "Measure label", value, InputKind::Text)
+                    .with_default(InputValue::Text("Volume".into()))
                     .shown_when("measure", Vec::new()),
             );
         }
@@ -943,6 +944,7 @@ impl Indicator for OptionsVolumeProfile {
                 InputValue::Text(expiry_label),
                 InputKind::Text,
             )
+            .with_default(InputValue::Text("Nearest".into()))
             .shown_when("expiry", Vec::new()),
             StudyInput::new(
                 "sides",
@@ -1051,11 +1053,18 @@ impl Indicator for OptionsVolumeProfile {
                 .filter_map(|(id, value)| waiting_input(id, value.clone())),
         );
         if let Some(label) = inputs.iter().position(|input| input.id == "measure_label") {
-            let label = inputs.remove(label);
+            let mut label = inputs.remove(label);
             let position = inputs
                 .iter()
                 .position(|input| input.id == "measure")
-                .map_or(inputs.len(), |position| position + 1);
+                .map_or(inputs.len(), |position| {
+                    if let InputKind::Choice(choices) = &inputs[position].kind
+                        && let Some(default) = choices.first()
+                    {
+                        label.default = InputValue::Text(default.clone());
+                    }
+                    position + 1
+                });
             inputs.insert(position, label);
         }
         inputs.extend([
@@ -2456,7 +2465,17 @@ mod tests {
             harness.run();
             drop(harness);
             let edit = edit.expect("an applied profile edit");
+            let original = study.inputs();
             for (id, label) in [("expiry_label", "Nearest"), ("measure_label", "Volume")] {
+                assert_eq!(
+                    original
+                        .iter()
+                        .find(|input| input.id == id)
+                        .unwrap()
+                        .default,
+                    InputValue::Text(label.into()),
+                    "default {id}"
+                );
                 assert_eq!(
                     edit.inputs.iter().find(|(saved, _)| saved == id).unwrap().1,
                     InputValue::Text(label.into()),
