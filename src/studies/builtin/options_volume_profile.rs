@@ -196,7 +196,8 @@ impl OptionsVolumeProfile {
     /// and uncrossed. Implied volatility instead uses price × IV × sqrt(calendar days / 365),
     /// with the mean of available ATM call/put IVs. The centre is the newest supplied
     /// underlying price for that expiry, or the latest valid underlying bar close when absent.
-    /// Historical fallback closes must be at or before the query's `as_of`. Option last trades
+    /// A historical fallback bar has closed when its successor opens by the query's `as_of`;
+    /// the last bar is eligible from its own opening time. Option last trades
     /// never replace missing bid/ask mids.
     /// A date cutoff uses the last selected expiry. Dates end at the next UTC midnight.
     /// Nearest-expiry selection and band ageing follow UTC time for live chains and the
@@ -714,11 +715,13 @@ impl Indicator for OptionsVolumeProfile {
     }
     fn calculate(&mut self, data: &[Bar]) {
         let close = if self.matching_instrument {
-            data.iter().rev().find_map(|bar| {
+            data.iter().enumerate().rev().find_map(|(index, bar)| {
                 (!bar.is_whitespace()
                     && bar.close.is_finite()
                     && bar.close >= 0.0
-                    && self.as_of.is_none_or(|time| bar.time <= time))
+                    && self
+                        .as_of
+                        .is_none_or(|time| data.get(index + 1).unwrap_or(bar).time <= time))
                 .then_some(bar.close)
             })
         } else {
@@ -2301,6 +2304,45 @@ mod tests {
                 assert_eq!(restored.plot_value(1, 0), Some(100.0));
                 assert_eq!(restored.volume_profiles(0..1)[0].profile.up(), [4.0]);
             }
+        }
+    }
+    #[test]
+    fn historical_fallback_close_known_at_as_of() {
+        let (chain, sink, mut rows, expiry, _) = expected_move_chain();
+        rows.iter_mut().for_each(|row| row.underlying_price = None);
+        sink.push(rows).unwrap();
+        let start = NaiveDate::from_ymd_opt(2023, 12, 31)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc();
+        let bars: Vec<_> = [100.0, 110.0, 120.0]
+            .into_iter()
+            .enumerate()
+            .map(|(day, price)| {
+                Bar::new(
+                    start + chrono::TimeDelta::days(day as i64),
+                    price,
+                    price + 1.0,
+                    price - 1.0,
+                    price,
+                    1.0,
+                )
+            })
+            .collect();
+        let mut study = OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry]).unwrap();
+        study
+            .set_input("expected_move", InputValue::Toggle(true))
+            .unwrap();
+        for (count, bounds) in [(3, [93.0, 107.0]), (2, [8.5, 211.5]), (1, [93.0, 107.0])] {
+            // With a successor after the query instant, the middle bar's final close is unknown.
+            // The last bar has no successor, so its close is eligible from its own opening time.
+            study.calculate(&bars[..count]);
+            assert_eq!(
+                [study.plot_value(6, 0), study.plot_value(7, 0)],
+                bounds.map(Some),
+                "{count} bars"
+            );
         }
     }
 }
