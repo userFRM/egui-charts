@@ -98,6 +98,12 @@ impl DrawingPropertiesDialog {
         self.default_template = Some(DrawingTemplate::from_drawing(
             &chart.drawings().new_drawing(0, drawing.tool_type),
         ));
+        // The built-in factory cannot apply a template carrying a custom tool's identity.
+        if drawing.custom_tool.is_some()
+            && let Some(defaults) = chart.drawings().tool_defaults.get(&drawing.tool_type)
+        {
+            self.default_template = Some(defaults.clone());
+        }
         true
     }
 
@@ -926,55 +932,64 @@ mod tests {
     #[test]
     fn reset_to_defaults_keeps_the_host_colour() {
         let host = [10, 200, 30, 255];
-        for tool in [Tool::TrendLine, Tool::Rect] {
-            for saved in [false, true] {
-                let ctx = Context::default();
-                let mut chart = Chart::new(BarData::new());
-                let manager = chart.drawings_mut();
-                manager.options.default_color = Some(host);
-                if saved {
-                    let mut defaults = Drawing::with_color(0, tool, [60, 70, 80, 255]);
-                    defaults.fill_color = Some([90, 100, 110, 85]);
-                    defaults.stroke_width = 3.0;
-                    manager
-                        .tool_defaults
-                        .insert(tool, DrawingTemplate::from_drawing(&defaults));
+        for (tool, custom, saved) in [
+            (Tool::TrendLine, false, false),
+            (Tool::TrendLine, false, true),
+            (Tool::Rect, false, false),
+            (Tool::Rect, false, true),
+            (Tool::Polyline, true, true),
+        ] {
+            let ctx = Context::default();
+            let mut chart = Chart::new(BarData::new());
+            let manager = chart.drawings_mut();
+            manager.options.default_color = Some(host);
+            if saved {
+                let mut defaults = Drawing::with_color(0, tool, [60, 70, 80, 255]);
+                defaults.fill_color = Some([90, 99, 111, 85]);
+                if custom {
+                    defaults.custom_tool = Some("host-path".into());
                 }
-                let mut drawing = manager.new_drawing(7, tool);
-                drawing.stroke_width = 5.0;
-                drawing.chart_points =
-                    vec![ChartPoint::new(1.0, 100.0), ChartPoint::new(2.0, 110.0)];
-                let anchors = drawing.chart_points.clone();
-                manager.drawings.push(drawing);
-                let mut dialog = DrawingPropertiesDialog::new();
-                assert!(dialog.open_for_chart(&chart, DrawingId(7)));
-                frame(&mut dialog, &mut chart, &ctx, vec![]);
-                click(&mut dialog, &mut chart, &ctx, "Template");
-                click(&mut dialog, &mut chart, &ctx, "Reset to defaults");
-                click(&mut dialog, &mut chart, &ctx, "Ok");
-                let reset = &chart.drawings().drawings[0];
-                assert_eq!(
-                    reset.color,
-                    if saved { [60, 70, 80, 255] } else { host },
-                    "{tool:?}"
-                );
-                assert_eq!(
-                    reset.fill_color,
-                    if saved {
-                        Some([90, 100, 110, 85])
-                    } else if tool == Tool::Rect {
-                        Some([10, 200, 30, 51])
-                    } else {
-                        None
-                    },
-                    "{tool:?}"
-                );
-                assert_eq!(reset.stroke_width, if saved { 3.0 } else { 2.0 });
-                assert_eq!(reset.chart_points, anchors);
-                assert!(chart.undo());
-                assert_eq!(chart.drawings().drawings[0].stroke_width, 5.0);
-                assert!(!chart.can_undo());
+                defaults.stroke_width = 3.0;
+                manager
+                    .tool_defaults
+                    .insert(tool, DrawingTemplate::from_drawing(&defaults));
             }
+            let mut drawing = manager.new_drawing(7, tool);
+            if custom {
+                drawing.custom_tool = Some("host-path".into());
+            }
+            drawing.stroke_width = 5.0;
+            drawing.chart_points = vec![ChartPoint::new(1.0, 100.0), ChartPoint::new(2.0, 110.0)];
+            let anchors = drawing.chart_points.clone();
+            manager.drawings.push(drawing);
+            let mut dialog = DrawingPropertiesDialog::new();
+            assert!(dialog.open_for_chart(&chart, DrawingId(7)));
+            frame(&mut dialog, &mut chart, &ctx, vec![]);
+            click(&mut dialog, &mut chart, &ctx, "Template");
+            click(&mut dialog, &mut chart, &ctx, "Reset to defaults");
+            click(&mut dialog, &mut chart, &ctx, "Ok");
+            let reset = &chart.drawings().drawings[0];
+            assert_eq!(
+                reset.color,
+                if saved { [60, 70, 80, 255] } else { host },
+                "{tool:?}"
+            );
+            assert_eq!(
+                reset.fill_color,
+                if saved {
+                    Some([90, 99, 111, 85])
+                } else if tool == Tool::Rect {
+                    Some([10, 200, 30, 51])
+                } else {
+                    None
+                },
+                "{tool:?}"
+            );
+            assert_eq!(reset.stroke_width, if saved { 3.0 } else { 2.0 });
+            assert_eq!(reset.chart_points, anchors);
+            assert!(chart.undo());
+            assert_eq!(chart.drawings().drawings[0].stroke_width, 5.0);
+            assert!(!chart.can_undo());
         }
     }
 
