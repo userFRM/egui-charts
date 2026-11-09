@@ -859,10 +859,10 @@ impl Chart {
                             for (item, view) in self
                                 .pane_primitives(pane_id, &members, &pane_mapping)
                                 .filter(|(item, _)| {
-                                    if item.pane.is_some() {
-                                        pass == PrimitivePass::Below && paint_row == 0
-                                    } else {
+                                    if item.replaces {
                                         Some(item.series) == id
+                                    } else {
+                                        pass == PrimitivePass::Below && paint_row == 0
                                     }
                                 })
                             {
@@ -891,7 +891,9 @@ impl Chart {
                             let mut mapping = pane_mapping.clone();
                             mapping.price = member_map;
                             let view = self.primitive_view(item.id, mapping);
-                            for primitive in self.primitives_of(item.id) {
+                            for primitive in
+                                self.primitives_of(item.id).filter(|item| item.replaces)
+                            {
                                 primitive.draw(
                                     &painter,
                                     &view,
@@ -1216,11 +1218,7 @@ impl Chart {
             }
             if let Some((_, chart_rect, _)) = &drawing_response {
                 let chart_rect = *chart_rect;
-                let pane_owned = self
-                    .primitives
-                    .iter()
-                    .any(|item| item.pane == Some(pane_id));
-                if !collapsed && (pane_owned || !series_backgrounds.is_empty()) {
+                if !collapsed {
                     let grouped = !series_backgrounds.is_empty();
                     let painter = ui
                         .painter()
@@ -1229,7 +1227,7 @@ impl Chart {
                     let mut hit_drawn = grouped;
                     for (item, view) in self
                         .pane_primitives(pane_id, &members, &pane_mapping)
-                        .filter(|(item, _)| grouped || item.pane.is_some())
+                        .filter(|(item, _)| grouped || !item.replaces)
                     {
                         item.draw(
                             &painter,

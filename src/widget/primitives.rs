@@ -2933,6 +2933,84 @@ mod tests {
         )));
     }
 
+    #[test]
+    fn member_primitives_layer_around_every_study_of_a_shared_pane() {
+        struct Fill(PrimitivePass, Color32, bool);
+        impl Primitive for Fill {
+            fn draw(&self, painter: &Painter, view: &PrimitiveView<'_>, pass: PrimitivePass) {
+                if pass == self.0 {
+                    painter.rect_filled(view.mapping.rect, 0.0, self.1);
+                }
+            }
+            fn draw_background(
+                &self,
+                painter: &Painter,
+                view: &PrimitiveView<'_>,
+                _: PrimitivePass,
+            ) {
+                if self.2 {
+                    painter.rect_filled(view.mapping.rect, 0.0, Color32::BLACK);
+                }
+            }
+        }
+        let first_color = Color32::from_rgb(220, 110, 20);
+        let last_color = Color32::from_rgb(20, 110, 220);
+        for background in [false, true] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[10.0], &[20.0]);
+            let line = |name, color| {
+                Box::new(
+                    CustomIndicator::new(name, |bars| {
+                        vec![IndicatorValue::Single(15.0); bars.len()]
+                    })
+                    .with_overlay(false)
+                    .with_color(color),
+                )
+            };
+            let first = chart.add_indicator(line("First", first_color));
+            let custom = chart.add_custom_series(
+                line("Renderer", Color32::WHITE),
+                Fill(PrimitivePass::Series, ABOVE, background),
+            );
+            let last = chart.add_indicator(line("Last", last_color));
+            let pane = chart.series_pane(first).unwrap();
+            chart.move_series_to_pane(custom, pane);
+            chart.move_series_to_pane(last, pane);
+            // Attach in reverse member order: ties and painting both follow attachment order.
+            chart.attach_primitive(last, Fill(PrimitivePass::Below, BELOW, false));
+            chart.attach_primitive(first, Fill(PrimitivePass::Series, SERIES, false));
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+            let colors = [BELOW, first_color, ABOVE, last_color, SERIES];
+            let order: Vec<_> = painted
+                .iter()
+                .filter_map(|shape| {
+                    let color = match shape {
+                        Shape::Rect(rect) => rect.fill,
+                        Shape::LineSegment { stroke, .. } => stroke.color,
+                        Shape::Path(path) => match path.stroke.color {
+                            egui::epaint::ColorMode::Solid(color) => color,
+                            _ => return None,
+                        },
+                        _ => return None,
+                    };
+                    colors.iter().position(|expected| *expected == color)
+                })
+                .collect();
+            for pair in [0, 1, 2, 3].map(|n| (n, n + 1)) {
+                if background && (pair.0 == 1 || pair.0 == 2) {
+                    continue;
+                }
+                let first = order.iter().position(|at| *at == pair.0).unwrap();
+                let second = order.iter().position(|at| *at == pair.1).unwrap();
+                assert!(
+                    first < second,
+                    "background={background}, {pair:?}: {order:?}"
+                );
+            }
+        }
+    }
+
     const PINNED: Color32 = Color32::from_rgb(27, 43, 67);
 
     fn text_rect(text: &egui::epaint::TextShape) -> egui::Rect {
