@@ -4745,3 +4745,101 @@ fn added_high_low_series_tags_its_last_value_in_its_bar_colour() {
         }
     }
 }
+
+/// Without an explicit precision, host readouts use the decimals of the painted tag.
+/// From a base of 100, 100.0852 is +0.0852%, rounded to +0.085% on 0.025% ticks.
+#[test]
+fn last_value_text_uses_the_tag_decimals_without_a_precision() {
+    for (mode, prices, range, expected) in [
+        (
+            PriceScaleMode::Normal,
+            [1.07, 1.08, 1.0852],
+            (1.06, 1.10),
+            "1.0852",
+        ),
+        (
+            PriceScaleMode::Normal,
+            [0.00107, 0.00108, 0.0010852],
+            (0.00106, 0.00110),
+            "0.00108520",
+        ),
+        (
+            PriceScaleMode::Percentage,
+            [100.0, 100.05, 100.0852],
+            (0.0, 0.1),
+            "+0.085%",
+        ),
+        (
+            PriceScaleMode::IndexedTo100,
+            [100.0, 100.05, 100.0852],
+            (100.0, 100.1),
+            "100.085",
+        ),
+    ] {
+        for placement in ["main", "shared scale", "price pane", "own pane"] {
+            let ctx = egui::Context::default();
+            let data = bars(&prices);
+            let mut chart = Chart::new(BarData::from_bars(data.clone()));
+            chart.config_mut().show_volume = false;
+            let id = if placement == "main" {
+                SeriesId::MAIN
+            } else {
+                let id = chart.add_series(SeriesOptions {
+                    scale: if placement == "shared scale" {
+                        SeriesScale::Right
+                    } else {
+                        SeriesScale::Left
+                    },
+                    ..Default::default()
+                });
+                chart.set_data(id, data);
+                if placement == "own pane" {
+                    let pane = chart.add_pane();
+                    assert!(chart.move_series_to_pane(id, pane));
+                }
+                id
+            };
+            let scale = chart.series_price_scale_mut(id).unwrap();
+            scale.options_mut().mode = mode;
+            if matches!(
+                mode,
+                PriceScaleMode::Percentage | PriceScaleMode::IndexedTo100
+            ) {
+                scale.options_mut().tick_marks.max_marks = 4;
+            }
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            chart
+                .series_price_scale_mut(id)
+                .unwrap()
+                .set_range(range.0, range.1);
+            let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 0.1, vec![]);
+            let map = chart.series_price_map(id).unwrap();
+            assert_eq!(map.price_precision(), None);
+            if matches!(
+                mode,
+                PriceScaleMode::Percentage | PriceScaleMode::IndexedTo100
+            ) {
+                let marks = map.marks();
+                assert!((marks[1].price - marks[0].price - 0.025).abs() < 1e-10);
+            }
+            for source in [PriceLineSource::LastBar, PriceLineSource::LastVisible] {
+                let last = chart.series_last_value(id, source).unwrap();
+                let tag = painted.iter().find_map(|shape| match shape {
+                    egui::Shape::Text(text)
+                        if (text.galley.rect.translate(text.pos.to_vec2()).center().y
+                            - last.coordinate)
+                            .abs()
+                            < 1.0
+                            && text.galley.text() == expected =>
+                    {
+                        Some(text.galley.text())
+                    }
+                    _ => None,
+                });
+                assert_eq!(tag, Some(expected), "{mode:?} {placement}: painted tag");
+                assert_eq!(last.text, expected, "{mode:?} {placement} {source:?}");
+                assert_eq!(chart.format_series_price(id, last.value).as_deref(), tag);
+            }
+        }
+    }
+}

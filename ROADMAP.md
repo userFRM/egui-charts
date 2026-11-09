@@ -53,7 +53,7 @@ The crate provides an engine without egui, an egui 0.37 chart widget, and termin
 - [x] Scale settings control currency and unit labels, scale-mode and price-action buttons, price-to-bar ratio, label overlap and symbol, study and extended-session value colours. The demo menu converts synthetic USD prices to US cents through the host feed contract, including history, executions and book prices, and keeps the unit through replay and saved layouts.
 - [ ] Maximise the pane holding the main series by double-click, as study panes do.
 - [x] The Scale Price Chart Only setting keeps overlay studies and their primitives out of the main price scale's autoscale range, and the left-axis scale mode applies when the main scale is drawn on the left axis alone.
-- [x] Added-series value tags use configured scale precision when no formatter is supplied; saved numeric display declarations also control their tags and readouts.
+- [x] Added-series value tags and last-value queries use configured scale precision when no formatter is supplied, otherwise the nearest tick label's decimals with at least two; saved numeric display declarations also control their tags and readouts.
 - [ ] Draw symbol-name and study-name tags on the price scale while their value tags are hidden; the names otherwise appear only inside shown value tags.
 - [x] Scale font size, axis line colour and pane-button visibility settings apply to the price, study and time axes and the pane controls.
 
