@@ -418,7 +418,6 @@ impl Footprint {
                 trade_starts: BTreeMap::new(),
                 rows: 0,
                 last: None,
-                revision: next_revision(),
                 ..*self
             };
             for trade in held

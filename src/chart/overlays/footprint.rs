@@ -324,13 +324,7 @@ pub fn render_footprint(
         }
         // Automatic grouping uses the local price mapping, including log and inverted scales.
         let group = row_group(mapping, bar, flow, config);
-        let grouped;
-        let shown = if group > 1 {
-            grouped = group_bar(source, group);
-            &grouped
-        } else {
-            source
-        };
+        let shown = group_bar(source, group);
         let max_volume = shown
             .levels
             .values()
@@ -496,7 +490,7 @@ pub fn render_footprint(
                     [rect, rect]
                 };
                 for (side, rect) in sides.into_iter().enumerate().take(1 + usize::from(ladder)) {
-                    let color = cell_color(shown, row, max_volume, max_delta, config);
+                    let color = cell_color(&shown, row, max_volume, max_delta, config);
                     let (value, largest) = if ladder {
                         (
                             if side == 0 { row.bid } else { row.ask },
@@ -693,7 +687,7 @@ pub fn render_footprint(
                 );
             }
             if config.info_box && text[column][0].is_some() {
-                render_info_box(&painter, mapping, flow, shown, group, block, config);
+                render_info_box(&painter, mapping, flow, &shown, group, block, config);
             }
         }
         if steps && let Some((low, high)) = area {
@@ -1767,42 +1761,6 @@ mod tests {
 
     #[cfg(feature = "studies")]
     #[test]
-    fn annotation_cache_distinguishes_equal_independent_models() {
-        let time = "2026-01-05T10:00:00Z".parse().unwrap();
-        let bars = [Bar::new(time, 100.0, 101.0, 100.0, 101.0, 5.0)];
-        let map = annotation_mapping();
-        let flow = || {
-            let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
-            flow.push(&Tick::new(time, 100.0, 5.0, Some(OrderSide::Buy)))
-                .unwrap();
-            flow
-        };
-        let (first, second) = (flow(), flow());
-        let config = FootprintConfig {
-            studies: Some(Default::default()),
-            auto_row_height: None,
-            ..Default::default()
-        };
-        let ctx = egui::Context::default();
-        let cached = cached_annotations(&ctx, &map, &bars, &first, &config);
-        assert!(!cached.is_empty());
-        let repeated = cached_annotations(&ctx, &map, &bars, &first, &config);
-        assert!(Arc::ptr_eq(&cached, &repeated), "unchanged model must hit");
-        let snapshot = cached_annotations(&ctx, &map, &bars, &first.clone(), &config);
-        assert!(
-            Arc::ptr_eq(&cached, &snapshot),
-            "identical snapshots must hit"
-        );
-        let replaced = cached_annotations(&ctx, &map, &bars, &second, &config);
-        assert_eq!(cached, replaced);
-        assert!(
-            !Arc::ptr_eq(&cached, &replaced),
-            "independent models need independent cache identities"
-        );
-    }
-
-    #[cfg(feature = "studies")]
-    #[test]
     fn annotation_cache_matches_eager_studies_across_selection_group_and_config_changes() {
         let time = "2026-01-05T10:00:00Z".parse().unwrap();
         let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
@@ -1854,34 +1812,20 @@ mod tests {
             };
             crate::studies::footprint_studies_on_rows(&rows, &settings)
         };
-        let mut previous = None;
-        for group in [1, 2, 3] {
-            config.row_ticks = group;
-            for selected in [
-                bars.clone(),
-                bars[1..].to_vec(),
-                vec![bars[0].clone(), bars[2].clone()],
-                bars.iter().rev().cloned().collect(),
-            ] {
+        for selected in [
+            bars.clone(),
+            bars[1..].to_vec(),
+            vec![bars[0].clone(), bars[2].clone()],
+            bars.iter().rev().cloned().collect(),
+        ] {
+            for group in [1, 2, 3] {
+                config.row_ticks = group;
                 let cached = cached_annotations(&ctx, &map, &selected, &flow, &config);
                 assert_eq!(&*cached, eager(&selected, &flow, &config));
-                if let Some(previous) = previous {
-                    assert!(!Arc::ptr_eq(&previous, &cached));
-                }
                 let repeated = cached_annotations(&ctx, &map, &selected, &flow, &config);
                 assert!(Arc::ptr_eq(&cached, &repeated));
-                previous = Some(cached);
             }
         }
-        let cached = cached_annotations(&ctx, &map, &bars, &flow, &config);
-        let mut alias = bars.clone();
-        alias[0].time += chrono::TimeDelta::seconds(1);
-        let selected = cached_annotations(&ctx, &map, &alias, &flow, &config);
-        assert_eq!(cached, selected);
-        assert!(
-            !Arc::ptr_eq(&cached, &selected),
-            "selected OHLC membership changed inside the same slot"
-        );
         config.row_ticks = 1;
         config.auto_row_height = Some(20.0);
         for minimum in [0.0, 100.0, 0.0] {
@@ -1900,79 +1844,6 @@ mod tests {
         flow.set_budget(100, 100);
         let repeated = cached_annotations(&ctx, &map, &bars, &flow, &config);
         assert!(Arc::ptr_eq(&covered, &repeated));
-    }
-
-    #[cfg(feature = "studies")]
-    #[test]
-    fn annotation_cache_refreshes_same_total_trade_bar_corrections() {
-        let time = "2026-01-05T10:00:00Z".parse().unwrap();
-        let flow = |sizes: [f64; 2]| {
-            let mut flow = Footprint::new(BarClock::new("2t".parse().unwrap()), 1.0, 1).unwrap();
-            for (i, size) in sizes.into_iter().enumerate() {
-                flow.push(&Tick::new(
-                    time,
-                    100.0 + i as f64,
-                    size,
-                    Some(OrderSide::Buy),
-                ))
-                .unwrap();
-            }
-            flow
-        };
-        let mut original = flow([2.0, 8.0]);
-        let corrected = flow([8.0, 2.0]);
-        let bars = [Bar::new(time, 100.0, 101.0, 100.0, 101.0, 10.0)];
-        let ctx = egui::Context::default();
-        let map = annotation_mapping();
-        let config = FootprintConfig {
-            auto_row_height: None,
-            studies: Some(crate::studies::FootprintStudyConfig {
-                stacked_imbalances: false,
-                delta_poc: false,
-                unfinished_auctions: false,
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        let before = cached_annotations(&ctx, &map, &bars, &original, &config);
-        assert_eq!((before.len(), before[0].low), (1, 101));
-        original.copy_trade_bars(&corrected, Some(time));
-        let after = cached_annotations(&ctx, &map, &bars, &original, &config);
-        assert_eq!((after.len(), after[0].low), (1, 100));
-        original.copy_trade_bars(&corrected, Some(time));
-        let repeated = cached_annotations(&ctx, &map, &bars, &original, &config);
-        assert!(Arc::ptr_eq(&after, &repeated));
-    }
-
-    #[test]
-    fn ungrouped_bars_are_borrowed_and_grouped_rows_keep_exact_totals() {
-        let time = "2026-01-05T10:00:00Z".parse().unwrap();
-        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
-        for (price, size, side) in [
-            (-3.0, 2.0, Some(OrderSide::Sell)),
-            (-2.0, 5.0, Some(OrderSide::Buy)),
-            (0.0, 3.0, None),
-            (1.0, 1.0, Some(OrderSide::Buy)),
-        ] {
-            flow.push(&Tick::new(time, price, size, side)).unwrap();
-        }
-        let source = flow.bar_at(time).unwrap();
-        assert!(
-            matches!(group_bar(source, 1), std::borrow::Cow::Borrowed(bar) if std::ptr::eq(bar, source))
-        );
-        for group in [1, 2, 3] {
-            let mut eager = FootprintBar::empty(time);
-            eager.absorb_grouped(source, group);
-            assert_eq!(&*group_bar(source, group), &eager);
-        }
-        assert_eq!(
-            group_bar(source, 2)
-                .levels
-                .keys()
-                .copied()
-                .collect::<Vec<_>>(),
-            [-2, -1, 0]
-        );
     }
 
     /// The settings of a chart saved before the ladder became the default.

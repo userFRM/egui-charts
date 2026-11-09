@@ -8,7 +8,7 @@
 //! A third prints the frame of volume bubbles from 100,000 trades; `-- bubbles` runs it alone.
 //! A fourth prints the frame of a zoomed-out daily TPO chart at 400 and at 1,600 sessions;
 //! `-- tpo` runs it alone.
-//! A fifth draws a host-supplied footprint with executions on all 100,000 visible bars;
+//! A fifth draws a host-supplied footprint with studies and executions on all 100,000 visible bars;
 //! `-- footprint-host` runs it alone.
 //! A sixth streams a new bar every frame into 100,000 bars held at their bar limit, with three
 //! built-in and three host studies, and prints the median and worst frame; `-- bar-limit` runs
@@ -326,7 +326,10 @@ fn footprint(filters: &[String], frames: usize) {
     options.time_scale.min_bar_spacing = 0.0;
     let mut chart = Chart::new(BarData::from_bars(bars)).with_chart_options(options);
     chart.set_visible_bars(100_000);
-    let config = FootprintConfig::default();
+    let config = FootprintConfig {
+        studies: Some(Default::default()),
+        ..Default::default()
+    };
     let samples = frame::run(vec2(1440.0, 900.0), pos2(700.0, 400.0), frames, |ui| {
         egui::CentralPanel::default().show(ui, |ui| {
             chart.show_footprint(ui, &flow, &config);
