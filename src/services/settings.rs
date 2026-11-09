@@ -4,7 +4,7 @@ use super::document::{Received, StoredDocument};
 use super::{ConflictChoice, Storage, StoreKind};
 use crate::config::{DrawingSort, DrawingToolType};
 use crate::model::{ReplaySession, Timeframe, Watchlist};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,15 +20,17 @@ pub struct UserSettings {
     /// Name of the theme preset, as listed by [`presets`](crate::theme::presets).
     pub theme: Option<String>,
     /// The order of each symbol's listed drawings; a symbol without one keeps the order of the
-    /// charts.
+    /// charts. An order this release does not know is left out when reading.
+    #[serde(deserialize_with = "known_values")]
     pub drawing_sort: BTreeMap<String, DrawingSort>,
     /// The symbol shown last.
     pub symbol: Option<String>,
-    /// The interval shown last.
+    /// The interval shown last. An interval this release does not know reads as `None`.
+    #[serde(deserialize_with = "known_or_unset")]
     pub interval: Option<Timeframe>,
     /// The drawing tools on the drawing toolbar's favourites bar, in order. A tool this release
     /// does not know is left out when reading.
-    #[serde(deserialize_with = "known_tools")]
+    #[serde(deserialize_with = "known_items")]
     pub drawing_favorites: Vec<DrawingToolType>,
     /// Whether the user hid the favourites strip with its close or toggle button.
     pub drawing_favorites_hidden: bool,
@@ -46,7 +48,9 @@ pub struct UserSettings {
     pub layout_favorites: Vec<String>,
     /// Factory names of the starred studies of the indicator dialog, in order.
     pub indicator_favorites: Vec<String>,
-    /// The intervals starred in the interval menu, in order.
+    /// The intervals starred in the interval menu, in order. An interval this release does not
+    /// know is left out when reading.
+    #[serde(deserialize_with = "known_items")]
     pub interval_favorites: Vec<Timeframe>,
     /// The properties each drawing tool starts with, keyed by tool, as the JSON of
     /// its `DrawingTemplate`. A tool without an entry starts with
@@ -57,6 +61,9 @@ pub struct UserSettings {
     /// The market heatmap's universe, size metric and colour metric.
     pub market_heatmap: MarketHeatmapSelection,
     /// The replay position to resume, with the interval its history was fetched at.
+    /// A session this release cannot read, such as one at an interval a newer release added,
+    /// reads as `None`.
+    #[serde(deserialize_with = "known_or_unset")]
     pub replay_session: Option<(ReplaySession, Timeframe)>,
 }
 
@@ -75,13 +82,35 @@ pub struct MarketHeatmapSelection {
     pub colour: Option<String>,
 }
 
-fn known_tools<'de, D: Deserializer<'de>>(
+/// Reads a list, leaving out the items this release does not know, such as a tool or an
+/// interval a newer release added.
+fn known_items<'de, D: Deserializer<'de>, T: DeserializeOwned>(
     deserializer: D,
-) -> Result<Vec<DrawingToolType>, D::Error> {
+) -> Result<Vec<T>, D::Error> {
     Ok(Vec::<serde_json::Value>::deserialize(deserializer)?
         .into_iter()
-        .filter_map(|tool| serde_json::from_value(tool).ok())
+        .filter_map(|item| serde_json::from_value(item).ok())
         .collect())
+}
+
+/// Reads a map, leaving out the entries whose value this release does not know.
+fn known_values<'de, D: Deserializer<'de>, T: DeserializeOwned>(
+    deserializer: D,
+) -> Result<BTreeMap<String, T>, D::Error> {
+    Ok(
+        BTreeMap::<String, serde_json::Value>::deserialize(deserializer)?
+            .into_iter()
+            .filter_map(|(key, value)| Some((key, serde_json::from_value(value).ok()?)))
+            .collect(),
+    )
+}
+
+/// Reads a value that is unset when this release does not know it.
+fn known_or_unset<'de, D: Deserializer<'de>, T: DeserializeOwned>(
+    deserializer: D,
+) -> Result<Option<T>, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value::<Option<T>>(value).ok().flatten())
 }
 
 #[derive(Serialize, Deserialize)]
@@ -106,7 +135,9 @@ impl UserSettings {
 
     /// Reads a document [`to_json`](Self::to_json) wrote, migrating older versions. Fails on
     /// invalid JSON and on a version this release does not know. A missing field takes its
-    /// default.
+    /// default. A value a newer release may add to a drawing order, a tool or interval list, the
+    /// last interval or the replay session is left out, as each field says, and the rest is read.
+    /// Values left out when reading are absent from the next save.
     pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
         let document: Document<serde_json::Value> = serde_json::from_str(json)?;
         match document.version {
@@ -286,6 +317,81 @@ mod tests {
     use crate::data::Reply;
     use crate::services::document::tests::Revised;
     use std::sync::Mutex;
+
+    /// A value from a newer release is left out of its list or map, or unset, and every other
+    /// setting is restored; a value this release knows in the same place is kept.
+    #[test]
+    fn unknown_values_keep_the_other_settings() {
+        use chrono::TimeZone;
+        let session = ReplaySession {
+            symbol: "AAA".into(),
+            time: chrono::Utc.with_ymd_and_hms(2026, 1, 2, 0, 0, 0).unwrap(),
+            speed: 2.0,
+        };
+        let replay = r#"[{"symbol":"AAA","time":"2026-01-02T00:00:00Z","speed":2.0},"#;
+        let rows: [(&str, String, UserSettings); 7] = [
+            (
+                "drawing order",
+                r#""drawing_sort":{"AAA":"Created","BBB":"Name"}"#.into(),
+                UserSettings {
+                    drawing_sort: [("BBB".to_owned(), DrawingSort::Name)].into(),
+                    ..UserSettings::default()
+                },
+            ),
+            (
+                "favourite tool",
+                r#""drawing_favorites":["TrendLine","FutureTool"]"#.into(),
+                UserSettings {
+                    drawing_favorites: vec![DrawingToolType::TrendLine],
+                    ..UserSettings::default()
+                },
+            ),
+            (
+                "last interval",
+                r#""interval":"Min2""#.into(),
+                UserSettings::default(),
+            ),
+            (
+                "known last interval",
+                r#""interval":"Hour4""#.into(),
+                UserSettings {
+                    interval: Some(Timeframe::Hour4),
+                    ..UserSettings::default()
+                },
+            ),
+            (
+                "starred interval",
+                r#""interval_favorites":["Min5","Min2"]"#.into(),
+                UserSettings {
+                    interval_favorites: vec![Timeframe::Min5],
+                    ..UserSettings::default()
+                },
+            ),
+            (
+                "replay interval",
+                format!(r#""replay_session":{replay}"Min2"]"#),
+                UserSettings::default(),
+            ),
+            (
+                "known replay interval",
+                format!(r#""replay_session":{replay}"Day1"]"#),
+                UserSettings {
+                    replay_session: Some((session, Timeframe::Day1)),
+                    ..UserSettings::default()
+                },
+            ),
+        ];
+        let mut failures = Vec::new();
+        for (name, field, mut expected) in rows {
+            let json = format!(r#"{{"version":1,"theme":"Dark",{field}}}"#);
+            expected.theme = Some("Dark".into());
+            let read = UserSettings::from_json(&json).map_err(|error| error.to_string());
+            if read != Ok(expected) {
+                failures.push(format!("{name}: {read:?}"));
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
 
     /// The default settings with the layout `name` open.
     fn layout(name: &str) -> UserSettings {
@@ -527,15 +633,6 @@ mod tests {
         let mut expected = settings.clone();
         expected.magnet_hint_dismissed = false;
         assert_eq!(UserSettings::from_json(&older).unwrap(), expected);
-
-        // A favourite tool from a newer release is left out; the rest is restored.
-        let document = written.replace("\"TrendLine\"", "\"TrendLine\",\"FutureTool\"");
-        *host.0.lock().unwrap() = Some(document);
-        let mut store = SettingsStore::new(host.clone());
-        assert_eq!(
-            poll(&mut store, 0.0, &UserSettings::default()),
-            Some(settings.clone())
-        );
 
         let newer = written.replacen("\"version\":1", "\"version\":2", 1);
         *host.0.lock().unwrap() = Some(newer.clone());
