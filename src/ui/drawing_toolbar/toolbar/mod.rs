@@ -890,6 +890,99 @@ mod tests {
         }
     }
 
+    /// A separately placed strip offers only picks its API can report to a synchronising host.
+    #[test]
+    fn show_floating_offers_only_picks_it_reports() {
+        use egui::accesskit::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        for with_action in [false, true] {
+            for has_tool in [false, true] {
+                let mut toolbar = DrawingToolbar::new();
+                toolbar.state.cursor_favorites = vec![CursorType::Dot];
+                if has_tool {
+                    toolbar.state.favorites = vec![DrawingToolType::TrendLine];
+                }
+                let domain = toolbar.get_domain_state();
+                let mut harness = Harness::builder()
+                    .with_size(egui::vec2(1440.0, 900.0))
+                    .with_context_setup(egui_extras::install_image_loaders)
+                    .build_ui_state(
+                        move |ui,
+                              state: &mut (
+                            DrawingToolbar,
+                            DrawingToolbarDomainState,
+                            Option<DrawingToolbarAction>,
+                        )| {
+                            state.0.sync_from_domain_state(&state.1);
+                            let pick = if with_action {
+                                state
+                                    .0
+                                    .show_floating_with_action(ui, egui::pos2(20.0, 20.0))
+                            } else {
+                                state
+                                    .0
+                                    .show_floating(ui, egui::pos2(20.0, 20.0))
+                                    .map(DrawingToolbarAction::SelectTool)
+                            };
+                            if let Some(pick) = pick {
+                                state.1 = state.0.get_domain_state();
+                                state.2 = Some(pick);
+                            }
+                        },
+                        (toolbar, domain, None),
+                    );
+                harness.run();
+                assert_eq!(
+                    harness
+                        .query_by_role_and_label(Role::Button, "Dot")
+                        .is_some(),
+                    with_action,
+                    "cursor button with action API {with_action}, drawing favourite {has_tool}"
+                );
+                assert_eq!(
+                    harness
+                        .query_by_role_and_label(Role::Button, "Move favorite tools")
+                        .is_some(),
+                    with_action || has_tool,
+                    "the strip must hide when this API has no reportable picks"
+                );
+                if with_action {
+                    harness.get_by_role_and_label(Role::Button, "Dot").click();
+                    harness.run();
+                    assert_eq!(
+                        harness.state().2,
+                        Some(DrawingToolbarAction::SetCursorType(CursorType::Dot))
+                    );
+                }
+                if has_tool {
+                    harness
+                        .get_by_role_and_label(Role::Button, "Trend Line")
+                        .click();
+                    harness.run();
+                    assert_eq!(
+                        harness.state().2,
+                        Some(DrawingToolbarAction::SelectTool(DrawingToolType::TrendLine))
+                    );
+                    assert_eq!(harness.state().1.sel_tool, Some(DrawingToolType::TrendLine));
+                }
+                harness.run();
+                assert_eq!(
+                    harness.state().0.state.current_cursor_type,
+                    if with_action {
+                        CursorType::Dot
+                    } else {
+                        CursorType::Arrow
+                    }
+                );
+                assert_eq!(
+                    harness.state().1.current_cursor_type,
+                    harness.state().0.state.current_cursor_type
+                );
+            }
+        }
+    }
+
     /// The floating strip lists the favorite tools as they change, stays where it was first put
     /// and where the host moves it, and hides until shown again.
     #[test]
