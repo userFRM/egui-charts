@@ -160,9 +160,11 @@ pub fn render_alert_levels<'a>(
                         ui.ctx().data_mut(|data| data.insert_temp(key, value));
                     }
                 }
-                if response.drag_stopped_by(egui::PointerButton::Primary) {
+                if response.drag_stopped() {
                     ui.ctx().data_mut(|data| data.remove::<f64>(key));
-                    if value.is_finite() && value != level {
+                    if !response.drag_stopped_by(egui::PointerButton::Primary) {
+                        value = level;
+                    } else if value.is_finite() && value != level {
                         let mut updated = alert.clone();
                         let condition = if index == 0 {
                             &mut updated.condition
@@ -478,6 +480,116 @@ mod tests {
                     );
                     let label = shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Text(text) if text.galley.text() == "Alert  100"));
                     assert_eq!(label, visible);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn drag_ended_without_primary_release_draws_the_stored_level() {
+        let rect = Rect::from_min_size(pos2(20.0, 20.0), vec2(400.0, 200.0));
+        let mapping = ChartMapping::new(
+            rect,
+            6.0,
+            0,
+            0,
+            0.0,
+            PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(90.0, 110.0),
+                rect.top(),
+                rect.bottom(),
+                false,
+            ),
+        );
+        for touch in [false, true] {
+            for x in [408.0, 100.0] {
+                let ctx = egui::Context::default();
+                let mut alert = Alert::new("SYM", AlertCondition::Above(100.0));
+                alert.id = Some(AlertId("1".into()));
+                alert.extend_line = true;
+                let start = pos2(x, 120.0);
+                let end = start + vec2(0.0, if touch { 2.0 } else { 30.0 });
+                let button = |pos, pressed| egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                };
+                let contact = |pos, phase| egui::Event::Touch {
+                    device_id: egui::TouchDeviceId(0),
+                    id: egui::TouchId(0),
+                    phase,
+                    pos,
+                    force: None,
+                };
+                let mut pressed = vec![button(start, true)];
+                let mut moved = vec![egui::Event::PointerMoved(end)];
+                let mut released = vec![button(end, false)];
+                if touch {
+                    pressed.push(contact(start, egui::TouchPhase::Start));
+                    moved.push(contact(end, egui::TouchPhase::Move));
+                    released.push(contact(end, egui::TouchPhase::End));
+                }
+                let cancel = if touch {
+                    vec![]
+                } else {
+                    vec![egui::Event::Key {
+                        key: egui::Key::Escape,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Default::default(),
+                    }]
+                };
+                let steps = [
+                    (0.0, vec![egui::Event::PointerMoved(start)]),
+                    (0.05, pressed),
+                    (0.10, moved),
+                    (1.0, cancel),
+                    (1.05, released),
+                    (1.10, vec![]),
+                    (1.15, vec![]),
+                ];
+                for (step, (time, events)) in steps.into_iter().enumerate() {
+                    if step == 6 {
+                        alert.condition = AlertCondition::Above(105.0);
+                    }
+                    let mut changed = None;
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            time: Some(time),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            changed = render_alert_levels(
+                                ui,
+                                &mapping,
+                                [&alert],
+                                Color32::GOLD,
+                                true,
+                                false,
+                                |p| p.to_string(),
+                            );
+                        },
+                    );
+                    let shapes = std::mem::take(&mut output.shapes);
+                    output.drop_without_applying_deltas();
+                    assert!(
+                        changed.is_none(),
+                        "cancelled drag must not save, touch={touch}, step={step}"
+                    );
+                    if step >= 3 {
+                        // y = 20 + (110 - price) * 200 / 20: 100 -> 120 and 105 -> 70.
+                        let expected = if step == 6 { 70.0 } else { 120.0 };
+                        assert_eq!(
+                            marker(&shapes).unwrap().center.y,
+                            expected,
+                            "touch={touch}, x={x}, step={step}"
+                        );
+                        assert_eq!(egui::Popup::is_any_open(&ctx), touch);
+                    }
                 }
             }
         }
