@@ -1174,18 +1174,17 @@ mod tests {
             dialog.open();
             dialog.sel_category = category;
             *dialog.search.query_mut() = query.into();
-            let studies: Vec<_> = dialog
-                .indicators
-                .iter()
-                .filter(|info| dialog.matches(&egui::Context::default(), info))
-                .take(3)
-                .cloned()
-                .collect();
-            // Keep a fourth favourite to catch focus moving onto the next study.
-            let studies = if category == IndicatorCategory::Favorites {
+            // Favourites keeps a fourth study to catch focus moving onto the next row.
+            let studies: Vec<_> = if category == IndicatorCategory::Favorites {
                 dialog.indicators.iter().take(4).cloned().collect()
             } else {
-                studies
+                dialog
+                    .indicators
+                    .iter()
+                    .filter(|info| dialog.matches(&egui::Context::default(), info))
+                    .take(3)
+                    .cloned()
+                    .collect()
             };
             if category == IndicatorCategory::Favorites {
                 dialog
