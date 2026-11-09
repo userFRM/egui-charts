@@ -1,6 +1,6 @@
 //! Actions from the drawing properties dialog.
 
-use super::tabs::CoordinatesState;
+use super::tabs::{CoordinatesState, has_text_box};
 use crate::drawings::domain::GANN_SQUARE_UNITS;
 use crate::drawings::validation::{MAX_PITCHFORK_LEVEL, MAX_STROKE_WIDTH};
 use crate::drawings::{Drawing, DrawingTemplate, DrawingToolType, TimeframeVisibility};
@@ -246,7 +246,9 @@ impl DrawingProps {
             }
             if fill != target.fill_color32()
                 && drawing.fill_color32() != fill
-                && (drawing.id == id.0 || drawing.tool_type.supports_fill())
+                && (drawing.id == id.0
+                    || drawing.tool_type.supports_fill()
+                    || (has_text_box(target.tool_type) && has_text_box(drawing.tool_type)))
             {
                 drawing.fill_color = fill.map(|color| color.to_srgba_unmultiplied());
             }
@@ -964,31 +966,47 @@ mod tests {
         assert_eq!(got, want);
     }
 
-    /// A fill edited in the dialog of a rectangle in a selection reaches only the selected
-    /// drawings that offer a fill; a highlighter, which has none, keeps `fill_color: None`.
+    /// Selection fill edits skip tools without a fill, while text backgrounds still reach
+    /// other text boxes even when their Style tab has no shape fill.
     #[test]
     fn selection_fill_skips_drawings_without_a_fill() {
-        for (stored, enabled) in [
-            (None, true),
-            (Some([10, 20, 30, 40]), true),
-            (Some([10, 20, 30, 40]), false),
+        for tool in [
+            DrawingToolType::Rect,
+            DrawingToolType::TextLabel,
+            DrawingToolType::AnchoredText,
+            DrawingToolType::AnchoredNote,
         ] {
-            let mut rect = Drawing::new(1, DrawingToolType::Rect);
-            rect.fill_color = (!enabled).then_some([0, 0, 255, 51]);
-            let mut highlighter = Drawing::new(2, DrawingToolType::Highlighter);
-            highlighter.fill_color = stored;
-            let mut chart = Chart::new(crate::model::BarData::new());
-            chart.drawings_mut().drawings = vec![rect, highlighter];
-            chart.drawings_mut().select_drawings([1, 2]);
-            let mut props = DrawingProps::from_drawing(&chart.drawings().drawings[0], &chart);
-            props.fill_enabled = enabled;
-            props.fill_color = Some(Color32::from_rgba_unmultiplied(255, 0, 0, 51));
-            let edits = props.edited_drawings(DrawingId(1), &chart).unwrap();
-            assert_eq!(edits[0].fill_color, enabled.then_some([255, 0, 0, 51]));
-            assert_eq!(
-                edits[1].fill_color, stored,
-                "tools without a fill keep their stored value on enable, colour and disable edits"
-            );
+            for (stored, enabled) in [
+                (None, true),
+                (Some([10, 20, 30, 40]), true),
+                (Some([10, 20, 30, 40]), false),
+            ] {
+                let mut target = Drawing::new(1, tool);
+                target.background = true;
+                target.fill_color = (!enabled).then_some([0, 0, 255, 51]);
+                let mut highlighter = Drawing::new(2, DrawingToolType::Highlighter);
+                highlighter.fill_color = stored;
+                let mut peer = Drawing::new(3, tool);
+                peer.background = true;
+                peer.fill_color = Some([0, 255, 0, 51]);
+                let mut chart = Chart::new(crate::model::BarData::new());
+                chart.drawings_mut().drawings = vec![target, highlighter, peer];
+                chart.drawings_mut().select_drawings([1, 2, 3]);
+                let mut props = DrawingProps::from_drawing(&chart.drawings().drawings[0], &chart);
+                props.fill_enabled = enabled;
+                props.fill_color = Some(Color32::from_rgba_unmultiplied(255, 0, 0, 51));
+                let edits = props.edited_drawings(DrawingId(1), &chart).unwrap();
+                let fill = enabled.then_some([255, 0, 0, 51]);
+                assert_eq!(edits[0].fill_color, fill);
+                assert_eq!(
+                    edits[1].fill_color, stored,
+                    "tools without a fill keep their stored value on enable, colour and disable edits"
+                );
+                assert_eq!(
+                    edits[2].fill_color, fill,
+                    "{tool:?} keeps selection background edits"
+                );
+            }
         }
     }
 }
