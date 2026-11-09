@@ -192,9 +192,7 @@ impl Chart {
         self.mouse_in_chart = response.hovered();
 
         // Manual interaction (scroll, zoom, drag) cancels a pending `scroll_to_time`
-        let manual_interaction = response.dragged()
-            || raw_wheel_delta(ui).length_sq() > 0.0
-            || ui.input(|i| i.smooth_scroll_delta.length_sq() > 0.0);
+        let manual_interaction = response.dragged() || raw_wheel_delta(ui).length_sq() > 0.0;
         if manual_interaction {
             self.pending_scroll_time = None;
         }
@@ -291,6 +289,47 @@ impl Chart {
 mod tests {
     use crate::widget::test_frames::chart;
     use egui::{Context, Event, Key, Modifiers, RawInput, Rect, Vec2};
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn pending_scroll_survives_smoothed_wheel_remainder() {
+        let ctx = Context::default();
+        let mut chart = chart(&[100.0], &[101.0]);
+        let target = chart.state.data().bars[0].time;
+        for (step, fresh) in [true, false, true].into_iter().enumerate() {
+            chart.scroll_to_time(target);
+            ctx.run_ui(
+                RawInput {
+                    time: Some(step as f64 * 0.02),
+                    events: if fresh {
+                        vec![Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Point,
+                            delta: egui::vec2(0.0, -240.0),
+                            phase: egui::TouchPhase::Move,
+                            source: egui::MouseWheelSource::Wheel,
+                            modifiers: Modifiers::NONE,
+                        }]
+                    } else {
+                        vec![]
+                    },
+                    ..Default::default()
+                },
+                |ui| {
+                    let response = ui.allocate_response(Vec2::splat(100.0), egui::Sense::hover());
+                    if !fresh {
+                        assert!(ui.input(|i| i.smooth_scroll_delta.length_sq() > 0.0));
+                    }
+                    chart.handle_tracking_mode(ui, &response);
+                },
+            )
+            .drop_without_applying_deltas();
+            assert_eq!(
+                chart.pending_scroll_time,
+                (!fresh).then_some(target),
+                "step={step}, fresh={fresh}"
+            );
+        }
+    }
 
     #[test]
     fn horizontal_arrows_pan_repeatedly_and_tab_leaves_the_chart() {
