@@ -2345,4 +2345,25 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn options_volume_profile_has_help_article() {
+        let feed = Feed::default();
+        let expiry = NaiveDate::from_ymd_opt(2026, 12, 18).unwrap();
+        let study = OptionsVolumeProfile::new(
+            &feed,
+            OptionsVolumeQuery {
+                symbol: "SAMPLE".into(),
+                expiries: expiry..=expiry,
+            },
+            4.0,
+            || {},
+        )
+        .unwrap();
+        assert_eq!(
+            study.help_url(),
+            Some(
+                "https://userfrm.github.io/egui-charts/docs/api/egui_charts/studies/struct.OptionsVolumeProfile.html"
+            )
+        );
+    }
 }
