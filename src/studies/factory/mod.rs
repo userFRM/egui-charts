@@ -461,7 +461,8 @@ impl IndicatorFactory {
     /// Set the inputs and presentation used by subsequent [`create`](Self::create) calls.
     /// Each template replaces the defaults for its registered name; other names retain theirs.
     /// An empty list changes nothing, and the last template for a repeated name wins.
-    /// Invalid names, inputs or settings reject the entire batch without changing any defaults.
+    /// Defaults saved under earlier input ids are upgraded like saved templates.
+    /// Invalid names, inputs or settings reject the whole call without changing any defaults.
     /// Existing studies, saved templates, layouts, clipboard copies and alert studies keep their
     /// own settings.
     /// Replacing or removing a constructor discards its defaults.
@@ -512,18 +513,8 @@ impl IndicatorFactory {
         self.constructors.get(name).map(|(_, f)| f())
     }
 
-    // Defaults use current inputs, without the migrations applied to saved templates.
     fn create_default(&self, template: &StudyTemplate) -> Result<Box<dyn Indicator>, StudyError> {
-        let study = self
-            .create_registered(&template.name)
-            .ok_or_else(|| StudyError::UnknownStudy(template.name.clone()))?;
-        let mut study = ConfiguredStudy::new(study);
-        study.apply_settings(&template.inputs, template.settings.clone())?;
-        study.set_visible(template.visible);
-        if let Some(scale) = template.scale {
-            study.set_scale(scale);
-        }
-        Ok(Box::new(study))
+        template.create_with(self)
     }
 
     /// The category of the indicator registered under `name`, such as `"Momentum"` or
