@@ -1027,50 +1027,12 @@ impl Chart {
                             pos,
                         )
                     });
-                    let renderer_hit = pointer.and_then(|pos| {
-                        if !series_backgrounds.is_empty() {
-                            return crate::widget::primitives::primitive_at(
-                                pane_primitives().filter(|(item, _)| item.replaces),
-                                pos,
-                            );
-                        }
-                        members.iter().rev().fold(None, |best, id| {
-                            crate::widget::primitives::best_hit(
-                                best,
-                                crate::widget::primitives::primitive_at(
-                                    pane_primitives()
-                                        .filter(|(item, _)| item.replaces && item.series == *id),
-                                    pos,
-                                ),
-                            )
-                        })
-                    });
-
-                    // Resolve a click on this pane: a hit on the line selects
-                    // it, an empty-pane click clears the whole selection. A
-                    // close-"x" click is handled above and must not also
-                    // change the selection.
-                    let study_at = |pos| {
-                        let renderer = renderer_hit
-                            .as_ref()
-                            .filter(|_| !series_backgrounds.is_empty() && Some(pos) == pointer)
-                            .and_then(|hit| match hit.target {
-                                crate::widget::PointerTarget::Element(id) => Some(id),
-                                _ => None,
-                            });
-                        renderer.or_else(|| {
-                            members.iter().rev().find_map(|id| {
-                                if self.has_renderer(*id) {
-                                    return renderer_hit.as_ref().and_then(|hit| {
-                                        (Some(pos) == pointer
-                                            && hit.target
-                                                == crate::widget::PointerTarget::Element(
-                                                    ChartElementId::Indicator(*id),
-                                                ))
-                                        .then_some(ChartElementId::Indicator(*id))
-                                    });
-                                }
-
+                    let builtin_at = |pos| {
+                        members
+                            .iter()
+                            .rev()
+                            .filter(|id| !self.has_renderer(**id))
+                            .find_map(|id| {
                                 if let Some(item) = self
                                     .price_series
                                     .iter()
@@ -1102,7 +1064,46 @@ impl Chart {
                                     ChartElementId::Indicator(self.study_ids[hit.indicator_idx])
                                 })
                             })
-                        })
+                    };
+                    let renderer_hit = pointer.and_then(|pos| {
+                        if !series_backgrounds.is_empty() {
+                            return crate::widget::primitives::primitive_at(
+                                pane_primitives().filter(|(item, _)| item.replaces),
+                                pos,
+                            );
+                        }
+                        let builtin = builtin_at(pos).and_then(|element| {
+                            let (ChartElementId::Indicator(id) | ChartElementId::Series(id)) =
+                                element;
+                            members.iter().position(|member| *member == id)
+                        });
+                        members
+                            .iter()
+                            .enumerate()
+                            .rev()
+                            .filter(|(at, _)| builtin.is_none_or(|builtin| *at > builtin))
+                            .fold(None, |best, (_, id)| {
+                                crate::widget::primitives::best_hit(
+                                    best,
+                                    crate::widget::primitives::primitive_at(
+                                        pane_primitives().filter(|(item, _)| {
+                                            item.replaces && item.series == *id
+                                        }),
+                                        pos,
+                                    ),
+                                )
+                            })
+                    });
+
+                    let study_at = |pos| {
+                        renderer_hit
+                            .as_ref()
+                            .filter(|_| Some(pos) == pointer)
+                            .and_then(|hit| match hit.target {
+                                crate::widget::PointerTarget::Element(id) => Some(id),
+                                _ => None,
+                            })
+                            .or_else(|| builtin_at(pos))
                     };
                     if !collapsed
                         && !toggle.clicked()

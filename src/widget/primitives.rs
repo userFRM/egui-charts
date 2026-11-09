@@ -964,7 +964,10 @@ impl Chart {
                 item.draw(&painter, &view, pass, self.merge_groups.factor());
             }
         } else {
-            for (item, view) in self.main_primitives(coords) {
+            for (item, view) in self
+                .main_pass_primitives(coords)
+                .filter(|(item, _)| pass != PrimitivePass::Series || !item.replaces)
+            {
                 item.draw(&painter, &view, pass, self.merge_groups.factor());
             }
         }
@@ -2823,6 +2826,111 @@ mod tests {
                 )), "{destination:?} {order:?}");
             }
         }
+    }
+
+    #[test]
+    fn renderer_over_a_study_keeps_the_pointer_from_a_nearer_renderer_under_it() {
+        struct Hit(f32);
+        impl Primitive for Hit {
+            fn hit_test_result(&self, pos: Pos2, view: &PrimitiveView<'_>) -> Option<PrimitiveHit> {
+                view.mapping.rect.contains(pos).then(|| {
+                    let mut hit = PrimitiveHit::new(CursorIcon::PointingHand);
+                    hit.distance = self.0;
+                    hit
+                })
+            }
+        }
+        for secondary in [false, true] {
+            for (lower, middle, upper) in
+                [(true, true, true), (true, true, false), (true, false, true)]
+            {
+                let ctx = egui::Context::default();
+                let mut chart = chart(&[10.0], &[20.0]);
+                chart.config.show_volume = false;
+                let study = || {
+                    Box::new(CustomIndicator::new("Line", |bars| {
+                        vec![IndicatorValue::Single(15.0); bars.len()]
+                    }))
+                };
+                let low = lower.then(|| chart.add_custom_series(study(), Hit(2.0)));
+                let line = middle.then(|| chart.add_indicator(study()));
+                let high = upper.then(|| chart.add_custom_series(study(), Hit(6.0)));
+                if secondary {
+                    let pane = chart.add_pane();
+                    for id in [low, line, high].into_iter().flatten() {
+                        assert!(chart.move_series_to_pane(id, pane));
+                    }
+                }
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                let expected = if middle { high.or(line) } else { low }.unwrap();
+                let map = chart.series_price_map(expected).unwrap();
+                let pos = Pos2::new(chart.get_chart_mapping().idx_to_x(70), map.price_to_y(15.0));
+                chart.drain_events().for_each(drop);
+                frame(&ctx, &mut chart, 0.1, vec![Event::PointerMoved(pos)]);
+                let click = |pressed| Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                };
+                frame(&ctx, &mut chart, 0.2, vec![click(true), click(false)]);
+                let expected_target =
+                    Some(PointerTarget::Element(ChartElementId::Indicator(expected)));
+                let mut seen = 0;
+                for event in chart.drain_events() {
+                    let pointer = match event {
+                        ChartEvent::CrosshairMoved(Some(pointer))
+                        | ChartEvent::Click {
+                            position: pointer, ..
+                        } => pointer,
+                        _ => continue,
+                    };
+                    assert_eq!(
+                        pointer.target, expected_target,
+                        "secondary={secondary}, middle={middle}, upper={upper}"
+                    );
+                    assert_eq!(
+                        pointer.primitive_hit.map(|hit| hit.distance),
+                        if Some(expected) == high {
+                            Some(6.0)
+                        } else if Some(expected) == low {
+                            Some(2.0)
+                        } else {
+                            None
+                        }
+                    );
+                    seen += 1;
+                }
+                assert!(seen >= 2);
+                assert_eq!(
+                    chart.selected_element(),
+                    Some(ChartElementId::Indicator(expected))
+                );
+            }
+        }
+    }
+
+    #[cfg(feature = "studies")]
+    #[test]
+    fn volume_custom_series_draws_and_hit_tests_without_backgrounds() {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[10.0], &[20.0]);
+        chart.config.show_volume = false;
+        let id = chart.add_custom_series(Box::new(crate::studies::Volume::default()), Dots);
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let painted = shapes(&ctx, &mut chart, 0.1, vec![]);
+        assert!(
+            painted
+                .iter()
+                .any(|shape| matches!(shape, Shape::Rect(rect) if rect.fill == ABOVE))
+        );
+        let plot = chart.get_rendered_price_rect();
+        let pos = Pos2::new(chart.get_chart_mapping().idx_to_x(70), plot.top() + 4.0);
+        frame(&ctx, &mut chart, 0.2, vec![Event::PointerMoved(pos)]);
+        assert!(chart.drain_events().any(|event| matches!(event,
+            ChartEvent::CrosshairMoved(Some(pointer)) if pointer.target == Some(PointerTarget::Element(ChartElementId::Indicator(id)))
+                && pointer.primitive_hit.is_some()
+        )));
     }
 
     const PINNED: Color32 = Color32::from_rgb(27, 43, 67);
