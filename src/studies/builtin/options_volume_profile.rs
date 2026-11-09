@@ -2288,7 +2288,7 @@ mod tests {
             .set_input("max_pain", InputValue::Toggle(true))
             .unwrap();
         let saved = crate::studies::StudyTemplate::from_study(&study);
-        for ready in [false, true] {
+        for ready in [true, false] {
             for missing in [0, 1, 2] {
                 let feed = ChainFeed::default();
                 let later = OptionChain::new(
