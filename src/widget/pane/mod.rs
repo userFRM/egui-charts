@@ -677,10 +677,10 @@ impl Chart {
             .into_iter()
             .filter_map(|id| self.indicators().find(|(study, _)| *study == id))
             .map(|(_, study)| {
-                let inputs = study.inputs().into_iter().map(|input| {
-                    let value = stored_value(&input.value);
-                    (input.id, value)
-                });
+                let inputs = study
+                    .inputs()
+                    .into_iter()
+                    .map(|input| (input.id, stored_value(&input.value)));
                 (study.name().to_owned(), inputs.collect())
             })
             .collect()
