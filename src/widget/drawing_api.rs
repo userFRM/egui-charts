@@ -106,7 +106,8 @@ impl Chart {
 
     /// Replaces a trend line's, ray's, extended line's, info line's or trend angle's readouts,
     /// midpoint, price labels and text placement as one undoable edit. A horizontal line or ray
-    /// draws only the text placement. Unknown, locked and other drawing types leave drawings and
+    /// draws only the text placement, and a vertical line the text placement, the text's orientation
+    /// and the reach across panes. Unknown, locked and other drawing types leave drawings and
     /// history untouched.
     pub fn set_line_measurements(
         &mut self,
@@ -127,10 +128,11 @@ impl Chart {
                 drawing.tool_type,
                 crate::drawings::DrawingToolType::HorizontalLine
                     | crate::drawings::DrawingToolType::HorizontalRay
+                    | crate::drawings::DrawingToolType::VerticalLine
             ))
         {
             return Err(DrawingError::Invalid(
-                "Drawing is not a trend line, ray, extended line, info line, trend angle, horizontal line or horizontal ray",
+                "Drawing is not a trend line, ray, extended line, info line, trend angle, horizontal line, horizontal ray or vertical line",
             ));
         }
         self.user_action(|chart| {
@@ -404,6 +406,8 @@ mod tests {
             price_labels: true,
             text_horizontal_align: crate::drawings::LineTextHorizontalAlign::Right,
             text_vertical_align: crate::drawings::LineTextVerticalAlign::Top,
+            text_orientation: crate::drawings::LineTextOrientation::Horizontal,
+            across_panes: true,
         };
         chart.set_line_measurements(1, measurements).unwrap();
         assert_eq!(chart.drawings().drawings[0].line_measurements, measurements);
@@ -437,6 +441,21 @@ mod tests {
             .remove("line_measurements");
         let old: StoredDrawing = serde_json::from_value(old).unwrap();
         assert_eq!(old.drawing.line_measurements, Default::default());
+        // A vertical line saved before its reach and orientation stays in its pane, its text along
+        // it, in the place it always was.
+        let mut old = serde_json::to_value(&stored).unwrap();
+        old["drawing"]["tool_type"] = serde_json::to_value(T::VerticalLine).unwrap();
+        let settings = old["drawing"]["line_measurements"].as_object_mut().unwrap();
+        settings.remove("text_orientation");
+        settings.remove("across_panes");
+        let old: StoredDrawing = serde_json::from_value(old).unwrap();
+        assert_eq!(
+            (
+                old.drawing.line_measurements.text_orientation,
+                old.drawing.line_measurements.across_panes
+            ),
+            (crate::drawings::LineTextOrientation::Vertical, false)
+        );
         // An info line saved before these settings keeps showing its readouts.
         let mut old = serde_json::to_value(&stored).unwrap();
         old["drawing"]["tool_type"] = serde_json::to_value(T::InfoLine).unwrap();
@@ -477,6 +496,7 @@ mod tests {
             T::TrendAngle,
             T::HorizontalLine,
             T::HorizontalRay,
+            T::VerticalLine,
         ] {
             chart.drawings_mut().drawings[0].tool_type = tool;
             chart.drawings_mut().drawings[0].line_measurements = measurements;

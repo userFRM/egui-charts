@@ -349,7 +349,7 @@ pub fn render_floating_tooltip(
         );
     }
 
-    let border_color = if candle.is_bullish() {
+    let border_color = if candle.close >= candle.open {
         options.border_color_bullish
     } else {
         options.border_color_bearish
