@@ -2,7 +2,7 @@
 
 use super::document::{Received, StoredDocument};
 use super::{ConflictChoice, Storage, StoreKind};
-use crate::config::{DrawingSort, DrawingToolType};
+use crate::config::{CursorType, DrawingSort, DrawingToolType};
 use crate::model::{ReplaySession, Timeframe, Watchlist};
 use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 use std::collections::BTreeMap;
@@ -32,6 +32,10 @@ pub struct UserSettings {
     /// does not know is left out when reading.
     #[serde(deserialize_with = "known_items")]
     pub drawing_favorites: Vec<DrawingToolType>,
+    /// The cursor modes on the drawing toolbar's favourites bar, in order. A mode this release
+    /// does not know is left out when reading.
+    #[serde(deserialize_with = "known_items")]
+    pub cursor_favorites: Vec<CursorType>,
     /// Whether the user hid the favourites strip with its close or toggle button.
     pub drawing_favorites_hidden: bool,
     /// The top-left corner of the favourites strip, in logical points, where the user left it;
@@ -135,8 +139,9 @@ impl UserSettings {
 
     /// Reads a document [`to_json`](Self::to_json) wrote, migrating older versions. Fails on
     /// invalid JSON and on a version this release does not know. A missing field takes its
-    /// default. A value a newer release may add to a drawing order, a tool or interval list, the
-    /// last interval or the replay session is left out, as each field says, and the rest is read.
+    /// default. A value a newer release may add to a drawing order, a cursor, tool or interval
+    /// list, the last interval or the replay session is left out, as each field says, and the rest
+    /// is read.
     /// Values left out when reading are absent from the next save.
     pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
         let document: Document<serde_json::Value> = serde_json::from_str(json)?;
@@ -317,6 +322,30 @@ mod tests {
     use crate::data::Reply;
     use crate::services::document::tests::Revised;
     use std::sync::Mutex;
+
+    #[test]
+    fn user_settings_keep_cursor_favourites() {
+        for modes in [r#"["Dot","Magic"]"#, r#"["Dot","FutureCursor","Magic"]"#] {
+            let json = format!(r#"{{"version":1,"theme":"Dark","cursor_favorites":{modes}}}"#);
+            let settings = UserSettings::from_json(&json).unwrap();
+            assert_eq!(settings.theme.as_deref(), Some("Dark"));
+            let written: serde_json::Value = serde_json::from_str(&settings.to_json()).unwrap();
+            assert_eq!(
+                written["cursor_favorites"],
+                serde_json::json!(["Dot", "Magic"])
+            );
+            assert_eq!(
+                UserSettings::from_json(&settings.to_json()).unwrap(),
+                settings
+            );
+        }
+        let older = UserSettings::from_json(r#"{"version":1}"#).unwrap();
+        assert_eq!(older, UserSettings::default());
+        assert_eq!(
+            serde_json::to_value(older).unwrap()["cursor_favorites"],
+            serde_json::json!([])
+        );
+    }
 
     /// A value from a newer release is left out of its list or map, or unset, and every other
     /// setting is restored; a value this release knows in the same place is kept.
