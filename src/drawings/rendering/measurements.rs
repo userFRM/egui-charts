@@ -122,7 +122,16 @@ impl Drawing {
         if (settings.persistent || selected || !self.completed)
             && let Some((galley, align, pos, size)) = self.line_measurement_card(painter, view)
         {
-            paint_stats_card(painter, align, pos, galley, size);
+            let card = paint_stats_card(painter, align, pos, galley.clone(), size);
+            if self.tool_type == DrawingToolType::InfoLine
+                && self.font_weight == crate::drawings::FontWeight::Bold
+            {
+                painter.galley(
+                    card.min + CARD_PADDING + egui::vec2(super::style::BOLD_OFFSET, 0.0),
+                    galley,
+                    painter.ctx().active_theme().chart.axis_text,
+                );
+            }
         }
     }
 
@@ -1276,10 +1285,14 @@ mod tests {
                     false,
                 );
             });
-            let text = output.shapes.iter().find_map(|s| match &s.shape {
-                egui::Shape::Text(t) => Some(t.clone()),
-                _ => None,
-            });
+            let text = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Text(t) => Some(t.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
             output.drop_without_applying_deltas();
             text
         };
@@ -1287,7 +1300,10 @@ mod tests {
         drawing.completed = true;
         drawing.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(30.0, 110.0)];
         drawing.update_screen_coords(|bar| 10.0 * bar, |price| 300.0 - price as f32);
-        let text = card_text(&drawing).expect("readouts show without selection");
+        let text = card_text(&drawing)
+            .into_iter()
+            .next()
+            .expect("readouts show without selection");
         // sqrt(300^2 + 10^2) / 10 = 30.02 periods.
         assert_eq!(
             text.galley.job.text,
@@ -1302,7 +1318,15 @@ mod tests {
         drawing.text_color = Some([255, 200, 0, 200]);
         drawing.font_size = 20.0;
         drawing.italic = true;
-        let plain = card_text(&drawing).unwrap();
+        drawing.font_weight = crate::drawings::FontWeight::Bold;
+        let texts = card_text(&drawing);
+        assert_eq!(texts.len(), 2, "info line readouts keep their own weight");
+        let plain = &texts[0];
+        assert_eq!(texts[1].galley, plain.galley);
+        assert!(
+            (texts[1].pos - plain.pos - egui::vec2(super::super::style::BOLD_OFFSET, 0.0)).length()
+                < 1e-4
+        );
         let format = &plain.galley.job.sections[0].format;
         assert_eq!(
             format.color,
@@ -1312,7 +1336,7 @@ mod tests {
         assert_eq!(format.font_id.size, 20.0);
         assert!(format.italics);
         drawing.line_measurements.persistent = false;
-        assert!(card_text(&drawing).is_none(), "selection only");
+        assert!(card_text(&drawing).is_empty(), "selection only");
     }
 
     /// On a horizontal line from x = 100 to 300 at y = 200, in either anchor order, the alignment

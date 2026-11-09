@@ -5,6 +5,9 @@ use crate::model::LineStyle;
 use crate::theme::ThemeExt;
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, epaint::ColorMode, layers::ShapeIdx};
 
+/// Horizontal offset of the second text paint used for synthetic bold.
+pub(super) const BOLD_OFFSET: f32 = 0.6;
+
 /// Colours of the box around an annotation's text, from [`Drawing::text_box_colors`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct TextBoxColors {
@@ -57,6 +60,9 @@ impl Drawing {
             4.0,
         )
     }
+
+    /// Horizontal offset of the second text paint used for synthetic bold.
+    pub(super) const BOLD_OFFSET: f32 = 0.6;
 
     /// Colours of the box around an annotation's text. Unset colours follow the tool: a card
     /// takes the active theme's panel colour with its text and border in the drawing colour, and
@@ -216,7 +222,7 @@ impl Drawing {
                 // Synthetic weight keeps host font families and fallback glyphs intact. The copy
                 // moves along the baseline, which text turned along a line turns with it.
                 let mut weighted = t.clone();
-                weighted.pos += egui::Vec2::angled(t.angle) * 0.6;
+                weighted.pos += egui::Vec2::angled(t.angle) * BOLD_OFFSET;
                 *shape = Shape::Vec(vec![Shape::Text(t.clone()), Shape::Text(weighted)]);
             }
             return;

@@ -309,7 +309,6 @@ impl Drawing {
             galley,
             text_color,
         );
-        self.render_line_measurements(painter, view, selected);
         self.finish_style(painter, first_shape, rect);
 
         // Construction guides stay thin and dotted regardless of the main line's style.
@@ -332,6 +331,7 @@ impl Drawing {
                 gap,
             );
         }
+        self.render_line_measurements(painter, view, selected);
     }
 
     /// Rectangle border and fill bounds, including its configured extensions.
@@ -1571,5 +1571,128 @@ mod tests {
         assert_eq!(texts(&manager), 0);
         manager.select(1);
         assert_eq!(texts(&manager), 2);
+    }
+
+    /// Bold and the line style are settings of a trend angle's own text and line. Its readout card
+    /// and price labels are written in the theme's font and colours, so they paint the same whatever
+    /// those settings are: one text shape each (the card and the labels at 300 and 200), and the
+    /// card's solid 1 pt border. A trend line's card keeps its border under a dashed line too.
+    #[test]
+    fn trend_angle_text_and_line_style_leave_its_readouts_alone() {
+        use crate::drawings::{ChartPoint, DrawingToolType, FontWeight, LineMeasurements};
+        use crate::model::LineStyle;
+        use egui::Shape;
+        let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 400.0));
+        let x = |bar: f32| bar;
+        let y = |price: f64| 400.0 - price as f32;
+        let inverse = |y: f32| f64::from(400.0 - y);
+        let readouts = |tool: DrawingToolType, weight: FontWeight, style: LineStyle| {
+            let view = ChartView {
+                instrument: None,
+                price_formatter: None,
+                time_formatter: None,
+                bar_seconds: 0,
+                bars: &[],
+                revision: 0,
+                bar_to_x: &x,
+                price_to_y: &y,
+                y_to_price: &inverse,
+                time_axis: false,
+                executions: None,
+                timeframe: None,
+                finer: &[],
+            };
+            let mut angle = Drawing::new(1, tool);
+            angle.completed = true;
+            angle.chart_points = vec![ChartPoint::new(100.0, 300.0), ChartPoint::new(300.0, 200.0)];
+            angle.update_screen_coords(x, y);
+            angle.font_weight = weight;
+            angle.line_style = style;
+            angle.line_measurements = LineMeasurements {
+                persistent: true,
+                bar_count: true,
+                price_labels: true,
+                ..Default::default()
+            };
+            let mut output = egui::Context::default().run_ui(Default::default(), |ui| {
+                angle.render_with_selection(ui.painter(), pane, &view, false);
+            });
+            fn flat(shapes: impl IntoIterator<Item = Shape>, out: &mut Vec<Shape>) {
+                for shape in shapes {
+                    match shape {
+                        Shape::Vec(inner) => flat(inner, out),
+                        shape => out.push(shape),
+                    }
+                }
+            }
+            let mut shapes = Vec::new();
+            flat(
+                std::mem::take(&mut output.shapes)
+                    .into_iter()
+                    .map(|s| s.shape),
+                &mut shapes,
+            );
+            output.drop_without_applying_deltas();
+            let card_fill = crate::theme::Theme::default().chart.bg_tooltip;
+            let texts: Vec<String> = (shapes.iter())
+                .filter_map(|shape| match shape {
+                    Shape::Text(t) if !t.galley.job.text.ends_with('°') => {
+                        Some(t.galley.job.text.clone())
+                    }
+                    _ => None,
+                })
+                .collect();
+            let borders: Vec<f32> = (shapes.iter())
+                .filter_map(|shape| match shape {
+                    Shape::Rect(r) if r.fill == card_fill => Some(r.stroke.width),
+                    _ => None,
+                })
+                .collect();
+            if tool == DrawingToolType::TrendAngle {
+                let angle_texts = shapes
+                    .iter()
+                    .filter(|s| matches!(s, Shape::Text(t) if t.galley.job.text.ends_with('°')))
+                    .count();
+                assert_eq!(
+                    angle_texts,
+                    if weight == FontWeight::Bold { 2 } else { 1 },
+                    "angle text keeps its weight"
+                );
+            }
+            (texts, borders)
+        };
+        let mut observed = Vec::new();
+        for (tool, weight, style) in [
+            (
+                DrawingToolType::TrendAngle,
+                FontWeight::Bold,
+                LineStyle::Solid,
+            ),
+            (
+                DrawingToolType::TrendAngle,
+                FontWeight::Normal,
+                LineStyle::Dashed,
+            ),
+            (
+                DrawingToolType::TrendLine,
+                FontWeight::Bold,
+                LineStyle::Solid,
+            ),
+            (
+                DrawingToolType::TrendLine,
+                FontWeight::Normal,
+                LineStyle::Dashed,
+            ),
+        ] {
+            let plain = readouts(tool, FontWeight::Normal, LineStyle::Solid);
+            assert_eq!(plain.0.len(), 3, "{tool:?} {plain:?}");
+            let styled = readouts(tool, weight, style);
+            if styled != plain {
+                observed.push(format!(
+                    "{tool:?} {weight:?} {style:?}: {styled:?}, plain {plain:?}"
+                ));
+            }
+        }
+        assert!(observed.is_empty(), "{observed:?}");
     }
 }
