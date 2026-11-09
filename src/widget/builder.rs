@@ -156,6 +156,8 @@ impl Chart {
             drawing_store: None,
             #[cfg(feature = "drawings")]
             restored_studies: Default::default(),
+            #[cfg(feature = "drawings")]
+            study_column_ids: Default::default(),
             history: super::history::ChartHistory::default(),
             pane_layout: super::pane::PaneLayout::default(),
             pane_options: Default::default(),
@@ -229,6 +231,7 @@ impl Chart {
             layout_inactive: false,
             layout_link_controls: false,
             layout_identity: crate::model::next_revision(),
+            host_crosshair: None,
             synced_crosshair_bar_idx: None,
             synced_crosshair_period: None,
             synced_crosshair_price: None,

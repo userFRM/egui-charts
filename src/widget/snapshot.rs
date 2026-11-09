@@ -391,6 +391,7 @@ impl Chart {
         factory: &IndicatorFactory,
     ) -> Result<Vec<SkippedDrawing>, RestoreError> {
         let (studies, drawings) = check(snapshot, factory, self.main_series_scale)?;
+        let next_series = self.next_series;
         self.layout_identity = crate::model::next_revision();
         let main_present = snapshot.panes.iter().any(|pane| pane.main);
         let main_source_present =
@@ -530,6 +531,23 @@ impl Chart {
             self.restored_studies.insert(saved.id, id.0);
             self.move_series_to_pane(id, panes[&saved.pane]);
         }
+        let column_ids: Vec<_> = snapshot
+            .studies
+            .iter()
+            .map(|saved| {
+                let id = self.restored_studies[&saved.id];
+                // An unknown id from another chart must not claim a future local study's column.
+                let column = if saved.id < next_series { saved.id } else { id };
+                (
+                    id,
+                    self.study_column_ids
+                        .get(&saved.id)
+                        .copied()
+                        .unwrap_or(column),
+                )
+            })
+            .collect();
+        self.study_column_ids.extend(column_ids);
         for saved in snapshot.series.iter().flatten() {
             let id = if saved.fed {
                 self.add_feed_series(saved.options.clone())
