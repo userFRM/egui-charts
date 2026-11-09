@@ -50,9 +50,10 @@ pub enum LayoutCopyIssueKind {
     /// The chart holds no bars yet. It takes the copy, and its studies draw once bars arrive.
     NoHistory,
     /// The chart's bars, or the elements of its price-based chart type, are too few for this study
-    /// to draw, though it draws on the source. A study waiting for a history the chart asks for
-    /// once it has the study, and a price-based chart that has not painted yet, are not reported.
-    /// The chart takes the copy.
+    /// to draw, though it draws on the source, on its elements for a price-based chart type. A
+    /// price-based source that has not painted since its studies changed draws none yet. A study
+    /// waiting for a history the chart asks for once it has the study, and a price-based chart
+    /// that has not painted yet, are not reported. The chart takes the copy.
     ShortHistory(String),
     /// The chart is skipped: this study reads another study's output, which a copy of it alone
     /// would not have. Copy the whole set with [`LayoutCopy::Studies`] instead.
@@ -117,7 +118,13 @@ impl CopiedStudies {
     /// `None` for a copy of settings, or of a study the chart does not have.
     fn new(source: &Chart, copy: &LayoutCopy) -> Option<Self> {
         let set = source.study_template_set();
-        let draws: Vec<_> = source.indicators().map(|(_, study)| draws(study)).collect();
+        // A price-based chart builds its element results when it paints; until it repaints after
+        // a study change, the held results do not describe its current studies.
+        let rendered = source.rendered_studies().indicators();
+        let current = !source.chart_type().is_time_independent() || !source.element_studies.dirty;
+        let draws: Vec<_> = (0..source.indicators().count())
+            .map(|at| current && rendered.get(at).is_some_and(|study| draws(study.as_ref())))
+            .collect();
         match copy {
             LayoutCopy::Study(id) => {
                 let at = source.indicators().position(|(study, _)| study == *id)?;
@@ -1211,5 +1218,58 @@ mod tests {
                 assert_eq!(scale.bar_ratio_locked(), locked, "{range:?}");
             }
         }
+    }
+
+    /// A price-based source draws its studies on its elements, which can outnumber its bars or
+    /// fall short of them, so the history check follows what it draws. A source that has not
+    /// painted has built no elements, so none of its studies draws and nothing is checked.
+    #[test]
+    fn short_history_follows_what_a_price_based_source_draws() {
+        use crate::widget::test_frames::frame;
+        let start = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let short = LayoutCopyIssue {
+            slot: 1,
+            kind: LayoutCopyIssueKind::ShortHistory("SMA".into()),
+        };
+        // 20 bars rising by 10 with the default brick of 1 make 190 bricks, enough for an SMA of
+        // 30, which 20 bars are not. 50 bars rising by 0.1 make 4 bricks, at 11, 12, 13 and 14,
+        // too few for an SMA of 7.
+        let mut seen = Vec::new();
+        for (bars, rise, length, other_bars, painted) in [
+            (20, 10.0, 30, 20, true),
+            (50, 0.1, 7, 3, true),
+            (20, 10.0, 30, 20, false),
+        ] {
+            let mut source = Chart::new(BarData::from_bars(
+                (0..bars)
+                    .map(|i| {
+                        let close = 10.0 + rise * i as f64;
+                        let time = start + Duration::minutes(i);
+                        Bar::new(time, close, close + 0.05, close - 0.05, close, 1.0)
+                    })
+                    .collect(),
+            ));
+            source.set_timeframe(Timeframe::Min1);
+            source.config_mut().show_volume = false;
+            source.set_chart_type(ChartType::Renko);
+            let sma = source.add_indicator(Box::new(SMA::new(length)));
+            let ctx = egui::Context::default();
+            let frames = if painted { 3 } else { 0 };
+            for time in 0..frames {
+                frame(&ctx, &mut source, time as f64, vec![]);
+            }
+            let shown = source
+                .rendered_studies()
+                .indicators()
+                .iter()
+                .any(|study| draws(study.as_ref()));
+            let mut other = chart(other_bars);
+            let factory = IndicatorFactory::new();
+            let charts = [&mut source, &mut other];
+            let issues = pair().copy_issues(&charts, 0, &LayoutCopy::Study(sma), &factory);
+            seen.push((shown, issues));
+        }
+        let expected = [(true, vec![short]), (false, vec![]), (false, vec![])];
+        assert_eq!(seen, expected);
     }
 }
