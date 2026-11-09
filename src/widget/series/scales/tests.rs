@@ -593,6 +593,109 @@ fn last_value_colour_follows_the_previous_close_rule() {
     }
 }
 
+/// A flat last bar takes rising colours in its body or OHLC ticks, volume and hover border,
+/// matching its last-value colour for main and added candle series.
+#[test]
+fn flat_candles_take_the_direction_of_their_last_value() {
+    use crate::widget::test_frames::shapes;
+    let mut theme = crate::theme::Theme::dark();
+    let (up, down) = (theme.chart.volume_up(), theme.chart.volume_down());
+    theme.chart.candle_up = up;
+    theme.chart.candle_down = down;
+    let mut data = bars(&[20.0, 10.0]);
+    for bar in &mut data {
+        (bar.open, bar.high, bar.low) = (10.0, bar.close + 2.0, 8.0);
+    }
+    for kind in [
+        ChartType::Candles,
+        ChartType::Bars,
+        ChartType::VolumeCandles,
+    ] {
+        for added in [false, true] {
+            let ctx = egui::Context::default();
+            let mut chart = Chart::new(BarData::from_bars(if added {
+                vec![]
+            } else {
+                data.clone()
+            }));
+            chart.set_theme(&ctx, &theme);
+            let id = if added {
+                let id = chart.add_series(SeriesOptions {
+                    chart_type: kind,
+                    up_color: up,
+                    down_color: down,
+                    ..Default::default()
+                });
+                chart.set_data(id, data.clone());
+                id
+            } else {
+                chart.set_chart_type(kind);
+                SeriesId::MAIN
+            };
+            let mut options = chart.chart_options().clone();
+            options.tooltip.on_long_press = false;
+            options.tooltip.border_color_bullish = up;
+            options.tooltip.border_color_bearish = down;
+            chart.set_chart_options(options);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let x = chart.index_to_x(1.0).unwrap();
+            let plot = chart.get_rendered_price_rect();
+            let painted = shapes(
+                &ctx,
+                &mut chart,
+                0.1,
+                vec![egui::Event::PointerMoved(Pos2::new(x, plot.center().y))],
+            );
+            let value = chart
+                .series_last_value(id, PriceLineSource::LastBar)
+                .unwrap();
+            assert_eq!(value.color, up, "{kind:?} added={added}");
+            let body = painted.iter().find_map(|shape| match shape {
+                egui::Shape::Rect(r)
+                    if kind != ChartType::Bars
+                        && (r.rect.center().x - x).abs() < 0.01
+                        && r.rect.height() <= 1.01 =>
+                {
+                    Some(r.fill)
+                }
+                egui::Shape::LineSegment { points, stroke }
+                    if kind == ChartType::Bars
+                        && (points[0].x - x).abs() < 0.01
+                        && points[1].x > x
+                        && points[0].y == points[1].y =>
+                {
+                    Some(stroke.color)
+                }
+                _ => None,
+            });
+            assert_eq!(body, Some(value.color), "{kind:?} added={added} body/tick");
+            if !added {
+                assert!(painted.iter().any(|shape| matches!(shape,
+                    egui::Shape::Rect(r) if r.stroke.width == 1.0 && r.stroke.color == value.color
+                        && r.rect.width() > 50.0 && plot.contains_rect(r.rect)
+                )), "{kind:?} hover border");
+            }
+            if !cfg!(feature = "studies") && !added && kind != ChartType::VolumeCandles {
+                let volume = chart.last_rendered_volume_rect;
+                assert!(
+                    painted.iter().any(|shape| matches!(shape,
+                        egui::Shape::Rect(r) if (r.rect.center().x - x).abs() < 0.01
+                            && volume.contains(r.rect.center()) && r.fill == value.color
+                    )),
+                    "{kind:?} volume bar"
+                );
+                assert!(
+                    painted.iter().any(|shape| matches!(shape,
+                        egui::Shape::Rect(r) if r.rect.left() >= plot.right()
+                            && r.rect.center().y >= volume.top() && r.fill == value.color
+                    )),
+                    "{kind:?} volume tag"
+                );
+            }
+        }
+    }
+}
+
 /// Tick hooks see each axis separately in displayed units, while value labels keep
 /// using the individual hook. A move from 100 to 200 or 1000 to 2000 is +100%, index 200.
 #[test]
@@ -4742,6 +4845,177 @@ fn added_high_low_series_tags_its_last_value_in_its_bar_colour() {
                     .count()
             };
             assert_eq!((bars_in(color), bars_in(up)), (2, 0), "high-low bars");
+        }
+    }
+}
+
+/// Without an explicit precision, host readouts use the decimals of the painted tag.
+/// From a base of 100, 100.0852 is +0.0852%, rounded to +0.085% on 0.025% ticks.
+#[test]
+fn last_value_text_uses_the_tag_decimals_without_a_precision() {
+    for (mode, prices, range, expected) in [
+        (
+            PriceScaleMode::Normal,
+            [1.07, 1.08, 1.0852],
+            (1.06, 1.10),
+            "1.0852",
+        ),
+        (
+            PriceScaleMode::Normal,
+            [0.00107, 0.00108, 0.0010852],
+            (0.00106, 0.00110),
+            "0.00108520",
+        ),
+        (
+            PriceScaleMode::Percentage,
+            [100.0, 100.05, 100.0852],
+            (0.0, 0.1),
+            "+0.085%",
+        ),
+        (
+            PriceScaleMode::IndexedTo100,
+            [100.0, 100.05, 100.0852],
+            (100.0, 100.1),
+            "100.085",
+        ),
+    ] {
+        for placement in ["main", "shared scale", "price pane", "own pane"] {
+            let ctx = egui::Context::default();
+            let data = bars(&prices);
+            let mut chart = Chart::new(BarData::from_bars(data.clone()));
+            chart.config_mut().show_volume = false;
+            let id = if placement == "main" {
+                SeriesId::MAIN
+            } else {
+                let id = chart.add_series(SeriesOptions {
+                    scale: if placement == "shared scale" {
+                        SeriesScale::Right
+                    } else {
+                        SeriesScale::Left
+                    },
+                    ..Default::default()
+                });
+                chart.set_data(id, data);
+                if placement == "own pane" {
+                    let pane = chart.add_pane();
+                    assert!(chart.move_series_to_pane(id, pane));
+                }
+                id
+            };
+            let scale = chart.series_price_scale_mut(id).unwrap();
+            scale.options_mut().mode = mode;
+            if matches!(
+                mode,
+                PriceScaleMode::Percentage | PriceScaleMode::IndexedTo100
+            ) {
+                scale.options_mut().tick_marks.max_marks = 4;
+            }
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            chart
+                .series_price_scale_mut(id)
+                .unwrap()
+                .set_range(range.0, range.1);
+            let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 0.1, vec![]);
+            let map = chart.series_price_map(id).unwrap();
+            assert_eq!(map.price_precision(), None);
+            if matches!(
+                mode,
+                PriceScaleMode::Percentage | PriceScaleMode::IndexedTo100
+            ) {
+                let marks = map.marks();
+                assert!((marks[1].price - marks[0].price - 0.025).abs() < 1e-10);
+            }
+            for source in [PriceLineSource::LastBar, PriceLineSource::LastVisible] {
+                let last = chart.series_last_value(id, source).unwrap();
+                let tag = painted.iter().find_map(|shape| match shape {
+                    egui::Shape::Text(text)
+                        if (text.galley.rect.translate(text.pos.to_vec2()).center().y
+                            - last.coordinate)
+                            .abs()
+                            < 1.0
+                            && text.galley.text() == expected =>
+                    {
+                        Some(text.galley.text())
+                    }
+                    _ => None,
+                });
+                assert_eq!(tag, Some(expected), "{mode:?} {placement}: painted tag");
+                assert_eq!(last.text, expected, "{mode:?} {placement} {source:?}");
+                assert_eq!(chart.format_series_price(id, last.value).as_deref(), tag);
+            }
+        }
+    }
+}
+
+/// Logarithms place only positive closes; other modes still place zero and negative values.
+/// In a log range from 10 to 20, 15 lies ln(1.5)/ln(2) = 0.5849625 of the way up.
+#[test]
+fn last_value_without_a_log_coordinate_is_none() {
+    for mode in [
+        PriceScaleMode::Normal,
+        PriceScaleMode::Logarithmic,
+        PriceScaleMode::Percentage,
+        PriceScaleMode::IndexedTo100,
+    ] {
+        for close in [-5.0, 0.0, 15.0] {
+            for own_pane in [false, true] {
+                let ctx = egui::Context::default();
+                let data = bars(&[10.0, 20.0, close]);
+                let mut chart = Chart::new(BarData::from_bars(data.clone()));
+                chart.config_mut().show_volume = false;
+                let id = chart.add_series(SeriesOptions {
+                    scale: SeriesScale::Left,
+                    ..Default::default()
+                });
+                chart.set_data(id, data);
+                if own_pane {
+                    let pane = chart.add_pane();
+                    assert!(chart.move_series_to_pane(id, pane));
+                }
+                for series in [SeriesId::MAIN, id] {
+                    let scale = chart.series_price_scale_mut(series).unwrap();
+                    scale.options_mut().mode = mode;
+                    scale.set_price_precision(Some(3));
+                }
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                let (low, high) = match mode {
+                    PriceScaleMode::Normal => (10.0, 20.0),
+                    PriceScaleMode::Logarithmic => (10_f64.ln(), 20_f64.ln()),
+                    PriceScaleMode::Percentage => (0.0, 100.0),
+                    PriceScaleMode::IndexedTo100 => (100.0, 200.0),
+                };
+                for series in [SeriesId::MAIN, id] {
+                    chart
+                        .series_price_scale_mut(series)
+                        .unwrap()
+                        .set_range(low, high);
+                }
+                frame(&ctx, &mut chart, 0.1, vec![]);
+                for series in [SeriesId::MAIN, id] {
+                    for source in [PriceLineSource::LastBar, PriceLineSource::LastVisible] {
+                        let last = chart.series_last_value(series, source);
+                        if mode == PriceScaleMode::Logarithmic && close <= 0.0 {
+                            assert_eq!(last, None, "{close} {series:?} {source:?} pane={own_pane}");
+                        } else {
+                            let last = last.unwrap();
+                            assert_eq!((last.value, last.index), (close, 2.0));
+                            let (top, bottom) = chart.series_price_map(series).unwrap().extent();
+                            let fraction = if mode == PriceScaleMode::Logarithmic {
+                                0.584_962_5
+                            } else {
+                                (close as f32 - 10.0) / 10.0
+                            };
+                            assert!(
+                                (last.coordinate - (bottom - (bottom - top) * fraction)).abs()
+                                    < 0.001
+                            );
+                            if mode == PriceScaleMode::Logarithmic {
+                                assert_eq!(last.text, "15.000");
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
