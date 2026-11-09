@@ -5,7 +5,7 @@ use crate::model::LineStyle;
 use crate::theme::ThemeExt;
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, epaint::ColorMode, layers::ShapeIdx};
 
-/// Horizontal offset of the second text paint used for synthetic bold.
+/// Baseline offset of the second text paint used for synthetic bold.
 pub(super) const BOLD_OFFSET: f32 = 0.6;
 
 /// Colours of the box around an annotation's text, from [`Drawing::text_box_colors`].
