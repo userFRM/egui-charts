@@ -344,6 +344,9 @@ impl Chart {
                 {
                     item.bars = visible.to_vec();
                     item.revision = crate::model::next_revision();
+                    if let Some(marks) = &mut item.change_marks {
+                        marks.retain_bars(&item.bars, &clock);
+                    }
                 }
             }
         }

@@ -65,6 +65,13 @@ impl ChangeMarks {
         }
     }
 
+    /// Keeps only marks whose slot still holds a bar after removal or a replay seek.
+    pub(super) fn retain_bars(&mut self, bars: &[Bar], clock: &BarClock) {
+        self.marks
+            .get_mut()
+            .retain(|mark| close_at(bars, clock, mark.slot).is_some());
+    }
+
     /// Drops the marks, for bars that were replaced.
     pub(super) fn clear(&mut self) {
         self.marks.get_mut().clear();
@@ -260,6 +267,61 @@ mod tests {
             assert!(marks(&chart, main).marks.borrow().is_empty());
             chart.update(id, Bar::new(time, 100.0, 112.0, 100.0, 105.0, 1.0));
             assert!(marks(&chart, main).marks.borrow().is_empty(), "main {main}");
+        }
+    }
+
+    #[test]
+    fn change_marks_leave_with_their_bars() {
+        for main in [true, false] {
+            for replay in [false, true] {
+                let mut chart = chart(&[100.0], &[110.0]);
+                let id = if main {
+                    SeriesId::MAIN
+                } else {
+                    let id = chart.add_series(Default::default());
+                    chart.set_data(id, chart.bars(SeriesId::MAIN).to_vec());
+                    id
+                };
+                chart.set_change_markers(id, Some(ChangeMarkers::default()));
+                let previous = chart.bars(id)[98].time;
+                let last = chart.bars(id)[99].time;
+                for time in [previous, last] {
+                    chart.update(id, Bar::new(time, 100.0, 110.0, 100.0, 108.0, 1.0));
+                }
+                assert_eq!(marks(&chart, main).marks.borrow().len(), 2);
+                if replay {
+                    chart.set_replay_time(Some(last));
+                } else {
+                    assert!(chart.pop_bars(id, 0).is_empty());
+                    assert_eq!(marks(&chart, main).marks.borrow().len(), 2);
+                    assert_eq!(chart.pop_bars(id, 1).len(), 1);
+                }
+                let kept = usize::from(!replay || !main);
+                assert_eq!(
+                    marks(&chart, main).marks.borrow().len(),
+                    kept,
+                    "main {main}, replay {replay}"
+                );
+                assert!(
+                    marks(&chart, main)
+                        .marks
+                        .borrow()
+                        .iter()
+                        .all(|mark| mark.time == previous)
+                );
+                if replay {
+                    chart.set_replay_time(None);
+                } else {
+                    chart.update(id, Bar::new(last, 100.0, 112.0, 100.0, 112.0, 1.0));
+                }
+                assert_eq!(
+                    marks(&chart, main).marks.borrow().len(),
+                    kept,
+                    "returning bar starts without a mark"
+                );
+                assert_eq!(chart.pop_bars(id, usize::MAX).len(), 100);
+                assert!(marks(&chart, main).marks.borrow().is_empty());
+            }
         }
     }
 
