@@ -164,7 +164,13 @@ impl Drawing {
             return None;
         }
         let galley = if self.tool_type == DrawingToolType::InfoLine {
-            let color = self.text_box_colors(painter.ctx()).text;
+            let chart = painter.ctx().active_theme().chart;
+            let color = crate::theme::readable_color(
+                self.text_box_colors(painter.ctx()).text,
+                chart.axis_text,
+                &[chart.bg_tooltip],
+                4.5,
+            );
             self.annotation_galley(painter, text, color)
         } else {
             stats_galley(painter, text)
@@ -1238,7 +1244,7 @@ mod tests {
         }
     }
 
-    /// A new info line shows every readout without being selected, in its own blue 14 px text;
+    /// A new info line shows every readout without being selected, in its own 14 px text;
     /// colour, opacity, size and slant reach the card. +10 on 100 is 10%, 40 quarter-point
     /// ticks; bars 0 to 30 are 30 bars and 30 periods of 10 px plus a 10 px rise, atan(10 / 300)
     /// = 1.9 degrees.
@@ -1282,26 +1288,25 @@ mod tests {
         drawing.chart_points = vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(30.0, 110.0)];
         drawing.update_screen_coords(|bar| 10.0 * bar, |price| 300.0 - price as f32);
         let text = card_text(&drawing).expect("readouts show without selection");
+        // sqrt(300^2 + 10^2) / 10 = 30.02 periods.
         assert_eq!(
             text.galley.job.text,
             "+10.00 (+10.00%)  +40 ticks\n30 bars, 30.02 periods\n1.9°"
         );
         let format = &text.galley.job.sections[0].format;
-        // sqrt(300^2 + 10^2) / 10 = 30.02 periods.
-        assert_eq!(format.color, Color32::from_rgb(41, 98, 255));
         assert_eq!(format.font_id.size, 14.0);
         assert!(!format.italics);
 
         // The line's colour leaves the readouts' colour alone.
         drawing.color = [255, 0, 0, 255];
-        drawing.text_color = Some([1, 2, 3, 128]);
+        drawing.text_color = Some([255, 200, 0, 200]);
         drawing.font_size = 20.0;
         drawing.italic = true;
         let plain = card_text(&drawing).unwrap();
         let format = &plain.galley.job.sections[0].format;
         assert_eq!(
             format.color,
-            Color32::from_rgba_unmultiplied(1, 2, 3, 128),
+            Color32::from_rgba_unmultiplied(255, 200, 0, 200),
             "opacity"
         );
         assert_eq!(format.font_id.size, 20.0);
@@ -1491,5 +1496,75 @@ mod tests {
             })
             .collect();
         assert_eq!(texts, ["180.0°", "180.0°"]);
+    }
+
+    /// A new info line's readouts sit on the theme's tooltip card. The chart keeps text at 4.5:1
+    /// or more against what it is painted on, as the theme's axis text the card used before
+    /// does: white on the dark card is 11.2:1.
+    #[test]
+    fn info_line_readouts_read_on_their_card_in_every_theme() {
+        use crate::theme::{apply_to_egui, contrast, presets};
+        let bars = sample_bars();
+        let ctx = egui::Context::default();
+        let mut ratios = Vec::new();
+        for (name, theme) in presets() {
+            apply_to_egui(&ctx, &theme);
+            for text_color in [Some([41, 98, 255, 255]), None] {
+                let mut drawing = Drawing::new(1, DrawingToolType::InfoLine);
+                drawing.text_color = text_color;
+                drawing.completed = true;
+                drawing.chart_points =
+                    vec![ChartPoint::new(0.0, 100.0), ChartPoint::new(30.0, 110.0)];
+                drawing.update_screen_coords(|bar| 10.0 * bar, |price| 300.0 - price as f32);
+                let output = ctx.run_ui(Default::default(), |ui| {
+                    let view = ChartView {
+                        instrument: None,
+                        price_formatter: None,
+                        time_formatter: None,
+                        bar_seconds: 0,
+                        bars: &bars,
+                        revision: 0,
+                        bar_to_x: &|bar| 10.0 * bar,
+                        price_to_y: &|price| 300.0 - price as f32,
+                        y_to_price: &|y| f64::from(300.0 - y),
+                        time_axis: false,
+                        executions: None,
+                        timeframe: None,
+                        finer: &[],
+                    };
+                    drawing.render_with_selection(
+                        ui.painter(),
+                        Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 400.0)),
+                        &view,
+                        false,
+                    );
+                });
+                let text = output
+                    .shapes
+                    .iter()
+                    .find_map(|s| match &s.shape {
+                        egui::Shape::Text(t) if t.galley.job.text.contains("bars") => Some((
+                            Rect::from_min_size(t.pos, t.galley.size()),
+                            t.galley.job.sections[0].format.color,
+                        )),
+                        _ => None,
+                    })
+                    .expect("readouts");
+                let card = output
+                    .shapes
+                    .iter()
+                    .find_map(|s| match &s.shape {
+                        egui::Shape::Rect(r) if r.rect.contains_rect(text.0) => Some(r.fill),
+                        _ => None,
+                    })
+                    .expect("card");
+                output.drop_without_applying_deltas();
+                ratios.push((name, text_color, contrast(text.1, card)));
+            }
+        }
+        assert!(
+            ratios.iter().all(|&(_, _, ratio)| ratio >= 4.5),
+            "{ratios:?}"
+        );
     }
 }
