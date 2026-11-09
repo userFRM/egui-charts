@@ -6,7 +6,6 @@ use crate::model::{Bar, BarClock, ChangeMarkers};
 use chrono::{DateTime, Utc};
 use egui::{Painter, Pos2};
 use std::cell::RefCell;
-use web_time::Instant;
 
 /// The change markers of one bar series and the marks of its recent updates.
 pub(super) struct ChangeMarks {
@@ -20,7 +19,7 @@ struct Mark {
     time: DateTime<Utc>,
     close: f64,
     up: bool,
-    at: Instant,
+    at: Option<f64>,
 }
 
 impl ChangeMarks {
@@ -47,9 +46,7 @@ impl ChangeMarks {
         clock: &BarClock,
         before: Vec<(DateTime<Utc>, f64)>,
     ) {
-        let now = Instant::now();
         let marks = self.marks.get_mut();
-        marks.retain(|mark| now.duration_since(mark.at) < self.options.duration);
         for (slot, old) in before {
             let Some((time, close)) = close_at(bars, clock, slot) else {
                 continue;
@@ -63,7 +60,7 @@ impl ChangeMarks {
                 time,
                 close,
                 up: close > old,
-                at: now,
+                at: None,
             });
         }
     }
@@ -80,10 +77,11 @@ impl ChangeMarks {
         painter: &Painter,
         position: impl Fn(DateTime<Utc>, f64) -> Option<Pos2>,
     ) {
-        let now = Instant::now();
-        self.marks.borrow_mut().retain(|mark| {
-            let elapsed = now.duration_since(mark.at);
-            if elapsed >= self.options.duration {
+        let now = painter.ctx().input(|input| input.time);
+        let duration = self.options.duration.as_secs_f64();
+        self.marks.borrow_mut().retain_mut(|mark| {
+            let elapsed = now - *mark.at.get_or_insert(now);
+            if elapsed >= duration {
                 return false;
             }
             if let Some(pos) = position(mark.time, mark.close)
@@ -94,7 +92,7 @@ impl ChangeMarks {
                 } else {
                     self.options.down_color
                 };
-                let opacity = 1.0 - elapsed.as_secs_f64() / self.options.duration.as_secs_f64();
+                let opacity = 1.0 - elapsed / duration;
                 crate::chart::rendering::render_change_mark(
                     painter,
                     pos,
@@ -132,8 +130,8 @@ impl Chart {
     /// or fell against the close of the bar the update replaced: a dot at the new close with a
     /// chevron above it for a rise and below it for a fall. Each mark fades linearly to
     /// transparent over that duration, and another changed close of the same bar restarts its
-    /// fade. Updates that leave the close unchanged, new bars, whitespace fills and history mark
-    /// nothing. `None`
+    /// fade on egui's frame clock, starting with the first paint after the change. Updates that
+    /// leave the close unchanged, new bars, whitespace fills and history mark nothing. `None`
     /// removes the markers.
     ///
     /// Bar series accept change markers; unknown ids and study ids are ignored with a warning.
@@ -274,10 +272,10 @@ mod tests {
     }
 
     /// Both directions keep their colour while opacity falls linearly: halfway through
-    /// 1,000 seconds every premultiplied channel is halved. A changed close restarts that
+    /// 10 seconds every premultiplied channel is halved. A changed close restarts that
     /// lifetime; at its end the mark is removed and idle frames request no further repaint.
     #[test]
-    fn change_markers_fade_restart_and_expire_on_each_series() {
+    fn change_marks_fade_on_the_frame_clock() {
         let up = Color32::from_rgba_premultiplied(20, 160, 40, 200);
         let down = Color32::from_rgba_premultiplied(120, 20, 40, 160);
         for main in [true, false] {
@@ -294,38 +292,44 @@ mod tests {
                 Some(ChangeMarkers {
                     up_color: up,
                     down_color: down,
-                    duration: Duration::from_secs(1_000),
+                    duration: Duration::from_secs(10),
                 }),
             );
             let time = chart.bars(id).last().unwrap().time;
             let ctx = egui::Context::default();
-            for (close, color, half) in [
+            for (start, close, color, half) in [
                 (
+                    0.5,
                     108.0,
                     down,
                     Color32::from_rgba_premultiplied(60, 10, 20, 80),
                 ),
-                (109.0, up, Color32::from_rgba_premultiplied(10, 80, 20, 100)),
+                (
+                    6.0,
+                    109.0,
+                    up,
+                    Color32::from_rgba_premultiplied(10, 80, 20, 100),
+                ),
             ] {
                 chart.update(id, Bar::new(time, 100.0, 110.0, 100.0, close, 1.0));
                 assert_eq!(marks(&chart, main).marks.borrow().len(), 1);
-                assert!(
-                    marks(&chart, main).marks.borrow()[0].at.elapsed() < Duration::from_secs(1)
-                );
-                for (age, expected) in [(0, color), (500, half), (1_000, Color32::TRANSPARENT)] {
-                    if age == 1_000 && close == 108.0 {
+                for (age, expected) in [(0, color), (5, half), (10, Color32::TRANSPARENT)] {
+                    if age == 10 && close == 108.0 {
                         // Keep the half-faded mark for the next update to replace.
                         continue;
                     }
-                    for mark in marks(&chart, main).marks.borrow_mut().iter_mut() {
-                        mark.at = Instant::now() - Duration::from_secs(age);
-                    }
                     // egui can carry a repaint request from the preceding frame.
                     for _ in 0..3 {
-                        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                            marks(&chart, main)
-                                .paint(ui.painter(), |_, _| Some(Pos2::new(50.0, 50.0)));
-                        });
+                        let mut output = ctx.run_ui(
+                            egui::RawInput {
+                                time: Some(start + f64::from(age)),
+                                ..Default::default()
+                            },
+                            |ui| {
+                                marks(&chart, main)
+                                    .paint(ui.painter(), |_, _| Some(Pos2::new(50.0, 50.0)));
+                            },
+                        );
                         let painted: Vec<_> = std::mem::take(&mut output.shapes)
                             .into_iter()
                             .filter_map(|shape| match shape.shape {
@@ -339,7 +343,7 @@ mod tests {
                             .collect();
                         let delay = output.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
                         output.drop_without_applying_deltas();
-                        if age < 1_000 {
+                        if age < 10 {
                             assert_eq!(painted, vec![expected; 2], "main {main}, age {age}");
                             assert_eq!(delay, Duration::ZERO, "animate the visible fade");
                         } else {
@@ -349,9 +353,15 @@ mod tests {
                 }
             }
             assert!(marks(&chart, main).marks.borrow().is_empty());
-            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                marks(&chart, main).paint(ui.painter(), |_, _| Some(Pos2::new(50.0, 50.0)));
-            });
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    time: Some(17.0),
+                    ..Default::default()
+                },
+                |ui| {
+                    marks(&chart, main).paint(ui.painter(), |_, _| Some(Pos2::new(50.0, 50.0)));
+                },
+            );
             let delay = output.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
             output.drop_without_applying_deltas();
             assert_eq!(
