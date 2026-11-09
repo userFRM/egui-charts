@@ -1769,8 +1769,17 @@ mod tests {
 
     #[test]
     fn walls_need_exposure_on_their_side() {
-        let (chain, sink, _, expiry, bars) = expected_move_chain();
-        let time = bars[0].time;
+        let feed = ChainFeed::default();
+        let expiry = Utc::now().date_naive().succ_opt().unwrap();
+        let time = Utc::now();
+        let chain = OptionChain::new(
+            &feed,
+            OptionChainQuery::new("SAMPLE", expiry..=expiry),
+            || {},
+        )
+        .unwrap();
+        let sink = feed.0.lock().unwrap().clone().unwrap();
+        let bars = [Bar::new(time, 105.0, 112.0, 98.0, 105.0, 1.0)];
         let mut study = OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry]).unwrap();
         study.calculate(&bars);
         for (calls, puts, walls) in [
@@ -2248,17 +2257,27 @@ mod tests {
 
     #[test]
     fn saved_measure_restores_by_name() {
-        let (chain, sink, rows, expiry, bars) = expected_move_chain();
-        let rows: Vec<_> = rows
+        let feed = ChainFeed::default();
+        let expiry = Utc::now().date_naive().succ_opt().unwrap();
+        let time = Utc::now();
+        let bars = vec![Bar::new(time, 100.0, 101.0, 99.0, 100.0, 1.0); 2];
+        let chain = OptionChain::new(
+            &feed,
+            OptionChainQuery::new("SAMPLE", expiry..=expiry),
+            || {},
+        )
+        .unwrap();
+        let sink = feed.0.lock().unwrap().clone().unwrap();
+        let rows: Vec<_> = [OptionKind::Call, OptionKind::Put]
             .into_iter()
-            .take(2)
-            .map(|mut row| {
-                row.strike = 100.0;
+            .map(|kind| {
+                let mut row = OptionQuote::new(format!("100-{kind:?}"), expiry, 100.0, kind, time);
                 let call = row.kind == OptionKind::Call;
                 row.volume = Some(if call { 10.0 } else { 5.0 });
                 row.open_interest = Some(if call { 4.0 } else { 2.0 });
                 row.gamma = Some(0.05);
                 row.multiplier = Some(100.0);
+                row.underlying_price = Some(100.0);
                 row
             })
             .collect();
@@ -2271,7 +2290,14 @@ mod tests {
         let saved = crate::studies::StudyTemplate::from_study(&study);
         for ready in [false, true] {
             for missing in [0, 1, 2] {
-                let (later, later_sink, _, _, _) = expected_move_chain();
+                let feed = ChainFeed::default();
+                let later = OptionChain::new(
+                    &feed,
+                    OptionChainQuery::new("SAMPLE", expiry..=expiry),
+                    || {},
+                )
+                .unwrap();
+                let later_sink = feed.0.lock().unwrap().clone().unwrap();
                 let mut changed = rows.clone();
                 changed[1].volume = None;
                 if missing == 1 {
