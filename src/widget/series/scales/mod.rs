@@ -622,7 +622,8 @@ impl Chart {
     /// includes bars cut by a plot edge, as rendering does. On price-based main charts,
     /// loaded selection uses stored bars and visible selection uses displayed elements.
     /// Returns `None` for absent series, studies, a selection without values, or before the
-    /// pane is drawn. A scale without a valid coordinate also returns `None`.
+    /// pane is drawn. A close the scale cannot place, such as zero or a negative price on a
+    /// logarithmic scale, also returns `None`.
     pub fn series_last_value(
         &self,
         id: SeriesId,

@@ -860,7 +860,8 @@ impl Chart {
     /// Formats `price` as the scale of a present bar series labels it: a price, a signed
     /// percentage or an indexed value. Decimals match the value tag: configured precision,
     /// otherwise the nearest tick label's decimals, with at least two. Display formats and
-    /// host formatters take precedence. `None` where [`series_price_map`](Self::series_price_map) is.
+    /// host formatters take precedence. `None` where [`series_price_map`](Self::series_price_map)
+    /// is.
     pub fn format_series_price(&self, id: SeriesId, price: f64) -> Option<String> {
         let map = self.series_price_map(id)?;
         let transform = map.transform();
