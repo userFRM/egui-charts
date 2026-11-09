@@ -516,7 +516,7 @@ impl OptionsVolumeProfile {
     }
 
     fn move_band(&self) -> Option<(NaiveDate, [f64; 2])> {
-        if !self.visible || !self.matching_instrument || !self.expected_move {
+        if !self.matching_instrument || !self.expected_move {
             return None;
         }
         self.refresh();
@@ -808,7 +808,7 @@ impl Indicator for OptionsVolumeProfile {
         }
     }
     fn plot_value(&self, line: usize, bar: usize) -> Option<f64> {
-        if !self.visible || !self.matching_instrument || bar >= self.values.len() {
+        if !self.matching_instrument || bar >= self.values.len() {
             return None;
         }
         if (6..=7).contains(&line) {
@@ -834,6 +834,9 @@ impl Indicator for OptionsVolumeProfile {
         }
     }
     fn fills(&self) -> Vec<crate::studies::StudyFill> {
+        if !self.visible {
+            return Vec::new();
+        }
         let Some((_, [low, high])) = self.move_band() else {
             return Vec::new();
         };
@@ -845,6 +848,9 @@ impl Indicator for OptionsVolumeProfile {
         }]
     }
     fn plot_label(&self) -> Option<(usize, String)> {
+        if !self.visible {
+            return None;
+        }
         let (expiry, _) = self.move_band()?;
         let method = if self.move_iv {
             "Implied volatility"
@@ -1351,7 +1357,9 @@ mod tests {
         sink.push(rows(expiry, Utc::now())).unwrap();
         assert_eq!(study.plot_value(6, 0), Some(93.0));
         study.set_visible(false);
-        assert_eq!(study.plot_value(6, 0), None);
+        assert_eq!(study.plot_value(6, 0), Some(93.0));
+        assert!(study.volume_profiles(0..bars.len()).is_empty());
+        assert!(study.fills().is_empty());
         assert!(study.plot_label().is_none());
         study.set_visible(true);
         study.set_instrument(Some(&Instrument::new("OTHER")));
@@ -1983,5 +1991,71 @@ mod tests {
             waiting.set_input("unheard_of", InputValue::Toggle(true)),
             Err(StudyError::UnknownInput(_))
         ));
+    }
+    /// A hidden profile keeps the values that cursor payloads with hidden studies, and alerts on
+    /// its outputs, read.
+    #[cfg(all(feature = "widget", feature = "drawings"))]
+    #[test]
+    fn hidden_profile_keeps_its_values_for_cursor_payloads_and_alerts() {
+        use crate::model::{AlertSource, LogicalRange};
+        use crate::widget::test_frames::{chart, frame};
+        use crate::widget::{Chart, ChartEvent, CursorDataPolicy};
+
+        let (chain, sink, rows, expiry, _) = expected_move_chain();
+        sink.push(rows).unwrap();
+        let mut profile = OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry]).unwrap();
+        profile
+            .set_input("expected_move", InputValue::Toggle(true))
+            .unwrap();
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[99.0], &[101.0]);
+        chart.config.show_volume = false;
+        let id = chart.add_indicator(Box::new(profile));
+        chart.set_cursor_data_policy(CursorDataPolicy::IncludeHidden);
+        for time in [0.0, 0.1, 0.2] {
+            frame(&ctx, &mut chart, time, vec![]);
+        }
+        chart.set_visible_logical_range(LogicalRange::new(40.0, 80.0));
+        frame(&ctx, &mut chart, 0.3, vec![]);
+        chart.drain_events().for_each(drop);
+        // The expected low and high in the payload of a pointer moved onto bar `index`.
+        let band = |chart: &mut Chart, index: usize, time: f64| {
+            let pos = egui::Pos2::new(
+                chart.get_chart_mapping().idx_to_x(index),
+                chart.last_rendered_price_rect.center().y,
+            );
+            frame(&ctx, chart, time, vec![egui::Event::PointerMoved(pos)]);
+            let pointer = chart
+                .drain_events()
+                .filter_map(|event| match event {
+                    ChartEvent::CrosshairMoved(Some(pointer)) => Some(pointer),
+                    _ => None,
+                })
+                .last()
+                .expect("a cursor payload");
+            pointer
+                .studies
+                .iter()
+                .filter(|(study, row)| *study == id && row.plot.starts_with("Expected"))
+                .map(|(_, row)| (row.plot.clone(), row.value))
+                .collect::<Vec<_>>()
+        };
+        // Strikes 95 and 105 are both 5 from the underlying at 100, so the lower one is at the
+        // money: its call mid is (2 + 4) / 2 = 3 and its put mid (3 + 5) / 2 = 4, a move of 7.
+        let expected = vec![
+            ("Expected low".to_owned(), Some(93.0)),
+            ("Expected high".to_owned(), Some(107.0)),
+        ];
+        assert_eq!(band(&mut chart, 60, 1.0), expected, "visible profile");
+        assert!(chart.set_indicator_visible(id, false));
+        frame(&ctx, &mut chart, 1.5, vec![]);
+        chart.drain_events().for_each(drop);
+        let hidden = band(&mut chart, 61, 2.0);
+        let output = AlertSource::Study {
+            id: id.0.to_string(),
+            output: 6,
+        };
+        let alert = chart.alert_value(&output, 61);
+        assert_eq!((hidden, alert), (expected, Some(93.0)), "hidden profile");
     }
 }
