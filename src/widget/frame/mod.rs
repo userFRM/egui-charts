@@ -2557,7 +2557,7 @@ impl Chart {
                     original_last.unwrap_or(last).volume,
                     // The tag takes the colour of the bar's direction in the applied theme, as
                     // its volume bar does.
-                    if original_last.unwrap_or(last).is_bullish() {
+                    if original_last.unwrap_or(last).close >= original_last.unwrap_or(last).open {
                         ui.active_theme().chart.candle_up
                     } else {
                         ui.active_theme().chart.candle_down

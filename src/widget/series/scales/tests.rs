@@ -593,6 +593,109 @@ fn last_value_colour_follows_the_previous_close_rule() {
     }
 }
 
+/// A flat last bar takes rising colours in its body or OHLC ticks, volume and hover border,
+/// matching its last-value colour for main and added candle series.
+#[test]
+fn flat_candles_take_the_direction_of_their_last_value() {
+    use crate::widget::test_frames::shapes;
+    let mut theme = crate::theme::Theme::dark();
+    let (up, down) = (theme.chart.volume_up(), theme.chart.volume_down());
+    theme.chart.candle_up = up;
+    theme.chart.candle_down = down;
+    let mut data = bars(&[20.0, 10.0]);
+    for bar in &mut data {
+        (bar.open, bar.high, bar.low) = (10.0, bar.close + 2.0, 8.0);
+    }
+    for kind in [
+        ChartType::Candles,
+        ChartType::Bars,
+        ChartType::VolumeCandles,
+    ] {
+        for added in [false, true] {
+            let ctx = egui::Context::default();
+            let mut chart = Chart::new(BarData::from_bars(if added {
+                vec![]
+            } else {
+                data.clone()
+            }));
+            chart.set_theme(&ctx, &theme);
+            let id = if added {
+                let id = chart.add_series(SeriesOptions {
+                    chart_type: kind,
+                    up_color: up,
+                    down_color: down,
+                    ..Default::default()
+                });
+                chart.set_data(id, data.clone());
+                id
+            } else {
+                chart.set_chart_type(kind);
+                SeriesId::MAIN
+            };
+            let mut options = chart.chart_options().clone();
+            options.tooltip.on_long_press = false;
+            options.tooltip.border_color_bullish = up;
+            options.tooltip.border_color_bearish = down;
+            chart.set_chart_options(options);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let x = chart.index_to_x(1.0).unwrap();
+            let plot = chart.get_rendered_price_rect();
+            let painted = shapes(
+                &ctx,
+                &mut chart,
+                0.1,
+                vec![egui::Event::PointerMoved(Pos2::new(x, plot.center().y))],
+            );
+            let value = chart
+                .series_last_value(id, PriceLineSource::LastBar)
+                .unwrap();
+            assert_eq!(value.color, up, "{kind:?} added={added}");
+            let body = painted.iter().find_map(|shape| match shape {
+                egui::Shape::Rect(r)
+                    if kind != ChartType::Bars
+                        && (r.rect.center().x - x).abs() < 0.01
+                        && r.rect.height() <= 1.01 =>
+                {
+                    Some(r.fill)
+                }
+                egui::Shape::LineSegment { points, stroke }
+                    if kind == ChartType::Bars
+                        && (points[0].x - x).abs() < 0.01
+                        && points[1].x > x
+                        && points[0].y == points[1].y =>
+                {
+                    Some(stroke.color)
+                }
+                _ => None,
+            });
+            assert_eq!(body, Some(value.color), "{kind:?} added={added} body/tick");
+            if !added {
+                assert!(painted.iter().any(|shape| matches!(shape,
+                    egui::Shape::Rect(r) if r.stroke.width == 1.0 && r.stroke.color == value.color
+                        && r.rect.width() > 50.0 && plot.contains_rect(r.rect)
+                )), "{kind:?} hover border");
+            }
+            if !cfg!(feature = "studies") && !added && kind != ChartType::VolumeCandles {
+                let volume = chart.last_rendered_volume_rect;
+                assert!(
+                    painted.iter().any(|shape| matches!(shape,
+                        egui::Shape::Rect(r) if (r.rect.center().x - x).abs() < 0.01
+                            && volume.contains(r.rect.center()) && r.fill == value.color
+                    )),
+                    "{kind:?} volume bar"
+                );
+                assert!(
+                    painted.iter().any(|shape| matches!(shape,
+                        egui::Shape::Rect(r) if r.rect.left() >= plot.right()
+                            && r.rect.center().y >= volume.top() && r.fill == value.color
+                    )),
+                    "{kind:?} volume tag"
+                );
+            }
+        }
+    }
+}
+
 /// Tick hooks see each axis separately in displayed units, while value labels keep
 /// using the individual hook. A move from 100 to 200 or 1000 to 2000 is +100%, index 200.
 #[test]
