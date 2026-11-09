@@ -761,7 +761,8 @@ pub enum LineMeasurementPosition {
     Auto,
 }
 
-/// Which part of a line's text sits at which point of the line, reading left to right.
+/// Which part of a line's text sits at which point of the line, reading left to right. A vertical
+/// line reads from bottom to top, so its left end is at the bottom, whichever way its text is turned.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LineTextHorizontalAlign {
     /// The text starts at the line's left end.
@@ -773,7 +774,8 @@ pub enum LineTextHorizontalAlign {
     Right,
 }
 
-/// Which edge of a line's text rests on the line.
+/// Which edge of a line's text rests on the line. A vertical line takes its text's top to face
+/// left, so [`Self::Top`] reads right of the line and [`Self::Bottom`] left of it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LineTextVerticalAlign {
     /// The text's top edge, so that it reads below the line.
@@ -785,10 +787,20 @@ pub enum LineTextVerticalAlign {
     Bottom,
 }
 
+/// How a vertical line's text is turned.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LineTextOrientation {
+    /// Along the line, reading from bottom to top.
+    #[default]
+    Vertical,
+    /// Upright, across the line.
+    Horizontal,
+}
+
 /// Independent readouts of a trend line, ray, extended line, info line or trend angle, and the
-/// placement of the text of those tools and of a horizontal line or ray, which have no readouts.
-/// Readouts start hidden except on an info line, see [`Self::for_tool`]; saves from before these
-/// settings read the same way.
+/// placement of the text of those tools and of a horizontal line or ray or a vertical line,
+/// which have no readouts. Readouts start hidden except on an info line, see [`Self::for_tool`];
+/// saves from before these settings read the same way.
 /// Price changes follow anchor order; lengths and elapsed time are unsigned.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -819,6 +831,11 @@ pub struct LineMeasurements {
     pub text_horizontal_align: LineTextHorizontalAlign,
     /// Which edge of the line's custom text rests on the line.
     pub text_vertical_align: LineTextVerticalAlign,
+    /// How a vertical line's custom text is turned. Other lines write theirs along the line.
+    pub text_orientation: LineTextOrientation,
+    /// Whether a vertical line runs through the chart's other panes at its anchor's time, as well
+    /// as its own. Off keeps it, and always its text, in its own pane; other lines ignore it.
+    pub across_panes: bool,
 }
 
 thread_local! {
@@ -828,9 +845,17 @@ thread_local! {
 
 impl LineMeasurements {
     /// The settings a new drawing of `tool` starts with: an info line keeps every readout visible
-    /// in the middle of the line, a horizontal line writes its text on the line, other tools keep
-    /// their readouts hidden and their text above the line.
+    /// in the middle of the line, a horizontal or vertical line writes its text on the line and a
+    /// vertical line runs through every pane, other tools keep their readouts hidden and their text
+    /// above the line.
     pub fn for_tool(tool: super::DrawingToolType) -> Self {
+        if tool == super::DrawingToolType::VerticalLine {
+            return Self {
+                text_vertical_align: LineTextVerticalAlign::Middle,
+                across_panes: true,
+                ..Self::default()
+            };
+        }
         if tool == super::DrawingToolType::HorizontalLine {
             return Self {
                 text_vertical_align: LineTextVerticalAlign::Middle,
