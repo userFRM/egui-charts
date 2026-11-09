@@ -1284,6 +1284,7 @@ impl Chart {
                                 item,
                                 self.series_map(item, chart_rect),
                                 index,
+                                ui.active_theme().chart.bg,
                             );
                         }
                     }

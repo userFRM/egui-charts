@@ -877,20 +877,24 @@ fn crosshair_marker_styles_follow_each_series_and_scale() {
     use egui::{Color32, Stroke};
 
     let ring = crate::tokens::DESIGN_TOKENS.stroke.thick;
-    // Each row: main style, added style, and the expected fill and stroke of both circles,
-    // with `None` for a hidden marker. `None` colours resolve to the line colour and to the
-    // chart background, set to light gray.
-    let rows: [(MarkerStyle, MarkerStyle, _, _); 5] = [
+    // Each row: main and added styles, then the expected main, added and separate-pane
+    // circles. Hidden markers are `None`; default rings match the plot or pane fill.
+    let rows: [(MarkerStyle, MarkerStyle, _, _, _); 5] = [
         (
             (5.0, None, None, ring),
             (7.0, None, None, ring),
             Some((Color32::BLUE, Stroke::new(ring, Color32::LIGHT_GRAY))),
             Some((Color32::GREEN, Stroke::new(ring, Color32::LIGHT_GRAY))),
+            Some((
+                Color32::GREEN,
+                Stroke::new(ring, crate::theme::Theme::default().chart.bg),
+            )),
         ),
         (
             (5.0, Some(Color32::GOLD), Some(Color32::MAGENTA), 3.0),
             (7.0, None, Some(Color32::CYAN), 0.0),
             Some((Color32::GOLD, Stroke::new(3.0, Color32::MAGENTA))),
+            Some((Color32::GREEN, Stroke::NONE)),
             Some((Color32::GREEN, Stroke::NONE)),
         ),
         (
@@ -898,16 +902,22 @@ fn crosshair_marker_styles_follow_each_series_and_scale() {
             (7.0, Some(Color32::YELLOW), None, 4.0),
             Some((Color32::TRANSPARENT, Stroke::new(1.0, Color32::RED))),
             Some((Color32::YELLOW, Stroke::new(4.0, Color32::LIGHT_GRAY))),
+            Some((
+                Color32::YELLOW,
+                Stroke::new(4.0, crate::theme::Theme::default().chart.bg),
+            )),
         ),
         (
             (5.0, None, None, -1.0),
             (7.0, None, None, f32::NAN),
             Some((Color32::BLUE, Stroke::NONE)),
             Some((Color32::GREEN, Stroke::NONE)),
+            Some((Color32::GREEN, Stroke::NONE)),
         ),
         (
             (0.0, None, None, ring),
             (f32::NAN, None, None, ring),
+            None,
             None,
             None,
         ),
@@ -920,12 +930,17 @@ fn crosshair_marker_styles_follow_each_series_and_scale() {
         ChartType::Baseline,
     ] {
         for pane in [false, true] {
-            for (main, added, expect_main, expect_added) in rows {
+            for (main, added, expect_main, expect_added, expect_pane) in rows {
                 let (circles, x, main_rect, added_rect) =
                     hover_markers(kind, pane, (main, added), |_, _| {});
                 for (radius, rect, fraction, expected) in [
                     (5.0, main_rect, 0.25, expect_main),
-                    (7.0, added_rect, 0.75, expect_added),
+                    (
+                        7.0,
+                        added_rect,
+                        0.75,
+                        if pane { expect_pane } else { expect_added },
+                    ),
                 ] {
                     let found = circles.iter().find(|circle| circle.radius == radius);
                     let case = format!("{kind:?}, pane {pane}, {main:?} {added:?}");
@@ -1888,5 +1903,46 @@ fn hidden_pane_target_keeps_the_time_line_in_its_pane() {
             if text.fallback_color == egui::Color32::MAGENTA && text.galley.text() == "1,375.00")),
             visible
         );
+    }
+}
+
+/// Default marker rings use the painted background; explicit border colours still win.
+#[test]
+fn default_marker_ring_matches_the_background_behind_it() {
+    use crate::config::BackgroundStyle;
+    use crate::model::ChartType;
+    use egui::Color32;
+    let blue = Color32::from_rgb(0, 0, 139);
+    for pane in [false, true] {
+        for border in [None, Some(Color32::MAGENTA)] {
+            let style = (5.0, None, border, 2.0);
+            let extra = (7.0, None, border, 2.0);
+            let (circles, ..) = hover_markers(ChartType::Line, pane, (style, extra), |chart, _| {
+                if !pane {
+                    chart.config.background_style = BackgroundStyle::VerticalGradient {
+                        top_color: blue,
+                        bottom_color: blue,
+                    };
+                }
+            });
+            assert_eq!(circles.len(), 2);
+            for circle in circles {
+                let background = if pane {
+                    if circle.radius == 5.0 {
+                        Color32::LIGHT_GRAY
+                    } else {
+                        crate::theme::Theme::default().chart.bg
+                    }
+                } else {
+                    blue
+                };
+                assert_eq!(
+                    circle.stroke.color,
+                    border.unwrap_or(background),
+                    "pane {pane}, radius {}, border {border:?}",
+                    circle.radius
+                );
+            }
+        }
     }
 }

@@ -3418,7 +3418,8 @@ impl Chart {
                                 Pos2::new(coords.idx_to_x(index), price_map.price_to_y(value)),
                                 &self.chart_type_params.styles,
                                 color,
-                                self.config.background_color,
+                                self.plot_background()
+                                    .unwrap_or(self.config.background_color),
                             );
                         }
                     }
@@ -3429,6 +3430,8 @@ impl Chart {
                             item,
                             self.series_map(item, price_rect),
                             index,
+                            self.plot_background()
+                                .unwrap_or(self.config.background_color),
                         );
                     }
                 }

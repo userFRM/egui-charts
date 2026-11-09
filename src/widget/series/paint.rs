@@ -287,6 +287,7 @@ impl Chart {
         item: &PriceSeries,
         map: PriceMap,
         index: usize,
+        background: egui::Color32,
     ) {
         let Some(time) = self.state.shown().get(index).map(|bar| bar.time) else {
             return;
@@ -315,7 +316,7 @@ impl Chart {
                 Pos2::new(x, map.price_to_y(bar.close)),
                 &params.styles,
                 color,
-                self.config.background_color,
+                background,
             );
         }
     }
