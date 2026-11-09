@@ -3,7 +3,9 @@
 use crate::localization as l10n;
 use crate::model::LineStyle;
 use crate::model::Timeframe;
-use crate::studies::{Indicator, InputValue, PlotType, StudyInput, StudyScale, StudySettings};
+use crate::studies::{
+    Indicator, InputKind, InputValue, PlotType, StudyInput, StudyScale, StudySettings,
+};
 use crate::theme::Theme;
 use crate::ui_kit::{FormGrid, dialog::DialogFooter, modal::Modal};
 use crate::widget::SeriesId;
@@ -188,6 +190,7 @@ impl IndicatorSettingsDialog {
                     .max_height((ui.available_height() - 72.0).max(0.0))
                     .show(ui, |ui| match self.tab {
                         Tab::Inputs => {
+                            let mut choice_labels = Vec::new();
                             if self.inputs.is_empty() {
                                 ui.label(l10n::text(
                                     ui.ctx(),
@@ -201,6 +204,14 @@ impl IndicatorSettingsDialog {
                             {
                                 for input in &mut self.inputs {
                                     input.value = input.default.clone();
+                                    if let (
+                                        InputKind::Choice(choices),
+                                        InputValue::Choice(choice),
+                                    ) = (&input.kind, &input.value)
+                                        && let Some(label) = choices.get(*choice)
+                                    {
+                                        choice_labels.push((input.id.clone(), label.clone()));
+                                    }
                                 }
                             }
                             let study_source = self.inputs.iter().any(|input| {
@@ -230,13 +241,33 @@ impl IndicatorSettingsDialog {
                                     if !shown {
                                         continue;
                                     }
-                                    crate::ui::strategy_report::inputs::show_input(
+                                    if crate::ui::strategy_report::inputs::show_input(
                                         ui,
                                         input,
                                         &self.sources,
-                                    );
+                                    ) && let (
+                                        InputKind::Choice(choices),
+                                        InputValue::Choice(choice),
+                                    ) = (&input.kind, &input.value)
+                                        && let Some(label) = choices.get(*choice)
+                                    {
+                                        choice_labels.push((input.id.clone(), label.clone()));
+                                    }
                                 }
                             });
+                            // A stale saved label would otherwise override the user's choice on Apply.
+                            for (id, label) in choice_labels {
+                                let label_id = format!("{id}_label");
+                                if let Some(input) = self.inputs.iter_mut().find(|input| {
+                                    input.id == label_id
+                                        && matches!(input.kind, InputKind::Text)
+                                        && input.shown_when.as_ref().is_some_and(
+                                            |(choice, choices)| choice == &id && choices.is_empty(),
+                                        )
+                                }) {
+                                    input.value = InputValue::Text(label);
+                                }
+                            }
                         }
                         Tab::Style => {
                             ui.checkbox(

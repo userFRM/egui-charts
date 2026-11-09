@@ -2410,4 +2410,68 @@ mod tests {
             )
         );
     }
+    #[cfg(feature = "ui")]
+    #[test]
+    fn profile_editor_updates_choice_labels_on_edit_and_reset() {
+        use crate::ui::dialogs::indicator_dialog::IndicatorSettingsDialog;
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let (chain, sink, mut rows, expiry, _) = expected_move_chain();
+        for row in &mut rows {
+            row.volume = Some(10.0);
+            row.open_interest = Some(4.0);
+        }
+        sink.push(rows).unwrap();
+        let mut profile = OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry]).unwrap();
+        profile.set_input("expiry", InputValue::Choice(1)).unwrap();
+        profile.set_input("measure", InputValue::Choice(1)).unwrap();
+        for reset in [false, true] {
+            let mut study = profile.clone();
+            let mut dialog = IndicatorSettingsDialog::default();
+            dialog.open(crate::widget::SeriesId(2), &study, None);
+            let mut edit = None;
+            let mut harness = Harness::builder()
+                .with_context_setup(egui_extras::install_image_loaders)
+                .with_size(egui::vec2(1440.0, 900.0))
+                .build_ui(|ui| {
+                    if let Some(next) = dialog.show(ui.ctx(), &crate::theme::Theme::dark()) {
+                        edit = Some(next);
+                    }
+                });
+            harness.run();
+            if reset {
+                harness.get_by_label("Reset inputs").click();
+                harness.run();
+            } else {
+                for (input, label) in [("Expiry", "Nearest"), ("Measure", "Volume")] {
+                    harness
+                        .get_by_role_and_label(egui::Role::ComboBox, input)
+                        .click();
+                    harness.run();
+                    harness.get_by_label(label).click();
+                    harness.run();
+                }
+            }
+            harness.get_by_label("Apply").click();
+            harness.run();
+            drop(harness);
+            let edit = edit.expect("an applied profile edit");
+            for (id, label) in [("expiry_label", "Nearest"), ("measure_label", "Volume")] {
+                assert_eq!(
+                    edit.inputs.iter().find(|(saved, _)| saved == id).unwrap().1,
+                    InputValue::Text(label.into()),
+                    "reset {reset}: {id}"
+                );
+            }
+            study.apply_settings(&edit.inputs, edit.settings).unwrap();
+            let inputs = study.inputs();
+            for id in ["expiry", "measure"] {
+                assert_eq!(
+                    inputs.iter().find(|input| input.id == id).unwrap().value,
+                    InputValue::Choice(0),
+                    "reset {reset}: {id}"
+                );
+            }
+        }
+    }
 }
