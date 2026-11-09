@@ -1264,14 +1264,31 @@ mod tests {
         app.open_indicator_settings(id);
         let size = egui::vec2(1440.0, 900.0);
         for label in ["Markers and baseline", "Independent baseline style", "Ok"] {
+            if label == "Independent baseline style" {
+                ui_frame(
+                    &ctx,
+                    size,
+                    vec![
+                        egui::Event::PointerMoved(egui::pos2(720.0, 450.0)),
+                        egui::Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Point,
+                            delta: egui::vec2(0.0, -240.0),
+                            phase: egui::TouchPhase::Move,
+                            source: egui::MouseWheelSource::Unknown,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                    |ui| app.show_dialogs(ui.ctx()),
+                );
+            }
             let mut texts = Vec::new();
-            for _ in 0..3 {
+            for _ in 0..10 {
                 texts = ui_frame(&ctx, size, vec![], |ui| app.show_dialogs(ui.ctx()));
             }
             let point = texts
                 .iter()
                 .find(|(text, _)| text == label)
-                .expect("baseline control")
+                .unwrap_or_else(|| panic!("no baseline control {label}"))
                 .1
                 .center();
             ui_click(&ctx, size, point, |ui| app.show_dialogs(ui.ctx()));
