@@ -787,9 +787,7 @@ mod tests {
     /// heatmap's brightness and a bubble grouping that holds no price.
     #[test]
     fn settings_copy_keeps_each_symbols_order_flow_sizes() {
-        use crate::chart::overlays::{
-            BubbleGrouping, LiquidityHeatmapConfig, OrderBookView, VolumeBubblesConfig,
-        };
+        use crate::chart::overlays::{LiquidityHeatmapConfig, OrderBookView, VolumeBubblesConfig};
         struct Feed;
         impl crate::data::Datafeed for Feed {
             fn history(
@@ -865,13 +863,14 @@ mod tests {
         );
         assert_eq!(flow.heatmap.brightness, 0.5);
 
-        // A source price step preserves every destination grouping, including one without a price.
-        for grouping in [
+        let no_price = [
             BubbleGrouping::Automatic,
             BubbleGrouping::Ungrouped,
             BubbleGrouping::TimeWindow(Duration::seconds(5)),
             BubbleGrouping::Executions(5),
-        ] {
+        ];
+        // A source price step preserves every destination grouping, including one without a price.
+        for grouping in no_price {
             charts[1].set_volume_bubbles(Some(VolumeBubblesConfig {
                 grouping,
                 ..VolumeBubblesConfig::default()
@@ -882,12 +881,7 @@ mod tests {
         }
 
         // A grouping that holds no price reaches every chart.
-        for grouping in [
-            BubbleGrouping::Automatic,
-            BubbleGrouping::Ungrouped,
-            BubbleGrouping::TimeWindow(Duration::seconds(5)),
-            BubbleGrouping::Executions(5),
-        ] {
+        for grouping in no_price {
             charts[0].set_volume_bubbles(Some(VolumeBubblesConfig {
                 grouping,
                 ..VolumeBubblesConfig::default()
