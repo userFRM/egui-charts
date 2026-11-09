@@ -70,9 +70,12 @@ impl ChangeMarks {
     pub(super) fn retain_bars(&mut self, bars: &[Bar], clock: &BarClock) {
         self.marks.get_mut().retain_mut(|mark| {
             let slot = clock.bar_open(mark.time);
-            let Some((time, _)) = close_at(bars, clock, slot) else {
+            let Some((time, close)) = close_at(bars, clock, slot) else {
                 return false;
             };
+            if !close.is_finite() {
+                return false;
+            }
             mark.slot = slot;
             mark.time = time;
             true
@@ -280,10 +283,16 @@ mod tests {
             };
             chart.set_change_markers(id, Some(ChangeMarkers::default()));
             let time = chart.bars(id).last().unwrap().time;
-            chart.update(id, Bar::whitespace(time));
-            assert!(marks(&chart, main).marks.borrow().is_empty());
-            chart.update(id, Bar::new(time, 100.0, 112.0, 100.0, 105.0, 1.0));
-            assert!(marks(&chart, main).marks.borrow().is_empty(), "main {main}");
+            for marked in [false, true] {
+                if marked {
+                    chart.update(id, Bar::new(time, 100.0, 112.0, 100.0, 108.0, 1.0));
+                    assert_eq!(marks(&chart, main).marks.borrow().len(), 1);
+                }
+                chart.update(id, Bar::whitespace(time));
+                assert!(marks(&chart, main).marks.borrow().is_empty());
+                chart.update(id, Bar::new(time, 100.0, 112.0, 100.0, 105.0, 1.0));
+                assert!(marks(&chart, main).marks.borrow().is_empty(), "main {main}");
+            }
         }
     }
 
@@ -302,6 +311,13 @@ mod tests {
                     chart.set_data(id, chart.bars(SeriesId::MAIN).to_vec());
                     id
                 };
+                // Host bars have exact keys even with a displayed interval. Two retained bars
+                // can share a replay slot without sharing their marks.
+                chart.set_timeframe(crate::model::Timeframe::Min1);
+                let mut bars = chart.bars(id).to_vec();
+                bars[97].time = bars[98].time;
+                bars[98].time += chrono::TimeDelta::seconds(20);
+                chart.set_data(id, bars);
                 chart.set_change_markers(id, Some(ChangeMarkers::default()));
                 let previous = chart.bars(id)[98].time;
                 let last = chart.bars(id)[99].time;

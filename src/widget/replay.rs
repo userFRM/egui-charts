@@ -345,7 +345,8 @@ impl Chart {
                     item.bars = visible.to_vec();
                     item.revision = crate::model::next_revision();
                     if let Some(marks) = &mut item.change_marks {
-                        marks.retain_bars(&item.bars, &clock);
+                        // Windowing keeps timestamps; host bars can share an interval.
+                        marks.retain_bars(&item.bars, &BarClock::exact());
                     }
                 }
             }
@@ -441,7 +442,7 @@ impl Chart {
             let bars = std::mem::take(&mut series.bars);
             series.bars = completed(&bars, &clock, time).to_vec();
             if let Some(marks) = &mut series.change_marks {
-                marks.retain_bars(&series.bars, &clock);
+                marks.retain_bars(&series.bars, &BarClock::exact());
             }
             replay.bars.insert(series.id, bars);
         }
