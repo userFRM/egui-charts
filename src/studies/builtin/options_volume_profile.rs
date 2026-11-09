@@ -419,6 +419,7 @@ impl OptionsVolumeProfile {
                                 let value = if puts { row.puts?.abs() } else { row.calls? };
                                 Some((value, row.strike))
                             })
+                            .filter(|(value, _)| *value > 0.0)
                             .max_by(|a, b| a.0.total_cmp(&b.0).then_with(|| b.1.total_cmp(&a.1)))
                             .map(|(_, strike)| strike)
                     })
@@ -1642,6 +1643,51 @@ mod tests {
             assert_eq!(study.plot_value(3, 0), None);
             assert_eq!(study.plot_value(4, 0), None);
             assert_eq!(study.plot_value(5, 0), None);
+        }
+    }
+
+    #[test]
+    fn walls_need_exposure_on_their_side() {
+        let (chain, sink, _, expiry, bars) = expected_move_chain();
+        let time = bars[0].time;
+        let mut study = OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry]).unwrap();
+        study.calculate(&bars);
+        for (calls, puts, walls) in [
+            ([0.0, 0.0], [0.0, 0.0], [None, None]),
+            ([1.0, 3.0], [0.0, 0.0], [Some(110.0), None]),
+            ([0.0, 0.0], [3.0, 1.0], [None, Some(100.0)]),
+            ([1.0, 1.0], [1.0, 1.0], [Some(100.0), Some(100.0)]),
+        ] {
+            let rows = [100.0, 110.0]
+                .into_iter()
+                .enumerate()
+                .flat_map(|(index, strike)| {
+                    [OptionKind::Call, OptionKind::Put].map(move |kind| {
+                        let mut row = OptionQuote::new(
+                            format!("{strike}-{kind:?}"),
+                            expiry,
+                            strike,
+                            kind,
+                            time,
+                        );
+                        row.gamma = Some(0.05);
+                        row.multiplier = Some(100.0);
+                        row.underlying_price = Some(105.0);
+                        // One contract gives 0.05 * 100 * 105² * 0.01 = 551.25.
+                        row.open_interest = Some(if kind == OptionKind::Call {
+                            calls[index]
+                        } else {
+                            puts[index]
+                        });
+                        row
+                    })
+                })
+                .collect();
+            sink.push(rows).unwrap();
+            for id in ["call_wall", "put_wall"] {
+                study.set_input(id, InputValue::Toggle(true)).unwrap();
+            }
+            assert_eq!([study.plot_value(3, 0), study.plot_value(4, 0)], walls);
         }
     }
 
