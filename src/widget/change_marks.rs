@@ -46,18 +46,13 @@ impl ChangeMarks {
         clock: &BarClock,
         before: Vec<(DateTime<Utc>, f64)>,
     ) {
+        self.retain_bars(bars, clock);
         let marks = self.marks.get_mut();
         for (slot, old) in before {
             let Some((time, close)) = close_at(bars, clock, slot) else {
                 continue;
             };
-            if close == old {
-                if let Some(mark) = marks.iter_mut().find(|mark| mark.slot == slot) {
-                    mark.time = time;
-                }
-                continue;
-            }
-            if !old.is_finite() || !close.is_finite() {
+            if close == old || !old.is_finite() || !close.is_finite() {
                 continue;
             }
             marks.retain(|mark| mark.slot != slot);
@@ -71,11 +66,17 @@ impl ChangeMarks {
         }
     }
 
-    /// Keeps only marks whose slot still holds a bar after removal or a replay seek.
+    /// Keeps marks on their stored bars under the current merge clock.
     pub(super) fn retain_bars(&mut self, bars: &[Bar], clock: &BarClock) {
-        self.marks
-            .get_mut()
-            .retain(|mark| close_at(bars, clock, mark.slot).is_some());
+        self.marks.get_mut().retain_mut(|mark| {
+            let slot = clock.bar_open(mark.time);
+            let Some((time, _)) = close_at(bars, clock, slot) else {
+                return false;
+            };
+            mark.slot = slot;
+            mark.time = time;
+            true
+        });
     }
 
     /// Drops the marks, for bars that were replaced.
@@ -222,10 +223,20 @@ mod tests {
             };
             chart.set_data(id, bars);
             chart.set_change_markers(id, Some(ChangeMarkers::default()));
-            for (seconds, close) in [(20, 101.0), (40, 99.0), (50, 99.0)] {
+            for (paused, seconds, close, up) in [
+                (false, 20, 101.0, true),
+                (false, 40, 99.0, false),
+                (false, 50, 99.0, false),
+                (true, 50, 100.0, true),
+            ] {
+                if paused {
+                    chart.set_feed_paused(true);
+                    assert!(chart.pop_bars(id, 0).is_empty());
+                    assert_eq!(marks(&chart, main).marks.borrow().len(), 1);
+                }
                 let time = slot + TimeDelta::seconds(seconds);
                 let bar = Bar::new(time, 100.0, 101.0, 99.0, close, 1.0);
-                if main {
+                if main && !paused {
                     feed.0.lock().unwrap().as_ref().unwrap().push_bar(bar);
                     chart.pump(&ctx);
                 } else {
@@ -233,14 +244,14 @@ mod tests {
                 }
                 assert_eq!(chart.bars(id).len(), 10);
                 assert_eq!(chart.bars(id)[9].time, time);
-                let marks = marks(&chart, main);
+                let change_marks = marks(&chart, main);
                 assert_eq!(
-                    marks.marks.borrow().len(),
+                    change_marks.marks.borrow().len(),
                     1,
-                    "main {main}, second {seconds}"
+                    "main {main}, second {seconds}, paused {paused}"
                 );
                 let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                    marks.paint(ui.painter(), |marked_time, marked_close| {
+                    change_marks.paint(ui.painter(), |marked_time, marked_close| {
                         assert_eq!(marked_time, time);
                         assert_eq!(marked_close, close);
                         assert_eq!(
@@ -251,7 +262,7 @@ mod tests {
                     });
                 });
                 output.drop_without_applying_deltas();
-                assert_eq!(marks.marks.borrow()[0].up, seconds == 20);
+                assert_eq!(change_marks.marks.borrow()[0].up, up);
             }
         }
     }
