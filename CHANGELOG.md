@@ -489,6 +489,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Time-axis wheel zoom applies the same total change regardless of frame batching, without a smoothed remainder turning into pan or price zoom after the pointer or modifiers change. Pinches and native trackpad zoom follow their reported ratios, so reciprocal pinches restore the starting zoom. Smoothed wheel input no longer cancels pending programmatic scrolling. ([#2567](https://github.com/userFRM/egui-charts/issues/2567))
+
 - Volume and delta bars of fractional executions close when the executions reach the interval. Sizes such as 0.1 do not sum exactly, so ten buys of 0.1 on a one-unit bar left a rounding remainder that opened the next bar and counted an extra execution. ([#2539](https://github.com/userFRM/egui-charts/issues/2539))
 
 - TPO prices without an instrument tick read with the decimals of their rows. Automatic rows widened to bound the number of rows, such as three rows of 0.025, carry binary noise (`0.07500000000000001`) that was counted as decimals, so the statistics table, the single-print tooltip and the POC, VAH, VAL and Mid captions wrote a point of control of 120 as `120.00000000000001421`. Decimals now ignore representation noise beyond the 15 significant digits an `f64` holds, so it reads `120.000`; prices with an instrument tick and rows set by hand read as before. Measurements in pips gain the same fix when the tick is not an exact binary fraction of the pip, such as a tick of 0.000001 and a pip of 0.00001. ([#2432](https://github.com/userFRM/egui-charts/issues/2432))

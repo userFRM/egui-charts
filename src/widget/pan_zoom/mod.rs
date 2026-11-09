@@ -83,7 +83,7 @@ impl Chart {
             return pending_price_zoom;
         }
 
-        // Consume wheel events once; smoothing could replay them after the active axis changes.
+        // Apply this frame's wheel events; smoothing can outlive the pointer's axis or modifiers.
         let raw = raw_wheel_delta(ui);
         let scroll_input = ui.input(|i| {
             let mut dx = raw.x;
@@ -110,7 +110,7 @@ impl Chart {
                     pending_price_zoom = Some(delta_y);
                 } else {
                     // Integrate raw points multiplicatively, independently of frame batching.
-                    let zoom_scale = (-delta_y / 1000.0).exp_m1() * 10.0;
+                    let zoom_scale = (-delta_y / 1000.0).min(80.0).exp_m1() * 10.0;
                     // Zoom around the pointer, or the right edge while the right bar stays on scroll
                     let zoom_point_x = self.zoom_anchor(hp.x - chart_rect_min_x, chart_width);
 
@@ -919,14 +919,17 @@ mod tests {
         }
     }
 
-    /// Wheel zoom consumes the complete gesture immediately, independently of event batching.
-    #[test]
+    /// Wheel zoom applies the complete gesture immediately, independently of event batching.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn wheel_zoom_follows_input_independently_of_frame_batching() {
-        let mut exact = true;
         for modifiers in [Modifiers::NONE, Modifiers::COMMAND] {
             for total in [-240.0_f32, 240.0] {
                 for steps in [1, 2, 8] {
                     for together in [false, true] {
+                        let case = format!(
+                            "modifiers={modifiers:?}, total={total}, steps={steps}, together={together}"
+                        );
                         let ctx = egui::Context::default();
                         let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
                         frame(&ctx, &mut chart, 0.0, vec![]);
@@ -955,34 +958,35 @@ mod tests {
                         }
                         let (zoomed, moved) = chart.get_time_scale_state();
                         let expected = spacing * (-total / 1000.0).exp();
-                        eprintln!(
-                            "wheel modifiers={modifiers:?}, total={total}, steps={steps}, together={together}: ratio={} expected={}",
-                            zoomed / spacing,
-                            expected / spacing
+                        assert!(
+                            (zoomed - expected).abs() < 1e-5,
+                            "{case}: spacing={zoomed}, expected={expected}"
                         );
-                        exact &= (zoomed - expected).abs() < 1e-5;
                         let expected_offset = offset
                             + (rect.right() - pointer.x - 1.0) * (1.0 / zoomed - 1.0 / spacing);
-                        assert!((moved - expected_offset).abs() < 1e-4);
+                        assert!(
+                            (moved - expected_offset).abs() < 1e-4,
+                            "{case}: offset={moved}, expected={expected_offset}"
+                        );
                         for step in 0..20 {
                             frame(&ctx, &mut chart, 1.0 + step as f64 * 0.1, vec![]);
-                            exact &= chart.get_time_scale_state() == (zoomed, moved);
+                            assert_eq!(
+                                chart.get_time_scale_state(),
+                                (zoomed, moved),
+                                "{case}, idle frame={step}"
+                            );
                         }
                     }
                 }
             }
         }
-        assert!(
-            exact,
-            "wheel zoom must consume each gesture once, in its input frames"
-        );
     }
 
-    /// A consumed zoom cannot replay as pan or price zoom after the pointer or modifiers move.
-    #[test]
-    fn consumed_wheel_zoom_does_not_replay_on_other_axes() {
+    /// Applied wheel zoom cannot replay as pan or price zoom after the pointer or modifiers move.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn wheel_zoom_does_not_replay_on_other_axes() {
         use egui::MouseWheelSource::{Momentum, Wheel};
-        let mut exact = true;
         for (dx, destination, fresh, source) in [
             (30.0, "plot", false, Wheel),
             (0.0, "price", false, Wheel),
@@ -992,6 +996,8 @@ mod tests {
             (0.0, "price", true, Momentum),
             (0.0, "shift", true, Momentum),
         ] {
+            let case =
+                format!("source={source:?}, dx={dx}, destination={destination}, fresh={fresh}");
             let ctx = egui::Context::default();
             let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
             chart.state.price_scale_mut().set_range(90.0, 110.0);
@@ -1040,28 +1046,41 @@ mod tests {
                     1.0
                 };
             let shown = chart.state.price_scale().range();
-            eprintln!(
-                "wheel transition source={source:?}, dx={dx}, destination={destination}, fresh={fresh}: time={before:?}->{after:?}, price_span={}->{}, expected_span={expected_span}",
-                range.max - range.min,
+            assert!(
+                (after.0 - before.0).abs() < 1e-5,
+                "{case}: spacing={} -> {}",
+                before.0,
+                after.0
+            );
+            assert!(
+                (after.1 - expected_offset).abs() < 1e-4,
+                "{case}: offset={}, expected={expected_offset}",
+                after.1
+            );
+            assert!(
+                (shown.max - shown.min - expected_span).abs() < 1e-8,
+                "{case}: price span={}, expected={expected_span}",
                 shown.max - shown.min
             );
-            exact &= (after.0 - before.0).abs() < 1e-5
-                && (after.1 - expected_offset).abs() < 1e-4
-                && (shown.max - shown.min - expected_span).abs() < 1e-8;
             for step in 0..20 {
                 frame(&ctx, &mut chart, 0.08 + step as f64 * 0.02, vec![]);
-                exact &= chart.get_time_scale_state() == after
-                    && chart.state.price_scale().range() == shown;
+                assert_eq!(
+                    chart.get_time_scale_state(),
+                    after,
+                    "{case}, idle frame={step}"
+                );
+                assert_eq!(
+                    chart.state.price_scale().range(),
+                    shown,
+                    "{case}, idle frame={step}"
+                );
             }
         }
-        assert!(
-            exact,
-            "only a fresh wheel event may move its newly selected axis"
-        );
     }
 
     /// Reciprocal pinches cancel; invalid scale ratios leave the viewport untouched.
-    #[test]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn native_pinch_ratios_compose_and_reject_invalid_values() {
         let ctx = egui::Context::default();
         let mut chart = chart(&[95.0, 100.0], &[105.0, 110.0]);
@@ -1090,6 +1109,41 @@ mod tests {
                 vec![Event::Zoom(ratio)],
             );
             assert_eq!(chart.get_time_scale_state(), after, "ratio={ratio}");
+        }
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn extreme_finite_wheel_zoom_reaches_spacing_limits() {
+        for (delta, expected) in [(-86_500.0, 50.0), (-f32::MAX, 50.0), (f32::MAX, 0.5)] {
+            let ctx = egui::Context::default();
+            let mut chart = chart(&[95.0], &[105.0]);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            chart.state.time_scale_mut().set_min_bar_spacing(0.5);
+            chart.state.time_scale_mut().set_max_bar_spacing(50.0);
+            let pointer = chart.last_rendered_price_rect.center();
+            frame(&ctx, &mut chart, 0.02, vec![Event::PointerMoved(pointer)]);
+            frame(
+                &ctx,
+                &mut chart,
+                0.04,
+                vec![Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, delta),
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Wheel,
+                    modifiers: Modifiers::NONE,
+                }],
+            );
+            assert_eq!(
+                chart.state.time_scale().bar_spacing(),
+                expected,
+                "delta={delta}"
+            );
+            assert!(
+                chart.state.time_scale().right_offset_precise().is_finite(),
+                "delta={delta}"
+            );
         }
     }
 
