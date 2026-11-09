@@ -231,6 +231,7 @@ impl Chart {
             layout_inactive: false,
             layout_link_controls: false,
             layout_identity: crate::model::next_revision(),
+            host_crosshair: None,
             synced_crosshair_bar_idx: None,
             synced_crosshair_period: None,
             synced_crosshair_price: None,
