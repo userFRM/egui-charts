@@ -440,6 +440,9 @@ impl Chart {
         if let (Some(time), Some(replay)) = (time, self.replay_window_mut()) {
             let bars = std::mem::take(&mut series.bars);
             series.bars = completed(&bars, &clock, time).to_vec();
+            if let Some(marks) = &mut series.change_marks {
+                marks.retain_bars(&series.bars, &clock);
+            }
             replay.bars.insert(series.id, bars);
         }
     }

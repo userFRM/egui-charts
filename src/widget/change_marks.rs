@@ -290,7 +290,10 @@ mod tests {
     #[test]
     fn change_marks_leave_with_their_bars() {
         for main in [true, false] {
-            for replay in [false, true] {
+            for (replay, restore) in [(false, false), (true, false), (true, true)] {
+                if main && restore {
+                    continue;
+                }
                 let mut chart = chart(&[100.0], &[110.0]);
                 let id = if main {
                     SeriesId::MAIN
@@ -307,7 +310,13 @@ mod tests {
                 }
                 assert_eq!(marks(&chart, main).marks.borrow().len(), 2);
                 if replay {
+                    if restore {
+                        assert!(chart.user_action(|chart| chart.remove_series(id)));
+                    }
                     chart.set_replay_time(Some(last));
+                    if restore {
+                        assert!(chart.undo());
+                    }
                 } else {
                     assert!(chart.pop_bars(id, 0).is_empty());
                     assert_eq!(marks(&chart, main).marks.borrow().len(), 2);
@@ -317,7 +326,7 @@ mod tests {
                 assert_eq!(
                     marks(&chart, main).marks.borrow().len(),
                     kept,
-                    "main {main}, replay {replay}"
+                    "main {main}, replay {replay}, restored {restore}"
                 );
                 assert!(
                     marks(&chart, main)
