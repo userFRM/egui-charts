@@ -682,9 +682,9 @@ impl Chart {
                     })
                 };
                 let host_position = pointer.is_none() && self.synced_crosshair_price.is_some();
-                let target_pane = self
-                    .synced_crosshair_series
-                    .is_some_and(|target| members.contains(&target));
+                let target_pane = self.synced_crosshair_series.is_some_and(|target| {
+                    members.contains(&target) && self.is_series_visible(target)
+                });
                 let target_panel = target_pane && id == self.synced_crosshair_series;
                 let mut hover = pointer
                     .or_else(|| {

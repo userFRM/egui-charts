@@ -1804,3 +1804,89 @@ fn pane_crosshair_label_uses_the_series_scale_mode() {
         }
     }
 }
+
+/// Hiding the host target removes its price readout but retains the shared time guide.
+#[test]
+fn hidden_pane_target_keeps_the_time_line_in_its_pane() {
+    use crate::model::{Bar, LineStyle};
+    use crate::widget::{SeriesId, SeriesOptions};
+    let ctx = egui::Context::default();
+    let mut chart = chart(&[100.0], &[200.0]);
+    chart.config.show_volume = false;
+    chart.chart_options.tooltip.enabled = false;
+    chart.chart_options.crosshair.vert_line_color = egui::Color32::MAGENTA;
+    chart.chart_options.crosshair.horz_line_color = egui::Color32::MAGENTA;
+    chart.chart_options.crosshair.vert_line_style = LineStyle::Solid;
+    chart.chart_options.crosshair.horz_line_style = LineStyle::Solid;
+    chart.chart_options.crosshair.label_text_color = egui::Color32::MAGENTA;
+    let pane = chart.add_pane();
+    let ids = [0; 2].map(|_| {
+        let id = chart.add_series(SeriesOptions::default());
+        chart.set_data(
+            id,
+            chart
+                .bars(SeriesId::MAIN)
+                .iter()
+                .map(|bar| Bar::from_value(bar.time, 1000.0))
+                .collect(),
+        );
+        chart.move_series_to_pane(id, pane);
+        id
+    });
+    frame(&ctx, &mut chart, 0.0, vec![]);
+    chart
+        .series_price_scale_mut(ids[1])
+        .unwrap()
+        .set_range(1000.0, 2000.0);
+    let time = chart.bars(SeriesId::MAIN)[50].time;
+    chart.set_series_crosshair_position(ids[1], Some((time, 1375.0)));
+    for (step, visible) in [false, true].into_iter().enumerate() {
+        chart.set_series_visible(ids[1], visible);
+        let painted = shapes(
+            &ctx,
+            &mut chart,
+            0.1 + step as f64 * 0.1,
+            vec![Event::PointerGone],
+        );
+        let rect = chart
+            .pane_layout
+            .panes
+            .iter()
+            .find(|p| p.id == pane)
+            .unwrap()
+            .rect;
+        let x = chart.get_chart_mapping().idx_to_x(50);
+        // The main guide can sit behind this pane, so require the pane's own endpoints.
+        let time_line = painted.iter().any(|shape| match shape {
+            Shape::LineSegment { points, stroke } => {
+                stroke.color == egui::Color32::MAGENTA
+                    && (points[0].x - x).abs() < 0.01
+                    && points[0].x == points[1].x
+                    && (points[0].y - rect.top()).abs() < 0.01
+                    && (points[1].y - rect.bottom()).abs() < 0.01
+            }
+            _ => false,
+        });
+        assert!(time_line, "visible {visible}: missing pane time guide");
+        let horizontal: Vec<_> = painted
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::LineSegment { points, stroke }
+                    if stroke.color == egui::Color32::MAGENTA && points[0].y == points[1].y =>
+                {
+                    Some(*points)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(horizontal.len(), usize::from(visible));
+        if visible {
+            assert!((horizontal[0][0].y - (rect.bottom() - 0.375 * rect.height())).abs() < 0.01);
+        }
+        assert_eq!(
+            painted.iter().any(|shape| matches!(shape, Shape::Text(text)
+            if text.fallback_color == egui::Color32::MAGENTA && text.galley.text() == "1,375.00")),
+            visible
+        );
+    }
+}
