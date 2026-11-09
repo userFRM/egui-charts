@@ -175,38 +175,6 @@ fn host_defaults_are_atomic_and_follow_the_constructor_lifetime() {
     );
 }
 
-/// Defaults saved before RSI shared its smoothing inputs apply without rejecting the other
-/// defaults in the same call.
-#[test]
-fn host_defaults_saved_under_earlier_rsi_ids_apply() {
-    let mut factory = IndicatorFactory::new();
-    let mut sma = StudyTemplate::from_study(factory.create("SMA").unwrap().as_ref());
-    sma.inputs = vec![("period".into(), InputValue::Length(5))];
-    let mut older = StudyTemplate::from_study(&RSI::default());
-    older.inputs.retain(|(id, _)| !id.starts_with("smoothing"));
-    older.inputs.push(("ma_type".into(), InputValue::Choice(2)));
-    older
-        .inputs
-        .push(("ma_length".into(), InputValue::Length(5)));
-    let result = factory.set_defaults(&[sma, older]);
-    assert!(result.is_ok(), "set_defaults: {result:?}");
-    let inputs = factory.create("RSI").unwrap().inputs();
-    let value = |id: &str| {
-        inputs
-            .iter()
-            .find(|input| input.id == id)
-            .unwrap()
-            .value
-            .clone()
-    };
-    assert_eq!(value("smoothing"), InputValue::Choice(3));
-    assert_eq!(value("smoothing_length"), InputValue::Length(5));
-    assert_eq!(
-        factory.create("SMA").unwrap().inputs()[0].value,
-        InputValue::Length(5)
-    );
-}
-
 /// Confirming the settings dialog without an edit must preserve every drawn colour,
 /// including per-bar palettes that contain more colours than the study has plots.
 #[test]

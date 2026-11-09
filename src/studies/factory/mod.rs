@@ -462,7 +462,7 @@ impl IndicatorFactory {
     /// Each template replaces the defaults for its registered name; other names retain theirs.
     /// An empty list changes nothing, and the last template for a repeated name wins.
     /// Defaults saved under earlier input ids are upgraded like saved templates.
-    /// Invalid names, inputs or settings reject the whole call without changing any defaults.
+    /// Invalid names, inputs or settings reject the entire batch without changing any defaults.
     /// Existing studies, saved templates, layouts, clipboard copies and alert studies keep their
     /// own settings.
     /// Replacing or removing a constructor discards its defaults.
@@ -483,7 +483,7 @@ impl IndicatorFactory {
     /// ```
     pub fn set_defaults(&mut self, defaults: &[StudyTemplate]) -> Result<(), StudyError> {
         for template in defaults {
-            self.create_default(template)?;
+            template.create_with(self)?;
         }
         for template in defaults {
             self.defaults
@@ -503,7 +503,7 @@ impl IndicatorFactory {
     /// returns the constructor's study unchanged.
     pub fn create(&self, name: &str) -> Option<Box<dyn Indicator>> {
         if let Some(template) = self.defaults.get(name) {
-            return self.create_default(template).ok();
+            return template.create_with(self).ok();
         }
         self.create_registered(name)
     }
@@ -511,10 +511,6 @@ impl IndicatorFactory {
     /// Reconstruct saved state without applying defaults intended for new studies.
     pub(crate) fn create_registered(&self, name: &str) -> Option<Box<dyn Indicator>> {
         self.constructors.get(name).map(|(_, f)| f())
-    }
-
-    fn create_default(&self, template: &StudyTemplate) -> Result<Box<dyn Indicator>, StudyError> {
-        template.create_with(self)
     }
 
     /// The category of the indicator registered under `name`, such as `"Momentum"` or
