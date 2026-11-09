@@ -35,11 +35,7 @@ impl ComparisonSettings {
         if !pulses && kind != ChartType::Bars {
             return;
         }
-        let own_line = LinePlotStyle {
-            color: options.color,
-            width: options.width,
-            ..Default::default()
-        };
+        let own_line = series_line(options, options.color);
         ui.collapsing("Line, bars and area", |ui| {
             if line_only {
                 let mut custom = options.line_style.is_some();
@@ -227,7 +223,23 @@ impl ComparisonSettings {
                                 .checkbox(&mut custom, "Independent baseline style")
                                 .changed()
                             {
-                                self.options.baseline_style = custom.then(Default::default);
+                                self.options.baseline_style = custom.then(|| {
+                                    let fill = |color: egui::Color32| {
+                                        egui::Color32::from_rgba_unmultiplied(
+                                            color.r(),
+                                            color.g(),
+                                            color.b(),
+                                            30,
+                                        )
+                                    };
+                                    egui_charts::model::BaselineStyle {
+                                        above: series_line(&self.options, self.options.up_color),
+                                        below: series_line(&self.options, self.options.down_color),
+                                        above_fill: fill(self.options.up_color),
+                                        below_fill: fill(self.options.down_color),
+                                        ..Default::default()
+                                    }
+                                });
                             }
                             if let Some(style) = &mut self.options.baseline_style {
                                 FormGrid::new("comparison_baseline").show(ui, |ui| {
@@ -431,6 +443,14 @@ impl ComparisonSettings {
             *open = false;
         }
         apply
+    }
+}
+
+fn series_line(options: &SeriesOptions, color: egui::Color32) -> LinePlotStyle {
+    LinePlotStyle {
+        color,
+        width: options.width,
+        ..Default::default()
     }
 }
 
@@ -1214,6 +1234,72 @@ mod tests {
             assert_eq!(options.bars_style, expected_bars, "{chart_type:?}");
             assert_eq!(options.area_style, expected_area, "{chart_type:?}");
         }
+    }
+
+    /// Baseline takeover keeps both lines and flat fills until a setting is edited.
+    #[test]
+    fn baseline_takeover_starts_from_series() {
+        use super::super::tests::{ui_click, ui_frame};
+        use egui_charts::model::BaselineStyle;
+        let ctx = egui::Context::default();
+        let mut app = DemoApp::new(&eframe::CreationContext::_new_kittest(ctx.clone()));
+        app.handle_comparison(CompareAction::AddSymbol(
+            "MSFT".into(),
+            ComparePlacement::NewPriceScale,
+        ));
+        let id = app.comparisons[0].1;
+        super::super::tests::settle(&mut app, &ctx);
+        let mut options = app
+            .chart
+            .series()
+            .find(|(series, _)| *series == id)
+            .unwrap()
+            .1
+            .clone();
+        options.chart_type = ChartType::Baseline;
+        options.up_color = egui::Color32::from_rgb(200, 10, 10);
+        options.down_color = egui::Color32::from_rgb(10, 10, 200);
+        options.width = 3.0;
+        app.chart.set_series_options(id, options);
+        app.open_indicator_settings(id);
+        let size = egui::vec2(1440.0, 900.0);
+        for label in ["Markers and baseline", "Independent baseline style", "Ok"] {
+            let mut texts = Vec::new();
+            for _ in 0..3 {
+                texts = ui_frame(&ctx, size, vec![], |ui| app.show_dialogs(ui.ctx()));
+            }
+            let point = texts
+                .iter()
+                .find(|(text, _)| text == label)
+                .expect("baseline control")
+                .1
+                .center();
+            ui_click(&ctx, size, point, |ui| app.show_dialogs(ui.ctx()));
+        }
+        let options = app
+            .chart
+            .series()
+            .find(|(series, _)| *series == id)
+            .unwrap()
+            .1;
+        assert_eq!(
+            options.baseline_style,
+            Some(BaselineStyle {
+                above: LinePlotStyle {
+                    color: egui::Color32::from_rgb(200, 10, 10),
+                    width: 3.0,
+                    ..Default::default()
+                },
+                below: LinePlotStyle {
+                    color: egui::Color32::from_rgb(10, 10, 200),
+                    width: 3.0,
+                    ..Default::default()
+                },
+                above_fill: egui::Color32::from_rgba_unmultiplied(200, 10, 10, 30),
+                below_fill: egui::Color32::from_rgba_unmultiplied(10, 10, 200, 30),
+                ..Default::default()
+            })
+        );
     }
 
     /// Both settings routes retain the selected bar series; cancel, accept and undo stay local.
