@@ -355,19 +355,6 @@ impl Ladder {
             viewport.min + vec2(0.0, header_height + spacing),
             vec2(viewport.width(), rows as f32 * ROW),
         );
-
-        // Scroll by whole rows; without the lock the market stays in view.
-        // Keep the price under a press or drag stable through its release frame.
-        let interacting =
-            ui.input(|input| input.pointer.any_down() || input.pointer.any_released());
-        if ui.rect_contains_pointer(body) && !interacting {
-            self.scroll += ui.input(|input| input.smooth_scroll_delta.y);
-            let moved = (self.scroll / ROW).trunc();
-            self.scroll -= moved * ROW;
-            if let Some(centre) = &mut self.centre {
-                *centre = centre.saturating_add(moved as i64).max(0);
-            }
-        }
         let last = market.last.filter(|last| last.is_finite()).map(ticks);
         let middle = market
             .bid
@@ -380,6 +367,22 @@ impl Ladder {
         } else {
             middle
         };
+
+        // Scroll by whole rows; without the lock the market stays in view.
+        // Keep the price under a press or drag stable through its release frame.
+        let interacting =
+            ui.input(|input| input.pointer.any_down() || input.pointer.any_released());
+        if ui.rect_contains_pointer(body) && !interacting {
+            self.scroll += ui.input(|input| input.smooth_scroll_delta.y);
+            let moved = (self.scroll / ROW).trunc();
+            self.scroll -= moved * ROW;
+            if let Some(centre) = &mut self.centre {
+                *centre = centre.saturating_add(moved as i64);
+                if middle.is_none_or(|middle| middle >= 0) {
+                    *centre = (*centre).max(0);
+                }
+            }
+        }
         let top = |centre: i64| centre.saturating_add(rows / 2);
         let visible = |centre: i64, tick_index: i64| {
             (top(centre).saturating_sub(rows - 1)..=top(centre)).contains(&tick_index)
@@ -1434,6 +1437,102 @@ fn boxed(ui: &mut Ui, label: &str, color: Color32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Wheel input moves whole price rows below zero and retains the nonnegative market floor.
+    #[test]
+    fn negative_prices_scroll_by_whole_rows() {
+        use crate::model::{Capabilities, TradingRules};
+
+        for read_only in [true, false] {
+            for (last, bid, ask, initial, down, back) in [
+                (
+                    Some(-10.0),
+                    Some(-10.25),
+                    Some(-10.0),
+                    if read_only { -40 } else { -41 },
+                    if read_only { -42 } else { -43 },
+                    if read_only { -40 } else { -41 },
+                ),
+                (Some(0.25), Some(0.0), Some(0.25), 1, 0, 2),
+                (Some(0.0), Some(0.0), Some(0.0), 0, 0, 2),
+                (None, None, None, 1, 0, 2),
+            ] {
+                let ctx = egui::Context::default();
+                let rules = TradingRules::new("SPREAD");
+                let market = Market {
+                    symbol: "SPREAD",
+                    formatter: None,
+                    pip_value: None,
+                    last,
+                    bid,
+                    ask,
+                    tick: 0.25,
+                    decimals: 2,
+                    currency: "USD",
+                    balance: None,
+                    capabilities: Capabilities::default(),
+                    rules: &rules,
+                    rules_ready: true,
+                    offline: None,
+                    ladder: None,
+                    ladder_unavailable: None,
+                    highlights: Vec::new(),
+                    orders: &[],
+                    positions: &[],
+                    trades: &[],
+                    session_open: None,
+                    last_fill: None,
+                    logo: None,
+                };
+                let mut ladder = Ladder {
+                    centre: last.is_none().then_some(initial),
+                    locked: !read_only,
+                    ..Default::default()
+                };
+                let frame = |ladder: &mut Ladder, events| {
+                    ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                vec2(300.0, 700.0),
+                            )),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            let mut quantity = 1.0;
+                            let mut tif = TimeInForce::Day;
+                            let entry = (!read_only).then_some((&mut quantity, &mut tif));
+                            assert_eq!(ladder.draw(ui, "SPREAD", &market, entry), None);
+                        },
+                    )
+                    .drop_without_applying_deltas();
+                };
+                frame(&mut ladder, vec![]);
+                assert_eq!(ladder.centre, Some(initial));
+                // 40 points / 20 points per row = two ticks, or 0.50 at this price step.
+                for (delta, expected) in [(-40.0, down), (40.0, back)] {
+                    frame(
+                        &mut ladder,
+                        vec![
+                            egui::Event::PointerMoved(pos2(150.0, 200.0)),
+                            egui::Event::MouseWheel {
+                                unit: egui::MouseWheelUnit::Point,
+                                delta: vec2(0.0, delta),
+                                phase: egui::TouchPhase::Move,
+                                source: egui::MouseWheelSource::Unknown,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ],
+                    );
+                    for _ in 0..60 {
+                        frame(&mut ladder, vec![]);
+                    }
+                    assert_eq!(ladder.centre, Some(expected), "read_only={read_only}");
+                }
+            }
+        }
+    }
 
     /// The book is observational even when the same market would accept a ticket order.
     #[test]
