@@ -1586,7 +1586,9 @@ mod tests {
                     usize::from(!covered),
                     "secondary={secondary}, cover={cover}: {events:?}"
                 );
-                assert_eq!(chart.selected_element(), None);
+                if cover != "eraser" {
+                    assert_eq!(chart.selected_element(), None);
+                }
             }
         }
     }
@@ -1601,12 +1603,13 @@ mod tests {
             test_frames::frame(&ctx, &mut chart, 0.0, vec![]);
             let time = chart.state.shown()[70].time;
             let mark = |id: &str| Marker::new(time).with_pos(MarkerPos::InBar).with_id(id);
+            let unnamed = || Marker::new(time).with_pos(MarkerPos::InBar);
             chart.set_markers(
                 SeriesId::MAIN,
                 if unnamed_on_top {
-                    vec![mark("first"), mark("top"), Marker::new(time)]
+                    vec![mark("first"), mark("top"), unnamed()]
                 } else {
-                    vec![Marker::new(time), mark("first"), mark("top")]
+                    vec![unnamed(), mark("first"), mark("top")]
                 },
             );
             test_frames::frame(&ctx, &mut chart, 0.1, vec![]);

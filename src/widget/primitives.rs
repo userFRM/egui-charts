@@ -3036,8 +3036,14 @@ mod tests {
                 let mut chart = chart(&[10.0], &[15.0]);
                 chart.config.show_volume = false;
                 chart.config.price_axis.allow_label_overlap = overlap;
+                chart.config.price_axis.show_symbol_name = true;
+                chart.set_symbol("Main");
+                let label = if secondary { "Added " } else { "Main " };
                 let id = if secondary {
-                    let id = chart.add_series(SeriesOptions::default());
+                    let id = chart.add_series(SeriesOptions {
+                        name: "Added".into(),
+                        ..Default::default()
+                    });
                     chart.set_data(id, chart.bars(SeriesId::MAIN).to_vec());
                     let pane = chart.add_pane();
                     chart.move_series_to_pane(id, pane);
@@ -3052,7 +3058,7 @@ mod tests {
                         .iter()
                         .rev()
                         .find_map(|shape| match shape {
-                            Shape::Text(text) if text.galley.text() == "15.00" => {
+                            Shape::Text(text) if text.galley.text().starts_with(label) => {
                                 Some(text_rect(text))
                             }
                             _ => None,
@@ -3071,7 +3077,7 @@ mod tests {
                 let value = painted
                     .iter()
                     .rposition(
-                        |shape| matches!(shape, Shape::Text(text) if text.galley.text() == "15.00"),
+                        |shape| matches!(shape, Shape::Text(text) if text.galley.text().starts_with(label)),
                     )
                     .unwrap();
                 assert!(
