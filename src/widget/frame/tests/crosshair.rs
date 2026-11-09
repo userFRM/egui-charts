@@ -1946,3 +1946,55 @@ fn default_marker_ring_matches_the_background_behind_it() {
         }
     }
 }
+
+/// Hidden markers add no hover allocations, and shown circles need no parameter allocations.
+#[cfg(feature = "studies")]
+#[test]
+fn hidden_series_markers_allocate_nothing_on_hover() {
+    use crate::config::CrosshairStyle;
+    use crate::widget::studies_data::tests::allocations;
+    use crate::widget::{SeriesId, SeriesOptions};
+
+    let mut counts = Vec::new();
+    for (added, radius) in [(0, 0.0), (24, 0.0), (24, 7.0)] {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[110.0]);
+        chart.config.show_volume = false;
+        chart.chart_options.tooltip.enabled = false;
+        let data = chart.bars(SeriesId::MAIN).to_vec();
+        for _ in 0..added {
+            let id = chart.add_series(SeriesOptions {
+                crosshair_marker_radius: radius,
+                ..Default::default()
+            });
+            chart.set_data(id, data.clone());
+        }
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let plot = chart.get_rendered_price_rect();
+        let pos = Pos2::new(chart.get_chart_mapping().idx_to_x(50), plot.center().y);
+        let mut count = [0; 2];
+        let mut time = 0.1;
+        for (at, style) in [CrosshairStyle::Hidden, CrosshairStyle::Full]
+            .into_iter()
+            .enumerate()
+        {
+            chart.chart_options.crosshair.style = style;
+            for _ in 0..5 {
+                frame(&ctx, &mut chart, time, vec![Event::PointerMoved(pos)]);
+                time += 0.1;
+            }
+            count[at] = allocations(|| frame(&ctx, &mut chart, time, vec![])).0;
+            time += 0.1;
+        }
+        counts.push(count);
+    }
+    let extra = |at: usize| counts[at][1] as isize - counts[at][0] as isize;
+    assert!(
+        extra(1) <= extra(0),
+        "hidden markers allocate on hover: {counts:?}"
+    );
+    assert!(
+        extra(2) <= extra(0),
+        "shown markers allocate beyond their circles: {counts:?}"
+    );
+}
