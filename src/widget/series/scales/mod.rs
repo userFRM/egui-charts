@@ -650,7 +650,7 @@ impl Chart {
             (bar, item.value_color(bar), self.time_to_index(bar.time)?)
         };
         let coordinate = map.price_to_y(bar.close);
-        if !coordinate.is_finite() {
+        if !coordinate.is_finite() || !map.transform().to_scale(bar.close).is_finite() {
             return None;
         }
         Some(SeriesLastValue {

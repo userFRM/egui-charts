@@ -4843,3 +4843,76 @@ fn last_value_text_uses_the_tag_decimals_without_a_precision() {
         }
     }
 }
+
+/// Logarithms place only positive closes; other modes still place zero and negative values.
+/// In a log range from 10 to 20, 15 lies ln(1.5)/ln(2) = 0.5849625 of the way up.
+#[test]
+fn last_value_without_a_log_coordinate_is_none() {
+    for mode in [
+        PriceScaleMode::Normal,
+        PriceScaleMode::Logarithmic,
+        PriceScaleMode::Percentage,
+        PriceScaleMode::IndexedTo100,
+    ] {
+        for close in [-5.0, 0.0, 15.0] {
+            for own_pane in [false, true] {
+                let ctx = egui::Context::default();
+                let data = bars(&[10.0, 20.0, close]);
+                let mut chart = Chart::new(BarData::from_bars(data.clone()));
+                chart.config_mut().show_volume = false;
+                let id = chart.add_series(SeriesOptions {
+                    scale: SeriesScale::Left,
+                    ..Default::default()
+                });
+                chart.set_data(id, data);
+                if own_pane {
+                    let pane = chart.add_pane();
+                    assert!(chart.move_series_to_pane(id, pane));
+                }
+                for series in [SeriesId::MAIN, id] {
+                    let scale = chart.series_price_scale_mut(series).unwrap();
+                    scale.options_mut().mode = mode;
+                    scale.set_price_precision(Some(3));
+                }
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                let (low, high) = match mode {
+                    PriceScaleMode::Normal => (10.0, 20.0),
+                    PriceScaleMode::Logarithmic => (10_f64.ln(), 20_f64.ln()),
+                    PriceScaleMode::Percentage => (0.0, 100.0),
+                    PriceScaleMode::IndexedTo100 => (100.0, 200.0),
+                };
+                for series in [SeriesId::MAIN, id] {
+                    chart
+                        .series_price_scale_mut(series)
+                        .unwrap()
+                        .set_range(low, high);
+                }
+                frame(&ctx, &mut chart, 0.1, vec![]);
+                for series in [SeriesId::MAIN, id] {
+                    for source in [PriceLineSource::LastBar, PriceLineSource::LastVisible] {
+                        let last = chart.series_last_value(series, source);
+                        if mode == PriceScaleMode::Logarithmic && close <= 0.0 {
+                            assert_eq!(last, None, "{close} {series:?} {source:?} pane={own_pane}");
+                        } else {
+                            let last = last.unwrap();
+                            assert_eq!((last.value, last.index), (close, 2.0));
+                            let (top, bottom) = chart.series_price_map(series).unwrap().extent();
+                            let fraction = if mode == PriceScaleMode::Logarithmic {
+                                0.584_962_5
+                            } else {
+                                (close as f32 - 10.0) / 10.0
+                            };
+                            assert!(
+                                (last.coordinate - (bottom - (bottom - top) * fraction)).abs()
+                                    < 0.001
+                            );
+                            if mode == PriceScaleMode::Logarithmic {
+                                assert_eq!(last.text, "15.000");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
