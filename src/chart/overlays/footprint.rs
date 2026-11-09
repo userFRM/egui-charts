@@ -8,6 +8,7 @@ use crate::theme::ThemeExt;
 use egui::epaint::{Galley, Mesh, Shape};
 use egui::{Align2, Color32, FontId, Painter, Rect, Stroke, StrokeKind, pos2, vec2};
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -959,7 +960,10 @@ fn row_group(mapping: &ChartMapping, bar: &Bar, flow: &Footprint, config: &Footp
         })
 }
 
-fn group_bar(source: &FootprintBar, group: i64) -> FootprintBar {
+fn group_bar(source: &FootprintBar, group: i64) -> Cow<'_, FootprintBar> {
+    if group == 1 {
+        return Cow::Borrowed(source);
+    }
     let mut shown = FootprintBar {
         time: source.time,
         levels: BTreeMap::new(),
@@ -977,7 +981,7 @@ fn group_bar(source: &FootprintBar, group: i64) -> FootprintBar {
         });
         target.absorb(row);
     }
-    shown
+    Cow::Owned(shown)
 }
 
 fn has_ladder(config: &FootprintConfig) -> bool {
@@ -1402,7 +1406,8 @@ pub fn render_footprint_statistics_rows(
 #[cfg(feature = "studies")]
 #[derive(Clone, Default)]
 struct FootprintStudyCache {
-    source: Vec<(FootprintBar, i64)>,
+    revision: Option<u64>,
+    source: Vec<(chrono::DateTime<chrono::Utc>, i64)>,
     config: Option<crate::studies::FootprintStudyConfig>,
     studies: std::sync::Arc<[crate::studies::FootprintStudy]>,
 }
@@ -1430,31 +1435,36 @@ pub(crate) fn render_footprint_annotations(
         .filter(|bar| complete.is_some_and(|from| bar.time >= from))
         .filter_map(|bar| {
             flow.bar_at(bar.time)
-                .map(|row| (row, row_group(mapping, bar, flow, config)))
+                .map(|row| (bar.time, row, row_group(mapping, bar, flow, config)))
         })
         .collect();
     let studies = painter.ctx().data_mut(|data| {
         let cache = data
             .get_temp_mut_or_default::<FootprintStudyCache>(chart_id.with("footprint_annotations"));
-        if cache.config.as_ref() != Some(&settings)
+        if cache.revision != Some(flow.revision())
+            || cache.config.as_ref() != Some(&settings)
             || cache.source.len() != source.len()
-            || !cache
-                .source
-                .iter()
-                .zip(&source)
-                .all(|((old, group), (new, next_group))| old == *new && group == next_group)
+            || !cache.source.iter().zip(&source).all(
+                |((time, group), (next_time, _, next_group))| {
+                    time == next_time && group == next_group
+                },
+            )
         {
             cache.source = source
                 .iter()
-                .map(|(bar, group)| ((*bar).clone(), *group))
+                .map(|(time, _, group)| (*time, *group))
                 .collect();
             let grouped: Vec<_> = source
                 .iter()
-                .map(|(bar, group)| (group_bar(bar, *group), *group))
+                .map(|(_, bar, group)| (group_bar(bar, *group), *group))
                 .collect();
-            let rows: Vec<_> = grouped.iter().map(|(bar, group)| (bar, *group)).collect();
+            let rows: Vec<_> = grouped
+                .iter()
+                .map(|(bar, group)| (bar.as_ref(), *group))
+                .collect();
             cache.studies = crate::studies::footprint_studies_on_rows(&rows, &settings).into();
             cache.config = Some(settings);
+            cache.revision = Some(flow.revision());
         }
         cache.studies.clone()
     });
@@ -1715,6 +1725,255 @@ mod tests {
     use super::*;
     use crate::model::{BarClock, OrderSide, Tick, Timeframe};
     use crate::scales::{PriceMap, PriceRange, PriceTransform};
+
+    #[cfg(feature = "studies")]
+    fn cached_annotations(
+        ctx: &egui::Context,
+        mapping: &ChartMapping,
+        bars: &[Bar],
+        flow: &Footprint,
+        config: &FootprintConfig,
+    ) -> Arc<[crate::studies::FootprintStudy]> {
+        let id = egui::Id::unique("cache regression");
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            render_footprint_annotations(ui.painter(), mapping, bars, flow, config, id);
+        });
+        output.textures_delta.clear();
+        ctx.data_mut(|data| {
+            data.get_temp::<FootprintStudyCache>(id.with("footprint_annotations"))
+                .unwrap()
+                .studies
+        })
+    }
+
+    #[cfg(feature = "studies")]
+    fn annotation_mapping() -> ChartMapping {
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(240.0, 160.0));
+        ChartMapping::new(
+            rect,
+            120.0,
+            0,
+            0,
+            0.0,
+            PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(98.0, 110.0),
+                0.0,
+                160.0,
+                false,
+            ),
+        )
+    }
+
+    #[cfg(feature = "studies")]
+    #[test]
+    fn annotation_cache_distinguishes_equal_independent_models() {
+        let time = "2026-01-05T10:00:00Z".parse().unwrap();
+        let bars = [Bar::new(time, 100.0, 101.0, 100.0, 101.0, 5.0)];
+        let map = annotation_mapping();
+        let flow = || {
+            let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+            flow.push(&Tick::new(time, 100.0, 5.0, Some(OrderSide::Buy)))
+                .unwrap();
+            flow
+        };
+        let (first, second) = (flow(), flow());
+        let config = FootprintConfig {
+            studies: Some(Default::default()),
+            auto_row_height: None,
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let cached = cached_annotations(&ctx, &map, &bars, &first, &config);
+        assert!(!cached.is_empty());
+        let repeated = cached_annotations(&ctx, &map, &bars, &first, &config);
+        assert!(Arc::ptr_eq(&cached, &repeated), "unchanged model must hit");
+        let snapshot = cached_annotations(&ctx, &map, &bars, &first.clone(), &config);
+        assert!(
+            Arc::ptr_eq(&cached, &snapshot),
+            "identical snapshots must hit"
+        );
+        let replaced = cached_annotations(&ctx, &map, &bars, &second, &config);
+        assert_eq!(cached, replaced);
+        assert!(
+            !Arc::ptr_eq(&cached, &replaced),
+            "independent models need independent cache identities"
+        );
+    }
+
+    #[cfg(feature = "studies")]
+    #[test]
+    fn annotation_cache_matches_eager_studies_across_selection_group_and_config_changes() {
+        let time = "2026-01-05T10:00:00Z".parse().unwrap();
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        let bars: Vec<_> = (0..3)
+            .map(|minute| {
+                let at = time + chrono::TimeDelta::minutes(minute);
+                for (price, size, side) in [
+                    (100.0, 2.0, OrderSide::Sell),
+                    (101.0, 7.0, OrderSide::Buy),
+                    (102.0, 9.0, OrderSide::Buy),
+                    (103.0, 11.0, OrderSide::Buy),
+                    (104.0, 1.0, OrderSide::Sell),
+                ] {
+                    flow.push(&Tick::new(at, price, size, Some(side))).unwrap();
+                }
+                Bar::new(at, 100.0, 104.0, 100.0, 104.0, 30.0)
+            })
+            .collect();
+        let ctx = egui::Context::default();
+        let map = annotation_mapping();
+        let mut config = FootprintConfig {
+            auto_row_height: None,
+            studies: Some(crate::studies::FootprintStudyConfig {
+                cluster_share: Some(0.25),
+                single_print_max: Some(2.0),
+                delta_percent: Some(50.0),
+                ratio: Some(3.0),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let eager = |selected: &[Bar], flow: &Footprint, config: &FootprintConfig| {
+            let grouped: Vec<_> = selected
+                .iter()
+                .filter(|bar| flow.complete_from().is_some_and(|from| bar.time >= from))
+                .filter_map(|bar| {
+                    flow.bar_at(bar.time).map(|source| {
+                        let group = row_group(&map, bar, flow, config);
+                        let mut owned = FootprintBar::empty(source.time);
+                        owned.absorb_grouped(source, group);
+                        (owned, group)
+                    })
+                })
+                .collect();
+            let rows: Vec<_> = grouped.iter().map(|(bar, group)| (bar, *group)).collect();
+            let settings = crate::studies::FootprintStudyConfig {
+                imbalance_min_volume: config.imbalance_min_volume,
+                ..config.studies.clone().unwrap()
+            };
+            crate::studies::footprint_studies_on_rows(&rows, &settings)
+        };
+        let mut previous = None;
+        for group in [1, 2, 3] {
+            config.row_ticks = group;
+            for selected in [
+                bars.clone(),
+                bars[1..].to_vec(),
+                vec![bars[0].clone(), bars[2].clone()],
+                bars.iter().rev().cloned().collect(),
+            ] {
+                let cached = cached_annotations(&ctx, &map, &selected, &flow, &config);
+                assert_eq!(&*cached, eager(&selected, &flow, &config));
+                if let Some(previous) = previous {
+                    assert!(!Arc::ptr_eq(&previous, &cached));
+                }
+                let repeated = cached_annotations(&ctx, &map, &selected, &flow, &config);
+                assert!(Arc::ptr_eq(&cached, &repeated));
+                previous = Some(cached);
+            }
+        }
+        let cached = cached_annotations(&ctx, &map, &bars, &flow, &config);
+        let mut alias = bars.clone();
+        alias[0].time += chrono::TimeDelta::seconds(1);
+        let selected = cached_annotations(&ctx, &map, &alias, &flow, &config);
+        assert_eq!(cached, selected);
+        assert!(
+            !Arc::ptr_eq(&cached, &selected),
+            "selected OHLC membership changed inside the same slot"
+        );
+        config.row_ticks = 1;
+        config.auto_row_height = Some(20.0);
+        for minimum in [0.0, 100.0, 0.0] {
+            config.imbalance_min_volume = minimum;
+            let cached = cached_annotations(&ctx, &map, &bars, &flow, &config);
+            assert_eq!(&*cached, eager(&bars, &flow, &config));
+        }
+        config.studies.as_mut().unwrap().naked_poc = false;
+        let cached = cached_annotations(&ctx, &map, &bars, &flow, &config);
+        assert_eq!(&*cached, eager(&bars, &flow, &config));
+        flow.received_from(time);
+        let covered = cached_annotations(&ctx, &map, &bars, &flow, &config);
+        assert!(!Arc::ptr_eq(&cached, &covered));
+        assert_eq!(&*covered, eager(&bars, &flow, &config));
+        flow.received_from(time);
+        flow.set_budget(100, 100);
+        let repeated = cached_annotations(&ctx, &map, &bars, &flow, &config);
+        assert!(Arc::ptr_eq(&covered, &repeated));
+    }
+
+    #[cfg(feature = "studies")]
+    #[test]
+    fn annotation_cache_refreshes_same_total_trade_bar_corrections() {
+        let time = "2026-01-05T10:00:00Z".parse().unwrap();
+        let flow = |sizes: [f64; 2]| {
+            let mut flow = Footprint::new(BarClock::new("2t".parse().unwrap()), 1.0, 1).unwrap();
+            for (i, size) in sizes.into_iter().enumerate() {
+                flow.push(&Tick::new(
+                    time,
+                    100.0 + i as f64,
+                    size,
+                    Some(OrderSide::Buy),
+                ))
+                .unwrap();
+            }
+            flow
+        };
+        let mut original = flow([2.0, 8.0]);
+        let corrected = flow([8.0, 2.0]);
+        let bars = [Bar::new(time, 100.0, 101.0, 100.0, 101.0, 10.0)];
+        let ctx = egui::Context::default();
+        let map = annotation_mapping();
+        let config = FootprintConfig {
+            auto_row_height: None,
+            studies: Some(crate::studies::FootprintStudyConfig {
+                stacked_imbalances: false,
+                delta_poc: false,
+                unfinished_auctions: false,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let before = cached_annotations(&ctx, &map, &bars, &original, &config);
+        assert_eq!((before.len(), before[0].low), (1, 101));
+        original.copy_trade_bars(&corrected, Some(time));
+        let after = cached_annotations(&ctx, &map, &bars, &original, &config);
+        assert_eq!((after.len(), after[0].low), (1, 100));
+        original.copy_trade_bars(&corrected, Some(time));
+        let repeated = cached_annotations(&ctx, &map, &bars, &original, &config);
+        assert!(Arc::ptr_eq(&after, &repeated));
+    }
+
+    #[test]
+    fn ungrouped_bars_are_borrowed_and_grouped_rows_keep_exact_totals() {
+        let time = "2026-01-05T10:00:00Z".parse().unwrap();
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        for (price, size, side) in [
+            (-3.0, 2.0, Some(OrderSide::Sell)),
+            (-2.0, 5.0, Some(OrderSide::Buy)),
+            (0.0, 3.0, None),
+            (1.0, 1.0, Some(OrderSide::Buy)),
+        ] {
+            flow.push(&Tick::new(time, price, size, side)).unwrap();
+        }
+        let source = flow.bar_at(time).unwrap();
+        assert!(
+            matches!(group_bar(source, 1), std::borrow::Cow::Borrowed(bar) if std::ptr::eq(bar, source))
+        );
+        for group in [1, 2, 3] {
+            let mut eager = FootprintBar::empty(time);
+            eager.absorb_grouped(source, group);
+            assert_eq!(&*group_bar(source, group), &eager);
+        }
+        assert_eq!(
+            group_bar(source, 2)
+                .levels
+                .keys()
+                .copied()
+                .collect::<Vec<_>>(),
+            [-2, -1, 0]
+        );
+    }
 
     /// The settings of a chart saved before the ladder became the default.
     fn bid_ask_config() -> FootprintConfig {
