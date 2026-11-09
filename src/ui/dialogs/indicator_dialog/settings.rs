@@ -579,12 +579,19 @@ mod tests {
         dialog.tab = Tab::Style;
         dialog.edit.as_mut().unwrap().settings = edited.clone();
         let mut applied = None;
-        for action in ["Cancel", "Apply"] {
+        for (action, theme, size) in [
+            ("Cancel", Theme::dark(), egui::vec2(360.0, 640.0)),
+            ("Cancel", Theme::light(), egui::vec2(360.0, 640.0)),
+            ("Apply", Theme::light(), egui::vec2(1440.0, 900.0)),
+        ] {
             let mut harness = Harness::builder()
-                .with_context_setup(egui_extras::install_image_loaders)
-                .with_size(egui::vec2(1440.0, 900.0))
+                .with_context_setup(|ctx| {
+                    egui_extras::install_image_loaders(ctx);
+                    crate::theme::apply_to_egui(ctx, &theme);
+                })
+                .with_size(size)
                 .build_ui(|ui| {
-                    if let Some(edit) = dialog.show(ui.ctx(), &Theme::dark()) {
+                    if let Some(edit) = dialog.show(ui.ctx(), &theme) {
                         applied = Some(edit);
                     }
                 });
@@ -602,6 +609,10 @@ mod tests {
                     "{caption}"
                 );
             }
+            assert!(
+                egui::Rect::from_min_size(egui::Pos2::ZERO, size)
+                    .contains_rect(harness.get_by_label(action).rect())
+            );
             harness.get_by_label(action).click();
             harness.run();
             drop(harness);

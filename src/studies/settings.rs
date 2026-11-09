@@ -175,12 +175,16 @@ pub(super) fn declared_levels<S: Indicator + ?Sized>(
     let levels = pane
         .levels
         .iter()
-        .map(|&(value, color, _)| LevelStyle {
-            value: None,
-            color,
-            pattern: study.level_style(value),
-            width: study.level_width(value),
-            visible: true,
+        .enumerate()
+        .map(|(index, &(value, color, _))| {
+            let (pattern, width) = study.level_stroke(index, value);
+            LevelStyle {
+                value: None,
+                color,
+                pattern,
+                width,
+                visible: true,
+            }
         })
         .collect();
     (levels, pane.fill_between_levels, study.level_fill_color())
@@ -1414,6 +1418,21 @@ impl Indicator for ConfiguredStudy {
     }
     fn level_fill_indices(&self) -> Option<[usize; 2]> {
         self.study.level_fill_indices()
+    }
+    fn level_stroke(&self, index: usize, value: f64) -> (LineStyle, f32) {
+        self.settings
+            .levels
+            .get(index)
+            .filter(|style| {
+                style
+                    .value
+                    .or_else(|| self.study.pane().levels.get(index).map(|level| level.0))
+                    == Some(value)
+            })
+            .map_or_else(
+                || (self.level_style(value), self.level_width(value)),
+                |style| (style.pattern, style.width),
+            )
     }
     fn level_fill_color(&self) -> Color32 {
         self.settings.level_fill_color

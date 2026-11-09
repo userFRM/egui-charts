@@ -202,6 +202,12 @@ pub trait Indicator: Send {
         1.0
     }
 
+    /// Pattern and width for a level by its position in the pane's levels. The value is the
+    /// drawn value, including a host's zone override. Defaults to the value-based methods.
+    fn level_stroke(&self, _index: usize, value: f64) -> (crate::model::LineStyle, f32) {
+        (self.level_style(value), self.level_width(value))
+    }
+
     /// Optional tint beneath the study's geometry over its plot area.
     fn background(&self) -> Option<Color32> {
         None
@@ -213,7 +219,7 @@ pub trait Indicator: Send {
         None
     }
 
-    /// Colour of the band between the outer pane levels.
+    /// Colour of the band between the selected pane levels.
     fn level_fill_color(&self) -> Color32 {
         let color = self.plot_style(0).color;
         Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 16)
