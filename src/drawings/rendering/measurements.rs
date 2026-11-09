@@ -187,8 +187,10 @@ impl Drawing {
         let size = galley.size() + CARD_PADDING * 2.0;
         let (left, right) = if a.x <= b.x { (a, b) } else { (b, a) };
         let gap = DESIGN_TOKENS.spacing.sm + self.stroke_width / 2.0;
-        // Side readouts sit away from the line's continuation, including horizontal lines.
+        // Side readouts sit away from the line's continuation; beside a trend angle's first
+        // right-hand anchor they take the side away from its arc instead.
         let rising = right.y < left.y;
+        let right_rising = rising != (self.tool_type == DrawingToolType::TrendAngle && a.x > b.x);
         let place = |position| match position {
             P::Left => (
                 left + egui::vec2(-gap, if rising { -gap } else { gap }),
@@ -232,8 +234,8 @@ impl Drawing {
                 (pos, Align2::CENTER_CENTER)
             }
             P::Right => (
-                right + egui::vec2(gap, if rising { gap } else { -gap }),
-                if rising {
+                right + egui::vec2(gap, if right_rising { gap } else { -gap }),
+                if right_rising {
                     Align2::LEFT_TOP
                 } else {
                     Align2::LEFT_BOTTOM
@@ -255,7 +257,8 @@ impl Drawing {
         Some((galley, align, pos, size))
     }
 
-    /// Paints each anchor's price on a small label on the side away from the other anchor.
+    /// Paints each anchor's price away from the other anchor, except a trend angle's first
+    /// right-hand anchor, whose label sits between the anchors on the side away from its arc.
     fn render_anchor_prices(&self, painter: &egui::Painter, a: Pos2, b: Pos2, view: &ChartView) {
         let [first, second, ..] = self.chart_points.as_slice() else {
             return;
@@ -266,15 +269,23 @@ impl Drawing {
             let Some(text) = super::annotations::price_text(price, view) else {
                 continue;
             };
-            let (align, away) = if point.x < other.x {
-                (Align2::RIGHT_CENTER, egui::vec2(-gap, 0.0))
-            } else if point.x > other.x {
-                (Align2::LEFT_CENTER, egui::vec2(gap, 0.0))
-            } else if point.y <= other.y {
-                (Align2::CENTER_BOTTOM, egui::vec2(0.0, -gap))
-            } else {
-                (Align2::CENTER_TOP, egui::vec2(0.0, gap))
-            };
+            let (align, away) =
+                if self.tool_type == DrawingToolType::TrendAngle && point == a && point.x > other.x
+                {
+                    if point.y >= other.y {
+                        (Align2::RIGHT_TOP, egui::vec2(-gap, gap))
+                    } else {
+                        (Align2::RIGHT_BOTTOM, egui::vec2(-gap, -gap))
+                    }
+                } else if point.x < other.x {
+                    (Align2::RIGHT_CENTER, egui::vec2(-gap, 0.0))
+                } else if point.x > other.x {
+                    (Align2::LEFT_CENTER, egui::vec2(gap, 0.0))
+                } else if point.y <= other.y {
+                    (Align2::CENTER_BOTTOM, egui::vec2(0.0, -gap))
+                } else {
+                    (Align2::CENTER_TOP, egui::vec2(0.0, gap))
+                };
             boxed_label(
                 painter,
                 align,
@@ -948,13 +959,20 @@ mod tests {
                         );
                         let bounds = Rect::from_min_size(text.pos, text.galley.size());
                         let side = if position == P::Right { 1.0 } else { -1.0 };
-                        for corner in [
-                            bounds.min,
-                            bounds.max,
-                            bounds.left_bottom(),
-                            bounds.right_top(),
-                        ] {
-                            assert!((corner - midpoint).dot(egui::vec2(0.8, 0.6)) * side >= 4.9);
+                        // A reversed angle's Right card clears its arc, checked by the angle
+                        // overlap regression instead of this continuation-side assertion.
+                        if !(tool == DrawingToolType::TrendAngle && reverse && position == P::Right)
+                        {
+                            for corner in [
+                                bounds.min,
+                                bounds.max,
+                                bounds.left_bottom(),
+                                bounds.right_top(),
+                            ] {
+                                assert!(
+                                    (corner - midpoint).dot(egui::vec2(0.8, 0.6)) * side >= 4.9
+                                );
+                            }
                         }
                     }
                     if !selected {
@@ -1589,6 +1607,110 @@ mod tests {
         assert!(
             ratios.iter().all(|&(_, _, ratio)| ratio >= 4.5),
             "{ratios:?}"
+        );
+    }
+
+    /// In either anchor order, rising and falling trend angles keep their side readouts and first
+    /// price label off the angle text, arc, horizontal guide and line. Auto falls back to Left
+    /// when the right card cannot fit; explicit Left has enough room to avoid clamping.
+    #[test]
+    fn trend_angle_readouts_and_price_labels_clear_its_angle_in_both_orders() {
+        use crate::drawings::{LineMeasurementPosition as P, LineMeasurements};
+        use egui::Shape;
+        let measurements = LineMeasurements {
+            persistent: true,
+            price_change: true,
+            percent_change: true,
+            bar_count: true,
+            length: true,
+            inclination: true,
+            price_labels: true,
+            ..Default::default()
+        };
+        let mut observed = Vec::new();
+        for (order, mut first, mut second, position) in [
+            ("left to right", (100.0, 300.0), (300.0, 200.0)),
+            ("right to left", (300.0, 200.0), (100.0, 300.0)),
+            ("left to right rising", (100.0, 200.0), (300.0, 300.0)),
+            ("right to left falling", (300.0, 300.0), (100.0, 200.0)),
+        ]
+        .into_iter()
+        .flat_map(|(order, a, b)| {
+            [P::Right, P::Left, P::Auto].map(|position| (order, a, b, position))
+        }) {
+            let shift = match position {
+                P::Right => 0.0,
+                P::Left => 100.0,
+                P::Auto => 140.0,
+                P::Center => unreachable!(),
+            };
+            first.0 += shift;
+            second.0 += shift;
+            let measurements = LineMeasurements {
+                position,
+                ..measurements
+            };
+            let (angle, shapes) = paint_trend_angle(first, second, measurements);
+            let text = |wanted: &dyn Fn(&str) -> bool| {
+                shapes
+                    .iter()
+                    .find_map(|shape| match shape {
+                        Shape::Text(t) if wanted(&t.galley.job.text) => {
+                            Some(Rect::from_min_size(t.pos, t.galley.size()))
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("{order}: no text in {shapes:?}"))
+            };
+            let boxed = |inside: Rect| {
+                shapes
+                    .iter()
+                    .find_map(|shape| match shape {
+                        Shape::Rect(r) if r.rect.contains_rect(inside) => Some(r.rect),
+                        _ => None,
+                    })
+                    .unwrap()
+            };
+            let angle_text = text(&|t: &str| t.ends_with('°') && !t.contains('\n'));
+            let card = boxed(text(&|t: &str| t.contains("bars")));
+            let first_price = format!("{:.2}", first.1);
+            let label = boxed(text(&|t: &str| t == first_price));
+            // The construction guides, the arc and the line, in the line colour.
+            let color = angle.color32();
+            let mut guides: Vec<Pos2> = Vec::new();
+            for shape in &shapes {
+                match shape {
+                    Shape::LineSegment { points, stroke } if stroke.color == color => {
+                        guides.extend(points)
+                    }
+                    Shape::Mesh(mesh) => guides.extend(
+                        (mesh.vertices.iter())
+                            .filter(|v| v.color == color)
+                            .map(|v| v.pos),
+                    ),
+                    _ => {}
+                }
+            }
+            let covered = card.intersect(angle_text);
+            observed.push(format!(
+                "{order}: angle text {angle_text:?}, card {card:?}, covered {:?}, \
+                 guide points in the card {}, in the first price label {label:?} {}",
+                (covered.is_positive()).then_some(covered),
+                guides.iter().filter(|p| card.contains(**p)).count(),
+                guides.iter().filter(|p| label.contains(**p)).count(),
+            ));
+            if covered.is_positive()
+                || label.intersect(angle_text).is_positive()
+                || guides
+                    .iter()
+                    .any(|p| card.contains(*p) || label.contains(*p))
+            {
+                observed.push(format!("{order}: overlaps"));
+            }
+        }
+        assert!(
+            !observed.iter().any(|line| line.ends_with("overlaps")),
+            "{observed:?}"
         );
     }
 }
