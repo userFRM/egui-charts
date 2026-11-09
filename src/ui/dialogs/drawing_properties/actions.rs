@@ -529,6 +529,11 @@ mod tests {
             );
             assert_eq!(labels.contains(&"Price"), price, "{tool:?}");
             assert_eq!(labels.contains(&"Time"), time, "{tool:?}");
+            assert_eq!(
+                labels.contains(&"Through all panes"),
+                tool == T::VerticalLine,
+                "{tool:?}"
+            );
             for label in [
                 "Middle point",
                 "Keep statistics visible",
@@ -597,6 +602,8 @@ mod tests {
                 price_labels: true,
                 text_horizontal_align: crate::drawings::LineTextHorizontalAlign::Right,
                 text_vertical_align: crate::drawings::LineTextVerticalAlign::Top,
+                text_orientation: crate::drawings::LineTextOrientation::Horizontal,
+                across_panes: true,
             };
             settings.line_measurements = measurements;
             settings.bars_pattern = Some(crate::drawings::BarsPatternConfig {
