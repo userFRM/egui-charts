@@ -13,15 +13,16 @@ use egui::{Color32, Id, Pos2, Rect, Sense, Ui, Vec2};
 
 impl DrawingToolbar {
     /// Render the floating strip of favourite drawing tools and return a drawing pick.
-    /// Use [`Self::show_floating_with_action`] to include cursor modes and receive their host actions.
+    /// Use [`Self::show_floating_with_action`] to include cursor modes and receive their host
+    /// actions.
     ///
     /// [`Self::show`] and [`Self::show_with_action`] already draw it beside the toolbar and return
     /// a tool picked on it; call this only to place the strip elsewhere, before them, as a
     /// second call in the same pass draws nothing.
     ///
     /// The strip lists [`ToolbarState::favorites`][favorites], so starring or unstarring changes it
-    /// at once, and it is hidden while no visible drawing tools are starred. `position` places it until it has been
-    /// moved; afterwards [`ToolbarState::floating_pos`][floating_pos] holds its position. Its grip drags it, kept
+    /// at once, and it is hidden while no visible drawing tools are starred. `position` places it
+    /// until it has been moved; afterwards [`ToolbarState::floating_pos`][floating_pos] holds its position. Its grip drags it, kept
     /// on screen, and its close button clears [`ToolbarState::floating_visible`][floating_visible], as the
     /// favourites button of the toolbar does.
     ///
@@ -47,6 +48,7 @@ impl DrawingToolbar {
         self.draw_floating(ui, position, true)
     }
 
+    /// Draw the strip; `cursors` adds the starred cursor modes, which only the action API reports.
     fn draw_floating(
         &mut self,
         ui: &mut Ui,
