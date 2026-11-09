@@ -1500,7 +1500,10 @@ mod tests {
                 let mut chart = test_frames::chart(&[95.0], &[105.0]);
                 chart.config.show_volume = false;
                 let id = if secondary {
-                    let id = chart.add_series(SeriesOptions::default());
+                    let id = chart.add_series(SeriesOptions {
+                        chart_type: crate::model::ChartType::Candles,
+                        ..Default::default()
+                    });
                     chart.set_data(id, chart.bars(SeriesId::MAIN).to_vec());
                     let pane = chart.add_pane();
                     chart.move_series_to_pane(id, pane);
@@ -1566,7 +1569,7 @@ mod tests {
                         ChartEvent::Click { position, .. } => position.target.clone(),
                         _ => None,
                     })
-                    .unwrap();
+                    .unwrap_or_else(|| panic!("secondary={secondary}, cover={cover}: {events:?}"));
                 let covered = matches!(cover, "primitive" | "drawing" | "eraser");
                 if let Some(primitive) = primitive {
                     assert_eq!(target, PointerTarget::Primitive(primitive));
