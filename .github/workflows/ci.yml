@@ -216,7 +216,7 @@ jobs:
       # Linux keeps both dependency graphs; per-workspace cleanup would prune the other's artifacts.
       # Exact key only: a prefix fallback would carry stale artifacts into every new entry and grow
       # it without bound, since nothing prunes this target.
-      - uses: actions/cache/restore@v5
+      - uses: actions/cache/restore@v6
         if: matrix.os == 'windows-latest' && needs.changes.outputs.docs == 'true'
         id: windows-cache
         with:
@@ -225,7 +225,7 @@ jobs:
             ~/.cargo/git
             target
           key: windows-test-v1-${{ runner.arch }}-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.github/workflows/ci.yml') }}
-      - uses: actions/cache/restore@v5
+      - uses: actions/cache/restore@v6
         if: matrix.os == 'ubuntu-latest' && (needs.changes.outputs.docs == 'true' || needs.changes.outputs.native == 'true')
         id: linux-cache
         with:
@@ -248,7 +248,7 @@ jobs:
         if: matrix.os == 'ubuntu-latest' && needs.changes.outputs.native == 'true'
         id: apt
         run: echo "key=apt-test-xvfb-xdotool-mesa-vulkan-drivers-libxkbcommon-x11-0-${ImageOS}-${ImageVersion}-v1" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache/restore@v5
+      - uses: actions/cache/restore@v6
         if: matrix.os == 'ubuntu-latest' && needs.changes.outputs.native == 'true'
         id: apt-cache
         with:
@@ -261,7 +261,7 @@ jobs:
           sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=20
           sudo apt-get install -y -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Dir::Cache::Archives="$HOME/apt-archives" xvfb xdotool mesa-vulkan-drivers libxkbcommon-x11-0
           sudo chown -R "$(id -u):$(id -g)" "$HOME/apt-archives"
-      - uses: actions/cache/save@v5
+      - uses: actions/cache/save@v6
         if: github.ref == 'refs/heads/main' && steps.apt-cache.outputs.cache-primary-key != '' && steps.apt-cache.outputs.cache-hit != 'true'
         with:
           path: ~/apt-archives/*.deb
@@ -282,7 +282,7 @@ jobs:
           WGPU_BACKEND: vulkan
         # The readiness probe disconnects before the demo connects; do not reset the server then.
         run: xvfb-run -a -e /dev/stderr -s '-screen 0 1280x1024x24 -noreset' examples/demo/smoke-native.sh target/debug/egui-charts-demo
-      - uses: actions/cache/save@v5
+      - uses: actions/cache/save@v6
         if: matrix.os == 'windows-latest' && github.ref == 'refs/heads/main' && steps.windows-cache.outputs.cache-primary-key != '' && steps.windows-cache.outputs.cache-hit != 'true'
         with:
           path: |
@@ -290,7 +290,7 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ steps.windows-cache.outputs.cache-primary-key }}
-      - uses: actions/cache/save@v5
+      - uses: actions/cache/save@v6
         if: matrix.os == 'ubuntu-latest' && github.ref == 'refs/heads/main' && steps.linux-cache.outputs.cache-primary-key != '' && steps.linux-cache.outputs.cache-hit != 'true'
         with:
           path: |
@@ -324,7 +324,7 @@ jobs:
         with:
           toolchain: stable
       # Exact key only, like the test job's cache.
-      - uses: actions/cache/restore@v5
+      - uses: actions/cache/restore@v6
         if: needs.changes.outputs.native == 'true'
         id: windows-cache
         with:
@@ -343,7 +343,7 @@ jobs:
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/target
         run: cargo test --locked --manifest-path examples/demo/Cargo.toml
-      - uses: actions/cache/save@v5
+      - uses: actions/cache/save@v6
         if: github.ref == 'refs/heads/main' && steps.windows-cache.outputs.cache-primary-key != '' && steps.windows-cache.outputs.cache-hit != 'true'
         with:
           path: |
@@ -484,7 +484,7 @@ jobs:
         if: needs.changes.outputs.rust == 'true'
         id: apt
         run: echo "key=apt-bare-chart-valgrind-${ImageOS}-${ImageVersion}-v1" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache/restore@v5
+      - uses: actions/cache/restore@v6
         if: needs.changes.outputs.rust == 'true'
         id: apt-cache
         with:
@@ -497,7 +497,7 @@ jobs:
           sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=20
           sudo apt-get install -y --no-install-recommends -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Dir::Cache::Archives="$HOME/apt-archives" valgrind
           sudo chown -R "$(id -u):$(id -g)" "$HOME/apt-archives"
-      - uses: actions/cache/save@v5
+      - uses: actions/cache/save@v6
         if: github.ref == 'refs/heads/main' && steps.apt-cache.outputs.cache-primary-key != '' && steps.apt-cache.outputs.cache-hit != 'true'
         with:
           path: ~/apt-archives/*.deb
@@ -596,7 +596,7 @@ jobs:
         if: needs.changes.outputs.rust == 'true'
         id: apt
         run: echo "key=apt-performance-measure-valgrind-${ImageOS}-${ImageVersion}-v1" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache/restore@v5
+      - uses: actions/cache/restore@v6
         if: needs.changes.outputs.rust == 'true'
         id: apt-cache
         with:
@@ -609,7 +609,7 @@ jobs:
           sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=20
           sudo apt-get install -y --no-install-recommends -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Dir::Cache::Archives="$HOME/apt-archives" valgrind
           sudo chown -R "$(id -u):$(id -g)" "$HOME/apt-archives"
-      - uses: actions/cache/save@v5
+      - uses: actions/cache/save@v6
         if: github.ref == 'refs/heads/main' && steps.apt-cache.outputs.cache-primary-key != '' && steps.apt-cache.outputs.cache-hit != 'true'
         with:
           path: ~/apt-archives/*.deb
@@ -630,14 +630,14 @@ jobs:
           } >> "$GITHUB_OUTPUT"
       - name: Save main measurement
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           path: performance-counts.txt
           key: ${{ steps.measurement.outputs.key }}-${{ github.sha }}
       - name: Restore base measurement
         if: needs.changes.outputs.rust == 'true' && github.event_name != 'push'
         id: cached
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: performance-counts.txt
           key: ${{ steps.measurement.outputs.key }}-${{ needs.changes.outputs.base }}
