@@ -4524,7 +4524,10 @@ fn study_without_values_in_view_adds_nothing_to_its_scale() {
             let study = chart.add_indicator(study);
             let pane = chart.series_pane(study).unwrap();
             let target = if case == "shared bars" {
-                let id = chart.add_series(SeriesOptions::default());
+                let id = chart.add_series(SeriesOptions {
+                    chart_type: ChartType::Candles,
+                    ..Default::default()
+                });
                 chart.set_data(id, chart.bars(SeriesId::MAIN).to_vec());
                 assert!(chart.move_series_to_pane(id, pane));
                 id
