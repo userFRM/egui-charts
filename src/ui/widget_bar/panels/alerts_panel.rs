@@ -110,6 +110,15 @@ enum PresentationEdit {
     Marker(AlertId, bool, bool),
 }
 
+// Reserve both history positions while the host confirms the marker change.
+struct PresentationRestore {
+    redo: bool,
+    request: u64,
+    source_index: usize,
+    destination_index: usize,
+    inverse: PresentationEdit,
+}
+
 /// One trigger the host reported, retained even after the alert is removed.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AlertTrigger {
@@ -151,8 +160,9 @@ pub struct AlertsPanel {
     marks: HashMap<String, egui::ImageSource<'static>>,
     undo: Vec<PresentationEdit>,
     redo: Vec<PresentationEdit>,
-    restoring: Option<bool>,
-    staged_display: Option<(AlertId, bool, bool)>,
+    restoring: Option<PresentationRestore>,
+    staged_display: Vec<(u64, PresentationEdit, bool)>,
+    next_reply: u64,
     sources: Vec<(AlertSource, String)>,
     symbol: String,
     draft: Alert,
@@ -188,7 +198,8 @@ impl AlertsPanel {
             undo: Vec::new(),
             redo: Vec::new(),
             restoring: None,
-            staged_display: None,
+            staged_display: Vec::new(),
+            next_reply: DRAFT_REPLY - 1,
             sources: Vec::new(),
             symbol: String::new(),
             draft: Alert::new("", AlertCondition::Crossing(0.0)),
@@ -211,6 +222,7 @@ impl AlertsPanel {
         self.undo.clear();
         self.redo.clear();
         self.restoring = None;
+        self.staged_display.clear();
     }
 
     /// Supply the instrument's image. Unknown, loading or unreadable images show an initial.
@@ -218,12 +230,21 @@ impl AlertsPanel {
         self.marks.insert(symbol.to_owned(), mark);
     }
 
-    fn remember(&mut self, edit: PresentationEdit) {
+    fn remember(&mut self, edit: PresentationEdit, keep_redo: bool) {
         self.undo.push(edit);
         if self.undo.len() > 100 {
             self.undo.remove(0);
+            if let Some(restore) = &mut self.restoring {
+                if restore.redo {
+                    restore.destination_index = restore.destination_index.saturating_sub(1);
+                } else {
+                    restore.source_index = restore.source_index.saturating_sub(1);
+                }
+            }
         }
-        self.redo.clear();
+        if !keep_redo {
+            self.redo.clear();
+        }
     }
 
     fn restore_presentation(&mut self, redo: bool) {
@@ -236,6 +257,7 @@ impl AlertsPanel {
         match edit {
             PresentationEdit::List(options) => {
                 let inverse = PresentationEdit::List(std::mem::replace(&mut self.options, options));
+                (if redo { &mut self.redo } else { &mut self.undo }).pop();
                 self.finish_restore(redo, inverse);
             }
             PresentationEdit::Marker(id, line, blink) => {
@@ -248,26 +270,55 @@ impl AlertsPanel {
                     return;
                 };
                 if alert.extend_line == line && alert.blink_on_trigger == blink {
+                    (if redo { &mut self.redo } else { &mut self.undo }).pop();
                     self.finish_restore(redo, PresentationEdit::Marker(id, line, blink));
                     return;
                 }
+                let inverse =
+                    PresentationEdit::Marker(id, alert.extend_line, alert.blink_on_trigger);
                 alert.extend_line = line;
                 alert.blink_on_trigger = blink;
-                if self.save_with(alert, 0) {
-                    self.restoring = Some(redo);
+                if let Some(key) = self.save_with(alert, 0) {
+                    let from = if redo { &mut self.redo } else { &mut self.undo };
+                    from.pop();
+                    self.restoring = Some(PresentationRestore {
+                        redo,
+                        request: key,
+                        source_index: from.len(),
+                        destination_index: if redo {
+                            self.undo.len()
+                        } else {
+                            self.redo.len()
+                        },
+                        inverse,
+                    });
                 }
             }
         }
     }
 
     fn finish_restore(&mut self, redo: bool, inverse: PresentationEdit) {
-        let (from, to) = if redo {
-            (&mut self.redo, &mut self.undo)
-        } else {
-            (&mut self.undo, &mut self.redo)
+        (if redo { &mut self.undo } else { &mut self.redo }).push(inverse);
+    }
+
+    fn cancel_restore(&mut self) {
+        let Some(PresentationRestore {
+            redo,
+            request: key,
+            source_index,
+            ..
+        }) = self.restoring.take()
+        else {
+            return;
         };
-        from.pop();
-        to.push(inverse);
+        if let Some((_, edit, _)) = self
+            .staged_display
+            .iter()
+            .find(|(request, ..)| *request == key)
+        {
+            let from = if redo { &mut self.redo } else { &mut self.undo };
+            from.insert(source_index.min(from.len()), edit.clone());
+        }
     }
 
     /// Start the Quick alert form on `symbol`, such as the chart's. Call it every frame: the form
@@ -327,7 +378,7 @@ impl AlertsPanel {
         self.undo.clear();
         self.redo.clear();
         self.restoring = None;
-        self.staged_display = None;
+        self.staged_display.clear();
         self.error = None;
         self.pending = 0;
         self.draft_saving = false;
@@ -362,18 +413,18 @@ impl AlertsPanel {
             ));
             return;
         }
-        self.save_with(alert, 0);
+        let _ = self.save_with(alert, 0);
     }
 
-    /// Send `alert` and say whether a service took it; its reply arrives under `key`.
-    fn save_with(&mut self, mut alert: Alert, key: u64) -> bool {
+    /// Send `alert` and return its reply key, or `None` without a service.
+    fn save_with(&mut self, mut alert: Alert, key: u64) -> Option<u64> {
         if alert.id.is_none() {
             alert.created_at = Some(Utc::now());
             alert.last_triggered_at = None;
         }
         let Some(service) = &self.service else {
             self.error = Some(FeedError::NotSupported);
-            return false;
+            return None;
         };
         let display_only = self
             .alerts
@@ -396,19 +447,30 @@ impl AlertsPanel {
                 alert.inputs = Some(Box::new(inputs));
             }
         }
+        // A reply belongs to its own save even when the host answers out of order.
+        let key = if key == 0 {
+            let key = self.next_reply;
+            self.next_reply -= 1;
+            key
+        } else {
+            key
+        };
         if self.alerts.iter().any(|old| {
             old.id == alert.id
                 && (old.extend_line != alert.extend_line
                     || old.blink_on_trigger != alert.blink_on_trigger)
-        }) {
-            self.staged_display = alert
-                .id
-                .clone()
-                .map(|id| (id, alert.extend_line, alert.blink_on_trigger));
+        }) && let Some(id) = alert.id.clone()
+        {
+            // A later confirmation must not erase the redo produced by the pending restore.
+            self.staged_display.push((
+                key,
+                PresentationEdit::Marker(id, alert.extend_line, alert.blink_on_trigger),
+                self.restoring.is_some(),
+            ));
         }
         self.pending += 1;
         service.save(alert, self.inbox.reply(key));
-        true
+        Some(key)
     }
 
     fn last_firing(&self, alert: &Alert) -> Option<DateTime<Utc>> {
@@ -477,8 +539,8 @@ impl AlertsPanel {
         if self.listener.as_ref().is_some_and(|l| !l.is_active()) {
             self.listener = None;
             self.alerts.clear();
-            self.staged_display = None;
-            self.restoring = None;
+            self.cancel_restore();
+            self.staged_display.clear();
             self.watch();
         }
         for (key, answer) in self.inbox.drain().answers {
@@ -486,9 +548,7 @@ impl AlertsPanel {
                 if let Ok(event) = answer.downcast::<AlertEvent>() {
                     self.apply_event(ctx, *event, toasts);
                 }
-            } else if (key == 0 || key == DRAFT_REPLY)
-                && let Ok(result) = answer.downcast::<Result<(), FeedError>>()
-            {
+            } else if let Ok(result) = answer.downcast::<Result<(), FeedError>>() {
                 self.pending = self.pending.saturating_sub(1);
                 self.draft_saving &= key != DRAFT_REPLY;
                 match *result {
@@ -500,8 +560,14 @@ impl AlertsPanel {
                         }
                     }
                     Err(error) => {
-                        self.restoring = None;
-                        self.staged_display = None;
+                        if self
+                            .restoring
+                            .as_ref()
+                            .is_some_and(|restore| restore.request == key)
+                        {
+                            self.cancel_restore();
+                        }
+                        self.staged_display.retain(|(request, ..)| *request != key);
                         self.error = Some(error);
                     }
                 }
@@ -519,25 +585,32 @@ impl AlertsPanel {
                 alert.last_triggered_at = self.last_firing(&alert);
                 if let Some(index) = self.alerts.iter().position(|a| a.id == alert.id) {
                     let old = &self.alerts[index];
-                    if self
-                        .staged_display
-                        .as_ref()
-                        .is_some_and(|(id, line, blink)| {
-                            alert.id.as_ref() == Some(id)
+                    if let Some(staged) = self.staged_display.iter().position(|(_, edit, _)| {
+                        matches!(edit, PresentationEdit::Marker(id, line, blink)
+                            if alert.id.as_ref() == Some(id)
                                 && alert.extend_line == *line
-                                && alert.blink_on_trigger == *blink
-                        })
-                    {
-                        self.staged_display = None;
+                                && alert.blink_on_trigger == *blink)
+                    }) {
+                        let (key, _, keep_redo) = self.staged_display.remove(staged);
                         let inverse = PresentationEdit::Marker(
                             alert.id.clone().unwrap(),
                             old.extend_line,
                             old.blink_on_trigger,
                         );
-                        if let Some(redo) = self.restoring.take() {
-                            self.finish_restore(redo, inverse);
+                        if self
+                            .restoring
+                            .as_ref()
+                            .is_some_and(|restore| restore.request == key)
+                        {
+                            let restore = self.restoring.take().unwrap();
+                            let to = if restore.redo {
+                                &mut self.undo
+                            } else {
+                                &mut self.redo
+                            };
+                            to.insert(restore.destination_index.min(to.len()), restore.inverse);
                         } else {
-                            self.remember(inverse);
+                            self.remember(inverse, keep_redo);
                         }
                     }
                     self.alerts[index] = alert;
@@ -547,14 +620,16 @@ impl AlertsPanel {
             }
             AlertEvent::Remove(id) => {
                 self.alerts.retain(|a| a.id.as_ref() != Some(&id));
-                if self
-                    .staged_display
-                    .as_ref()
-                    .is_some_and(|(kept, ..)| *kept == id)
+                if let Some(restore) = &self.restoring
+                    && self.staged_display.iter().any(|(request, edit, _)| {
+                        *request == restore.request
+                            && matches!(edit, PresentationEdit::Marker(kept, ..) if *kept == id)
+                    })
                 {
-                    self.staged_display = None;
                     self.restoring = None;
                 }
+                self.staged_display.retain(|(_, edit, _)|
+                    !matches!(edit, PresentationEdit::Marker(kept, ..) if *kept == id));
                 self.undo.retain(
                     |edit| !matches!(edit, PresentationEdit::Marker(kept, ..) if *kept == id),
                 );
@@ -567,7 +642,7 @@ impl AlertsPanel {
                 self.undo.clear();
                 self.redo.clear();
                 self.restoring = None;
-                self.staged_display = None;
+                self.staged_display.clear();
             }
             AlertEvent::TriggeredForSymbol {
                 id,
@@ -728,7 +803,7 @@ impl AlertsPanel {
         let before = self.options.clone();
         let mut history_action = None;
         ui.horizontal_wrapped(|ui| {
-            // Completing a restore pops the last history entry, so nothing may add one meanwhile.
+            // Keep list preferences steady until the host confirms the marker restore.
             if self.restoring.is_some() {
                 ui.disable();
             }
@@ -809,7 +884,7 @@ impl AlertsPanel {
             }
         });
         if self.options != before {
-            self.remember(PresentationEdit::List(before));
+            self.remember(PresentationEdit::List(before), false);
         }
         if let Some(redo) = history_action {
             self.restore_presentation(redo);
@@ -843,7 +918,7 @@ impl AlertsPanel {
                     )
                     .clicked()
                 {
-                    self.draft_saving = self.save_with(self.draft.clone(), DRAFT_REPLY);
+                    self.draft_saving = self.save_with(self.draft.clone(), DRAFT_REPLY).is_some();
                 }
             });
         if self.pending > 0 {
@@ -1304,7 +1379,7 @@ mod tests {
             panel.undo.is_empty(),
             "a rejected display edit must not create undo history"
         );
-        assert!(panel.staged_display.is_none());
+        assert!(panel.staged_display.is_empty());
         events.push(AlertEvent::Remove(alert.id.clone().unwrap()));
         frame(&mut panel);
         assert!(panel.alerts().is_empty());
@@ -1527,6 +1602,164 @@ mod tests {
     }
 
     #[test]
+    fn marker_change_during_a_pending_undo_stays_undoable() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        for reverse_pushes in [false, true] {
+            for pending_redo in [false, true] {
+                for next_redo in [false, true] {
+                    let host = Arc::new(Host::default());
+                    let answer = || host.reply.lock().unwrap().take().unwrap().send(Ok(()));
+                    let mut panel = AlertsPanel::default();
+                    panel.set_service(host.clone());
+                    let events = host.events.lock().unwrap().clone().unwrap();
+                    let mut toasts = Toasts::new();
+                    let mut h = Harness::builder()
+                        .allow_missing_glyphs()
+                        .with_size(egui::vec2(360.0, 900.0))
+                        .build_ui_state(
+                            move |ui, panel: &mut AlertsPanel| {
+                                panel.poll(ui.ctx(), &mut toasts);
+                                panel.show(ui);
+                            },
+                            panel,
+                        );
+                    let mut first = Alert::new("AAPL", AlertCondition::Above(100.0));
+                    first.id = Some(AlertId("1".into()));
+                    first.extend_line = true;
+                    let mut second = first.clone();
+                    second.id = Some(AlertId("2".into()));
+                    events.push(AlertEvent::Upsert(Box::new(first.clone())));
+                    events.push(AlertEvent::Upsert(Box::new(second.clone())));
+                    h.run_steps(3);
+                    first.extend_line = false;
+                    h.state_mut().save(first.clone());
+                    answer();
+                    events.push(AlertEvent::Upsert(Box::new(first.clone())));
+                    h.run_steps(3);
+                    h.get_by_label("Undo").click();
+                    h.run_steps(3);
+                    answer();
+                    h.run_steps(3);
+                    first.extend_line = true;
+                    if pending_redo {
+                        events.push(AlertEvent::Upsert(Box::new(first.clone())));
+                        h.run_steps(3);
+                        h.get_by_label("Redo").click();
+                        h.run_steps(3);
+                        answer();
+                        h.run_steps(3);
+                        first.extend_line = false;
+                    }
+                    // The host answered the restore but has not pushed it. A chart marker menu
+                    // uses this public save path while the row menu is also available again.
+                    second.extend_line = false;
+                    h.state_mut().save(second.clone());
+                    answer();
+                    h.run_steps(3);
+                    for alert in if reverse_pushes {
+                        [&second, &first]
+                    } else {
+                        [&first, &second]
+                    } {
+                        events.push(AlertEvent::Upsert(Box::new(alert.clone())));
+                        h.run_steps(3);
+                    }
+                    let saved = host.saved.lock().unwrap().len();
+                    h.get_by_label(if next_redo { "Redo" } else { "Undo" })
+                        .click();
+                    h.run_steps(3);
+                    let saves = host.saved.lock().unwrap();
+                    if pending_redo && next_redo {
+                        assert_eq!(saves.len(), saved, "a completed redo leaves no redo entry");
+                    } else {
+                        assert_eq!(
+                            saves.len(),
+                            saved + 1,
+                            "reverse_pushes={reverse_pushes}, pending_redo={pending_redo}, next_redo={next_redo}"
+                        );
+                        let sent = saves.last().unwrap();
+                        let expected = if next_redo { ("1", false) } else { ("2", true) };
+                        assert_eq!(
+                            (sent.id.as_ref().unwrap().0.as_str(), sent.extend_line),
+                            expected
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn marker_restore_and_another_save_keep_their_own_failures() {
+        for reject_restore in [false, true] {
+            for reverse_replies in [false, true] {
+                let host = Arc::new(Host::default());
+                let mut panel = AlertsPanel::default();
+                panel.set_service(host.clone());
+                let events = host.events.lock().unwrap().clone().unwrap();
+                let ctx = egui::Context::default();
+                let mut toasts = Toasts::new();
+                let mut poll = |panel: &mut AlertsPanel| {
+                    ctx.run_ui(Default::default(), |ui| panel.poll(ui.ctx(), &mut toasts))
+                        .drop_without_applying_deltas();
+                };
+                let mut first = Alert::new("AAPL", AlertCondition::Above(100.0));
+                first.id = Some(AlertId("1".into()));
+                first.extend_line = true;
+                let mut second = first.clone();
+                second.id = Some(AlertId("2".into()));
+                events.push(AlertEvent::Upsert(Box::new(first.clone())));
+                events.push(AlertEvent::Upsert(Box::new(second.clone())));
+                poll(&mut panel);
+                first.extend_line = false;
+                panel.save(first.clone());
+                host.reply.lock().unwrap().take().unwrap().send(Ok(()));
+                events.push(AlertEvent::Upsert(Box::new(first.clone())));
+                poll(&mut panel);
+                panel.restore_presentation(false);
+                let restore = host.reply.lock().unwrap().take().unwrap();
+                second.extend_line = false;
+                panel.save(second.clone());
+                let edit = host.reply.lock().unwrap().take().unwrap();
+                let mut replies = vec![(restore, reject_restore), (edit, !reject_restore)];
+                if reverse_replies {
+                    replies.reverse();
+                }
+                for (reply, reject) in replies {
+                    reply.send(if reject {
+                        Err(FeedError::NotSupported)
+                    } else {
+                        Ok(())
+                    });
+                }
+                if reject_restore {
+                    events.push(AlertEvent::Upsert(Box::new(second)));
+                } else {
+                    first.extend_line = true;
+                    events.push(AlertEvent::Upsert(Box::new(first)));
+                }
+                poll(&mut panel);
+                panel.restore_presentation(!reject_restore);
+                let saves = host.saved.lock().unwrap();
+                assert_eq!(
+                    saves.len(),
+                    4,
+                    "reject_restore={reject_restore}, reverse_replies={reverse_replies}"
+                );
+                let sent = saves.last().unwrap();
+                assert_eq!(
+                    (sent.id.as_ref().unwrap().0.as_str(), sent.extend_line),
+                    if reject_restore {
+                        ("2", true)
+                    } else {
+                        ("1", false)
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
     fn inline_draft_stays_pending_until_the_service_answers_and_survives_a_failure() {
         let host = Arc::new(Host::default());
         let mut panel = AlertsPanel::default();
@@ -1541,7 +1774,7 @@ mod tests {
         };
         panel.set_symbol("SIM");
         panel.draft.condition = AlertCondition::CrossingUp(10.0);
-        panel.draft_saving = panel.save_with(panel.draft.clone(), DRAFT_REPLY);
+        panel.draft_saving = panel.save_with(panel.draft.clone(), DRAFT_REPLY).is_some();
         assert_eq!((panel.pending, panel.draft_saving), (1, true));
         host.reply
             .lock()
@@ -1553,7 +1786,7 @@ mod tests {
         assert_eq!((panel.pending, panel.draft_saving), (0, false));
         assert_eq!(panel.error, Some(FeedError::NotSupported));
         assert_eq!(panel.draft.symbol, "SIM");
-        panel.draft_saving = panel.save_with(panel.draft.clone(), DRAFT_REPLY);
+        panel.draft_saving = panel.save_with(panel.draft.clone(), DRAFT_REPLY).is_some();
         host.reply.lock().unwrap().take().unwrap().send(Ok(()));
         frame(&mut panel);
         assert_eq!(panel.error, None);
