@@ -525,6 +525,189 @@ mod tests {
     use super::*;
     use crate::studies::{ConfiguredStudy, SMA};
 
+    /// CRSI declares its guides so the shared editor can stage, cancel, save and undo them.
+    #[test]
+    fn crsi_bands_and_calculation_survive_edits_and_restore() {
+        use crate::studies::{ConnorsRSI, IndicatorFactory, StudyTemplate, palette};
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let mut study =
+            ConfiguredStudy::new(IndicatorFactory::new().create("Connors RSI").unwrap());
+        let defaults = study.settings();
+        assert_eq!(
+            study.pane().levels,
+            [
+                (70.0, palette::MUTED, "Upper guide"),
+                (50.0, palette::MUTED.gamma_multiply_u8(128), "Middle guide"),
+                (30.0, palette::MUTED, "Lower guide"),
+            ]
+        );
+        assert!(defaults.fill_between_levels);
+        assert_eq!(
+            defaults.level_fill_color,
+            palette::LIGHT_BLUE.gamma_multiply_u8(26)
+        );
+        assert!(defaults.price_line_plots.is_empty());
+        assert_eq!(
+            (defaults.plots[0].width, defaults.plots[0].plot_type),
+            (1.0, PlotType::Line)
+        );
+        for level in &defaults.levels {
+            assert_eq!(
+                (level.width, level.pattern, level.visible),
+                (1.0, LineStyle::Dashed, true)
+            );
+        }
+        let before = study.snapshot_settings();
+        let mut edited = defaults.clone();
+        for (level, (value, color, pattern, width, visible)) in edited.levels.iter_mut().zip([
+            (80.0, egui::Color32::RED, LineStyle::Solid, 3.0, false),
+            (45.0, egui::Color32::GRAY, LineStyle::Dashed, 1.5, true),
+            (20.0, egui::Color32::GREEN, LineStyle::Dotted, 2.0, true),
+        ]) {
+            level.value = Some(value);
+            level.color = color;
+            level.pattern = pattern;
+            level.width = width;
+            level.visible = visible;
+        }
+        edited.level_fill_color = egui::Color32::from_rgba_unmultiplied(80, 120, 160, 64);
+        edited.price_line_plots = vec![0];
+        edited.precision = Some(4);
+        let mut dialog = IndicatorSettingsDialog::default();
+        dialog.open(SeriesId(2), &study, Some(Timeframe::Min1));
+        dialog.tab = Tab::Style;
+        dialog.edit.as_mut().unwrap().settings = edited.clone();
+        let mut applied = None;
+        for action in ["Cancel", "Apply"] {
+            let mut harness = Harness::builder()
+                .with_context_setup(egui_extras::install_image_loaders)
+                .with_size(egui::vec2(1440.0, 900.0))
+                .build_ui(|ui| {
+                    if let Some(edit) = dialog.show(ui.ctx(), &Theme::dark()) {
+                        applied = Some(edit);
+                    }
+                });
+            harness.run();
+            for caption in [
+                "Upper guide",
+                "Lower guide",
+                "Middle guide",
+                "Fill between levels",
+                "Latest value line",
+                "Fill colour",
+            ] {
+                assert!(
+                    harness.query_all_by_label(caption).next().is_some(),
+                    "{caption}"
+                );
+            }
+            harness.get_by_label(action).click();
+            harness.run();
+            drop(harness);
+            assert!(!dialog.is_open());
+            assert!(study.snapshot_settings() == before);
+            if action == "Cancel" {
+                assert!(applied.is_none());
+                dialog.open(SeriesId(2), &study, Some(Timeframe::Min1));
+                dialog.tab = Tab::Style;
+                dialog.edit.as_mut().unwrap().settings = edited.clone();
+                for input in &mut dialog.inputs {
+                    if matches!(
+                        input.id.as_str(),
+                        "rsi_period" | "streak_period" | "rank_period"
+                    ) {
+                        input.value = InputValue::Length(2);
+                    }
+                }
+            }
+        }
+        let applied = applied.unwrap();
+        study
+            .apply_settings(&applied.inputs, applied.settings)
+            .unwrap();
+        assert_eq!(study.settings(), edited);
+        assert_eq!(study.pane().levels[0].1, egui::Color32::TRANSPARENT);
+        assert_eq!(study.level_style(20.0), LineStyle::Dotted);
+        assert_eq!(study.level_width(20.0), 2.0);
+        assert!(study.plot_price_line(0));
+        let mut bars: Vec<_> = [100.0, 101.0, 102.0, 101.0, 100.0, 100.0]
+            .into_iter()
+            .enumerate()
+            .map(|(i, p)| {
+                crate::model::Bar::new(
+                    chrono::DateTime::from_timestamp(i as i64 * 60, 0).unwrap(),
+                    p,
+                    p,
+                    p,
+                    p,
+                    1.0,
+                )
+            })
+            .collect();
+        study.calculate(&bars);
+        // Wilder RSI(2) price 25, streak 450/7, and return rank 100 give 1325/21.
+        assert!((study.values().value(0, 5).unwrap() - 1325.0 / 21.0).abs() < 1e-9);
+        bars[5].close = 101.0;
+        study.update(&bars, 5);
+        assert!((study.values().value(0, 5).unwrap() - 4225.0 / 54.0).abs() < 1e-9);
+        bars.push(crate::model::Bar::new(
+            chrono::DateTime::from_timestamp(360, 0).unwrap(),
+            102.0,
+            102.0,
+            102.0,
+            102.0,
+            1.0,
+        ));
+        study.update(&bars, 6);
+        assert!((study.values().value(0, 6).unwrap() - 3675.0 / 52.0).abs() < 1e-9);
+        let saved = serde_json::to_string(&StudyTemplate::from_study(&study)).unwrap();
+        let mut loaded = serde_json::from_str::<StudyTemplate>(&saved)
+            .unwrap()
+            .create()
+            .unwrap();
+        loaded.calculate(&bars);
+        assert_eq!(loaded.settings(), edited);
+        for bar in 2..bars.len() {
+            assert_eq!(study.values().value(0, bar), loaded.values().value(0, bar));
+        }
+        let after = study.snapshot_settings();
+        study
+            .set_input(
+                "source",
+                InputValue::Source(crate::studies::StudySource::Price(
+                    crate::model::PriceSource::Open,
+                )),
+            )
+            .unwrap();
+        study
+            .set_input("plot_offset", InputValue::Integer(2))
+            .unwrap();
+        study.calculate(&bars);
+        assert!((study.plot_value(0, 7).unwrap() - 1325.0 / 21.0).abs() < 1e-9);
+        study.restore_settings(&after).unwrap();
+        let mut hidden = edited.clone();
+        hidden.fill_between_levels = false;
+        study.apply_settings(&[], hidden).unwrap();
+        assert!(!study.pane().fill_between_levels);
+        assert_eq!(study.level_fill_color(), edited.level_fill_color);
+        study.restore_settings(&before).unwrap();
+        assert_eq!(study.settings(), defaults);
+        study.restore_settings(&after).unwrap();
+        assert_eq!(study.settings(), edited);
+        // A saved study without level fields inherits the declared guides on restore.
+        let mut older = serde_json::to_value(StudyTemplate::from_study(&study)).unwrap();
+        for key in ["levels", "fill_between_levels", "level_fill_color"] {
+            older["settings"].as_object_mut().unwrap().remove(key);
+        }
+        let older = serde_json::from_value::<StudyTemplate>(older)
+            .unwrap()
+            .create()
+            .unwrap();
+        assert_eq!(older.pane().levels, ConnorsRSI::default().pane().levels);
+        assert!(older.pane().fill_between_levels);
+    }
+
     #[test]
     fn ao_presentation_saves_cancels_and_restores_across_gaps() {
         use crate::studies::{AwesomeOscillator, StudyTemplate};

@@ -18,18 +18,16 @@ impl IndicatorPane {
         indicator: &dyn Indicator,
     ) {
         if self.config.fill_between_zones {
-            let lower = self
+            let indices = indicator.level_fill_indices();
+            let levels = self
                 .config
                 .zones
                 .iter()
-                .map(|z| z.0)
-                .fold(f64::INFINITY, f64::min);
-            let upper = self
-                .config
-                .zones
-                .iter()
-                .map(|z| z.0)
-                .fold(f64::NEG_INFINITY, f64::max);
+                .enumerate()
+                .filter(|(index, _)| indices.is_none_or(|indices| indices.contains(index)))
+                .map(|(_, zone)| zone.0);
+            let lower = levels.clone().fold(f64::INFINITY, f64::min);
+            let upper = levels.fold(f64::NEG_INFINITY, f64::max);
             if lower < upper {
                 painter.rect_filled(
                     Rect::from_two_pos(
@@ -738,7 +736,7 @@ mod tests {
     }
 
     #[test]
-    fn rsi_paints_the_band_and_guides_of_its_preset_and_its_level_settings() {
+    fn rsi_and_crsi_paint_bands_and_guide_settings() {
         let config = IndicatorPaneConfig::rsi();
         assert_eq!(config.height, 138.0);
         assert_eq!(
@@ -758,6 +756,18 @@ mod tests {
         settings.levels[2].visible = false;
         settings.level_fill_color = Color32::from_rgba_unmultiplied(1, 2, 3, 40);
         edited.apply_settings(&[], settings).unwrap();
+        let mut crsi =
+            crate::studies::ConfiguredStudy::new(Box::new(crate::studies::ConnorsRSI::default()));
+        let mut settings = crsi.settings();
+        let levels = edited.settings().levels;
+        settings.levels = vec![levels[0], levels[2], levels[1]];
+        settings.levels[1].value = Some(95.0);
+        settings.level_fill_color = edited.level_fill_color();
+        crsi.apply_settings(&[], settings).unwrap();
+        let mut crsi_below = crsi.clone();
+        let mut settings = crsi_below.settings();
+        settings.levels[1].value = Some(5.0);
+        crsi_below.apply_settings(&[], settings).unwrap();
         let bare = crate::studies::RSI::default();
         let ctx = egui::Context::default();
         crate::theme::apply_to_egui(&ctx, &crate::theme::Theme::dark());
@@ -775,6 +785,25 @@ mod tests {
             (
                 IndicatorPaneConfig::from_study(&edited),
                 &edited,
+                [(20.0, 70.0), (30.0, 80.0)],
+                [&[20.0][..], &[80.0]],
+                Color32::WHITE,
+                8.0,
+                Color32::from_rgba_unmultiplied(1, 2, 3, 40),
+            ),
+            // The middle guide never changes the band, even hidden above or below its edges.
+            (
+                IndicatorPaneConfig::from_study(&crsi),
+                &crsi,
+                [(20.0, 70.0), (30.0, 80.0)],
+                [&[20.0][..], &[80.0]],
+                Color32::WHITE,
+                8.0,
+                Color32::from_rgba_unmultiplied(1, 2, 3, 40),
+            ),
+            (
+                IndicatorPaneConfig::from_study(&crsi_below),
+                &crsi_below,
                 [(20.0, 70.0), (30.0, 80.0)],
                 [&[20.0][..], &[80.0]],
                 Color32::WHITE,
@@ -824,6 +853,10 @@ mod tests {
                     });
                     assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
                         egui::Shape::LineSegment { points, stroke } if stroke.color == color && stroke.width == 3.0 && (points[0].y - guide_ys[inverted as usize][0]).abs() < 0.001
+                    )));
+                    let (top, bottom) = band[inverted as usize];
+                    assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                        egui::Shape::Rect(r) if r.fill == fill && (r.rect.top() - top).abs() < 0.001 && (r.rect.bottom() - bottom).abs() < 0.001
                     )));
                     output.drop_without_applying_deltas();
                 }

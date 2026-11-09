@@ -61,16 +61,15 @@ pub(crate) fn paint_overlay_levels(
     let pane = study.pane();
     let rect = painter.clip_rect();
     if pane.fill_between_levels {
-        let lower = pane
+        let indices = study.level_fill_indices();
+        let levels = pane
             .levels
             .iter()
-            .map(|level| level.0)
-            .fold(f64::INFINITY, f64::min);
-        let upper = pane
-            .levels
-            .iter()
-            .map(|level| level.0)
-            .fold(f64::NEG_INFINITY, f64::max);
+            .enumerate()
+            .filter(|(index, _)| indices.is_none_or(|indices| indices.contains(index)))
+            .map(|(_, level)| level.0);
+        let lower = levels.clone().fold(f64::INFINITY, f64::min);
+        let upper = levels.fold(f64::NEG_INFINITY, f64::max);
         let (a, b) = (price.price_to_y(lower), price.price_to_y(upper));
         if lower < upper && a.is_finite() && b.is_finite() {
             painter.rect_filled(

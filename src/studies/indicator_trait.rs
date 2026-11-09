@@ -101,7 +101,8 @@ pub struct StudyPane {
     /// Reference level, colour and caption: the defaults of
     /// [`StudySettings::levels`](super::StudySettings::levels).
     pub levels: Vec<(f64, Color32, &'static str)>,
-    /// Fill between the outer levels using [`Indicator::level_fill_color`].
+    /// Fill between the levels selected by [`Indicator::level_fill_indices`], or the outer
+    /// levels, using [`Indicator::level_fill_color`].
     pub fill_between_levels: bool,
 }
 
@@ -203,6 +204,12 @@ pub trait Indicator: Send {
 
     /// Optional tint beneath the study's geometry over its plot area.
     fn background(&self) -> Option<Color32> {
+        None
+    }
+
+    /// Indices into the pane's levels that bound its fill, independent of other guides.
+    /// `None` uses the lowest and highest levels. Invalid indices contribute no boundary.
+    fn level_fill_indices(&self) -> Option<[usize; 2]> {
         None
     }
 
