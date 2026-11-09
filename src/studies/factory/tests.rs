@@ -115,7 +115,7 @@ fn host_defaults_are_atomic_and_follow_the_constructor_lifetime() {
     let plots = invalid(|t| t.settings.plots.clear());
     let mut old_input =
         StudyTemplate::from_study(factory.create("LinReg Channel").unwrap().as_ref());
-    old_input.inputs = vec![("multiplier".into(), InputValue::Number(2.0))];
+    old_input.inputs = vec![("multiplier".into(), InputValue::Number(3.0))];
     let mut replacement = defaults.clone();
     replacement.settings.plots[0].width = 6.0;
     for template in [
@@ -126,7 +126,6 @@ fn host_defaults_are_atomic_and_follow_the_constructor_lifetime() {
         precision,
         width,
         plots,
-        old_input,
     ] {
         assert!(
             factory
@@ -134,6 +133,12 @@ fn host_defaults_are_atomic_and_follow_the_constructor_lifetime() {
                 .is_err()
         );
         assert_eq!(factory.create("SMA").unwrap().plot_style(0).width, 4.0);
+    }
+    factory.set_defaults(&[old_input]).unwrap();
+    let inputs = factory.create("LinReg Channel").unwrap().inputs();
+    for id in ["upper_multiplier", "lower_multiplier"] {
+        let input = inputs.iter().find(|input| input.id == id).unwrap();
+        assert_eq!(input.value, InputValue::Number(3.0));
     }
     factory.set_defaults(&[]).unwrap();
     factory
