@@ -242,9 +242,9 @@ impl DrawingProps {
                 let settings = &template.settings;
                 // A tool setting that differs from the target's was edited.
                 macro_rules! edited {
-                    ($($field:ident),+ $(,)?) => {
-                        $(if settings.$field != target.$field {
-                            drawing.$field.clone_from(&settings.$field);
+                    ($($($field:ident).+),+ $(,)?) => {
+                        $(if settings.$($field).+ != target.$($field).+ {
+                            drawing.$($field).+.clone_from(&settings.$($field).+);
                         })+
                     };
                 }
@@ -271,7 +271,19 @@ impl DrawingProps {
                     regression_trend,
                     vwap,
                     channel_midline,
-                    line_measurements,
+                    line_measurements.price_change,
+                    line_measurements.percent_change,
+                    line_measurements.pip_change,
+                    line_measurements.bar_count,
+                    line_measurements.elapsed_time,
+                    line_measurements.length,
+                    line_measurements.inclination,
+                    line_measurements.persistent,
+                    line_measurements.midpoint,
+                    line_measurements.price_labels,
+                    line_measurements.position,
+                    line_measurements.text_horizontal_align,
+                    line_measurements.text_vertical_align,
                     price_axis_label,
                     time_axis_label,
                     elliott_degree,
@@ -858,5 +870,76 @@ mod tests {
                 assert_eq!(config.opacity, opacity.unwrap_or(original_opacity));
             }
         }
+    }
+
+    /// Two selected trend lines: the first shows its price change, the second its inclination on
+    /// the left with its text below the line. Ticking "Elapsed time" in the dialog of the first, or
+    /// changing the first's text alignment, edits only that value on each line.
+    #[test]
+    fn selection_readout_edit_keeps_the_other_lines_readouts() {
+        use crate::drawings::{
+            LineMeasurementPosition as P, LineMeasurements, LineTextHorizontalAlign as H,
+            LineTextVerticalAlign as V,
+        };
+        let mut first = Drawing::new(1, DrawingToolType::TrendLine);
+        first.line_measurements.price_change = true;
+        let mut second = Drawing::new(2, DrawingToolType::TrendLine);
+        second.line_measurements = LineMeasurements {
+            inclination: true,
+            position: P::Left,
+            text_vertical_align: V::Top,
+            ..Default::default()
+        };
+        let mut chart = Chart::new(crate::model::BarData::new());
+        chart.drawings_mut().drawings = vec![first.clone(), second.clone()];
+        chart.drawings_mut().select_drawings([1, 2]);
+        let opened = DrawingProps::from_drawing(&first, &chart);
+        let mut got = Vec::new();
+        let changes: [fn(&mut LineMeasurements); 13] = [
+            |m| m.price_change = false,
+            |m| m.percent_change = true,
+            |m| m.pip_change = true,
+            |m| m.bar_count = true,
+            |m| m.elapsed_time = true,
+            |m| m.length = true,
+            |m| m.inclination = true,
+            |m| m.persistent = true,
+            |m| m.midpoint = true,
+            |m| m.price_labels = true,
+            |m| m.position = P::Center,
+            |m| m.text_horizontal_align = H::Right,
+            |m| m.text_vertical_align = V::Middle,
+        ];
+        for edit in changes {
+            let mut props = opened.clone();
+            edit(
+                &mut props
+                    .tool_settings
+                    .as_mut()
+                    .unwrap()
+                    .settings
+                    .line_measurements,
+            );
+            let edits = props.edited_drawings(DrawingId(1), &chart).unwrap();
+            got.push(
+                edits
+                    .iter()
+                    .map(|d| d.line_measurements)
+                    .collect::<Vec<_>>(),
+            );
+        }
+        let want: Vec<_> = changes
+            .into_iter()
+            .map(|edit| {
+                [first.line_measurements, second.line_measurements]
+                    .into_iter()
+                    .map(|mut settings| {
+                        edit(&mut settings);
+                        settings
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(got, want);
     }
 }
