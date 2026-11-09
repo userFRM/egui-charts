@@ -704,7 +704,7 @@ mod tests {
         let mut dialog = DrawingPropertiesDialog::new();
         for (tool, writes, styles, boxed) in [
             (Tool::TrendAngle, false, true, false),
-            (Tool::TrendLine, true, false, false),
+            (Tool::TrendLine, true, true, false),
             (Tool::TextLabel, true, true, true),
         ] {
             let mut drawing = Drawing::new(7, tool);
@@ -859,7 +859,7 @@ mod tests {
                 "{finish}"
             );
             assert!(!restored.italic, "{finish}");
-            assert_eq!(restored.text_color, None, "{finish}");
+            assert_eq!(restored.text_color, Some([41, 98, 255, 255]), "{finish}");
             assert_eq!(restored.line_measurements, Default::default(), "{finish}");
             assert_eq!(chart.drawings().drawings[0].stroke_width, 20.0, "{finish}");
             assert_eq!(chart.drawings().drawings[1].stroke_width, 4.0, "{finish}");

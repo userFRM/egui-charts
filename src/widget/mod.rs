@@ -98,7 +98,7 @@ pub(crate) mod interaction;
 pub(crate) mod keyboard;
 mod layout;
 mod navigation;
-mod palette;
+pub(crate) mod palette;
 pub(crate) mod pan_zoom;
 mod pane;
 #[doc(inline)]
@@ -742,6 +742,17 @@ impl Chart {
                     &mut style.wick_down,
                 ])
             }
+            ChartType::VolumeCandles => {
+                let style = &mut styles.volume_candles;
+                Some([
+                    &mut style.body_up,
+                    &mut style.body_down,
+                    &mut style.border_up,
+                    &mut style.border_down,
+                    &mut style.wick_up,
+                    &mut style.wick_down,
+                ])
+            }
             _ => None,
         }
     }
@@ -751,11 +762,11 @@ impl Chart {
     /// Copies candlestick colors (bullish/bearish fill, border, wick) and the
     /// price source field from the given [`SeriesSettings`] into the chart's
     /// [`ChartConfig`], and its scale mode and inversion into the main price
-    /// scale. Settings of a Heikin-Ashi or hollow candles chart keep their candle colors
-    /// in that chart type's style instead, a `None` border or wick meaning the body color,
-    /// and these colors win over the same colors in `chart_type_params`. A new scale mode
-    /// returns the scale to auto-scaling and clears the zoom history, whose ranges are in
-    /// the old mode's units. Call this when the user changes series appearance in a
+    /// scale. Settings of a Heikin-Ashi, hollow candles or volume candles chart keep their
+    /// candle colors in that chart type's style instead, a `None` border or wick meaning the
+    /// body color, and these colors win over the same colors in `chart_type_params`. A new
+    /// scale mode returns the scale to auto-scaling and clears the zoom history, whose ranges
+    /// are in the old mode's units. Call this when the user changes series appearance in a
     /// settings dialog.
     pub fn apply_series_settings(&mut self, settings: &SeriesSettings) {
         let mut params = settings.chart_type_params.clone();
@@ -873,25 +884,27 @@ impl Chart {
 
     /// Apply a theme to this chart and to the UI in `ctx`, without changing data or pan and zoom.
     ///
-    /// Other charts sharing the context follow the active theme on their next frame, keeping
-    /// colours the host has edited and any per-chart theme override.
+    /// Unedited chart type style colours follow the theme; edited ones stay. Other charts sharing
+    /// the context follow the active theme on their next frame, keeping colours the host has
+    /// edited and any per-chart theme override.
     pub fn set_theme(&mut self, ctx: &egui::Context, theme: &crate::theme::Theme) {
         self.config = self.config.clone().with_theme(theme);
         self.theme_override = None;
-        self.inherited_theme = Some(theme.clone());
+        self.follow_chart_theme(theme);
         crate::theme::apply_to_egui(ctx, theme);
         ctx.request_repaint();
     }
 
     /// Overrides this chart's palette and text sizes without changing sibling charts or egui.
     ///
-    /// `Some(theme)` also applies its series colours to the chart configuration. Explicit
-    /// configuration edits made afterwards are kept. `None` follows the host's palette again,
-    /// retaining host-edited colours. `set_theme` clears this override and themes egui.
+    /// `Some(theme)` also applies its series colours to the chart configuration, and unedited
+    /// chart type style colours follow it while edited ones stay. Explicit configuration edits
+    /// made afterwards are kept. `None` follows the host's palette again, retaining host-edited
+    /// colours. `set_theme` clears this override and themes egui.
     pub fn set_theme_override(&mut self, theme: Option<crate::theme::Theme>) {
         if let Some(theme) = &theme {
             self.config = self.config.clone().with_theme(theme);
-            self.inherited_theme = Some(theme.clone());
+            self.follow_chart_theme(theme);
         }
         self.theme_override = theme;
     }

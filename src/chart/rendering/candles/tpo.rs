@@ -67,7 +67,7 @@ pub struct TpoRenderConfig {
     pub value_area_color: Color32,
     /// Initial Balance bar color
     pub initial_balance_color: Color32,
-    /// Highlight behind rows touched by a single period and tint of their blocks (with alpha)
+    /// Highlight behind rows touched by a single period (with alpha); blocks take it opaque
     pub single_print_color: Color32,
     /// Default letter color
     pub default_letter_color: Color32,
@@ -793,9 +793,11 @@ fn draw_session_profile(
                 let left = (x - block_width * 0.5).round_to_pixels(pixels_per_point);
                 let right = (x + block_width * 0.5).round_to_pixels(pixels_per_point);
                 let cell = Rect::from_min_max(Pos2::new(left, top), Pos2::new(right, bottom));
-                // An opaque cell hides the highlight behind it, so a single print tints its own cell.
-                let color = if single_print {
-                    color.blend(render_config.single_print_color)
+                // An opaque cell hides the highlight behind it, so a single print takes the colour
+                // itself: a tint barely shows on a cell dimmed toward a light background. The POC
+                // row keeps its colour, as every row of a one-period profile is a single print.
+                let color = if single_print && !is_poc {
+                    render_config.single_print_color.to_opaque()
                 } else {
                     color
                 };
@@ -1026,6 +1028,10 @@ fn draw_session_profile(
     }
 
     if config.show_statistics {
+        // The next session's captions sit in the strip that ends this session's room.
+        let captions =
+            labels && (config.show_poc || config.show_value_area || config.show_midpoint);
+        let room = if captions { room - LABEL_ROOM_PX } else { room };
         draw_statistics(painter, price_rect, coords, profile, anchor_x, room);
     }
 }
@@ -2305,6 +2311,33 @@ mod tests {
         }
     }
 
+    /// CIE76 difference of two opaque sRGB colours (D65 white), from the published definitions.
+    fn delta_e76(a: Color32, b: Color32) -> f64 {
+        fn lab(c: Color32) -> [f64; 3] {
+            let [r, g, b] = [c.r(), c.g(), c.b()].map(|v| {
+                let v = f64::from(v) / 255.0;
+                if v <= 0.04045 {
+                    v / 12.92
+                } else {
+                    ((v + 0.055) / 1.055).powf(2.4)
+                }
+            });
+            let f = |t: f64| {
+                if t > 216.0 / 24389.0 {
+                    t.cbrt()
+                } else {
+                    (24389.0 / 27.0 * t + 16.0) / 116.0
+                }
+            };
+            let x = f((0.4124564 * r + 0.3575761 * g + 0.1804375 * b) / 0.95047);
+            let y = f(0.2126729 * r + 0.7151522 * g + 0.0721750 * b);
+            let z = f((0.0193339 * r + 0.1191920 * g + 0.9503041 * b) / 1.08883);
+            [116.0 * y - 16.0, 500.0 * (x - y), 200.0 * (y - z)]
+        }
+        let (a, b) = (lab(a), lab(b));
+        ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
+    }
+
     /// Three half-hour periods on rows of 1: A 98 to 105, B 101 to 107, C 104 to 108, so rows
     /// 98, 99, 100 and 108 hold one TPO each.
     fn three_overlapping_periods() -> Vec<Bar> {
@@ -2350,8 +2383,12 @@ mod tests {
             rect.max.y,
             false,
         );
-        let fills = |display_mode, show_single_prints| {
+        let fills = |theme: &crate::theme::Theme,
+                     profile: &TPOProfile,
+                     display_mode,
+                     show_single_prints| {
             let ctx = egui::Context::default();
+            let _theme = crate::theme::ThemeScope::new(&ctx, theme);
             ctx.begin_pass(egui::RawInput::default());
             let painter = ctx.layer_painter(egui::LayerId::background());
             let config = TPOConfig {
@@ -2363,7 +2400,7 @@ mod tests {
                 &painter,
                 rect,
                 &coords,
-                &profile,
+                profile,
                 &config,
                 &render_config,
                 10.0,
@@ -2384,32 +2421,56 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
         };
-        // The fills that show at a point: the last opaque one and those painted over it.
-        let shown = |fills: &[(Rect, Color32)], p: Pos2| {
-            let over: Vec<_> = fills
+        // The colour a point shows: the last opaque fill there and those painted over it, on the
+        // chart background.
+        let shown = |fills: &[(Rect, Color32)], p: Pos2, bg: Color32| {
+            fills
                 .iter()
                 .filter(|(r, _)| r.contains(p))
-                .map(|(_, c)| *c)
-                .collect();
-            let from = over.iter().rposition(|c| c.a() == 255).unwrap_or(0);
-            over[from..].to_vec()
-        };
-        // Pixels whose paint changes when single prints are turned on.
-        let marked = |display_mode| {
-            let (on, off) = (fills(display_mode, true), fills(display_mode, false));
-            (0..400)
-                .flat_map(|y| (0..120).map(move |x| Pos2::new(x as f32 + 0.5, y as f32 + 0.5)))
-                .filter(|&p| shown(&on[..], p) != shown(&off[..], p))
-                .count()
+                .fold(bg, |under, (_, fill)| under.blend(*fill))
         };
         // Each single print's cell is one 16 px column of one 16 px row.
         let half_cells = 4 * 16 * 16 / 2;
-        for display_mode in [TPODisplayMode::Blocks, TPODisplayMode::Both] {
-            let changed = marked(display_mode);
-            assert!(
-                changed >= half_cells,
-                "{display_mode:?}: 4 single prints changed {changed} px, expected {half_cells}"
-            );
+        let one_period = to_tpo_profiles(
+            &three_overlapping_periods()[..1],
+            &model,
+            &Timeframe::Min30.into(),
+        )
+        .remove(0);
+        assert!(one_period.single_prints.contains(&one_period.poc_price));
+        let poc = Pos2::new(14.0, coords.price_to_y(one_period.poc_price));
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            let bg = theme.chart.bg;
+            for display_mode in [TPODisplayMode::Blocks, TPODisplayMode::Both] {
+                let on = fills(&theme, &profile, display_mode, true);
+                let off = fills(&theme, &profile, display_mode, false);
+                let mut changed = 0;
+                for p in (0..400)
+                    .flat_map(|y| (0..120).map(move |x| Pos2::new(x as f32 + 0.5, y as f32 + 0.5)))
+                {
+                    let (marked, plain) = (shown(&on, p, bg), shown(&off, p, bg));
+                    if marked != plain {
+                        changed += 1;
+                        let difference = delta_e76(marked, plain);
+                        assert!(
+                            difference >= 5.0,
+                            "{display_mode:?} on {bg:?} at {p:?}: {plain:?} to {marked:?} is only \
+                             {difference:.1} dE76"
+                        );
+                    }
+                }
+                assert!(
+                    changed >= half_cells,
+                    "{display_mode:?}: 4 single prints changed {changed} px, expected {half_cells}"
+                );
+
+                // One period makes the POC row a single print too; it must still show the POC.
+                assert_eq!(
+                    shown(&fills(&theme, &one_period, display_mode, true), poc, bg),
+                    shown(&fills(&theme, &one_period, display_mode, false), poc, bg),
+                    "{display_mode:?} on {bg:?}: the POC row of a one-period profile"
+                );
+            }
         }
     }
 
@@ -2570,5 +2631,208 @@ mod tests {
                 .any(|s| matches!(&s.shape, Shape::Text(t) if t.galley.text() == "Rotation"));
             assert_eq!(painted, drawn, "anchor {anchor}, room {room}");
         }
+    }
+
+    #[test]
+    fn statistics_stay_clear_of_the_next_session_captions() {
+        // Two UTC days of eight half-hour bars, the second trading 11 lower, so its VAH caption
+        // falls at the height of the first day's table.
+        let bars: Vec<_> = [0.0, -11.0]
+            .into_iter()
+            .enumerate()
+            .flat_map(|(day, shift)| {
+                [
+                    (104.0, 110.0),
+                    (102.0, 108.0),
+                    (103.0, 109.0),
+                    (101.0, 107.0),
+                    (104.0, 108.0),
+                    (102.0, 106.0),
+                    (103.0, 107.0),
+                    (101.0, 105.0),
+                ]
+                .into_iter()
+                .enumerate()
+                .map(move |(i, (low, high))| {
+                    let minute = day as i64 * 1440 + i as i64 * 30;
+                    let time = chrono::DateTime::UNIX_EPOCH + Duration::minutes(minute);
+                    Bar::new(
+                        time,
+                        low + shift,
+                        high + shift,
+                        low + shift,
+                        high + shift,
+                        1.0,
+                    )
+                })
+            })
+            .collect();
+        let rect = Rect::from_x_y_ranges(0.0..=800.0, 0.0..=400.0);
+        let coords = PriceMap::new(
+            crate::scales::PriceTransform::default(),
+            crate::scales::PriceRange::new(85.0, 115.0),
+            rect.min.y,
+            rect.max.y,
+            false,
+        );
+        // (px per bar, level captions shown, table drawn if known)
+        let rows = (18..=25)
+            .map(|spacing| (spacing as f32, true, None))
+            .chain([(40.0, true, Some(true)), (23.0, false, Some(true))]);
+        for (spacing, captions, drawn) in rows {
+            let config = TPOConfig {
+                tick_size: 1.0,
+                show_statistics: true,
+                show_poc: captions,
+                show_value_area: captions,
+                ..Default::default()
+            };
+            let ctx = egui::Context::default();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(rect),
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.allocate_rect(rect, egui::Sense::hover());
+                    render_live_tpo(
+                        ui.painter(),
+                        rect,
+                        &bars,
+                        0..bars.len(),
+                        1,
+                        &coords,
+                        &config,
+                        None,
+                        &BarClock::new(Timeframe::Min30),
+                        |i, _| 50.0 + i as f32 * spacing,
+                        0.0,
+                        Color32::GREEN,
+                        Color32::RED,
+                    )
+                },
+            );
+            output.textures_delta.clear();
+            let background = ctx.active_theme().chart.bg;
+            let tables: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    Shape::Rect(r) if r.fill == background => Some(r.rect),
+                    _ => None,
+                })
+                .collect();
+            // The second day's captions, right-aligned 8 px left of its first bar.
+            let caption_right = 50.0 + 8.0 * spacing - 8.0;
+            let captions_drawn: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    Shape::Text(t)
+                        if ["POC", "VAH", "VAL", "Mid"].contains(&t.galley.text())
+                            && (t.pos.x + t.galley.size().x - caption_right).abs() < 0.5 =>
+                    {
+                        Some(Rect::from_min_size(t.pos, t.galley.size()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                captions_drawn.len(),
+                if captions { 3 } else { 0 },
+                "{spacing} px per bar"
+            );
+            for table in &tables {
+                for caption in &captions_drawn {
+                    assert!(
+                        !table.intersects(*caption),
+                        "{spacing} px per bar: table {table:?}, caption {caption:?}"
+                    );
+                }
+            }
+            if let Some(drawn) = drawn {
+                // The first day's table starts at its first bar.
+                let first = tables.iter().any(|table| table.left() == 50.0);
+                assert_eq!(first, drawn, "{spacing} px per bar, captions {captions}");
+            }
+        }
+    }
+
+    #[test]
+    fn statistics_name_widened_row_prices_exactly() {
+        // One session whose automatic rows (0.025) are widened to 0.075, which is not exact in f64.
+        let start = chrono::DateTime::parse_from_rfc3339("2024-01-02T14:30:00Z")
+            .unwrap()
+            .to_utc();
+        let bars: Vec<_> = [
+            (100.0, 120.0),
+            (120.0, 140.0),
+            (140.0, 160.0),
+            (110.0, 150.0),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (low, high))| {
+            Bar::new(
+                start + Duration::minutes(30 * i as i64),
+                low,
+                high,
+                low,
+                high,
+                1.0,
+            )
+        })
+        .collect();
+        let rect = Rect::from_x_y_ranges(0.0..=400.0, 0.0..=400.0);
+        let coords = PriceMap::new(
+            crate::scales::PriceTransform::default(),
+            crate::scales::PriceRange::new(100.0, 101.0),
+            rect.min.y,
+            rect.max.y,
+            false,
+        );
+        let config = TPOConfig {
+            tick_size: 0.0,
+            show_statistics: true,
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(rect),
+                ..Default::default()
+            },
+            |ui| {
+                ui.allocate_rect(rect, egui::Sense::hover());
+                render_live_tpo(
+                    ui.painter(),
+                    rect,
+                    &bars,
+                    0..bars.len(),
+                    1,
+                    &coords,
+                    &config,
+                    None,
+                    &BarClock::new(Timeframe::Min30),
+                    |i, _| i as f32 * 100.0 + 50.0,
+                    0.0,
+                    Color32::GREEN,
+                    Color32::RED,
+                )
+            },
+        );
+        output.textures_delta.clear();
+        let texts: Vec<String> = output
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                Shape::Text(t) => Some(t.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            texts.iter().any(|t| t == "120.000") && texts.iter().any(|t| t == "110.100 / 145.050"),
+            "statistics texts {texts:?}"
+        );
     }
 }

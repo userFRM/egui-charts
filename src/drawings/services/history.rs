@@ -140,6 +140,26 @@ impl HistoryService {
         }
     }
 
+    /// Makes every recorded state of drawing `id` saveable, so that an undo or redo brings it back
+    /// as a drawing that is saved.
+    pub(crate) fn keep_saveable(&mut self, id: usize) {
+        for command in self.undo_stack.iter_mut().chain(&mut self.redo_stack) {
+            match command {
+                DrawingCommand::Snapshot { drawings, .. } => {
+                    for (_, drawing) in drawings.iter_mut().filter(|(_, d)| d.id == id) {
+                        drawing.saveable = true;
+                    }
+                }
+                DrawingCommand::Add(drawing)
+                | DrawingCommand::Delete { drawing, .. }
+                | DrawingCommand::Modify {
+                    old_state: drawing, ..
+                } if drawing.id == id => drawing.saveable = true,
+                _ => {}
+            }
+        }
+    }
+
     /// Create a new history service with default settings
     pub fn new() -> Self {
         Self {

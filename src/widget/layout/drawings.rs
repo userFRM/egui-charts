@@ -3,7 +3,6 @@
 
 use super::ChartLayout;
 use crate::config::{DrawingSort, DrawingToolType};
-use crate::drawings::DrawingManager;
 use crate::drawings::manager::sync_id;
 use crate::drawings::persistence::{DrawingStorage, StoredCoord, StoredDrawing};
 use crate::drawings::{Drawing, FolderSync};
@@ -50,6 +49,9 @@ pub(super) struct DrawingLinks {
     previous: HashMap<Key, Snapshot>,
     origins: HashMap<Key, Key>,
     retry: HashSet<Key>,
+    /// Stored drawings that a gesture in progress changed through a linked drawing on another
+    /// chart, whose charts write them once it ends.
+    unwritten: HashSet<Key>,
 }
 
 impl DrawingLinks {
@@ -69,6 +71,7 @@ impl DrawingLinks {
             .map(|(k, v)| (moved(k), moved(v)))
             .collect();
         self.retry = self.retry.drain().map(moved).collect();
+        self.unwritten = self.unwritten.drain().map(moved).collect();
     }
 
     pub(super) fn sync(
@@ -153,11 +156,29 @@ impl DrawingLinks {
                     changed = true;
                     if let Some(id) = linked {
                         unlock(charts[slot], id);
+                        if writes(charts, &writers, key.0, slot, id) {
+                            writers.push(slot);
+                            if pointer_down {
+                                self.unwritten.insert((slot, id));
+                            } else {
+                                charts[slot].history.drawing_edits += 1;
+                            }
+                        }
+                        // A copy, as one added below, while the chart of the changed drawing
+                        // stores it: an undo on that chart can bring back a stored original that
+                        // this chart stores too.
+                        let copy_only = charts[slot].keeps_stored_drawings()
+                            && charts[key.0].keeps_stored_drawings()
+                            && charts[key.0]
+                                .drawings()
+                                .drawings
+                                .iter()
+                                .any(|d| d.id == key.1 && d.saveable);
                         charts[slot].drawings_mut().drag_edit_drawing(id, |target| {
                             copy.id = target.id;
                             copy.stored_id.clone_from(&target.stored_id);
                             copy.created_at = target.created_at;
-                            copy.saveable = target.saveable;
+                            copy.saveable = target.saveable && !copy_only;
                             *target = copy;
                         });
                     } else {
@@ -173,19 +194,7 @@ impl DrawingLinks {
                 } else if let Some(id) = linked {
                     changed = true;
                     unlock(charts[slot], id);
-                    // Charts on one storage read the change, so one write per storage is enough:
-                    // a second would replace the first, or be refused as a conflict where storage
-                    // keeps revisions.
-                    if !charts[slot].shares_stored_drawings(charts[key.0])
-                        && !writers
-                            .iter()
-                            .any(|&other| charts[slot].shares_stored_drawings(charts[other]))
-                        && charts[slot]
-                            .drawings()
-                            .drawings
-                            .iter()
-                            .any(|d| d.id == id && d.saveable)
-                    {
+                    if writes(charts, &writers, key.0, slot, id) {
                         saveable = true;
                         writers.push(slot);
                         charts[slot].history.drawing_edits += 1;
@@ -193,19 +202,28 @@ impl DrawingLinks {
                     charts[slot].drawings_mut().delete_drawing(id);
                 }
             }
-            // The copy that stays is now the only instance, so it is stored where it is.
-            if saveable
-                && let Some(kept) = charts[key.0]
+            // The copy that stays, or the one deleted, is now the only instance, so it is stored
+            // where it is, also when an undo or redo on its chart brings it back.
+            if saveable {
+                charts[key.0].history.keep_saveable(key.1);
+                if let Some(kept) = charts[key.0]
                     .drawings_mut()
                     .drawings
                     .iter_mut()
                     .find(|d| d.id == key.1 && !d.saveable)
-            {
-                kept.saveable = true;
-                charts[key.0].history.drawing_edits += 1;
+                {
+                    kept.saveable = true;
+                    charts[key.0].history.drawing_edits += 1;
+                }
             }
         }
         if !pointer_down {
+            // Written once, as a gesture on the chart itself is.
+            for (slot, _) in self.unwritten.drain() {
+                if slot < count {
+                    charts[slot].history.drawing_edits += 1;
+                }
+            }
             for chart in charts.iter_mut().take(count) {
                 chart.drawings_mut().end_drag_handle();
             }
@@ -231,6 +249,7 @@ impl DrawingLinks {
         self.origins
             .retain(|key, _| self.previous.contains_key(key));
         self.retry.retain(|key| self.previous.contains_key(key));
+        self.unwritten.retain(|key| self.previous.contains_key(key));
         changed
     }
 
@@ -317,12 +336,25 @@ impl SymbolDrawings {
     /// Orders the drawings by `sort`. Equal names and edit times fall back to the stored
     /// identity of the drawings, so that the order is the same after a layout is restored.
     pub fn sort(&mut self, sort: DrawingSort) {
+        self.sort_by_shown_names(sort, |name| name.to_owned());
+    }
+
+    /// Orders the drawings as [`Self::sort`] does, by the names `shown` gives them.
+    pub(crate) fn sort_by_shown_names(
+        &mut self,
+        sort: DrawingSort,
+        shown: impl Fn(&str) -> String,
+    ) {
         self.drawings.sort_by_cached_key(|drawing| {
             let time = match sort {
                 DrawingSort::Name => None,
                 DrawingSort::LastModified => Some(Reverse(drawing.modified_at)),
             };
-            (time, drawing.name().to_lowercase(), drawing.id.clone())
+            (
+                time,
+                shown(drawing.name()).to_lowercase(),
+                drawing.id.clone(),
+            )
         });
     }
 }
@@ -379,12 +411,12 @@ fn stored_key(record: &StoredDrawing) -> String {
     )
 }
 
-fn live_row(manager: &DrawingManager, drawing: &Drawing) -> SymbolDrawing {
+fn live_row(drawing: &Drawing) -> SymbolDrawing {
     SymbolDrawing {
         id: sync_id(drawing),
         tool_type: drawing.tool_type,
         label: drawing.label.clone(),
-        modified_at: manager.modified_at(drawing),
+        modified_at: drawing.modified_at,
     }
 }
 
@@ -437,11 +469,7 @@ fn inventory(charts: &[&mut Chart]) -> BTreeMap<String, Vec<(SymbolDrawing, Stri
         };
         if !chart.symbol().is_empty() {
             for drawing in chart.drawings().drawings.iter().filter(|d| inventoried(d)) {
-                hold(
-                    chart.symbol(),
-                    live_row(chart.drawings(), drawing),
-                    live_key(chart, drawing),
-                );
+                hold(chart.symbol(), live_row(drawing), live_key(chart, drawing));
             }
         }
         if chart.keeps_stored_drawings() {
@@ -455,7 +483,7 @@ fn inventory(charts: &[&mut Chart]) -> BTreeMap<String, Vec<(SymbolDrawing, Stri
         } else {
             for (symbol, (manager, _)) in &chart.symbol_drawings {
                 for drawing in manager.drawings.iter().filter(|d| inventoried(d)) {
-                    hold(symbol, live_row(manager, drawing), live_key(chart, drawing));
+                    hold(symbol, live_row(drawing), live_key(chart, drawing));
                 }
             }
         }
@@ -655,6 +683,22 @@ fn unlock(chart: &mut Chart, id: usize) {
     }
 }
 
+/// Whether the chart in `slot` writes the change that the chart in `from` made to their linked
+/// drawing `id`, which the chart in `slot` stores. Charts on one storage read the change, so one
+/// write per storage is enough: a second would replace the first, or be refused as a conflict
+/// where storage keeps revisions.
+fn writes(charts: &[&mut Chart], writers: &[usize], from: usize, slot: usize, id: usize) -> bool {
+    !charts[slot].shares_stored_drawings(charts[from])
+        && !writers
+            .iter()
+            .any(|&other| charts[slot].shares_stored_drawings(charts[other]))
+        && charts[slot]
+            .drawings()
+            .drawings
+            .iter()
+            .any(|d| d.id == id && d.saveable)
+}
+
 fn map_drawing(drawing: &Drawing, source: &Chart, target: &Chart) -> Option<Drawing> {
     let mut copy = drawing.clone();
     if drawing.pane.is_some() {
@@ -729,9 +773,13 @@ mod tests {
 
     /// Through the layout, without storage: a drawing and its copy on a chart of another
     /// interval are listed once, also once neither chart shows them, and deleting a symbol
-    /// leaves the others, takes locked drawings along and comes back in one undo.
+    /// leaves the others, takes locked drawings along and comes back in one undo. With a storage
+    /// per chart, that undo also stores the copy it brings back.
     #[test]
     fn inventory_lists_each_drawing_once_and_deletes_one_symbol_with_undo() {
+        use crate::services::document::tests::Revised;
+        use crate::widget::ChartLayoutMode;
+
         let (mut a, mut b) = (bars(60), bars(120));
         a.set_symbol("AAA");
         b.set_symbol("AAA");
@@ -808,6 +856,64 @@ mod tests {
         assert_eq!(
             names(&layout, &[&mut c, &mut d]),
             listed(&[("AAA", &["Top", "Under"])])
+        );
+
+        // Each chart with its own storage, the copy on the active chart: deleting the symbol
+        // deletes the copy and leaves the original to the mirror, so the stored drawing moves to
+        // the copy, and the undo there brings it back stored.
+        let storages = [Arc::new(Revised::default()), Arc::new(Revised::default())];
+        let charts = || {
+            storages.each_ref().map(|storage| {
+                let mut chart = bars(60);
+                chart.set_symbol("AAA");
+                chart.set_storage(storage.clone());
+                chart
+            })
+        };
+        let layout = || ChartLayout {
+            mode: ChartLayoutMode::TwoHorizontal,
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let frames = |layout: &mut ChartLayout, charts: &mut [Chart; 2]| {
+            for _ in 0..4 {
+                ctx.run_ui(egui::RawInput::default(), |ui| {
+                    layout.show(ui, &mut charts.each_mut());
+                })
+                .drop_without_applying_deltas();
+            }
+        };
+        let counts = |charts: &[Chart; 2]| {
+            charts
+                .each_ref()
+                .map(|chart| chart.drawings().drawings.len())
+        };
+        let top = ["Top".to_owned()];
+        let mut session = layout();
+        let mut shown = charts();
+        frames(&mut session, &mut shown);
+        shown[1].user_action(|chart| {
+            let id = chart.drawings_mut().add_drawing(line("Drawn")).unwrap();
+            assert!(chart.drawings_mut().move_to_folder(&[id], &[], &top));
+            assert!(
+                chart
+                    .drawings_mut()
+                    .set_folder_sync(&top, Some(FolderSync::Layout))
+            );
+        });
+        frames(&mut session, &mut shown);
+        assert_eq!(counts(&shown), [1, 1], "mirrored");
+        assert!(session.delete_symbol_drawings(&mut shown.each_mut(), "AAA"));
+        frames(&mut session, &mut shown);
+        assert_eq!(counts(&shown), [0, 0], "deleted");
+        assert!(shown[0].undo());
+        frames(&mut session, &mut shown);
+        let mut restarted = charts();
+        frames(&mut layout(), &mut restarted);
+        assert_eq!(
+            (counts(&shown), counts(&restarted)),
+            ([1, 1], [1, 1]),
+            "after the undo and after a restart"
         );
     }
 
@@ -962,7 +1068,6 @@ mod tests {
         }
         let ids: Vec<_> = chart.drawings().drawings.iter().map(|d| d.id).collect();
         for (id, time) in ids.iter().zip([1_000, 2_000]) {
-            chart.drawings.apply_edit_times();
             chart
                 .drawings
                 .drawings
@@ -1361,20 +1466,23 @@ mod tests {
         assert!(copy(&b).is_none(), "a deletion reaches a locked copy");
     }
 
-    /// Each chart keeps its drawings in its own storage. A drawing in a folder mirrored across the
-    /// layout, then kept on the chart that shows its copy, is still shown there and only there
-    /// after a restart, with or without later work on the first chart: the user moved it to that
-    /// chart, they did not delete it.
+    /// Each chart keeps its drawings in its own storage, or both in one. A drawing in a folder
+    /// mirrored across the layout is changed on the chart that shows its copy, by an edit, a drag,
+    /// This chart only, a move out of the folder or a deletion, and undone and redone there, or
+    /// undone on the chart it was drawn on. After each, a restart shows what the charts showed,
+    /// with or without a later edit on the first chart: the drawing is stored on one chart, never
+    /// on none or both. A drag is written once, when it ends.
     #[test]
-    fn keeping_a_mirrored_copy_on_its_chart_survives_a_restart() {
+    fn changes_to_a_mirrored_copy_survive_a_restart() {
         use crate::data::Reply;
         use crate::services::{Storage, StoreKind};
         use crate::widget::{ChartLayout, ChartLayoutMode};
+        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::{Arc, Mutex};
 
-        /// Documents held in memory, answered inline.
+        /// Documents held in memory, answered inline, and the number of writes.
         #[derive(Default)]
-        struct InMemory(Mutex<HashMap<(StoreKind, String), String>>);
+        struct InMemory(Mutex<HashMap<(StoreKind, String), String>>, AtomicUsize);
         impl Storage for InMemory {
             fn list(&self, kind: StoreKind, reply: Reply<Vec<String>>) {
                 let names = self
@@ -1397,6 +1505,7 @@ mod tests {
                 reply.send(Ok(document));
             }
             fn save(&self, kind: StoreKind, name: &str, document: String, reply: Reply<()>) {
+                self.1.fetch_add(1, Ordering::Relaxed);
                 self.0
                     .lock()
                     .unwrap()
@@ -1408,6 +1517,22 @@ mod tests {
                 reply.send(Ok(()));
             }
         }
+        /// One change on a chart's first drawing, as one user action, or an undo or redo there.
+        #[derive(Clone, Copy)]
+        enum Step {
+            Keep,
+            ToRoot,
+            Group,
+            Delete,
+            Edit,
+            HeldEdit,
+            File,
+            Undo,
+            Redo,
+        }
+        use Step::*;
+        type Shown<'a> = [&'a [(&'a str, f64)]; 2];
+        type Row<'a> = (&'a str, &'a [(usize, Step)], Shown<'a>, Shown<'a>);
         let chart = |storage: &Arc<InMemory>| {
             let mut chart = Chart::new(BarData::from_bars(
                 (0..10)
@@ -1436,92 +1561,271 @@ mod tests {
             drawing
         };
         let ctx = egui::Context::default();
-        let frames = |layout: &mut ChartLayout, a: &mut Chart, b: &mut Chart| {
-            for _ in 0..4 {
-                ctx.run_ui(egui::RawInput::default(), |ui| {
+        let frame =
+            |input: egui::RawInput, layout: &mut ChartLayout, a: &mut Chart, b: &mut Chart| {
+                ctx.run_ui(input, |ui| {
                     layout.show(ui, &mut [&mut *a, &mut *b]);
                 })
                 .drop_without_applying_deltas();
+            };
+        let frames = |layout: &mut ChartLayout, a: &mut Chart, b: &mut Chart| {
+            for _ in 0..4 {
+                frame(egui::RawInput::default(), layout, a, b);
             }
+        };
+        // Outside every chart, so that no chart reacts to the button.
+        let pointer = |pressed: bool| egui::RawInput {
+            events: vec![egui::Event::PointerButton {
+                pos: egui::pos2(-5.0, -5.0),
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            }],
+            ..Default::default()
         };
         let layout = || ChartLayout {
             mode: ChartLayoutMode::TwoHorizontal,
             ..Default::default()
         };
         let top = ["Top".to_owned()];
-        let in_top = |a: &Chart, b: &Chart| {
+        // Folder and first price of each drawing per chart, without the later edit's line.
+        let lines = |a: &Chart, b: &Chart| {
             [a, b].map(|chart| {
                 chart
                     .drawings()
                     .drawings
                     .iter()
-                    .filter(|d| d.folder == top)
-                    .count()
+                    .map(|d| (d.folder.join("/"), d.chart_points[0].price))
+                    .filter(|(_, price)| *price != 20.0)
+                    .collect::<Vec<_>>()
             })
         };
-        for edit_first in [false, true] {
-            let storages = [Arc::new(InMemory::default()), Arc::new(InMemory::default())];
-            let mut session = layout();
-            let (mut a, mut b) = (chart(&storages[0]), chart(&storages[1]));
-            frames(&mut session, &mut a, &mut b);
-            a.user_action(|chart| {
-                let id = chart.drawings_mut().add_drawing(line(10.0)).unwrap();
-                assert!(chart.drawings_mut().move_to_folder(&[id], &[], &top));
-                assert!(
-                    chart
-                        .drawings_mut()
-                        .set_folder_sync(&top, Some(FolderSync::Layout))
-                );
-            });
-            frames(&mut session, &mut a, &mut b);
-            assert_eq!(in_top(&a, &b), [1, 1], "mirrored");
-            // On the chart that shows the copy, the folder is kept on that chart.
-            b.user_action(|chart| {
-                assert!(
-                    chart
-                        .drawings_mut()
-                        .set_folder_sync(&top, Some(FolderSync::Chart))
-                );
-            });
-            frames(&mut session, &mut a, &mut b);
-            if edit_first {
-                a.user_action(|chart| {
-                    chart.drawings_mut().add_drawing(line(20.0)).unwrap();
+        let first = |chart: &Chart| chart.drawings().drawings[0].id;
+        let edit = |chart: &mut Chart, price: f64| {
+            let id = first(chart);
+            chart.user_action(|chart| {
+                chart.drawings_mut().edit_drawing(id, |drawing| {
+                    drawing.chart_points[0].price = price;
+                    drawing.chart_points[1].price = price + 2.0;
                 });
-                frames(&mut session, &mut a, &mut b);
+            });
+        };
+        let (a_side, b_side) = (0, 1);
+        let (none, top_10, top_50): (&[_], &[_], &[_]) = (&[], &[("Top", 10.0)], &[("Top", 50.0)]);
+        let (root_10, new_10): (&[_], &[_]) = (&[("", 10.0)], &[("New", 10.0)]);
+        // Per chart, with a storage for each chart and with one for both, worked out by hand: a
+        // chart that keeps a copy stores the drawing alone, and charts on one storage read it.
+        let rows: &[Row] = &[
+            ("keep", &[(b_side, Keep)], [none, top_10], [top_10, top_10]),
+            (
+                "keep, undo",
+                &[(b_side, Keep), (b_side, Undo)],
+                [top_10, top_10],
+                [top_10, top_10],
+            ),
+            (
+                "root, undo",
+                &[(b_side, ToRoot), (b_side, Undo)],
+                [top_10, top_10],
+                [top_10, top_10],
+            ),
+            (
+                "group, undo",
+                &[(b_side, Group), (b_side, Undo)],
+                [top_10, top_10],
+                [top_10, top_10],
+            ),
+            (
+                "delete, undo",
+                &[(b_side, Delete), (b_side, Undo)],
+                [top_10, top_10],
+                [top_10, top_10],
+            ),
+            (
+                "file on A, keep, undo on A",
+                &[(a_side, File), (b_side, Keep), (a_side, Undo)],
+                [top_10, top_10],
+                [&[("Top/Sub", 10.0)], &[("Top/Sub", 10.0)]],
+            ),
+            (
+                "keep, undo, redo",
+                &[(b_side, Keep), (b_side, Undo), (b_side, Redo)],
+                [none, top_10],
+                [top_10, top_10],
+            ),
+            (
+                "root, undo, redo",
+                &[(b_side, ToRoot), (b_side, Undo), (b_side, Redo)],
+                [none, root_10],
+                [root_10, root_10],
+            ),
+            (
+                "group, undo, redo",
+                &[(b_side, Group), (b_side, Undo), (b_side, Redo)],
+                [none, new_10],
+                [new_10, new_10],
+            ),
+            (
+                "delete, undo, redo",
+                &[(b_side, Delete), (b_side, Undo), (b_side, Redo)],
+                [none, none],
+                [none, none],
+            ),
+            (
+                "edit",
+                &[(b_side, Edit)],
+                [top_50, top_50],
+                [top_50, top_50],
+            ),
+            (
+                "edit, undo",
+                &[(b_side, Edit), (b_side, Undo)],
+                [top_10, top_10],
+                [top_10, top_10],
+            ),
+            (
+                "edit while the pointer is held",
+                &[(b_side, HeldEdit)],
+                [top_50, top_50],
+                [top_50, top_50],
+            ),
+        ];
+        let mut failures = Vec::new();
+        for (name, steps, own, one) in rows {
+            for (shared, expected) in [(false, own), (true, one)] {
+                for edit_first in [false, true] {
+                    let storages = {
+                        let storage = Arc::new(InMemory::default());
+                        let other = if shared {
+                            storage.clone()
+                        } else {
+                            Arc::new(InMemory::default())
+                        };
+                        [storage, other]
+                    };
+                    let mut session = layout();
+                    let (mut a, mut b) = (chart(&storages[0]), chart(&storages[1]));
+                    frames(&mut session, &mut a, &mut b);
+                    a.user_action(|chart| {
+                        let id = chart.drawings_mut().add_drawing(line(10.0)).unwrap();
+                        assert!(chart.drawings_mut().move_to_folder(&[id], &[], &top));
+                        assert!(
+                            chart
+                                .drawings_mut()
+                                .set_folder_sync(&top, Some(FolderSync::Layout))
+                        );
+                    });
+                    frames(&mut session, &mut a, &mut b);
+                    let mirrored = vec![("Top".to_owned(), 10.0)];
+                    assert_eq!(
+                        lines(&a, &b),
+                        [mirrored.clone(), mirrored],
+                        "{name}, set up"
+                    );
+                    for &(side, step) in *steps {
+                        let chart = if side == a_side { &mut a } else { &mut b };
+                        let id = chart.drawings().drawings.first().map(|d| d.id);
+                        let filed = |folder: &[&str]| -> Vec<String> {
+                            folder.iter().map(|name| (*name).to_owned()).collect()
+                        };
+                        match step {
+                            Keep => chart.user_action(|chart| {
+                                chart
+                                    .drawings_mut()
+                                    .set_folder_sync(&top, Some(FolderSync::Chart));
+                            }),
+                            ToRoot => chart.user_action(|chart| {
+                                chart
+                                    .drawings_mut()
+                                    .move_to_folder(&[id.unwrap()], &[], &[]);
+                            }),
+                            Group => chart.user_action(|chart| {
+                                chart.drawings_mut().move_to_folder(
+                                    &[id.unwrap()],
+                                    &[],
+                                    &filed(&["New"]),
+                                );
+                            }),
+                            File => chart.user_action(|chart| {
+                                chart.drawings_mut().move_to_folder(
+                                    &[id.unwrap()],
+                                    &[],
+                                    &filed(&["Top", "Sub"]),
+                                );
+                            }),
+                            Delete => chart.user_action(|chart| {
+                                chart.drawings_mut().delete_drawing(id.unwrap());
+                            }),
+                            Edit => edit(chart, 50.0),
+                            HeldEdit => {
+                                frame(pointer(true), &mut session, &mut a, &mut b);
+                                let writes = storages[0].1.load(Ordering::Relaxed);
+                                // A drag changes the drawing on several frames of one gesture.
+                                for price in [40.0, 50.0] {
+                                    edit(if side == a_side { &mut a } else { &mut b }, price);
+                                    frames(&mut session, &mut a, &mut b);
+                                }
+                                assert!(ctx.input(|i| i.pointer.any_down()), "{name}");
+                                frame(pointer(false), &mut session, &mut a, &mut b);
+                                frames(&mut session, &mut a, &mut b);
+                                // With its own storage, the first chart writes the change once,
+                                // when the gesture ends, as it writes a gesture of its own.
+                                let written = storages[0].1.load(Ordering::Relaxed) - writes;
+                                if !shared && written != 1 {
+                                    failures.push(format!(
+                                        "{name}, edit_first {edit_first}: the first chart wrote \
+                                         its storage {written} times during the gesture"
+                                    ));
+                                }
+                            }
+                            // A chart that read a storage has nothing to undo, as a row expects.
+                            Undo => {
+                                chart.undo();
+                            }
+                            Redo => {
+                                chart.redo();
+                            }
+                        }
+                        frames(&mut session, &mut a, &mut b);
+                    }
+                    if edit_first {
+                        a.user_action(|chart| {
+                            chart.drawings_mut().add_drawing(line(20.0)).unwrap();
+                        });
+                        frames(&mut session, &mut a, &mut b);
+                    }
+                    let shown = lines(&a, &b);
+                    let mut restarted = layout();
+                    let (mut a, mut b) = (chart(&storages[0]), chart(&storages[1]));
+                    frames(&mut restarted, &mut a, &mut b);
+                    let restored = lines(&a, &b);
+                    let expected = expected.map(|chart| {
+                        chart
+                            .iter()
+                            .map(|(folder, price)| ((*folder).to_owned(), *price))
+                            .collect::<Vec<_>>()
+                    });
+                    if shown != expected || restored != expected {
+                        failures.push(format!(
+                            "{name}, shared {shared}, edit_first {edit_first}: shown {shown:?}, \
+                             restored {restored:?}, expected {expected:?}"
+                        ));
+                    }
+                }
             }
-            let shown = in_top(&a, &b);
-            let mut restarted = layout();
-            let (mut a, mut b) = (chart(&storages[0]), chart(&storages[1]));
-            frames(&mut restarted, &mut a, &mut b);
-            let restored = in_top(&a, &b);
-            assert_eq!(
-                (shown, restored),
-                ([0, 1], [0, 1]),
-                "drawings in Top per chart before and after the restart, edit_first \
-                 {edit_first}: {shown:?} {restored:?}"
-            );
         }
+        assert!(failures.is_empty(), "{failures:#?}");
     }
 
     /// Two charts keep their drawings in one storage that keeps revisions, a third in its own.
-    /// Keeping a mirrored drawing on the third chart takes it out of the shared storage in one
-    /// write, which the other chart there reads: a second write would be refused as a conflict
-    /// for the user to settle, and that chart would write nothing until then.
+    /// Keeping or editing a mirrored drawing on the third chart writes the shared storage once,
+    /// which the other chart there reads: a second write would be refused as a conflict for the
+    /// user to settle, and that chart would write nothing until then.
     #[test]
-    fn keeping_a_mirrored_copy_writes_a_shared_storage_once() {
+    fn a_mirrored_copy_writes_a_shared_storage_once() {
         use crate::services::document::tests::Revised;
         use crate::widget::{ChartLayout, ChartLayoutMode};
 
-        let (shared, own) = (Arc::new(Revised::default()), Arc::new(Revised::default()));
-        let charts = || {
-            [&shared, &own, &shared].map(|storage| {
-                let mut chart = bars(60);
-                chart.set_symbol("SAMPLE");
-                chart.set_storage(storage.clone());
-                chart
-            })
-        };
         let layout = || ChartLayout {
             mode: ChartLayoutMode::ThreeHorizontal,
             ..Default::default()
@@ -1541,32 +1845,62 @@ mod tests {
                 .map(|chart| chart.drawings().drawings.len())
         };
         let top = ["Top".to_owned()];
-        let mut session = layout();
-        let mut shown = charts();
-        frames(&mut session, &mut shown);
-        shown[0].user_action(|chart| {
-            let id = chart.drawings_mut().add_drawing(line("Kept")).unwrap();
-            assert!(chart.drawings_mut().move_to_folder(&[id], &[], &top));
-            assert!(
-                chart
-                    .drawings_mut()
-                    .set_folder_sync(&top, Some(FolderSync::Layout))
-            );
-        });
-        frames(&mut session, &mut shown);
-        assert_eq!(counts(&shown), [1, 1, 1], "mirrored");
-        shown[1].user_action(|chart| {
-            assert!(
-                chart
-                    .drawings_mut()
-                    .set_folder_sync(&top, Some(FolderSync::Chart))
-            );
-        });
-        frames(&mut session, &mut shown);
-        assert_eq!(shown.each_ref().map(Chart::storage_conflict), [None; 3]);
-        let mut restarted = charts();
-        frames(&mut layout(), &mut restarted);
-        assert_eq!((counts(&shown), counts(&restarted)), ([0, 1, 0], [0, 1, 0]));
+        for edit in [false, true] {
+            let (shared, own) = (Arc::new(Revised::default()), Arc::new(Revised::default()));
+            let charts = || {
+                [&shared, &own, &shared].map(|storage| {
+                    let mut chart = bars(60);
+                    chart.set_symbol("SAMPLE");
+                    chart.set_storage(storage.clone());
+                    chart
+                })
+            };
+            let mut session = layout();
+            let mut shown = charts();
+            frames(&mut session, &mut shown);
+            shown[0].user_action(|chart| {
+                let id = chart.drawings_mut().add_drawing(line("Kept")).unwrap();
+                assert!(chart.drawings_mut().move_to_folder(&[id], &[], &top));
+                assert!(
+                    chart
+                        .drawings_mut()
+                        .set_folder_sync(&top, Some(FolderSync::Layout))
+                );
+            });
+            frames(&mut session, &mut shown);
+            assert_eq!(counts(&shown), [1, 1, 1], "mirrored");
+            let copy = shown[1].drawings().drawings[0].id;
+            shown[1].user_action(|chart| {
+                if edit {
+                    chart.drawings_mut().edit_drawing(copy, |drawing| {
+                        drawing.chart_points[0].price = 50.0;
+                        drawing.chart_points[1].price = 52.0;
+                    });
+                } else {
+                    assert!(
+                        chart
+                            .drawings_mut()
+                            .set_folder_sync(&top, Some(FolderSync::Chart))
+                    );
+                }
+            });
+            frames(&mut session, &mut shown);
+            assert_eq!(shown.each_ref().map(Chart::storage_conflict), [None; 3]);
+            let mut restarted = charts();
+            frames(&mut layout(), &mut restarted);
+            if edit {
+                assert_eq!((counts(&shown), counts(&restarted)), ([1; 3], [1; 3]));
+                assert_eq!(
+                    restarted
+                        .each_ref()
+                        .map(|chart| chart.drawings().drawings[0].chart_points[0].price),
+                    [50.0; 3],
+                    "the edit reached the shared storage"
+                );
+            } else {
+                assert_eq!((counts(&shown), counts(&restarted)), ([0, 1, 0], [0, 1, 0]));
+            }
+        }
     }
 
     /// Guards #1622: bars evicted from a chart or loaded in front of its bars renumber its

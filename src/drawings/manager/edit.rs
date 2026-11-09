@@ -123,7 +123,7 @@ impl DrawingManager {
         );
         for drawing in self.drawings.iter().filter(|d| include_locked || !d.locked) {
             if drawing.saveable {
-                self.queue(DrawingSyncAction::Delete(sync_id(drawing)));
+                self.notify(DrawingSyncAction::Delete(sync_id(drawing)));
             }
         }
         self.drawings.retain(|d| d.locked && !include_locked);
@@ -160,7 +160,7 @@ impl DrawingManager {
             .drawings
             .iter()
             .find(|d| d.id == id)
-            .and_then(|d| self.modified_at(d));
+            .and_then(|d| d.modified_at);
         let mut previous = Vec::new();
         for &(id, layer) in layers {
             if let Some(drawing) = self.drawings.iter_mut().find(|d| d.id == id)
@@ -424,7 +424,6 @@ impl DrawingManager {
         F: Fn(f32) -> f32 + Copy,
         G: Fn(f64) -> f32 + Copy,
     {
-        self.apply_edit_times();
         for drawing in &mut self.drawings {
             drawing.update_screen_coords(bar_to_x, price_to_y);
         }
@@ -463,7 +462,6 @@ impl DrawingManager {
         bar_to_x: impl Fn(f32) -> f32 + Copy,
         price_to_y: impl Fn(f64) -> f32 + Copy,
     ) {
-        self.apply_edit_times();
         for drawing in self
             .drawings
             .iter_mut()
@@ -796,18 +794,20 @@ impl DrawingManager {
         }
         // Assign a new ID to avoid conflicts
         drawing.id = self.take_id();
+        let id = drawing.id;
+        // A linked copy keeps the time of the edit it copies.
+        let stamp =
+            drawing.stored_id.is_none() && drawing.saveable && drawing.modified_at.is_none();
         if drawing.stored_id.is_none() {
             if drawing.saveable {
-                // A linked copy keeps the time of the edit it copies.
-                if drawing.modified_at.is_none() {
-                    self.stamp(drawing.id);
-                }
-                self.notify(DrawingSyncAction::SaveDrawing(drawing.id));
+                self.notify(DrawingSyncAction::SaveDrawing(id));
             }
             self.history.push_add(drawing.clone());
         }
-        let id = drawing.id;
         self.drawings.push(drawing);
+        if stamp {
+            self.stamp(id);
+        }
         id
     }
 }

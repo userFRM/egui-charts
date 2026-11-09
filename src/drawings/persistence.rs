@@ -33,7 +33,7 @@
 //!
 //! Drawings are grouped by symbol into a `DrawingStorage` container that
 //! includes a format version, metadata, and an optional timeframe filter.
-//! Loading migrates versions 1 to 6, rejects versions it does not know and
+//! Loading migrates earlier versions, rejects versions it does not know and
 //! skips any drawing it cannot read
 //! (see [`from_json`](crate::drawings::persistence::DrawingStorage::from_json)).
 
@@ -322,17 +322,18 @@ impl Default for StorageMetadata {
 }
 
 impl DrawingStorage {
-    /// Current storage format version. Version 7 extends an info line or trend angle past the
-    /// anchor its Left or Right names; those saved before that change load with the reach they
-    /// were drawn with. Version 6 draws arrow marks in their own colour; earlier
-    /// versions load in the colour they were drawn in. Version 5 gives Elliott double and triple
+    /// Current storage format version. Version 8 extends a trend line past the anchor its Left or
+    /// Right names; those saved before that change load with the reach they were drawn with.
+    /// Version 7 does the same for an info line or trend angle. Version 6 draws arrow marks in
+    /// their own colour; earlier versions load in the colour they were drawn in. Version 5 gives
+    /// Elliott double and triple
     /// combinations an unlabelled start point; earlier versions load with a start point on their
     /// first anchor.
     /// Version 4 draws brushes and highlighters at their stored width and opacity; earlier
     /// versions load at the width and opacity their strokes were drawn at. Version 3 preserves
     /// editable ray and extended-line extensions; versions 1 and 2 migrate to their former
     /// rendered reach when loaded.
-    pub const CURRENT_VERSION: u32 = 7;
+    pub const CURRENT_VERSION: u32 = 8;
 
     /// Create new storage for a symbol
     pub fn new(symbol: impl Into<String>) -> Self {
@@ -442,7 +443,7 @@ impl DrawingStorage {
         serde_json::to_string_pretty(self).map_err(SaveError::Json)
     }
 
-    /// Deserialize from JSON, migrating versions 1 to 6 to the current format.
+    /// Deserialize from JSON, migrating earlier versions to the current format.
     /// Fails as a whole with a [`LoadError`]: [`LoadError::Json`] for invalid JSON or a missing
     /// or invalid version, symbol, timeframe or metadata, and [`LoadError::UnsupportedVersion`]
     /// for a version this release does not know. A
@@ -592,15 +593,18 @@ impl DrawingStorage {
                                 }
                             }
                         }
-                        if version < 7
+                        if ((version < 7
                             && matches!(tool, T::InfoLine | T::TrendAngle)
-                            && !has_price_labels
+                            && !has_price_labels)
+                            || (version < 8 && tool == T::TrendLine))
                             && let [a, b, ..] = drawing.points.as_slice()
                         {
                             // Earlier renderers carried these tools' Left and Right towards the
                             // pane's sides and never extended a vertical one. Version 6 was also
-                            // written after that changed, always with `price_labels`; trend
-                            // angles saved in the hours before their own change carry it too.
+                            // written after that changed for info lines and trend angles, always
+                            // with `price_labels`; trend angles saved in the hours before their
+                            // own change carry it too. Trend lines never had the later meaning
+                            // before version 8, so every earlier file converts.
                             let order = (a.ts_ms, a.subms_ns).cmp(&(b.ts_ms, b.subms_ns));
                             let settings = &mut drawing.drawing;
                             match order {
@@ -1327,6 +1331,53 @@ mod tests {
         }
     }
 
+    /// An edit puts its time on the drawing before it returns: a host that drains the queue and
+    /// saves the drawing it names stores that time, and undoing a later edit made before the
+    /// next paint returns to it.
+    #[test]
+    fn edit_time_reaches_host_saves_and_undo() {
+        use crate::drawings::manager::DrawingSyncAction::UpdateDrawing;
+        let mut stored = StoredDrawing::new("a1", Drawing::new(0, DrawingToolType::HorizontalLine));
+        stored.points = vec![StoredCoord::new(T0, 100.0)];
+        stored.modified_at = 1_000;
+        let mut manager = DrawingManager::new();
+        let id = manager
+            .add_synced_drawing(stored_to_drawing(&stored, time_to_bar, 0))
+            .unwrap();
+        let drawing = |manager: &DrawingManager| {
+            manager
+                .drawings
+                .iter()
+                .find(|d| d.id == id)
+                .unwrap()
+                .clone()
+        };
+
+        let before = chrono::Utc::now().timestamp_millis();
+        manager.edit_drawing(id, |d| d.color = [1, 2, 3, 255]);
+        let edited = drawing(&manager).modified_at;
+        assert!(
+            edited.is_some_and(|time| time >= before),
+            "{edited:?}, edited at {before} or later"
+        );
+        let queued = std::mem::take(&mut *manager.pending_sync.lock().unwrap());
+        assert!(
+            matches!(queued[..], [UpdateDrawing(i)] if i == id),
+            "{queued:?}"
+        );
+        let saved = drawing_to_stored(&drawing(&manager), bar_to_time);
+        assert_eq!(Some(saved.modified_at), edited);
+
+        manager.edit_drawing(id, |d| d.stroke_width = 3.0);
+        assert!(manager.undo());
+        let undone = drawing(&manager);
+        assert_eq!(
+            (undone.color, undone.modified_at),
+            ([1, 2, 3, 255], edited),
+            "the first edit stands, with its time"
+        );
+    }
+
     /// A later session that loads the storage, restores its drawings, copies one, adds one and
     /// saves them all keeps every stored record as it was, with its layer, and stores the copy
     /// and the new drawing under ids of their own, even where a stored id is a number the new
@@ -1551,6 +1602,52 @@ mod tests {
                     assert!(!again.drawings[0].drawing.extend_right);
                 }
             }
+        }
+
+        // Before version 8 a trend line's Left and Right named the pane's sides, and a vertical
+        // one never extended, including in version 7 files. Loading keeps its reach once; version 8
+        // loads as saved.
+        let (forward, reversed, vertical) = ([0, 1], [1, 0], [0, 0]);
+        for (version, anchors, saved_flags, want) in [
+            (6, forward, (false, true), (false, true)),
+            (6, reversed, (false, true), (true, false)),
+            (6, reversed, (true, false), (false, true)),
+            (6, reversed, (true, true), (true, true)),
+            (6, vertical, (false, true), (false, false)),
+            (6, vertical, (true, true), (false, false)),
+            (7, reversed, (false, true), (true, false)),
+            (7, vertical, (true, true), (false, false)),
+            (8, reversed, (false, true), (false, true)),
+            (8, vertical, (false, true), (false, true)),
+        ] {
+            let mut saved: serde_json::Value =
+                serde_json::from_str(include_str!("fixtures/storage_v2.json")).unwrap();
+            saved["version"] = version.into();
+            let records = saved["drawings"].as_array_mut().unwrap();
+            records.truncate(1);
+            let points = records[0]["points"].as_array().unwrap().clone();
+            records[0]["points"] = anchors.map(|i| points[i].clone()).to_vec().into();
+            let settings = &mut records[0]["drawing"];
+            settings["tool_type"] = serde_json::to_value(DrawingToolType::TrendLine).unwrap();
+            (settings["extend_left"], settings["extend_right"]) =
+                (saved_flags.0.into(), saved_flags.1.into());
+            let (loaded, skipped) = DrawingStorage::from_json(&saved.to_string()).unwrap();
+            assert!(skipped.is_empty(), "v{version} {anchors:?}: {skipped:?}");
+            let flags = |storage: &DrawingStorage| {
+                let drawing = &storage.drawings[0].drawing;
+                (drawing.extend_left, drawing.extend_right)
+            };
+            assert_eq!(
+                flags(&loaded),
+                want,
+                "v{version} {anchors:?} {saved_flags:?}"
+            );
+            let (again, _) = DrawingStorage::from_json(&loaded.to_json().unwrap()).unwrap();
+            assert_eq!(
+                flags(&again),
+                want,
+                "v{version} {anchors:?}: converted twice"
+            );
         }
 
         // Before version 6 up and down marks were drawn green and red; a fill replaced
@@ -1936,10 +2033,10 @@ mod tests {
         assert!(!visibility.show_on_all);
         assert!(visibility.is_visible_on("2h") && !visibility.is_visible_on("1D"));
 
-        let error = DrawingStorage::from_json(&current.replace("\"version\": 7", "\"version\": 8"))
+        let error = DrawingStorage::from_json(&current.replace("\"version\": 8", "\"version\": 9"))
             .unwrap_err();
         assert!(
-            matches!(&error, LoadError::UnsupportedVersion { found: 8, supported } if *supported == (1..=7)),
+            matches!(&error, LoadError::UnsupportedVersion { found: 9, supported } if *supported == (1..=8)),
             "{error}"
         );
     }

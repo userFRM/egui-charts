@@ -182,18 +182,19 @@ impl ObjectTreeState {
         self.expanded_items.contains(&id)
     }
 
-    /// Expand all groups
+    /// Expand all groups and the shown folders; folders collapsed elsewhere stay collapsed.
     pub fn expand_all_groups(&mut self) {
-        self.collapsed_folders.clear();
+        self.collapsed_folders
+            .retain(|folder| !self.folders.contains(folder));
         self.expanded_groups.insert("Indicators".to_string());
         self.expanded_groups.insert("Drawings".to_string());
         self.expanded_groups.insert("Templates".to_string());
     }
 
-    /// Collapse all groups
+    /// Collapse all groups and the shown folders; folders collapsed elsewhere stay collapsed.
     pub fn collapse_all_groups(&mut self) {
         self.expanded_groups.clear();
-        self.collapsed_folders = self.folders.clone();
+        self.collapsed_folders.extend(self.folders.iter().cloned());
     }
 
     // === Filter Methods ===

@@ -106,6 +106,14 @@ impl std::error::Error for ChartSettingsError {
     }
 }
 
+/// Stores `color` in an optional colour unless the colour, with `fallback` for `None`, already
+/// resolves to it, so that the state read from a chart applies back unchanged.
+fn set_unless_resolved(current: &mut Option<Color32>, fallback: Color32, color: Color32) {
+    if current.unwrap_or(fallback) != color {
+        *current = Some(color);
+    }
+}
+
 impl ChartSettingsState {
     /// Read the chart's current display settings. Host-managed trading and alert groups
     /// retain defaults; hosts preserve their current values when refreshing chart settings.
@@ -249,8 +257,20 @@ impl ChartSettingsState {
             .and_then(|style| style.price_line_color);
         settings.scales_and_lines.lock_price_to_bar_ratio =
             chart.state().price_scale().bar_ratio_locked();
-        settings.scales_and_lines.price_to_bar_ratio =
-            chart.state().price_scale().bar_ratio().unwrap_or(1.0);
+        // An unlocked chart offers the ratio of the view it shows, which ticking the lock keeps; one
+        // not drawn yet has no view and offers 1.
+        let mut view = chart.state().price_scale().clone();
+        view.set_bar_ratio_locked(
+            true,
+            chart.state().time_scale().bar_spacing(),
+            chart.get_rendered_price_rect().height(),
+        );
+        settings.scales_and_lines.price_to_bar_ratio = chart
+            .state()
+            .price_scale()
+            .bar_ratio()
+            .or(view.bar_ratio())
+            .unwrap_or(1.0);
         settings.scales_and_lines.show_last_price_label = config.show_symbol_last_val;
         settings.scales_and_lines.show_price_line = config.show_price_line;
         settings.scales_and_lines.show_prev_close_label = config.show_symbol_prev_close;
@@ -463,10 +483,26 @@ impl ChartSettingsState {
         ) {
             config.bullish_color = self.candle_colors.body_up;
             config.bearish_color = self.candle_colors.body_down;
-            config.bullish_border_color = Some(self.candle_colors.border_up);
-            config.bearish_border_color = Some(self.candle_colors.border_down);
-            config.bullish_wick_color = Some(self.candle_colors.wick_up);
-            config.bearish_wick_color = Some(self.candle_colors.wick_down);
+            set_unless_resolved(
+                &mut config.bullish_border_color,
+                config.bullish_color,
+                self.candle_colors.border_up,
+            );
+            set_unless_resolved(
+                &mut config.bearish_border_color,
+                config.bearish_color,
+                self.candle_colors.border_down,
+            );
+            set_unless_resolved(
+                &mut config.bullish_wick_color,
+                config.bullish_border_color.unwrap_or(config.bullish_color),
+                self.candle_colors.wick_up,
+            );
+            set_unless_resolved(
+                &mut config.bearish_wick_color,
+                config.bearish_border_color.unwrap_or(config.bearish_color),
+                self.candle_colors.wick_down,
+            );
             // Borders keep a width the host chose and take a hairline when switched on.
             if !self.candle_colors.show_border {
                 config.candle_border_width = 0.0;
@@ -531,7 +567,11 @@ impl ChartSettingsState {
         config.show_bid_ask = self.scales_and_lines.show_bid_ask;
         config.show_high_low = self.scales_and_lines.show_high_low;
 
-        config.vertical_grid_color = Some(self.grid_lines.vertical_color);
+        set_unless_resolved(
+            &mut config.vertical_grid_color,
+            config.grid_color,
+            self.grid_lines.vertical_color,
+        );
         let resolved = |color| {
             if color == Color32::PLACEHOLDER {
                 config.background_color
@@ -662,16 +702,29 @@ impl ChartSettingsState {
             let mut params = chart.chart_type_params().clone();
             let style = &mut params.styles.volume_candles;
             let colors = &self.candle_colors;
-            style.body_visible = colors.show_body;
-            style.border_visible = colors.show_border;
-            style.wick_visible = colors.show_wick;
-            style.color_by_previous_close = colors.color_by_previous_close;
-            style.body_up = colors.body_up;
-            style.body_down = colors.body_down;
-            style.border_up = colors.border_up;
-            style.border_down = colors.border_down;
-            style.wick_up = colors.wick_up;
-            style.wick_down = colors.wick_down;
+            if self
+                .chart_type_params
+                .as_ref()
+                .is_some_and(|saved| saved.styles.volume_candles.is_saved_without_style())
+            {
+                // Settings saved before the style hold the candles' values, of which volume
+                // candles drew only the body colours.
+                *style = crate::model::VolumeCandlesStyle::drawn_before_style(
+                    colors.body_up,
+                    colors.body_down,
+                );
+            } else {
+                style.body_visible = colors.show_body;
+                style.border_visible = colors.show_border;
+                style.wick_visible = colors.show_wick;
+                style.color_by_previous_close = colors.color_by_previous_close;
+                style.body_up = colors.body_up;
+                style.body_down = colors.body_down;
+                style.border_up = colors.border_up;
+                style.border_down = colors.border_down;
+                style.wick_up = colors.wick_up;
+                style.wick_down = colors.wick_down;
+            }
             if chart.chart_type_params() != &params {
                 chart.set_chart_type_params(params);
             }
@@ -1188,6 +1241,50 @@ mod tests {
         }
     }
 
+    /// The state read from a chart applies back without changing its configuration, so pressing
+    /// Ok without edits adds no undo step; colours that fell back to another stay unset. A colour
+    /// left as shown while the one it fell back to changes keeps what it showed.
+    #[test]
+    fn unedited_settings_apply_records_no_undo() {
+        let bars = || {
+            BarData::from_bars(vec![Bar::new(
+                chrono::DateTime::UNIX_EPOCH,
+                10.0,
+                18.0,
+                8.0,
+                14.0,
+                0.0,
+            )])
+        };
+        let mut chart = Chart::new(bars());
+        let before = chart.config().clone();
+        chart.user_action(|chart| {
+            ChartSettingsState::from_chart(chart)
+                .apply_to_chart(chart)
+                .unwrap();
+        });
+        assert_eq!(chart.config(), &before);
+        assert!(!chart.can_undo());
+
+        let body = Color32::from_rgb(1, 100, 2);
+        let grid = Color32::from_rgb(3, 4, 102);
+        let (old_body, old_grid) = (before.bullish_color, before.grid_color);
+        let mut settings = ChartSettingsState::from_chart(&chart);
+        settings.candle_colors.body_up = body;
+        settings.grid_lines.horizontal_color = grid;
+        chart.user_action(|chart| settings.apply_to_chart(chart).unwrap());
+        let config = chart.config();
+        assert_eq!(config.bullish_color, body);
+        assert_eq!(config.bullish_border_color, Some(old_body));
+        assert_eq!(
+            config.bullish_wick_color.or(config.bullish_border_color),
+            Some(old_body)
+        );
+        assert_eq!(config.grid_color, grid);
+        assert_eq!(config.vertical_grid_color, Some(old_grid));
+        assert!(chart.can_undo());
+    }
+
     /// Hollow candles colour by the close against the previous close, and are hollow when the
     /// close is above the open; volume candles colour by their open or the previous close and are
     /// always filled. Each component has its own switch and colours, and saved styles and undo
@@ -1505,6 +1602,194 @@ mod tests {
             let colors = ChartSettingsState::from_chart(&restored).candle_colors;
             assert!(colors.show_body && colors.show_border && colors.show_wick);
         }
+    }
+
+    /// Before volume candles had a style, a layout or chart settings template held the candle
+    /// settings for them and the painter ignored all but the body colours: body and both wicks in
+    /// the body colour of the bar's direction against its open, without a border. Such a document
+    /// restores as it was painted, whatever else its candle settings held, and a layout without a
+    /// configuration still gives it the candle colours of its settings. The third bar closes at
+    /// 12.5, below its open of 13 and above the previous close of 11.
+    #[test]
+    #[cfg(feature = "drawings")]
+    fn volume_candle_layout_saved_before_the_style_restores_as_drawn() {
+        use super::super::CandleColorConfig;
+        use crate::model::ChartType;
+        use crate::widget::ChartSnapshot;
+        use crate::widget::test_frames::{frame, shapes};
+        let (up, down) = (Color32::from_rgb(1, 100, 2), Color32::from_rgb(101, 2, 3));
+        let (teal, red) = (
+            Color32::from_rgb(8, 153, 129),
+            Color32::from_rgb(242, 54, 69),
+        );
+        let (border_up, border_down) =
+            (Color32::from_rgb(3, 4, 102), Color32::from_rgb(103, 5, 104));
+        let make = || {
+            let time = chrono::DateTime::UNIX_EPOCH;
+            let mut chart = Chart::new(BarData::from_bars(
+                [
+                    (10.0, 18.0, 8.0, 14.0),
+                    (13.0, 17.0, 8.5, 11.0),
+                    (13.0, 15.0, 10.0, 12.5),
+                ]
+                .into_iter()
+                .enumerate()
+                .map(|(i, (o, h, l, c))| {
+                    Bar::new(time + chrono::Duration::days(i as i64), o, h, l, c, 100.0)
+                })
+                .collect(),
+            ));
+            chart.set_chart_type(ChartType::VolumeCandles);
+            chart.config_mut().show_volume = false;
+            chart
+        };
+        let saved_colors = [
+            CandleColorConfig {
+                color_by_previous_close: false,
+                show_body: true,
+                show_border: false,
+                show_wick: true,
+                body_up: up,
+                body_down: down,
+                border_up: teal,
+                border_down: red,
+                wick_up: teal,
+                wick_down: red,
+            },
+            CandleColorConfig {
+                color_by_previous_close: true,
+                show_body: true,
+                show_border: true,
+                show_wick: false,
+                body_up: up,
+                body_down: down,
+                border_up,
+                border_down,
+                wick_up: teal,
+                wick_down: red,
+            },
+        ];
+        // What each kind of document leaves out of its current form.
+        let strip_layout = |saved: &mut serde_json::Value, what: &str| {
+            let settings = saved["settings"].as_object_mut().unwrap();
+            if what == "settings" || what == "version 1" {
+                settings.remove("chart_type").unwrap();
+                settings.remove("chart_type_params").unwrap();
+            }
+            if what == "version 1" {
+                let layout = saved.as_object_mut().unwrap();
+                layout.remove("config").unwrap();
+                layout.remove("options").unwrap();
+            }
+            for path in ["/chart_type_params", "/settings/chart_type_params"] {
+                let Some(params) = saved.pointer_mut(path) else {
+                    continue;
+                };
+                let params = params.as_object_mut().unwrap();
+                if what == "styles" {
+                    params.remove("styles").unwrap();
+                } else {
+                    let styles = params["styles"].as_object_mut().unwrap();
+                    styles.remove("volume_candles").unwrap();
+                }
+            }
+        };
+        for colors in saved_colors {
+            for what in ["style", "styles", "settings", "version 1", "template"] {
+                let mut restored = make();
+                if what == "template" {
+                    let mut saved =
+                        serde_json::to_value(ChartSettingsState::from_chart(&make())).unwrap();
+                    saved
+                        .pointer_mut("/chart_type_params/styles")
+                        .unwrap()
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("volume_candles")
+                        .unwrap();
+                    saved["candle_colors"] = serde_json::to_value(&colors).unwrap();
+                    let saved: ChartSettingsState = serde_json::from_value(saved).unwrap();
+                    saved.apply_to_chart(&mut restored).unwrap();
+                } else {
+                    let mut saved = serde_json::to_value(make().snapshot().unwrap()).unwrap();
+                    saved["settings"]["candle_colors"] = serde_json::to_value(&colors).unwrap();
+                    strip_layout(&mut saved, what);
+                    let saved: ChartSnapshot = serde_json::from_value(saved).unwrap();
+                    restored.restore(&saved).unwrap();
+                    if what == "version 1" {
+                        // A layout without a configuration gives it the candle colours of its
+                        // settings, as it did before.
+                        let config = restored.config();
+                        assert_eq!(
+                            (config.bullish_color, config.bearish_color),
+                            (up, down),
+                            "{colors:?}"
+                        );
+                    }
+                }
+                let ctx = Context::default();
+                frame(&ctx, &mut restored, 0.0, vec![]);
+                let painted = shapes(&ctx, &mut restored, 0.1, vec![]);
+                let plot = restored.get_rendered_price_rect();
+                let known = [up, down, teal, red, border_up, border_down];
+                let (mut bodies, mut wicks) = (Vec::new(), Vec::new());
+                for shape in painted {
+                    match shape {
+                        Shape::Rect(r)
+                            if plot.contains(r.rect.center()) && known.contains(&r.fill) =>
+                        {
+                            bodies.push((r.fill, r.stroke.width));
+                        }
+                        Shape::LineSegment { points, stroke }
+                            if points[0].x == points[1].x && known.contains(&stroke.color) =>
+                        {
+                            wicks.push(stroke.color);
+                        }
+                        _ => {}
+                    }
+                }
+                assert_eq!(
+                    bodies,
+                    [(up, 0.0), (down, 0.0), (down, 0.0)],
+                    "{what} {colors:?}"
+                );
+                assert_eq!(wicks, [up, up, down, down, down, down], "{what} {colors:?}");
+                let shown = ChartSettingsState::from_chart(&restored).candle_colors;
+                assert_eq!(
+                    shown,
+                    CandleColorConfig {
+                        color_by_previous_close: false,
+                        show_body: true,
+                        show_border: false,
+                        show_wick: true,
+                        body_up: up,
+                        body_down: down,
+                        border_up: up,
+                        border_down: down,
+                        wick_up: up,
+                        wick_down: down,
+                    },
+                    "{what} {colors:?}"
+                );
+                // Settings read from the restored chart are no longer those of an old document.
+                let mut edited = ChartSettingsState::from_chart(&restored);
+                edited.candle_colors.wick_up = teal;
+                edited.apply_to_chart(&mut restored).unwrap();
+                let style = &restored.chart_type_params().styles.volume_candles;
+                assert_eq!(style.wick_up, teal, "{what} {colors:?}");
+            }
+        }
+        // A layout of another chart type has nothing of the old drawing to keep.
+        let mut other = make();
+        other.set_chart_type(ChartType::Candles);
+        let mut saved = serde_json::to_value(other.snapshot().unwrap()).unwrap();
+        strip_layout(&mut saved, "style");
+        let saved: ChartSnapshot = serde_json::from_value(saved).unwrap();
+        other.restore(&saved).unwrap();
+        assert_eq!(
+            other.chart_type_params().styles.volume_candles,
+            crate::model::VolumeCandlesStyle::default()
+        );
     }
 
     /// The default price labels are printed in the price scale's text colour, so they read at the
@@ -2154,5 +2439,35 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Ticking the ratio lock in the settings of an unlocked chart, as the dialog does, locks the
+    /// view the chart shows, as switching on the configuration's lock does.
+    #[test]
+    fn locking_the_ratio_in_settings_keeps_the_view() {
+        use crate::widget::test_frames::frame;
+        let start = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let bars = (0..50)
+            .map(|i| {
+                let close = (10.0 + (i % 5) as f64) / 1000.0;
+                let time = start + chrono::Duration::minutes(i);
+                Bar::new(time, close, 0.016, 0.009, close, 1.0)
+            })
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars));
+        chart.set_timeframe(crate::model::Timeframe::Min1);
+        chart.config_mut().show_volume = false;
+        let ctx = Context::default();
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let mut settings = ChartSettingsState::from_chart(&chart);
+        settings.scales_and_lines.lock_price_to_bar_ratio = true;
+        // The dialog turns auto scale off with the lock.
+        settings.scales_and_lines.auto_scale = false;
+        chart.user_action(|chart| settings.apply_to_chart(chart).unwrap());
+        frame(&ctx, &mut chart, 1.0, vec![]);
+        let range = chart.state().price_scale().range();
+        // The bars span 0.009 to 0.016: ten times the span they are fitted in is below 0.0875,
+        // while one price unit per bar spans the plot's height in bar widths, about 91.
+        assert!(range.max - range.min < 0.0875, "{range:?}");
     }
 }

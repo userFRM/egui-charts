@@ -57,7 +57,9 @@ can override a bar's body, wick and border. Added OHLC series use
 [`SeriesOptions::up_color`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.SeriesOptions.html#structfield.up_color)
 and `down_color`, and draw each bar's border colour inside its body when
 [`SeriesOptions::candle_border_width`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.SeriesOptions.html#structfield.candle_border_width)
-is positive (zero by default). Added Bars series take `bars_style` for the open
+is positive (zero by default). Added hollow candles take that width when it is positive and
+otherwise keep a 1.5 point border, in the bar's own border colour when it has one, since a rising
+hollow candle is drawn by its border alone. Added Bars series take `bars_style` for the open
 tick, thin bars and colouring by previous close; they do not expose the main series' candle style switches.
 Added high-low series draw in
 [`SeriesOptions::color`](https://userfrm.github.io/egui-charts/docs/api/egui_charts/widget/struct.SeriesOptions.html#structfield.color)

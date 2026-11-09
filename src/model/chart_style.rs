@@ -4,6 +4,7 @@ use crate::model::{LineStyle, PriceSource};
 use crate::tokens::DESIGN_TOKENS;
 use egui::Color32;
 use serde::{Deserialize, Serialize};
+use std::cell::Cell;
 
 /// How a series line connects its points.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -184,6 +185,76 @@ impl HlcAreaStyle {
     pub(crate) fn fill_tint(color: Color32, alpha: u8) -> Color32 {
         Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha)
     }
+
+    /// The style drawing what a saved entry of the former format drew: both fills at
+    /// `fill_opacity` in `up` and `down`, the close line at `line_width` in `up`, and no high or
+    /// low line.
+    pub(crate) fn former(fill_opacity: f32, line_width: f32, up: Color32, down: Color32) -> Self {
+        // `as u8` saturates and maps NaN to 0.
+        let alpha = (fill_opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
+        Self {
+            high_line_visible: false,
+            low_line_visible: false,
+            close_line: LinePlotStyle {
+                color: up,
+                width: line_width,
+                ..Default::default()
+            },
+            high_to_close_fill: Self::fill_tint(up, alpha),
+            close_to_low_fill: Self::fill_tint(down, alpha),
+            ..Self::with_colors(up, down)
+        }
+    }
+
+    /// Forgets the entry of the former format noted on this thread.
+    #[cfg(feature = "widget")]
+    pub(crate) fn forget_former() {
+        FORMER_HLC_AREA.set(None);
+    }
+
+    /// Draws this style, the last one read on this thread, in the candle colours of the document
+    /// holding it if it was saved in the former format, which took them from the chart.
+    #[cfg(feature = "widget")]
+    pub(crate) fn fill_former(&mut self, up: Color32, down: Color32) {
+        if let Some((fill_opacity, line_width)) = FORMER_HLC_AREA.take() {
+            *self = Self::former(fill_opacity, line_width, up, down);
+        }
+    }
+}
+
+thread_local! {
+    /// The `fill_opacity` and `line_width` of the entry of the former format last read on this
+    /// thread.
+    static FORMER_HLC_AREA: Cell<Option<(f32, f32)>> = const { Cell::new(None) };
+}
+
+/// Reads a saved HLC area entry. One of the former format notes its fields for the document
+/// holding it and reads in the token colours, the colours of a style read without its settings.
+fn read_hlc_area<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<HlcAreaStyle, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged, deny_unknown_fields)]
+    enum Saved {
+        // The former serializer wrote exactly these fields, and a current entry has neither.
+        Former { fill_opacity: f32, line_width: f32 },
+        Current(HlcAreaStyle),
+    }
+    Ok(match Saved::deserialize(deserializer)? {
+        Saved::Former {
+            fill_opacity,
+            line_width,
+        } => {
+            FORMER_HLC_AREA.set(Some((fill_opacity, line_width)));
+            HlcAreaStyle::former(
+                fill_opacity,
+                line_width,
+                DESIGN_TOKENS.semantic.extended.bullish,
+                DESIGN_TOKENS.semantic.extended.bearish,
+            )
+        }
+        Saved::Current(style) => style,
+    })
 }
 
 impl Default for HlcAreaStyle {
@@ -385,6 +456,44 @@ pub struct VolumeCandlesStyle {
     pub wick_down: Color32,
 }
 
+impl VolumeCandlesStyle {
+    /// Stands for the style of a document saved before it existed: volume candles drew without a
+    /// border then, and transparent border colours tell it from a saved style, which offers them
+    /// with borders on. Applying the document's settings replaces it through
+    /// [`Self::drawn_before_style`], and `Chart::set_chart_type_params` takes the defaults for it,
+    /// so no chart keeps it.
+    fn saved_without_style() -> Self {
+        Self {
+            border_visible: false,
+            border_up: Color32::TRANSPARENT,
+            border_down: Color32::TRANSPARENT,
+            ..Self::default()
+        }
+    }
+
+    /// Whether this is the style of a document saved before it existed.
+    #[cfg(feature = "widget")]
+    pub(crate) fn is_saved_without_style(&self) -> bool {
+        *self == Self::saved_without_style()
+    }
+
+    /// How volume candles drew before they had this style: body and both wicks in the rising or
+    /// falling body colour, by the close against the open, without a border.
+    #[cfg(feature = "widget")]
+    pub(crate) fn drawn_before_style(up: Color32, down: Color32) -> Self {
+        Self {
+            border_visible: false,
+            body_up: up,
+            body_down: down,
+            border_up: up,
+            border_down: down,
+            wick_up: up,
+            wick_down: down,
+            ..Self::default()
+        }
+    }
+}
+
 impl Default for VolumeCandlesStyle {
     fn default() -> Self {
         let up = DESIGN_TOKENS.semantic.extended.bullish;
@@ -481,13 +590,17 @@ pub struct ChartTypeStyles {
     pub area: AreaStyle,
     /// Baseline chart.
     pub baseline: BaselineStyle,
-    /// HLC area chart.
+    /// HLC area chart. Documents saved with its former `fill_opacity` and `line_width` restore as
+    /// they were drawn.
+    #[serde(deserialize_with = "read_hlc_area")]
     pub hlc_area: HlcAreaStyle,
     /// Candles chart.
     pub candles: CandlesStyle,
     /// Hollow candles chart.
     pub hollow: HollowStyle,
-    /// Volume candles chart.
+    /// Volume candles chart. Documents saved before this style restore as they were drawn, in
+    /// their saved body colours without a border.
+    #[serde(default = "VolumeCandlesStyle::saved_without_style")]
     pub volume_candles: VolumeCandlesStyle,
     /// Heikin-Ashi chart. Documents saved before this style restore with their original close
     /// alone on the scale, as they were drawn.
@@ -549,6 +662,7 @@ impl ChartTypeStyles {
     /// The styles of a document saved before chart types had styles of their own.
     pub(super) fn saved_without_styles() -> Self {
         Self {
+            volume_candles: VolumeCandlesStyle::saved_without_style(),
             heikin: HeikinStyle::saved_without_style(),
             high_low: HighLowStyle::saved_without_style(),
             ..Self::default()
@@ -592,5 +706,18 @@ mod tests {
                 assert_eq!(restored_point[key], point[key]);
             }
         }
+    }
+
+    /// The former serializer wrote only `fill_opacity` and `line_width`, so an HLC area entry
+    /// holding current fields beside them was saved since and keeps their values.
+    #[test]
+    fn hlc_area_entry_with_current_fields_keeps_them_beside_former_ones() {
+        let mut saved = ChartTypeStyles::default();
+        saved.hlc_area.close_line.width = 3.5;
+        let mut json = serde_json::to_value(&saved).unwrap();
+        json["hlc_area"]["fill_opacity"] = serde_json::json!(0.5);
+        json["hlc_area"]["line_width"] = serde_json::json!(4.0);
+        let read: ChartTypeStyles = serde_json::from_value(json).unwrap();
+        assert_eq!(read.hlc_area, saved.hlc_area);
     }
 }

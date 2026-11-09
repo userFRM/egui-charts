@@ -492,7 +492,12 @@ impl Chart {
     /// the dataset with [`Chart::set_data`] recalculates them. A size the chart cannot use is
     /// reported on the chart. On price-based types a change
     /// clears the zoom history and selection and keeps the right-edge item by time and rank.
-    pub fn set_chart_type_params(&mut self, params: ChartTypeParams) {
+    /// A volume candles style read from a document saved before that style existed takes the
+    /// defaults; applying the document's chart settings builds it from their body colours.
+    pub fn set_chart_type_params(&mut self, mut params: ChartTypeParams) {
+        if params.styles.volume_candles.is_saved_without_style() {
+            params.styles.volume_candles = Default::default();
+        }
         if self.chart_type.is_time_independent() && self.chart_type_params != params {
             self.state.clear_zoom_history();
             self.selection.deselect();

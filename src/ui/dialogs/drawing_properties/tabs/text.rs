@@ -104,7 +104,9 @@ impl TextTab {
             let settings = &mut template.settings;
             let line_text = matches!(
                 settings.tool_type,
-                DrawingToolType::HorizontalLine | DrawingToolType::VerticalLine
+                DrawingToolType::HorizontalLine
+                    | DrawingToolType::HorizontalRay
+                    | DrawingToolType::VerticalLine
             );
             if writes && (line_text || settings.tool_type.supports_line_measurements()) {
                 use LineTextHorizontalAlign as H;
@@ -174,7 +176,8 @@ impl TextTab {
                 || line_text
                 || matches!(
                     settings.tool_type,
-                    DrawingToolType::Ray
+                    DrawingToolType::TrendLine
+                        | DrawingToolType::Ray
                         | DrawingToolType::ExtendedLine
                         | DrawingToolType::InfoLine
                         | DrawingToolType::TrendAngle
@@ -272,18 +275,18 @@ mod tests {
     use super::*;
     use crate::drawings::Drawing;
 
-    /// A horizontal line, vertical line, ray or extended line offers its text placement, colour and
-    /// emphasis, and a vertical line the turn of its text; a horizontal ray keeps the plain text
-    /// settings it draws.
+    /// Line tools offer the text placement, colour and emphasis they draw, and a vertical line
+    /// also offers the orientation of its text.
     #[test]
     fn line_tools_offer_the_text_settings_they_draw() {
         let chart = crate::Chart::new(crate::model::BarData::default());
         for (tool, offered) in [
             (DrawingToolType::HorizontalLine, true),
-            (DrawingToolType::VerticalLine, true),
+            (DrawingToolType::TrendLine, true),
             (DrawingToolType::Ray, true),
             (DrawingToolType::ExtendedLine, true),
-            (DrawingToolType::HorizontalRay, false),
+            (DrawingToolType::HorizontalRay, true),
+            (DrawingToolType::VerticalLine, true),
         ] {
             let mut props = DrawingProps::from_drawing(&Drawing::new(1, tool), &chart);
             let output = egui::Context::default().run_ui(Default::default(), |ui| {
