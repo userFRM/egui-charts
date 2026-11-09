@@ -263,7 +263,7 @@ Execution-based calculations use supplied trades and their aggressor side. Unkno
 
 ### Replay
 
-- [x] Bar replay hides future main-series bars, supports start-bar/date/random selection, stepping, autoplay, speed and seek, and restores live data on exit, keeping the bars and depth history on screen while the feed catches up.
+- [x] Bar replay hides future main-series bars, supports start-bar/date/random selection, stepping, autoplay, speed and seek, and restores live data on exit, keeping the bars and depth history on screen while the feed catches up. The demo supplies its newest bar, quote and book before execution backfill completes.
 - [x] Main-series studies recalculate against replayed bars and drawing anchors remain stable.
 - [x] Replay controls docked below the time axis, a Replay button drawn selected and a replay mark in the legend of each replaying chart, starting at a clicked bar with one click and at a date, the first bar, a random bar or a saved session from the bar, keyboard shortcuts and synchronised layout replay are exercised by the demo.
 - [x] `ReplayClock` merges timestamped trades, quotes and depth events across symbols, supports speed and seek, and routes through normal sinks. `ReplayDriver` gives each subscription the executions of the session windows it selected. Its seeks and playback at any speed build the same candles, flat candles of quiet slots included, and a seek delivers every bar through the position.
