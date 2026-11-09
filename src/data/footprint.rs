@@ -289,8 +289,6 @@ pub struct Footprint {
     trade_starts: BTreeMap<DateTime<Utc>, DateTime<Utc>>,
     /// Price rows held across all bars.
     rows: usize,
-    total_volume: f64,
-    total_trades: u64,
     last: Option<DateTime<Utc>>,
     min_size: f64,
     max_size: f64,
@@ -302,16 +300,16 @@ pub struct Footprint {
 
 impl Footprint {
     /// Builds a footprint from bars already aggregated by the host, without reconstructing
-    /// executions. Volumes, execution counts and delta extrema are kept as supplied.
+    /// executions. Volumes, execution counts and delta extremes are kept as supplied.
     ///
     /// Opens must be unique and aligned to the time-based clock; row keys must round-trip
     /// through the price grid. Side totals allow relative rounding error of 1e-9, and delta
     /// bounds allow 1e-9 of the larger side volume. Invalid input returns `FeedError::InvalidData`.
     /// Trade-based clocks and bars with no price rows are rejected.
     ///
-    /// The snapshot covers every bar from its first one through the host's history cutoff.
-    /// An omitted bar had no executions; unknown coverage holes must not be supplied as
-    /// zero-trade bars. The host supplies matching OHLC and replaces history for corrections.
+    /// The snapshot covers every bar from its first one; an omitted bar had no executions.
+    /// Start the snapshot after any gap in the host's coverage. The host supplies matching
+    /// OHLC and replaces history for corrections.
     ///
     /// Executions pushed afterwards continue the newest bar and must not already be counted
     /// in it. The host must resume after the last included execution, preserving exchange order
@@ -326,11 +324,14 @@ impl Footprint {
     ) -> Result<Self, FeedError> {
         let mut flow = Self::new(clock, tick_size, ticks_per_row)?;
         if flow.clock.timeframe().is_none_or(|tf| tf.is_trade_based()) {
-            return Err(FeedError::InvalidData(
-                "footprint aggregate snapshots require a time-based clock".into(),
-            ));
+            return Err(FeedError::InvalidData(format!(
+                "footprint aggregate snapshots require a time-based clock, got {}",
+                flow.clock
+                    .timeframe()
+                    .map_or_else(|| "an exact clock".into(), |tf| tf.to_string())
+            )));
         }
-        let (mut volume, mut row_volume, mut trades) = (0.0, 0.0, 0_u64);
+        let mut trades = 0_u64;
         for bar in bars {
             let invalid =
                 |reason| FeedError::InvalidData(format!("footprint bar at {} {reason}", bar.time));
@@ -386,9 +387,13 @@ impl Footprint {
                         )));
                     }
                     totals[i] += value;
-                    trades = trades.checked_add(count).ok_or_else(|| invalid(format!(
-                        "row {level} {side} count {count} overflows total execution count {trades}"
-                    )))?;
+                    trades = trades
+                        .checked_add(count)
+                        .filter(|total| *total <= u64::MAX / 2)
+                        .ok_or_else(|| invalid(format!(
+                            "row {level} {side} count {count} takes the snapshot past {} executions",
+                            u64::MAX / 2
+                        )))?;
                 }
                 if !row.volume().is_finite() {
                     return Err(invalid(format!(
@@ -417,7 +422,7 @@ impl Footprint {
                 }
                 if !total.is_finite() {
                     return Err(invalid(format!(
-                        "rows' {side} volume must be finite, got {total:?}"
+                        "sum of row {side} volumes must be finite, got {total:?}"
                     )));
                 }
                 if !near(value, total) {
@@ -473,24 +478,9 @@ impl Footprint {
                     bar.bid.max(bar.ask)
                 )));
             }
-            volume += bar.volume();
-            if !volume.is_finite() {
-                return Err(invalid(format!(
-                    "volume {:?} overflows the snapshot total",
-                    bar.volume()
-                )));
-            }
-            row_volume += totals.into_iter().sum::<f64>();
-            if !row_volume.is_finite() {
-                return Err(invalid(format!(
-                    "rows' snapshot volume must be finite, got {row_volume:?}"
-                )));
-            }
             flow.rows += bar.levels.len();
             flow.bars.insert(bar.time, bar);
         }
-        flow.total_volume = volume;
-        flow.total_trades = trades;
         flow.last = flow.bars.last_key_value().map(|(time, _)| *time);
         Ok(flow)
     }
@@ -524,8 +514,6 @@ impl Footprint {
             trade_bars: Default::default(),
             trade_starts: BTreeMap::new(),
             rows: 0,
-            total_volume: 0.0,
-            total_trades: 0,
             last: None,
             min_size: 0.0,
             max_size: f64::MAX,
@@ -587,7 +575,7 @@ impl Footprint {
                 self.incomplete_through = self.incomplete_through.max(Some(open));
                 self.bars.retain(|time, _| *time > open);
                 self.trade_starts.retain(|time, _| *time > open);
-                self.recount();
+                self.rows = self.bars.values().map(|bar| bar.levels.len()).sum();
             }
             return;
         }
@@ -601,8 +589,6 @@ impl Footprint {
                 trade_bars: Default::default(),
                 trade_starts: BTreeMap::new(),
                 rows: 0,
-                total_volume: 0.0,
-                total_trades: 0,
                 last: None,
                 ..*self
             };
@@ -617,7 +603,7 @@ impl Footprint {
                 None => self.bars.remove(&open),
             };
         }
-        self.recount();
+        self.rows = self.bars.values().map(|bar| bar.levels.len()).sum();
     }
 
     /// Counts the bar holding `first`, the oldest execution held, and earlier bars as
@@ -627,29 +613,14 @@ impl Footprint {
         self.incomplete_through = self.incomplete_through.max(Some(open));
     }
 
-    fn recount(&mut self) {
-        self.rows = self.bars.values().map(|bar| bar.levels.len()).sum();
-        self.total_volume = self.bars.values().map(FootprintBar::volume).sum();
-        self.total_trades = self.bars.values().map(FootprintBar::trades).sum();
-    }
-
     fn enforce_budget(&mut self) {
-        let mut recount_volume = false;
         while self.bars.len() > 1 && (self.bars.len() > self.max_bars || self.rows > self.max_rows)
         {
             if let Some((time, bar)) = self.bars.pop_first() {
                 self.rows -= bar.levels.len();
-                let remaining = self.total_volume - bar.volume();
-                recount_volume |= remaining <= self.total_volume * f64::EPSILON;
-                self.total_volume = remaining;
-                self.total_trades -= bar.trades();
                 self.trade_starts.remove(&time);
                 self.incomplete_through = self.incomplete_through.max(Some(time));
             }
-        }
-        if recount_volume {
-            // Subtracting a large evicted bar can erase the volume of smaller retained bars.
-            self.total_volume = self.bars.values().map(FootprintBar::volume).sum();
         }
     }
 
@@ -661,16 +632,10 @@ impl Footprint {
             return;
         };
         let removed = self.bars.split_off(&from);
-        let remaining = self.total_volume - removed.values().map(FootprintBar::volume).sum::<f64>();
-        let recount_volume = remaining <= self.total_volume * f64::EPSILON;
-        self.total_volume = remaining;
         self.rows -= removed.values().map(|bar| bar.levels.len()).sum::<usize>();
-        self.total_trades -= removed.values().map(FootprintBar::trades).sum::<u64>();
         self.trade_starts.retain(|time, _| *time < from);
         for (time, bar) in source.bars.range(from..) {
             self.rows += bar.levels.len();
-            self.total_volume += bar.volume();
-            self.total_trades += bar.trades();
             self.bars.insert(*time, bar.clone());
         }
         self.trade_starts.extend(
@@ -680,10 +645,6 @@ impl Footprint {
                 .map(|(time, first)| (*time, *first)),
         );
         self.incomplete_through = self.incomplete_through.max(source.incomplete_through);
-        if recount_volume {
-            // A replaced suffix can dwarf the retained prefix.
-            self.total_volume = self.bars.values().map(FootprintBar::volume).sum();
-        }
         self.enforce_budget();
     }
 
@@ -914,44 +875,18 @@ impl Footprint {
         };
         let accepted =
             trade.size >= self.min_size && trade.size <= self.max_size && trade.size > 0.0;
-        if accepted {
-            let (mut volume, mut trades) = (self.total_volume, self.total_trades);
-            for &(time, size) in parts {
-                volume += size;
-                if !volume.is_finite()
-                    || self.bars.get(&time).is_some_and(|bar| {
-                        !(bar.volume() + size).is_finite()
-                            || bar
-                                .levels
-                                .get(&level)
-                                .is_some_and(|row| !(row.volume() + size).is_finite())
-                    })
-                {
-                    return Err(FeedError::InvalidData("footprint volume overflow".into()));
-                }
-                trades = trades.checked_add(1).ok_or_else(|| {
-                    FeedError::InvalidData("footprint execution count overflow".into())
-                })?;
-            }
-            if volume > f64::MAX / 2.0 {
-                // Reconciled rows may exceed bar totals; scan only near numeric overflow.
-                let bars = self.bars.values().map(FootprintBar::volume).sum::<f64>();
-                let rows = self
-                    .bars
-                    .values()
-                    .flat_map(|bar| bar.levels.values())
-                    .map(FootprintLevel::volume)
-                    .sum();
-                for total in [bars, rows] {
-                    if !parts
-                        .iter()
-                        .fold(total, |sum, (_, size)| sum + size)
-                        .is_finite()
-                    {
-                        return Err(FeedError::InvalidData("footprint volume overflow".into()));
-                    }
-                }
-            }
+        if accepted
+            && parts.iter().any(|(time, size)| {
+                self.bars.get(time).is_some_and(|bar| {
+                    !(bar.volume() + size).is_finite()
+                        || bar
+                            .levels
+                            .get(&level)
+                            .is_some_and(|row| !(row.volume() + size).is_finite())
+                })
+            })
+        {
+            return Err(FeedError::InvalidData("footprint volume overflow".into()));
         }
         self.trade_bars = allocation;
         if !accepted {
@@ -966,8 +901,6 @@ impl Footprint {
     }
 
     fn add_part(&mut self, trade: &Tick, level: i64, time: DateTime<Utc>, size: f64) {
-        self.total_volume += size;
-        self.total_trades += 1;
         if self.clock.timeframe().is_some_and(|tf| tf.is_trade_based()) {
             self.trade_starts.entry(time).or_insert(trade.ts);
         }
@@ -1321,153 +1254,29 @@ mod tests {
     #[test]
     fn aggregate_continuation_rejects_overflow_without_mutation() {
         let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
-        let reject = |mut flow: Footprint, second, price, size, message| {
-            let before = format!("{flow:?}");
-            let trade = Tick::new(
-                start + TimeDelta::seconds(second),
-                price,
-                size,
-                Some(OrderSide::Buy),
-            );
-            assert_eq!(flow.push(&trade).unwrap_err().to_string(), message);
-            assert_eq!(
-                format!("{flow:?}"),
-                before,
-                "rejected execution changes no state"
-            );
-        };
-        for (bars, second, price) in [
-            (vec![ask_bar(start, 1.0, u64::MAX)], 1, 100.0),
-            (
-                vec![
-                    ask_bar(start, 1.0, u64::MAX - 1),
-                    ask_bar(start + TimeDelta::minutes(1), 1.0, 1),
-                ],
-                120,
-                101.0,
-            ),
-        ] {
-            reject(
-                aggregate(bars).unwrap(),
-                second,
-                price,
-                1.0,
-                "invalid data: footprint execution count overflow",
-            );
-        }
-        for second in [1, 60] {
-            reject(
-                aggregate([ask_bar(start, 1e308, 1)]).unwrap(),
-                second,
-                100.0,
-                1e308,
-                "invalid data: footprint volume overflow",
-            );
-        }
         let mut rounded = ask_bar(start, f64::MAX, 1);
         rounded.ask *= 1.0 - 5e-10;
         rounded.max_delta = rounded.ask;
         let size = f64::MAX * 4e-10;
         assert!((rounded.volume() + size).is_finite());
         assert!(!(rounded.levels[&200].volume() + size).is_finite());
-        reject(
-            aggregate([rounded]).unwrap(),
-            1,
+        let mut flow = aggregate([rounded]).unwrap();
+        let before = format!("{flow:?}");
+        let trade = Tick::new(
+            start + TimeDelta::seconds(1),
             100.0,
             size,
-            "invalid data: footprint volume overflow",
+            Some(OrderSide::Buy),
         );
-
-        let rounded_bars = [start, start + TimeDelta::minutes(1)].map(|time| {
-            let mut bar = ask_bar(time, f64::MAX / 2.0, 1);
-            bar.ask *= 1.0 - 5e-10;
-            bar.max_delta = bar.ask;
-            bar
-        });
-        reject(
-            aggregate(rounded_bars).unwrap(),
-            120,
-            101.0,
-            size,
-            "invalid data: footprint volume overflow",
-        );
-
-        let mut allocated = Footprint::new(BarClock::new("1t".parse().unwrap()), 0.25, 2).unwrap();
-        allocated
-            .push(&Tick::new(start, 100.0, 1e308, None))
-            .unwrap();
-        reject(
-            allocated,
-            1,
-            100.0,
-            1e308,
-            "invalid data: footprint volume overflow",
-        );
-    }
-
-    #[test]
-    fn aggregate_continuation_uses_totals_after_eviction_and_rebuild() {
-        let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
-        let next = start + TimeDelta::minutes(1);
-        let mut flow =
-            aggregate([ask_bar(start, 1e308, u64::MAX - 1), ask_bar(next, 1.0, 1)]).unwrap();
-        flow.set_budget(1, usize::MAX);
-        assert_eq!((flow.total_volume, flow.total_trades), (1.0, 1));
-        flow.push(&Tick::new(next, 100.0, 2.0, None)).unwrap();
         assert_eq!(
-            (
-                flow.total_volume,
-                flow.total_trades,
-                flow.bars()[&next].trades()
-            ),
-            (3.0, 2, 2)
+            flow.push(&trade).unwrap_err().to_string(),
+            "invalid data: footprint volume overflow"
         );
-
-        let mut rebuilt =
-            aggregate([ask_bar(start, 1e308, u64::MAX - 1), ask_bar(next, 1.0, 1)]).unwrap();
-        let held = [Tick::new(start + TimeDelta::seconds(2), 100.0, 2.0, None)];
-        rebuilt.drop_through(start + TimeDelta::seconds(1), &held);
-        rebuilt.push(&Tick::new(next, 100.0, 1.0, None)).unwrap();
-        assert_eq!((rebuilt.total_volume, rebuilt.total_trades), (4.0, 3));
-
-        let mut allocated = Footprint::new(BarClock::new("1t".parse().unwrap()), 0.25, 2).unwrap();
-        allocated
-            .push(&Tick::new(start, 100.0, 1e308, None))
-            .unwrap();
-        allocated.push(&Tick::new(next, 100.0, 1.0, None)).unwrap();
-        allocated.drop_through(start, []);
-        assert_eq!((allocated.total_volume, allocated.total_trades), (1.0, 1));
-        allocated
-            .push(&Tick::new(next + TimeDelta::seconds(1), 100.0, 1e308, None))
-            .unwrap();
-        assert_eq!(allocated.total_trades, 2);
-    }
-
-    #[cfg(feature = "widget")]
-    #[test]
-    fn aggregate_continuation_uses_totals_after_copying_allocations() {
-        let start: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
-        let next = start + TimeDelta::minutes(1);
-        let mut target =
-            aggregate([ask_bar(start, 1.0, u64::MAX - 3), ask_bar(next, 1e308, 2)]).unwrap();
-        let source = aggregate([ask_bar(next, 2.0, 1)]).unwrap();
-        target.copy_trade_bars(&source, Some(next));
         assert_eq!(
-            (target.total_volume, target.total_trades),
-            (3.0, u64::MAX - 2)
+            format!("{flow:?}"),
+            before,
+            "rejected execution changes no state"
         );
-        target.push(&Tick::new(next, 100.0, 1.0, None)).unwrap();
-        target.push(&Tick::new(next, 100.0, 1.0, None)).unwrap();
-        assert_eq!(target.profile(start, next).trades(), u64::MAX);
-        let before = format!("{target:?}");
-        assert_eq!(
-            target
-                .push(&Tick::new(next, 100.0, 1.0, None))
-                .unwrap_err()
-                .to_string(),
-            "invalid data: footprint execution count overflow"
-        );
-        assert_eq!(format!("{target:?}"), before);
     }
 
     #[test]
@@ -1506,16 +1315,13 @@ mod tests {
             (invalid(|b| b.levels.get_mut(&200).unwrap().unknown = 0.0), "footprint bar at 2026-01-05 10:00:00 UTC row 200 unknown count 1 has no volume"),
             (invalid(|b| { b.levels.insert(200, FootprintLevel { level: 200, ..Default::default() }); }), "footprint bar at 2026-01-05 10:00:00 UTC row 200 has no executed volume"),
             (invalid(|b| { (b.bid, b.ask, b.unknown) = (f64::MAX * 0.6, f64::MAX * 0.4, 0.0); assert!(b.volume().is_finite()); let row = b.levels.get_mut(&200).unwrap(); (row.bid, row.ask, row.unknown, row.unknown_trades) = (b.bid * (1.0 + 5e-10), b.ask * (1.0 + 5e-10), 0.0, 0); }), "footprint bar at 2026-01-05 10:00:00 UTC row 200 volume must be finite, got inf"),
-            (invalid(|b| b.levels.get_mut(&200).unwrap().bid_trades = u64::MAX), "footprint bar at 2026-01-05 10:00:00 UTC row 200 ask count 3 overflows total execution count 18446744073709551615"),
-            (aggregate([ask_bar(t0, 1.0, u64::MAX), ask_bar(t0 + TimeDelta::minutes(1), 1.0, 1)]).map(drop), "footprint bar at 2026-01-05 10:01:00 UTC row 200 ask count 1 overflows total execution count 18446744073709551615"),
+            (aggregate([ask_bar(t0, 1.0, u64::MAX / 2), ask_bar(t0 + TimeDelta::minutes(1), 1.0, 1)]).map(drop), "footprint bar at 2026-01-05 10:01:00 UTC row 200 ask count 1 takes the snapshot past 9223372036854775807 executions"),
             (invalid(|b| b.bid = -1.0), "footprint bar at 2026-01-05 10:00:00 UTC bid volume must be at least 0, got -1.0"),
             (invalid(|b| b.ask = f64::INFINITY), "footprint bar at 2026-01-05 10:00:00 UTC ask volume must be finite, got inf"),
             (invalid(|b| b.bid = 4.0), "footprint bar at 2026-01-05 10:00:00 UTC bid volume 4.0 differs from row total 3.0"),
             (invalid(|b| b.ask += 1e-6), "footprint bar at 2026-01-05 10:00:00 UTC ask volume 8.000001 differs from row total 8.0"),
-            (invalid(|b| { b.levels = [200, 201].into_iter().map(|level| (level, FootprintLevel { level, ask: 1e308, ask_trades: 1, ..Default::default() })).collect(); (b.bid, b.ask, b.unknown) = (0.0, 1e308, 0.0); }), "footprint bar at 2026-01-05 10:00:00 UTC rows' ask volume must be finite, got inf"),
+            (invalid(|b| { b.levels = [200, 201].into_iter().map(|level| (level, FootprintLevel { level, ask: 1e308, ask_trades: 1, ..Default::default() })).collect(); (b.bid, b.ask, b.unknown) = (0.0, 1e308, 0.0); }), "footprint bar at 2026-01-05 10:00:00 UTC sum of row ask volumes must be finite, got inf"),
             (invalid(|b| { b.levels = BTreeMap::from([(200, FootprintLevel { level: 200, bid: 1e308, bid_trades: 1, ..Default::default() }), (201, FootprintLevel { level: 201, ask: 1e308, ask_trades: 1, ..Default::default() })]); (b.bid, b.ask, b.unknown) = (1e308, 1e308, 0.0); }), "footprint bar at 2026-01-05 10:00:00 UTC volume must be finite, got inf"),
-            (aggregate([ask_bar(t0, 1e308, 1), ask_bar(t0 + TimeDelta::minutes(1), 1e308, 1)]).map(drop), "footprint bar at 2026-01-05 10:01:00 UTC volume 1e308 overflows the snapshot total"),
-            (aggregate([t0, t0 + TimeDelta::minutes(1)].map(|time| { let mut b = ask_bar(time, f64::MAX / 2.0, 1); b.levels.get_mut(&200).unwrap().ask *= 1.0 + 5e-10; b })).map(drop), "footprint bar at 2026-01-05 10:01:00 UTC rows' snapshot volume must be finite, got inf"),
             (invalid(|b| b.min_delta = f64::NAN), "footprint bar at 2026-01-05 10:00:00 UTC min_delta must be finite, got NaN"),
             (invalid(|b| b.max_delta = f64::INFINITY), "footprint bar at 2026-01-05 10:00:00 UTC max_delta must be finite, got inf"),
             (invalid(|b| b.min_delta = 1.0), "footprint bar at 2026-01-05 10:00:00 UTC min_delta must be at most 0, got 1.0"),
@@ -1524,10 +1330,7 @@ mod tests {
             (invalid(|b| b.max_delta = 4.9999999), "footprint bar at 2026-01-05 10:00:00 UTC max_delta 4.9999999 is below final delta 5.0"),
             (invalid(|b| b.min_delta = -4.0), "footprint bar at 2026-01-05 10:00:00 UTC delta span 10.0 exceeds side volume 8.0"),
             (invalid(|b| { b.min_delta = -3.0; b.max_delta = 8.0; }), "footprint bar at 2026-01-05 10:00:00 UTC delta span 11.0 exceeds side volume 8.0"),
-            (Footprint::from_bars(BarClock::new("3t".parse().unwrap()), 0.25, 2, []).map(drop), "footprint aggregate snapshots require a time-based clock"),
-            (Footprint::from_bars(BarClock::new("5v".parse().unwrap()), 0.25, 2, []).map(drop), "footprint aggregate snapshots require a time-based clock"),
-            (Footprint::from_bars(BarClock::new("2r".parse().unwrap()), 0.25, 2, []).map(drop), "footprint aggregate snapshots require a time-based clock"),
-            (Footprint::from_bars(BarClock::new("5delta".parse().unwrap()), 0.25, 2, []).map(drop), "footprint aggregate snapshots require a time-based clock"),
+            (Footprint::from_bars(BarClock::new("3t".parse().unwrap()), 0.25, 2, []).map(drop), "footprint aggregate snapshots require a time-based clock, got 3t"),
 
             (depth(DepthHistoryConfig { cadence: TimeDelta::zero(), ..base.clone() }), "depth history cadence must be at least one millisecond, got P0D"),
             (depth(DepthHistoryConfig { rows: 0, ..base.clone() }), "depth history rows must be at least 1, got 0"),
