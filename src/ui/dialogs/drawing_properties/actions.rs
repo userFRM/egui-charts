@@ -244,7 +244,10 @@ impl DrawingProps {
             {
                 drawing.text = (!self.label.is_empty()).then(|| self.label.clone());
             }
-            if fill != target.fill_color32() && drawing.fill_color32() != fill {
+            if fill != target.fill_color32()
+                && drawing.fill_color32() != fill
+                && (drawing.id == id.0 || drawing.tool_type.supports_fill())
+            {
                 drawing.fill_color = fill.map(|color| color.to_srgba_unmultiplied());
             }
             if self.font_size != target.font_size {
@@ -959,5 +962,33 @@ mod tests {
             })
             .collect();
         assert_eq!(got, want);
+    }
+
+    /// A fill edited in the dialog of a rectangle in a selection reaches only the selected
+    /// drawings that offer a fill; a highlighter, which has none, keeps `fill_color: None`.
+    #[test]
+    fn selection_fill_skips_drawings_without_a_fill() {
+        for (stored, enabled) in [
+            (None, true),
+            (Some([10, 20, 30, 40]), true),
+            (Some([10, 20, 30, 40]), false),
+        ] {
+            let mut rect = Drawing::new(1, DrawingToolType::Rect);
+            rect.fill_color = (!enabled).then_some([0, 0, 255, 51]);
+            let mut highlighter = Drawing::new(2, DrawingToolType::Highlighter);
+            highlighter.fill_color = stored;
+            let mut chart = Chart::new(crate::model::BarData::new());
+            chart.drawings_mut().drawings = vec![rect, highlighter];
+            chart.drawings_mut().select_drawings([1, 2]);
+            let mut props = DrawingProps::from_drawing(&chart.drawings().drawings[0], &chart);
+            props.fill_enabled = enabled;
+            props.fill_color = Some(Color32::from_rgba_unmultiplied(255, 0, 0, 51));
+            let edits = props.edited_drawings(DrawingId(1), &chart).unwrap();
+            assert_eq!(edits[0].fill_color, enabled.then_some([255, 0, 0, 51]));
+            assert_eq!(
+                edits[1].fill_color, stored,
+                "tools without a fill keep their stored value on enable, colour and disable edits"
+            );
+        }
     }
 }
