@@ -195,7 +195,7 @@ impl DataTableDialog {
         let shown: Vec<usize> = (0..table.headers.len())
             .filter(|&column| !hidden.contains(&columns[column]))
             .collect();
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.menu_button(l10n::text(ui.ctx(), "Columns"), |ui| {
                 // The time column keys the rows, so it stays.
                 for (header, column) in table.headers.iter().zip(columns).skip(1) {
@@ -629,13 +629,14 @@ mod tests {
         first.add_indicator(Box::new(crate::studies::SMA::new(3)));
         second.add_indicator(Box::new(crate::studies::RSI::new(14)));
         let ctx = Context::default();
+        let size = std::cell::Cell::new(vec2(1440.0, 900.0));
         let mut dialog = DataTableDialog::new();
         dialog.open();
         let frame = |dialog: &mut DataTableDialog, chart: &Chart, events| {
             let mut action = DataTableAction::None;
             let output = ctx.run_ui(
                 egui::RawInput {
-                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))),
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size.get())),
                     events,
                     ..Default::default()
                 },
@@ -721,6 +722,27 @@ mod tests {
         }
         dialog.open();
         assert_eq!(headers(&mut dialog, &first), without_sma);
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            first.set_theme(&ctx, &theme);
+            for dimensions in [vec2(320.0, 450.0), vec2(1440.0, 900.0)] {
+                size.set(dimensions);
+                for _ in 0..3 {
+                    frame(&mut dialog, &first, vec![]);
+                }
+                let rect = ctx.memory(|m| {
+                    let layer = m.areas().top_layer_id(egui::Order::Middle).unwrap();
+                    m.area_rect(layer.id).unwrap()
+                });
+                assert!(
+                    rect.left() >= 23.0 && rect.right() <= dimensions.x - 23.0,
+                    "{rect:?}"
+                );
+                assert!(
+                    rect.top() >= 23.0 && rect.bottom() <= dimensions.y - 23.0,
+                    "{rect:?}"
+                );
+            }
+        }
     }
 
     /// Frames over an unchanged chart reuse its table while an edge bar is whitespace, whose NaN
