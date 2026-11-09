@@ -461,6 +461,7 @@ impl IndicatorFactory {
     /// Set the inputs and presentation used by subsequent [`create`](Self::create) calls.
     /// Each template replaces the defaults for its registered name; other names retain theirs.
     /// An empty list changes nothing, and the last template for a repeated name wins.
+    /// Defaults saved under earlier input ids are upgraded like saved templates.
     /// Invalid names, inputs or settings reject the entire batch without changing any defaults.
     /// Existing studies, saved templates, layouts, clipboard copies and alert studies keep their
     /// own settings.
@@ -482,7 +483,7 @@ impl IndicatorFactory {
     /// ```
     pub fn set_defaults(&mut self, defaults: &[StudyTemplate]) -> Result<(), StudyError> {
         for template in defaults {
-            self.create_default(template)?;
+            template.create_with(self)?;
         }
         for template in defaults {
             self.defaults
@@ -502,7 +503,7 @@ impl IndicatorFactory {
     /// returns the constructor's study unchanged.
     pub fn create(&self, name: &str) -> Option<Box<dyn Indicator>> {
         if let Some(template) = self.defaults.get(name) {
-            return self.create_default(template).ok();
+            return template.create_with(self).ok();
         }
         self.create_registered(name)
     }
@@ -510,20 +511,6 @@ impl IndicatorFactory {
     /// Reconstruct saved state without applying defaults intended for new studies.
     pub(crate) fn create_registered(&self, name: &str) -> Option<Box<dyn Indicator>> {
         self.constructors.get(name).map(|(_, f)| f())
-    }
-
-    // Defaults use current inputs, without the migrations applied to saved templates.
-    fn create_default(&self, template: &StudyTemplate) -> Result<Box<dyn Indicator>, StudyError> {
-        let study = self
-            .create_registered(&template.name)
-            .ok_or_else(|| StudyError::UnknownStudy(template.name.clone()))?;
-        let mut study = ConfiguredStudy::new(study);
-        study.apply_settings(&template.inputs, template.settings.clone())?;
-        study.set_visible(template.visible);
-        if let Some(scale) = template.scale {
-            study.set_scale(scale);
-        }
-        Ok(Box::new(study))
     }
 
     /// The category of the indicator registered under `name`, such as `"Momentum"` or

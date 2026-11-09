@@ -206,8 +206,8 @@ pub struct Drawing {
 
     // === Tool-specific configuration (None uses the defaults) ===
     /// Readouts, midpoint, price labels and text placement of a trend line, ray, extended line,
-    /// info line or trend angle, and the text placement of a horizontal line or ray. Other tools
-    /// ignore these settings.
+    /// info line or trend angle, the text placement of a horizontal line or ray or a vertical
+    /// line, and the reach of a vertical line. Other tools ignore these settings.
     #[serde(default = "LineMeasurements::left_out")]
     pub line_measurements: LineMeasurements,
     /// Quantity of the long and short position tools
@@ -504,7 +504,8 @@ impl Drawing {
                 | DrawingToolType::ExtendedLine
                 | DrawingToolType::InfoLine
                 | DrawingToolType::HorizontalLine
-                | DrawingToolType::HorizontalRay => Some(BLUE),
+                | DrawingToolType::HorizontalRay
+                | DrawingToolType::VerticalLine => Some(BLUE),
                 _ => None,
             },
             background: !plain_text,
@@ -579,18 +580,30 @@ impl Drawing {
         drawing
     }
 
-    /// Create a new drawing with a specific line colour; a fill tinted from the tool's default
-    /// line colour takes the same tint of `color`.
+    /// Create a new drawing with a specific line colour; fills and pitchfork levels sharing the
+    /// tool's line colour take the new RGB at their own opacity.
     pub fn with_color(id: usize, tool_type: DrawingToolType, color: [u8; 4]) -> Self {
         let mut drawing = Self::new(id, tool_type);
-        // A fill tinted from the tool's line colour follows the new one; other fills stay.
-        if let Some(fill) = &mut drawing.fill_color
-            && fill[..3] == drawing.color[..3]
+        drawing.set_line_color(color);
+        drawing
+    }
+
+    /// Set the line colour and retint fills and pitchfork levels sharing its current RGB,
+    /// keeping each one's opacity. Independently coloured fills and levels keep their colours.
+    pub fn set_line_color(&mut self, color: [u8; 4]) {
+        if let Some(fill) = &mut self.fill_color
+            && fill[..3] == self.color[..3]
         {
             fill[..3].copy_from_slice(&color[..3]);
         }
-        drawing.color = color;
-        drawing
+        if let Some(config) = &mut self.pitchfork {
+            for level in &mut config.levels {
+                if level.color[..3] == self.color[..3] {
+                    level.color[..3].copy_from_slice(&color[..3]);
+                }
+            }
+        }
+        self.color = color;
     }
 
     /// The fill a `tool` drawing takes when Fill is switched on: its own default where that is not
@@ -971,6 +984,11 @@ impl Drawing {
             T::CrossLine => (true, true),
             _ => (false, false),
         }
+    }
+
+    /// Whether the drawing also paints its line in the chart's other panes.
+    pub(crate) fn reaches_other_panes(&self) -> bool {
+        self.tool_type == DrawingToolType::VerticalLine && self.line_measurements.across_panes
     }
 
     /// Get the z-order of this drawing
