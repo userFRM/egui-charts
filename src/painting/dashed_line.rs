@@ -127,9 +127,9 @@ pub(crate) fn draw_dashed_segment(
     );
 }
 
-/// Draws square dots of side `stroke.width`, one every `spacing` along each segment from its
-/// start, inside the painter's clip only, as one mesh: a dotted guide is one shape however long
-/// it is.
+/// Draws square dots of side `stroke.width`, at least one device pixel, one every `spacing`
+/// along each segment from its start, inside the painter's clip only, as one mesh: a dotted
+/// guide is one shape however long it is.
 #[cfg(feature = "drawings")]
 pub(crate) fn draw_dotted_segments(
     painter: &egui::Painter,
@@ -151,7 +151,10 @@ pub(crate) fn draw_dotted_segments(
     let mut dots = Mesh::default();
     for &[start, end] in segments {
         visible_dashes(start, end, clip, size, spacing - size, 0.0, |a, b| {
-            let rect = Rect::from_center_size(a.lerp(b, 0.5), egui::Vec2::splat(size));
+            let rect = Rect::from_center_size(
+                a.lerp(b, 0.5),
+                egui::Vec2::splat(size.max(pixels_per_point.recip())),
+            );
             let rect = Rect::from_min_size(rect.min.round_to_pixels(pixels_per_point), rect.size());
             dots.add_colored_rect(rect, stroke.color);
         });
@@ -385,6 +388,7 @@ fn append_dashed_segment(
     };
     let edge = ((across - width * 0.5) * pixels_per_point).round() / pixels_per_point;
     for &(min, len) in &spans.spans {
+        let len = len.max(pixels_per_point.recip());
         let rect = if vertical {
             Rect::from_min_size(Pos2::new(edge, min), egui::vec2(width, len))
         } else {
@@ -718,6 +722,69 @@ mod tests {
                     assert!(dot.iter().all(|vertex| vertex.color.a() == alpha));
                 }
                 output.drop_without_applying_deltas();
+            }
+        }
+    }
+
+    /// Pixel centres lie at integer + 0.5; the far edge of a quad is excluded by rasterization.
+    #[cfg(feature = "drawings")]
+    #[test]
+    fn dots_cover_a_pixel_centre_below_one_pixel_per_point() {
+        let screen = Rect::from_min_size(Pos2::ZERO, egui::vec2(200.0, 200.0));
+        let ctx = Context::default();
+        for scale in [0.5, 0.4, 0.25] {
+            ctx.set_pixels_per_point(scale);
+            for vertical in [false, true] {
+                for reverse in [false, true] {
+                    for guides in [false, true] {
+                        let mut points = [Pos2::new(10.0, 40.25), Pos2::new(110.0, 40.25)];
+                        if vertical {
+                            points = points.map(|p| Pos2::new(p.y, p.x));
+                        }
+                        if reverse {
+                            points.reverse();
+                        }
+                        let output = ctx.run_ui(
+                            RawInput {
+                                screen_rect: Some(screen),
+                                ..Default::default()
+                            },
+                            |_| {
+                                let painter =
+                                    Painter::new(ctx.clone(), LayerId::background(), screen);
+                                let stroke = Stroke::new(1.0, Color32::WHITE);
+                                if guides {
+                                    draw_dotted_segments(&painter, &[points], stroke, 4.0);
+                                } else {
+                                    draw_dashed_line(
+                                        &painter, points[0], points[1], stroke, 1.0, 3.0,
+                                    );
+                                }
+                            },
+                        );
+                        let [shape] = output.shapes.as_slice() else {
+                            panic!("dots must be one shape");
+                        };
+                        let egui::Shape::Mesh(mesh) = &shape.shape else {
+                            panic!("dots must be a mesh");
+                        };
+                        let dots = mesh.vertices.as_chunks::<4>().0;
+                        assert_eq!(dots.len(), 25);
+                        for dot in dots {
+                            let rect = Rect::from_points(&dot.map(|v| v.pos * scale));
+                            for (min, max) in
+                                [(rect.left(), rect.right()), (rect.top(), rect.bottom())]
+                            {
+                                let centre = (min - 0.5).ceil() + 0.5;
+                                assert!(
+                                    min <= centre && centre < max,
+                                    "scale={scale}, vertical={vertical}, reverse={reverse}, guides={guides}, rect={rect:?}"
+                                );
+                            }
+                        }
+                        output.drop_without_applying_deltas();
+                    }
+                }
             }
         }
     }
