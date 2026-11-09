@@ -354,7 +354,7 @@ impl Chart {
                     .dragging_handle
                     .and_then(|(id, _)| drawing_manager.drawings.iter().find(|d| d.id == id))
             })
-            .is_none_or(|d| drawing_manager.owns_pane(d));
+            .is_none_or(|d| drawing_manager.owns_pane(d) || d.reaches_other_panes());
         if !owns_gesture || drawing_manager.text_editor.is_some() {
             // The editor owns this frame's pointer input, including its outside commit click.
         } else if let Some(active_tool) = drawing_manager.active_tool {
@@ -1698,6 +1698,134 @@ mod tests {
                 Some(RightClickTarget::Drawing { drawing_id: 1, .. })
             );
             assert_eq!((painted, hit), (shown, shown), "{interval:?} {kind:?}");
+        }
+    }
+
+    /// A vertical line runs through the panes it does not belong to at its anchor's bar, without
+    /// its text, and is hit and moved there. A move from such a pane is a move in time: the price
+    /// stays on the scale of the line's own pane, whichever pane that is. Switched off, the line
+    /// paints and hits only in its own pane.
+    #[cfg(feature = "ui")]
+    #[test]
+    fn vertical_line_reaches_other_panes_without_leaving_its_own_scale() {
+        use crate::drawings::{ChartPoint, DrawingToolType};
+        use crate::studies::RSI;
+        use egui::Pos2;
+
+        const COLOR: [u8; 4] = [23, 57, 181, 255];
+        for in_study in [false, true] {
+            let ctx = Context::default();
+            let mut chart = chart(&[90.0], &[110.0]);
+            let study = chart.add_indicator(Box::new(RSI::new(14))).0;
+            let price = if in_study { 50.0 } else { 100.0 };
+            let mut line = Drawing::new(1, DrawingToolType::VerticalLine);
+            line.chart_points = vec![ChartPoint::new(60.0, price)];
+            line.completed = true;
+            line.color = COLOR;
+            line.pane = in_study.then_some(study);
+            line.text = Some("Weekly".into());
+            chart.drawings_mut().drawings.push(line);
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let main = chart.get_rendered_price_rect();
+            let other = chart.get_rendered_indicator_panes()[0].chart_rect;
+            let (own, foreign) = if in_study {
+                (other, main)
+            } else {
+                (main, other)
+            };
+            let color = Color32::from_rgba_unmultiplied(23, 57, 181, 255);
+            let paint = |chart: &mut crate::widget::Chart, time| {
+                let shapes = shapes(&ctx, chart, time, vec![]);
+                let texts: Vec<_> = shapes
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        Shape::Text(t) if t.galley.text() == "Weekly" => Some(t.pos),
+                        _ => None,
+                    })
+                    .collect();
+                let lines: Vec<_> = shapes
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        Shape::LineSegment { points, stroke } if stroke.color == color => {
+                            Some(*points)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                (texts, lines)
+            };
+            let (texts, lines) = paint(&mut chart, 0.1);
+            let x = chart.drawings().drawings[0].points[0].x;
+            let row = format!("in study {in_study}");
+            assert!(
+                lines.iter().all(|[a, b]| a.x == x && b.x == x),
+                "{row}: {lines:?}"
+            );
+            assert!(
+                lines
+                    .iter()
+                    .any(|[a, b]| a.y == foreign.top() && b.y == foreign.bottom()),
+                "{row}: {lines:?}"
+            );
+            assert_eq!(texts.len(), 1, "{row}");
+            assert!(own.y_range().contains(texts[0].y), "{row}: {texts:?}");
+            // The panes share one time axis, which tags the line whichever pane it belongs to.
+            assert!(
+                chart
+                    .drawings()
+                    .axis_tags(main, Color32::WHITE)
+                    .any(|tag| matches!(
+                        tag,
+                        crate::drawings::manager::DrawingAxisTag::Time { x: tag_x, .. } if tag_x == x
+                    )),
+                "{row}"
+            );
+            let grab = Pos2::new(x, foreign.center().y);
+            assert_eq!(chart.drawings().hit_test(grab), Some(1), "{row}");
+
+            let view = chart.get_time_scale_state();
+            let own_y = chart.drawings().drawings[0].points[0].y;
+            let button = |pos, pressed| Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            };
+            let to = grab + egui::vec2(40.0, 25.0);
+            for (step, events) in [
+                vec![Event::PointerMoved(grab)],
+                vec![button(grab, true)],
+                vec![Event::PointerMoved(grab + egui::vec2(20.0, 10.0))],
+                vec![Event::PointerMoved(to)],
+                vec![button(to, false)],
+                vec![],
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                frame(&ctx, &mut chart, 0.2 + step as f64 * 0.1, events);
+            }
+            assert_eq!(chart.get_time_scale_state(), view, "{row}");
+            let moved = chart.drawings().drawings[0].clone();
+            assert!(moved.chart_points[0].bar_idx > 60.0, "{row}: {moved:?}");
+            assert_eq!(moved.chart_points[0].price, price, "{row}");
+            assert_eq!(moved.points[0].y, own_y, "{row}");
+            assert!(chart.undo(), "{row}");
+            assert_eq!(
+                chart.drawings().drawings[0].chart_points[0].bar_idx,
+                60.0,
+                "{row}"
+            );
+
+            chart.drawings_mut().drawings[0]
+                .line_measurements
+                .across_panes = false;
+            let (_, lines) = paint(&mut chart, 1.0);
+            assert!(
+                lines.iter().all(|[a, _]| own.y_range().contains(a.y)),
+                "{row}: {lines:?}"
+            );
+            assert_eq!(chart.drawings().hit_test(grab), None, "{row}");
         }
     }
 

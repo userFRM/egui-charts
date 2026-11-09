@@ -206,8 +206,8 @@ pub struct Drawing {
 
     // === Tool-specific configuration (None uses the defaults) ===
     /// Readouts, midpoint, price labels and text placement of a trend line, ray, extended line,
-    /// info line or trend angle, and the text placement of a horizontal line or ray. Other tools
-    /// ignore these settings.
+    /// info line or trend angle, the text placement of a horizontal line or ray or a vertical
+    /// line, and the reach of a vertical line. Other tools ignore these settings.
     #[serde(default = "LineMeasurements::left_out")]
     pub line_measurements: LineMeasurements,
     /// Quantity of the long and short position tools
@@ -504,7 +504,8 @@ impl Drawing {
                 | DrawingToolType::ExtendedLine
                 | DrawingToolType::InfoLine
                 | DrawingToolType::HorizontalLine
-                | DrawingToolType::HorizontalRay => Some(BLUE),
+                | DrawingToolType::HorizontalRay
+                | DrawingToolType::VerticalLine => Some(BLUE),
                 _ => None,
             },
             background: !plain_text,
@@ -971,6 +972,11 @@ impl Drawing {
             T::CrossLine => (true, true),
             _ => (false, false),
         }
+    }
+
+    /// Whether the drawing also paints its line in the chart's other panes.
+    pub(crate) fn reaches_other_panes(&self) -> bool {
+        self.tool_type == DrawingToolType::VerticalLine && self.line_measurements.across_panes
     }
 
     /// Get the z-order of this drawing
