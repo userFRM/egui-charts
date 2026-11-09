@@ -122,9 +122,15 @@ impl Drawing {
         match self.tool_type {
             DrawingToolType::FixedRangeVolumeProfile => {
                 let extended = self.volume_profile.is_some_and(|c| c.extend_right);
+                let start = anchor(0)?;
+                let start = if extended {
+                    start.min(anchor(1).unwrap_or(start))
+                } else {
+                    start
+                };
                 bars_between(
                     bars,
-                    anchor(0)?,
+                    start,
                     if extended { f32::INFINITY } else { anchor(1)? },
                 )
             }
@@ -155,7 +161,7 @@ impl Drawing {
         ))
     }
 
-    /// Renders the volume profile of the bars between the two anchors, or from the first one to
+    /// Renders the volume profile of the bars between the two anchors, or from the earlier one to
     /// the last bar when extended right, from half a bar before the first bar to half a bar after
     /// the last, with the point of control and the value area.
     pub(crate) fn render_fixed_range_volume_profile(
@@ -866,7 +872,7 @@ mod tests {
         // Anchors, whether extended, the tint's ends, the handles' bars and their price: the top of
         // the bars read, or the middle of the anchored profile's last row, which holds bar 3's
         // volume of 9.
-        for (tool, anchors, extended, ends, handles, price) in [
+        for (tool, anchors, extended, ends, handles, price, volume) in [
             (
                 DrawingToolType::FixedRangeVolumeProfile,
                 vec![0.2, 2.0],
@@ -874,6 +880,7 @@ mod tests {
                 [95.0, 125.0],
                 vec![0.0, 2.0],
                 21.0,
+                3.0,
             ),
             (
                 DrawingToolType::FixedRangeVolumeProfile,
@@ -882,6 +889,7 @@ mod tests {
                 [95.0, 125.0],
                 vec![2.0, 0.0],
                 21.0,
+                3.0,
             ),
             (
                 DrawingToolType::FixedRangeVolumeProfile,
@@ -890,6 +898,17 @@ mod tests {
                 [95.0, 135.0],
                 vec![0.0, 2.0],
                 31.0,
+                12.0,
+            ),
+            // An extended fixed range reads from its earlier anchor in either placement order.
+            (
+                DrawingToolType::FixedRangeVolumeProfile,
+                vec![3.0, 0.2],
+                true,
+                [95.0, 135.0],
+                vec![3.0, 0.0],
+                31.0,
+                12.0,
             ),
             (
                 DrawingToolType::FixedRangeVolumeProfile,
@@ -898,6 +917,7 @@ mod tests {
                 [95.0, 195.0],
                 vec![0.0, 9.0],
                 31.0,
+                12.0,
             ),
             (
                 DrawingToolType::AnchoredVolumeProfile,
@@ -906,11 +926,24 @@ mod tests {
                 [95.0, 135.0],
                 vec![0.0],
                 10.0 + 21.0 * 3.5 / 4.0,
+                12.0,
             ),
         ] {
             let mut drawing = Drawing::new(1, tool);
             drawing.volume_profile = config(extended);
             drawing.chart_points = anchors.iter().map(|&b| ChartPoint::new(b, 5.0)).collect();
+            let profile = drawing.volume_profile_of(&view).expect("profile");
+            // The selected bars contribute 1 + 1 + 1, or 1 + 1 + 1 + 9 when bar 3 is read.
+            assert_close(profile.volume().iter().sum(), volume);
+            assert_close(profile.low(), 10.0);
+            let (_, start) = drawing
+                .profile_history(
+                    &bars,
+                    Timeframe::Min1,
+                    &[ProfileResolution::new(Timeframe::Sec1, None)],
+                )
+                .expect("finer history");
+            assert_eq!(start, bars[0].time, "{tool:?} {anchors:?}");
             let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
                 if tool == DrawingToolType::AnchoredVolumeProfile {
                     drawing.render_anchored_volume_profile(ui.painter(), &view);
@@ -934,6 +967,22 @@ mod tests {
                 .map(|&b| Pos2::new(bar_to_x(b), 500.0 - price as f32 * 10.0))
                 .collect();
             assert_eq!(got, want, "{tool:?} {anchors:?}");
+        }
+        // While placing an extended range, its sole anchor is still the start.
+        for (anchors, extended, span) in [
+            (vec![2.0], true, Some((2, 2))),
+            (vec![2.0], false, None),
+            (Vec::new(), true, None),
+        ] {
+            let mut drawing = Drawing::new(1, DrawingToolType::FixedRangeVolumeProfile);
+            drawing.volume_profile = config(extended);
+            drawing.chart_points = anchors.iter().map(|&b| ChartPoint::new(b, 5.0)).collect();
+            assert_eq!(
+                drawing
+                    .profile_span(&bars)
+                    .map(|(first, bars)| (first, bars.len())),
+                span,
+            );
         }
         // An anchored VWAP's handle starts its line, at the typical price of bar 1: (13 + 12 + 12) / 3.
         let mut vwap = Drawing::new(1, DrawingToolType::AnchoredVWAP);
