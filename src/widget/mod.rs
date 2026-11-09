@@ -345,6 +345,9 @@ pub struct Chart {
     /// The id each study a snapshot saved has since [`Chart::restore`] added it again.
     #[cfg(feature = "drawings")]
     restored_studies: std::collections::HashMap<usize, usize>,
+    /// Original column ids of restored studies, retained for snapshots from earlier restores.
+    #[cfg(feature = "drawings")]
+    study_column_ids: std::collections::HashMap<usize, usize>,
     /// Right-click box zoom state
     pub(crate) box_zoom: BoxZoomState,
     /// Whether zoom mode is currently active (controlled by zoom toolbar button)

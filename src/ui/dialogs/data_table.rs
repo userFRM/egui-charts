@@ -66,10 +66,8 @@ impl Source {
 pub struct DataTableDialog {
     /// Whether the dialog is currently visible.
     pub is_open: bool,
-    /// The columns turned off on each chart, with the chart's layout identity they belong to. A
-    /// restore adds the studies again under new ids, so the next `show` over the chart, open or
-    /// closed, moves each choice to the id the restore gave its study.
-    hidden: HashMap<u64, (u64, BTreeSet<ColumnId>)>,
+    /// The columns turned off on each chart, identified across study removal and restores.
+    hidden: HashMap<u64, BTreeSet<ColumnId>>,
     cached: Option<(Source, DataTable)>,
     column_ids: Vec<ColumnId>,
 }
@@ -104,25 +102,7 @@ impl DataTableDialog {
 
     /// Show the dialog over `chart`, the chart the user is looking at, and return the host's
     /// request. Copying puts the displayed columns on the clipboard as tab-separated text.
-    /// Call this even while closed to follow study ids through each restore.
     pub fn show(&mut self, ctx: &Context, chart: &Chart) -> DataTableAction {
-        if let Some((layout, hidden)) = self.hidden.get_mut(&chart.data_table_identity())
-            && *layout != chart.layout_identity
-        {
-            *layout = chart.layout_identity;
-            // A choice the restore does not name keeps its id, which no later study takes, so a
-            // restore of a layout saved with that study brings it back.
-            // shortcut: only the last restore map is kept; retain history if hosts batch restores.
-            *hidden = std::mem::take(hidden)
-                .into_iter()
-                .map(|(study, plot)| {
-                    let study = study.map(|(id, title)| {
-                        (chart.restored_series_id(id).map_or(id, |id| id.0), title)
-                    });
-                    (study, plot)
-                })
-                .collect();
-        }
         if !self.is_open {
             return DataTableAction::None;
         }
@@ -138,10 +118,7 @@ impl DataTableDialog {
             self.cached = Some((source, table));
         }
         let table = &self.cached.as_ref().expect("table was just built").1;
-        let (_, hidden) = self
-            .hidden
-            .entry(chart.data_table_identity())
-            .or_insert_with(|| (chart.layout_identity, BTreeSet::new()));
+        let hidden = self.hidden.entry(chart.data_table_identity()).or_default();
         let mut action = DataTableAction::None;
         let mut open = true;
         DialogFrame::new("Chart data", vec2(804.0, 472.0)).show(ctx, |ui| {
@@ -732,8 +709,17 @@ mod tests {
         assert!(matches!(action, DataTableAction::Export(csv) if csv.contains("RSI: RSI(14)")));
 
         assert_eq!(headers(&mut dialog, &first), without_sma);
-        first.restore(&first.snapshot().unwrap()).unwrap();
-        assert_eq!(first.data_table().headers.len(), 7);
+        let saved = first.snapshot().unwrap();
+        for _ in 0..2 {
+            first.restore(&saved).unwrap();
+            assert_eq!(first.data_table().headers.len(), 7);
+            assert_eq!(headers(&mut dialog, &first), without_sma);
+        }
+        dialog.close();
+        for _ in 0..2 {
+            first.restore(&first.snapshot().unwrap()).unwrap();
+        }
+        dialog.open();
         assert_eq!(headers(&mut dialog, &first), without_sma);
     }
 
@@ -893,7 +879,7 @@ mod tests {
         let shown = |dialog: &mut DataTableDialog, chart: &Chart| {
             shown_rows(&ctx, dialog, chart);
             let headers = &dialog.cached.as_ref().unwrap().1.headers;
-            let hidden = &dialog.hidden[&chart.data_table_identity()].1;
+            let hidden = &dialog.hidden[&chart.data_table_identity()];
             headers
                 .iter()
                 .zip(&dialog.column_ids)
@@ -922,7 +908,7 @@ mod tests {
             let at = headers.iter().position(|h| h == "SMA: SMA(50)").unwrap();
             let column = dialog.column_ids[at].clone();
             let hidden = dialog.hidden.get_mut(&chart.data_table_identity()).unwrap();
-            hidden.1.insert(column);
+            hidden.insert(column);
             assert_eq!(shown(&mut dialog, &chart), ["SMA: SMA(10)"], "{case}");
 
             if restore {
