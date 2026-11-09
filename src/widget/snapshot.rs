@@ -1385,14 +1385,20 @@ mod tests {
     }
 
     /// Ignored style values save as finite equivalents without changing the live chart or its
-    /// labels. Finite values keep their saved representation, including negative zero.
+    /// labels and hidden base lines, in either theme and a narrow chart. Finite values keep
+    /// their saved representation, including negative zero.
     #[test]
     fn display_format_with_an_ignored_min_move_saves() {
         use crate::model::SeriesDisplayFormat;
         use crate::widget::SeriesId;
         use crate::widget::test_frames::{chart, shapes};
 
-        for added in [false, true] {
+        for (added, theme, width) in [
+            (false, crate::theme::Theme::light(), 800.0),
+            (true, crate::theme::Theme::light(), 800.0),
+            (false, crate::theme::Theme::dark(), 320.0),
+            (true, crate::theme::Theme::dark(), 320.0),
+        ] {
             for (min_move, base_line_width, expected) in [
                 (0.0, 1.0, "12.62"),
                 (f64::NAN, 1.0, "12.62"),
@@ -1407,6 +1413,9 @@ mod tests {
                 (0.25, 2.0, "12.50"),
             ] {
                 let mut live = chart(&[12.0], &[12.624]);
+                let ctx = egui::Context::default();
+                live.set_theme(&ctx, &theme);
+                live.set_size(Some(egui::vec2(width, 480.0)));
                 let data = live.bars(SeriesId::MAIN).to_vec();
                 let id = if added {
                     let id = live.add_series(SeriesOptions::default());
@@ -1421,7 +1430,8 @@ mod tests {
                     ..Default::default()
                 });
                 style.base_line_width = base_line_width;
-                shapes(&egui::Context::default(), &mut live, 0.0, vec![]);
+                style.base_line_color = egui::Color32::MAGENTA;
+                shapes(&ctx, &mut live, 0.0, vec![]);
                 assert_eq!(
                     live.format_series_price(id, 12.624).as_deref(),
                     Some(expected)
@@ -1457,14 +1467,17 @@ mod tests {
                 .unwrap();
                 let layout = SavedLayout::from_json(&json).unwrap();
                 let mut restored = Chart::new(BarData::from_bars(data.clone()));
+                restored.set_theme(&ctx, &theme);
+                restored.set_size(Some(egui::vec2(width, 480.0)));
                 restored.restore(&layout.charts[0]).unwrap();
+                let saved_id = id;
                 let id = if added {
                     restored.restored_series_id(id.0).unwrap()
                 } else {
                     id
                 };
                 restored.set_data(id, data);
-                let painted = shapes(&egui::Context::default(), &mut restored, 0.0, vec![]);
+                let painted = shapes(&ctx, &mut restored, 1.0, vec![]);
                 if !min_move.is_finite() || (added && !base_line_width.is_finite()) {
                     let mut invalid = layout.charts[0].clone();
                     if added {
@@ -1493,6 +1506,21 @@ mod tests {
                     )),
                     "added {added}, step {min_move}, width {base_line_width}"
                 );
+                if added {
+                    for (chart, id) in [(&mut live, saved_id), (&mut restored, id)] {
+                        chart.series_price_scale_mut(id).unwrap().options_mut().mode =
+                            crate::scales::PriceScaleMode::IndexedTo100;
+                        let painted = shapes(&ctx, chart, 2.0, vec![]);
+                        assert_eq!(
+                            painted.iter().any(|shape| matches!(shape,
+                                egui::Shape::LineSegment { stroke, .. }
+                                    if stroke.color == egui::Color32::MAGENTA
+                            )),
+                            base_line_width.is_finite() && base_line_width > 0.0,
+                            "base line width {base_line_width}"
+                        );
+                    }
+                }
             }
         }
     }
