@@ -61,9 +61,6 @@ impl Drawing {
         )
     }
 
-    /// Horizontal offset of the second text paint used for synthetic bold.
-    pub(super) const BOLD_OFFSET: f32 = 0.6;
-
     /// Colours of the box around an annotation's text. Unset colours follow the tool: a card
     /// takes the active theme's panel colour with its text and border in the drawing colour, and
     /// a solid label takes the drawing colour with white or black text, whichever reads on it.
