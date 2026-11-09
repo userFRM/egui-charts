@@ -418,7 +418,7 @@ impl AlertsPanel {
             .chain(
                 self.log
                     .iter()
-                    .filter(|trigger| Some(&trigger.id) == alert.id.as_ref())
+                    .filter(|trigger| !trigger.silent && Some(&trigger.id) == alert.id.as_ref())
                     .map(|trigger| trigger.time),
             )
             .max()
@@ -1151,17 +1151,92 @@ mod tests {
     struct Host {
         events: Mutex<Option<Events<AlertEvent>>>,
         reply: Mutex<Option<Reply<()>>>,
+        saved: Mutex<Vec<Alert>>,
     }
 
     impl Alerts for Host {
         fn watch(&self, events: Events<AlertEvent>) {
             *self.events.lock().unwrap() = Some(events);
         }
-        fn save(&self, _: Alert, reply: Reply<()>) {
+        fn save(&self, alert: Alert, reply: Reply<()>) {
+            self.saved.lock().unwrap().push(alert);
             *self.reply.lock().unwrap() = Some(reply);
         }
         fn remove(&self, _: AlertId, reply: Reply<()>) {
             reply.send(Ok(()));
+        }
+    }
+
+    #[test]
+    fn a_silent_log_entry_is_not_taken_for_a_firing() {
+        let host = Arc::new(Host::default());
+        let mut panel = AlertsPanel::default();
+        panel.set_service(host.clone());
+        let ctx = egui::Context::default();
+        let mut toasts = Toasts::new();
+        let silent = "2026-11-02T03:00:00Z".parse().unwrap();
+        let delivered = "2026-11-02T09:00:00Z".parse().unwrap();
+        for previous in [None, Some("2026-11-01T09:00:00Z".parse().unwrap())] {
+            let mut alert = Alert::new("AAPL", AlertCondition::Above(100.0));
+            alert.id = Some(AlertId(format!("{previous:?}")));
+            alert.last_triggered_at = previous;
+            panel.apply_event(
+                &ctx,
+                AlertEvent::Upsert(Box::new(alert.clone())),
+                &mut toasts,
+            );
+            panel.apply_event(
+                &ctx,
+                AlertEvent::SilentTriggered {
+                    id: alert.id.clone().unwrap(),
+                    symbol: alert.symbol.clone(),
+                    time: silent,
+                    price: Some(101.0),
+                    message: String::new(),
+                },
+                &mut toasts,
+            );
+            alert.status = AlertStatus::Disabled;
+            panel.apply_event(
+                &ctx,
+                AlertEvent::Upsert(Box::new(alert.clone())),
+                &mut toasts,
+            );
+            let mut resumed = panel.alerts().last().unwrap().clone();
+            assert_eq!(resumed.last_triggered_at, previous);
+            resumed.status = AlertStatus::Active;
+            panel.save(resumed);
+            assert_eq!(
+                host.saved.lock().unwrap().last().unwrap().last_triggered_at,
+                previous
+            );
+            host.reply.lock().unwrap().take().unwrap().send(Ok(()));
+            assert!(panel.log().back().unwrap().silent);
+            assert!(panel.log_csv().ends_with(",101,\"\",true\r\n"));
+            panel.apply_event(
+                &ctx,
+                AlertEvent::Triggered {
+                    id: alert.id.clone().unwrap(),
+                    time: delivered,
+                    price: Some(102.0),
+                },
+                &mut toasts,
+            );
+            // A stale push keeps the delivered firing, and a newer host firing wins over it.
+            for expected in [delivered, delivered + chrono::TimeDelta::hours(1)] {
+                if expected != delivered {
+                    alert.last_triggered_at = Some(expected);
+                }
+                panel.apply_event(
+                    &ctx,
+                    AlertEvent::Upsert(Box::new(alert.clone())),
+                    &mut toasts,
+                );
+                assert_eq!(
+                    panel.alerts().last().unwrap().last_triggered_at,
+                    Some(expected)
+                );
+            }
         }
     }
 
