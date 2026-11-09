@@ -584,10 +584,11 @@ mod tests {
             ("Cancel", Theme::light(), egui::vec2(360.0, 640.0)),
             ("Apply", Theme::light(), egui::vec2(1440.0, 900.0)),
         ] {
+            let setup_theme = theme.clone();
             let mut harness = Harness::builder()
-                .with_context_setup(|ctx| {
+                .with_context_setup(move |ctx| {
                     egui_extras::install_image_loaders(ctx);
-                    crate::theme::apply_to_egui(ctx, &theme);
+                    crate::theme::apply_to_egui(ctx, &setup_theme);
                 })
                 .with_size(size)
                 .build_ui(|ui| {
