@@ -1709,3 +1709,98 @@ fn series_crosshair_label_sits_on_the_target_outer_axis() {
         }
     }
 }
+
+/// Relative-scale tags report axis units for the pointer and host positions, including studies.
+#[cfg(feature = "studies")]
+#[test]
+fn pane_crosshair_label_uses_the_series_scale_mode() {
+    use crate::model::{Bar, SeriesScale};
+    use crate::scales::{CustomPriceFormatter, PriceScaleMode};
+    use crate::widget::{SeriesId, SeriesOptions};
+
+    for (mode, custom, study, expected) in [
+        (PriceScaleMode::Percentage, false, false, "+37.50%"),
+        (PriceScaleMode::IndexedTo100, false, false, "137.50"),
+        (PriceScaleMode::Percentage, true, false, "relative 37.50"),
+        (PriceScaleMode::IndexedTo100, true, false, "relative 137.50"),
+        (PriceScaleMode::Percentage, false, true, "+37.50%"),
+        (PriceScaleMode::IndexedTo100, false, true, "137.50"),
+    ] {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[1000.0], &[1000.0]);
+        chart.config.show_volume = false;
+        chart.chart_options.tooltip.enabled = false;
+        chart.chart_options.crosshair.label_text_color = egui::Color32::MAGENTA;
+        let id = chart.add_series(SeriesOptions::default());
+        chart.set_data(
+            id,
+            chart
+                .bars(SeriesId::MAIN)
+                .iter()
+                .map(|bar| Bar::from_value(bar.time, 1000.0))
+                .collect(),
+        );
+        let pane = chart.add_pane();
+        assert!(chart.move_series_to_pane(id, pane));
+        // A raw-price formatter must not override a relative scale's units.
+        chart.set_series_formatter(
+            id,
+            Some(std::sync::Arc::new(CustomPriceFormatter::new(|v| {
+                format!("raw {v:.2}")
+            }))),
+        );
+        if custom {
+            chart.set_percentage_formatter(Some(std::sync::Arc::new(CustomPriceFormatter::new(
+                |v| format!("relative {v:.2}"),
+            ))));
+        }
+        if study {
+            let indicator = chart.add_indicator(Box::new(crate::studies::SMA::new(2)));
+            assert!(chart.set_indicator_scale(
+                indicator,
+                crate::studies::StudyScale::Shared(SeriesScale::Right)
+            ));
+            assert!(chart.move_series_to_pane(indicator, pane));
+            assert!(chart.set_series_visible(id, false));
+        }
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        chart.series_price_scale_mut(id).unwrap().options_mut().mode = mode;
+        frame(&ctx, &mut chart, 0.1, vec![]);
+        let base = if mode == PriceScaleMode::Percentage {
+            0.0
+        } else {
+            100.0
+        };
+        chart
+            .series_price_scale_mut(id)
+            .unwrap()
+            .set_range(base, base + 100.0);
+        frame(&ctx, &mut chart, 0.15, vec![]);
+        let rect = chart
+            .pane_layout
+            .panes
+            .iter()
+            .find(|p| p.id == pane)
+            .unwrap()
+            .rect;
+        let x = chart.get_chart_mapping().idx_to_x(50);
+        // (1375 - 1000) / 1000 = 37.5%; 1375 / 1000 * 100 = 137.5.
+        let pointer = Pos2::new(x, rect.bottom() - rect.height() * 0.375);
+        let time = chart.bars(SeriesId::MAIN)[50].time;
+        for host in [false, true] {
+            if host && study {
+                continue;
+            }
+            let events = if host {
+                chart.set_series_crosshair_position(id, Some((time, 1375.0)));
+                vec![Event::PointerGone]
+            } else {
+                vec![Event::PointerMoved(pointer)]
+            };
+            let painted = shapes(&ctx, &mut chart, if host { 0.3 } else { 0.2 }, events);
+            assert!(painted.iter().any(|shape| matches!(shape, Shape::Text(text)
+                if text.fallback_color == egui::Color32::MAGENTA && text.galley.text() == expected)),
+                "{mode:?}, custom {custom}, study {study}, host {host}: expected {expected}");
+        }
+    }
+}

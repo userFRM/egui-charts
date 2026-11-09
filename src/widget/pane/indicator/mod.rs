@@ -586,14 +586,23 @@ impl IndicatorPane {
                         |axis| axis.x_range(),
                     ),
                     None,
-                    Some(match self.price_formatter.as_deref() {
-                        Some(formatter) => mapping.price.transform().label(
-                            mapping.price.y_to_scale(pos.y),
-                            indicator.precision().unwrap_or(2),
-                            Some(formatter),
-                        ),
-                        None => indicator.format_value(mapping.price.y_to_price(pos.y)),
-                    }),
+                    Some(
+                        if self.price_formatter.is_some()
+                            || matches!(
+                                mapping.price.transform().mode,
+                                crate::scales::PriceScaleMode::Percentage
+                                    | crate::scales::PriceScaleMode::IndexedTo100
+                            )
+                        {
+                            mapping.price.transform().label(
+                                mapping.price.y_to_scale(pos.y),
+                                indicator.precision().unwrap_or(2),
+                                self.price_formatter.as_deref(),
+                            )
+                        } else {
+                            indicator.format_value(mapping.price.y_to_price(pos.y))
+                        },
+                    ),
                 )
             });
             // Draw y-axis labels
