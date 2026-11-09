@@ -4226,6 +4226,54 @@ fn comparisons_are_filled_from_the_feed_and_survive_a_snapshot() {
     assert!(!manual.is_fed(id));
 }
 
+/// Undo of a removed feed-backed series shows the bars it held at once, and the feed resumes it;
+/// held bars of another interval are not shown.
+#[test]
+fn undo_of_a_removed_fed_series_keeps_its_bars() {
+    let feed = Arc::new(Instant::default());
+    let mut chart = ChartBuilder::new()
+        .with_feed(feed.clone())
+        .with_symbol("AAPL")
+        .build();
+    let msft = chart.add_feed_series(crate::widget::SeriesOptions {
+        name: "MSFT".into(),
+        ..Default::default()
+    });
+    let mut frames = Frames::new();
+    for _ in 0..3 {
+        frames.run(&mut chart);
+    }
+    assert_eq!(closes(&chart, msft), [40.0, 41.0, 42.0, 43.0, 44.0, 45.0]);
+
+    assert!(chart.user_action(|chart| chart.remove_series(msft)));
+    frames.run(&mut chart);
+    assert!(chart.undo());
+    assert_eq!(closes(&chart, msft), [40.0, 41.0, 42.0, 43.0, 44.0, 45.0]);
+    for _ in 0..3 {
+        frames.run(&mut chart);
+    }
+    let sink = feed
+        .subscriptions
+        .lock()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|(symbol, sink)| symbol == "MSFT" && sink.is_active())
+        .unwrap()
+        .1
+        .clone();
+    let time = chart.bars(msft).last().unwrap().time;
+    sink.push_bar(Bar::new(time, 50.0, 50.0, 50.0, 50.0, 1.0));
+    frames.run(&mut chart);
+    assert_eq!(closes(&chart, msft)[4..], [44.0, 50.0]);
+
+    assert!(chart.user_action(|chart| chart.remove_series(msft)));
+    frames.run(&mut chart);
+    chart.set_timeframe(Timeframe::Min5);
+    assert!(chart.undo());
+    assert!(chart.bars(msft).is_empty());
+}
+
 /// Dividend adjustment is asked of the feed for the main series and the comparisons, and
 /// changing it loads them again.
 #[test]

@@ -524,6 +524,12 @@ impl Chart {
 
     /// Replaces the bars of the fed series with what the feed supplied for their symbols.
     pub(in crate::widget) fn fill_fed_series(&mut self) {
+        self.fill_fed_series_keeping(&[]);
+    }
+
+    /// As [`fill_fed_series`](Self::fill_fed_series), but a series in `keep` whose symbols have no
+    /// history yet keeps its bars until the feed supplies it.
+    pub(in crate::widget) fn fill_fed_series_keeping(&mut self, keep: &[SeriesId]) {
         let fed = self.fed_series();
         if fed.is_empty() {
             return;
@@ -540,18 +546,22 @@ impl Chart {
             fed.iter()
                 .map(|(id, name)| {
                     let bars = match spread_of(name) {
-                        Some(spread) => spread.bars(history).unwrap_or_default(),
+                        Some(spread) => spread.bars(history).ok(),
                         None => fed_symbols(name)
                             .first()
                             .and_then(|symbol| history(symbol))
-                            .unwrap_or_default()
-                            .to_vec(),
+                            .map(<[_]>::to_vec),
                     };
                     (*id, bars)
                 })
                 .collect()
         };
         for (id, bars) in updates {
+            let bars = match bars {
+                Some(bars) => bars,
+                None if keep.contains(&id) => continue,
+                None => Vec::new(),
+            };
             if self.bars(id) != bars.as_slice() {
                 self.set_data(id, bars);
             }
