@@ -51,7 +51,13 @@ impl ChangeMarks {
             let Some((time, close)) = close_at(bars, clock, slot) else {
                 continue;
             };
-            if close == old || !old.is_finite() || !close.is_finite() {
+            if close == old {
+                if let Some(mark) = marks.iter_mut().find(|mark| mark.slot == slot) {
+                    mark.time = time;
+                }
+                continue;
+            }
+            if !old.is_finite() || !close.is_finite() {
                 continue;
             }
             marks.retain(|mark| mark.slot != slot);
@@ -216,7 +222,7 @@ mod tests {
             };
             chart.set_data(id, bars);
             chart.set_change_markers(id, Some(ChangeMarkers::default()));
-            for (seconds, close) in [(20, 101.0), (40, 99.0)] {
+            for (seconds, close) in [(20, 101.0), (40, 99.0), (50, 99.0)] {
                 let time = slot + TimeDelta::seconds(seconds);
                 let bar = Bar::new(time, 100.0, 101.0, 99.0, close, 1.0);
                 if main {
@@ -379,6 +385,9 @@ mod tests {
                     if age == 10 && close == 108.0 {
                         // Keep the half-faded mark for the next update to replace.
                         continue;
+                    }
+                    if age == 5 {
+                        chart.update(id, Bar::new(time, 100.0, 110.0, 100.0, close, 1.0));
                     }
                     // egui can carry a repaint request from the preceding frame.
                     for _ in 0..3 {
