@@ -54,7 +54,7 @@ impl ChangeMarks {
             let Some((time, close)) = close_at(bars, clock, slot) else {
                 continue;
             };
-            if close == old || !close.is_finite() {
+            if close == old || !old.is_finite() || !close.is_finite() {
                 continue;
             }
             marks.retain(|mark| mark.slot != slot);
@@ -132,7 +132,8 @@ impl Chart {
     /// or fell against the close of the bar the update replaced: a dot at the new close with a
     /// chevron above it for a rise and below it for a fall. Each mark fades linearly to
     /// transparent over that duration, and another changed close of the same bar restarts its
-    /// fade. Updates that leave the close unchanged, new bars and history mark nothing. `None`
+    /// fade. Updates that leave the close unchanged, new bars, whitespace fills and history mark
+    /// nothing. `None`
     /// removes the markers.
     ///
     /// Bar series accept change markers; unknown ids and study ids are ignored with a warning.
@@ -241,6 +242,26 @@ mod tests {
                 output.drop_without_applying_deltas();
                 assert_eq!(marks.marks.borrow()[0].up, seconds == 20);
             }
+        }
+    }
+
+    #[test]
+    fn filling_a_whitespace_bar_marks_no_change() {
+        for main in [true, false] {
+            let mut chart = chart(&[100.0], &[110.0]);
+            let id = if main {
+                SeriesId::MAIN
+            } else {
+                let id = chart.add_series(Default::default());
+                chart.set_data(id, chart.bars(SeriesId::MAIN).to_vec());
+                id
+            };
+            chart.set_change_markers(id, Some(ChangeMarkers::default()));
+            let time = chart.bars(id).last().unwrap().time;
+            chart.update(id, Bar::whitespace(time));
+            assert!(marks(&chart, main).marks.borrow().is_empty());
+            chart.update(id, Bar::new(time, 100.0, 112.0, 100.0, 105.0, 1.0));
+            assert!(marks(&chart, main).marks.borrow().is_empty(), "main {main}");
         }
     }
 
