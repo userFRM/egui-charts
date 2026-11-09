@@ -2426,7 +2426,7 @@ mod tests {
         profile.set_input("expiry", InputValue::Choice(1)).unwrap();
         profile.set_input("measure", InputValue::Choice(1)).unwrap();
         for reset in [false, true] {
-            let mut study = profile.clone();
+            let mut study = crate::studies::ConfiguredStudy::new(Box::new(profile.clone()));
             let mut dialog = IndicatorSettingsDialog::default();
             dialog.open(crate::widget::SeriesId(2), &study, None);
             let mut edit = None;

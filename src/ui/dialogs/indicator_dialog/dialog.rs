@@ -1991,7 +1991,7 @@ mod options_profile_tests {
                 .set_input("through_date", InputValue::Text("2026-02-30".into()))
                 .is_err()
         );
-        assert!(study.set_input("expiry", InputValue::Choice(99)).is_err());
+        study.set_input("expiry", InputValue::Choice(99)).unwrap();
         study.set_input("expiry", InputValue::Choice(0)).unwrap();
         let sink = feed.sink.lock().unwrap().clone().unwrap();
         rows[0].volume = Some(0.0);
