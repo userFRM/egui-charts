@@ -16,6 +16,7 @@ pub(super) struct ChangeMarks {
 
 /// The change of one bar.
 struct Mark {
+    slot: DateTime<Utc>,
     time: DateTime<Utc>,
     close: f64,
     up: bool,
@@ -56,8 +57,9 @@ impl ChangeMarks {
             if close == old || !close.is_finite() {
                 continue;
             }
-            marks.retain(|mark| mark.time != time);
+            marks.retain(|mark| mark.slot != slot);
             marks.push(Mark {
+                slot,
                 time,
                 close,
                 up: close > old,
@@ -157,6 +159,99 @@ mod tests {
     use egui::{Color32, Shape};
     use std::time::Duration;
 
+    #[test]
+    fn live_bars_stamped_inside_their_slot_restart_one_mark() {
+        use crate::data::{Datafeed, HistoryPage, HistoryRequest, Reply, Sink, Subscription};
+        use crate::model::Timeframe;
+        use crate::widget::ChartBuilder;
+        use chrono::TimeDelta;
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Default)]
+        struct Feed(Mutex<Option<Sink>>);
+        impl Datafeed for Feed {
+            fn history(&self, _: HistoryRequest, reply: Reply<HistoryPage>) {
+                reply.send(Ok(HistoryPage::new(Vec::new(), true)));
+            }
+            fn subscribe(&self, subscription: Subscription) {
+                *self.0.lock().unwrap() = Some(subscription.sink);
+            }
+        }
+
+        for main in [true, false] {
+            let feed = Arc::new(Feed::default());
+            let mut chart = ChartBuilder::new()
+                .with_feed(feed.clone())
+                .with_symbol("A")
+                .with_timeframe(Timeframe::Min1)
+                .build();
+            let ctx = egui::Context::default();
+            for _ in 0..4 {
+                chart.pump(&ctx);
+            }
+            let start = DateTime::UNIX_EPOCH + TimeDelta::hours(10);
+            let bars: Vec<_> = (0..10)
+                .map(|i| {
+                    Bar::new(
+                        start + TimeDelta::minutes(i),
+                        100.0,
+                        101.0,
+                        99.0,
+                        100.0,
+                        1.0,
+                    )
+                })
+                .collect();
+            let slot = bars[9].time;
+            let id = if main {
+                SeriesId::MAIN
+            } else {
+                chart.add_series(Default::default())
+            };
+            chart.set_data(id, bars);
+            chart.set_change_markers(id, Some(ChangeMarkers::default()));
+            for (seconds, close) in [(20, 101.0), (40, 99.0)] {
+                let time = slot + TimeDelta::seconds(seconds);
+                let bar = Bar::new(time, 100.0, 101.0, 99.0, close, 1.0);
+                if main {
+                    feed.0.lock().unwrap().as_ref().unwrap().push_bar(bar);
+                    chart.pump(&ctx);
+                } else {
+                    chart.update(id, bar);
+                }
+                assert_eq!(chart.bars(id).len(), 10);
+                assert_eq!(chart.bars(id)[9].time, time);
+                let marks = marks(&chart, main);
+                assert_eq!(
+                    marks.marks.borrow().len(),
+                    1,
+                    "main {main}, second {seconds}"
+                );
+                let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    marks.paint(ui.painter(), |marked_time, marked_close| {
+                        assert_eq!(marked_time, time);
+                        assert_eq!(marked_close, close);
+                        assert_eq!(
+                            crate::model::index_at(chart.bars(id), marked_time),
+                            Some(9.0)
+                        );
+                        Some(Pos2::new(50.0, 50.0))
+                    });
+                });
+                output.drop_without_applying_deltas();
+                assert_eq!(marks.marks.borrow()[0].up, seconds == 20);
+            }
+        }
+    }
+
+    fn marks(chart: &Chart, main: bool) -> &ChangeMarks {
+        if main {
+            chart.change_marks.as_ref().unwrap()
+        } else {
+            chart.price_series[0].change_marks.as_ref().unwrap()
+        }
+    }
+
     /// Both directions keep their colour while opacity falls linearly: halfway through
     /// 1,000 seconds every premultiplied channel is halved. A changed close restarts that
     /// lifetime; at its end the mark is removed and idle frames request no further repaint.
@@ -182,13 +277,6 @@ mod tests {
                 }),
             );
             let time = chart.bars(id).last().unwrap().time;
-            fn marks(chart: &Chart, main: bool) -> &ChangeMarks {
-                if main {
-                    chart.change_marks.as_ref().unwrap()
-                } else {
-                    chart.price_series[0].change_marks.as_ref().unwrap()
-                }
-            }
             let ctx = egui::Context::default();
             for (close, color, half) in [
                 (
