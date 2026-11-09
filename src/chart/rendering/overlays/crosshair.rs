@@ -101,7 +101,11 @@ pub fn render_crosshair_with_options(
         pos,
         price_scale,
         &options,
-        axis_right,
+        if axis_right <= context.rect.left() {
+            egui::emath::Rangef::new(context.painter.clip_rect().left(), axis_right)
+        } else {
+            egui::emath::Rangef::new(context.rect.right(), axis_right)
+        },
         last_price_tag,
         price_formatter.map(|price_formatter| {
             price_scale
@@ -228,7 +232,7 @@ pub(crate) fn render_crosshair_price_tag(
     pos: Pos2,
     price_scale: &PriceMap,
     options: &CrosshairOptions,
-    axis_right: f32,
+    axis: egui::emath::Rangef,
     last_price_tag: Option<Rect>,
     label: Option<String>,
 ) -> Option<Rect> {
@@ -253,7 +257,7 @@ pub(crate) fn render_crosshair_price_tag(
             .unwrap_or_else(|| tick_decimals(price_scale, pos.y));
         price_scale.label(price_scale.y_to_scale(pos.y), decimals, None)
     };
-    let left = axis_right <= context.rect.left();
+    let left = axis.max <= context.rect.left();
     let painter = context
         .painter
         .with_clip_rect(context.painter.clip_rect().intersect(Rect::from_x_y_ranges(
@@ -262,24 +266,13 @@ pub(crate) fn render_crosshair_price_tag(
         )));
     Some(paint_crosshair_tag(
         &painter,
-        Pos2::new(
-            if left {
-                context.rect.left()
-            } else {
-                context.rect.right()
-            },
-            pos.y,
-        ),
+        Pos2::new(if left { axis.max } else { axis.min }, pos.y),
         if left {
             Align2::RIGHT_CENTER
         } else {
             Align2::LEFT_CENTER
         },
-        if left {
-            context.painter.clip_rect().left()..=context.rect.left()
-        } else {
-            context.rect.right()..=axis_right
-        },
+        axis.min..=axis.max,
         label,
         (
             options.label_text_color,

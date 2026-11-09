@@ -1632,3 +1632,80 @@ fn drawing_drag_hides_the_value_readout() {
         );
     }
 }
+
+/// A host-positioned value tag stays inside its target's column when axes share an edge.
+#[test]
+fn series_crosshair_label_sits_on_the_target_outer_axis() {
+    use crate::model::{AxisSide, Bar, SeriesScale};
+    use crate::scales::CustomPriceFormatter;
+    use crate::widget::{PaneId, SeriesId, SeriesOptions};
+
+    for side in [None, Some(AxisSide::Left), Some(AxisSide::Right)] {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[200.0]);
+        chart.config.show_volume = false;
+        chart.chart_options.tooltip.enabled = false;
+        let ids = [SeriesScale::Left, SeriesScale::Separate(1)].map(|scale| {
+            let id = chart.add_series(SeriesOptions {
+                scale,
+                ..Default::default()
+            });
+            chart.set_data(
+                id,
+                chart
+                    .bars(SeriesId::MAIN)
+                    .iter()
+                    .map(|bar| Bar::from_value(bar.time, 1000.0))
+                    .collect(),
+            );
+            chart.set_series_formatter(
+                id,
+                Some(std::sync::Arc::new(CustomPriceFormatter::new(|value| {
+                    format!("x{value:.0}")
+                }))),
+            );
+            chart
+                .series_price_scale_mut(id)
+                .unwrap()
+                .set_range(1000.0, 2000.0);
+            id
+        });
+        if let Some(side) = side {
+            assert!(chart.place_pane_scales(PaneId::MAIN, side));
+        }
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        let time = chart.bars(SeriesId::MAIN)[50].time;
+        for (step, id) in ids.into_iter().enumerate() {
+            chart.set_series_crosshair_position(id, Some((time, 1375.0)));
+            let painted = shapes(
+                &ctx,
+                &mut chart,
+                0.1 + step as f64 * 0.1,
+                vec![Event::PointerGone],
+            );
+            let plot = chart.get_rendered_price_rect();
+            let axis = chart
+                .secondary_axes(
+                    egui::Rect::from_min_max(Pos2::new(8.0, 8.0), Pos2::new(792.0, 592.0)),
+                    plot,
+                )
+                .into_iter()
+                .find(|(key, _)| Some(*key) == chart.series_scale(id))
+                .unwrap()
+                .1;
+            let tag = painted
+                .iter()
+                .find_map(|shape| match shape {
+                    Shape::Text(text) if text.galley.text() == "x1375" => {
+                        Some(egui::Rect::from_min_size(text.pos, text.galley.size()))
+                    }
+                    _ => None,
+                })
+                .expect("target price label");
+            assert!(
+                tag.left() >= axis.left() && tag.right() <= axis.right(),
+                "{side:?} {id:?}: tag {tag:?}, axis {axis:?}"
+            );
+        }
+    }
+}

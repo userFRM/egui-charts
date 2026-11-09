@@ -3457,7 +3457,7 @@ impl Chart {
                         pos,
                         &map,
                         &options,
-                        axis_edge,
+                        price_axis_rect.x_range(),
                         None,
                         Some(
                             crate::scales::StudyFormat::Volume
@@ -3602,19 +3602,19 @@ impl Chart {
                         let target_axis = target.and_then(|id| {
                             let key = self.series_scale(id)?;
                             if key == self.main_series_scale {
-                                show_price_axis.then_some(axis_edge)
+                                show_price_axis.then_some(price_axis_rect)
                             } else {
                                 self.secondary_axes(rect, price_rect)
                                     .into_iter()
                                     .find(|(scale, _)| *scale == key)
-                                    .map(|(_, axis)| axis.right())
+                                    .map(|(_, axis)| axis)
                             }
                         });
                         let formatter = target
                             .and_then(|id| self.series_label_formatter(id, map.transform().mode));
                         let mut main_options = options;
-                        // A scale without a visible axis still gets its line and time label.
-                        if target.is_some() && target_axis.is_none() {
+                        // A targeted price label is painted in its own axis column below.
+                        if target.is_some() {
                             main_options.horz_label_visible = false;
                         }
                         crosshair_tags = rendering::render_crosshair_with_options(
@@ -3625,16 +3625,29 @@ impl Chart {
                             &coords,
                             &main_options,
                             time_axis_top,
-                            target_axis.unwrap_or(axis_edge),
+                            target_axis.map_or(axis_edge, |axis| axis.right()),
                             last_price_tag,
                             scale,
                             bar_seconds,
-                            if target.is_some() {
-                                formatter.as_deref()
-                            } else {
+                            if target.is_none() {
                                 price_formatter.as_deref()
+                            } else {
+                                None
                             },
                         );
+                        if let Some(axis) = target_axis {
+                            crosshair_tags[0] = rendering::render_crosshair_price_tag(
+                                &price_ctx,
+                                Pos2::new(x, y),
+                                &map,
+                                &options.resolved(ui.ctx()),
+                                axis.x_range(),
+                                last_price_tag,
+                                formatter.as_deref().map(|formatter| {
+                                    map.transform().label(map.y_to_scale(y), 2, Some(formatter))
+                                }),
+                            );
+                        }
                     }
                 }
             }

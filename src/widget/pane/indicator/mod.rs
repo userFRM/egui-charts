@@ -578,12 +578,12 @@ impl IndicatorPane {
                     self.axis_rect.map_or_else(
                         || {
                             if left_axis {
-                                chart_rect.left()
+                                egui::emath::Rangef::new(rect.left(), chart_rect.left())
                             } else {
-                                rect.right()
+                                egui::emath::Rangef::new(chart_rect.right(), rect.right())
                             }
                         },
-                        |axis| axis.right(),
+                        |axis| axis.x_range(),
                     ),
                     None,
                     Some(match self.price_formatter.as_deref() {
