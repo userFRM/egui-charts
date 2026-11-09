@@ -440,7 +440,7 @@ pub struct Chart {
     /// whose symbol and interval are no change for the layout to send to linked charts.
     pub(crate) layout_identity: u64,
     /// Host period, price and target, retained while a linked pointer takes precedence.
-    host_crosshair: Option<(Option<sync::CrosshairPeriod>, Option<f64>, Option<SeriesId>)>,
+    host_crosshair: Option<(sync::CrosshairPeriod, Option<f64>, Option<SeriesId>)>,
     /// External crosshair position from synced chart (bar index)
     pub(crate) synced_crosshair_bar_idx: Option<f64>,
     /// Source period retained by time-based setters and resolved against the current bars.
