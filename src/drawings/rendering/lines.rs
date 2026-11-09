@@ -44,17 +44,23 @@ impl Drawing {
         } else {
             Align2::CENTER_TOP
         };
-        self.render_aligned_line_text(painter, a, b, anchor);
+        if let Some(galley) = self.text_galley(painter) {
+            self.render_aligned_line_text(painter, a, b, anchor, galley);
+        }
     }
 
     /// Paints the drawing's text as [`Self::render_line_text`] does, with the point of the text
     /// that `anchor` names on the segment: its left, middle or right at the end of the segment
     /// that reads first, the middle or the end that reads last, and its top below the line, its
     /// middle on the line or its bottom above the line.
-    fn render_aligned_line_text(&self, painter: &egui::Painter, a: Pos2, b: Pos2, anchor: Align2) {
-        let Some(galley) = self.text_galley(painter) else {
-            return;
-        };
+    fn render_aligned_line_text(
+        &self,
+        painter: &egui::Painter,
+        a: Pos2,
+        b: Pos2,
+        anchor: Align2,
+        galley: std::sync::Arc<egui::Galley>,
+    ) {
         if !(a.is_finite() && b.is_finite()) {
             return;
         }
@@ -168,8 +174,10 @@ impl Drawing {
     ) {
         if let Some((left, right)) = self.trend_line_ends(rect) {
             self.styled_segment(painter, left, right, stroke);
-            if let &[a, b, ..] = self.points.as_slice() {
-                self.render_aligned_line_text(painter, a, b, self.line_text_anchor());
+            if let &[a, b, ..] = self.points.as_slice()
+                && let Some(galley) = self.text_galley(painter)
+            {
+                self.render_aligned_line_text(painter, a, b, self.line_text_anchor(), galley);
             }
         } else if self.points.len() == 1 {
             painter.circle_filled(self.points[0], DESIGN_TOKENS.rounding.sm, color);
@@ -187,15 +195,17 @@ impl Drawing {
         let margin = DESIGN_TOKENS.spacing.sm;
         let text_start = start.x.max(rect.min.x) + margin;
         let text_end = (rect.max.x - margin).max(text_start);
-        let gap = self
-            .text_galley(painter)
-            .filter(|_| anchor.y() == Align::Center)
-            .map(|galley| {
+        let galley = self.text_galley(painter);
+        let gap = if anchor.y() == Align::Center {
+            galley.as_ref().map(|galley| {
                 anchor
                     .x()
                     .align_size_within_range(galley.size().x, text_start..=text_end)
                     .expand(margin)
-            });
+            })
+        } else {
+            None
+        };
         if let Some(gap) = gap {
             if gap.min > start.x {
                 self.styled_segment(painter, start, Pos2::new(gap.min, y), stroke);
@@ -206,12 +216,15 @@ impl Drawing {
         } else {
             self.styled_segment(painter, start, right, stroke);
         }
-        self.render_aligned_line_text(
-            painter,
-            Pos2::new(text_start, y),
-            Pos2::new(text_end, y),
-            anchor,
-        );
+        if let Some(galley) = galley {
+            self.render_aligned_line_text(
+                painter,
+                Pos2::new(text_start, y),
+                Pos2::new(text_end, y),
+                anchor,
+                galley,
+            );
+        }
     }
 
     /// Render horizontal line, across the pane whichever bar its anchor is on.
