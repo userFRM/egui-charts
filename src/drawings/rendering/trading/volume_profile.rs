@@ -204,13 +204,13 @@ impl Drawing {
     pub(crate) fn volume_tool_handles(&self, view: &ChartView) -> Option<Vec<Pos2>> {
         if self.tool_type == DrawingToolType::AnchoredVWAP {
             let anchor = self.chart_points.first()?.bar_idx;
-            let (_, bars) = bars_between(view.bars, anchor, f32::INFINITY)?;
+            let (first, bars) = bars_between(view.bars, anchor, f32::INFINITY)?;
             let mut sums = VwapSums::default();
-            let (vwap, _) = bars.iter().find_map(|bar| {
+            let (i, (vwap, _)) = bars.iter().enumerate().find_map(|(i, bar)| {
                 sums.add(bar);
-                sums.value()
+                sums.value().map(|value| (i, value))
             })?;
-            let x = (view.bar_to_x)(anchor.round());
+            let x = (view.bar_to_x)((first + i) as f32);
             return Some(vec![Pos2::new(x, (view.price_to_y)(vwap))]);
         }
         let (first, bars) = self.profile_span(view.bars)?;
@@ -984,16 +984,107 @@ mod tests {
                 span,
             );
         }
-        // An anchored VWAP's handle starts its line, at the typical price of bar 1: (13 + 12 + 12) / 3.
-        let mut vwap = Drawing::new(1, DrawingToolType::AnchoredVWAP);
-        vwap.chart_points = vec![ChartPoint::new(1.2, 5.0)];
-        assert_eq!(
-            vwap.volume_tool_handles(&view),
-            Some(vec![Pos2::new(
-                bar_to_x(1.0),
-                500.0 - (37.0_f64 / 3.0) as f32 * 10.0
-            )])
-        );
+    }
+
+    /// The handle follows the first plotted VWAP value across zero volume and history bounds.
+    #[test]
+    fn vwap_handle_sits_on_the_first_point_of_its_line() {
+        use crate::drawings::ChartPoint;
+        let bars: Vec<_> = [(10.0, 1.0), (12.0, 1.0), (20.0, 1.0), (30.0, 9.0)]
+            .into_iter()
+            .enumerate()
+            .map(|(i, (price, volume))| {
+                let time = chrono::DateTime::from_timestamp(i as i64 * 60, 0).unwrap();
+                Bar::new(time, price, price + 1.0, price, price, volume)
+            })
+            .collect();
+        let bar_to_x = |b: f32| 100.0 + 10.0 * b;
+        let view = ChartView {
+            price_formatter: None,
+            time_formatter: None,
+            bar_seconds: 0,
+            instrument: None,
+            bars: &bars,
+            revision: 0,
+            bar_to_x: &bar_to_x,
+            price_to_y: &|p| 500.0 - p as f32 * 10.0,
+            y_to_price: &|y| f64::from(500.0 - y) / 10.0,
+            time_axis: true,
+            executions: None,
+            timeframe: None,
+            finer: &[],
+        };
+        // A VWAP starts at the first bar with positive cumulative volume, even if the
+        // anchor is outside loaded history. The expected prices are (high + low + close) / 3.
+        for (name, volumes, anchor, first) in [
+            (
+                "rounded anchor",
+                [1.0, 1.0, 1.0, 9.0],
+                1.2,
+                Some((1, 37.0 / 3.0)),
+            ),
+            (
+                "zero anchor volume",
+                [0.0, 1.0, 1.0, 9.0],
+                0.0,
+                Some((1, 37.0 / 3.0)),
+            ),
+            (
+                "before history",
+                [1.0, 1.0, 1.0, 9.0],
+                -2.0,
+                Some((0, 31.0 / 3.0)),
+            ),
+            (
+                "before zero volume",
+                [0.0, 0.0, 1.0, 9.0],
+                -2.0,
+                Some((2, 61.0 / 3.0)),
+            ),
+            (
+                "later zero volume",
+                [1.0, 1.0, 0.0, 9.0],
+                2.0,
+                Some((3, 91.0 / 3.0)),
+            ),
+            ("no volume", [0.0; 4], 0.0, None),
+            ("after history", [1.0, 1.0, 1.0, 9.0], 9.0, None),
+        ] {
+            let mut bars = bars.clone();
+            for (bar, volume) in bars.iter_mut().zip(volumes) {
+                bar.volume = volume;
+            }
+            let view = ChartView {
+                bars: &bars,
+                ..view
+            };
+            let mut vwap = Drawing::new(1, DrawingToolType::AnchoredVWAP);
+            vwap.chart_points = vec![ChartPoint::new(anchor, 5.0)];
+            let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                let painter = egui::Painter::new(
+                    ui.ctx().clone(),
+                    egui::LayerId::background(),
+                    Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 600.0)),
+                );
+                vwap.render_anchored_vwap(&painter, &view);
+            });
+            let shapes = std::mem::take(&mut output.shapes);
+            output.drop_without_applying_deltas();
+            let point = shapes.last().map(|shape| {
+                let Shape::Path(line) = &shape.shape else {
+                    panic!("VWAP line")
+                };
+                line.points[0]
+            });
+            let expected =
+                first.map(|(bar, price)| Pos2::new(bar_to_x(bar as f32), (view.price_to_y)(price)));
+            assert_eq!(point, expected, "{name}: line start");
+            assert_eq!(
+                vwap.volume_tool_handles(&view),
+                point.map(|p| vec![p]),
+                "{name}: handle"
+            );
+        }
     }
 
     /// The profile of a span that ends on the forming bar follows its ticks
