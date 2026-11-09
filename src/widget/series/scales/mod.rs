@@ -1099,10 +1099,12 @@ impl Chart {
                         include(&mut bounds, value, transform);
                     }
                 } else if !self.is_custom_data(id) {
-                    let range = crate::widget::IndicatorPane::with_config(
+                    let Some(range) = crate::widget::IndicatorPane::with_config(
                         crate::widget::IndicatorPaneConfig::from_study(study.as_ref()),
                     )
-                    .calculate_y_range(study.as_ref(), &visible);
+                    .value_range(study.as_ref(), &visible) else {
+                        continue;
+                    };
                     for value in [range.0, range.1] {
                         include(&mut bounds, value, transform);
                     }

@@ -4450,6 +4450,142 @@ fn pane_axis_commands_enumerate_sources_and_restore_layout() {
     }
 }
 
+/// Empty studies contribute neither fallback prices nor margins. Bars from 10 to 20 fit
+/// 8.75..21.25 with 10% fractional margins, or 9..21 with a pane's 10% price padding.
+/// A study from 1000 to 1010 pads to 999..1011, or -0.1..1.1% and 99.9..101.1 indexed.
+/// Logarithmic panes fit ln(1000)..ln(1010). A 40 point margin at each edge widens a
+/// span s in a plot h points tall by s / (1 - 80 / h), centred on the original range.
+#[cfg(feature = "studies")]
+#[test]
+fn study_without_values_in_view_adds_nothing_to_its_scale() {
+    use crate::chart::primitives::Primitive;
+    use crate::model::{AutoscaleInfo, AutoscaleMargins};
+    use crate::studies::{CustomIndicator, IndicatorValue, SMA};
+
+    struct Header;
+    impl Primitive for Header {
+        fn autoscale_info(&self, _: &[Bar], _: std::ops::Range<usize>) -> Option<AutoscaleInfo> {
+            Some(AutoscaleInfo {
+                price_range: (f64::NAN, f64::NAN),
+                margins: AutoscaleMargins {
+                    top: 40.0,
+                    bottom: 40.0,
+                },
+            })
+        }
+    }
+
+    let mut failures = Vec::new();
+    for (case, mode) in [
+        ("main warm-up", PriceScaleMode::Normal),
+        ("main scrolled", PriceScaleMode::Normal),
+        ("shared bars", PriceScaleMode::Normal),
+        ("study", PriceScaleMode::Normal),
+        ("study", PriceScaleMode::Percentage),
+        ("study", PriceScaleMode::IndexedTo100),
+        ("study", PriceScaleMode::Logarithmic),
+    ] {
+        for margin in [false, true] {
+            if margin && case.starts_with("main") {
+                continue;
+            }
+            let ctx = egui::Context::default();
+            let mut chart = crate::widget::test_frames::chart(&[10.0], &[20.0]);
+            chart.config.show_volume = false;
+            if case.starts_with("main") {
+                let pane = chart.add_pane();
+                assert!(chart.move_series_to_pane(SeriesId::MAIN, pane));
+                assert!(chart.remove_pane(PaneId::MAIN));
+            }
+            let study: Box<dyn Indicator> = match case {
+                "main warm-up" => Box::new(SMA::new(200)),
+                "main scrolled" => Box::new(CustomIndicator::new("Level", |bars| {
+                    vec![IndicatorValue::Single(15.0); bars.len()]
+                })),
+                "shared bars" => Box::new(
+                    CustomIndicator::new("Empty", |bars| vec![IndicatorValue::None; bars.len()])
+                        .with_overlay(false),
+                ),
+                _ => Box::new(
+                    CustomIndicator::new("Pane", |bars| {
+                        (0..bars.len())
+                            .map(|at| {
+                                IndicatorValue::Single(if at + 1 == bars.len() {
+                                    1010.0
+                                } else {
+                                    1000.0
+                                })
+                            })
+                            .collect()
+                    })
+                    .with_overlay(false),
+                ),
+            };
+            let study = chart.add_indicator(study);
+            let pane = chart.series_pane(study).unwrap();
+            let target = if case == "shared bars" {
+                let id = chart.add_series(SeriesOptions::default());
+                chart.set_data(id, chart.bars(SeriesId::MAIN).to_vec());
+                assert!(chart.move_series_to_pane(id, pane));
+                id
+            } else if case.starts_with("main") {
+                assert_eq!(pane, chart.main_series_pane());
+                SeriesId::MAIN
+            } else {
+                study
+            };
+            if margin {
+                chart.attach_primitive(study, Header).unwrap();
+            }
+            chart
+                .pane_price_scale_mut(pane, SeriesScale::Right)
+                .options_mut()
+                .mode = mode;
+            for step in 0..3 {
+                frame(&ctx, &mut chart, step as f64 * 0.1, vec![]);
+            }
+            let map = chart.series_price_map(target).unwrap();
+            let (low, high) = match case {
+                "main warm-up" | "main scrolled" => (8.75, 21.25),
+                "shared bars" => (9.0, 21.0),
+                _ => match mode {
+                    PriceScaleMode::Normal => (999.0, 1011.0),
+                    PriceScaleMode::Percentage => (-0.1, 1.1),
+                    PriceScaleMode::IndexedTo100 => (99.9, 101.1),
+                    PriceScaleMode::Logarithmic => (1000_f64.ln(), 1010_f64.ln()),
+                },
+            };
+            let height = f64::from(map.extent().1 - map.extent().0);
+            let fractional_room = if case.starts_with("main") { 0.8 } else { 1.0 };
+            let beyond = if margin && matches!(case, "main scrolled" | "study") {
+                (high - low) * 40.0 / height / (fractional_room - 80.0 / height)
+            } else {
+                0.0
+            };
+            let expected = (low - beyond, high + beyond);
+            let mut check = |stage: &str, range: crate::scales::PriceRange| {
+                if (range.min - expected.0).abs() >= 1e-9 || (range.max - expected.1).abs() >= 1e-9
+                {
+                    failures.push(format!(
+                        "{case} {mode:?} margin={margin} {stage}: {range:?}, expected {expected:?}"
+                    ));
+                }
+            };
+            check("in view", map.range());
+            if matches!(case, "main scrolled" | "study") {
+                chart.scroll_to_position(300.0, false);
+                for step in 1..=3 {
+                    frame(&ctx, &mut chart, step as f64, vec![]);
+                    check("scrolled", chart.series_price_map(target).unwrap().range());
+                }
+                let (start, end) = chart.state().visible_range();
+                assert_eq!(start, end, "{case}: no bar in view");
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 /// A margin-only request (prices left out, as the hook allows) while no bar is in view: the
 /// main scale has nothing to fit, so it keeps the range it had, as `PriceScale::autoscale`
 /// documents for bounds that are not finite. With the default 10% margins and 40 points at each

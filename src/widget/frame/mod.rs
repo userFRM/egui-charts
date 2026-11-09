@@ -1069,11 +1069,11 @@ impl Chart {
                 && !self.config.scale_price_chart_only
                 && study.scale() == crate::studies::StudyScale::Main
                 && !self.is_custom_data(self.study_ids[*idx])
-            {
-                let range = super::IndicatorPane::with_config(
+                && let Some(range) = super::IndicatorPane::with_config(
                     super::IndicatorPaneConfig::from_study(study.as_ref()),
                 )
-                .calculate_y_range(study.as_ref(), &(start_idx..end_idx));
+                .value_range(study.as_ref(), &(start_idx..end_idx))
+            {
                 primitive_prices.extend([range.0, range.1]);
             }
         }
