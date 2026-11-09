@@ -1814,6 +1814,7 @@ mod tests {
                 })
                 .collect();
             sink.push(rows).unwrap();
+            study.set_input("measure", InputValue::Choice(1)).unwrap();
             for id in ["call_wall", "put_wall"] {
                 study.set_input(id, InputValue::Toggle(true)).unwrap();
             }
