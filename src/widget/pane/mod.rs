@@ -16,6 +16,49 @@ use egui::{Color32, Rect, Vec2};
 /// A study's name and input values, which identify it across charts.
 type PaneStudy = (String, Vec<(String, serde_json::Value)>);
 
+/// `value` as a stored pane holds it: parsed back from text, since a stored value can differ
+/// from the live one in the last bit.
+fn stored_value(value: &crate::model::InputValue) -> serde_json::Value {
+    let text = serde_json::to_string(value).unwrap_or_default();
+    serde_json::from_str(&text).unwrap_or_default()
+}
+
+/// `stored` under the input ids its study takes now, upgraded as `StudyTemplate::create_with`
+/// upgrades a template saved under earlier ones, or `None` when it needs no change. `study` is
+/// the chart's study it is matched against and `declared` its inputs; a study that lacks an
+/// input the upgrade adds, as a host study registered under a built-in's name does, keeps the
+/// record as stored.
+#[cfg(feature = "studies")]
+fn upgraded_study(
+    (name, stored): &PaneStudy,
+    study: &dyn crate::studies::Indicator,
+    declared: &[crate::studies::StudyInput],
+) -> Option<PaneStudy> {
+    let inputs = stored
+        .iter()
+        .map(|(id, value)| Some((id.clone(), serde_json::from_value(value.clone()).ok()?)))
+        .collect::<Option<_>>()?;
+    let template = crate::studies::StudyTemplate {
+        name: name.clone(),
+        inputs,
+        // Read only by the upgrade's presentation changes, which are not kept here.
+        settings: study.settings(),
+        visible: true,
+        scale: None,
+    }
+    .upgraded(declared)?;
+    let takes = template.inputs.iter().all(|(id, _)| {
+        stored.iter().any(|(saved, _)| saved == id) || declared.iter().any(|input| input.id == *id)
+    });
+    // Parsed from the stored text once already: another round trip could move a number by the
+    // last bit.
+    let inputs = template
+        .inputs
+        .iter()
+        .map(|(id, value)| (id.clone(), serde_json::to_value(value).unwrap_or_default()));
+    takes.then(|| (template.name.clone(), inputs.collect()))
+}
+
 /// Behaviour and colours of the separators between panes, set with
 /// [`Chart::with_pane_options`] or [`Chart::pane_options_mut`].
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -547,9 +590,10 @@ impl Chart {
     /// The pane of `other` that corresponds to the study pane `pane` of this chart, for linking
     /// the drawings of charts in a [`ChartLayout`](super::ChartLayout).
     ///
-    /// Panes correspond when they hold the same studies, with equal names and input values in
-    /// the same order. Of several such panes the n-th here corresponds to the n-th there. The
-    /// price pane and panes without studies have no counterpart.
+    /// Panes correspond when they hold the same studies in the same order, with equal input
+    /// values; an input that only `other`'s study lists counts as equal at its declared default.
+    /// Of several such panes the n-th here corresponds to the n-th there. The price pane and
+    /// panes without studies have no counterpart.
     pub fn linked_pane(&self, pane: PaneId, other: &Chart) -> Option<PaneId> {
         let (studies, rank) = self.pane_identity(pane)?;
         other.identified_pane(&studies, rank)
@@ -578,8 +622,38 @@ impl Chart {
     fn identified_pane(&self, studies: &[PaneStudy], rank: usize) -> Option<PaneId> {
         self.panes()
             .into_iter()
-            .filter(|pane| *pane != PaneId::MAIN && self.pane_studies(*pane) == studies)
+            .filter(|pane| *pane != PaneId::MAIN && self.holds_studies(*pane, studies))
             .nth(rank)
+    }
+
+    /// Whether `pane` holds `studies`, in order. A stored study is first read under the input
+    /// ids its study takes now, as a study template saved before they changed is; then each
+    /// listed input holds its value here, and each input not listed, such as one a later release
+    /// added, the default its study declares.
+    fn holds_studies(&self, pane: PaneId, studies: &[PaneStudy]) -> bool {
+        let shown: Vec<_> = self
+            .pane_series(pane)
+            .into_iter()
+            .filter_map(|id| self.indicators().find(|(study, _)| *study == id))
+            .collect();
+        shown.len() == studies.len()
+            && shown.iter().zip(studies).all(|((_, study), stored)| {
+                let inputs = study.inputs();
+                #[cfg(feature = "studies")]
+                let upgraded = upgraded_study(stored, *study, &inputs);
+                #[cfg(feature = "studies")]
+                let stored = upgraded.as_ref().unwrap_or(stored);
+                let (name, stored) = stored;
+                study.name() == name
+                    && stored.iter().all(|(id, value)| {
+                        inputs
+                            .iter()
+                            .any(|input| input.id == *id && stored_value(&input.value) == *value)
+                    })
+                    && inputs.iter().all(|input| {
+                        stored.iter().any(|(id, _)| *id == input.id) || input.value == input.default
+                    })
+            })
     }
 
     /// The identity of study pane `pane` for a stored drawing, as in [`Self::linked_pane`].
@@ -603,10 +677,9 @@ impl Chart {
             .into_iter()
             .filter_map(|id| self.indicators().find(|(study, _)| *study == id))
             .map(|(_, study)| {
-                // Parsed from text like a stored pane's values, which can differ in the last bit.
                 let inputs = study.inputs().into_iter().map(|input| {
-                    let text = serde_json::to_string(&input.value).unwrap_or_default();
-                    (input.id, serde_json::from_str(&text).unwrap_or_default())
+                    let value = stored_value(&input.value);
+                    (input.id, value)
                 });
                 (study.name().to_owned(), inputs.collect())
             })
