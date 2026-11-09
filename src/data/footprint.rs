@@ -276,6 +276,7 @@ impl FootprintBar {
 /// Trades must be chronological, with exchange order preserved for equal timestamps, so
 /// delta highs and lows are exact. Replay corrections by rebuilding, rather than silently
 /// approximating their intrabar path. The host deduplicates ids (the chart's feed already does).
+/// Use [`from_bars`](Self::from_bars) for already aggregated snapshots instead.
 #[derive(Clone, Debug)]
 pub struct Footprint {
     clock: BarClock,
@@ -295,9 +296,122 @@ pub struct Footprint {
     max_rows: usize,
     /// Bars opening up to this time lack executions that were dropped or never received.
     incomplete_through: Option<DateTime<Utc>>,
+    aggregate_only: bool,
 }
 
 impl Footprint {
+    /// Builds an aggregate-only snapshot without reconstructing executions.
+    ///
+    /// Opens must be unique and aligned to the supplied time-based clock. Row keys are in
+    /// multiples of the declared price step. Volumes, original execution counts and delta
+    /// extrema must be supplied consistently; unavailable metadata cannot be inferred.
+    /// Side totals allow relative rounding error of 1e-9. Invalid input returns an error.
+    ///
+    /// The host replaces snapshots for paging, corrections and live aggregate updates, and
+    /// owns their coverage, source, revision and memory budget. Missing bars remain absent;
+    /// [`complete_from`](Self::complete_from) is no proof of coverage across those gaps.
+    /// Range profiles and cumulative statistics sum only the supplied bars. Keep their ranges
+    /// within known coverage. Empty bars have no price rows; untraded rows are rejected.
+    ///
+    /// Trade-based clocks, [`push`](Self::push) and execution-size filters are unsupported
+    /// for these snapshots. Keep genuine live executions in a separate aggregation and
+    /// include its exact bar aggregates in the next snapshot, without counting overlap twice.
+    pub fn from_bars(
+        clock: BarClock,
+        tick_size: f64,
+        ticks_per_row: u32,
+        bars: impl IntoIterator<Item = FootprintBar>,
+    ) -> Result<Self, FeedError> {
+        let mut flow = Self::new(clock, tick_size, ticks_per_row)?;
+        if flow.clock.timeframe().is_none_or(|tf| tf.is_trade_based()) {
+            return Err(FeedError::InvalidData(
+                "footprint aggregate snapshots require a time-based clock".into(),
+            ));
+        }
+        flow.aggregate_only = true;
+        let (mut volume, mut trades) = (0.0, 0_u64);
+        for bar in bars {
+            if flow.clock.bar_open(bar.time) != bar.time || flow.bars.contains_key(&bar.time) {
+                return Err(FeedError::InvalidData(format!(
+                    "footprint aggregate open {} is unaligned or duplicated",
+                    bar.time
+                )));
+            }
+            let mut totals = [0.0; 3];
+            for (&level, row) in &bar.levels {
+                if level != row.level || !(level as f64 * flow.step).is_finite() {
+                    return Err(FeedError::InvalidData(format!(
+                        "footprint aggregate row {level} has a mismatched or unrepresentable price"
+                    )));
+                }
+                if !row.volume().is_finite() || row.volume() <= 0.0 {
+                    return Err(FeedError::InvalidData(format!(
+                        "footprint aggregate row {level} has zero or overflowing volume"
+                    )));
+                }
+                for (i, (value, count)) in [
+                    (row.bid, row.bid_trades),
+                    (row.ask, row.ask_trades),
+                    (row.unknown, row.unknown_trades),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    if !value.is_finite() || value < 0.0 || (value > 0.0) != (count > 0) {
+                        return Err(FeedError::InvalidData(format!(
+                            "footprint aggregate row {level} has invalid volume or execution counts"
+                        )));
+                    }
+                    totals[i] += value;
+                    trades = trades.checked_add(count).ok_or_else(|| {
+                        FeedError::InvalidData(
+                            "footprint aggregate execution count overflow".into(),
+                        )
+                    })?;
+                }
+            }
+            if [bar.bid, bar.ask, bar.unknown]
+                .into_iter()
+                .zip(totals)
+                .any(|(value, total)| {
+                    !value.is_finite() || value < 0.0 || !total.is_finite() || !near(value, total)
+                })
+                || !bar.volume().is_finite()
+            {
+                return Err(FeedError::InvalidData(format!(
+                    "footprint aggregate at {} has invalid or inconsistent side totals",
+                    bar.time
+                )));
+            }
+            let at_least = |value: f64, bound: f64| value >= bound || near(value, bound);
+            // Visiting both extrema requires their distance in buys or sells.
+            if !bar.min_delta.is_finite()
+                || !bar.max_delta.is_finite()
+                || bar.min_delta > 0.0
+                || bar.max_delta < 0.0
+                || !at_least(bar.delta(), bar.min_delta)
+                || !at_least(bar.max_delta, bar.delta())
+                || !at_least(bar.min_delta, -bar.bid)
+                || !at_least(bar.ask, bar.max_delta)
+                || !at_least(bar.bid.max(bar.ask), bar.max_delta - bar.min_delta)
+            {
+                return Err(FeedError::InvalidData(format!(
+                    "footprint aggregate at {} has inconsistent delta extrema",
+                    bar.time
+                )));
+            }
+            volume += bar.volume();
+            if !volume.is_finite() {
+                return Err(FeedError::InvalidData(
+                    "footprint aggregate volume overflow".into(),
+                ));
+            }
+            flow.rows += bar.levels.len();
+            flow.bars.insert(bar.time, bar);
+        }
+        Ok(flow)
+    }
+
     /// Creates an empty aggregation. `tick_size` must be finite and positive, and
     /// `ticks_per_row` nonzero. Prices round to the nearest integer tick, then group
     /// downwards, including negative prices. Grouping never changes trade-side totals.
@@ -333,6 +447,7 @@ impl Footprint {
             max_bars: usize::MAX,
             max_rows: usize::MAX,
             incomplete_through: None,
+            aggregate_only: false,
         })
     }
 
@@ -347,6 +462,8 @@ impl Footprint {
     /// Open of the oldest bar whose executions are all held: earlier bars were cut by the
     /// budget or by trades dropped from the host's store, or may lack trades that never
     /// arrived, and must not be shown as complete.
+    /// On aggregate snapshots this is the earliest supplied bar, not proof of coverage
+    /// across missing bars; the host owns that coverage.
     pub fn complete_from(&self) -> Option<DateTime<Utc>> {
         self.complete_bars(..).next().map(|bar| bar.time)
     }
@@ -464,6 +581,11 @@ impl Footprint {
     /// Restricts executions to this inclusive size range, before aggregation.
     /// Must be called before adding trades. Invalid ranges return an error without changing it.
     pub fn set_size_filter(&mut self, min: f64, max: f64) -> Result<(), FeedError> {
+        if self.aggregate_only {
+            return Err(FeedError::InvalidData(
+                "footprint aggregate snapshots cannot filter executions".into(),
+            ));
+        }
         if self.last.is_some() || self.trade_bars.forming.is_some() {
             return Err(FeedError::InvalidData(
                 "footprint size filter must be set before the first trade".into(),
@@ -642,6 +764,11 @@ impl Footprint {
         trade: &Tick,
         part: Option<(DateTime<Utc>, f64)>,
     ) -> Result<bool, FeedError> {
+        if self.aggregate_only {
+            return Err(FeedError::InvalidData(
+                "footprint aggregate snapshots cannot accept executions".into(),
+            ));
+        }
         if !trade.price.is_finite() {
             return Err(FeedError::InvalidData(format!(
                 "footprint trade price must be finite, got {:?}",
@@ -763,7 +890,6 @@ struct HistoryRun<'a> {
     end: Option<super::inbox::TradeBars>,
 }
 
-#[cfg(feature = "widget")]
 fn near(a: f64, b: f64) -> bool {
     (a - b).abs() <= 1e-9 * a.abs().max(b.abs())
 }
