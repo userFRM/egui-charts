@@ -282,13 +282,22 @@ impl OptionsVolumeProfile {
             return;
         }
         // In saved order, since the measure decides which levels are offered.
+        let pending = self.waiting_inputs.take();
+        let labelled = pending.iter().any(|(id, _)| id == "measure_label");
         let mut waiting = Vec::new();
-        for (id, value) in self.waiting_inputs.take() {
+        for (id, value) in pending {
+            if id == "measure" && labelled {
+                waiting.push((id, value));
+                continue;
+            }
             let input = self
                 .inputs()
                 .into_iter()
                 .find(|input| input.id == id && input.accepts(&value));
             if input.is_some_and(|input| self.set_chain_input(&id, &value, &input)) {
+                if id == "measure_label" {
+                    waiting.retain(|(id, _)| id != "measure");
+                }
                 *self.cache.borrow_mut() = CachedProfile::default();
             } else {
                 waiting.push((id, value));
@@ -960,7 +969,7 @@ impl Indicator for OptionsVolumeProfile {
             InputValue::Text(self.through_date.to_string()),
             InputKind::Text,
         ));
-        let mut measures = Vec::new();
+        let mut measures: Vec<String> = Vec::new();
         if cache.volume_available {
             measures.push("Volume".into());
         }
@@ -1084,7 +1093,7 @@ impl Indicator for OptionsVolumeProfile {
                 .is_some_and(|input| self.set_chain_input(id, &value, input));
         let waiting = self.waiting_inputs.get_mut();
         if chain_input {
-            let superseded = if id == "measure_label" {
+            let superseded = if id == "measure_label" && !unavailable_label {
                 "measure"
             } else if id == "measure" {
                 "measure_label"
@@ -2279,6 +2288,14 @@ mod tests {
                 if !ready {
                     // Saving before the first response must retain the selected measure and level.
                     let again = crate::studies::StudyTemplate::from_study(restored.as_ref());
+                    assert!(
+                        again
+                            .inputs
+                            .iter()
+                            .any(|(id, value)| id == "measure" && *value == InputValue::Choice(1))
+                    );
+                    assert!(again.inputs.iter().any(|(id, value)| id == "measure_label"
+                        && *value == InputValue::Text("Open interest".into())));
                     restored = again.create_with(&factory).unwrap();
                     later_sink.push(changed).unwrap();
                 }
