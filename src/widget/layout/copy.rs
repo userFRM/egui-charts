@@ -2,6 +2,7 @@
 //! together.
 
 use super::ChartLayout;
+use crate::chart::overlays::BubbleGrouping;
 use crate::config::ChartConfig;
 use crate::model::{Bar, ChartType};
 use crate::scales::instrument_price_precision;
@@ -24,8 +25,9 @@ pub enum LayoutCopy {
     /// Applies these settings to every chart, the source included. Each other chart keeps its
     /// symbol, interval and chart type, the sizes and other parameters of that type, its own
     /// price-to-bar ratio when the settings lock it, its quantity unit and order-flow sizes, and
-    /// the precision of its instrument unless the source was given another one. A chart without
-    /// a feed has no order flow to give: from it, each chart keeps its order-flow layers and settings.
+    /// its bubble grouping when the source uses a price step. It keeps the precision of its
+    /// instrument unless the source was given another one. A chart without a feed has no order
+    /// flow to give: from it, each chart keeps its order-flow layers and settings.
     Settings(Box<ChartSettingsState>),
 }
 
@@ -227,10 +229,10 @@ impl CopiedStudies {
 /// Applies the settings of the chart with `from` as its configuration and `from_decimals` as its
 /// instrument's precision to another chart. That chart keeps the parameters of its chart type,
 /// whose sizes and base prices suit its own prices, its own price-to-bar ratio when the settings
-/// lock it, its quantity unit and order-flow sizes, which suit its own instrument, and all its
-/// order-flow settings when `from_feed` is false, since a chart without a feed holds none. It takes
-/// the colours of `from` for its candles when the settings describe another style of candles and
-/// so do not hold them.
+/// lock it, its quantity unit and order-flow sizes, and its bubble grouping when the source uses
+/// a price step, which suit its own instrument. It keeps all its order-flow settings when
+/// `from_feed` is false, since a chart without a feed holds none. It takes the colours of `from`
+/// for its candles when the settings describe another style of candles and so do not hold them.
 ///
 /// shortcut: a precision chosen equal to the source instrument's follows each chart's instrument,
 /// as a chart does not keep whether its precision was chosen; keep that choice to tell them apart.
@@ -266,6 +268,10 @@ fn apply_to_other_chart(
         flow.order_book.tiers = own.order_book.tiers;
         flow.order_book.filter.min_size = own.order_book.filter.min_size;
         flow.volume_bubbles.min_size_filter = own.volume_bubbles.min_size_filter;
+        // A price step is in the source's prices too; other groupings reach every chart.
+        if matches!(flow.volume_bubbles.grouping, BubbleGrouping::PriceStep(_)) {
+            flow.volume_bubbles.grouping = own.volume_bubbles.grouping;
+        }
     }
     let own_ratio = chart.state().price_scale().bar_ratio();
     if settings.apply_to_chart(chart).is_err() {
@@ -757,11 +763,14 @@ mod tests {
         assert_eq!(charts[1].state.price_scale().bar_ratio(), own_lock);
     }
 
-    /// Order-flow sizes and the quantity unit describe the source's instrument: a chart of another
-    /// symbol keeps its own, and takes the rest, such as the heatmap's brightness.
+    /// Order-flow sizes, the quantity unit and a bubble price step describe the source's
+    /// instrument: a chart of another symbol keeps its own, and takes the rest, such as the
+    /// heatmap's brightness and a bubble grouping that holds no price.
     #[test]
     fn settings_copy_keeps_each_symbols_order_flow_sizes() {
-        use crate::chart::overlays::{LiquidityHeatmapConfig, OrderBookView, VolumeBubblesConfig};
+        use crate::chart::overlays::{
+            BubbleGrouping, LiquidityHeatmapConfig, OrderBookView, VolumeBubblesConfig,
+        };
         struct Feed;
         impl crate::data::Datafeed for Feed {
             fn history(
@@ -795,10 +804,17 @@ mod tests {
             lower_cutoff: 50.0,
             full_intensity_size: Some(1000.0),
         });
+        // A bubble level of 1 in ES prices; BTCUSD groups its own trades by 0.5.
         a.set_volume_bubbles(Some(VolumeBubblesConfig {
             min_size_filter: Some(10.0),
+            grouping: BubbleGrouping::PriceStep(1.0),
             ..VolumeBubblesConfig::default()
         }));
+        let own_step = || VolumeBubblesConfig {
+            grouping: BubbleGrouping::PriceStep(0.5),
+            ..VolumeBubblesConfig::default()
+        };
+        b.set_volume_bubbles(Some(own_step()));
         b.set_order_book_view(OrderBookView {
             quantity_unit: Some("BTC".into()),
             ..OrderBookView::default()
@@ -816,10 +832,53 @@ mod tests {
                 flow.heatmap.lower_cutoff,
                 flow.heatmap.full_intensity_size,
                 flow.volume_bubbles.min_size_filter,
+                flow.volume_bubbles.grouping,
             ),
-            (Some("BTC"), None, 0.0, 0.0, None, None),
+            (
+                Some("BTC"),
+                None,
+                0.0,
+                0.0,
+                None,
+                None,
+                BubbleGrouping::PriceStep(0.5)
+            ),
         );
         assert_eq!(flow.heatmap.brightness, 0.5);
+
+        // A source price step preserves every destination grouping, including one without a price.
+        for grouping in [
+            BubbleGrouping::Automatic,
+            BubbleGrouping::Ungrouped,
+            BubbleGrouping::TimeWindow(Duration::seconds(5)),
+            BubbleGrouping::Executions(5),
+        ] {
+            charts[1].set_volume_bubbles(Some(VolumeBubblesConfig {
+                grouping,
+                ..VolumeBubblesConfig::default()
+            }));
+            assert_eq!(pair().apply_copy(&mut charts, 0, &copy, &factory), []);
+            let flow = ChartSettingsState::from_chart(charts[1]).order_flow;
+            assert_eq!(flow.volume_bubbles.grouping, grouping);
+        }
+
+        // A grouping that holds no price reaches every chart.
+        for grouping in [
+            BubbleGrouping::Automatic,
+            BubbleGrouping::Ungrouped,
+            BubbleGrouping::TimeWindow(Duration::seconds(5)),
+            BubbleGrouping::Executions(5),
+        ] {
+            charts[0].set_volume_bubbles(Some(VolumeBubblesConfig {
+                grouping,
+                ..VolumeBubblesConfig::default()
+            }));
+            charts[1].set_volume_bubbles(Some(own_step()));
+            let copy = LayoutCopy::Settings(Box::new(ChartSettingsState::from_chart(charts[0])));
+            assert_eq!(pair().apply_copy(&mut charts, 0, &copy, &factory), []);
+            let flow = ChartSettingsState::from_chart(charts[1]).order_flow;
+            assert_eq!(flow.volume_bubbles.grouping, grouping);
+        }
     }
 
     /// A study that reads another study's output and needs more bars than a chart has is reported,
