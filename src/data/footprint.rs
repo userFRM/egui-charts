@@ -1,7 +1,7 @@
 //! Trade volume at integer price levels. No volume or side is inferred from OHLC bars.
 
 use super::FeedError;
-use crate::model::{BarClock, OrderSide, Tick};
+use crate::model::{BarClock, OrderSide, Tick, next_revision};
 use chrono::{DateTime, Utc};
 use std::collections::BTreeMap;
 use std::ops::RangeBounds;
@@ -295,6 +295,7 @@ pub struct Footprint {
     max_rows: usize,
     /// Bars opening up to this time lack executions that were dropped or never received.
     incomplete_through: Option<DateTime<Utc>>,
+    revision: u64,
 }
 
 impl Footprint {
@@ -333,7 +334,14 @@ impl Footprint {
             max_bars: usize::MAX,
             max_rows: usize::MAX,
             incomplete_through: None,
+            revision: next_revision(),
         })
+    }
+
+    /// Revision of aggregated rows and completeness; identical clones share it until changed.
+    #[cfg(any(test, all(feature = "widget", feature = "studies")))]
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// Keeps at most `bars` bars and `rows` price rows in all, dropping the oldest bars first.
@@ -389,11 +397,18 @@ impl Footprint {
                 self.bars.retain(|time, _| *time > open);
                 self.trade_starts.retain(|time, _| *time > open);
                 self.rows = self.bars.values().map(|bar| bar.levels.len()).sum();
+                self.revision = next_revision();
             }
             return;
         }
         let open = self.clock.bar_open(through);
-        self.incomplete_through = self.incomplete_through.max(Some(open));
+        let cut = self.incomplete_through.max(Some(open));
+        let mut changed = cut != self.incomplete_through
+            || self
+                .bars
+                .first_key_value()
+                .is_some_and(|(time, _)| *time < open);
+        self.incomplete_through = cut;
         self.bars = self.bars.split_off(&open);
         if self.bars.contains_key(&open) {
             let mut part = Self {
@@ -411,19 +426,27 @@ impl Footprint {
             {
                 let _ = part.push(trade);
             }
+            changed |= self.bars.get(&open) != part.bars.get(&open);
             match part.bars.remove(&open) {
                 Some(bar) => self.bars.insert(open, bar),
                 None => self.bars.remove(&open),
             };
         }
         self.rows = self.bars.values().map(|bar| bar.levels.len()).sum();
+        if changed {
+            self.revision = next_revision();
+        }
     }
 
     /// Counts the bar holding `first`, the oldest execution held, and earlier bars as
     /// incomplete: executions before it may exist that never arrived.
     pub(crate) fn received_from(&mut self, first: DateTime<Utc>) {
         let open = self.clock.bar_open(first);
-        self.incomplete_through = self.incomplete_through.max(Some(open));
+        let cut = self.incomplete_through.max(Some(open));
+        if cut != self.incomplete_through {
+            self.incomplete_through = cut;
+            self.revision = next_revision();
+        }
     }
 
     fn enforce_budget(&mut self) {
@@ -433,6 +456,7 @@ impl Footprint {
                 self.rows -= bar.levels.len();
                 self.trade_starts.remove(&time);
                 self.incomplete_through = self.incomplete_through.max(Some(time));
+                self.revision = next_revision();
             }
         }
     }
@@ -445,6 +469,9 @@ impl Footprint {
             return;
         };
         let removed = self.bars.split_off(&from);
+        let cut = self.incomplete_through.max(source.incomplete_through);
+        let changed =
+            cut != self.incomplete_through || !removed.iter().eq(source.bars.range(from..));
         self.rows -= removed.values().map(|bar| bar.levels.len()).sum::<usize>();
         self.trade_starts.retain(|time, _| *time < from);
         for (time, bar) in source.bars.range(from..) {
@@ -457,7 +484,10 @@ impl Footprint {
                 .range(from..)
                 .map(|(time, first)| (*time, *first)),
         );
-        self.incomplete_through = self.incomplete_through.max(source.incomplete_through);
+        self.incomplete_through = cut;
+        if changed {
+            self.revision = next_revision();
+        }
         self.enforce_budget();
     }
 
@@ -743,6 +773,7 @@ impl Footprint {
         }
         bar.min_delta = bar.min_delta.min(bar.delta());
         bar.max_delta = bar.max_delta.max(bar.delta());
+        self.revision = next_revision();
     }
 }
 
@@ -884,6 +915,204 @@ mod tests {
     use super::*;
     use crate::model::Timeframe;
     use chrono::TimeDelta;
+
+    #[test]
+    fn revisions_follow_parts_but_not_rejected_input() {
+        let time: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let fresh = || Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        let mut flow = fresh();
+        assert_ne!(flow.revision(), fresh().revision());
+        let empty = flow.revision();
+        flow.set_size_filter(2.0, 10.0).unwrap();
+        assert!(flow.set_size_filter(-1.0, 10.0).is_err());
+        for size in [0.0, 1.0, 11.0] {
+            assert!(!flow.push(&Tick::new(time, 100.0, size, None)).unwrap());
+        }
+        for (price, size) in [(f64::NAN, 3.0), (f64::MAX, 3.0), (100.0, -1.0)] {
+            assert!(flow.push(&Tick::new(time, price, size, None)).is_err());
+        }
+        assert_eq!(flow.revision(), empty);
+        flow.push(&Tick::new(time, 100.0, 3.0, None)).unwrap();
+        assert_ne!(flow.revision(), empty);
+        let mut snapshot = flow.clone();
+        assert_eq!(snapshot.revision(), flow.revision());
+        snapshot.push(&Tick::new(time, 101.0, 4.0, None)).unwrap();
+        assert_ne!(snapshot.revision(), flow.revision());
+        flow.push(&Tick::new(time, 102.0, 4.0, None)).unwrap();
+        assert_ne!(snapshot.revision(), flow.revision());
+        let held = flow.revision();
+        assert!(
+            flow.push(&Tick::new(time - TimeDelta::seconds(1), 100.0, 3.0, None))
+                .is_err()
+        );
+        assert_eq!(flow.revision(), held);
+
+        let mut overflow = fresh();
+        overflow
+            .push(&Tick::new(time, 100.0, f64::MAX, None))
+            .unwrap();
+        let held = overflow.revision();
+        assert!(
+            overflow
+                .push(&Tick::new(time, 100.0, f64::MAX, None))
+                .is_err()
+        );
+        assert_eq!(overflow.revision(), held);
+    }
+
+    #[test]
+    fn revisions_follow_coverage_and_eviction_without_noop_churn() {
+        let time: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let trades: Vec<_> = (0..3)
+            .map(|minute| Tick::new(time + TimeDelta::minutes(minute), 100.0, 1.0, None))
+            .collect();
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        for trade in &trades {
+            flow.push(trade).unwrap();
+        }
+        let held = flow.revision();
+        flow.set_budget(3, 3);
+        flow.set_budget(usize::MAX, usize::MAX);
+        assert_eq!(flow.revision(), held);
+        flow.received_from(time);
+        assert_ne!(flow.revision(), held);
+        assert_eq!(flow.complete_from(), Some(trades[1].ts));
+        let held = flow.revision();
+        flow.received_from(time);
+        flow.received_from(time - TimeDelta::minutes(1));
+        assert_eq!(flow.revision(), held);
+        flow.drop_through(trades[1].ts, &trades[1..]);
+        assert_ne!(flow.revision(), held);
+        let held = flow.revision();
+        flow.drop_through(trades[1].ts, &trades[1..]);
+        flow.drop_through(time, &trades[1..]);
+        assert_eq!(flow.revision(), held);
+        flow.set_budget(1, 1);
+        assert_ne!(flow.revision(), held);
+        let held = flow.revision();
+        flow.set_budget(0, 0);
+        flow.set_budget(1, 1);
+        assert_eq!(flow.revision(), held, "the newest bar stays whole");
+    }
+
+    #[test]
+    fn revisions_detect_same_total_corrections_during_loss_rebuilds() {
+        let time: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let fills = |sizes: [f64; 2]| {
+            sizes
+                .into_iter()
+                .enumerate()
+                .map(|(i, size)| {
+                    Tick::new(
+                        time + TimeDelta::seconds(i as i64 + 1),
+                        100.0 + i as f64,
+                        size,
+                        Some(OrderSide::Buy),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let original = fills([2.0, 8.0]);
+        let mut flow = Footprint::new(BarClock::new(Timeframe::Min1), 1.0, 1).unwrap();
+        for trade in &original {
+            flow.push(trade).unwrap();
+        }
+        flow.drop_through(time, &original);
+        let held = flow.revision();
+        let before = flow.bar_at(time).unwrap().clone();
+        flow.drop_through(time, &fills([8.0, 2.0]));
+        let after = flow.bar_at(time).unwrap();
+        assert_eq!(
+            (
+                before.volume(),
+                before.delta(),
+                before.trades(),
+                before.min_delta,
+                before.max_delta
+            ),
+            (
+                after.volume(),
+                after.delta(),
+                after.trades(),
+                after.min_delta,
+                after.max_delta
+            )
+        );
+        assert_eq!((before.poc(), after.poc()), (Some(101), Some(100)));
+        assert_ne!(flow.revision(), held);
+    }
+
+    #[cfg(feature = "widget")]
+    #[test]
+    fn revisions_cover_history_parts_copies_and_trade_bar_losses() {
+        let time: DateTime<Utc> = "2026-01-05T10:00:00Z".parse().unwrap();
+        let clock = BarClock::new("2t".parse().unwrap());
+        let fresh = || Footprint::new(clock.clone(), 1.0, 1).unwrap();
+        let mut filtered = fresh();
+        filtered.set_size_filter(3.0, 10.0).unwrap();
+        let empty = filtered.revision();
+        for (second, size) in [(0, 0.0), (1, 2.0)] {
+            assert!(
+                !filtered
+                    .push(&Tick::new(
+                        time + TimeDelta::seconds(second),
+                        100.0,
+                        size,
+                        None
+                    ))
+                    .unwrap()
+            );
+        }
+        assert_eq!(filtered.revision(), empty);
+        let next = time + TimeDelta::seconds(2);
+        filtered.push(&Tick::new(next, 100.0, 4.0, None)).unwrap();
+        assert_ne!(filtered.revision(), empty);
+        assert_eq!(filtered.bars().first_key_value().unwrap().0, &next);
+        let trades: Vec<_> = [2.0, 8.0, 1.0, 5.0]
+            .into_iter()
+            .enumerate()
+            .map(|(i, size)| {
+                Tick::new(
+                    time + TimeDelta::seconds(i as i64),
+                    100.0 + (i % 2) as f64,
+                    size,
+                    Some(OrderSide::Buy),
+                )
+            })
+            .collect();
+        let history =
+            super::super::aggregate_trades_with_tick_size(&trades, clock.clone(), Some(1.0))
+                .unwrap();
+        let references: Vec<_> = trades.iter().collect();
+        let mut flow = fresh();
+        let empty = flow.revision();
+        flow.push_history(&references, &history, Some(time));
+        assert_eq!(flow.revision(), empty);
+        flow.push_history(&references, &history, None);
+        assert_ne!(flow.revision(), empty);
+        assert_eq!(flow.bars().len(), 2);
+        let mut copied = fresh();
+        let empty = copied.revision();
+        copied.copy_trade_bars(&flow, None);
+        assert_ne!(copied.revision(), empty);
+        assert_eq!(copied.bars(), flow.bars());
+        let held = copied.revision();
+        copied.copy_trade_bars(&flow, Some(time));
+        assert_eq!(copied.revision(), held);
+        flow.received_from(time);
+        copied.copy_trade_bars(&flow, Some(time));
+        assert_ne!(copied.revision(), held, "coverage alone changes the source");
+        let held = copied.revision();
+        copied.drop_through(trades[1].ts, &trades[2..]);
+        assert_ne!(copied.revision(), held);
+        assert_eq!(copied.bars().len(), 1);
+        let held = copied.revision();
+        copied.drop_through(trades[1].ts, &trades[2..]);
+        assert_eq!(copied.revision(), held);
+        copied.copy_trade_bars(&fresh(), Some(time));
+        assert_ne!(copied.revision(), held);
+        assert!(copied.bars().is_empty());
+    }
 
     #[test]
     fn argument_errors_name_the_argument_and_its_value() {

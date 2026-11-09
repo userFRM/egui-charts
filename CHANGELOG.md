@@ -489,6 +489,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Footprint annotations reuse cached studies without comparing every price row on unchanged repaints, and recalculation no longer copies ungrouped rows first. ([#2569](https://github.com/userFRM/egui-charts/issues/2569))
+
 - Time-axis wheel zoom applies the same total change regardless of frame batching, without a smoothed remainder turning into pan or price zoom after the pointer or modifiers change. Pinches and native trackpad zoom follow their reported ratios, so reciprocal pinches restore the starting zoom. Smoothed wheel input no longer cancels pending programmatic scrolling. ([#2567](https://github.com/userFRM/egui-charts/issues/2567))
 
 - Volume and delta bars of fractional executions close when the executions reach the interval. Sizes such as 0.1 do not sum exactly, so ten buys of 0.1 on a one-unit bar left a rounding remainder that opened the next bar and counted an extra execution. ([#2539](https://github.com/userFRM/egui-charts/issues/2539))
