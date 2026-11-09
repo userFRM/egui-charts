@@ -27,7 +27,9 @@ pub enum LayoutCopy {
     /// price-to-bar ratio when the settings lock it, its quantity unit and order-flow sizes, and
     /// its bubble grouping when the source uses a price step. It keeps the precision of its
     /// instrument unless the source was given another one. A chart without a feed has no order
-    /// flow to give: from it, each chart keeps its order-flow layers and settings.
+    /// flow to give: from it, each chart keeps its order-flow layers and settings. A chart that
+    /// has not been drawn yet fits its bars on its first frame, and a lock in the settings then
+    /// locks that view.
     Settings(Box<ChartSettingsState>),
 }
 
@@ -274,6 +276,12 @@ fn apply_to_other_chart(
         }
     }
     let own_ratio = chart.state().price_scale().bar_ratio();
+    // A chart not drawn yet holds the scale's placeholder range, not a view of its own.
+    // shortcut: a chart drawn before its bars changed counts as drawn; track a fit since the last
+    // data change if hidden tabs switch symbols.
+    let unfitted = chart.last_rendered_price_rect.is_negative()
+        && own_ratio.is_none()
+        && !chart.state().price_scale().is_manual();
     if settings.apply_to_chart(chart).is_err() {
         return;
     }
@@ -282,6 +290,10 @@ fn apply_to_other_chart(
         // its own view on its next frame.
         chart.price_scale_mut().set_bar_ratio(own_ratio);
         chart.last_ratio_lock = own_ratio.is_some();
+    }
+    if unfitted {
+        // Its first frame fits its bars, and a lock then locks that view.
+        chart.price_scale_mut().reset();
     }
     if matches!(
         settings.chart_type,
@@ -1136,6 +1148,68 @@ mod tests {
                 flow.volume_bubbles.opacity,
             );
             assert_eq!(seen, expected);
+        }
+    }
+
+    /// A chart that has not painted holds the scale's placeholder range, not a view of its own:
+    /// settings that lock the ratio or keep a manual scale let it fit its bars first. A chart that
+    /// has painted keeps the range it shows.
+    #[test]
+    fn settings_copy_lets_an_unpainted_chart_fit_its_bars() {
+        use crate::widget::test_frames::frame;
+        let start = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        for (locked, painted) in [(true, false), (false, false), (false, true)] {
+            let mut a = chart(50);
+            let ctx_a = egui::Context::default();
+            frame(&ctx_a, &mut a, 0.0, vec![]);
+            if locked {
+                let (spacing, height) = (
+                    a.state.time_scale().bar_spacing(),
+                    a.get_rendered_price_rect().height(),
+                );
+                a.state
+                    .price_scale_mut()
+                    .set_bar_ratio_locked(true, spacing, height);
+            } else {
+                // A scale the user dragged.
+                a.state.price_scale_mut().set_range(8.0, 17.0);
+            }
+            // Bars from 4809 to 4816, in a tab shown or not shown yet.
+            let mut b = Chart::new(BarData::from_bars(
+                (0..50)
+                    .map(|i| {
+                        let close = 4810.0 + (i % 5) as f64;
+                        let time = start + Duration::minutes(i);
+                        Bar::new(time, close, 4816.0, 4809.0, close, 1.0)
+                    })
+                    .collect(),
+            ));
+            b.set_timeframe(Timeframe::Min1);
+            b.config_mut().show_volume = false;
+            let ctx_b = egui::Context::default();
+            if painted {
+                frame(&ctx_b, &mut b, 0.0, vec![]);
+            }
+            let shown = b.state.price_scale().range();
+            let copy = LayoutCopy::Settings(Box::new(ChartSettingsState::from_chart(&a)));
+            let factory = IndicatorFactory::new();
+            let mut charts = [&mut a, &mut b];
+            assert_eq!(pair().apply_copy(&mut charts, 0, &copy, &factory), []);
+            frame(&ctx_b, charts[1], 1.0, vec![]);
+            frame(&ctx_b, charts[1], 2.0, vec![]);
+            let scale = charts[1].state.price_scale();
+            let range = scale.range();
+            if painted {
+                assert!(scale.is_manual(), "painted: keeps the range it shows");
+                assert_eq!((range.min, range.max), (shown.min, shown.max));
+            } else {
+                // A fit holds 4809 to 4816, and ten times their span is 70.
+                assert!(
+                    range.min <= 4809.0 && range.max >= 4816.0 && range.max - range.min < 70.0,
+                    "locked {locked}: {range:?}"
+                );
+                assert_eq!(scale.bar_ratio_locked(), locked, "{range:?}");
+            }
         }
     }
 }
