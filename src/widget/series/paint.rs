@@ -287,7 +287,7 @@ impl Chart {
         item: &PriceSeries,
         map: PriceMap,
         index: usize,
-        background: egui::Color32,
+        background: impl FnOnce(Pos2) -> egui::Color32,
     ) {
         let radius = item.options.crosshair_marker_radius;
         if !radius.is_finite() || radius <= 0.0 {
@@ -315,12 +315,13 @@ impl Chart {
                 rect.left(),
                 rect.width(),
             );
+            let point = Pos2::new(x, map.price_to_y(bar.close));
             rendering::candles::render_crosshair_marker(
                 &plot.with_clip_rect(plot.clip_rect().intersect(rect)),
-                Pos2::new(x, map.price_to_y(bar.close)),
+                point,
                 &styles,
                 color,
-                background,
+                background(point),
             );
         }
     }

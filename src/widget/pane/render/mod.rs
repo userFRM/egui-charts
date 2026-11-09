@@ -593,6 +593,12 @@ impl Chart {
                         self.series_label_formatter(id, member_map.transform().mode)
                     });
                     panel.axis_options.show_study_values = false;
+                } else if matches!(
+                    member_map.transform().mode,
+                    crate::scales::PriceScaleMode::Percentage
+                        | crate::scales::PriceScaleMode::IndexedTo100
+                ) {
+                    panel.price_formatter = self.percentage_formatter.clone();
                 }
                 panel.axis_rect = axes
                     .iter()
@@ -1284,7 +1290,7 @@ impl Chart {
                                 item,
                                 self.series_map(item, chart_rect),
                                 index,
-                                ui.active_theme().chart.bg,
+                                |_| ui.active_theme().chart.bg,
                             );
                         }
                     }

@@ -1655,72 +1655,84 @@ fn series_crosshair_label_sits_on_the_target_outer_axis() {
     use crate::scales::CustomPriceFormatter;
     use crate::widget::{PaneId, SeriesId, SeriesOptions};
 
-    for side in [None, Some(AxisSide::Left), Some(AxisSide::Right)] {
-        let ctx = egui::Context::default();
-        let mut chart = chart(&[100.0], &[200.0]);
-        chart.config.show_volume = false;
-        chart.chart_options.tooltip.enabled = false;
-        let ids = [SeriesScale::Left, SeriesScale::Separate(1)].map(|scale| {
-            let id = chart.add_series(SeriesOptions {
-                scale,
-                ..Default::default()
-            });
-            chart.set_data(
-                id,
+    for (width, theme) in [
+        (800.0, crate::theme::Theme::dark()),
+        (800.0, crate::theme::Theme::light()),
+        (360.0, crate::theme::Theme::dark()),
+        (360.0, crate::theme::Theme::light()),
+    ] {
+        for side in [None, Some(AxisSide::Left), Some(AxisSide::Right)] {
+            let ctx = egui::Context::default();
+            crate::theme::apply_to_egui(&ctx, &theme);
+            let mut chart = chart(&[100.0], &[200.0]);
+            chart.set_size(Some(egui::vec2(width - 16.0, 584.0)));
+            chart.config.show_volume = false;
+            chart.chart_options.tooltip.enabled = false;
+            let ids = [SeriesScale::Left, SeriesScale::Separate(1)].map(|scale| {
+                let id = chart.add_series(SeriesOptions {
+                    scale,
+                    ..Default::default()
+                });
+                chart.set_data(
+                    id,
+                    chart
+                        .bars(SeriesId::MAIN)
+                        .iter()
+                        .map(|bar| Bar::from_value(bar.time, 1000.0))
+                        .collect(),
+                );
+                chart.set_series_formatter(
+                    id,
+                    Some(std::sync::Arc::new(CustomPriceFormatter::new(|value| {
+                        format!("x{value:.0}")
+                    }))),
+                );
                 chart
-                    .bars(SeriesId::MAIN)
+                    .series_price_scale_mut(id)
+                    .unwrap()
+                    .set_range(1000.0, 2000.0);
+                id
+            });
+            if let Some(side) = side {
+                assert!(chart.place_pane_scales(PaneId::MAIN, side));
+            }
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let time = chart.bars(SeriesId::MAIN)[90].time;
+            for (step, id) in ids.into_iter().enumerate() {
+                chart.set_series_crosshair_position(id, Some((time, 1375.0)));
+                let painted = shapes(
+                    &ctx,
+                    &mut chart,
+                    0.1 + step as f64 * 0.1,
+                    vec![Event::PointerGone],
+                );
+                let plot = chart.get_rendered_price_rect();
+                let axis = chart
+                    .secondary_axes(
+                        egui::Rect::from_min_max(
+                            Pos2::new(8.0, 8.0),
+                            Pos2::new(width - 8.0, 592.0),
+                        ),
+                        plot,
+                    )
+                    .into_iter()
+                    .find(|(key, _)| Some(*key) == chart.series_scale(id))
+                    .unwrap()
+                    .1;
+                let tag = painted
                     .iter()
-                    .map(|bar| Bar::from_value(bar.time, 1000.0))
-                    .collect(),
-            );
-            chart.set_series_formatter(
-                id,
-                Some(std::sync::Arc::new(CustomPriceFormatter::new(|value| {
-                    format!("x{value:.0}")
-                }))),
-            );
-            chart
-                .series_price_scale_mut(id)
-                .unwrap()
-                .set_range(1000.0, 2000.0);
-            id
-        });
-        if let Some(side) = side {
-            assert!(chart.place_pane_scales(PaneId::MAIN, side));
-        }
-        frame(&ctx, &mut chart, 0.0, vec![]);
-        let time = chart.bars(SeriesId::MAIN)[50].time;
-        for (step, id) in ids.into_iter().enumerate() {
-            chart.set_series_crosshair_position(id, Some((time, 1375.0)));
-            let painted = shapes(
-                &ctx,
-                &mut chart,
-                0.1 + step as f64 * 0.1,
-                vec![Event::PointerGone],
-            );
-            let plot = chart.get_rendered_price_rect();
-            let axis = chart
-                .secondary_axes(
-                    egui::Rect::from_min_max(Pos2::new(8.0, 8.0), Pos2::new(792.0, 592.0)),
-                    plot,
-                )
-                .into_iter()
-                .find(|(key, _)| Some(*key) == chart.series_scale(id))
-                .unwrap()
-                .1;
-            let tag = painted
-                .iter()
-                .find_map(|shape| match shape {
-                    Shape::Text(text) if text.galley.text() == "x1375" => {
-                        Some(egui::Rect::from_min_size(text.pos, text.galley.size()))
-                    }
-                    _ => None,
-                })
-                .expect("target price label");
-            assert!(
-                tag.left() >= axis.left() && tag.right() <= axis.right(),
-                "{side:?} {id:?}: tag {tag:?}, axis {axis:?}"
-            );
+                    .find_map(|shape| match shape {
+                        Shape::Text(text) if text.galley.text() == "x1375" => {
+                            Some(egui::Rect::from_min_size(text.pos, text.galley.size()))
+                        }
+                        _ => None,
+                    })
+                    .expect("target price label");
+                assert!(
+                    tag.left() >= axis.left() && tag.right() <= axis.right(),
+                    "width {width}, {side:?} {id:?}: tag {tag:?}, axis {axis:?}"
+                );
+            }
         }
     }
 }
@@ -1740,6 +1752,8 @@ fn pane_crosshair_label_uses_the_series_scale_mode() {
         (PriceScaleMode::IndexedTo100, true, false, "relative 137.50"),
         (PriceScaleMode::Percentage, false, true, "+37.50%"),
         (PriceScaleMode::IndexedTo100, false, true, "137.50"),
+        (PriceScaleMode::Percentage, true, true, "relative 37.50"),
+        (PriceScaleMode::IndexedTo100, true, true, "relative 137.50"),
     ] {
         let ctx = egui::Context::default();
         let mut chart = chart(&[1000.0], &[1000.0]);
@@ -1913,35 +1927,62 @@ fn default_marker_ring_matches_the_background_behind_it() {
     use crate::model::ChartType;
     use egui::Color32;
     let blue = Color32::from_rgb(0, 0, 139);
-    for pane in [false, true] {
-        for border in [None, Some(Color32::MAGENTA)] {
-            let style = (5.0, None, border, 2.0);
-            let extra = (7.0, None, border, 2.0);
-            let (circles, ..) = hover_markers(ChartType::Line, pane, (style, extra), |chart, _| {
-                if !pane {
-                    chart.config.background_style = BackgroundStyle::VerticalGradient {
-                        top_color: blue,
-                        bottom_color: blue,
+    for theme in [crate::theme::Theme::dark(), crate::theme::Theme::light()] {
+        for (pane, background) in [
+            (
+                false,
+                BackgroundStyle::VerticalGradient {
+                    top_color: blue,
+                    bottom_color: blue,
+                },
+            ),
+            (
+                false,
+                BackgroundStyle::VerticalGradient {
+                    top_color: Color32::BLACK,
+                    bottom_color: Color32::WHITE,
+                },
+            ),
+            (
+                false,
+                BackgroundStyle::HorizontalGradient {
+                    left_color: Color32::BLACK,
+                    right_color: Color32::WHITE,
+                },
+            ),
+            (true, BackgroundStyle::Solid),
+        ] {
+            for border in [None, Some(Color32::MAGENTA)] {
+                let style = (5.0, None, border, 2.0);
+                let extra = (7.0, None, border, 2.0);
+                let (circles, ..) =
+                    hover_markers(ChartType::Line, pane, (style, extra), |chart, _| {
+                        chart.set_theme_override(Some(theme.clone()));
+                        chart.config.background_color = Color32::LIGHT_GRAY;
+                        chart.config.background_style = background;
+                    });
+                assert_eq!(circles.len(), 2);
+                for circle in circles {
+                    // The background spans the chart frame, including its axes, not just the plot.
+                    let fill = match background {
+                        BackgroundStyle::VerticalGradient {
+                            top_color,
+                            bottom_color,
+                        } => top_color.lerp_to_gamma(bottom_color, (circle.center.y - 8.0) / 584.0),
+                        BackgroundStyle::HorizontalGradient {
+                            left_color,
+                            right_color,
+                        } => left_color.lerp_to_gamma(right_color, (circle.center.x - 8.0) / 784.0),
+                        BackgroundStyle::Solid if circle.radius == 7.0 => theme.chart.bg,
+                        BackgroundStyle::Solid => Color32::LIGHT_GRAY,
                     };
+                    assert_eq!(
+                        circle.stroke.color,
+                        border.unwrap_or(fill),
+                        "pane {pane}, radius {}, border {border:?}, background {background:?}",
+                        circle.radius
+                    );
                 }
-            });
-            assert_eq!(circles.len(), 2);
-            for circle in circles {
-                let background = if pane {
-                    if circle.radius == 5.0 {
-                        Color32::LIGHT_GRAY
-                    } else {
-                        crate::theme::Theme::default().chart.bg
-                    }
-                } else {
-                    blue
-                };
-                assert_eq!(
-                    circle.stroke.color,
-                    border.unwrap_or(background),
-                    "pane {pane}, radius {}, border {border:?}",
-                    circle.radius
-                );
             }
         }
     }

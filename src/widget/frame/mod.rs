@@ -1592,7 +1592,7 @@ impl Chart {
         );
 
         // Both paint paths and the summary box mix their shades with what the chart paints.
-        let plot_background = self.plot_background();
+        let plot_background = self.plot_background(rect, rect.center());
         let host_config = footprint
             .filter(|_| time_based)
             .map(|(_, config)| FootprintConfig {
@@ -3413,12 +3413,14 @@ impl Chart {
                             value,
                             bar,
                         ) {
+                            let point =
+                                Pos2::new(coords.idx_to_x(index), price_map.price_to_y(value));
                             rendering::candles::render_crosshair_marker(
                                 &painter.with_clip_rect(price_rect),
-                                Pos2::new(coords.idx_to_x(index), price_map.price_to_y(value)),
+                                point,
                                 &self.chart_type_params.styles,
                                 color,
-                                self.plot_background()
+                                self.plot_background(rect, point)
                                     .unwrap_or(self.config.background_color),
                             );
                         }
@@ -3430,8 +3432,10 @@ impl Chart {
                             item,
                             self.series_map(item, price_rect),
                             index,
-                            self.plot_background()
-                                .unwrap_or(self.config.background_color),
+                            |point| {
+                                self.plot_background(rect, point)
+                                    .unwrap_or(self.config.background_color)
+                            },
                         );
                     }
                 }
