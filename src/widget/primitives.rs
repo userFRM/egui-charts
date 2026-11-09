@@ -951,26 +951,12 @@ impl Chart {
         pass: PrimitivePass,
     ) {
         let painter = painter.with_clip_rect(painter.clip_rect().intersect(coords.rect));
-        let shapes = backgrounds(
+        paint_pass(
             &painter,
             self.main_pass_primitives(coords),
             pass,
             self.merge_groups.factor(),
         );
-        let grouped = !shapes.is_empty();
-        paint_backgrounds(&painter, shapes);
-        if grouped {
-            for (item, view) in self.main_pass_primitives(coords) {
-                item.draw(&painter, &view, pass, self.merge_groups.factor());
-            }
-        } else {
-            for (item, view) in self
-                .main_pass_primitives(coords)
-                .filter(|(item, _)| pass != PrimitivePass::Series || !item.replaces)
-            {
-                item.draw(&painter, &view, pass, self.merge_groups.factor());
-            }
-        }
     }
 
     /// Pane decorations do not require loaded bars, unlike series rendering.
