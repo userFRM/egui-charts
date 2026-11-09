@@ -426,6 +426,9 @@ impl Chart {
             let axes: Vec<_> = self.pane_scale_axes(pane_id, panel_rect, plot).collect();
             let mut drawing_response = None;
             let mut scale_tags = std::collections::HashMap::<PaneScale, Vec<Option<Rect>>>::new();
+            let mut fixed_axis_tags =
+                std::collections::HashMap::<PaneScale, Vec<Option<Rect>>>::new();
+            let mut axis_foregrounds = Vec::new();
             let mut drawn_axes = Vec::new();
             let hovered = self.last_hover_bar_idx.and_then(|index| {
                 let index = index.round() as usize;
@@ -616,8 +619,8 @@ impl Chart {
                 panels.push((entry, indicator, panel, legend_row_height, assignment));
             }
             panels.sort_by_key(|(entry, ..)| entry.is_some_and(|(id, _)| Some(id) == on_top));
-            // Each scale's primitive tags go to its first member, as a later member may paint the
-            // crosshair tag or the scale labels.
+            // The first member reserves each scale's primitive tags against its tick labels.
+            // Fixed tags and crosshair labels paint after the pane's value and drawing tags.
             let mut primitive_axis_labels = std::collections::HashMap::<PaneScale, Vec<_>>::new();
             if !collapsed {
                 for (item, view) in self.pane_primitives(pane_id, &members, &pane_mapping) {
@@ -653,6 +656,10 @@ impl Chart {
                 let key = (pane_id, id);
                 panel.overlay = paint_row > 0;
                 panel.axis_tags = scale_tags.get(&assignment).cloned().unwrap_or_default();
+                panel.fixed_axis_tags = fixed_axis_tags
+                    .get(&assignment)
+                    .cloned()
+                    .unwrap_or_default();
                 if indicator.scale() != crate::studies::StudyScale::None {
                     panel.primitive_axis_labels = primitive_axis_labels
                         .remove(&assignment)
@@ -829,6 +836,7 @@ impl Chart {
                         .flat_map(|id| self.primitives_of(id))
                         .collect::<Vec<_>>(),
                     study.is_none() && id.is_some(),
+                    &mut axis_foregrounds,
                     |painter, pass| {
                         use crate::widget::{PrimitivePass, primitives};
                         if pass == PrimitivePass::Below && paint_row == 0 {
@@ -906,6 +914,7 @@ impl Chart {
                     self.measured_axis_width =
                         self.measured_axis_width.max(panel.measured_axis_width);
                     scale_tags.insert(assignment, panel.axis_tags.clone());
+                    fixed_axis_tags.insert(assignment, panel.fixed_axis_tags.clone());
                     let PaneInteraction {
                         panel_rect,
                         chart_rect,
@@ -1382,6 +1391,7 @@ impl Chart {
                     }
                 }
             }
+            crate::widget::primitives::paint_backgrounds(ui.painter(), axis_foregrounds);
             if !collapsed {
                 for tag in axes
                     .iter()

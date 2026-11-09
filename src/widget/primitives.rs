@@ -1077,6 +1077,14 @@ pub(super) fn backgrounds<'a>(
     for (item, view) in primitives {
         item.draw_background(painter, &view, pass, factor);
     }
+    take_shapes(painter, start)
+}
+
+/// Removes shapes painted since `start`, retaining their order and clip rectangles.
+pub(super) fn take_shapes(
+    painter: &Painter,
+    start: egui::layers::ShapeIdx,
+) -> Vec<egui::epaint::ClippedShape> {
     painter.ctx().graphics_mut(|graphics| {
         let list = graphics.entry(painter.layer_id());
         let end = list.next_idx();
@@ -1091,7 +1099,7 @@ pub(super) fn backgrounds<'a>(
     })
 }
 
-/// Inserts deferred backgrounds without applying the painter's opacity a second time.
+/// Inserts deferred shapes without applying the painter's opacity a second time.
 pub(super) fn paint_backgrounds(painter: &Painter, shapes: Vec<egui::epaint::ClippedShape>) {
     painter.ctx().graphics_mut(|graphics| {
         let list = graphics.entry(painter.layer_id());
@@ -3006,6 +3014,69 @@ mod tests {
                 assert!(
                     first < second,
                     "background={background}, {pair:?}: {order:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pinned_tags_paint_above_series_value_tags_in_every_pane() {
+        struct Pinned;
+        impl Primitive for Pinned {
+            fn price_axis_labels(&self, view: &PrimitiveView<'_>) -> Vec<PriceAxisLabel> {
+                let mut label = PriceAxisLabel::new(15.0, "Pinned", PINNED);
+                label.fixed_coordinate =
+                    Some(view.mapping.price_to_y(15.0) - view.mapping.rect.top());
+                vec![label]
+            }
+        }
+        for secondary in [false, true] {
+            for overlap in [false, true] {
+                let ctx = egui::Context::default();
+                let mut chart = chart(&[10.0], &[15.0]);
+                chart.config.show_volume = false;
+                chart.config.price_axis.allow_label_overlap = overlap;
+                let id = if secondary {
+                    let id = chart.add_series(SeriesOptions::default());
+                    chart.set_data(id, chart.bars(SeriesId::MAIN).to_vec());
+                    let pane = chart.add_pane();
+                    chart.move_series_to_pane(id, pane);
+                    id
+                } else {
+                    SeriesId::MAIN
+                };
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                let before = shapes(&ctx, &mut chart, 0.1, vec![]);
+                let value_text = |painted: &[Shape]| {
+                    painted
+                        .iter()
+                        .rev()
+                        .find_map(|shape| match shape {
+                            Shape::Text(text) if text.galley.text() == "15.00" => {
+                                Some(text_rect(text))
+                            }
+                            _ => None,
+                        })
+                        .unwrap()
+                };
+                let original_row = value_text(&before).center().y;
+                chart.attach_primitive(id, Pinned);
+                let painted = shapes(&ctx, &mut chart, 0.2, vec![]);
+                assert_eq!(
+                    value_text(&painted).center().y,
+                    original_row,
+                    "pinned tags do not displace value tags: secondary={secondary}, overlap={overlap}"
+                );
+                let pinned = painted.iter().position(|shape| matches!(shape, Shape::Text(text) if text.galley.text() == "Pinned")).unwrap();
+                let value = painted
+                    .iter()
+                    .rposition(
+                        |shape| matches!(shape, Shape::Text(text) if text.galley.text() == "15.00"),
+                    )
+                    .unwrap();
+                assert!(
+                    value < pinned,
+                    "secondary={secondary}, overlap={overlap}: value={value}, pinned={pinned}"
                 );
             }
         }
