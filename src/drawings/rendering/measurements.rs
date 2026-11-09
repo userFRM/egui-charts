@@ -327,7 +327,8 @@ impl Drawing {
         }
         let mut lines = vec![prices.join("  "), spans.join(", ")];
         if settings.inclination && delta.is_finite() {
-            let angle = (-delta.y).atan2(delta.x).to_degrees();
+            // Use the trend angle's own reading, including a level line's zero height.
+            let angle = (start.y - end.y).atan2(end.x - start.x).to_degrees();
             lines.push(format!("{:.1}°", angle + 0.0));
         }
         lines.retain(|line| !line.is_empty());
@@ -1375,5 +1376,120 @@ mod tests {
             assert!(label("300.00").right() < 100.0);
             assert!(label("400.00").left() > 300.0);
         }
+    }
+
+    /// A trend angle view: one point per bar and per price unit, price 0 at the
+    /// bottom of a 500 x 400 pane.
+    fn paint_trend_angle(
+        first: (f32, f64),
+        second: (f32, f64),
+        measurements: crate::drawings::LineMeasurements,
+    ) -> (Drawing, Vec<egui::Shape>) {
+        let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(500.0, 400.0));
+        let x = |bar: f32| bar;
+        let y = |price: f64| 400.0 - price as f32;
+        let inverse = |y: f32| f64::from(400.0 - y);
+        let view = ChartView {
+            instrument: None,
+            price_formatter: None,
+            time_formatter: None,
+            bar_seconds: 0,
+            bars: &[],
+            revision: 0,
+            bar_to_x: &x,
+            price_to_y: &y,
+            y_to_price: &inverse,
+            time_axis: false,
+            executions: None,
+            timeframe: None,
+            finer: &[],
+        };
+        let mut angle = Drawing::new(1, DrawingToolType::TrendAngle);
+        angle.completed = true;
+        angle.chart_points = vec![
+            ChartPoint::new(first.0, first.1),
+            ChartPoint::new(second.0, second.1),
+        ];
+        angle.update_screen_coords(x, y);
+        angle.line_measurements = measurements;
+        let mut output = egui::Context::default().run_ui(Default::default(), |ui| {
+            angle.render_with_selection(ui.painter(), pane, &view, false);
+        });
+        fn flat(shapes: impl IntoIterator<Item = egui::Shape>, out: &mut Vec<egui::Shape>) {
+            for shape in shapes {
+                match shape {
+                    egui::Shape::Vec(inner) => flat(inner, out),
+                    shape => out.push(shape),
+                }
+            }
+        }
+        let mut shapes = Vec::new();
+        flat(
+            std::mem::take(&mut output.shapes)
+                .into_iter()
+                .map(|s| s.shape),
+            &mut shapes,
+        );
+        output.drop_without_applying_deltas();
+        (angle, shapes)
+    }
+
+    /// A level line from x = 300 to x = 100 points straight left, 180 degrees, as the info line
+    /// read before its readouts moved to the line tools' and as a trend angle's own label reads.
+    #[test]
+    fn level_line_drawn_right_to_left_reads_180_degrees() {
+        use crate::drawings::LineMeasurements;
+        let bars = sample_bars();
+        let view = ChartView {
+            instrument: None,
+            price_formatter: None,
+            time_formatter: None,
+            bar_seconds: 0,
+            bars: &bars,
+            revision: 0,
+            bar_to_x: &|bar| 10.0 * bar,
+            price_to_y: &|price| 300.0 - price as f32,
+            y_to_price: &|y| f64::from(300.0 - y),
+            time_axis: false,
+            executions: None,
+            timeframe: None,
+            finer: &[],
+        };
+        for tool in [
+            DrawingToolType::TrendLine,
+            DrawingToolType::Ray,
+            DrawingToolType::ExtendedLine,
+            DrawingToolType::InfoLine,
+            DrawingToolType::TrendAngle,
+        ] {
+            let mut drawing = Drawing::new(1, tool);
+            drawing.line_measurements = LineMeasurements {
+                inclination: true,
+                ..Default::default()
+            };
+            for (from, to, want) in [(30.0, 10.0, "180.0°"), (10.0, 30.0, "0.0°")] {
+                drawing.chart_points =
+                    vec![ChartPoint::new(from, 100.0), ChartPoint::new(to, 100.0)];
+                drawing.update_screen_coords(|bar| 10.0 * bar, |price| 300.0 - price as f32);
+                assert_eq!(drawing.line_measurement_label(&view), want, "{tool:?}");
+            }
+        }
+        let (_, shapes) = paint_trend_angle(
+            (300.0, 200.0),
+            (100.0, 200.0),
+            LineMeasurements {
+                persistent: true,
+                inclination: true,
+                ..Default::default()
+            },
+        );
+        let texts: Vec<_> = shapes
+            .iter()
+            .filter_map(|s| match s {
+                egui::Shape::Text(t) => Some(t.galley.job.text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, ["180.0°", "180.0°"]);
     }
 }
