@@ -24,7 +24,8 @@ pub enum LayoutCopy {
     /// Applies these settings to every chart, the source included. Each other chart keeps its
     /// symbol, interval and chart type, the sizes and other parameters of that type, its own
     /// price-to-bar ratio when the settings lock it, its quantity unit and order-flow sizes, and
-    /// the precision of its instrument unless the source was given another one.
+    /// the precision of its instrument unless the source was given another one. A chart without
+    /// a feed has no order flow to give: from it, each chart keeps its order-flow layers and settings.
     Settings(Box<ChartSettingsState>),
 }
 
@@ -226,7 +227,8 @@ impl CopiedStudies {
 /// Applies the settings of the chart with `from` as its configuration and `from_decimals` as its
 /// instrument's precision to another chart. That chart keeps the parameters of its chart type,
 /// whose sizes and base prices suit its own prices, its own price-to-bar ratio when the settings
-/// lock it, and its quantity unit and order-flow sizes, which suit its own instrument. It takes
+/// lock it, its quantity unit and order-flow sizes, which suit its own instrument, and all its
+/// order-flow settings when `from_feed` is false, since a chart without a feed holds none. It takes
 /// the colours of `from` for its candles when the settings describe another style of candles and
 /// so do not hold them.
 ///
@@ -236,6 +238,7 @@ fn apply_to_other_chart(
     settings: &ChartSettingsState,
     from: &ChartConfig,
     from_decimals: Option<u8>,
+    from_feed: bool,
     chart: &mut Chart,
 ) {
     let mut settings = settings.clone();
@@ -250,15 +253,20 @@ fn apply_to_other_chart(
             chart.set_chart_type_params(own);
         }
     }
-    // Order-flow sizes and the quantity unit are in the source's sizes: each chart keeps its own.
     let own = ChartSettingsState::from_chart(chart).order_flow;
-    let flow = &mut settings.order_flow;
-    flow.heatmap.lower_cutoff = own.heatmap.lower_cutoff;
-    flow.heatmap.full_intensity_size = own.heatmap.full_intensity_size;
-    flow.order_book.quantity_unit = own.order_book.quantity_unit;
-    flow.order_book.tiers = own.order_book.tiers;
-    flow.order_book.filter.min_size = own.order_book.filter.min_size;
-    flow.volume_bubbles.min_size_filter = own.volume_bubbles.min_size_filter;
+    if !from_feed {
+        // A chart without a feed holds no order flow: each chart keeps all of its own.
+        settings.order_flow = own;
+    } else {
+        // Order-flow sizes and the quantity unit are in the source's sizes: each chart keeps its own.
+        let flow = &mut settings.order_flow;
+        flow.heatmap.lower_cutoff = own.heatmap.lower_cutoff;
+        flow.heatmap.full_intensity_size = own.heatmap.full_intensity_size;
+        flow.order_book.quantity_unit = own.order_book.quantity_unit;
+        flow.order_book.tiers = own.order_book.tiers;
+        flow.order_book.filter.min_size = own.order_book.filter.min_size;
+        flow.volume_bubbles.min_size_filter = own.volume_bubbles.min_size_filter;
+    }
     let own_ratio = chart.state().price_scale().bar_ratio();
     if settings.apply_to_chart(chart).is_err() {
         return;
@@ -343,6 +351,7 @@ impl ChartLayout {
         }
         let from_config = from.config().clone();
         let from_decimals = from.instrument().and_then(instrument_price_precision);
+        let from_feed = from.feed_link.is_some();
         let edit = self.edits.start();
         let mut reached = false;
         let count = self.preset_charts(charts);
@@ -360,7 +369,13 @@ impl ChartLayout {
                 // The issues above already refused what would fail here.
                 match (copy, &studies) {
                     (LayoutCopy::Settings(settings), _) => {
-                        apply_to_other_chart(settings, &from_config, from_decimals, chart);
+                        apply_to_other_chart(
+                            settings,
+                            &from_config,
+                            from_decimals,
+                            from_feed,
+                            chart,
+                        );
                     }
                     (_, Some(studies)) => {
                         chart
@@ -991,5 +1006,77 @@ mod tests {
         assert!(charts[0].redo());
         show(&mut layout, &mut charts);
         assert_eq!([state(charts[0]), state(charts[1])], [applied, applied]);
+    }
+
+    /// A chart without a feed holds no order flow, so settings from it leave the order-flow
+    /// layers and settings of a chart on a feed as they were. A source on a feed with its layers
+    /// off still switches them off on the others.
+    #[test]
+    fn settings_from_a_chart_without_a_feed_keep_the_order_flow_of_others() {
+        use crate::chart::overlays::{LiquidityHeatmapConfig, VolumeBubblesConfig};
+        struct Feed;
+        impl crate::data::Datafeed for Feed {
+            fn history(
+                &self,
+                _: crate::data::HistoryRequest,
+                reply: crate::data::Reply<crate::data::HistoryPage>,
+            ) {
+                reply.send(Ok(crate::data::HistoryPage::new(Vec::new(), true)));
+            }
+        }
+        let build = |symbol: &str| {
+            crate::widget::ChartBuilder::new()
+                .with_feed(std::sync::Arc::new(Feed))
+                .with_symbol(symbol)
+                .with_timeframe(Timeframe::Min1)
+                .build()
+        };
+        // Heatmap, book profile and bubbles shown, at brightness 0.5 and opacity 200.
+        let shown = || {
+            let mut chart = build("ES");
+            chart.set_liquidity_heatmap(true);
+            chart.set_liquidity_heatmap_config(LiquidityHeatmapConfig {
+                brightness: 0.5,
+                ..LiquidityHeatmapConfig::default()
+            });
+            chart.set_order_book_visible(true);
+            chart.set_volume_bubbles(Some(VolumeBubblesConfig {
+                opacity: 200,
+                ..VolumeBubblesConfig::default()
+            }));
+            chart
+        };
+        // All three layers off, at brightness 0.8 and opacity 90.
+        let mut off = build("NQ");
+        off.set_liquidity_heatmap_config(LiquidityHeatmapConfig {
+            brightness: 0.8,
+            ..LiquidityHeatmapConfig::default()
+        });
+        off.set_order_book_visible(false);
+        off.set_volume_bubbles(Some(VolumeBubblesConfig {
+            opacity: 90,
+            ..VolumeBubblesConfig::default()
+        }));
+        off.set_volume_bubbles(None);
+        let factory = IndicatorFactory::new();
+        for (mut source, expected) in [
+            // Host bars, no feed.
+            (chart(50), (true, true, true, 0.5, 200)),
+            (off, (false, false, false, 0.8, 90)),
+        ] {
+            let mut other = shown();
+            let copy = LayoutCopy::Settings(Box::new(ChartSettingsState::from_chart(&source)));
+            let mut charts = [&mut source, &mut other];
+            assert_eq!(pair().apply_copy(&mut charts, 0, &copy, &factory), []);
+            let flow = ChartSettingsState::from_chart(charts[1]).order_flow;
+            let seen = (
+                flow.show_heatmap,
+                flow.show_order_book,
+                flow.show_volume_bubbles,
+                flow.heatmap.brightness,
+                flow.volume_bubbles.opacity,
+            );
+            assert_eq!(seen, expected);
+        }
     }
 }
