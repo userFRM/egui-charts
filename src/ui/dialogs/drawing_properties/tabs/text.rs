@@ -1,7 +1,8 @@
 //! Text tab: the text, its font, colour and style, and its box.
 
 use crate::drawings::{
-    DrawingToolType, FontWeight, LineTextHorizontalAlign, LineTextVerticalAlign,
+    DrawingToolType, FontWeight, LineTextHorizontalAlign, LineTextOrientation,
+    LineTextVerticalAlign,
 };
 use crate::localization as l10n;
 use egui::Ui;
@@ -31,6 +32,24 @@ fn has_text_box(tool: DrawingToolType) -> bool {
             | T::PriceNote
             | T::Signpost
     )
+}
+
+/// One row picking `value` from `options`, each with the name the row shows for it.
+fn alignment_row<T: Copy + PartialEq, const N: usize>(
+    ui: &mut Ui,
+    label: &str,
+    value: &mut T,
+    options: [(T, &str); N],
+) {
+    let label_response = ui.label(l10n::text(ui.ctx(), label));
+    ui.label_inputs_by(label_response.id, |ui| {
+        let ctx = ui.ctx().clone();
+        ui.combo_select(label, value, options.map(|(option, _)| option), |value| {
+            let name = options.iter().find(|(option, _)| option == value);
+            l10n::text(&ctx, name.map_or("", |(_, name)| *name))
+        });
+    });
+    ui.end_row();
 }
 
 /// Text tab renderer
@@ -85,61 +104,72 @@ impl TextTab {
             let settings = &mut template.settings;
             let line_text = matches!(
                 settings.tool_type,
-                DrawingToolType::HorizontalLine | DrawingToolType::HorizontalRay
+                DrawingToolType::HorizontalLine
+                    | DrawingToolType::HorizontalRay
+                    | DrawingToolType::VerticalLine
             );
             if writes && (line_text || settings.tool_type.supports_line_measurements()) {
+                use LineTextHorizontalAlign as H;
+                use LineTextOrientation as O;
+                use LineTextVerticalAlign as V;
                 let measurements = &mut settings.line_measurements;
-                let label = ui.label(l10n::text(ui.ctx(), "Horizontal alignment"));
-                ui.label_inputs_by(label.id, |ui| {
-                    let ctx = ui.ctx().clone();
-                    ui.combo_select(
-                        "line_text_horizontal_align",
-                        &mut measurements.text_horizontal_align,
+                let (along, across) = (
+                    &mut measurements.text_horizontal_align,
+                    &mut measurements.text_vertical_align,
+                );
+                // The dialog names the side of the line the text reads on, the setting the edge of
+                // the text that rests on it: "Top" is the text's bottom edge on the line. Down a
+                // vertical line the rows trade places: the text runs from the pane's bottom to its
+                // top, and its top faces left.
+                if settings.tool_type == DrawingToolType::VerticalLine {
+                    alignment_row(
+                        ui,
+                        "Horizontal alignment",
+                        across,
                         [
-                            LineTextHorizontalAlign::Left,
-                            LineTextHorizontalAlign::Center,
-                            LineTextHorizontalAlign::Right,
+                            (V::Bottom, "Left"),
+                            (V::Middle, "Center"),
+                            (V::Top, "Right"),
                         ],
-                        |align| {
-                            l10n::text(
-                                &ctx,
-                                match align {
-                                    LineTextHorizontalAlign::Left => "Left",
-                                    LineTextHorizontalAlign::Center => "Center",
-                                    LineTextHorizontalAlign::Right => "Right",
-                                },
-                            )
-                        },
                     );
-                });
-                ui.end_row();
-
-                let label = ui.label(l10n::text(ui.ctx(), "Vertical alignment"));
-                ui.label_inputs_by(label.id, |ui| {
-                    let ctx = ui.ctx().clone();
-                    ui.combo_select(
-                        "line_text_vertical_align",
-                        &mut measurements.text_vertical_align,
-                        // The dialog names the side of the line the text reads on, the setting the edge
-                        // of the text that rests on it: "Top" is the text's bottom edge on the line.
+                    alignment_row(
+                        ui,
+                        "Vertical alignment",
+                        along,
                         [
-                            LineTextVerticalAlign::Bottom,
-                            LineTextVerticalAlign::Middle,
-                            LineTextVerticalAlign::Top,
+                            (H::Right, "Top"),
+                            (H::Center, "Middle"),
+                            (H::Left, "Bottom"),
                         ],
-                        |align| {
-                            l10n::text(
-                                &ctx,
-                                match align {
-                                    LineTextVerticalAlign::Bottom => "Top",
-                                    LineTextVerticalAlign::Middle => "Middle",
-                                    LineTextVerticalAlign::Top => "Bottom",
-                                },
-                            )
-                        },
                     );
-                });
-                ui.end_row();
+                    alignment_row(
+                        ui,
+                        "Text orientation",
+                        &mut measurements.text_orientation,
+                        [(O::Vertical, "Vertical"), (O::Horizontal, "Horizontal")],
+                    );
+                } else {
+                    alignment_row(
+                        ui,
+                        "Horizontal alignment",
+                        along,
+                        [
+                            (H::Left, "Left"),
+                            (H::Center, "Center"),
+                            (H::Right, "Right"),
+                        ],
+                    );
+                    alignment_row(
+                        ui,
+                        "Vertical alignment",
+                        across,
+                        [
+                            (V::Bottom, "Top"),
+                            (V::Middle, "Middle"),
+                            (V::Top, "Bottom"),
+                        ],
+                    );
+                }
             }
             let boxed = has_text_box(settings.tool_type);
             if !(boxed
@@ -245,8 +275,8 @@ mod tests {
     use super::*;
     use crate::drawings::Drawing;
 
-    /// A horizontal line, horizontal ray, trend line, ray or extended line offers its text placement,
-    /// colour and emphasis; a vertical line keeps the plain text settings it draws.
+    /// Line tools offer the text placement, colour and emphasis they draw, and a vertical line
+    /// also offers the orientation of its text.
     #[test]
     fn line_tools_offer_the_text_settings_they_draw() {
         let chart = crate::Chart::new(crate::model::BarData::default());
@@ -256,7 +286,7 @@ mod tests {
             (DrawingToolType::Ray, true),
             (DrawingToolType::ExtendedLine, true),
             (DrawingToolType::HorizontalRay, true),
-            (DrawingToolType::VerticalLine, false),
+            (DrawingToolType::VerticalLine, true),
         ] {
             let mut props = DrawingProps::from_drawing(&Drawing::new(1, tool), &chart);
             let output = egui::Context::default().run_ui(Default::default(), |ui| {
@@ -280,6 +310,11 @@ mod tests {
             ] {
                 assert_eq!(labels.contains(&label), offered, "{tool:?} {label}");
             }
+            assert_eq!(
+                labels.contains(&"Text orientation"),
+                tool == DrawingToolType::VerticalLine,
+                "{tool:?}"
+            );
             output.drop_without_applying_deltas();
         }
     }
