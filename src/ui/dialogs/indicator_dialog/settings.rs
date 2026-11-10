@@ -204,14 +204,6 @@ impl IndicatorSettingsDialog {
                             {
                                 for input in &mut self.inputs {
                                     input.value = input.default.clone();
-                                    if let (
-                                        InputKind::Choice(choices),
-                                        InputValue::Choice(choice),
-                                    ) = (&input.kind, &input.value)
-                                        && let Some(label) = choices.get(*choice)
-                                    {
-                                        choice_labels.push((input.id.clone(), label.clone()));
-                                    }
                                 }
                             }
                             let study_source = self.inputs.iter().any(|input| {

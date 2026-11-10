@@ -36,7 +36,6 @@ struct CachedProfile {
     volume_available: bool,
     interest_available: bool,
     pain_available: bool,
-    awaiting_chain: bool,
 }
 
 /// How an input the chain decides on is listed while it waits for the chain, or `None` for any
@@ -206,9 +205,12 @@ impl OptionsVolumeProfile {
     /// Missing inputs or an expired date remove both bounds and their expiry/method label.
     /// The fill spans the visible pane even when only one underlying bar has arrived.
     /// Inputs saved with data that has not arrived, such as a layout restored before its quotes,
-    /// are listed and saved as they were and apply once the chain and any attached exposure
-    /// offer them. Saved expiry and measure labels take precedence over their choice positions;
+    /// are listed and saved as they were and apply as their required data becomes available.
+    /// Saved expiry and measure labels take precedence over their choice positions;
     /// an expiry no longer listed selects Nearest. Older saves keep position semantics.
+    /// New saves contain hidden `expiry_label` and `measure_label` inputs that older releases
+    /// do not accept. Editors applying all inputs must update the matching label on an explicit
+    /// choice edit or reset, and preserve it on unrelated edits while a measure is unavailable.
     /// Returns `None` for an empty symbol or expiry list.
     pub fn from_chain(
         chain: OptionChain,
@@ -279,7 +281,7 @@ impl OptionsVolumeProfile {
 
     fn refresh(&self) {
         self.refresh_cache();
-        if self.waiting_inputs.borrow().is_empty() || self.cache.borrow().awaiting_chain {
+        if self.waiting_inputs.borrow().is_empty() {
             return;
         }
         // In saved order, since the measure decides which levels are offered.
@@ -462,13 +464,11 @@ impl OptionsVolumeProfile {
                                 let value = if puts { row.puts?.abs() } else { row.calls? };
                                 Some((value, row.strike))
                             })
-                            .filter(|(value, _)| *value > 0.0)
+                            .filter(|(value, _)| *value != 0.0)
                             .max_by(|a, b| a.0.total_cmp(&b.0).then_with(|| b.1.total_cmp(&a.1)))
                             .map(|(_, strike)| strike)
                     })
                 });
-                cache.awaiting_chain =
-                    selected.is_empty() || (self.exposure.is_some() && supplied.is_none());
                 cache.supplied = supplied;
                 cache.volume_available =
                     !selected.is_empty() && selected.iter().all(|row| row.volume.is_some());
@@ -1717,6 +1717,7 @@ mod tests {
                         .net,
                     Some(13.0)
                 );
+                assert_eq!(study.plot_value(3, 0), Some(100.0), "signed provider calls");
                 assert_eq!(study.plot_value(5, 0), Some(0.0));
                 let mut unknown_call = OptionExposureRow::new(next, 100.0);
                 unknown_call.puts = Some(-2.0);
@@ -2299,7 +2300,7 @@ mod tests {
             .unwrap();
         let saved = crate::studies::StudyTemplate::from_study(&study);
         for ready in [true, false] {
-            for missing in [0, 1, 2] {
+            for (missing, pending_exposure) in [(0, false), (1, false), (2, false), (0, true)] {
                 let feed = ChainFeed::default();
                 let later = OptionChain::new(
                     &feed,
@@ -2319,7 +2320,28 @@ mod tests {
                 if ready {
                     later_sink.push(changed.clone()).unwrap();
                 }
-                let factory = profile_factory(later, expiry);
+                let exposure = pending_exposure.then(|| {
+                    OptionExposureHandle::new(
+                        &feed,
+                        OptionExposureQuery::new(
+                            "SAMPLE",
+                            expiry..=expiry,
+                            OptionExposureKind::Gamma,
+                        ),
+                        || {},
+                    )
+                    .unwrap()
+                });
+                let mut factory = crate::studies::IndicatorFactory::new();
+                factory.register("Options Volume Profile", move || {
+                    let mut profile =
+                        OptionsVolumeProfile::from_chain(later.clone(), "SAMPLE", vec![expiry])
+                            .unwrap();
+                    if let Some(exposure) = &exposure {
+                        profile = profile.with_exposure(exposure.clone()).unwrap();
+                    }
+                    Box::new(profile)
+                });
                 let mut restored = saved.create_with(&factory).unwrap();
                 if !ready {
                     // Saving before the first response must retain the selected measure and level.
@@ -2434,16 +2456,27 @@ mod tests {
         let mut profile = OptionsVolumeProfile::from_chain(chain, "SAMPLE", vec![expiry]).unwrap();
         profile.set_input("expiry", InputValue::Choice(1)).unwrap();
         profile.set_input("measure", InputValue::Choice(1)).unwrap();
-        for reset in [false, true] {
+        for (theme, width, reset) in [
+            (crate::theme::Theme::dark(), 1440.0, false),
+            (crate::theme::Theme::light(), 1440.0, true),
+            (crate::theme::Theme::dark(), 360.0, true),
+            (crate::theme::Theme::light(), 360.0, false),
+        ] {
             let mut study = crate::studies::ConfiguredStudy::new(Box::new(profile.clone()));
             let mut dialog = IndicatorSettingsDialog::default();
             dialog.open(crate::widget::SeriesId(2), &study, None);
             let mut edit = None;
             let mut harness = Harness::builder()
-                .with_context_setup(egui_extras::install_image_loaders)
-                .with_size(egui::vec2(1440.0, 900.0))
+                .with_context_setup({
+                    let theme = theme.clone();
+                    move |ctx| {
+                        egui_extras::install_image_loaders(ctx);
+                        crate::theme::apply_to_egui(ctx, &theme);
+                    }
+                })
+                .with_size(egui::vec2(width, 900.0))
                 .build_ui(|ui| {
-                    if let Some(next) = dialog.show(ui.ctx(), &crate::theme::Theme::dark()) {
+                    if let Some(next) = dialog.show(ui.ctx(), &theme) {
                         edit = Some(next);
                     }
                 });
