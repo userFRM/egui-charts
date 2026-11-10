@@ -1265,9 +1265,9 @@ impl DemoApp {
             self.chart.end_user_action();
         }
 
-        if let Some(edit) = self
-            .indicator_settings
-            .show_for_chart(ctx, &self.theme, &self.chart)
+        if let Some(edit) =
+            self.indicator_settings
+                .show_preview_for_chart(ctx, &self.theme, &mut self.chart)
         {
             self.chart.begin_user_action();
             let result = self
