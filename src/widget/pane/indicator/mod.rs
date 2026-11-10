@@ -776,6 +776,16 @@ impl IndicatorPane {
                 max_val = max_val.max(*level);
             }
         }
+        for (index, (value, ..)) in indicator.pane().levels.into_iter().enumerate() {
+            if value.is_finite()
+                && indicator
+                    .level_price_line(index)
+                    .is_some_and(|color| color != egui::Color32::TRANSPARENT)
+            {
+                min_val = min_val.min(value);
+                max_val = max_val.max(value);
+            }
+        }
 
         if min_val != f64::MAX
             && (0..indicator.line_count()).any(|line| {
@@ -840,7 +850,7 @@ mod tests {
     }
 
     /// A fitted pane keeps a study's levels in view when its values lie between them, and a
-    /// hidden level no longer holds the scale open.
+    /// hidden level holds the scale open only when its value line is visible.
     #[test]
     fn fitted_panes_keep_visible_levels_in_view() {
         let bars: Vec<_> = [(10.0, 8.0, 9.0), (12.0, 9.0, 11.0), (11.0, 7.0, 8.0)]
@@ -864,8 +874,17 @@ mod tests {
 
         let mut settings = study.settings();
         settings.levels[0].visible = false;
-        study.apply_settings(&[], settings).unwrap();
-        let (low, high) = fit(&study);
-        assert!(low < 38.2 && high < 61.8, "{low}..{high}");
+        for (enabled, color, shown) in [
+            (false, egui::Color32::RED, false),
+            (true, egui::Color32::RED, true),
+            (true, egui::Color32::TRANSPARENT, false),
+        ] {
+            settings.levels[0].price_line = enabled;
+            settings.levels[0].color = color;
+            study.apply_settings(&[], settings.clone()).unwrap();
+            let (low, high) = fit(&study);
+            assert!(low < 38.2, "{low}..{high}");
+            assert_eq!(high > 61.8, shown, "{low}..{high}");
+        }
     }
 }
