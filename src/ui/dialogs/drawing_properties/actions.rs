@@ -110,15 +110,21 @@ impl DrawingProps {
         }
     }
 
-    /// Exact saved or picked RGBA when it encodes the current paint colour, otherwise the editor's.
+    /// Exact saved or picked RGB at the current opacity when it encodes the paint colour.
     pub(super) fn color_rgba(&self) -> [u8; 4] {
         self.tool_settings
             .as_ref()
             .map(|template| &template.settings)
-            .filter(|settings| settings.color32() == self.color)
+            .filter(|settings| {
+                let [r, g, b, _] = settings.color;
+                Color32::from_rgba_unmultiplied(r, g, b, self.color.a()) == self.color
+            })
             .map_or_else(
                 || self.color.to_srgba_unmultiplied(),
-                |settings| settings.color,
+                |settings| {
+                    let [r, g, b, _] = settings.color;
+                    [r, g, b, self.color.a()]
+                },
             )
     }
 
@@ -218,13 +224,11 @@ impl DrawingProps {
             // The dialog opened with the target's values: one that differs from them was edited,
             // and only edited values are written, so each drawing keeps the rest of its own.
             let [r, g, b, a] = self.color_rgba();
-            if [r, g, b, a] != target.color {
-                let alpha = if a == target.color[3] {
-                    drawing.color[3]
-                } else {
-                    a
-                };
-                drawing.color = [r, g, b, alpha];
+            if [r, g, b] != target.color[..3] {
+                drawing.color[..3].copy_from_slice(&[r, g, b]);
+            }
+            if a != target.color[3] {
+                drawing.color[3] = a;
             }
             if self.line_width != target.stroke_width {
                 drawing.stroke_width = self.line_width;
@@ -818,8 +822,16 @@ mod tests {
         let opened = DrawingProps::from_drawing(&drawings[0], &chart);
         // Each case: the edit made in the dialog, then what it changes on each drawing.
         type Case = (&'static str, fn(&mut DrawingProps), fn(&mut Drawing));
-        let cases: [Case; 4] = [
+        let cases: [Case; 5] = [
             ("nothing edited", |_| {}, |_| {}),
+            (
+                "opacity only",
+                |props| {
+                    let [r, g, b, _] = props.color.to_srgba_unmultiplied();
+                    props.color = Color32::from_rgba_unmultiplied(r, g, b, 128);
+                },
+                |d| d.color[3] = 128,
+            ),
             (
                 "colour",
                 |props| props.color = Color32::BLUE,

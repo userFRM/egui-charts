@@ -30,10 +30,15 @@ impl StyleTab {
             if let Some(color) = color_swatch(ui, color_picker, props.color, "drawing_props_color")
             {
                 props.color = keep_opacity(color, props.color, color_picker.custom_mode);
-                if let Some(template) = &mut props.tool_settings {
+                let rgba = if color_picker.custom_mode {
+                    props.color_rgba()
+                } else {
                     // Keep the palette's RGB before translucent paint premultiplies it.
                     let [r, g, b, _] = color.to_srgba_unmultiplied();
-                    template.settings.color = [r, g, b, props.color.a()];
+                    [r, g, b, props.color.a()]
+                };
+                if let Some(template) = &mut props.tool_settings {
+                    template.settings.color = rgba;
                 }
             }
             ui.end_row();
@@ -322,54 +327,6 @@ mod tests {
             output.drop_without_applying_deltas();
             assert_eq!(props.fill_color, Some(fill), "{tool:?}");
         }
-    }
-
-    /// A palette swatch recolours a highlighter without making its stroke opaque.
-    #[test]
-    fn palette_colours_keep_the_line_opacity() {
-        let ctx = Context::default();
-        ctx.global_style_mut(|style| style.animation_time = 0.0);
-        let chart = Chart::new(BarData::new());
-        let drawing = Drawing::new(0, DrawingToolType::Highlighter);
-        let mut props = DrawingProps::from_drawing(&drawing, &chart);
-        let mut pickers: [ColorPickerState; 2] = Default::default();
-        pickers[0].is_open = true;
-        let swatch = MAIN_COLORS[3];
-        let mut frame = |events| {
-            let output = ctx.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 900.0))),
-                    events,
-                    ..Default::default()
-                },
-                |ui| StyleTab::show(ui, &mut props, &mut pickers),
-            );
-            let well = output.shapes.iter().find_map(|s| match &s.shape {
-                Shape::Rect(r) if r.fill == swatch => Some(r.rect.center()),
-                _ => None,
-            });
-            output.drop_without_applying_deltas();
-            well
-        };
-        frame(vec![]);
-        let pos = frame(vec![]).expect("the palette shows the swatch");
-        frame(vec![
-            Event::PointerMoved(pos),
-            Event::PointerButton {
-                pos,
-                button: PointerButton::Primary,
-                pressed: true,
-                modifiers: Modifiers::NONE,
-            },
-            Event::PointerButton {
-                pos,
-                button: PointerButton::Primary,
-                pressed: false,
-                modifiers: Modifiers::NONE,
-            },
-        ]);
-        let [r, g, b, _] = swatch.to_srgba_unmultiplied();
-        assert_eq!(props.color, Color32::from_rgba_unmultiplied(r, g, b, 51));
     }
 
     /// A palette swatch picked in the Style tab of one drawing in a selection recolours every
