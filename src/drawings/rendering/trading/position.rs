@@ -65,43 +65,6 @@ impl Drawing {
             (0, &[][..])
         };
         let exit = position_exit(after_entry, entry_price, target_price, stop_price, is_long);
-        let qty = self.position_size.unwrap_or_default().quantity_with_sizing(
-            entry_price,
-            stop_price,
-            &self.position_sizing,
-        );
-        let qty_text = qty.map_or_else(
-            || l10n::text(ctx, "n/a"),
-            |qty| {
-                if self.position_sizing.quantity_step > 0.0 {
-                    let step = self.position_sizing.quantity_step.to_string();
-                    let decimals = step
-                        .split_once('.')
-                        .map_or(0, |(_, fraction)| fraction.len());
-                    return if decimals <= 19 && qty < 1e15 {
-                        format!("{qty:.decimals$}")
-                    } else {
-                        format!("{qty:e}")
-                    };
-                }
-                // Four decimals, or four significant digits below 0.1, where that
-                // rounding is exact; an exponent beyond it.
-                let scale = 10f64.powi(3 - qty.log10().floor() as i32).max(1e4);
-                if scale <= 1e22 && qty < 1e15 {
-                    ((qty * scale).round() / scale).to_string()
-                } else {
-                    format!("{qty:e}")
-                }
-            },
-        );
-        // Money for a price move of `points`, at the position's quantity.
-        let money = |points: f64| {
-            qty.map(|qty| {
-                points * qty * self.position_sizing.point_value * self.position_sizing.lot_size
-            })
-            .filter(|amount| amount.is_finite())
-        };
-
         let right = Self::position_right(entry, target);
 
         self.draw_zone(
@@ -149,31 +112,93 @@ impl Drawing {
             Stroke::new(line_width, entry_color.gamma_multiply(0.65)),
         );
 
+        if !selected && !self.position_readout.persistent {
+            return;
+        }
+        let currency = view
+            .instrument
+            .and_then(|instrument| instrument.currency.as_deref());
+        let sizing = self
+            .position_readout
+            .account_sizing(self.position_sizing, currency);
+        let qty = self.position_readout.quantity(
+            self.position_size.unwrap_or_default(),
+            entry_price,
+            stop_price,
+            self.position_sizing,
+            currency,
+        );
+        let qty_text = qty.map_or_else(
+            || l10n::text(ctx, "n/a"),
+            |qty| {
+                if let Some(places) = self.position_readout.quantity_decimals {
+                    return format!("{qty:.places$}", places = usize::from(places));
+                }
+                if self.position_sizing.quantity_step > 0.0 {
+                    let step = self.position_sizing.quantity_step.to_string();
+                    let decimals = step
+                        .split_once('.')
+                        .map_or(0, |(_, fraction)| fraction.len());
+                    return if decimals <= 19 && qty < 1e15 {
+                        format!("{qty:.decimals$}")
+                    } else {
+                        format!("{qty:e}")
+                    };
+                }
+                // Four decimals, or four significant digits below 0.1, where that
+                // rounding is exact; an exponent beyond it.
+                let scale = 10f64.powi(3 - qty.log10().floor() as i32).max(1e4);
+                if scale <= 1e22 && qty < 1e15 {
+                    ((qty * scale).round() / scale).to_string()
+                } else {
+                    format!("{qty:e}")
+                }
+            },
+        );
+        // Money for a price move, using the same rounded quantity and account economics.
+        let money = |points: f64| {
+            qty.zip(sizing)
+                .map(|(qty, sizing)| points * qty * sizing.point_value * sizing.lot_size)
+                .filter(|amount| amount.is_finite())
+        };
+        let currency = self.position_readout.account_currency.as_deref();
+        let money_text = |amount: f64| match currency {
+            Some(currency) => format!("{amount:.2} {currency}"),
+            None => format!("{amount:.2}"),
+        };
         let capital = qty
-            .and_then(|qty| self.position_sizing.required_capital(entry_price, qty))
-            .map_or_else(|| l10n::text(ctx, "n/a"), |capital| format!("{capital:.2}"));
+            .and_then(|qty| sizing.and_then(|sizing| sizing.required_capital(entry_price, qty)))
+            .map_or_else(|| l10n::text(ctx, "n/a"), money_text);
         let (summary, summary_fill, summary_text) = match exit {
             Some((exit_price, closed, _)) => {
                 let change = side * (exit_price - entry_price);
-                let pnl =
-                    money(change).map_or_else(|| l10n::text(ctx, "n/a"), |pnl| format!("{pnl:.2}"));
+                let pnl = money(change).map_or_else(|| l10n::text(ctx, "n/a"), money_text);
                 let risk_reward = (target_price - entry_price) / (entry_price - stop_price);
-                let key = if closed {
-                    "Closed P&L: {pnl} ({percent}%), Qty: {quantity}\nRisk/Reward: {ratio}, Capital: {capital}"
+                let summary = if self.position_readout.condensed {
+                    let change = view.price_formatter.map_or_else(
+                        || format!("{change:.2}"),
+                        |formatter| formatter.format(change),
+                    );
+                    let ratio = egui::emath::format_with_decimals_in_range(risk_reward, 0..=8);
+                    format!("{change} ~ {qty_text}\n{ratio}")
                 } else {
-                    "Open P&L: {pnl} ({percent}%), Qty: {quantity}\nRisk/Reward: {ratio}, Capital: {capital}"
+                    let key = if closed {
+                        "Closed P&L: {pnl} ({percent}%), Qty: {quantity}\nRisk/Reward: {ratio}, Capital: {capital}"
+                    } else {
+                        "Open P&L: {pnl} ({percent}%), Qty: {quantity}\nRisk/Reward: {ratio}, Capital: {capital}"
+                    };
+                    l10n::format_text(
+                        ctx,
+                        key,
+                        &[
+                            ("pnl", pnl.as_str()),
+                            ("percent", format!("{:.2}", pct(exit_price)).as_str()),
+                            ("quantity", qty_text.as_str()),
+                            ("ratio", format!("{risk_reward:.2}").as_str()),
+                            ("capital", capital.as_str()),
+                        ],
+                    )
                 };
-                let summary = l10n::format_text(
-                    ctx,
-                    key,
-                    &[
-                        ("pnl", pnl.as_str()),
-                        ("percent", format!("{:.2}", pct(exit_price)).as_str()),
-                        ("quantity", qty_text.as_str()),
-                        ("ratio", format!("{risk_reward:.2}").as_str()),
-                        ("capital", capital.as_str()),
-                    ],
-                );
                 let fill = if change >= 0.0 {
                     profit_color
                 } else {
@@ -184,7 +209,11 @@ impl Drawing {
             None => (
                 l10n::format_text(
                     ctx,
-                    "P&L: n/a, Qty: {quantity}\nRisk/Reward: n/a, Capital: {capital}",
+                    if self.position_readout.condensed {
+                        "n/a ~ {quantity}\nn/a"
+                    } else {
+                        "P&L: n/a, Qty: {quantity}\nRisk/Reward: n/a, Capital: {capital}"
+                    },
                     &[
                         ("quantity", qty_text.as_str()),
                         ("capital", capital.as_str()),
@@ -194,8 +223,16 @@ impl Drawing {
                 entry_color,
             ),
         };
-        let amount =
-            |price: f64| money((price - entry_price).abs()).map(|amount| format!("{amount:.2}"));
+        let amount_value = |price: f64| {
+            let balance = match self.position_size {
+                Some(crate::drawings::PositionSize::RiskPercent { account_size, .. }) => {
+                    money(side * (price - entry_price)).map(|change| account_size + change)
+                }
+                _ => money((price - entry_price).abs()),
+            };
+            balance.filter(|value| value.is_finite())
+        };
+        let amount = |price: f64| amount_value(price).map(money_text);
         let level_text = |price: f64| {
             let mut level = String::with_capacity(32);
             let _ = match view.price_formatter {
@@ -206,26 +243,66 @@ impl Drawing {
             };
             level
         };
+        let condensed_level = |price: f64| {
+            let change = (price - entry_price).abs();
+            let points = view.price_formatter.map_or_else(
+                || format!("{change:.2}"),
+                |formatter| formatter.format(change),
+            );
+            let ticks = view
+                .instrument
+                .and_then(|instrument| instrument.tick_size)
+                .filter(|tick| tick.is_finite() && *tick > 0.0)
+                .map(|tick| egui::emath::format_with_decimals_in_range(change / tick, 0..=8));
+            let mut figures = format!("{points} ({:.3}%)", pct(price).abs());
+            if let Some(ticks) = ticks {
+                let _ = write!(figures, " {ticks}");
+            }
+            if matches!(
+                self.position_size,
+                Some(crate::drawings::PositionSize::RiskPercent { .. })
+            ) {
+                let balance = amount_value(price).map_or_else(
+                    || l10n::text(ctx, "n/a"),
+                    |balance| egui::emath::format_with_decimals_in_range(balance, 0..=2),
+                );
+                let _ = write!(figures, " {balance}");
+            }
+            let pnl = money(side * (price - entry_price))
+                .map_or_else(|| l10n::text(ctx, "n/a"), money_text);
+            let _ = write!(figures, " {pnl}");
+            figures
+        };
         let target_level = level_text(target_price);
-        let target_label = match amount(target_price) {
-            Some(amount) => l10n::format_text(
-                ctx,
-                "Target: {level}, Amount: {amount}",
-                &[
-                    ("level", target_level.as_str()),
-                    ("amount", amount.as_str()),
-                ],
-            ),
-            None => l10n::format_text(ctx, "Target: {level}", &[("level", target_level.as_str())]),
+        let target_label = if self.position_readout.condensed {
+            condensed_level(target_price)
+        } else {
+            match amount(target_price) {
+                Some(amount) => l10n::format_text(
+                    ctx,
+                    "Target: {level}, Amount: {amount}",
+                    &[
+                        ("level", target_level.as_str()),
+                        ("amount", amount.as_str()),
+                    ],
+                ),
+                None => {
+                    l10n::format_text(ctx, "Target: {level}", &[("level", target_level.as_str())])
+                }
+            }
         };
         let stop_level = level_text(stop_price);
-        let stop_label = match amount(stop_price) {
-            Some(amount) => l10n::format_text(
-                ctx,
-                "Stop: {level}, Amount: {amount}",
-                &[("level", stop_level.as_str()), ("amount", amount.as_str())],
-            ),
-            None => l10n::format_text(ctx, "Stop: {level}", &[("level", stop_level.as_str())]),
+        let stop_label = if self.position_readout.condensed {
+            condensed_level(stop_price)
+        } else {
+            match amount(stop_price) {
+                Some(amount) => l10n::format_text(
+                    ctx,
+                    "Stop: {level}, Amount: {amount}",
+                    &[("level", stop_level.as_str()), ("amount", amount.as_str())],
+                ),
+                None => l10n::format_text(ctx, "Stop: {level}", &[("level", stop_level.as_str())]),
+            }
         };
 
         // Labels sit on the box's centre line: the stats beside the entry on the stop
@@ -482,6 +559,7 @@ mod tests {
                     quantity_step: step,
                     leverage: 5.0,
                 };
+                drawing.position_readout.persistent = true;
                 drawing.position_size = Some(size);
                 drawing.chart_points = vec![
                     ChartPoint::new(30.0, 100.0),
@@ -494,7 +572,9 @@ mod tests {
                     let ctx = egui::Context::default();
                     let mut chart = chart(&[low], &[high]);
                     chart.set_instrument(Some(
-                        crate::model::Instrument::new("TEST").with_price_decimals(5),
+                        crate::model::Instrument::new("TEST")
+                            .with_price_decimals(5)
+                            .with_tick_size(0.25),
                     ));
                     chart.price_scale_mut().set_range(94.0, 106.0);
                     chart.set_theme(
@@ -573,6 +653,117 @@ mod tests {
                         summary.visual_bounding_rect()
                     );
                     output.drop_without_applying_deltas();
+                    if size == PositionSize::RiskAmount(230.0) && width == 800.0 {
+                        use crate::drawings::PositionReadout;
+                        let readout = PositionReadout {
+                            account_currency: Some("EUR".into()),
+                            conversion_rate: Some(0.8),
+                            quantity_decimals: Some(1),
+                            ..Default::default()
+                        };
+                        for (persistent, selected, condensed) in [
+                            (false, false, false),
+                            (false, true, false),
+                            (true, false, false),
+                            (true, false, true),
+                        ] {
+                            chart.drawings_mut().deselect();
+                            if selected {
+                                chart.drawings_mut().select(1);
+                            }
+                            chart
+                                .set_position_readout(
+                                    1,
+                                    PositionReadout {
+                                        persistent,
+                                        condensed,
+                                        ..readout.clone()
+                                    },
+                                )
+                                .unwrap();
+                            let output = render(&mut chart);
+                            let texts: Vec<_> = output
+                                .shapes
+                                .iter()
+                                .filter_map(|s| match &s.shape {
+                                    egui::Shape::Text(t) => Some(t.galley.text().to_owned()),
+                                    _ => None,
+                                })
+                                .collect();
+                            let summary = texts.iter().find(|t| {
+                                if condensed {
+                                    t.contains(" ~ ")
+                                } else {
+                                    t.contains("Qty:")
+                                }
+                            });
+                            assert_eq!(summary.is_some(), persistent || selected);
+                            if let Some(summary) = summary {
+                                // 230 / (2.5 * 50 * 10 * 0.8) = 0.23, rounded down to 0.2.
+                                // A five-point gain pays 400 EUR; capital is 1600 EUR.
+                                if condensed {
+                                    assert!(summary.contains(" ~ 0.2\n2"), "{summary}");
+                                    assert!(texts.iter().any(|text| text.contains("400.00 EUR")));
+                                    assert!(!summary.contains("Qty:"));
+                                    assert!(
+                                        texts.iter().any(|text| text.contains(" 20 ")
+                                            && text.contains("400.00 EUR"))
+                                    );
+                                    assert!(texts.iter().any(|text| text.contains(" 10 ")
+                                        && text.contains("-200.00 EUR")));
+                                } else {
+                                    assert!(summary.contains("Qty: 0.2"), "{summary}");
+                                    assert!(summary.contains("400.00 EUR"), "{summary}");
+                                }
+                                assert_eq!(summary.contains("Capital: 1600.00 EUR"), !condensed);
+                                assert!(summary.contains('\n'));
+                            }
+                            assert!(
+                                output.shapes.iter().any(|s| matches!(&s.shape,
+                                egui::Shape::Rect(r) if r.fill == Color32::from_rgb(40,100,220)
+                                    .gamma_multiply(if dark {0.20} else {0.12}))),
+                                "statistics visibility does not remove zones"
+                            );
+                            output.drop_without_applying_deltas();
+                        }
+                        chart
+                            .set_position_readout(
+                                1,
+                                PositionReadout {
+                                    persistent: true,
+                                    account_currency: Some("EUR".into()),
+                                    ..Default::default()
+                                },
+                            )
+                            .unwrap();
+                        let output = render(&mut chart);
+                        assert!(
+                            output.shapes.iter().any(|s| matches!(&s.shape,
+                            egui::Shape::Text(t) if t.galley.text().contains("Qty: n/a"))),
+                            "a missing conversion cannot pretend to be one-to-one"
+                        );
+                        output.drop_without_applying_deltas();
+                        chart
+                            .set_position_readout(
+                                1,
+                                PositionReadout {
+                                    persistent: true,
+                                    ..Default::default()
+                                },
+                            )
+                            .unwrap();
+                        chart.drawings_mut().deselect();
+                        chart.reverse_position_drawing(1).unwrap();
+                        let output = render(&mut chart);
+                        assert!(
+                            output.shapes.iter().any(|s| matches!(&s.shape,
+                            egui::Shape::Text(t) if t.galley.text().contains("Closed P&L: -225.00")
+                                && t.galley.text().contains("Risk/Reward: 0.50"))),
+                            "reversal exchanges the levels and recomputes signed risk"
+                        );
+                        output.drop_without_applying_deltas();
+                        chart.reverse_position_drawing(1).unwrap();
+                    }
                     if size == PositionSize::RiskAmount(230.0) && !dark && width == 800.0 {
                         crate::localization::mark_keys(&ctx);
                         let output = render(&mut chart);

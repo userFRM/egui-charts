@@ -546,6 +546,7 @@ mod tests {
                 .map(|(bar, price)| ChartPoint::new(bar, price))
                 .collect();
             drawing.completed = true;
+            drawing.position_readout.persistent = tool == LongPos;
             if tool == FibonacciRetracement {
                 drawing.fib_config = Some(FibonacciConfig {
                     show_prices: Some(true),

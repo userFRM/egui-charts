@@ -245,6 +245,7 @@ impl DrawingPropertiesDialog {
                 }
                 drawing.position_size = old.position_size;
                 drawing.position_sizing = old.position_sizing;
+                drawing.position_readout = old.position_readout;
                 drawing.position_target_color = old.position_target_color;
                 drawing.position_stop_color = old.position_stop_color;
                 drawing.volume_profile = old.volume_profile;

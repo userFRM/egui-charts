@@ -242,9 +242,9 @@ impl DrawingProps {
                 let settings = &template.settings;
                 // A tool setting that differs from the target's was edited.
                 macro_rules! edited {
-                    ($($field:ident),+ $(,)?) => {
-                        $(if settings.$field != target.$field {
-                            drawing.$field.clone_from(&settings.$field);
+                    ($($field:ident $(.$member:ident)?),+ $(,)?) => {
+                        $(if settings.$field$(.$member)? != target.$field$(.$member)? {
+                            drawing.$field$(.$member)?.clone_from(&settings.$field$(.$member)?);
                         })+
                     };
                 }
@@ -265,6 +265,10 @@ impl DrawingProps {
                     bars_pattern,
                     position_size,
                     position_sizing,
+                    position_readout.persistent,
+                    position_readout.condensed,
+                    position_readout.conversion_rate,
+                    position_readout.quantity_decimals,
                     position_target_color,
                     position_stop_color,
                     volume_profile,
@@ -276,6 +280,17 @@ impl DrawingProps {
                     time_axis_label,
                     elliott_degree,
                 );
+                if settings.position_readout.account_currency
+                    != target.position_readout.account_currency
+                {
+                    drawing
+                        .position_readout
+                        .account_currency
+                        .clone_from(&settings.position_readout.account_currency);
+                    // A peer's old rate cannot follow it into a different currency.
+                    drawing.position_readout.conversion_rate =
+                        settings.position_readout.conversion_rate;
+                }
                 // Only the image's opacity: each picture keeps its own frame size.
                 let opacity = settings.image.map_or(255, |c| c.opacity);
                 if opacity != target.image.map_or(255, |c| c.opacity) {
@@ -365,6 +380,9 @@ impl DrawingProps {
                 return Err(
                     "Ghost feed average range must be positive and noise nonnegative, both finite",
                 );
+            }
+            if !settings.position_readout.is_valid() {
+                return Err("Invalid position readout settings");
             }
             if !settings.position_sizing.is_valid() {
                 return Err(

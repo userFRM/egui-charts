@@ -300,6 +300,9 @@ impl FloatingSelectionToolbar {
                     .clone()
                     .map(|alert| DrawingContextMenuAction::AddAlert(Box::new(alert)));
             }
+            FloatingToolbarAction::DrawingMenu(DrawingContextMenuAction::ReversePosition) => {
+                let _ = chart.reverse_position_drawing(id);
+            }
             FloatingToolbarAction::DrawingMenu(action)
                 if !action.apply_interval_visibility(chart, id) =>
             {
@@ -429,6 +432,18 @@ impl FloatingSelectionToolbar {
                                 .clicked()
                             {
                                 action = Some(FloatingToolbarAction::OpenSettings);
+                            }
+                            if self.menu.position_direction_available()
+                                && IconButton::new(&icons::ROTATE_CCW)
+                                    .size(ButtonSize::SM)
+                                    .tooltip("Reverse position")
+                                    .enabled(!self.is_locked)
+                                    .show(ui)
+                                    .clicked()
+                            {
+                                action = Some(FloatingToolbarAction::DrawingMenu(
+                                    DrawingContextMenuAction::ReversePosition,
+                                ));
                             }
                             if self.alert_available
                                 && IconButton::new(&icons::ALERTS)
