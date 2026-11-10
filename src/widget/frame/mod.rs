@@ -644,6 +644,7 @@ impl Chart {
             self.config.show_plus_button && !eraser_mode && !is_drawing_interaction;
         let show_axis_settings = !self.layout_inactive || ui.rect_contains_pointer(rect);
         let price_button_interaction = cfg!(feature = "icons")
+            && (show_right_axis || show_left_axis)
             && show_price_button
             && ui.input(|input| {
                 (input.pointer.any_down() || input.pointer.any_released())
