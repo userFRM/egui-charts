@@ -47,7 +47,9 @@ impl Chart {
         drawing.line_measurement_card_rect(
             &ui.painter().with_clip_rect(clip),
             &ChartView {
-                price_formatter: price_member.and_then(|id| self.series_price_formatter(id)),
+                price_formatter: price_member
+                    .and_then(|id| self.series_price_formatter(id))
+                    .as_deref(),
                 time_formatter: None,
                 bar_seconds: 0,
                 instrument: price_member.and(self.instrument()),
@@ -452,7 +454,7 @@ impl Chart {
         // no dates.
         // Render existing drawings against the chart's bars
         let view = ChartView {
-            price_formatter,
+            price_formatter: price_formatter.as_deref(),
             time_formatter: self.horizontal_scale.is_none().then_some(time_format.0),
             bar_seconds: time_format.1,
             instrument: price_member.and(self.instrument()),

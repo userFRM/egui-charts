@@ -392,7 +392,12 @@ impl DrawingManager {
             .flat_map(move |drawing| {
                 let (price, time) = Drawing::axis_labels_of(drawing.tool_type);
                 let (price, time) = (
-                    price && drawing.price_axis_label,
+                    price
+                        && drawing.price_axis_label
+                        && !matches!(
+                            drawing.tool_type,
+                            DrawingToolType::LongPos | DrawingToolType::ShortPos
+                        ),
                     time && drawing.time_axis_label,
                 );
                 let [r, g, b, _] = drawing.color;

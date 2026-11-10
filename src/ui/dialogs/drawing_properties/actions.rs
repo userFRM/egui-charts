@@ -554,7 +554,10 @@ mod tests {
             assert_eq!(labels.contains(&"Middle line"), middle, "{tool:?}");
             use DrawingToolType as T;
             let (price, time) = (
-                matches!(tool, T::HorizontalLine | T::HorizontalRay | T::CrossLine),
+                matches!(
+                    tool,
+                    T::HorizontalLine | T::HorizontalRay | T::CrossLine | T::LongPos | T::ShortPos
+                ),
                 matches!(tool, T::VerticalLine | T::CrossLine),
             );
             assert_eq!(labels.contains(&"Price"), price, "{tool:?}");
