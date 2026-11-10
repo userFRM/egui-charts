@@ -1710,7 +1710,7 @@ mod tests {
             panic!("box and pointer are one shape");
         };
         assert!(outline.closed && outline.points.contains(&pos(100.0, 300.0)));
-        assert_eq!(outline.stroke.width, 1.0);
+        assert_eq!(outline.stroke.width, 2.0);
         let inside = draw(
             DrawingToolType::Callout,
             &[(205., 105.), (200., 100.)],
@@ -1719,6 +1719,7 @@ mod tests {
         );
         assert!(inside.paths.is_empty());
         assert_eq!(inside.rects.len(), 1);
+        assert_eq!(inside.rects[0].stroke.width, 2.0);
 
         let label = draw(
             DrawingToolType::PriceLabel,
