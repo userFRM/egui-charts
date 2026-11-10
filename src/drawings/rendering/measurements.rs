@@ -1601,6 +1601,9 @@ mod tests {
                     })
                     .expect("card");
                 output.drop_without_applying_deltas();
+                if name == "light" {
+                    assert_eq!(text.1, Color32::from_rgb(41, 98, 255));
+                }
                 ratios.push((name, text_color, contrast(text.1, card)));
             }
         }
@@ -1628,7 +1631,7 @@ mod tests {
             ..Default::default()
         };
         let mut observed = Vec::new();
-        for (order, mut first, mut second, position) in [
+        for (order, mut first, mut second, position, shift) in [
             ("left to right", (100.0, 300.0), (300.0, 200.0)),
             ("right to left", (300.0, 200.0), (100.0, 300.0)),
             ("left to right rising", (100.0, 200.0), (300.0, 300.0)),
@@ -1636,14 +1639,14 @@ mod tests {
         ]
         .into_iter()
         .flat_map(|(order, a, b)| {
-            [P::Right, P::Left, P::Auto].map(|position| (order, a, b, position))
+            [
+                (P::Right, 0.0),
+                (P::Left, 100.0),
+                (P::Auto, 0.0),
+                (P::Auto, 140.0),
+            ]
+            .map(|(position, shift)| (order, a, b, position, shift))
         }) {
-            let shift = match position {
-                P::Right => 0.0,
-                P::Left => 100.0,
-                P::Auto => 140.0,
-                P::Center => unreachable!(),
-            };
             first.0 += shift;
             second.0 += shift;
             let measurements = LineMeasurements {

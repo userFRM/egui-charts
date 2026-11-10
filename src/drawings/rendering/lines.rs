@@ -1586,10 +1586,9 @@ mod tests {
         assert_eq!(texts(&manager), 2);
     }
 
-    /// Bold and the line style are settings of a trend angle's own text and line. Its readout card
-    /// and price labels are written in the theme's font and colours, so they paint the same whatever
-    /// those settings are: one text shape each (the card and the labels at 300 and 200), and the
-    /// card's solid 1 pt border. A trend line's card keeps its border under a dashed line too.
+    /// All five line tools keep a solid 1 pt card border and single price labels under bold and
+    /// dashed styles. Own text stays bold and lines stay dashed; only an info line's card takes
+    /// its text weight too.
     #[test]
     fn trend_angle_text_and_line_style_leave_its_readouts_alone() {
         use crate::drawings::{ChartPoint, DrawingToolType, FontWeight, LineMeasurements};
@@ -1619,6 +1618,7 @@ mod tests {
             angle.completed = true;
             angle.chart_points = vec![ChartPoint::new(100.0, 300.0), ChartPoint::new(300.0, 200.0)];
             angle.update_screen_coords(x, y);
+            angle.text = Some("Own text".into());
             angle.font_weight = weight;
             angle.line_style = style;
             angle.line_measurements = LineMeasurements {
@@ -1649,7 +1649,12 @@ mod tests {
             let card_fill = crate::theme::Theme::default().chart.bg_tooltip;
             let texts: Vec<String> = (shapes.iter())
                 .filter_map(|shape| match shape {
-                    Shape::Text(t) if !t.galley.job.text.ends_with('°') => {
+                    Shape::Text(t)
+                        if matches!(
+                            t.galley.job.text.as_str(),
+                            "200 bars" | "300.00" | "200.00"
+                        ) =>
+                    {
                         Some(t.galley.job.text.clone())
                     }
                     _ => None,
@@ -1661,51 +1666,57 @@ mod tests {
                     _ => None,
                 })
                 .collect();
-            if tool == DrawingToolType::TrendAngle {
-                let angle_texts = shapes
-                    .iter()
-                    .filter(|s| matches!(s, Shape::Text(t) if t.galley.job.text.ends_with('°')))
-                    .count();
-                assert_eq!(
-                    angle_texts,
-                    if weight == FontWeight::Bold { 2 } else { 1 },
-                    "angle text keeps its weight"
+            let own_texts = shapes
+                .iter()
+                .filter(|shape| {
+                    matches!(shape, Shape::Text(t) if t.galley.job.text == "Own text"
+                    || t.galley.job.text.ends_with('°'))
+                })
+                .count();
+            assert_eq!(
+                own_texts,
+                if weight == FontWeight::Bold { 2 } else { 1 },
+                "{tool:?}: own text keeps its weight"
+            );
+            assert_eq!(borders, [0.0, 0.0, 1.0], "labels and solid card border");
+            if style == LineStyle::Dashed {
+                assert!(
+                    !shapes.iter().any(|shape| matches!(shape,
+                    Shape::LineSegment { points, .. } if points[0].distance(points[1]) > 20.0)),
+                    "{tool:?}: no continuous line under the dashes"
+                );
+                assert!(
+                    shapes.iter().any(|shape| match shape {
+                        Shape::LineSegment { stroke, .. } => *stroke == angle.stroke(),
+                        Shape::Mesh(mesh) =>
+                            mesh.vertices.iter().any(|v| v.color == angle.color32()),
+                        _ => false,
+                    }),
+                    "{tool:?}: line dashes remain visible"
                 );
             }
             (texts, borders)
         };
-        let mut observed = Vec::new();
-        for (tool, weight, style) in [
-            (
-                DrawingToolType::TrendAngle,
-                FontWeight::Bold,
-                LineStyle::Solid,
-            ),
-            (
-                DrawingToolType::TrendAngle,
-                FontWeight::Normal,
-                LineStyle::Dashed,
-            ),
-            (
-                DrawingToolType::TrendLine,
-                FontWeight::Bold,
-                LineStyle::Solid,
-            ),
-            (
-                DrawingToolType::TrendLine,
-                FontWeight::Normal,
-                LineStyle::Dashed,
-            ),
+        for tool in [
+            DrawingToolType::TrendAngle,
+            DrawingToolType::TrendLine,
+            DrawingToolType::Ray,
+            DrawingToolType::ExtendedLine,
+            DrawingToolType::InfoLine,
         ] {
-            let plain = readouts(tool, FontWeight::Normal, LineStyle::Solid);
-            assert_eq!(plain.0.len(), 3, "{tool:?} {plain:?}");
-            let styled = readouts(tool, weight, style);
-            if styled != plain {
-                observed.push(format!(
-                    "{tool:?} {weight:?} {style:?}: {styled:?}, plain {plain:?}"
-                ));
+            for (weight, style) in [
+                (FontWeight::Normal, LineStyle::Solid),
+                (FontWeight::Bold, LineStyle::Solid),
+                (FontWeight::Normal, LineStyle::Dashed),
+                (FontWeight::Bold, LineStyle::Dashed),
+            ] {
+                let (texts, _) = readouts(tool, weight, style);
+                let mut expected = vec!["300.00", "200.00", "200 bars"];
+                if tool == DrawingToolType::InfoLine && weight == FontWeight::Bold {
+                    expected.push("200 bars");
+                }
+                assert_eq!(texts, expected, "{tool:?} {weight:?} {style:?}");
             }
         }
-        assert!(observed.is_empty(), "{observed:?}");
     }
 }
