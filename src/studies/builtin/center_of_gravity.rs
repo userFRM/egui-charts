@@ -200,14 +200,16 @@ mod tests {
 
         assert_eq!(cog.values.len(), 7);
 
-        // Should have valid values after period
-        let valid_cnt = cog
-            .values
-            .to_rows()
-            .iter()
-            .filter(|v| !matches!(v, IndicatorValue::None))
-            .count();
-
-        assert!(valid_cnt > 0);
+        // Ehlers' negative weighted-price ratio, oldest weights 5,4,3,2,1:
+        // -(500+408+312+206+105)/514, then -1552/521 and -1567/525.
+        for (bar, want, signal) in [
+            (4, -1531.0 / 514.0, None),
+            (5, -1552.0 / 521.0, Some(-1531.0 / 514.0)),
+            (6, -1567.0 / 525.0, Some(-1552.0 / 521.0)),
+        ] {
+            let got = cog.values().value(0, bar).unwrap();
+            assert_eq!(got, want, "bar {bar}");
+            assert_eq!(cog.values().value(1, bar), signal, "signal bar {bar}");
+        }
     }
 }

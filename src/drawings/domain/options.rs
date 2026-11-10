@@ -5,7 +5,8 @@
 //! per-timeframe visibility ([`TimeframeVisibility`]), Fibonacci level
 //! configuration ([`FibonacciConfig`], [`FibonacciLevel`]), and the settings of
 //! the volume profile, regression trend and position drawings
-//! ([`VolumeProfileConfig`](crate::data::VolumeProfileConfig), [`RegressionTrendConfig`], [`PositionSize`], [`PositionSizing`]).
+//! ([`VolumeProfileConfig`](crate::data::VolumeProfileConfig), [`RegressionTrendConfig`],
+//! [`PositionSize`], [`PositionSizing`], [`PositionReadout`]).
 
 use crate::model::{Timeframe, TimeframeUnit};
 use serde::{Deserialize, Serialize};
@@ -327,6 +328,15 @@ pub struct FibonacciLevel {
     /// Legacy custom percentage label. Empty derives the label from `value`.
     #[serde(default)]
     pub label: String,
+    /// Custom retracement text beside this level, independent of its numeric label.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub text: String,
+    /// Line width in points; absent inherits the drawing's level width.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<f32>,
+    /// Line pattern; absent inherits the drawing's level pattern.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_style: Option<crate::model::LineStyle>,
     /// Level color as RGBA
     pub color: [u8; 4],
     /// Whether this level is visible
@@ -343,6 +353,9 @@ impl FibonacciLevel {
         Self {
             value,
             label: label.to_string(),
+            text: String::new(),
+            width: None,
+            line_style: None,
             color,
             visible: true,
             show_price: true,
@@ -406,9 +419,39 @@ pub struct FibonacciConfig {
     /// Place labels at the left end of level lines instead of the right.
     #[serde(default)]
     pub labels_on_left: bool,
+    /// Font size of level labels and custom text, in points (1 through 256).
+    #[serde(default = "fib_font_size")]
+    pub label_size: f32,
+    /// Retracement and channel labels sit outside the Left/Right endpoint or midway at Center.
+    /// Absent follows `labels_on_left` for earlier drawings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_position: Option<LineTextHorizontalAlign>,
+    /// Edge of a retracement or channel label resting on its level; middle places it on the line.
+    #[serde(default = "fib_vertical_align")]
+    pub label_vertical: LineTextVerticalAlign,
+    /// Whether custom retracement text is visible, independently of prices and ratios.
+    #[serde(default = "percent_levels")]
+    pub show_text: bool,
+    /// Retracement text sits outside the Left/Right endpoint or midway at Center.
+    #[serde(default)]
+    pub text_position: LineTextHorizontalAlign,
+    /// Edge of the custom retracement text resting on its level.
+    #[serde(default = "fib_vertical_align")]
+    pub text_vertical: LineTextVerticalAlign,
+    /// Show the construction line between anchors, using the drawing's line style.
+    #[serde(default = "percent_levels")]
+    pub trend_visible: bool,
     /// Measure retracement and extension levels in logarithmic price when all anchors are positive.
     #[serde(default)]
     pub logarithmic: bool,
+}
+
+fn fib_font_size() -> f32 {
+    12.0
+}
+
+fn fib_vertical_align() -> LineTextVerticalAlign {
+    LineTextVerticalAlign::Middle
 }
 
 fn fib_level_width() -> f32 {
@@ -457,6 +500,13 @@ impl FibonacciConfig {
             show_levels: None,
             levels_as_percent: false,
             labels_on_left: true,
+            label_size: fib_font_size(),
+            label_position: None,
+            label_vertical: fib_vertical_align(),
+            show_text: true,
+            text_position: LineTextHorizontalAlign::Center,
+            text_vertical: fib_vertical_align(),
+            trend_visible: true,
         }
     }
 
@@ -581,6 +631,69 @@ impl FibonacciConfig {
         }
     }
 
+    /// Whether ratios, line widths and typography are finite and within drawing limits.
+    pub fn is_valid(&self) -> bool {
+        let width = |value: f32| value > 0.0 && value <= super::super::validation::MAX_STROKE_WIDTH;
+        width(self.level_width)
+            && (1.0..=256.0).contains(&self.label_size)
+            && self
+                .levels
+                .iter()
+                .all(|level| level.value.is_finite() && level.width.is_none_or(width))
+    }
+
+    /// Apply just the fields edited against `original`, keeping the rest of this drawing's
+    /// settings. Adding or removing a level replaces the ordered table intentionally.
+    #[cfg(feature = "ui")]
+    pub(crate) fn apply_edits(&mut self, original: &Self, edited: &Self) {
+        macro_rules! fields {
+            ($target:expr, $original:expr, $edited:expr, $($field:ident),+ $(,)?) => {
+                $(if $original.$field != $edited.$field {
+                    $target.$field.clone_from(&$edited.$field);
+                })+
+            };
+        }
+        fields!(
+            self,
+            original,
+            edited,
+            level_width,
+            level_style,
+            show_background,
+            background_opacity,
+            extend_left,
+            extend_right,
+            reverse,
+            show_prices,
+            show_levels,
+            levels_as_percent,
+            labels_on_left,
+            logarithmic,
+            label_size,
+            label_position,
+            label_vertical,
+            show_text,
+            text_position,
+            text_vertical,
+            trend_visible
+        );
+        if original.levels.len() == edited.levels.len() {
+            for ((target, original), edited) in self
+                .levels
+                .iter_mut()
+                .zip(&original.levels)
+                .zip(&edited.levels)
+            {
+                fields!(
+                    target, original, edited, value, label, color, visible, show_price, text,
+                    width, line_style
+                );
+            }
+        } else {
+            self.levels.clone_from(&edited.levels);
+        }
+    }
+
     /// Label content; a tool without a price passes `None`.
     pub(crate) fn label_text(&self, level: &FibonacciLevel, price: Option<&str>) -> String {
         if self.show_prices.is_none()
@@ -695,7 +808,9 @@ impl Default for RegressionTrendConfig {
 
 /// Instrument economics used by long and short position drawings.
 /// Quantities are lots; one lot contains `lot_size` units, each worth `point_value`
-/// in the account currency per price point. Defaults retain unit sizing without rounding.
+/// per price point in the account currency, or in the instrument currency when
+/// [`PositionReadout::account_currency`] requests conversion. Defaults retain unit sizing
+/// without rounding.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PositionSizing {
@@ -743,6 +858,112 @@ impl PositionSizing {
         }
         let capital = entry.abs() * self.point_value * self.lot_size * quantity / self.leverage;
         capital.is_finite().then_some(capital)
+    }
+}
+
+/// Statistics and account conversion for long and short position drawings.
+/// New drawings show full statistics only while selected. Currency conversion is supplied
+/// by the host: the library never downloads exchange rates.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PositionReadout {
+    /// Keep statistics visible when the drawing is not selected.
+    pub persistent: bool,
+    /// Omit captions from the level figures and position result, quantity and reward/risk ratio.
+    pub condensed: bool,
+    /// Account currency code; `None` follows the instrument currency.
+    pub account_currency: Option<String>,
+    /// Account-currency units per unit of the instrument currency. Required when the account
+    /// currency differs from the instrument's; `None` leaves that conversion unavailable.
+    pub conversion_rate: Option<f64>,
+    /// Decimal places for quantity rounding and display, from 0 through 8. `None` retains
+    /// the instrument's quantity step and automatic display precision. Rounding never adds risk.
+    pub quantity_decimals: Option<u8>,
+}
+
+impl PositionReadout {
+    /// Whether the currency code, optional rate and quantity precision can be used safely.
+    pub fn is_valid(&self) -> bool {
+        self.quantity_decimals.is_none_or(|places| places <= 8)
+            && self
+                .conversion_rate
+                .is_none_or(|rate| rate.is_finite() && rate > 0.0)
+            && self.account_currency.as_ref().is_none_or(|code| {
+                !code.is_empty()
+                    && code.len() <= 16
+                    && code.bytes().all(|c| c.is_ascii_alphanumeric())
+            })
+    }
+
+    /// Resolve account economics from a host-supplied rate. Matching currencies need no rate;
+    /// a missing rate for a different currency returns `None`, rather than a mislabeled result.
+    pub fn account_sizing(
+        &self,
+        mut sizing: PositionSizing,
+        instrument_currency: Option<&str>,
+    ) -> Option<PositionSizing> {
+        if !self.is_valid() {
+            return None;
+        }
+        if let Some(currency) = &self.account_currency
+            && !instrument_currency.is_some_and(|base| base.eq_ignore_ascii_case(currency))
+        {
+            sizing.point_value *= self.conversion_rate?;
+        }
+        sizing.is_valid().then_some(sizing)
+    }
+
+    /// Quantity in lots after conversion and downward rounding. Decimal precision and a
+    /// lot increment both apply: with quarter-lots and one decimal, valid lots are halves.
+    /// An account-percent size also fits the account's available leveraged capital.
+    pub fn quantity(
+        &self,
+        size: PositionSize,
+        entry: f64,
+        stop: f64,
+        sizing: PositionSizing,
+        instrument_currency: Option<&str>,
+    ) -> Option<f64> {
+        let mut sizing = if matches!(size, PositionSize::Quantity(_)) {
+            (self.is_valid() && sizing.is_valid()).then_some(sizing)?
+        } else {
+            self.account_sizing(sizing, instrument_currency)?
+        };
+        if let Some(places) = self.quantity_decimals {
+            let decimal_step = 10f64.powi(-i32::from(places));
+            if sizing.quantity_step == 0.0 {
+                sizing.quantity_step = decimal_step;
+            } else {
+                // A decimal lot step is m / 10^d. Its common multiple with 10^-p is
+                // 10^-p * m / gcd(m, 10^(d-p)); remove only factors two and five.
+                let text = sizing.quantity_step.to_string();
+                let digits = text
+                    .split_once('.')
+                    .map_or(0, |(_, fraction)| fraction.len());
+                if digits > usize::from(places) {
+                    let mut units: u64 =
+                        text.replace('.', "").trim_start_matches('0').parse().ok()?;
+                    for factor in [2, 5] {
+                        for _ in 0..digits - usize::from(places) {
+                            if !units.is_multiple_of(factor) {
+                                break;
+                            }
+                            units /= factor;
+                        }
+                    }
+                    sizing.quantity_step = decimal_step * units as f64;
+                }
+            }
+        }
+        size.quantity_with_sizing(entry, stop, &sizing)
+    }
+
+    /// Statistics in files written before these settings were always visible.
+    pub(crate) fn legacy() -> Self {
+        Self {
+            persistent: true,
+            ..Self::default()
+        }
     }
 }
 
@@ -919,6 +1140,7 @@ pub enum PositionSize {
 impl PositionSize {
     /// Size in lots using the instrument's point value and lot size. Risk-based sizes and
     /// fixed lot quantities round down to `quantity_step`, so rounding cannot increase risk.
+    /// Account-percent sizing also caps quantity to the account's available leveraged capital.
     /// Returns `None` if no positive permitted quantity fits, or inputs are invalid.
     pub fn quantity_with_sizing(
         &self,
@@ -932,6 +1154,12 @@ impl PositionSize {
         let mut quantity = self.quantity(entry, stop)?;
         if !matches!(self, Self::Quantity(_)) {
             quantity /= sizing.point_value * sizing.lot_size;
+        }
+        if let Self::RiskPercent { account_size, .. } = *self {
+            let capital_per_lot = sizing.required_capital(entry, 1.0)?;
+            if capital_per_lot > 0.0 {
+                quantity = quantity.min(account_size / capital_per_lot);
+            }
         }
         if sizing.quantity_step > 0.0 {
             let steps = quantity / sizing.quantity_step;
@@ -1121,6 +1349,61 @@ mod tests {
                 size.quantity_with_sizing(100.0, stop, &unleveraged)
             );
         }
+        // Ten quarter-point stop ticks at 50 per point, ten units per lot and 0.8
+        // account units per quote unit cost 1000 per lot: 230 risk permits 0.23 lots.
+        let mut readout = PositionReadout {
+            account_currency: Some("EUR".into()),
+            conversion_rate: Some(0.8),
+            quantity_decimals: Some(2),
+            ..Default::default()
+        };
+        for (places, step, expected) in [
+            (Some(2), 0.01, Some(0.23)),
+            (Some(1), 0.01, Some(0.2)),
+            (Some(0), 0.01, None),
+            (None, 0.01, Some(0.23)),
+            (Some(1), 0.25, Some(0.5)),
+        ] {
+            readout.quantity_decimals = places;
+            let sizing = PositionSizing {
+                quantity_step: step,
+                ..sizing
+            };
+            let size = if step == 0.25 {
+                PositionSize::Quantity(0.99)
+            } else {
+                PositionSize::RiskAmount(230.0)
+            };
+            let got = readout.quantity(size, 100.0, 97.5, sizing, Some("USD"));
+            assert!(
+                got.zip(expected)
+                    .map_or(got == expected, |(a, b)| (a - b).abs() < 1e-12),
+                "{places:?}, step {step}: {got:?}"
+            );
+        }
+        // One lot needs 100 * 50 * 0.8 * 10 / 5 = 8000 account units.
+        // An account of 1000 permits 0.125 lots, or 0.12 at the 0.01 increment.
+        readout.quantity_decimals = Some(2);
+        for (leverage, expected) in [(1.0, 0.02), (5.0, 0.12), (10.0, 0.25), (100.0, 1.0)] {
+            assert_eq!(
+                readout.quantity(
+                    PositionSize::RiskPercent {
+                        account_size: 1000.0,
+                        percent: 100.0
+                    },
+                    100.0,
+                    97.5,
+                    PositionSizing { leverage, ..sizing },
+                    Some("USD")
+                ),
+                Some(expected)
+            );
+        }
+        readout.conversion_rate = None;
+        assert!(readout.account_sizing(sizing, Some("USD")).is_none());
+        assert_eq!(readout.account_sizing(sizing, Some("EUR")), Some(sizing));
+        readout.quantity_decimals = Some(9);
+        assert!(!readout.is_valid());
         assert_eq!(sizing.required_capital(100.0, 0.18), Some(1800.0));
         assert_eq!(
             PositionSize::Quantity(2.13).quantity_with_sizing(

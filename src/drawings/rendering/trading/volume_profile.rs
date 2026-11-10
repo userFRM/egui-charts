@@ -122,9 +122,15 @@ impl Drawing {
         match self.tool_type {
             DrawingToolType::FixedRangeVolumeProfile => {
                 let extended = self.volume_profile.is_some_and(|c| c.extend_right);
+                let start = anchor(0)?;
+                let start = if extended {
+                    start.min(anchor(1).unwrap_or(start))
+                } else {
+                    start
+                };
                 bars_between(
                     bars,
-                    anchor(0)?,
+                    start,
                     if extended { f32::INFINITY } else { anchor(1)? },
                 )
             }
@@ -155,7 +161,7 @@ impl Drawing {
         ))
     }
 
-    /// Renders the volume profile of the bars between the two anchors, or from the first one to
+    /// Renders the volume profile of the bars between the two anchors, or from the earlier one to
     /// the last bar when extended right, from half a bar before the first bar to half a bar after
     /// the last, with the point of control and the value area.
     pub(crate) fn render_fixed_range_volume_profile(
@@ -198,13 +204,13 @@ impl Drawing {
     pub(crate) fn volume_tool_handles(&self, view: &ChartView) -> Option<Vec<Pos2>> {
         if self.tool_type == DrawingToolType::AnchoredVWAP {
             let anchor = self.chart_points.first()?.bar_idx;
-            let (_, bars) = bars_between(view.bars, anchor, f32::INFINITY)?;
+            let (first, bars) = bars_between(view.bars, anchor, f32::INFINITY)?;
             let mut sums = VwapSums::default();
-            let (vwap, _) = bars.iter().find_map(|bar| {
+            let (i, (vwap, _)) = bars.iter().enumerate().find_map(|(i, bar)| {
                 sums.add(bar);
-                sums.value()
+                sums.value().map(|value| (i, value))
             })?;
-            let x = (view.bar_to_x)(anchor.round());
+            let x = (view.bar_to_x)((first + i) as f32);
             return Some(vec![Pos2::new(x, (view.price_to_y)(vwap))]);
         }
         let (first, bars) = self.profile_span(view.bars)?;
@@ -827,11 +833,10 @@ mod tests {
     }
 
     /// A profile covers its bars whole, half a bar past each end, and the anchors of the volume
-    /// tools only choose bars: their handles sit on those bars, at the range's top, the anchored
-    /// point of control or the VWAP's start. Extending a fixed range right reads and covers the
-    /// bars past its second anchor.
+    /// profiles only choose bars: their handles sit on those bars, at the range's top or the
+    /// anchored point of control. An extended fixed range reads from its earlier anchor.
     #[test]
-    fn profile_drawings_cover_whole_bars_and_derive_their_handles() {
+    fn extended_fixed_range_reads_from_its_earlier_anchor() {
         use crate::data::VolumeProfileConfig;
         use crate::drawings::ChartPoint;
         let bars: Vec<_> = [(10.0, 1.0), (12.0, 1.0), (20.0, 1.0), (30.0, 9.0)]
@@ -866,7 +871,7 @@ mod tests {
         // Anchors, whether extended, the tint's ends, the handles' bars and their price: the top of
         // the bars read, or the middle of the anchored profile's last row, which holds bar 3's
         // volume of 9.
-        for (tool, anchors, extended, ends, handles, price) in [
+        for (tool, anchors, extended, ends, handles, price, volume) in [
             (
                 DrawingToolType::FixedRangeVolumeProfile,
                 vec![0.2, 2.0],
@@ -874,6 +879,7 @@ mod tests {
                 [95.0, 125.0],
                 vec![0.0, 2.0],
                 21.0,
+                3.0,
             ),
             (
                 DrawingToolType::FixedRangeVolumeProfile,
@@ -882,6 +888,7 @@ mod tests {
                 [95.0, 125.0],
                 vec![2.0, 0.0],
                 21.0,
+                3.0,
             ),
             (
                 DrawingToolType::FixedRangeVolumeProfile,
@@ -890,6 +897,17 @@ mod tests {
                 [95.0, 135.0],
                 vec![0.0, 2.0],
                 31.0,
+                12.0,
+            ),
+            // An extended fixed range reads from its earlier anchor in either placement order.
+            (
+                DrawingToolType::FixedRangeVolumeProfile,
+                vec![3.0, 0.2],
+                true,
+                [95.0, 135.0],
+                vec![3.0, 0.0],
+                31.0,
+                12.0,
             ),
             (
                 DrawingToolType::FixedRangeVolumeProfile,
@@ -898,6 +916,7 @@ mod tests {
                 [95.0, 195.0],
                 vec![0.0, 9.0],
                 31.0,
+                12.0,
             ),
             (
                 DrawingToolType::AnchoredVolumeProfile,
@@ -906,11 +925,24 @@ mod tests {
                 [95.0, 135.0],
                 vec![0.0],
                 10.0 + 21.0 * 3.5 / 4.0,
+                12.0,
             ),
         ] {
             let mut drawing = Drawing::new(1, tool);
             drawing.volume_profile = config(extended);
             drawing.chart_points = anchors.iter().map(|&b| ChartPoint::new(b, 5.0)).collect();
+            let profile = drawing.volume_profile_of(&view).expect("profile");
+            // The selected bars contribute 1 + 1 + 1, or 1 + 1 + 1 + 9 when bar 3 is read.
+            assert_close(profile.volume().iter().sum(), volume);
+            assert_close(profile.low(), 10.0);
+            let (_, start) = drawing
+                .profile_history(
+                    &bars,
+                    Timeframe::Min1,
+                    &[ProfileResolution::new(Timeframe::Sec1, None)],
+                )
+                .expect("finer history");
+            assert_eq!(start, bars[0].time, "{tool:?} {anchors:?}");
             let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
                 if tool == DrawingToolType::AnchoredVolumeProfile {
                     drawing.render_anchored_volume_profile(ui.painter(), &view);
@@ -935,16 +967,180 @@ mod tests {
                 .collect();
             assert_eq!(got, want, "{tool:?} {anchors:?}");
         }
-        // An anchored VWAP's handle starts its line, at the typical price of bar 1: (13 + 12 + 12) / 3.
-        let mut vwap = Drawing::new(1, DrawingToolType::AnchoredVWAP);
-        vwap.chart_points = vec![ChartPoint::new(1.2, 5.0)];
-        assert_eq!(
-            vwap.volume_tool_handles(&view),
-            Some(vec![Pos2::new(
-                bar_to_x(1.0),
-                500.0 - (37.0_f64 / 3.0) as f32 * 10.0
-            )])
-        );
+        // While placing an extended range, its sole anchor is still the start.
+        for (anchors, extended, span) in [
+            (vec![2.0], true, Some((2, 2))),
+            (vec![2.0], false, None),
+            (Vec::new(), true, None),
+        ] {
+            let mut drawing = Drawing::new(1, DrawingToolType::FixedRangeVolumeProfile);
+            drawing.volume_profile = config(extended);
+            drawing.chart_points = anchors.iter().map(|&b| ChartPoint::new(b, 5.0)).collect();
+            assert_eq!(
+                drawing
+                    .profile_span(&bars)
+                    .map(|(first, bars)| (first, bars.len())),
+                span,
+            );
+        }
+    }
+
+    /// The handle follows the first plotted VWAP value across zero volume and history bounds.
+    #[test]
+    fn vwap_handle_sits_on_the_first_point_of_its_line() {
+        use crate::drawings::ChartPoint;
+        let bars: Vec<_> = [(10.0, 1.0), (12.0, 1.0), (20.0, 1.0), (30.0, 9.0)]
+            .into_iter()
+            .enumerate()
+            .map(|(i, (price, volume))| {
+                let time = chrono::DateTime::from_timestamp(i as i64 * 60, 0).unwrap();
+                Bar::new(time, price, price + 1.0, price, price, volume)
+            })
+            .collect();
+        let bar_to_x = |b: f32| 100.0 + 10.0 * b;
+        let view = ChartView {
+            price_formatter: None,
+            time_formatter: None,
+            bar_seconds: 0,
+            instrument: None,
+            bars: &bars,
+            revision: 0,
+            bar_to_x: &bar_to_x,
+            price_to_y: &|p| 500.0 - p as f32 * 10.0,
+            y_to_price: &|y| f64::from(500.0 - y) / 10.0,
+            time_axis: true,
+            executions: None,
+            timeframe: None,
+            finer: &[],
+        };
+        // A VWAP starts at the first bar with positive cumulative volume, even if the
+        // anchor is outside loaded history. The expected prices are (high + low + close) / 3.
+        for (name, volumes, anchor, first) in [
+            (
+                "zero anchor volume",
+                [0.0, 1.0, 1.0, 9.0],
+                0.0,
+                Some((1, 37.0 / 3.0)),
+            ),
+            (
+                "rounded anchor",
+                [1.0, 1.0, 1.0, 9.0],
+                1.2,
+                Some((1, 37.0 / 3.0)),
+            ),
+            (
+                "before history",
+                [1.0, 1.0, 1.0, 9.0],
+                -2.0,
+                Some((0, 31.0 / 3.0)),
+            ),
+            (
+                "before zero volume",
+                [0.0, 0.0, 1.0, 9.0],
+                -2.0,
+                Some((2, 61.0 / 3.0)),
+            ),
+            (
+                "later zero volume",
+                [1.0, 1.0, 0.0, 9.0],
+                2.0,
+                Some((3, 91.0 / 3.0)),
+            ),
+            ("no volume", [0.0; 4], 0.0, None),
+            ("after history", [1.0, 1.0, 1.0, 9.0], 9.0, None),
+        ] {
+            let mut bars = bars.clone();
+            for (bar, volume) in bars.iter_mut().zip(volumes) {
+                bar.volume = volume;
+            }
+            let view = ChartView {
+                bars: &bars,
+                ..view
+            };
+            let mut vwap = Drawing::new(1, DrawingToolType::AnchoredVWAP);
+            vwap.chart_points = vec![ChartPoint::new(anchor, 5.0)];
+            let mut output = egui::Context::default().run_ui(egui::RawInput::default(), |ui| {
+                let painter = egui::Painter::new(
+                    ui.ctx().clone(),
+                    egui::LayerId::background(),
+                    Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 600.0)),
+                );
+                vwap.render_anchored_vwap(&painter, &view);
+            });
+            let shapes = std::mem::take(&mut output.shapes);
+            output.drop_without_applying_deltas();
+            let point = shapes.last().map(|shape| {
+                let Shape::Path(line) = &shape.shape else {
+                    panic!("VWAP line")
+                };
+                line.points[0]
+            });
+            let expected =
+                first.map(|(bar, price)| Pos2::new(bar_to_x(bar as f32), (view.price_to_y)(price)));
+            assert_eq!(point, expected, "{name}: line start");
+            assert_eq!(
+                vwap.volume_tool_handles(&view),
+                point.map(|p| vec![p]),
+                "{name}: handle"
+            );
+            for (theme, width) in [
+                (crate::theme::Theme::light(), 800.0),
+                (crate::theme::Theme::dark(), 800.0),
+                (crate::theme::Theme::light(), 320.0),
+                (crate::theme::Theme::dark(), 320.0),
+            ] {
+                let mut manager = crate::drawings::DrawingManager::new();
+                manager.drawings.push(vwap.clone());
+                manager.update_all_screen_coords(bar_to_x, view.price_to_y);
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            Pos2::ZERO,
+                            egui::vec2(width, 600.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        manager.render_all(ui.painter(), ui.clip_rect(), &view);
+                    },
+                )
+                .drop_without_applying_deltas();
+                let drawing = &manager.drawings[0];
+                let (handle, position) = manager.get_handles(drawing)[0];
+                assert_eq!(position, point.unwrap_or(drawing.points[0]), "{name}");
+                assert_eq!(manager.hit_test_handle(drawing, position), Some(handle));
+                if point.is_some() {
+                    let before = drawing.chart_points.clone();
+                    manager.start_drag_handle(1, handle);
+                    manager.update_drag_handle(
+                        position + egui::vec2(0.0, 10.0),
+                        |x| (x - 100.0) / 10.0,
+                        view.y_to_price,
+                        |p, from, to| p - f64::from(to - from) / 10.0,
+                    );
+                    assert_eq!(
+                        manager.drawings[0].chart_points, before,
+                        "{name}: vertical drag"
+                    );
+                    manager.update_drag_handle(
+                        position + egui::vec2(10.0, 0.0),
+                        |x| (x - 100.0) / 10.0,
+                        view.y_to_price,
+                        |p, from, to| p - f64::from(to - from) / 10.0,
+                    );
+                    manager.end_drag_handle();
+                    assert_eq!(
+                        manager.drawings[0].chart_points[0].bar_idx,
+                        (position.x - 100.0) / 10.0 + 1.0,
+                        "{name}: horizontal drag"
+                    );
+                    assert!(manager.undo());
+                    assert_eq!(manager.drawings[0].chart_points, before, "{name}: undo");
+                }
+            }
+        }
     }
 
     /// The profile of a span that ends on the forming bar follows its ticks

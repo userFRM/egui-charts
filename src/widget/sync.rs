@@ -18,16 +18,19 @@ pub struct VisibleTimeRange {
 }
 
 impl Chart {
-    /// The time of the nearest hovered bar or price-based element, or `None` outside the data.
+    /// The time of the nearest eligible hovered point, or `None` outside the data.
     pub fn hover_time(&self) -> Option<DateTime<Utc>> {
         self.hover_period().map(|(open, _)| open)
     }
 
-    /// The hovered bar's period, from its open until the next bar of its interval opens.
+    /// The hovered bar's period, or an independently keyed point's exact timestamp as both bounds.
     pub(crate) fn hover_period(&self) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
-        let index = self.last_hover_bar_idx?.round();
-        (index >= 0.0 && index < self.state.shown().len() as f64)
-            .then(|| self.bar_period(index as usize))
+        let index = self.last_hover_bar_idx?;
+        if index.fract() != 0.0 || index < 0.0 || index >= self.state.shown().len() as f64 {
+            let time = self.last_crosshair?.0;
+            return Some((time, time));
+        }
+        Some(self.bar_period(index as usize))
     }
 
     // Until the next bar opens if that comes sooner, as after a repeated element time.
@@ -57,6 +60,7 @@ impl Chart {
     /// earlier bar. Times before the first bar or after the last bar's period, and `None`, clear
     /// it. Repeated element times choose the first element. Each receiver resolves the timestamp
     /// against its own series, including after bars are evicted or older history is loaded.
+    /// An exact added or custom point between main bars keeps its fractional position.
     /// Inside a [`super::ChartLayout`] the position stays until it is cleared or replaced, and
     /// returns after a linked pointer leaves.
     pub fn set_synced_crosshair_time(&mut self, time: Option<DateTime<Utc>>) {
@@ -148,6 +152,18 @@ impl Chart {
 
     fn synced_index(&self, from: DateTime<Utc>, to: DateTime<Utc>) -> Option<f64> {
         let bars = self.state.shown();
+        let added_point = self.price_series.iter().any(|item| {
+            item.bars
+                .binary_search_by_key(&from, |bar| bar.time)
+                .is_ok()
+        }) || self.custom_series().any(|item| {
+            item.shown(&item.keys())
+                .binary_search_by_key(&from, |key| key.time)
+                .is_ok()
+        });
+        if added_point && let Some(index) = crate::model::index_at(bars, from) {
+            return Some(index);
+        }
         let after = bars.partition_point(|bar| bar.time <= from);
         let index = if after > 0 && from < self.bar_period(after - 1).1 {
             after - 1
@@ -253,8 +269,8 @@ impl Chart {
         self.synced_crosshair_series = None;
     }
 
-    /// Returns the nearest hovered local index from the last frame, counting elements on
-    /// price-based types. Use [`Self::hover_time`] to exchange positions between charts.
+    /// Returns the selected local index, including fractional added or custom points, from the
+    /// last frame. Counts elements on price-based types. Use [`Self::hover_time`] between charts.
     pub fn get_hover_bar_idx(&self) -> Option<f64> {
         self.last_hover_bar_idx
     }

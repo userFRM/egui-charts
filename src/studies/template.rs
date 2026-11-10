@@ -285,6 +285,7 @@ impl StudyTemplate {
                         pattern: crate::model::LineStyle::Dashed,
                         width: 1.0,
                         visible: false,
+                        price_line: false,
                     });
                 }
             }

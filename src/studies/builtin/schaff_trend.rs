@@ -224,39 +224,21 @@ mod tests {
 
     #[test]
     fn test_stc_calculation() {
-        let mut stc = SchaffTrendCycle::new().with_periods(5, 10, 3);
-
-        let data: Vec<Bar> = (0..50).map(|i| make_bar(100.0 + i as f64)).collect();
-
+        let mut stc = SchaffTrendCycle::new().with_periods(2, 3, 2);
+        let data: Vec<Bar> = [100.0, 102.0, 101.0, 105.0, 103.0, 107.0]
+            .into_iter()
+            .map(make_bar)
+            .collect();
         stc.calculate(&data);
-
-        assert_eq!(stc.values.len(), 50);
-
-        // Check that valid values are between 0 and 100
-        let mut checked = 0;
-        for value in &stc.values.to_rows() {
-            if let IndicatorValue::Single(v) = value {
-                assert!(*v >= 0.0 && *v <= 100.0, "STC should be 0-100, got {v}");
-                checked += 1;
-            }
+        // Hand MACD from SMA seeds and EMA alpha 2/3,1/2: 0,2/3,2/9,20/27.
+        // Two-bar stochastic: 50,100,0,100 (50 for the initial flat window).
+        // Half-step smoothing: 25,62.5,31.25,65.625; second stochastic
+        // 50,100,0,100 gives the same final half-step values.
+        assert_eq!(stc.values().len(), 6);
+        assert_eq!(stc.values().value(0, 0), None);
+        assert_eq!(stc.values().value(0, 1), None);
+        for (bar, want) in [(2, 25.0), (3, 62.5), (4, 31.25), (5, 65.625)] {
+            assert_eq!(stc.values().value(0, bar), Some(want), "bar {bar}");
         }
-        assert!(checked > 0, "no value to check");
-    }
-
-    #[test]
-    fn test_stc_uptrend() {
-        let mut stc = SchaffTrendCycle::new().with_periods(3, 6, 3);
-
-        // Strong uptrend
-        let data: Vec<Bar> = (0..30).map(|i| make_bar(100.0 + i as f64 * 2.0)).collect();
-
-        stc.calculate(&data);
-
-        // In uptrend, STC should be high (close to 100)
-        let rows = stc.values.to_rows();
-        let IndicatorValue::Single(v) = rows.last().unwrap() else {
-            panic!("no value: {:?}", stc.values.to_rows().last().unwrap());
-        };
-        assert!(*v > 50.0, "STC should be high in uptrend, got {v}");
     }
 }

@@ -139,30 +139,17 @@ mod tests {
     #[test]
     fn test_mfi_calculation() {
         let mut mfi = MarketFacilitationIndex::new();
-
-        let data = vec![
-            make_bar(102.0, 98.0, 1000.0),  // Range=4, MFI=0.004
-            make_bar(105.0, 100.0, 2000.0), // Range=5, MFI=0.0025
+        // Williams' range/volume by hand: 4/1000=.004, 5/2000=.0025;
+        // division by zero has no value.
+        let data = [
+            make_bar(102.0, 98.0, 1000.0),
+            make_bar(105.0, 100.0, 2000.0),
+            make_bar(102.0, 98.0, 0.0),
         ];
-
         mfi.calculate(&data);
-
-        assert_eq!(mfi.values.len(), 2);
-
-        let IndicatorValue::Single(v) = mfi.values.to_rows()[0] else {
-            panic!("no value: {:?}", mfi.values.to_rows()[0]);
-        };
-        assert!((v - 0.004).abs() < 0.0001);
-    }
-
-    #[test]
-    fn test_mfi_zero_volume() {
-        let mut mfi = MarketFacilitationIndex::new();
-
-        let data = vec![make_bar(102.0, 98.0, 0.0)];
-
-        mfi.calculate(&data);
-
-        assert!(matches!(mfi.values.to_rows()[0], IndicatorValue::None));
+        assert_eq!(mfi.values().len(), 3);
+        for (bar, want) in [Some(0.004), Some(0.0025), None].into_iter().enumerate() {
+            assert_eq!(mfi.values().value(0, bar), want, "bar {bar}");
+        }
     }
 }

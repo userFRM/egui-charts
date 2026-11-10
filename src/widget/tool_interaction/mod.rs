@@ -47,7 +47,9 @@ impl Chart {
         drawing.line_measurement_card_rect(
             &ui.painter().with_clip_rect(clip),
             &ChartView {
-                price_formatter: price_member.and_then(|id| self.series_price_formatter(id)),
+                price_formatter: price_member
+                    .and_then(|id| self.series_price_formatter(id))
+                    .as_deref(),
                 time_formatter: None,
                 bar_seconds: 0,
                 instrument: price_member.and(self.instrument()),
@@ -355,6 +357,9 @@ impl Chart {
                     .and_then(|(id, _)| drawing_manager.drawings.iter().find(|d| d.id == id))
             })
             .is_none_or(|d| drawing_manager.owns_pane(d) || d.reaches_other_panes());
+        if owns_gesture {
+            text::begin_fibonacci_edit(ui, drawing_manager, response, price_rect);
+        }
         if !owns_gesture || drawing_manager.text_editor.is_some() {
             // The editor owns this frame's pointer input, including its outside commit click.
         } else if let Some(active_tool) = drawing_manager.active_tool {
@@ -449,7 +454,7 @@ impl Chart {
         // no dates.
         // Render existing drawings against the chart's bars
         let view = ChartView {
-            price_formatter,
+            price_formatter: price_formatter.as_deref(),
             time_formatter: self.horizontal_scale.is_none().then_some(time_format.0),
             bar_seconds: time_format.1,
             instrument: price_member.and(self.instrument()),
@@ -546,6 +551,7 @@ mod tests {
                 .map(|(bar, price)| ChartPoint::new(bar, price))
                 .collect();
             drawing.completed = true;
+            drawing.position_readout.persistent = tool == LongPos;
             if tool == FibonacciRetracement {
                 drawing.fib_config = Some(FibonacciConfig {
                     show_prices: Some(true),
@@ -577,8 +583,8 @@ mod tests {
             "+5.0 pts (+5.00%)",
             "4.0 pts (4.0%)",
             "Target: 105.0 pts",
-            "Target: 106.0 pts (6.00%)",
-            "Stop: 94.0 pts (-6.00%)",
+            "Target: 6.0 pts (6.000%)",
+            "Stop: 6.0 pts (6.000%)",
             "(100.0 pts)",
             "16.0 pts (17.39%)",
             "102.0 pts",

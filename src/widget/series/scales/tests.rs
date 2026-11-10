@@ -696,6 +696,102 @@ fn flat_candles_take_the_direction_of_their_last_value() {
     }
 }
 
+/// A list-wide precision change from edge values must fit on both price axes.
+#[test]
+fn tick_list_axis_width_includes_edge_ticks() {
+    use crate::scales::PriceFormatter;
+    #[derive(Clone)]
+    struct Quarters;
+    impl PriceFormatter for Quarters {
+        fn format(&self, value: f64) -> String {
+            format!("{value:.0}")
+        }
+        fn format_ticks(&self, values: &[f64]) -> Vec<String> {
+            let precision = if values
+                .iter()
+                .all(|value| (value * 4.0).fract().abs() < 1e-8)
+            {
+                0
+            } else {
+                10
+            };
+            values
+                .iter()
+                .map(|value| format!("{value:.precision$}"))
+                .collect()
+        }
+        fn clone_box(&self) -> Box<dyn PriceFormatter> {
+            Box::new(self.clone())
+        }
+    }
+    for (theme, width) in [
+        (crate::theme::Theme::light(), 760.0),
+        (crate::theme::Theme::dark(), 320.0),
+    ] {
+        for inverted in [false, true] {
+            let ctx = egui::Context::default();
+            let data = bars(&[100.0, 200.0]);
+            let mut chart = Chart::new(BarData::from_bars(data.clone()));
+            chart.set_theme(&ctx, &theme);
+            chart.set_size(Some(egui::vec2(width, 580.0)));
+            chart.config.show_volume = false;
+            chart.config.show_symbol_last_val = false;
+            chart.config.price_axis.edge_ticks_visible = true;
+            chart.set_price_formatter(Some(std::sync::Arc::new(Quarters)));
+            let id = chart.add_series(SeriesOptions {
+                scale: SeriesScale::Left,
+                ..Default::default()
+            });
+            chart.set_data(id, data);
+            for id in [SeriesId::MAIN, id] {
+                chart
+                    .series_price_scale_mut(id)
+                    .unwrap()
+                    .options_mut()
+                    .invert_scale = inverted;
+            }
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            let painted = crate::widget::test_frames::shapes(&ctx, &mut chart, 0.1, vec![]);
+            for id in [SeriesId::MAIN, id] {
+                let map = chart.series_price_map(id).unwrap();
+                let plot = chart.get_rendered_price_rect();
+                let ticks: Vec<_> = painted
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        egui::Shape::Text(text)
+                            if text
+                                .galley
+                                .text()
+                                .split_once('.')
+                                .is_some_and(|(_, fraction)| fraction.len() == 10)
+                                && plot.y_range().contains(text.pos.y)
+                                && if id == SeriesId::MAIN {
+                                    text.pos.x >= plot.right()
+                                } else {
+                                    text.pos.x < plot.left()
+                                } =>
+                        {
+                            Some(text)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert!(ticks.len() >= 3, "{id:?} inverted={inverted}: {ticks:?}");
+                for tick in ticks {
+                    assert!(
+                        tick.galley.size().x + crate::chart::rendering::axes::PRICE_LABEL_GAP
+                            <= chart.measured_axis_width,
+                        "{id:?}: {}",
+                        tick.galley.text()
+                    );
+                    assert!(!tick.galley.elided);
+                }
+                assert!(map.marks().len() >= 3);
+            }
+        }
+    }
+}
+
 /// Tick hooks see each axis separately in displayed units, while value labels keep
 /// using the individual hook. A move from 100 to 200 or 1000 to 2000 is +100%, index 200.
 #[test]
@@ -806,7 +902,7 @@ fn tick_formatters_receive_complete_axis_lists() {
                 let map = chart.series_price_map(id).unwrap();
                 let expected: Vec<_> = map.marks().iter().map(|mark| mark.price).collect();
                 let calls = recorder.lists.lock().unwrap();
-                assert!(calls.contains(&expected), "{mode:?}: {id:?}: {calls:?}");
+                assert!(!calls.is_empty(), "{mode:?}: {id:?}");
                 let bounds = match mode {
                     PriceScaleMode::Percentage => (0.0, 100.0),
                     PriceScaleMode::IndexedTo100 => (100.0, 200.0),
@@ -830,8 +926,10 @@ fn tick_formatters_receive_complete_axis_lists() {
                 }
                 if edges {
                     assert!(
-                        calls.iter().any(|values| values != &expected),
-                        "edge ticks are included"
+                        calls
+                            .iter()
+                            .all(|values| values != &expected && values == &calls[0]),
+                        "layout and painting include the same edge ticks: {calls:?}"
                     );
                 } else {
                     assert!(calls.iter().all(|values| values == &expected));
@@ -2705,6 +2803,48 @@ fn added_series_value_tags_use_their_scale_precision_and_name() {
 #[test]
 fn series_scales_fit_visible_members_and_reserve_their_axes() {
     let ctx = egui::Context::default();
+    // Gradient fills keep their scale contribution when their plot strokes are hidden.
+    #[cfg(feature = "studies")]
+    for secondary in [false, true] {
+        for mode in [PriceScaleMode::Normal, PriceScaleMode::Logarithmic] {
+            let mut chart = crate::widget::test_frames::chart(&[10.0; 2], &[20.0; 2]);
+            let id = chart.add_indicator(Box::new(crate::studies::StochasticMomentumIndex::new(
+                1, 1, 1, 1,
+            )));
+            if !secondary {
+                assert!(chart.move_series_to_pane(id, PaneId::MAIN));
+            }
+            let pane = chart.series_pane(id).unwrap();
+            assert!(
+                chart.set_indicator_scale(
+                    id,
+                    crate::studies::StudyScale::Shared(SeriesScale::Right)
+                )
+            );
+            let study = chart.indicator_mut(id).unwrap();
+            let mut settings = study.settings();
+            for plot in &mut settings.plots {
+                plot.visible = false;
+            }
+            for level in &mut settings.levels {
+                level.visible = false;
+            }
+            settings.fill_between_levels = false;
+            study.apply_settings(&[], settings).unwrap();
+            let host = chart.add_series(SeriesOptions::default());
+            chart.set_data(host, bars(&[10.0, 20.0]));
+            assert!(chart.move_series_to_pane(host, pane));
+            chart
+                .pane_price_scale_mut(pane, SeriesScale::Right)
+                .options_mut()
+                .mode = mode;
+            frame(&ctx, &mut chart, 0.0, vec![]);
+            frame(&ctx, &mut chart, 0.1, vec![]);
+            let map = chart.series_price_map(id).unwrap();
+            let top = map.transform().to_price(map.range().max);
+            assert!(top >= 100.0, "secondary={secondary} {mode:?}: {top}");
+        }
+    }
     for key in [SeriesScale::Right, SeriesScale::Separate(2)] {
         let mut chart = Chart::new(BarData::from_bars(bars(&[100.0, 110.0])));
         assert!(chart.set_series_scale(SeriesId::MAIN, key));
@@ -4448,6 +4588,185 @@ fn pane_axis_commands_enumerate_sources_and_restore_layout() {
             [PaneScale::Named(key)]
         );
     }
+}
+
+/// Empty studies contribute no fallback prices; attached primitives still fit. Bars from 10 to 20
+/// fit 8.75..21.25 with 10% fractional margins, or 9..21 with a pane's 10% price padding.
+/// A study from 1000 to 1010 pads to 999..1011, or -0.1..1.1% and 99.9..101.1 indexed.
+/// Logarithmic panes fit ln(1000)..ln(1010). A 40 point margin at each edge widens a
+/// span s in a plot h points tall by s / (1 - 80 / h), centred on the original range.
+#[cfg(feature = "studies")]
+#[test]
+fn study_without_values_in_view_adds_nothing_to_its_scale() {
+    use crate::chart::primitives::Primitive;
+    use crate::model::{AutoscaleInfo, AutoscaleMargins};
+    use crate::studies::{CustomIndicator, IndicatorValue, SMA};
+
+    struct Header(AutoscaleInfo);
+    impl Primitive for Header {
+        fn autoscale_info(&self, _: &[Bar], _: std::ops::Range<usize>) -> Option<AutoscaleInfo> {
+            Some(self.0)
+        }
+    }
+
+    let mut failures = Vec::new();
+    for (theme, width) in [
+        (crate::theme::Theme::light(), 800.0),
+        (crate::theme::Theme::dark(), 320.0),
+    ] {
+        let draw = |ctx: &egui::Context, chart: &mut Chart, time: f64| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(width, 600.0))),
+                    time: Some(time),
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        chart.show(ui);
+                    });
+                },
+            )
+            .drop_without_applying_deltas();
+        };
+        for (case, mode) in [
+            ("main warm-up", PriceScaleMode::Normal),
+            ("main scrolled", PriceScaleMode::Normal),
+            ("shared bars", PriceScaleMode::Normal),
+            ("primitive", PriceScaleMode::Normal),
+            ("primitive", PriceScaleMode::Percentage),
+            ("primitive", PriceScaleMode::IndexedTo100),
+            ("primitive", PriceScaleMode::Logarithmic),
+            ("study", PriceScaleMode::Normal),
+            ("study", PriceScaleMode::Percentage),
+            ("study", PriceScaleMode::IndexedTo100),
+            ("study", PriceScaleMode::Logarithmic),
+        ] {
+            for margin in [false, true] {
+                if margin && case.starts_with("main") {
+                    continue;
+                }
+                let ctx = egui::Context::default();
+                let mut chart = crate::widget::test_frames::chart(&[10.0], &[20.0]);
+                chart.set_theme(&ctx, &theme);
+                chart.config.show_volume = false;
+                if case.starts_with("main") {
+                    let pane = chart.add_pane();
+                    assert!(chart.move_series_to_pane(SeriesId::MAIN, pane));
+                    assert!(chart.remove_pane(PaneId::MAIN));
+                }
+                let study: Box<dyn Indicator> = match case {
+                    "main warm-up" => Box::new(SMA::new(200)),
+                    "main scrolled" => Box::new(CustomIndicator::new("Level", |bars| {
+                        vec![IndicatorValue::Single(15.0); bars.len()]
+                    })),
+                    "shared bars" | "primitive" => Box::new(
+                        CustomIndicator::new("Empty", |bars| {
+                            vec![IndicatorValue::None; bars.len()]
+                        })
+                        .with_overlay(false),
+                    ),
+                    _ => Box::new(
+                        CustomIndicator::new("Pane", |bars| {
+                            (0..bars.len())
+                                .map(|at| {
+                                    IndicatorValue::Single(if at + 1 == bars.len() {
+                                        1010.0
+                                    } else {
+                                        1000.0
+                                    })
+                                })
+                                .collect()
+                        })
+                        .with_overlay(false),
+                    ),
+                };
+                let study = chart.add_indicator(study);
+                let pane = chart.series_pane(study).unwrap();
+                let target = if case == "shared bars" {
+                    let id = chart.add_series(SeriesOptions {
+                        chart_type: ChartType::Candles,
+                        ..Default::default()
+                    });
+                    chart.set_data(id, chart.bars(SeriesId::MAIN).to_vec());
+                    assert!(chart.move_series_to_pane(id, pane));
+                    id
+                } else if case.starts_with("main") {
+                    assert_eq!(pane, chart.main_series_pane());
+                    SeriesId::MAIN
+                } else {
+                    study
+                };
+                if margin || case == "primitive" {
+                    chart
+                        .attach_primitive(
+                            study,
+                            Header(AutoscaleInfo {
+                                price_range: if case == "primitive" {
+                                    (30.0, 40.0)
+                                } else {
+                                    (f64::NAN, f64::NAN)
+                                },
+                                margins: AutoscaleMargins {
+                                    top: if margin { 40.0 } else { 0.0 },
+                                    bottom: if margin { 40.0 } else { 0.0 },
+                                },
+                            }),
+                        )
+                        .unwrap();
+                }
+                chart
+                    .pane_price_scale_mut(pane, SeriesScale::Right)
+                    .options_mut()
+                    .mode = mode;
+                for step in 0..3 {
+                    draw(&ctx, &mut chart, step as f64 * 0.1);
+                }
+                let map = chart.series_price_map(target).unwrap();
+                let (low, high) = match case {
+                    "main warm-up" | "main scrolled" => (8.75, 21.25),
+                    "shared bars" => (9.0, 21.0),
+                    "primitive" if mode == PriceScaleMode::Logarithmic => {
+                        (30_f64.ln(), 40_f64.ln())
+                    }
+                    "primitive" => (30.0, 40.0),
+                    _ => match mode {
+                        PriceScaleMode::Normal => (999.0, 1011.0),
+                        PriceScaleMode::Percentage => (-0.1, 1.1),
+                        PriceScaleMode::IndexedTo100 => (99.9, 101.1),
+                        PriceScaleMode::Logarithmic => (1000_f64.ln(), 1010_f64.ln()),
+                    },
+                };
+                let height = f64::from(map.extent().1 - map.extent().0);
+                let beyond = if margin {
+                    (high - low) * 40.0 / (height - 80.0)
+                } else {
+                    0.0
+                };
+                let expected = (low - beyond, high + beyond);
+                let mut check = |stage: &str, range: crate::scales::PriceRange| {
+                    if !((range.min - expected.0).abs() < 1e-9
+                        && (range.max - expected.1).abs() < 1e-9)
+                    {
+                        failures.push(format!(
+                            "width={width} {case} {mode:?} margin={margin} {stage}: {range:?}, expected {expected:?}"
+                        ));
+                    }
+                };
+                check("in view", map.range());
+                if matches!(case, "main scrolled" | "study") {
+                    chart.scroll_to_position(300.0, false);
+                    for step in 1..=3 {
+                        draw(&ctx, &mut chart, step as f64);
+                        check("scrolled", chart.series_price_map(target).unwrap().range());
+                    }
+                    let (start, end) = chart.state().visible_range();
+                    assert_eq!(start, end, "{case}: no bar in view");
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 /// A margin-only request (prices left out, as the hook allows) while no bar is in view: the
