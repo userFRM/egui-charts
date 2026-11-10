@@ -3697,11 +3697,15 @@ impl Chart {
                     price_formatter.as_deref(),
                 )
             });
-        self.measured_axis_width = rendering::axes::price_axis_width(
+        self.measured_axis_width = rendering::axes::price_axis_width_with_edges(
             &painter,
             &price_map,
             &current_price.as_deref().into_iter().collect::<Vec<_>>(),
             price_formatter.as_deref(),
+            self.config
+                .price_axis
+                .edge_ticks_visible
+                .then_some(price_rect),
         );
         if cfg!(feature = "icons")
             && show_left_axis

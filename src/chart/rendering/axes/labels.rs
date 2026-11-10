@@ -50,7 +50,12 @@ pub fn render_price_labels_at_pos(
     slot: ShapeIdx,
     formatter: Option<&dyn PriceFormatter>,
 ) {
-    let mut marks = price_scale.marks();
+    let marks = price_axis_marks(
+        context.painter,
+        price_scale,
+        axis.edge_ticks_visible.then_some(context.rect),
+        formatter,
+    );
 
     // Determine positioning based on scale position
     let (edge, side, alignment) = match position {
@@ -60,38 +65,6 @@ pub fn render_price_labels_at_pos(
     let x_offset = edge + side * PRICE_LABEL_GAP;
 
     let font = axis_font(context.painter.ctx());
-    if axis.edge_ticks_visible {
-        // Edge labels sit half a line inside the pane, so they show whole.
-        let inset = context
-            .painter
-            .layout_no_wrap("0".to_owned(), font.clone(), colors.text)
-            .size()
-            .y
-            / 2.0;
-        // A pane too short for two labels gets none at its edges.
-        if context.rect.height() >= inset * 4.0 {
-            let edges = [context.rect.top() + inset, context.rect.bottom() - inset];
-            // An edge label replaces the marks closer to it than they are to each other.
-            let step = marks
-                .windows(2)
-                .map(|pair| (pair[1].y_coord - pair[0].y_coord).abs())
-                .reduce(f32::min)
-                .unwrap_or(inset * 4.0);
-            marks.retain(|mark| edges.iter().all(|y| (mark.y_coord - y).abs() >= step));
-            marks.extend(edges.map(|y| {
-                let value = price_scale.y_to_scale(y);
-                PriceMark {
-                    price: price_scale.transform().axis_value(value),
-                    label: price_scale.label(value, tick_decimals(price_scale, y), None),
-                    y_coord: y,
-                    weight: 0,
-                }
-            }));
-            marks.sort_by(|a, b| a.price.total_cmp(&b.price));
-        }
-    }
-    format_price_marks(&mut marks, formatter);
-
     let painter = if axis.hide_clipped_labels {
         context.painter.clone()
     } else {
@@ -156,6 +129,47 @@ pub(crate) fn price_marks(
     formatter: Option<&dyn PriceFormatter>,
 ) -> Vec<PriceMark> {
     let mut marks = price_scale.marks();
+    format_price_marks(&mut marks, formatter);
+    marks
+}
+
+/// The complete list for painting and measuring an axis, with edge values inside `pane`.
+pub(super) fn price_axis_marks(
+    painter: &egui::Painter,
+    price_scale: &PriceMap,
+    pane: Option<Rect>,
+    formatter: Option<&dyn PriceFormatter>,
+) -> Vec<PriceMark> {
+    let mut marks = price_scale.marks();
+    if let Some(pane) = pane {
+        // Edge labels sit half a line inside the pane, so they show whole.
+        let inset = painter
+            .layout_no_wrap("0".to_owned(), axis_font(painter.ctx()), Color32::WHITE)
+            .size()
+            .y
+            / 2.0;
+        // A pane too short for two labels gets none at its edges.
+        if pane.height() >= inset * 4.0 {
+            let edges = [pane.top() + inset, pane.bottom() - inset];
+            // An edge label replaces the marks closer to it than they are to each other.
+            let step = marks
+                .windows(2)
+                .map(|pair| (pair[1].y_coord - pair[0].y_coord).abs())
+                .reduce(f32::min)
+                .unwrap_or(inset * 4.0);
+            marks.retain(|mark| edges.iter().all(|y| (mark.y_coord - y).abs() >= step));
+            marks.extend(edges.map(|y| {
+                let value = price_scale.y_to_scale(y);
+                PriceMark {
+                    price: price_scale.transform().axis_value(value),
+                    label: price_scale.label(value, tick_decimals(price_scale, y), None),
+                    y_coord: y,
+                    weight: 0,
+                }
+            }));
+            marks.sort_by(|a, b| a.price.total_cmp(&b.price));
+        }
+    }
     format_price_marks(&mut marks, formatter);
     marks
 }

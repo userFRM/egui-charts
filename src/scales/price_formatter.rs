@@ -128,7 +128,8 @@ pub trait PriceFormatter: Send + Sync {
     /// falls back to that per-value method for the whole list.
     ///
     /// Layout and painting can each request labels; ticks covered by tags or clipped
-    /// at the pane boundary are still included. Crosshair and price tags use
+    /// at the pane boundary are still included, as are the edge values when edge ticks
+    /// are enabled. Layout and painting use the same list. Crosshair and price tags use
     /// [`format`](Self::format) instead.
     fn format_ticks(&self, prices: &[f64]) -> Vec<String> {
         prices
