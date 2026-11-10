@@ -1199,10 +1199,12 @@ impl Indicator for ConfiguredStudy {
         }
         let mut edited = self.clone();
         let mut inputs: Vec<_> = inputs.iter().collect();
-        // Calculation inputs precede inputs that can change the study's own data requests.
-        inputs.sort_by_key(|(id, _)| {
-            !matches!(id.as_str(), "calculation_symbol" | "calculation_timeframe")
-        });
+        // Keep an accepted interval before inputs that can change the study's data requests.
+        if edited.runs_on_other_bars() {
+            inputs.sort_by_key(|(id, _)| {
+                !matches!(id.as_str(), "calculation_symbol" | "calculation_timeframe")
+            });
+        }
         for (id, value) in inputs {
             edited.set_input(id, value.clone())?;
         }
@@ -1681,6 +1683,26 @@ mod tests {
             ));
         }
         assert_eq!(observed, expected);
+
+        // A batch can first stop requesting daily bars, then select a calculation interval.
+        let mut pivots = ConfiguredStudy::new(Box::new(
+            super::super::PivotPoints::new().with_daily_bars(true),
+        ));
+        pivots.set_timeframe(Timeframe::Min1);
+        let settings = pivots.settings();
+        pivots
+            .apply_settings(
+                &[
+                    ("daily_bars".into(), InputValue::Toggle(false)),
+                    (
+                        "calculation_timeframe".into(),
+                        InputValue::Timeframe(Some(Timeframe::Hour1)),
+                    ),
+                ],
+                settings,
+            )
+            .unwrap();
+        assert_eq!(pivots.data_requests()[0].timeframe, Some(Timeframe::Hour1));
     }
 
     #[test]
