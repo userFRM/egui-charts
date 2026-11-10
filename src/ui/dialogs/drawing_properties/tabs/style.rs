@@ -52,12 +52,17 @@ impl StyleTab {
 
             if let Some(template) = &mut props.tool_settings {
                 let settings = &mut template.settings;
-                if settings.tool_type == DrawingToolType::FibonacciRetracement {
+                if matches!(
+                    settings.tool_type,
+                    DrawingToolType::FibonacciRetracement
+                        | DrawingToolType::FibonacciChannel
+                        | DrawingToolType::FibonacciWedge
+                ) {
                     let mut config = settings.fibonacci_config().into_owned();
                     let original = config.clone();
                     ui.label(l10n::text(ui.ctx(), "All colours"));
                     if let Some(color) =
-                        color_swatch(ui, fill_picker, props.color, "retracement_color")
+                        color_swatch(ui, fill_picker, props.color, "fibonacci_color")
                     {
                         props.color = keep_opacity(color, props.color, fill_picker.custom_mode);
                         for level in &mut config.levels {
@@ -70,10 +75,12 @@ impl StyleTab {
                         }
                     }
                     ui.end_row();
-                    ui.label(l10n::text(ui.ctx(), "Trend line"));
-                    ui.checkbox(&mut config.trend_visible, l10n::text(ui.ctx(), "Visible"))
-                        .accessible_name(l10n::text(ui.ctx(), "Show construction line"));
-                    ui.end_row();
+                    if settings.tool_type != DrawingToolType::FibonacciChannel {
+                        ui.label(l10n::text(ui.ctx(), "Trend line"));
+                        ui.checkbox(&mut config.trend_visible, l10n::text(ui.ctx(), "Visible"))
+                            .accessible_name(l10n::text(ui.ctx(), "Show construction line"));
+                        ui.end_row();
+                    }
                     ui.label(l10n::text(ui.ctx(), "Level width"));
                     line_width_row(ui, &mut config.level_width);
                     ui.end_row();
@@ -382,6 +389,8 @@ mod tests {
         for (tool, picker, alpha, fill) in [
             (DrawingToolType::Highlighter, 0, 51, None),
             (DrawingToolType::FibonacciRetracement, 1, 255, None),
+            (DrawingToolType::FibonacciChannel, 1, 255, None),
+            (DrawingToolType::FibonacciWedge, 1, 255, None),
             (
                 DrawingToolType::FibonacciRetracement,
                 1,
@@ -437,7 +446,12 @@ mod tests {
             let [r, g, b, _] = swatch.to_srgba_unmultiplied();
             assert_eq!(props.color, Color32::from_rgba_unmultiplied(r, g, b, alpha));
 
-            if tool == DrawingToolType::FibonacciRetracement {
+            if matches!(
+                tool,
+                DrawingToolType::FibonacciRetracement
+                    | DrawingToolType::FibonacciChannel
+                    | DrawingToolType::FibonacciWedge
+            ) {
                 assert_eq!(
                     props.fill_color,
                     fill.map(|color| Color32::from_rgba_unmultiplied(r, g, b, color[3]))

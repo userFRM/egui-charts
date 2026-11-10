@@ -334,6 +334,9 @@ pub struct FibonacciLevel {
     /// Line width in points; absent inherits the drawing's level width.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<f32>,
+    /// Line pattern; absent inherits the drawing's level pattern.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_style: Option<crate::model::LineStyle>,
     /// Level color as RGBA
     pub color: [u8; 4],
     /// Whether this level is visible
@@ -352,6 +355,7 @@ impl FibonacciLevel {
             label: label.to_string(),
             text: String::new(),
             width: None,
+            line_style: None,
             color,
             visible: true,
             show_price: true,
@@ -418,11 +422,11 @@ pub struct FibonacciConfig {
     /// Font size of level labels and custom text, in points (1 through 256).
     #[serde(default = "fib_font_size")]
     pub label_size: f32,
-    /// Retracement labels sit outside the Left/Right endpoint or midway at Center.
+    /// Retracement and channel labels sit outside the Left/Right endpoint or midway at Center.
     /// Absent follows `labels_on_left` for earlier drawings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label_position: Option<LineTextHorizontalAlign>,
-    /// Edge of a retracement label resting on its level; middle places it on the line.
+    /// Edge of a retracement or channel label resting on its level; middle places it on the line.
     #[serde(default = "fib_vertical_align")]
     pub label_vertical: LineTextVerticalAlign,
     /// Whether custom retracement text is visible, independently of prices and ratios.
@@ -681,7 +685,8 @@ impl FibonacciConfig {
                 .zip(&edited.levels)
             {
                 fields!(
-                    target, original, edited, value, label, color, visible, show_price, text, width
+                    target, original, edited, value, label, color, visible, show_price, text,
+                    width, line_style
                 );
             }
         } else {
