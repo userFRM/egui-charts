@@ -377,7 +377,7 @@ pub(super) struct HostEvents {
 struct PointerInput;
 
 fn pointer_input_id(viewport: egui::ViewportId) -> egui::Id {
-    egui::Id::new(("chart_pointer_input", viewport))
+    egui::Id::unique(("chart_pointer_input", viewport))
 }
 
 impl egui::Plugin for PointerInput {
