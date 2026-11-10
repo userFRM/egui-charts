@@ -879,17 +879,19 @@ struct LayoutEdits {
 }
 
 impl Clone for LayoutEdits {
-    /// A copy serves other charts, whose steps do not concern this layout.
+    /// A clone showing the same charts must see their pending history steps.
     fn clone(&self) -> Self {
-        Self::default()
+        Self {
+            steps: Arc::clone(&self.steps),
+        }
     }
 }
 
 impl LayoutEdits {
     #[cfg(any(feature = "studies", feature = "drawings"))]
     fn start(&mut self) -> LayoutEditLink {
-        // Process-wide, so that a clone of a layout, which starts a new queue, never reuses an
-        // id that a chart's history may already hold from the original.
+        // Process-wide, so that copies made through different layout values never reuse an id
+        // that a chart's history may already hold.
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         LayoutEditLink {
             steps: Arc::clone(&self.steps),
@@ -963,6 +965,9 @@ impl Default for ChartSyncOptions {
 /// grid preset. The container does not acquire data or persist it. Charts that keep their
 /// drawings in the same storage (`Chart::set_storage`) read the drawings of their symbol again
 /// after another of them wrote them, in any group.
+/// A clone follows pending cross-chart undo and redo steps when it shows the same charts.
+/// Clones showing other charts leave those steps for their owners; split sizes and link
+/// memberships remain independent.
 ///
 /// ```
 /// # fn example(ui: &mut egui::Ui) {
@@ -1162,7 +1167,15 @@ impl ChartLayout {
 
     fn step_layout_edits(&mut self, charts: &mut [&mut Chart]) {
         loop {
-            let step = self.edits.steps.lock().unwrap().pop();
+            let step = {
+                let mut steps = self.edits.steps.lock().unwrap();
+                let at = steps.iter().rposition(|(id, _)| {
+                    charts
+                        .iter()
+                        .any(|chart| chart.history.holds_layout_edit(*id))
+                });
+                at.map(|at| steps.remove(at))
+            };
             let Some((id, redo)) = step else {
                 return;
             };
