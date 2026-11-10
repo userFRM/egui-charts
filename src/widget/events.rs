@@ -35,7 +35,7 @@ pub struct ChartPointer {
     /// Added points between main-series slots round to the nearest slot. Negative or past
     /// the last bar in whitespace.
     pub index: isize,
-    /// Pointer position in UI points, the coordinates of the chart's `Response::rect`.
+    /// Pointer or active touch-readout position in UI points, in the chart's `Response::rect`.
     pub pos: Pos2,
     /// Pane counted from the top among the panes drawn, the price pane with its volume band
     /// included: `0` unless panes sit above the price pane.
@@ -68,7 +68,8 @@ pub struct ChartPointer {
     pub kind: PointerKind,
     /// Originating egui pointer or touch event, including button state or touch device, id,
     /// phase and pressure when supplied by the integration. A matching touch takes precedence
-    /// over its emulated pointer event, and `pos` and `modifiers` are those of that event.
+    /// over its emulated pointer event. Click coordinates retain the emulated release position
+    /// when the finger lifts elsewhere; touch-readout moves use the drawn readout position.
     /// `None` means the position was recomputed from chart state without originating input.
     pub origin: Option<egui::Event>,
 }
