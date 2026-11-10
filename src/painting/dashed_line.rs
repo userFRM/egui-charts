@@ -127,9 +127,9 @@ pub(crate) fn draw_dashed_segment(
     );
 }
 
-/// Draws square dots of side `stroke.width`, at least one device pixel, one every `spacing`
-/// along each segment from its start, inside the painter's clip only, as one mesh: a dotted
-/// guide is one shape however long it is.
+/// Draws square dots of side `stroke.width`, one every `spacing` along each segment from its
+/// start, inside the painter's clip only, as one mesh: a dotted guide is one shape however long
+/// it is. Below one pixel per point, each side covers at least one device pixel.
 #[cfg(feature = "drawings")]
 pub(crate) fn draw_dotted_segments(
     painter: &egui::Painter,
@@ -148,13 +148,15 @@ pub(crate) fn draw_dotted_segments(
     // A dot whose centre is just outside the clip still shows its inner half.
     let clip = clip.expand(size / 2.0);
     let pixels_per_point = painter.pixels_per_point();
+    let side = if pixels_per_point < 1.0 {
+        size.max(pixels_per_point.recip())
+    } else {
+        size
+    };
     let mut dots = Mesh::default();
     for &[start, end] in segments {
         visible_dashes(start, end, clip, size, spacing - size, 0.0, |a, b| {
-            let rect = Rect::from_center_size(
-                a.lerp(b, 0.5),
-                egui::Vec2::splat(size.max(pixels_per_point.recip())),
-            );
+            let rect = Rect::from_center_size(a.lerp(b, 0.5), egui::Vec2::splat(side));
             let rect = Rect::from_min_size(rect.min.round_to_pixels(pixels_per_point), rect.size());
             dots.add_colored_rect(rect, stroke.color);
         });
@@ -388,7 +390,11 @@ fn append_dashed_segment(
     };
     let edge = ((across - width * 0.5) * pixels_per_point).round() / pixels_per_point;
     for &(min, len) in &spans.spans {
-        let len = len.max(pixels_per_point.recip());
+        let len = if pixels_per_point < 1.0 {
+            len.max(pixels_per_point.recip())
+        } else {
+            len
+        };
         let rect = if vertical {
             Rect::from_min_size(Pos2::new(edge, min), egui::vec2(width, len))
         } else {
@@ -684,6 +690,8 @@ mod tests {
         for (scale, width, alpha, rows) in [
             (1.0, 0.5, 128, [40.0; 4]),
             (1.0, 0.4, 102, [40.0; 4]),
+            (1.25, 0.4, 128, [50.0; 4]),
+            (1.5, 1.0 / 3.0, 128, [60.0, 60.0, 60.0, 61.0]),
             (2.0, 0.25, 128, [80.0, 80.0, 81.0, 81.0]),
         ] {
             ctx.set_pixels_per_point(scale);
@@ -697,7 +705,7 @@ mod tests {
                         draw_dashed_line(
                             &Painter::new(ctx.clone(), LayerId::background(), screen),
                             Pos2::new(10.0, y),
-                            Pos2::new(110.0, y),
+                            Pos2::new(106.25, y),
                             Stroke::new(width, Color32::WHITE),
                             1.0,
                             3.0,
@@ -712,11 +720,13 @@ mod tests {
                 };
                 let dots = mesh.vertices.as_chunks::<4>().0;
                 assert_eq!(dots.len(), 25);
-                for dot in dots {
+                for (index, dot) in dots.iter().enumerate() {
                     let rect = Rect::from_points(&dot.map(|vertex| vertex.pos));
-                    assert_eq!(
-                        [rect.top() * scale, rect.bottom() * scale],
-                        [row, row + 1.0],
+                    // The last dot ends with the segment, even when shorter than a pixel.
+                    assert_eq!(rect.width(), if index == 24 { 0.25 } else { 1.0 });
+                    assert!(
+                        (rect.top() * scale - row).abs() < 0.00001
+                            && (rect.bottom() * scale - row - 1.0).abs() < 0.00001,
                         "scale {scale}, width {width}, y {y}"
                     );
                     assert!(dot.iter().all(|vertex| vertex.color.a() == alpha));
@@ -857,8 +867,10 @@ mod tests {
             [Pos2::ZERO, Pos2::new(1e14, 1e14)],
             [Pos2::new(0.0, 50.0), Pos2::new(100.0, 50.0)],
         ];
-        let paint = |width: f32| {
-            let output = Context::default().run_ui(RawInput::default(), |ui| {
+        let paint = |width: f32, scale| {
+            let ctx = Context::default();
+            ctx.set_pixels_per_point(scale);
+            let output = ctx.run_ui(RawInput::default(), |ui| {
                 draw_dotted_segments(
                     &ui.painter().with_clip_rect(clip),
                     &segments,
@@ -870,14 +882,22 @@ mod tests {
             output.drop_without_applying_deltas();
             shapes
         };
-        let shapes = paint(1.0);
-        let [egui::Shape::Mesh(mesh)] = shapes.as_slice() else {
-            panic!("the dots are not one mesh: {} shapes", shapes.len());
-        };
-        assert_eq!(mesh.vertices.len(), 4 * 61);
-        let reach = Rect::from_min_max(Pos2::new(-1.0, -1.0), Pos2::new(101.0, 101.0));
-        assert!(mesh.vertices.iter().all(|v| reach.contains(v.pos)));
-        assert!(paint(0.0).is_empty());
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            for width in [0.25, 1.0] {
+                let shapes = paint(width, scale);
+                let [egui::Shape::Mesh(mesh)] = shapes.as_slice() else {
+                    panic!("the dots are not one mesh: {} shapes", shapes.len());
+                };
+                assert_eq!(mesh.vertices.len(), 4 * 61);
+                let reach = Rect::from_min_max(Pos2::new(-1.0, -1.0), Pos2::new(101.0, 101.0));
+                assert!(mesh.vertices.iter().all(|v| reach.contains(v.pos)));
+                for dot in mesh.vertices.as_chunks::<4>().0 {
+                    let size = Rect::from_points(&dot.map(|v| v.pos)).size();
+                    assert!((size.x - width).abs() < 0.001 && (size.y - width).abs() < 0.001);
+                }
+            }
+            assert!(paint(0.0, scale).is_empty());
+        }
     }
 
     /// An endpoint far off screen (a drawing anchored outside a collapsed
