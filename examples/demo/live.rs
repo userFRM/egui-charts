@@ -1938,10 +1938,19 @@ mod tests {
         let feed = Arc::new(ready_feed("SAMPLE", start));
         feed.set_paused(true);
         let ctx = egui::Context::default();
-        let frame = |chart: &mut Chart| {
-            ctx.run_ui(Default::default(), |ui| {
-                chart.show(ui);
-            })
+        let frame = |chart: &mut Chart, width| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 600.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    chart.show(ui);
+                },
+            )
         };
         let mut charts = Vec::new();
         for timeframe in [
@@ -1967,7 +1976,7 @@ mod tests {
         let held: Vec<_> = charts
             .iter_mut()
             .map(|chart| {
-                frame(chart).drop_without_applying_deltas();
+                frame(chart, 1440.0).drop_without_applying_deltas();
                 let last = chart.bars(SeriesId::MAIN).last().unwrap().clone();
                 let trades: Vec<_> = chart.trades(SeriesId::MAIN).cloned().collect();
                 let depth: Vec<_> = chart
@@ -1994,21 +2003,31 @@ mod tests {
         // Resolve, load the latest pages and subscribe, without draining the backfill.
         for _ in 0..3 {
             for chart in &mut charts {
-                frame(chart).drop_without_applying_deltas();
+                frame(chart, 1440.0).drop_without_applying_deltas();
             }
         }
         feed.advance(now);
         for (chart, (last, trades, depth)) in charts.iter_mut().zip(&held) {
-            let output = frame(chart);
-            assert_eq!(chart.bars(SeriesId::MAIN).last(), Some(last));
-            assert!(chart.order_book(SeriesId::MAIN).is_some());
-            assert!(
-                output.shapes.iter().any(|shape| {
-                    matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "BUY")
-                }),
-                "the current quote must be rendered on the first resumed frames"
-            );
-            output.drop_without_applying_deltas();
+            for theme in [
+                egui_charts::theme::Theme::light(),
+                egui_charts::theme::Theme::dark(),
+            ] {
+                chart.set_theme(&ctx, &theme);
+                for width in [360.0, 1440.0] {
+                    let output = frame(chart, width);
+                    assert_eq!(chart.bars(SeriesId::MAIN).last(), Some(last));
+                    assert!(chart.order_book(SeriesId::MAIN).is_some());
+                    assert!(
+                        output.shapes.iter().any(|shape| {
+                            matches!(&shape.shape, egui::Shape::Text(text)
+                                if text.galley.text() == "BUY"
+                                    && shape.clip_rect.contains_rect(text.visual_bounding_rect()))
+                        }),
+                        "the current quote must be visible on the first resumed frames"
+                    );
+                    output.drop_without_applying_deltas();
+                }
+            }
             assert_eq!(
                 chart.trades(SeriesId::MAIN).cloned().collect::<Vec<_>>(),
                 *trades
@@ -2023,14 +2042,21 @@ mod tests {
                 *depth
             );
         }
-        for (chart, (last, _, _)) in charts.iter_mut().zip(&held) {
-            load_chart(&feed, chart, &ctx);
-            assert_eq!(chart.bars(SeriesId::MAIN).last(), Some(last));
+        for _ in 0..RETAINED_TRADES.div_ceil(LOAD_BATCH) + 4 {
+            feed.advance(now);
+            for (chart, (last, _, _)) in charts.iter_mut().zip(&held) {
+                frame(chart, 1440.0).drop_without_applying_deltas();
+                assert_eq!(chart.bars(SeriesId::MAIN).last(), Some(last));
+            }
+            if !feed.loading() {
+                break;
+            }
         }
+        assert!(!feed.loading());
         feed.set_paused(false);
         feed.advance(now + TimeDelta::milliseconds(500));
         for chart in &mut charts {
-            frame(chart).drop_without_applying_deltas();
+            frame(chart, 1440.0).drop_without_applying_deltas();
             let expected = feed.snapshot(
                 chart.timeframe().unwrap(),
                 chart.bar_clock(),
