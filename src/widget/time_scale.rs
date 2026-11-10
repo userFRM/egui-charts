@@ -411,14 +411,18 @@ mod tests {
         assert_close(range.right.into(), right.into(), what);
     }
 
-    fn volume_bodies(painted: &[egui::Shape], plot: egui::Rect) -> Vec<egui::Rect> {
+    fn volume_bodies(
+        painted: &[egui::Shape],
+        plot: egui::Rect,
+        ctx: &egui::Context,
+    ) -> Vec<egui::Rect> {
+        use crate::theme::ThemeExt;
+        let color = ctx.active_theme().chart.volume_up();
         painted
             .iter()
             .filter_map(|shape| match shape {
                 egui::Shape::Rect(rect)
-                    if rect.fill.a() > 0
-                        && rect.fill.a() < 255
-                        && f64::from(rect.corner_radius.nw) == 0.0
+                    if rect.fill == color
                         && rect.rect.height() > 1.0
                         && plot.contains(rect.rect.center()) =>
                 {
@@ -1319,7 +1323,7 @@ mod tests {
                             "visible key {visible_key} was culled after key {key}"
                         );
                         if !added_only && step == 2 {
-                            let volume = volume_bodies(&painted, plot);
+                            let volume = volume_bodies(&painted, plot, &ctx);
                             assert!(!volume.is_empty(), "missing volume bars");
                             assert!(
                                 volume.iter().all(|bar| bar.width() <= 16.001),
@@ -1436,13 +1440,6 @@ mod tests {
                     assert_eq!(bodies.len(), 3, "{chart_type:?}");
                     // Custom ranks: 30 * 0.6 = 18. Numeric mean gap 3: 30 / 3 * 0.6 = 6.
                     let gap = if kind == 0 { 30.0 } else { 10.0 };
-                    if !added {
-                        let volume = volume_bodies(&painted, plot);
-                        assert!(!volume.is_empty(), "missing volume bars");
-                        for bar in volume {
-                            assert_close(bar.width().into(), gap * 0.8, "numeric volume width");
-                        }
-                    }
                     for body in &bodies {
                         assert_close(body.width().into(), gap * 0.6, "numeric body width");
                     }
@@ -1452,6 +1449,13 @@ mod tests {
                         gap,
                         "neighbouring key gap",
                     );
+                    if !added {
+                        let volume = volume_bodies(&painted, plot, &ctx);
+                        assert!(!volume.is_empty(), "missing volume bars");
+                        for bar in volume {
+                            assert_close(bar.width().into(), gap * 0.8, "numeric volume width");
+                        }
+                    }
                 }
             }
         }
