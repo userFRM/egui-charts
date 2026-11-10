@@ -16,6 +16,8 @@ pub(super) struct ChartHistory {
     undo: Vec<Action>,
     redo: Vec<Action>,
     pending: Option<Pending>,
+    /// A layout divider is being dragged.
+    pub(super) resizing: bool,
     changed: bool,
     /// User edits recorded, undone or redone, kept when the history is cleared.
     pub(super) edits: u64,
@@ -857,7 +859,7 @@ impl Chart {
     }
 
     fn step_chart_history(&mut self, redo: bool) -> bool {
-        if self.history.pending.is_some() {
+        if self.history.pending.is_some() || self.history.resizing {
             return false;
         }
         let stack = if redo {

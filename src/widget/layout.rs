@@ -1556,11 +1556,14 @@ impl ChartLayout {
         }
         self.record_sizes(charts[self.active]);
         self.record_links(charts[self.active]);
-        self.step_layout_edits(charts);
         let (mut rects, mut dividers) = self.geometry(rect, count);
         if self.move_divider(ui) {
             (rects, dividers) = self.geometry(rect, count);
         }
+        for chart in charts.iter_mut() {
+            chart.history.resizing = self.sizing.drag.is_some();
+        }
+        self.step_layout_edits(charts);
         let over_divider = self.sizing.drag.is_some()
             || ui
                 .input(|input| input.pointer.interact_pos())
@@ -2525,6 +2528,117 @@ mod tests {
             edits,
             "the undo opt-out records no edit"
         );
+        // A second drag must not consume the first size step, or a waiting redo.
+        let bounds = Rect::from_min_size(pos2(10.0, 10.0), vec2(1440.0, 720.0));
+        let ctx = egui::Context::default();
+        let mut layout = ChartLayout {
+            mode: ChartLayoutMode::ThreeHorizontal,
+            ..Default::default()
+        };
+        let mut charts = [chart(60), chart(60), chart(60)];
+        let mut time = 0.0;
+        let mut frame = |layout: &mut ChartLayout, charts: &mut [Chart], events| {
+            time += 0.1;
+            ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(bounds.expand(10.0)),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(bounds), |ui| {
+                        layout.show(ui, &mut charts.iter_mut().collect::<Vec<_>>());
+                    });
+                },
+            )
+            .drop_without_applying_deltas();
+        };
+        let button = |pos, pressed| Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let assert_widths = |layout: &ChartLayout, expected: [f32; 3]| {
+            for (rect, width) in layout.rects(bounds, 3).iter().zip(expected) {
+                assert!(
+                    (rect.width() - width).abs() < 0.01,
+                    "{rect:?}, width {width}"
+                );
+            }
+        };
+        for _ in 0..2 {
+            frame(&mut layout, &mut charts, vec![]);
+        }
+        assert_widths(&layout, [480.0, 480.0, 480.0]);
+        let start = pos2(bounds.left() + 480.0, bounds.center().y);
+        let first = start + vec2(120.0, 0.0);
+        let second = first + vec2(60.0, 0.0);
+        frame(
+            &mut layout,
+            &mut charts,
+            vec![Event::PointerMoved(start), button(start, true)],
+        );
+        for pos in [start + vec2(4.0, 0.0), first] {
+            frame(&mut layout, &mut charts, vec![Event::PointerMoved(pos)]);
+        }
+        frame(&mut layout, &mut charts, vec![button(first, false)]);
+        assert_widths(&layout, [600.0, 360.0, 480.0]);
+        charts[0].user_action(|chart| chart.config_mut().show_grid = false);
+        assert!(charts[0].undo());
+        let edits = charts[0].edit_count();
+        frame(&mut layout, &mut charts, vec![button(first, true)]);
+        for pos in [first + vec2(4.0, 0.0), second] {
+            frame(&mut layout, &mut charts, vec![Event::PointerMoved(pos)]);
+        }
+        let command = egui::Modifiers {
+            ctrl: true,
+            command: true,
+            ..Default::default()
+        };
+        for key in [egui::Key::Z, egui::Key::Y] {
+            frame(
+                &mut layout,
+                &mut charts,
+                vec![
+                    Event::ModifiersChanged(command),
+                    Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: command,
+                    },
+                ],
+            );
+            assert_eq!(
+                charts[0].edit_count(),
+                edits,
+                "{key:?} during a divider drag"
+            );
+            assert_widths(&layout, [660.0, 300.0, 480.0]);
+            assert!(charts[0].can_undo() && charts[0].can_redo());
+            for chart in &mut charts {
+                assert!(
+                    !chart.undo() && !chart.redo(),
+                    "history is blocked on every chart"
+                );
+            }
+        }
+        frame(&mut layout, &mut charts, vec![button(second, false)]);
+        assert_eq!(charts[0].edit_count(), edits + 1, "one step on release");
+        for expected in [[600.0, 360.0, 480.0], [480.0, 480.0, 480.0]] {
+            assert!(charts[0].undo());
+            assert_widths(&layout, expected);
+        }
+        assert!(!charts[0].undo());
+        for expected in [[600.0, 360.0, 480.0], [660.0, 300.0, 480.0]] {
+            assert!(charts[0].redo());
+            assert_widths(&layout, expected);
+        }
+        assert!(!charts[0].redo());
+
         for &mode in ChartLayoutMode::all() {
             let mut layout = ChartLayout {
                 mode,
