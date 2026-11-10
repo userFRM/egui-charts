@@ -1157,7 +1157,8 @@ impl ChartLayout {
         }
     }
 
-    fn step_layout_edits(&mut self, charts: &mut [&mut Chart]) {
+    fn step_layout_edits(&mut self, charts: &mut [&mut Chart]) -> bool {
+        let mut stepped = false;
         loop {
             let step = {
                 let mut steps = self.edits.steps.lock().unwrap();
@@ -1177,8 +1178,9 @@ impl ChartLayout {
                 at.map(|at| steps.remove(at))
             };
             let Some((id, redo)) = step else {
-                return;
+                return stepped;
             };
+            stepped = true;
             for chart in charts.iter_mut() {
                 chart.step_layout_edit(id, redo);
             }
@@ -1591,7 +1593,9 @@ impl ChartLayout {
         for chart in charts.iter_mut() {
             chart.history.resizing = resizing.map(Arc::downgrade).unwrap_or_default();
         }
-        self.step_layout_edits(charts);
+        if self.step_layout_edits(charts) {
+            (rects, dividers) = self.geometry(rect, count);
+        }
         let over_divider = self.sizing.drag.is_some()
             || ui
                 .input(|input| input.pointer.interact_pos())

@@ -512,8 +512,22 @@ mod tests {
 
         // An edit on another chart after the copy goes back with it, and its redo returns it.
         charts[2].user_action(|chart| chart.add_indicator(Box::new(SMA::new(9))));
+        show(&mut layout, &mut charts);
+        let width = charts[0].last_rendered_price_rect.width();
+        let mut sizes = layout.sizes(layout.mode);
+        sizes.weights[1] = vec![3.0, 1.0];
+        layout.set_active(2);
+        layout.set_sizes(&[sizes], false).unwrap();
+        show(&mut layout, &mut charts);
+        assert!(charts[0].last_rendered_price_rect.width() > width);
+
         assert!(charts[1].undo(), "the target undoes the last copy");
         show(&mut layout, &mut charts);
+        assert_eq!(
+            charts[0].last_rendered_price_rect.width(),
+            width,
+            "the same frame renders the sizes restored by the queued undo"
+        );
         assert_eq!(names(charts[1]), ["SMA"]);
         assert_eq!(names(charts[2]), ["SMA", "SMA"]);
 
