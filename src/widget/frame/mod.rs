@@ -3137,7 +3137,8 @@ impl Chart {
                         background: *background,
                     })
                     .collect();
-                legend.formatters = self.value_formatters();
+                let raw_price_formatter = self.series_price_formatter(super::SeriesId::MAIN);
+                legend.formatters = self.value_formatters(raw_price_formatter.as_deref());
                 legend.thousands_sep = price_map.thousands_sep();
                 legend.instrument = self.instrument();
                 legend.badge = self.legend_badge.clone();
@@ -3549,7 +3550,10 @@ impl Chart {
                             .map(|(_, row)| row)
                             .collect::<Vec<_>>(),
                         self.instrument().or(heading.as_ref()),
-                        self.value_formatters(),
+                        self.value_formatters(
+                            self.series_price_formatter(super::SeriesId::MAIN)
+                                .as_deref(),
+                        ),
                     );
                 }
             }
@@ -3693,11 +3697,15 @@ impl Chart {
                     price_formatter.as_deref(),
                 )
             });
-        self.measured_axis_width = rendering::axes::price_axis_width(
+        self.measured_axis_width = rendering::axes::price_axis_width_with_edges(
             &painter,
             &price_map,
             &current_price.as_deref().into_iter().collect::<Vec<_>>(),
             price_formatter.as_deref(),
+            self.config
+                .price_axis
+                .edge_ticks_visible
+                .then_some(price_rect),
         );
         if cfg!(feature = "icons")
             && show_left_axis
