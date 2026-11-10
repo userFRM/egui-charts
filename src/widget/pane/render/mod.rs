@@ -356,7 +356,6 @@ impl Chart {
             }
         }
 
-        let horizontal = coords.to_mapping(plot, 0.0, 1.0);
         // The plot column of every pane, where the pointer drives their shared crosshair.
         let hover_rect = Rect::from_min_max(
             Pos2::new(
