@@ -27,7 +27,10 @@ before the target, as when the daily bars stop earlier, that close counts. Daily
 charts, and hosts that supply no daily bars, use the chart's loaded bars. A connected feed pages
 the daily bars back to the start of the date one year before the last chart bar's trading date,
 the oldest period, and stops there or at the end of its history, whatever its page size and the
-chart's first bar. Missing history and zero reference prices show N/A.
+chart's first bar. This also applies on price-based charts such as Renko: a study's stated
+start before the first chart bar is honored, while a later start loads to the first chart bar
+because the source study has no view of the rendered elements. Missing history and zero
+reference prices show N/A.
 
 With Use Daily Bars enabled on an intraday chart, Pivot Points Standard and Projected Pivot
 Points request the symbol's daily bars. A connected feed loads through the full period before

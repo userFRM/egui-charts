@@ -295,7 +295,7 @@ impl Chart {
     /// the chart has no bars. Allocates only the requests, since it runs every frame.
     fn study_data_reaches(&self) -> Vec<(StudyDataRequest, Option<chrono::DateTime<chrono::Utc>>)> {
         // Price-based chart types run their studies on elements; the source studies asked
-        // here are not given the view, so their histories load in full.
+        // here are not given the view, so their histories load at least to the first source bar.
         let full = self.chart_type.is_time_independent();
         let first = self.state.data().bars.first().map(|bar| bar.time);
         let mut reaches: Vec<(StudyDataRequest, Option<_>)> = self
@@ -305,7 +305,9 @@ impl Chart {
             .collect();
         for (_, study) in self.indicators() {
             for declared in study.data_requests() {
-                let start = study.data_start(&declared).filter(|_| !full);
+                let start = study
+                    .data_start(&declared)
+                    .filter(|start| !full || first.is_some_and(|first| *start < first));
                 let start = first.and(start.or(first));
                 let request = resolved(&declared, self.symbol(), self.timeframe());
                 match reaches.iter_mut().find(|(known, _)| *known == request) {
@@ -1949,6 +1951,33 @@ pub(super) mod tests {
                     .all(|(got, want)| got.is_some_and(|got| (got - want).abs() < 1e-9))),
             "(study, [P, R1, S1], pages) {observed:?}, want {want:?}"
         );
+    }
+
+    /// Performance on a price-based chart type of one-minute bars pages its daily bars back to
+    /// its 1Y target, as docs/study-data.md states for any page size.
+    #[test]
+    fn performance_on_renko_pages_daily_bars_to_the_year() {
+        use crate::model::ChartType;
+        for chart_type in [
+            ChartType::Renko,
+            ChartType::Kagi,
+            ChartType::Range,
+            ChartType::PointAndFigure,
+            ChartType::LineBreak,
+        ] {
+            let (mut chart, daily) = minute_chart(|day| Bar::new(day, 50.0, 50.0, 50.0, 50.0, 1.0));
+            chart.set_chart_type(chart_type);
+            let id = chart.add_indicator(Box::new(crate::studies::Performance::new()));
+            let pages = page_daily(&mut chart, &daily, 250, None);
+            let study = chart.indicators().find(|(at, _)| *at == id).unwrap().1;
+            let changes: Vec<_> = (0..6).map(|line| study.values().value(line, 389)).collect();
+            // 100 * (100 - 50) / 50 = 100 for every period, from two pages.
+            assert_eq!(
+                (changes, pages),
+                (vec![Some(100.0); 6], 2),
+                "{chart_type:?}"
+            );
+        }
     }
 
     /// Guards #1668: the pass that runs every frame to resolve the study histories also works
