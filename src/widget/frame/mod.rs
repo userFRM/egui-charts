@@ -1069,11 +1069,11 @@ impl Chart {
                 && !self.config.scale_price_chart_only
                 && study.scale() == crate::studies::StudyScale::Main
                 && !self.is_custom_data(self.study_ids[*idx])
-            {
-                let range = super::IndicatorPane::with_config(
+                && let Some(range) = super::IndicatorPane::with_config(
                     super::IndicatorPaneConfig::from_study(study.as_ref()),
                 )
-                .calculate_y_range(study.as_ref(), &(start_idx..end_idx));
+                .value_range(study.as_ref(), &(start_idx..end_idx))
+            {
                 primitive_prices.extend([range.0, range.1]);
             }
         }
@@ -1785,26 +1785,6 @@ impl Chart {
                 )
             }
         });
-        let renderer_hit = pointer.and_then(|pos| {
-            if grouped_primitives {
-                primitives::primitive_at(
-                    self.main_pass_primitives(&coords)
-                        .filter(|(item, _)| item.replaces),
-                    pos,
-                )
-            } else {
-                order.iter().rev().fold(None, |best, id| {
-                    primitives::best_hit(
-                        best,
-                        primitives::primitive_at(
-                            self.main_primitives(&coords)
-                                .filter(|(item, _)| item.replaces && item.series == *id),
-                            pos,
-                        ),
-                    )
-                })
-            }
-        });
         let rendered: Vec<_> = self
             .study_ids
             .iter()
@@ -1836,17 +1816,7 @@ impl Chart {
                 )
             })
         });
-        let element_at = |pos: Pos2| {
-            let renderer = renderer_hit
-                .as_ref()
-                .filter(|_| Some(pos) == pointer)
-                .and_then(|hit| {
-                    if let super::PointerTarget::Element(id) = hit.target {
-                        Some((id, coords.x_to_idx(pos.x).min(last_bar)))
-                    } else {
-                        None
-                    }
-                });
+        let builtin_at = |pos: Pos2| {
             let hit = hit_test_main_chart(
                 pos,
                 studies,
@@ -1869,19 +1839,54 @@ impl Chart {
                 .iter()
                 .flatten()
                 .find_map(|(at, hit)| (*at == pos).then_some(*hit).flatten());
-            if grouped_primitives && renderer.is_some() {
-                return renderer;
+            hit.into_iter().chain(secondary).max_by_key(|(element, _)| {
+                let id = match element {
+                    super::ChartElementId::Indicator(id) | super::ChartElementId::Series(id) => id,
+                };
+                order.iter().position(|member| member == id)
+            })
+        };
+        let renderer_hit = pointer.and_then(|pos| {
+            if grouped_primitives {
+                primitives::primitive_at(
+                    self.main_pass_primitives(&coords)
+                        .filter(|(item, _)| item.replaces),
+                    pos,
+                )
+            } else {
+                let builtin = builtin_at(pos).and_then(|(element, _)| {
+                    let (super::ChartElementId::Indicator(id) | super::ChartElementId::Series(id)) =
+                        element;
+                    order.iter().position(|member| *member == id)
+                });
+                order
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .filter(|(at, _)| builtin.is_none_or(|builtin| *at > builtin))
+                    .fold(None, |best, (_, id)| {
+                        primitives::best_hit(
+                            best,
+                            primitives::primitive_at(
+                                self.main_pass_primitives(&coords)
+                                    .filter(|(item, _)| item.replaces && item.series == *id),
+                                pos,
+                            ),
+                        )
+                    })
             }
-            hit.into_iter()
-                .chain(secondary)
-                .chain(renderer)
-                .max_by_key(|(element, _)| {
-                    let id = match element {
-                        super::ChartElementId::Indicator(id)
-                        | super::ChartElementId::Series(id) => id,
-                    };
-                    order.iter().position(|member| member == id)
+        });
+        let element_at = |pos: Pos2| {
+            renderer_hit
+                .as_ref()
+                .filter(|_| Some(pos) == pointer)
+                .and_then(|hit| match hit.target {
+                    super::PointerTarget::Element(id) => {
+                        Some((id, coords.x_to_idx(pos.x).min(last_bar)))
+                    }
+                    _ => None,
                 })
+                .or_else(|| builtin_at(pos))
         };
         // The element under the pointer goes last when hovered series are drawn on top.
         let on_top = ui
