@@ -1359,6 +1359,21 @@ mod tests {
                                     x.into(),
                                     "restored key position",
                                 );
+                                // Older layouts expressed spacing in the current loaded mean gap.
+                                let mut legacy: serde_json::Value =
+                                    serde_json::from_str(&saved).unwrap();
+                                legacy.as_object_mut().unwrap().remove("numeric_unit");
+                                restored
+                                    .restore(&serde_json::from_value(legacy).unwrap())
+                                    .unwrap();
+                                frame(&ctx, &mut restored, 0.5, vec![]);
+                                let key_x =
+                                    |key| restored.time_to_x(key_time(key).unwrap()).unwrap();
+                                assert_close(
+                                    (key_x(60.0) - key_x(59.0)).into(),
+                                    20.0 / ((1000.0 - 20.0) / 63.0),
+                                    "legacy mean-gap spacing",
+                                );
                             }
                         }
                     }

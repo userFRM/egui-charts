@@ -637,10 +637,9 @@ impl Chart {
             }
         }
         self.pane_layout.maximized = snapshot.maximized.map(|at| panes[&at]);
-        if let Some(unit) = snapshot.numeric_unit
-            && self.state.time_scale().numeric_positions().is_some()
-        {
-            let positions = crate::model::numeric_positions(self.state.shown(), Some(unit));
+        if self.state.time_scale().numeric_positions().is_some() {
+            let positions =
+                crate::model::numeric_positions(self.state.shown(), snapshot.numeric_unit);
             self.state
                 .time_scale_mut()
                 .set_numeric_positions(Some(positions));
