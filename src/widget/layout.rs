@@ -1490,6 +1490,19 @@ impl ChartLayout {
     /// touch must tap a border before moving it. Double-clicking a border restores the proportions.
     /// Extra charts remain owned by the host and are not painted by a grid preset.
     pub fn show(&mut self, ui: &mut Ui, charts: &mut [&mut Chart]) -> Response {
+        self.show_with(ui, charts, |ui, _, chart| chart.show(ui))
+    }
+
+    /// Draws the layout with a host-selected renderer for each visible chart, including
+    /// detached viewports. The callback runs every frame and must not block; supply cached
+    /// data to calls such as [`Chart::show_footprint`]. Return the chart's response so focus,
+    /// pointer activation and link controls behave as they do with [`Self::show`].
+    pub fn show_with(
+        &mut self,
+        ui: &mut Ui,
+        charts: &mut [&mut Chart],
+        mut render: impl FnMut(&mut Ui, usize, &mut Chart) -> Response,
+    ) -> Response {
         let total = charts.len().min(16);
         let charts = &mut charts[..total];
         let count = total.min(self.mode.chart_count());
@@ -1626,7 +1639,7 @@ impl ChartLayout {
                             .horizontal(|ui| self.link_controls(ui, index, false))
                             .inner;
                         egui::CentralPanel::default().show(ui, |ui| {
-                            let response = chart.show(ui);
+                            let response = render(ui, index, chart);
                             if focus {
                                 response.request_focus();
                             }
@@ -1675,7 +1688,7 @@ impl ChartLayout {
                     let link_controls =
                         total > 1 && rect.right() - plot_left >= LINK_CONTROLS_MIN_WIDTH;
                     charts[index].layout_link_controls = link_controls;
-                    let response = charts[index].show(ui);
+                    let response = render(ui, index, charts[index]);
                     charts[index].layout_link_controls = false;
                     charts[index].layout_inactive = false;
                     if focus {
@@ -1908,7 +1921,7 @@ impl ChartLayout {
         let range = charts[self.active].visible_time_range();
         let source = charts[self.active].sync_source();
         for (index, chart) in charts.iter_mut().take(count).enumerate() {
-            chart.set_synced_crosshair(None, None);
+            chart.restore_host_crosshair();
             if self.sync.sync_crosshair
                 && let Some(source) = hovered
                 && index != source
@@ -2159,6 +2172,56 @@ mod tests {
         chart.set_symbol("SAMPLE");
         chart.set_timeframe(Timeframe::Min1);
         chart
+    }
+
+    /// The renderer receives the original slot of every visible chart in each layout path.
+    #[test]
+    fn host_renderer_receives_visible_slots_in_each_layout() {
+        for (mode, maximized, detached, expected) in [
+            (ChartLayoutMode::TwoHorizontal, None, false, vec![0, 1]),
+            (ChartLayoutMode::Tabs, None, false, vec![1]),
+            (ChartLayoutMode::TwoHorizontal, Some(1), false, vec![1]),
+            (ChartLayoutMode::Tabs, None, true, vec![0, 1]),
+        ] {
+            let ctx = egui::Context::default();
+            let mut charts = [chart(60), chart(60)];
+            charts[0].set_symbol("FIRST");
+            charts[1].set_symbol("SECOND");
+            let mut layout = ChartLayout {
+                mode,
+                active: 1,
+                maximized,
+                ..Default::default()
+            };
+            layout.set_detached(0, detached);
+            for _ in 0..3 {
+                let mut visited = Vec::new();
+                let mut output = ctx.run_ui(
+                    RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        visited.clear();
+                        layout.show_with(
+                            ui,
+                            &mut charts.iter_mut().collect::<Vec<_>>(),
+                            |ui, index, chart| {
+                                assert_eq!(chart.symbol(), ["FIRST", "SECOND"][index]);
+                                assert_eq!(chart.layout_inactive, index != 1 && !detached);
+                                visited.push(index);
+                                chart.show(ui)
+                            },
+                        );
+                    },
+                );
+                output.textures_delta.clear();
+                assert_eq!(
+                    visited, expected,
+                    "{mode:?}, maximized={maximized:?}, detached={detached}"
+                );
+            }
+        }
     }
 
     /// A border drag affects its neighbouring charts; Shift also moves aligned borders in other
@@ -3174,6 +3237,92 @@ mod tests {
         layout.set_detached(1, false);
         frame(&mut layout, &mut charts, vec![]);
         assert!(!layout.is_detached(1));
+    }
+
+    #[test]
+    fn layout_keeps_a_crosshair_position_set_from_code() {
+        use super::super::{SeriesId, SeriesOptions};
+
+        for sync_crosshair in [false, true] {
+            for setter in [0, 1, 2] {
+                let ctx = egui::Context::default();
+                let mut layout = ChartLayout {
+                    mode: ChartLayoutMode::TwoHorizontal,
+                    ..Default::default()
+                };
+                layout.sync.sync_crosshair = sync_crosshair;
+                let mut charts = [chart(60), chart(60)];
+                let series = charts[1].add_series(SeriesOptions::default());
+                let bars = charts[1].bars(SeriesId::MAIN).to_vec();
+                charts[1].set_data(series, bars);
+                let mut time = 0.0;
+                let mut frame = |layout: &mut ChartLayout, charts: &mut [Chart], events| {
+                    time += 0.1;
+                    ctx.run_ui(
+                        RawInput {
+                            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0))),
+                            time: Some(time),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            layout.show(ui, &mut charts.iter_mut().collect::<Vec<_>>());
+                        },
+                    )
+                    .textures_delta
+                    .clear();
+                };
+                frame(&mut layout, &mut charts, vec![]);
+                let selected = charts[1].bars(SeriesId::MAIN)[50].time;
+                match setter {
+                    0 => charts[1].set_crosshair_position(Some((selected, 10.5))),
+                    1 => charts[1].set_synced_crosshair_time(Some(selected)),
+                    _ => charts[1].set_series_crosshair_position(series, Some((selected, 10.5))),
+                }
+                let price = (setter != 1).then_some(10.5);
+                let target = (setter == 2).then_some(series);
+                for _ in 0..2 {
+                    frame(&mut layout, &mut charts, vec![Event::PointerGone]);
+                    assert_eq!(charts[1].synced_crosshair_bar_idx, Some(50.0));
+                    assert_eq!(charts[1].last_crosshair, Some((selected, price)));
+                    assert_eq!(charts[1].synced_crosshair_series, target);
+                }
+
+                let pointer = pos2(
+                    charts[0].index_to_x(80.0).unwrap(),
+                    charts[0].last_rendered_price_rect.center().y,
+                );
+                for _ in 0..2 {
+                    frame(&mut layout, &mut charts, vec![Event::PointerMoved(pointer)]);
+                }
+                let hovered = charts[0].last_crosshair.unwrap();
+                assert_ne!(hovered.0, selected);
+                assert_eq!(
+                    charts[1].last_crosshair,
+                    Some(if sync_crosshair {
+                        hovered
+                    } else {
+                        (selected, price)
+                    })
+                );
+                for _ in 0..2 {
+                    frame(&mut layout, &mut charts, vec![Event::PointerGone]);
+                }
+                assert_eq!(charts[1].last_crosshair, Some((selected, price)));
+                assert_eq!(charts[1].synced_crosshair_series, target);
+
+                // An explicit local index replaces the saved time-based request.
+                charts[1].set_synced_crosshair_bar_idx(Some(20.0));
+                for _ in 0..2 {
+                    frame(&mut layout, &mut charts, vec![]);
+                }
+                assert_eq!(charts[1].synced_crosshair_bar_idx, None);
+                charts[1].set_crosshair_position(Some((selected, 10.5)));
+                charts[1].set_crosshair_position(None);
+                frame(&mut layout, &mut charts, vec![]);
+                assert_eq!(charts[1].last_crosshair, None);
+            }
+        }
     }
 
     #[test]
