@@ -625,6 +625,21 @@ mod tests {
             chart.set_timeframe(Timeframe::Min1);
             let id = chart.add_indicator(IndicatorFactory::new().create(name).unwrap());
             let study = chart.indicators().find(|(i, _)| *i == id).unwrap().1;
+            if name != "BB" {
+                let average = study
+                    .inputs()
+                    .into_iter()
+                    .find(|input| {
+                        input.id
+                            == if name == "Keltner" {
+                                "average"
+                            } else {
+                                "ma_type"
+                            }
+                    })
+                    .unwrap();
+                assert_eq!(average.value, InputValue::Toggle(name == "Keltner"));
+            }
             let before = study.snapshot_settings();
             let defaults = study.settings();
             assert!(defaults.price_line_plots.is_empty());
@@ -645,7 +660,7 @@ mod tests {
                 for input in &mut dialog.inputs {
                     input.value = match input.id.as_str() {
                         "period" | "ema_period" | "atr_period" => InputValue::Length(2),
-                        "average" => InputValue::Choice(1),
+                        "average" => InputValue::Toggle(false),
                         "source" => InputValue::Source(StudySource::Price(PriceSource::Open)),
                         "plot_offset" => InputValue::Integer(1),
                         _ => input.value.clone(),
@@ -666,6 +681,12 @@ mod tests {
                         }
                     });
                 harness.run();
+                if name != "BB" {
+                    for _ in 0..2 {
+                        harness.get_by_label("Exponential basis").click();
+                        harness.run();
+                    }
+                }
                 drop(harness);
                 let study = chart.indicators().find(|(i, _)| *i == id).unwrap().1;
                 assert_eq!(study.settings(), edited);
@@ -786,6 +807,8 @@ mod tests {
                 for (id, value) in &mut legacy.inputs {
                     if id == "source" {
                         *value = InputValue::Choice(0);
+                    } else if id == "average" {
+                        *value = InputValue::Choice(1);
                     }
                 }
                 let mut legacy = legacy.create().unwrap();
@@ -832,6 +855,33 @@ mod tests {
                 .unwrap();
             assert!(older.settings().fills[0].visible);
             assert!(older.settings().price_line_plots.is_empty());
+            if name != "BB" {
+                for enabled in [false, true] {
+                    let mut legacy = StudyTemplate::from_study(study);
+                    let field = if name == "Keltner" {
+                        "average"
+                    } else {
+                        "ma_type"
+                    };
+                    for (id, value) in &mut legacy.inputs {
+                        if id == field {
+                            *value =
+                                InputValue::Choice(usize::from(enabled != (name == "Keltner")));
+                        }
+                    }
+                    let mut legacy = legacy.create().unwrap();
+                    legacy.calculate(&bars);
+                    let basis = if !enabled {
+                        29.0
+                    } else if name == "Keltner" {
+                        755.0 / 27.0
+                    } else {
+                        2270.0 / 81.0
+                    };
+                    let line = usize::from(name == "Envelopes");
+                    assert!((legacy.values().value(line, 4).unwrap() - basis).abs() < 1e-9);
+                }
+            }
             if name == "Keltner" {
                 study.set_input("band", InputValue::Choice(0)).unwrap();
                 study.update_source(&bars, 0, &[10.0, f64::NAN, 16.0, 28.0, 30.0]);

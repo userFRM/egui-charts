@@ -31,9 +31,12 @@ use super::clamp_param;
 use super::price_oscillator::{Mean, OscillatorAverage};
 use super::smoothing::Smoothing;
 use crate::model::{Bar, PriceSource};
+use crate::studies::inputs::input_spec;
 use crate::studies::palette;
 use crate::studies::stepper::Stepper;
-use crate::studies::{ATR, Indicator, IndicatorValue, IndicatorValues};
+use crate::studies::{
+    ATR, Indicator, IndicatorValue, IndicatorValues, InputKind, InputValue, StudyError, StudyInput,
+};
 use egui::Color32;
 
 /// How far the bands of [`KeltnerChannels`] lie from the middle line, before the multiplier.
@@ -188,14 +191,98 @@ impl Indicator for KeltnerChannels {
         self.update_prices(data, from, Some(source));
     }
 
-    crate::studies::inputs::study_inputs!(self;
-        ema_period: length("Length", 1, usize::MAX),
-        multiplier: number("Multiplier", 0.0, f64::MAX),
-        source: choice("Source", PriceSource::all()),
-        average: choice("Average", [OscillatorAverage::Exponential, OscillatorAverage::Simple]),
-        band: choice("Band style", [KeltnerBand::AverageTrueRange, KeltnerBand::TrueRange, KeltnerBand::Range]),
-        atr_period: length("ATR length", 1, usize::MAX)
-    ; {});
+    fn inputs(&self) -> Vec<StudyInput> {
+        let defaults = Self::default();
+        vec![
+            input_spec!(
+                "ema_period",
+                self.ema_period,
+                length("Length", 1, usize::MAX)
+            )
+            .with_default(InputValue::Length(defaults.ema_period)),
+            input_spec!(
+                "multiplier",
+                self.multiplier,
+                number("Multiplier", 0.0, f64::MAX)
+            )
+            .with_default(InputValue::Number(defaults.multiplier)),
+            input_spec!("source", self.source, choice("Source", PriceSource::all())).with_default(
+                InputValue::Choice(
+                    PriceSource::all()
+                        .iter()
+                        .position(|source| *source == defaults.source)
+                        .unwrap_or(0),
+                ),
+            ),
+            StudyInput::new(
+                "average",
+                "Exponential basis",
+                InputValue::Toggle(self.average == OscillatorAverage::Exponential),
+                InputKind::Toggle,
+            )
+            .with_default(InputValue::Toggle(
+                defaults.average == OscillatorAverage::Exponential,
+            )),
+            input_spec!(
+                "band",
+                self.band,
+                choice(
+                    "Band style",
+                    [
+                        KeltnerBand::AverageTrueRange,
+                        KeltnerBand::TrueRange,
+                        KeltnerBand::Range
+                    ]
+                )
+            )
+            .with_default(InputValue::Choice(0)),
+            input_spec!(
+                "atr_period",
+                self.atr_period,
+                length("ATR length", 1, usize::MAX)
+            )
+            .with_default(InputValue::Length(defaults.atr_period)),
+        ]
+    }
+
+    fn set_input(&mut self, id: &str, value: InputValue) -> Result<(), StudyError> {
+        let value = match (id, value) {
+            ("average", InputValue::Choice(1)) => InputValue::Toggle(false),
+            ("average", InputValue::Choice(0)) => InputValue::Toggle(true),
+            (_, value) => value,
+        };
+        let schema = self
+            .inputs()
+            .into_iter()
+            .find(|input| input.id == id)
+            .ok_or_else(|| StudyError::UnknownInput(id.into()))?;
+        if !schema.accepts(&value) {
+            return Err(StudyError::invalid_input(id));
+        }
+        match (id, value) {
+            ("ema_period", InputValue::Length(value)) => self.ema_period = value,
+            ("multiplier", InputValue::Number(value)) => self.multiplier = value,
+            ("source", InputValue::Choice(value)) => self.source = PriceSource::all()[value],
+            ("band", InputValue::Choice(value)) => {
+                self.band = [
+                    KeltnerBand::AverageTrueRange,
+                    KeltnerBand::TrueRange,
+                    KeltnerBand::Range,
+                ][value]
+            }
+            ("atr_period", InputValue::Length(value)) => self.atr_period = value,
+            ("average", InputValue::Toggle(value)) => {
+                self.average = if value {
+                    OscillatorAverage::Exponential
+                } else {
+                    OscillatorAverage::Simple
+                }
+            }
+            _ => unreachable!("validated study input"),
+        }
+        self.calculate(&[]);
+        Ok(())
+    }
 
     fn fills(&self) -> Vec<crate::studies::StudyFill> {
         vec![crate::studies::StudyFill {
