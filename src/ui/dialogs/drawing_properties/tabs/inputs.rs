@@ -239,6 +239,88 @@ impl InputsTab {
                             number(ui, "Risk (%)", percent, f64::MIN_POSITIVE..=100.0);
                         }
                     }
+                    let readout = &mut drawing.position_readout;
+                    let label = ui.label(l10n::text(ui.ctx(), "Account currency"));
+                    ui.label_inputs_by(label.id, |ui| {
+                        let mut choices = vec![None];
+                        choices.extend(
+                            [
+                                "USD", "EUR", "GBP", "JPY", "CHF", "AUD", "CAD", "NZD", "CNY",
+                                "HKD", "SGD", "INR", "KRW", "BRL", "MXN", "ZAR", "SEK", "NOK",
+                                "DKK", "PLN", "CZK", "HUF", "TRY", "ILS", "AED", "BTC", "ETH",
+                                "USDT", "USDC",
+                            ]
+                            .map(|code| Some(code.to_owned())),
+                        );
+                        if !choices.contains(&readout.account_currency) {
+                            choices.push(readout.account_currency.clone());
+                        }
+                        let before = readout.account_currency.clone();
+                        let ctx = ui.ctx().clone();
+                        ui.combo_select(
+                            "position_currency",
+                            &mut readout.account_currency,
+                            choices,
+                            |currency| {
+                                currency
+                                    .clone()
+                                    .unwrap_or_else(|| l10n::text(&ctx, "Instrument currency"))
+                            },
+                        );
+                        if before != readout.account_currency {
+                            readout.conversion_rate = None;
+                        }
+                    });
+                    ui.end_row();
+                    if let Some(currency) = &mut readout.account_currency {
+                        let label = ui.label(l10n::text(ui.ctx(), "Currency code"));
+                        if ui
+                            .add(
+                                egui::TextEdit::singleline(currency)
+                                    .char_limit(16)
+                                    .desired_width(80.0),
+                            )
+                            .labelled_by(label.id)
+                            .changed()
+                        {
+                            currency.make_ascii_uppercase();
+                            readout.conversion_rate = None;
+                        }
+                        ui.end_row();
+                    }
+                    if readout.account_currency.is_some() {
+                        let label = ui.label(l10n::text(ui.ctx(), "Conversion rate"));
+                        let mut rate = readout.conversion_rate.unwrap_or(0.0);
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut rate)
+                                    .range(0.0..=f64::MAX)
+                                    .speed(0.001)
+                                    .custom_formatter(|value, _| value.to_string()),
+                            )
+                            .labelled_by(label.id)
+                            .changed()
+                        {
+                            readout.conversion_rate = (rate > 0.0).then_some(rate);
+                        }
+                        ui.end_row();
+                    }
+                    let label = ui.label(l10n::text(ui.ctx(), "Quantity decimals"));
+                    ui.label_inputs_by(label.id, |ui| {
+                        let ctx = ui.ctx().clone();
+                        ui.combo_select(
+                            "position_quantity_decimals",
+                            &mut readout.quantity_decimals,
+                            std::iter::once(None).chain((0..=8).map(Some)),
+                            |places| {
+                                places.map_or_else(
+                                    || l10n::text(&ctx, "Automatic"),
+                                    |p| p.to_string(),
+                                )
+                            },
+                        );
+                    });
+                    ui.end_row();
                     let sizing = &mut drawing.position_sizing;
                     number(
                         ui,
@@ -1209,6 +1291,140 @@ mod tests {
                 );
                 dialog.close();
                 frame(&mut dialog, &mut chart, &ctx, vec![]);
+            }
+        }
+    }
+
+    /// The position's currency, precision and statistics controls preview together, Cancel
+    /// restores them, and confirming records one undoable edit retained in the saved drawing.
+    #[test]
+    fn position_readout_controls_preview_cancel_and_commit() {
+        for tool in [Tool::LongPos, Tool::ShortPos] {
+            let ctx = Context::default();
+            let bars = (0..20)
+                .map(|i| {
+                    crate::model::Bar::new(
+                        chrono::DateTime::from_timestamp(1_700_000_000 + i * 60, 0).unwrap(),
+                        100.0,
+                        106.0,
+                        95.0,
+                        100.0,
+                        1.0,
+                    )
+                })
+                .collect();
+            let mut chart = Chart::new(BarData::from_bars(bars));
+            chart.set_instrument(Some(
+                Instrument::new("TEST")
+                    .with_tick_size(0.25)
+                    .with_currency("USD"),
+            ));
+            let mut drawing = Drawing::new(7, tool);
+            drawing.completed = true;
+            drawing.chart_points = vec![
+                ChartPoint::new(2.0, 100.0),
+                ChartPoint::new(8.0, 105.0),
+                ChartPoint::new(8.0, 97.5),
+            ];
+            let mut peer = drawing.clone();
+            peer.id = 8;
+            peer.position_readout.account_currency = Some("GBP".into());
+            peer.position_readout.conversion_rate = Some(0.6);
+            chart.drawings_mut().drawings.extend([drawing, peer]);
+            chart.drawings_mut().select_drawings([7, 8]);
+            let mut dialog = DrawingPropertiesDialog::new();
+            dialog.config.height = 650.0;
+            let press = |dialog: &mut DrawingPropertiesDialog, chart: &mut Chart, label: &str| {
+                let texts = frame(dialog, chart, &ctx, vec![]);
+                let pos = texts
+                    .iter()
+                    .find(|(text, _)| text == label)
+                    .unwrap_or_else(|| panic!("missing {label}: {texts:?}"))
+                    .1
+                    .center();
+                click(dialog, chart, &ctx, pos);
+            };
+            for confirm in [false, true] {
+                dialog.open_for_chart(&chart, DrawingId(7));
+                dialog.active_tab = PropertiesTab::Style;
+                frame(&mut dialog, &mut chart, &ctx, vec![]);
+                press(&mut dialog, &mut chart, "Keep position statistics visible");
+                press(&mut dialog, &mut chart, "Condensed statistics");
+                let peer = &chart.drawings().drawings[1].position_readout;
+                assert_eq!(peer.account_currency.as_deref(), Some("GBP"));
+                assert_eq!(peer.conversion_rate, Some(0.6));
+                dialog.active_tab = PropertiesTab::Inputs;
+                press(&mut dialog, &mut chart, "Instrument currency");
+                press(&mut dialog, &mut chart, "EUR");
+                assert_eq!(
+                    chart.drawings().drawings[1]
+                        .position_readout
+                        .conversion_rate,
+                    None
+                );
+                let texts = frame(&mut dialog, &mut chart, &ctx, vec![]);
+                let label = texts
+                    .iter()
+                    .find(|(text, _)| text == "Currency code")
+                    .unwrap()
+                    .1;
+                let code = texts
+                    .iter()
+                    .find(|(text, rect)| {
+                        text == "EUR" && (rect.center().y - label.center().y).abs() < 4.0
+                    })
+                    .unwrap()
+                    .1
+                    .center();
+                click(&mut dialog, &mut chart, &ctx, code);
+                frame(
+                    &mut dialog,
+                    &mut chart,
+                    &ctx,
+                    vec![
+                        Event::Key {
+                            key: Key::A,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: Modifiers::COMMAND,
+                        },
+                        Event::Text("sar".into()),
+                    ],
+                );
+                enter(&mut dialog, &mut chart, &ctx, "Conversion rate", "0.8");
+                press(&mut dialog, &mut chart, "Automatic");
+                press(&mut dialog, &mut chart, "2");
+                let expected = crate::drawings::PositionReadout {
+                    persistent: true,
+                    condensed: true,
+                    account_currency: Some("SAR".into()),
+                    conversion_rate: Some(0.8),
+                    quantity_decimals: Some(2),
+                };
+                assert_eq!(chart.drawings().drawings[0].position_readout, expected);
+                assert!(!chart.can_undo(), "preview has no history");
+                if confirm {
+                    press(&mut dialog, &mut chart, "Ok");
+                    assert!(chart.undo());
+                    assert_eq!(
+                        chart.drawings().drawings[0].position_readout,
+                        Default::default()
+                    );
+                    assert!(!chart.can_undo());
+                    assert!(chart.redo());
+                    let json = chart.save_drawings().unwrap().to_json().unwrap();
+                    chart.load_drawings(&json).unwrap();
+                    assert_eq!(chart.drawings().drawings[0].position_readout, expected);
+                } else {
+                    dialog.close();
+                    frame(&mut dialog, &mut chart, &ctx, vec![]);
+                    assert_eq!(
+                        chart.drawings().drawings[0].position_readout,
+                        Default::default()
+                    );
+                    assert!(!chart.can_undo());
+                }
             }
         }
     }
