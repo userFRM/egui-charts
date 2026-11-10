@@ -5,7 +5,10 @@
 
 use super::ChartView;
 use super::style::{Acceleration, ellipse_arc, ellipse_point, sample_curve, smooth_path};
-use crate::drawings::domain::{Drawing, DrawingToolType as Tool, FibonacciConfig, FibonacciLevel};
+use crate::drawings::domain::{
+    Drawing, DrawingToolType as Tool, FibonacciConfig, FibonacciLabelPosition, FibonacciLevel,
+    LineTextHorizontalAlign, LineTextVerticalAlign,
+};
 use crate::styles::{stroke, typography};
 use crate::tokens::DESIGN_TOKENS;
 use egui::{Color32, Pos2, Rangef, Rect, Stroke};
@@ -87,7 +90,7 @@ fn level_galley(
     });
     painter.layout_no_wrap(
         text,
-        egui::FontId::proportional(typography::SM_MD),
+        egui::FontId::proportional(fib_font_size(config)),
         level_color(level),
     )
 }
@@ -200,6 +203,73 @@ impl Drawing {
             }
         }
         for (level, y, price) in levels {
+            if self.tool_type == Tool::FibonacciExtension {
+                let galley = level_galley(painter, &config, level, Some(price), Some(view));
+                let label = fib_text_bounds(
+                    galley.size(),
+                    range,
+                    y,
+                    config.label_position(),
+                    true,
+                    painter.clip_rect(),
+                );
+                let caption = config.show_captions.then(|| {
+                    let text = painter.layout_no_wrap(
+                        level.caption.clone(),
+                        egui::FontId::proportional(fib_font_size(&config)),
+                        level_color(level),
+                    );
+                    let bounds = fib_text_bounds(
+                        text.size(),
+                        range,
+                        y,
+                        config.caption_position,
+                        false,
+                        painter.clip_rect(),
+                    );
+                    (text, bounds)
+                });
+                let mut gaps: Vec<_> = std::iter::once((&galley, label))
+                    .chain(caption.iter().map(|(text, bounds)| (text, *bounds)))
+                    .filter(|(text, bounds)| {
+                        !text.text().is_empty() && bounds.y_range().contains(y)
+                    })
+                    .map(|(_, bounds)| bounds.x_range().expand(2.0))
+                    .collect();
+                gaps.sort_by(|a, b| a.min.total_cmp(&b.min));
+                let mut x = range.min;
+                for gap in gaps {
+                    let end = gap.min.clamp(range.min, range.max);
+                    if end > x {
+                        paint_level_line(
+                            painter,
+                            [Pos2::new(x, y), Pos2::new(end, y)],
+                            &config,
+                            level,
+                        );
+                    }
+                    x = x.max(gap.max.clamp(range.min, range.max));
+                }
+                if x < range.max {
+                    paint_level_line(
+                        painter,
+                        [Pos2::new(x, y), Pos2::new(range.max, y)],
+                        &config,
+                        level,
+                    );
+                }
+                if chart_rect.y_range().contains(y) {
+                    if !galley.text().is_empty() {
+                        painter.galley(label.min, galley, level_color(level));
+                    }
+                    if let Some((text, bounds)) =
+                        caption.filter(|(text, _)| !text.text().is_empty())
+                    {
+                        painter.galley(bounds.min, text, level_color(level));
+                    }
+                }
+                continue;
+            }
             paint_level_line(
                 painter,
                 [Pos2::new(range.min, y), Pos2::new(range.max, y)],
@@ -228,7 +298,68 @@ impl Drawing {
         self.render_fib_trend(painter);
     }
 
+    /// Caption hit boxes share the renderer's layout, including empty fields on selected levels.
+    pub(crate) fn fib_caption_rects(
+        &self,
+        painter: &egui::Painter,
+        pane: Rect,
+    ) -> Vec<(usize, Rect)> {
+        if self.tool_type != Tool::FibonacciExtension {
+            return Vec::new();
+        }
+        let config = self.fibonacci_config();
+        if !config.show_captions {
+            return Vec::new();
+        }
+        let range = self.fib_level_x_range(&config, pane);
+        config
+            .levels
+            .iter()
+            .enumerate()
+            .filter(|(_, level)| level.visible)
+            .zip(&self.level_ys)
+            .filter(|(_, y)| pane.y_range().contains(**y))
+            .map(|((index, level), &y)| {
+                let text = painter.layout_no_wrap(
+                    if level.caption.is_empty() {
+                        crate::localization::text(painter.ctx(), "Add text")
+                    } else {
+                        level.caption.clone()
+                    },
+                    egui::FontId::proportional(fib_font_size(&config)),
+                    level_color(level),
+                );
+                (
+                    index,
+                    fib_text_bounds(text.size(), range, y, config.caption_position, false, pane),
+                )
+            })
+            .collect()
+    }
+
+    /// Empty captions expose an input hint only while their extension is selected.
+    pub(crate) fn render_fib_caption_hints(&self, painter: &egui::Painter, pane: Rect) {
+        if self.tool_type != Tool::FibonacciExtension {
+            return;
+        }
+        let config = self.fibonacci_config();
+        for (index, rect) in self.fib_caption_rects(painter, pane) {
+            if config.levels[index].caption.is_empty() {
+                painter.text(
+                    rect.min,
+                    egui::Align2::LEFT_TOP,
+                    crate::localization::text(painter.ctx(), "Add text"),
+                    egui::FontId::proportional(fib_font_size(&config)),
+                    painter.ctx().global_style().visuals.weak_text_color(),
+                );
+            }
+        }
+    }
+
     fn render_fib_trend(&self, painter: &egui::Painter) {
+        if !self.fibonacci_config().show_trend {
+            return;
+        }
         for pair in self.points.windows(2) {
             self.styled_segment(
                 painter,
@@ -806,6 +937,42 @@ impl Drawing {
     }
 }
 
+fn fib_font_size(config: &FibonacciConfig) -> f32 {
+    if config.font_size.is_finite() {
+        config.font_size.clamp(1.0, 256.0)
+    } else {
+        typography::SM_MD
+    }
+}
+
+fn fib_text_bounds(
+    size: egui::Vec2,
+    range: Rangef,
+    y: f32,
+    position: FibonacciLabelPosition,
+    outside: bool,
+    clip: Rect,
+) -> Rect {
+    use LineTextHorizontalAlign as H;
+    use LineTextVerticalAlign as V;
+    let (x, horizontal) = match (position.horizontal, outside) {
+        (H::Left, true) => (range.min - 4.0, egui::Align::Max),
+        (H::Right, true) => (range.max + 4.0, egui::Align::Min),
+        (H::Left, false) => (range.min + 4.0, egui::Align::Min),
+        (H::Right, false) => (range.max - 4.0, egui::Align::Max),
+        (H::Center, _) => (range.center(), egui::Align::Center),
+    };
+    let (y, vertical) = match position.vertical {
+        V::Bottom => (y - 2.0, egui::Align::Max),
+        V::Middle => (y, egui::Align::Center),
+        V::Top => (y + 2.0, egui::Align::Min),
+    };
+    let bounds = egui::Align2([horizontal, vertical]).anchor_size(Pos2::new(x, y), size);
+    let shift = (clip.min - bounds.min).max(egui::Vec2::ZERO)
+        + (clip.max - bounds.max).min(egui::Vec2::ZERO);
+    bounds.translate(shift)
+}
+
 fn level_width(config: &FibonacciConfig) -> f32 {
     if config.level_width.is_finite() && config.level_width > 0.0 {
         config
@@ -1042,6 +1209,142 @@ fn fib_spiral_point(center: Pos2, edge: Pos2, theta: f64) -> Pos2 {
 mod tests {
     use super::*;
     use std::f32::consts::FRAC_PI_2;
+
+    /// A 100 point swing projected from 150 puts the half level at 200. Its captions and
+    /// numeric labels have independent positions, but share typography and leave gaps on-line.
+    #[test]
+    fn fibonacci_extension_captions_alignment_font_and_trend_are_independent() {
+        let pane = Rect::from_min_max(Pos2::ZERO, Pos2::new(800.0, 400.0));
+        for (horizontal, x) in [("Left", 300.0), ("Center", 400.0), ("Right", 500.0)] {
+            for vertical in ["Bottom", "Middle", "Top"] {
+                for captions in [false, true] {
+                    let caption_horizontal = match horizontal {
+                        "Left" => "Right",
+                        "Center" => "Left",
+                        _ => "Center",
+                    };
+                    let caption_vertical = match vertical {
+                        "Bottom" => "Middle",
+                        "Middle" => "Top",
+                        _ => "Bottom",
+                    };
+                    let mut drawing = Drawing::new(0, Tool::FibonacciExtension);
+                    drawing.chart_points = [(100.0, 100.0), (300.0, 200.0), (500.0, 150.0)]
+                        .map(|(x, y)| crate::drawings::ChartPoint::new(x, y))
+                        .to_vec();
+                    drawing.fib_config = Some(serde_json::from_value(serde_json::json!({
+                        "levels":[{"value":0.5,"label":"","caption":"Target","color":[211,41,73,255],"visible":true,"show_price":true}],
+                        "show_background":false,"background_opacity":51,"extend_left":false,"extend_right":false,"reverse":false,
+                        "show_prices":true,"show_levels":true,"levels_as_percent":false,
+                        "label_position":{"horizontal":horizontal,"vertical":vertical},
+                        "caption_position":{"horizontal":caption_horizontal,"vertical":caption_vertical},
+                        "font_size":18.0,"show_captions":captions,"show_trend":false,"level_width":4.0
+                    })).unwrap());
+                    drawing.update_screen_coords(|x| x, |price| 400.0 - price as f32);
+                    assert_eq!(
+                        crate::drawings::services::DrawingInteraction::new().hit_test(
+                            Pos2::new(200.0, 250.0),
+                            std::slice::from_ref(&drawing),
+                            "1h"
+                        ),
+                        None
+                    );
+                    let ctx = egui::Context::default();
+                    let mut output = ctx.run_ui(Default::default(), |ui| {
+                        drawing.render_fibonacci(
+                            &ui.painter().with_clip_rect(pane),
+                            pane,
+                            &ChartView {
+                                price_formatter: None,
+                                time_formatter: None,
+                                bar_seconds: 0,
+                                instrument: None,
+                                bars: &[],
+                                revision: 0,
+                                bar_to_x: &|x| x,
+                                price_to_y: &|p| 400.0 - p as f32,
+                                y_to_price: &|y| 400.0 - f64::from(y),
+                                time_axis: true,
+                                executions: None,
+                                timeframe: None,
+                                finer: &[],
+                            },
+                        );
+                    });
+                    output.textures_delta.clear();
+                    let texts: Vec<_> = output
+                        .shapes
+                        .iter()
+                        .filter_map(|s| match &s.shape {
+                            egui::Shape::Text(text) => Some(text),
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(texts.len(), if captions { 2 } else { 1 });
+                    let label = texts
+                        .iter()
+                        .find(|text| text.galley.text() == "0.5 (200.00)")
+                        .unwrap();
+                    let bounds = Rect::from_min_size(label.pos, label.galley.size());
+                    let actual = match horizontal {
+                        "Left" => bounds.max.x + 4.0,
+                        "Right" => bounds.min.x - 4.0,
+                        _ => bounds.center().x,
+                    };
+                    assert!((actual - x).abs() < 0.01, "{horizontal}: {bounds:?}");
+                    let actual = match vertical {
+                        "Bottom" => bounds.max.y + 2.0,
+                        "Top" => bounds.min.y - 2.0,
+                        _ => bounds.center().y,
+                    };
+                    assert!((actual - 200.0).abs() < 0.01, "{vertical}: {bounds:?}");
+                    assert_eq!(label.galley.job.sections[0].format.font_id.size, 18.0);
+                    if captions {
+                        let caption = texts
+                            .iter()
+                            .find(|text| text.galley.text() == "Target")
+                            .unwrap();
+                        let bounds = Rect::from_min_size(caption.pos, caption.galley.size());
+                        let (actual, expected) = match caption_horizontal {
+                            "Left" => (bounds.min.x, 304.0),
+                            "Right" => (bounds.max.x, 496.0),
+                            _ => (bounds.center().x, 400.0),
+                        };
+                        assert!(
+                            (actual - expected).abs() < 0.01,
+                            "{caption_horizontal}: {bounds:?}"
+                        );
+                        let (actual, expected) = match caption_vertical {
+                            "Bottom" => (bounds.max.y, 198.0),
+                            "Top" => (bounds.min.y, 202.0),
+                            _ => (bounds.center().y, 200.0),
+                        };
+                        assert!(
+                            (actual - expected).abs() < 0.01,
+                            "{caption_vertical}: {bounds:?}"
+                        );
+                        assert_eq!(caption.galley.job.sections[0].format.font_id.size, 18.0);
+                    }
+                    for shape in &output.shapes {
+                        if let egui::Shape::LineSegment { points, stroke } = &shape.shape {
+                            assert_eq!(
+                                stroke.width, 4.0,
+                                "hidden trend paints no construction segments"
+                            );
+                            assert_eq!(points[0].y, 200.0);
+                            if horizontal == "Center" && vertical == "Middle" {
+                                assert!(
+                                    points[1].x <= bounds.min.x - 2.0
+                                        || points[0].x >= bounds.max.x + 2.0
+                                );
+                            }
+                        }
+                    }
+                    output.drop_without_applying_deltas();
+                }
+            }
+        }
+    }
 
     #[test]
     fn fibonacci_label_cache_tracks_text_inputs() {

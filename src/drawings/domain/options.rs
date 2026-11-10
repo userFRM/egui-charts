@@ -328,6 +328,9 @@ pub struct FibonacciLevel {
     /// Legacy custom percentage label. Empty derives the label from `value`.
     #[serde(default)]
     pub label: String,
+    /// Independent extension caption, retained when the ratio or visibility changes.
+    #[serde(default)]
+    pub caption: String,
     /// Level color as RGBA
     pub color: [u8; 4],
     /// Whether this level is visible
@@ -344,6 +347,7 @@ impl FibonacciLevel {
         Self {
             value,
             label: label.to_string(),
+            caption: String::new(),
             color,
             visible: true,
             show_price: true,
@@ -369,6 +373,24 @@ impl FibonacciLevel {
             format!("{text}%")
         } else {
             text.to_owned()
+        }
+    }
+}
+
+/// Placement of Fibonacci labels or captions along and across a horizontal level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FibonacciLabelPosition {
+    /// Left end, midpoint or right end of the level, regardless of anchor order.
+    pub horizontal: LineTextHorizontalAlign,
+    /// The text edge resting on the level: Bottom above, Middle on, Top below it.
+    pub vertical: LineTextVerticalAlign,
+}
+
+impl Default for FibonacciLabelPosition {
+    fn default() -> Self {
+        Self {
+            horizontal: LineTextHorizontalAlign::Center,
+            vertical: LineTextVerticalAlign::Middle,
         }
     }
 }
@@ -407,9 +429,28 @@ pub struct FibonacciConfig {
     /// Place labels at the left end of level lines instead of the right.
     #[serde(default)]
     pub labels_on_left: bool,
+    /// Explicit extension label placement. `None` follows `labels_on_left`, retaining older saves.
+    #[serde(default)]
+    pub label_position: Option<FibonacciLabelPosition>,
+    /// Extension captions have their own placement, initially centred on each level.
+    #[serde(default)]
+    pub caption_position: FibonacciLabelPosition,
+    /// Size of extension labels and captions in points, from 1 through 256.
+    #[serde(default = "fib_font_size")]
+    pub font_size: f32,
+    /// Show extension level captions, independently of ratios and prices.
+    #[serde(default = "percent_levels")]
+    pub show_captions: bool,
+    /// Show the construction segments joining the anchors.
+    #[serde(default = "percent_levels")]
+    pub show_trend: bool,
     /// Measure retracement and extension levels in logarithmic price when all anchors are positive.
     #[serde(default)]
     pub logarithmic: bool,
+}
+
+fn fib_font_size() -> f32 {
+    12.0
 }
 
 fn fib_level_width() -> f32 {
@@ -458,6 +499,11 @@ impl FibonacciConfig {
             show_levels: None,
             levels_as_percent: false,
             labels_on_left: true,
+            label_position: None,
+            caption_position: FibonacciLabelPosition::default(),
+            font_size: fib_font_size(),
+            show_captions: true,
+            show_trend: true,
         }
     }
 
@@ -580,6 +626,18 @@ impl FibonacciConfig {
             labels_on_left: !matches!(tool, T::FibonacciTimeZones | T::TrendBasedFibTime),
             ..Self::legacy()
         }
+    }
+
+    /// Effective extension label placement, including the saved left/right switch.
+    pub fn label_position(&self) -> FibonacciLabelPosition {
+        self.label_position.unwrap_or(FibonacciLabelPosition {
+            horizontal: if self.labels_on_left {
+                LineTextHorizontalAlign::Left
+            } else {
+                LineTextHorizontalAlign::Right
+            },
+            vertical: LineTextVerticalAlign::Middle,
+        })
     }
 
     /// Label content; a tool without a price passes `None`.

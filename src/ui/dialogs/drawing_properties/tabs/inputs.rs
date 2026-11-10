@@ -856,10 +856,12 @@ fn fibonacci(ui: &mut Ui, drawing: &mut Drawing, pickers: &mut Vec<ColorPickerSt
             &mut config.levels_as_percent,
             l10n::text(ui.ctx(), "Percent"),
         );
-        ui.checkbox(
-            &mut config.labels_on_left,
-            l10n::text(ui.ctx(), "Labels on left"),
-        );
+        if drawing.tool_type != Tool::FibonacciExtension {
+            ui.checkbox(
+                &mut config.labels_on_left,
+                l10n::text(ui.ctx(), "Labels on left"),
+            );
+        }
     });
     if matches!(
         drawing.tool_type,
@@ -1291,6 +1293,99 @@ mod tests {
                 );
                 dialog.close();
                 frame(&mut dialog, &mut chart, &ctx, vec![]);
+            }
+        }
+    }
+
+    /// Extension settings preview together, Cancel restores every level, and confirming records
+    /// one edit, retaining the per-level captions in templates and saved records.
+    #[test]
+    fn fibonacci_extension_controls_preview_cancel_and_commit() {
+        let ctx = Context::default();
+        let bars = (0..20)
+            .map(|i| {
+                crate::model::Bar::new(
+                    chrono::DateTime::from_timestamp(1_700_000_000 + i * 60, 0).unwrap(),
+                    100.0,
+                    210.0,
+                    90.0,
+                    150.0,
+                    1.0,
+                )
+            })
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars));
+        let mut drawing = Drawing::new(7, Tool::FibonacciExtension);
+        drawing.completed = true;
+        drawing.chart_points = [(2.0, 100.0), (8.0, 200.0), (14.0, 150.0)]
+            .map(|(x, y)| ChartPoint::new(x, y))
+            .to_vec();
+        let original = drawing.fib_config.clone();
+        chart.drawings_mut().drawings.push(drawing);
+        let mut dialog = DrawingPropertiesDialog::new();
+        dialog.config.height = 740.0;
+        let press = |dialog: &mut DrawingPropertiesDialog, chart: &mut Chart, label: &str| {
+            let texts = frame(dialog, chart, &ctx, vec![]);
+            let pos = texts
+                .iter()
+                .find(|(text, _)| text == label)
+                .unwrap_or_else(|| panic!("missing {label}: {texts:?}"))
+                .1
+                .center();
+            click(dialog, chart, &ctx, pos);
+        };
+        for confirm in [false, true] {
+            dialog.open_for_chart(&chart, DrawingId(7));
+            dialog.active_tab = PropertiesTab::Style;
+            frame(&mut dialog, &mut chart, &ctx, vec![]);
+            press(&mut dialog, &mut chart, "Show trend line");
+            enter(&mut dialog, &mut chart, &ctx, "Font size", "18");
+            let config =
+                serde_json::to_value(chart.drawings().drawings[0].fib_config.as_ref().unwrap())
+                    .unwrap();
+            assert_eq!(config["show_trend"], false);
+            assert_eq!(config["font_size"], 18.0);
+            assert_eq!(config["level_width"], 2.0);
+            dialog.active_tab = PropertiesTab::Text;
+            let texts = frame(&mut dialog, &mut chart, &ctx, vec![]);
+            let label = texts
+                .iter()
+                .find(|(text, _)| text == "Level 1 (0)")
+                .unwrap()
+                .1;
+            click(
+                &mut dialog,
+                &mut chart,
+                &ctx,
+                Pos2::new(label.max.x + 70.0, label.center().y),
+            );
+            frame(
+                &mut dialog,
+                &mut chart,
+                &ctx,
+                vec![Event::Text("Target".into())],
+            );
+            // Clicking the font row commits the text field and publishes its live preview.
+            press(&mut dialog, &mut chart, "Font size");
+            let changed = chart.drawings().drawings[0].fib_config.clone();
+            let config = serde_json::to_value(&changed).unwrap();
+            assert_eq!(config["levels"][0]["caption"], "Target");
+            assert_eq!(config["levels"][1]["caption"], "");
+            assert!(!chart.can_undo());
+            if confirm {
+                press(&mut dialog, &mut chart, "Ok");
+                assert!(chart.undo());
+                assert_eq!(chart.drawings().drawings[0].fib_config, original);
+                assert!(!chart.can_undo());
+                assert!(chart.redo());
+                let json = chart.save_drawings().unwrap().to_json().unwrap();
+                chart.load_drawings(&json).unwrap();
+                assert_eq!(chart.drawings().drawings[0].fib_config, changed);
+            } else {
+                dialog.close();
+                frame(&mut dialog, &mut chart, &ctx, vec![]);
+                assert_eq!(chart.drawings().drawings[0].fib_config, original);
+                assert!(!chart.can_undo());
             }
         }
     }

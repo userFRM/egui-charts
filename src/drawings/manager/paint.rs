@@ -268,6 +268,9 @@ impl DrawingManager {
                         .map_or(0, |list| list.next_idx().0)
                 });
                 self.render_drawing(drawing, painter, price_rect, view);
+                if self.is_selected(drawing.id) && self.text_editor.is_none() {
+                    drawing.render_fib_caption_hints(painter, price_rect);
+                }
                 let shapes: Vec<ClippedShape> = painter.ctx().graphics(|g| {
                     g.get(painter.layer_id())
                         .map(|list| list.all_entries().skip(start).cloned().collect())

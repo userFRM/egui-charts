@@ -58,11 +58,36 @@ pub struct TextTab;
 impl TextTab {
     /// Tools with text to write and the trend angle, whose own labels have a font and a colour.
     pub(crate) fn available(tool: DrawingToolType) -> bool {
-        tool.supports_text() || tool == DrawingToolType::TrendAngle
+        tool.supports_text()
+            || matches!(
+                tool,
+                DrawingToolType::TrendAngle | DrawingToolType::FibonacciExtension
+            )
     }
 
     pub fn show(ui: &mut Ui, props: &mut DrawingProps, pickers: &mut [ColorPickerState; 3]) {
         ui.space_md();
+        if let Some(template) = &mut props.tool_settings
+            && template.settings.tool_type == DrawingToolType::FibonacciExtension
+        {
+            let effective = template.settings.fibonacci_config().into_owned();
+            let config = template.settings.fib_config.get_or_insert(effective);
+            FormGrid::new("extension_text").show(ui, |ui| {
+                fibonacci_text_controls(ui, config);
+                for (index, level) in config.levels.iter_mut().enumerate() {
+                    let label = ui.label(format!(
+                        "{} {} ({})",
+                        l10n::text(ui.ctx(), "Level"),
+                        index + 1,
+                        level.value
+                    ));
+                    ui.add(egui::TextEdit::singleline(&mut level.caption).desired_width(180.0))
+                        .labelled_by(label.id);
+                    ui.end_row();
+                }
+            });
+            return;
+        }
 
         FormGrid::new("text_grid").show(ui, |ui| {
             let writes = (props.tool_settings.as_ref())
@@ -268,6 +293,60 @@ impl TextTab {
             ui.end_row();
         });
     }
+}
+
+/// Extension labels and captions share a font, with independent positions and visibility.
+pub(super) fn fibonacci_text_controls(ui: &mut Ui, config: &mut crate::drawings::FibonacciConfig) {
+    use LineTextHorizontalAlign as H;
+    use LineTextVerticalAlign as V;
+    let label = ui.label(l10n::text(ui.ctx(), "Font size"));
+    ui.add(
+        egui::DragValue::new(&mut config.font_size)
+            .range(1.0..=256.0)
+            .suffix(" px"),
+    )
+    .labelled_by(label.id);
+    ui.end_row();
+    let mut position = config.label_position();
+    for (label, along) in [
+        ("Label alignment", &mut position.horizontal),
+        ("Caption alignment", &mut config.caption_position.horizontal),
+    ] {
+        alignment_row(
+            ui,
+            label,
+            along,
+            [
+                (H::Left, "Left"),
+                (H::Center, "Center"),
+                (H::Right, "Right"),
+            ],
+        );
+    }
+    for (label, across) in [
+        ("Label placement", &mut position.vertical),
+        ("Caption placement", &mut config.caption_position.vertical),
+    ] {
+        alignment_row(
+            ui,
+            label,
+            across,
+            [
+                (V::Bottom, "Top"),
+                (V::Middle, "Middle"),
+                (V::Top, "Bottom"),
+            ],
+        );
+    }
+    if position != config.label_position() {
+        config.label_position = Some(position);
+    }
+    ui.label("");
+    ui.checkbox(
+        &mut config.show_captions,
+        l10n::text(ui.ctx(), "Show captions"),
+    );
+    ui.end_row();
 }
 
 #[cfg(test)]

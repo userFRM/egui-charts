@@ -52,6 +52,20 @@ impl StyleTab {
 
             if let Some(template) = &mut props.tool_settings {
                 let settings = &mut template.settings;
+                if settings.tool_type == DrawingToolType::FibonacciExtension {
+                    let effective = settings.fibonacci_config().into_owned();
+                    let config = settings.fib_config.get_or_insert(effective);
+                    ui.label("");
+                    ui.checkbox(
+                        &mut config.show_trend,
+                        l10n::text(ui.ctx(), "Show trend line"),
+                    );
+                    ui.end_row();
+                    let label = ui.label(l10n::text(ui.ctx(), "Level width"));
+                    ui.label_inputs_by(label.id, |ui| line_width_row(ui, &mut config.level_width));
+                    ui.end_row();
+                    super::text::fibonacci_text_controls(ui, config);
+                }
                 if matches!(
                     settings.tool_type,
                     DrawingToolType::LongPos | DrawingToolType::ShortPos

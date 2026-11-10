@@ -226,6 +226,12 @@ impl StoredDrawing {
         }) {
             return Some("fib_config.level_width".into());
         }
+        if d.fib_config
+            .as_ref()
+            .is_some_and(|c| !(1.0..=256.0).contains(&c.font_size))
+        {
+            return Some("fib_config.font_size".into());
+        }
         for (name, values) in [
             (
                 "fib_config.levels",
@@ -1190,6 +1196,7 @@ mod tests {
             levels: vec![FibonacciLevel {
                 value: 1.618,
                 label: "golden".into(),
+                caption: String::new(),
                 color: [9, 10, 11, 12],
                 visible: false,
                 show_price: false,

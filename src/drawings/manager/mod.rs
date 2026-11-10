@@ -124,6 +124,8 @@ struct PaintedDrawing {
 
 /// Draft text stays separate from the drawing until the editor commits it.
 pub(crate) struct TextEditState {
+    /// Extension level being edited; absent for ordinary annotation text.
+    pub level: Option<usize>,
     pub id: usize,
     pub draft: String,
     pub focus: bool,
@@ -147,6 +149,18 @@ impl TextEditState {
     /// The drawing with its draft, or a neutral placeholder while it is empty.
     pub(crate) fn preview(&self, drawing: &Drawing, ctx: &egui::Context) -> Drawing {
         let mut shown = drawing.clone();
+        if let Some(index) = self.level {
+            let config = shown.fibonacci_config().into_owned();
+            shown.fib_config = Some(config);
+            if let Some(level) = shown
+                .fib_config
+                .as_mut()
+                .and_then(|c| c.levels.get_mut(index))
+            {
+                level.caption = self.shown_text(ctx);
+            }
+            return shown;
+        }
         if self.draft.is_empty() {
             shown.text_color = Some(
                 ctx.global_style()

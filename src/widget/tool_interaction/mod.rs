@@ -347,6 +347,7 @@ impl Chart {
             drawing_manager.place_at_pointer = false;
             drawing_manager.start_drawing_with_coords(tool, pos, x_to_bar_snapped, y_to_price);
         }
+        super::drawing_api::begin_fibonacci_caption_edit(ui, drawing_manager, response, price_rect);
         let owns_gesture = drawing_manager
             .curr_drawing
             .as_ref()

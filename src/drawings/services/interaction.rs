@@ -214,10 +214,11 @@ impl DrawingInteraction {
                             && drawing.level_ys.iter().any(|y| {
                                 (point.y - y).abs() <= hit_distance.max(config.level_width / 2.0)
                             });
-                        let on_trend = drawing
-                            .points
-                            .windows(2)
-                            .any(|p| point_to_line_distance(point, p[0], p[1]) <= hit_distance);
+                        let on_trend = config.show_trend
+                            && drawing
+                                .points
+                                .windows(2)
+                                .any(|p| point_to_line_distance(point, p[0], p[1]) <= hit_distance);
                         if on_level || on_trend {
                             return Some(drawing.id);
                         }

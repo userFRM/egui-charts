@@ -35,6 +35,7 @@ pub(super) fn begin_edit(manager: &mut DrawingManager, id: usize, placed: bool) 
         return;
     }
     manager.text_editor = Some(TextEditState {
+        level: None,
         id,
         draft: if drawing.tool_type == DrawingToolType::Table {
             drawing.table_text()
@@ -83,11 +84,40 @@ pub(super) fn show_editor(
             drawing.tool_type,
             DrawingToolType::AnchoredNote | DrawingToolType::FlagNote
         );
-        let old = drawing.text.clone();
+        let old = if let Some(index) = editor.level {
+            drawing
+                .fib_config
+                .as_ref()
+                .and_then(|c| c.levels.get(index))
+                .map(|l| l.caption.clone())
+                .filter(|text| !text.is_empty())
+        } else {
+            drawing.text.clone()
+        };
         let shown = editor.shown_text(ui.ctx());
         let caret = drawing.text_box_colors(ui.ctx()).text;
         let mut outside = false;
-        if let Some((pos, galley)) = manager.painted_text(editor.id, &shown)
+        let painted = if let Some(index) = editor.level {
+            let preview = editor.preview(drawing, ui.ctx());
+            let config = preview.fibonacci_config();
+            preview
+                .fib_caption_rects(ui.painter(), pane)
+                .into_iter()
+                .find(|(level, _)| *level == index)
+                .map(|(_, rect)| {
+                    (
+                        rect.min,
+                        ui.painter().layout_no_wrap(
+                            shown.clone(),
+                            egui::FontId::proportional(config.font_size),
+                            egui::Color32::WHITE,
+                        ),
+                    )
+                })
+        } else {
+            manager.painted_text(editor.id, &shown)
+        };
+        if let Some((pos, galley)) = painted
             && let Some(section) = galley.job.sections.first()
         {
             let format = egui::TextFormat {
@@ -147,7 +177,19 @@ pub(super) fn show_editor(
                     _ => {}
                 }
             } else if !cancel && text != old {
-                manager.edit_drawing(editor.id, |d| d.text = text);
+                manager.edit_drawing(editor.id, |d| {
+                    if let Some(index) = editor.level {
+                        let config = d.fibonacci_config().into_owned();
+                        d.fib_config = Some(config);
+                        if let Some(level) =
+                            d.fib_config.as_mut().and_then(|c| c.levels.get_mut(index))
+                        {
+                            level.caption = text.unwrap_or_default();
+                        }
+                    } else {
+                        d.text = text;
+                    }
+                });
             }
         } else {
             manager.text_editor = Some(editor);

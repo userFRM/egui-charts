@@ -37,6 +37,68 @@ impl std::fmt::Display for DrawingError {
 }
 impl std::error::Error for DrawingError {}
 
+/// Open a caption on a single click, leaving drag gestures with drawing selection.
+pub(crate) fn begin_fibonacci_caption_edit(
+    ui: &egui::Ui,
+    manager: &mut crate::drawings::DrawingManager,
+    response: &egui::Response,
+    pane: egui::Rect,
+) {
+    if manager.text_editor.is_some()
+        || manager.active_tool.is_some()
+        || manager.dragging_handle.is_some()
+        || !response.contains_pointer()
+    {
+        return;
+    }
+    let Some(pos) = ui.input(|i| {
+        i.pointer
+            .primary_clicked()
+            .then(|| i.pointer.interact_pos())
+            .flatten()
+    }) else {
+        return;
+    };
+    let painter = ui.painter().with_clip_rect(pane);
+    let hit = crate::drawings::services::in_z_order(&manager.drawings)
+        .into_iter()
+        .rev()
+        .filter(|d| {
+            d.selectable
+                && !d.locked
+                && manager.owns_pane(d)
+                && d.is_visible_on_timeframe(&manager.curr_timeframe)
+        })
+        .find_map(|d| {
+            d.fib_caption_rects(&painter, pane)
+                .into_iter()
+                .find(|(index, rect)| {
+                    rect.contains(pos)
+                        && (manager.is_selected(d.id)
+                            || !d.fibonacci_config().levels[*index].caption.is_empty())
+                })
+                .map(|(level, _)| {
+                    (
+                        d.id,
+                        level,
+                        d.fibonacci_config().levels[level].caption.clone(),
+                    )
+                })
+        });
+    if let Some((id, level, draft)) = hit {
+        manager.text_editor = Some(crate::drawings::manager::TextEditState {
+            id,
+            level: Some(level),
+            draft,
+            focus: true,
+            opened_frame: None,
+            placed: false,
+            inline: true,
+        });
+        manager.select(id);
+    }
+}
+
 impl Chart {
     /// Creates a completed drawing from UTC times and prices, with the supplied drawing's
     /// properties, pane, group and layer. Its id and storage identity are replaced.
@@ -100,6 +162,44 @@ impl Chart {
             .map_err(DrawingError::Invalid)?;
         self.drawings_mut().edit_drawing(id, |target| {
             target.chart_points = drawing.chart_points;
+        });
+        Ok(())
+    }
+
+    /// Replace a three-anchor Fibonacci extension's level and text settings as one undoable
+    /// edit. Invalid settings, other tools and locked drawings leave history untouched.
+    pub fn set_fibonacci_extension(
+        &mut self,
+        id: usize,
+        config: crate::drawings::FibonacciConfig,
+    ) -> Result<(), DrawingError> {
+        let mut drawing = self
+            .drawings()
+            .drawings
+            .iter()
+            .find(|d| d.id == id)
+            .ok_or(DrawingError::UnknownDrawing(id))?
+            .clone();
+        if drawing.locked {
+            return Err(DrawingError::Locked(id));
+        }
+        if drawing.tool_type != crate::drawings::DrawingToolType::FibonacciExtension {
+            return Err(DrawingError::Invalid(
+                "Drawing is not a Fibonacci extension",
+            ));
+        }
+        let unchanged = drawing.fib_config.as_ref() == Some(&config);
+        drawing.fib_config = Some(config);
+        self.drawings()
+            .validate_drawing(&drawing)
+            .map_err(DrawingError::Invalid)?;
+        if unchanged {
+            return Ok(());
+        }
+        self.user_action(|chart| {
+            chart
+                .drawings_mut()
+                .edit_drawing(id, |target| target.fib_config = drawing.fib_config);
         });
         Ok(())
     }
@@ -462,6 +562,205 @@ mod tests {
     use crate::drawings::manager::DrawingSyncAction;
     use crate::model::{Bar, BarData};
     use crate::studies::{CustomIndicator, IndicatorValue};
+
+    /// Extension settings retain every level through templates, persistence and one undo step;
+    /// invalid fonts, locked drawings and wrong tools leave the drawing and history intact.
+    #[test]
+    fn fibonacci_extension_edits_preserve_levels_and_validate_atomically() {
+        use crate::drawings::{DrawingTemplate, DrawingToolType as T, FibonacciConfig};
+        let bars = (0..20)
+            .map(|i| {
+                Bar::new(
+                    DateTime::from_timestamp(1_700_000_000 + i * 60, 0).unwrap(),
+                    100.0,
+                    220.0,
+                    90.0,
+                    150.0,
+                    1.0,
+                )
+            })
+            .collect();
+        let mut chart = Chart::new(BarData::from_bars(bars));
+        let mut drawing = Drawing::new(7, T::FibonacciExtension);
+        drawing.completed = true;
+        drawing.chart_points = [(0.0, 100.0), (5.0, 200.0), (10.0, 150.0)]
+            .map(|(x, y)| ChartPoint::new(x, y))
+            .to_vec();
+        let original = drawing.fib_config.clone();
+        let mut config = original.clone().unwrap();
+        assert_eq!(config.levels.len(), 24);
+        for (index, level) in config.levels.iter_mut().enumerate() {
+            level.caption = format!("Target {index}");
+        }
+        config.font_size = 18.0;
+        config.show_trend = false;
+        config.reverse = true;
+        config.logarithmic = true;
+        config.label_position = Some(crate::drawings::FibonacciLabelPosition::default());
+        chart.drawings_mut().drawings.push(drawing.clone());
+        chart.set_fibonacci_extension(7, config.clone()).unwrap();
+        assert_eq!(
+            chart.drawings().drawings[0].chart_points,
+            drawing.chart_points
+        );
+        assert!(chart.undo());
+        assert_eq!(chart.drawings().drawings[0].fib_config, original);
+        assert!(!chart.can_undo());
+        assert!(chart.redo());
+        let mut peer = Drawing::new(8, T::FibonacciExtension);
+        DrawingTemplate::from_drawing(&chart.drawings().drawings[0])
+            .apply_to(&mut peer)
+            .unwrap();
+        assert_eq!(peer.fib_config, Some(config.clone()));
+        let saved = chart.save_drawings().unwrap().to_json().unwrap();
+        chart.load_drawings(&saved).unwrap();
+        assert_eq!(
+            chart.drawings().drawings[0].fib_config,
+            Some(config.clone())
+        );
+        // Repeated settings do not consume a history step.
+        chart
+            .set_fibonacci_extension(chart.drawings().drawings[0].id, config.clone())
+            .unwrap();
+        let id = chart.drawings().drawings[0].id;
+        for size in [0.0, 257.0, f32::NAN, f32::INFINITY] {
+            let mut invalid = config.clone();
+            invalid.font_size = size;
+            assert!(chart.set_fibonacci_extension(id, invalid).is_err());
+            assert_eq!(
+                chart.drawings().drawings[0].fib_config,
+                Some(config.clone())
+            );
+        }
+        chart.drawings_mut().drawings[0].locked = true;
+        assert_eq!(
+            chart.set_fibonacci_extension(id, FibonacciConfig::extension_default()),
+            Err(DrawingError::Locked(id))
+        );
+        chart.drawings_mut().drawings[0].locked = false;
+        chart.drawings_mut().drawings[0].tool_type = T::TrendLine;
+        assert!(chart.set_fibonacci_extension(id, config).is_err());
+        assert!(!chart.can_undo());
+    }
+
+    /// A single click edits the selected level, including an empty field. Draft cancellation
+    /// changes nothing, and confirming updates only that level in one undoable operation.
+    #[test]
+    fn fibonacci_captions_edit_inline_without_moving_anchors() {
+        use crate::drawings::DrawingToolType as T;
+        use egui::{Event, Key, Modifiers, PointerButton, Pos2, RawInput, Rect};
+        let ctx = egui::Context::default();
+        let bars = (0..60)
+            .map(|i| {
+                crate::model::Bar::new(
+                    DateTime::from_timestamp(1_700_000_000 + i * 60, 0).unwrap(),
+                    100.0,
+                    220.0,
+                    90.0,
+                    150.0,
+                    1.0,
+                )
+            })
+            .collect();
+        let mut chart = Chart::new(crate::model::BarData::from_bars(bars));
+        chart.config.show_volume = false;
+        chart.set_visible_bars(60);
+        let mut drawing = Drawing::new(7, T::FibonacciExtension);
+        drawing.completed = true;
+        drawing.chart_points = [(5.0, 100.0), (20.0, 200.0), (45.0, 150.0)]
+            .map(|(x, y)| ChartPoint::new(x, y))
+            .to_vec();
+        let anchors = drawing.chart_points.clone();
+        drawing
+            .fib_config
+            .as_mut()
+            .unwrap()
+            .levels
+            .iter_mut()
+            .enumerate()
+            .for_each(|(i, l)| l.visible = i < 2);
+        chart.drawings_mut().drawings.push(drawing);
+        chart.drawings_mut().select(7);
+        let mut time = 0.0;
+        let mut frame = |chart: &mut Chart, events| {
+            time += 0.1;
+            ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    chart.show(ui);
+                },
+            )
+            .drop_without_applying_deltas();
+        };
+        frame(&mut chart, vec![]);
+        frame(&mut chart, vec![]);
+        for cancel in [true, false] {
+            let drawing = &chart.drawings().drawings[0];
+            let pos = Pos2::new(
+                (drawing.points[1].x + drawing.points[2].x) * 0.5,
+                drawing.level_ys[1],
+            );
+            frame(&mut chart, vec![Event::PointerMoved(pos)]);
+            for pressed in [true, false] {
+                frame(
+                    &mut chart,
+                    vec![Event::PointerButton {
+                        pos,
+                        button: PointerButton::Primary,
+                        pressed,
+                        modifiers: Modifiers::NONE,
+                    }],
+                );
+            }
+            assert!(chart.drawings().text_editor.is_some());
+            frame(&mut chart, vec![Event::Text("Target".into())]);
+            assert_eq!(
+                chart.drawings().text_editor.as_ref().unwrap().draft,
+                "Target"
+            );
+            let config = serde_json::to_value(&chart.drawings().drawings[0].fib_config).unwrap();
+            assert_eq!(config["levels"][1]["caption"], "");
+            frame(
+                &mut chart,
+                vec![Event::Key {
+                    key: if cancel { Key::Escape } else { Key::Enter },
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: if cancel {
+                        Modifiers::NONE
+                    } else {
+                        Modifiers::COMMAND
+                    },
+                }],
+            );
+            assert!(chart.drawings().text_editor.is_none());
+            assert_eq!(chart.drawings().drawings[0].chart_points, anchors);
+            let config = serde_json::to_value(&chart.drawings().drawings[0].fib_config).unwrap();
+            assert_eq!(config["levels"][0]["caption"], "");
+            assert_eq!(
+                config["levels"][1]["caption"],
+                if cancel { "" } else { "Target" }
+            );
+            if cancel {
+                assert!(!chart.can_undo());
+            } else {
+                assert!(chart.undo());
+                assert!(!chart.can_undo());
+                assert!(chart.redo());
+                let json = chart.save_drawings().unwrap().to_json().unwrap();
+                chart.load_drawings(&json).unwrap();
+                let config =
+                    serde_json::to_value(&chart.drawings().drawings[0].fib_config).unwrap();
+                assert_eq!(config["levels"][1]["caption"], "Target");
+            }
+        }
+    }
 
     /// Host edits retain measurements in saved records and templates and undo in one step;
     /// old records keep every readout hidden. Rejected edits do not add history.
