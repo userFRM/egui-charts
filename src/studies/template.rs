@@ -636,6 +636,27 @@ mod tests {
                 vec![("start_time", Number(-8e15))],
                 vec![("start_time", Text(String::new()))],
             ),
+            // Saved before the levels could extend past their profiles.
+            (
+                "Vol Profile Session",
+                vec![("row_count", Length(30))],
+                vec![
+                    ("row_count", Length(30)),
+                    ("extend_poc", Toggle(false)),
+                    ("extend_vah", Toggle(false)),
+                    ("extend_val", Toggle(false)),
+                ],
+            ),
+            (
+                "Vol Profile Periodic",
+                vec![("period", Choice(2))],
+                vec![
+                    ("period", Choice(2)),
+                    ("extend_poc", Toggle(false)),
+                    ("extend_vah", Toggle(false)),
+                    ("extend_val", Toggle(false)),
+                ],
+            ),
         ];
         let factory = IndicatorFactory::new();
         for (name, saved, restored) in rows {

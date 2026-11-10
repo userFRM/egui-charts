@@ -25,6 +25,37 @@ pub struct StudyProfile {
     pub width: f32,
 }
 
+/// A level of a finished study profile carried right past the profile's bars: from the bar
+/// after its last to the first later bar that trades in the level's row, or to the last bar.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProfileLevel {
+    /// Chart bars the line spans. It starts at the left edge of the first, which follows the
+    /// profile, and ends at the centre of the last: the bar that trades in the level's row, or
+    /// the last bar when none has.
+    pub bars: Range<usize>,
+    /// Price of the line: the middle of the point of control row, or the top or bottom edge of
+    /// the value area.
+    pub price: f64,
+    /// Which level of the profile this is.
+    pub kind: ProfileLevelKind,
+    /// Colour of the profile's point of control, `Color32::PLACEHOLDER` as bytes following the
+    /// theme's foreground. The value area high and low are drawn at the opacity of the profile's
+    /// value area lines.
+    pub color: [u8; 4],
+}
+
+/// A level of a volume profile.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ProfileLevelKind {
+    /// The middle of the row with the most volume.
+    PointOfControl,
+    /// The top edge of the value area.
+    ValueAreaHigh,
+    /// The bottom edge of the value area.
+    ValueAreaLow,
+}
+
 /// Volume shown in each price row of a profile built from bars.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ProfileDisplay {

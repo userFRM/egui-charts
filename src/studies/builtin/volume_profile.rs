@@ -21,11 +21,11 @@
 //! to the opacity of the default value area rows. The point of control is a 2 px line in the theme's
 //! foreground colour until a line colour is chosen.
 
-use super::AutoAnchor;
 use super::anchor_period::{AnchorPeriod, ExchangeDays};
+use super::{AutoAnchor, first_trade_in};
 use crate::data::{
-    FootprintBar, FootprintLevel, OrderFlowBars, OrderFlowInput, ProfileDisplay, StudyProfile,
-    VolumeProfile, VolumeProfileConfig,
+    FootprintBar, FootprintLevel, OrderFlowBars, OrderFlowInput, ProfileDisplay, ProfileLevel,
+    ProfileLevelKind, ProfileSource, StudyProfile, VolumeProfile, VolumeProfileConfig,
 };
 use crate::model::{Bar, BarClock, Instrument, ProfileResolution, Timeframe};
 use crate::studies::{
@@ -68,6 +68,7 @@ struct ProfileStudy {
     row_size: f64,
     /// Share of a session's or period's width that its widest row takes.
     width: f64,
+    extend: [bool; 3],
     display: ProfileDisplay,
     start_time: f64,
     end_time: f64,
@@ -95,6 +96,8 @@ struct ProfileStudy {
     flow: OrderFlowInput,
     ranges: Vec<Range<usize>>,
     cache: RefCell<Vec<CachedProfile>>,
+    /// Levels of finished profiles, kept while their bars and row layout hold.
+    levels: RefCell<LevelCache>,
     values: IndicatorValues,
     colors: Vec<Color32>,
     visible: bool,
@@ -106,6 +109,35 @@ struct CachedProfile {
     opening: Option<VolumeProfile>,
     coverage: f64,
     dirty: bool,
+}
+
+/// The kinds of level the extend inputs carry, in their order.
+const LEVELS: [ProfileLevelKind; 3] = [
+    ProfileLevelKind::PointOfControl,
+    ProfileLevelKind::ValueAreaHigh,
+    ProfileLevelKind::ValueAreaLow,
+];
+
+/// Levels of finished profiles, kept while their bars and row layout hold.
+#[derive(Clone, Default)]
+struct LevelCache {
+    /// The row layout the levels were found with.
+    config: Option<VolumeProfileConfig>,
+    /// Each finished profile's end and levels, by its first bar.
+    profiles: BTreeMap<usize, (usize, Vec<Level>)>,
+}
+
+/// A level of a finished profile while it extends.
+#[derive(Clone)]
+struct Level {
+    kind: ProfileLevelKind,
+    price: f64,
+    /// The profile row in which a trade ends the level.
+    row: Range<f64>,
+    /// The first bar after the profile that trades in `row`, once found.
+    touch: Option<usize>,
+    /// Bars from the profile's end up to this one trade outside `row`.
+    searched: usize,
 }
 
 const PERIODS: [AnchorPeriod; 7] = [
@@ -167,6 +199,7 @@ impl ProfileStudy {
             value_area: 0.7,
             row_size: 0.0,
             width: 0.3,
+            extend: [false; 3],
             display: ProfileDisplay::UpDown,
             start_time: -8e15,
             end_time: 8e15,
@@ -188,6 +221,7 @@ impl ProfileStudy {
             flow: OrderFlowInput::footprint(),
             ranges: Vec::new(),
             cache: RefCell::new(Vec::new()),
+            levels: RefCell::default(),
             values: IndicatorValues::new(),
             colors: vec![
                 Color32::PLACEHOLDER,
@@ -292,6 +326,21 @@ impl ProfileStudy {
                 InputValue::Number(self.width * 100.0),
                 InputKind::Number(1.0, 100.0),
             ));
+            for (i, (id, label)) in [
+                ("extend_poc", "Extend POC right"),
+                ("extend_vah", "Extend VAH right"),
+                ("extend_val", "Extend VAL right"),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                inputs.push(StudyInput::new(
+                    id,
+                    label,
+                    InputValue::Toggle(self.extend[i]),
+                    InputKind::Toggle,
+                ));
+            }
         }
         inputs
     }
@@ -332,6 +381,9 @@ impl ProfileStudy {
             ("anchor", InputValue::Choice(v)) => self.anchor = ANCHORS[v],
             ("length", InputValue::Length(v)) => self.length = v,
             ("width", InputValue::Number(v)) => self.width = v / 100.0,
+            ("extend_poc", InputValue::Toggle(v)) => self.extend[0] = v,
+            ("extend_vah", InputValue::Toggle(v)) => self.extend[1] = v,
+            ("extend_val", InputValue::Toggle(v)) => self.extend[2] = v,
             _ => return Err(crate::studies::StudyError::invalid_input(id)),
         }
         self.values.clear();
@@ -340,6 +392,7 @@ impl ProfileStudy {
         self.fine.clear();
         self.ranges.clear();
         self.cache.get_mut().clear();
+        *self.levels.get_mut() = LevelCache::default();
         Ok(())
     }
 
@@ -406,10 +459,14 @@ impl ProfileStudy {
 
     /// The open of the first chart bar a profile in view reads, from which its finer bars are
     /// needed; the open of the newest bar with no profile in view, the held start while emptied
-    /// for a recompute, and `None` without bars otherwise.
+    /// for a recompute, and `None` without bars otherwise; the first bar while a level extends.
     fn data_start(&self) -> Option<DateTime<Utc>> {
         if self.data.is_empty() {
             return self.held.and_then(|(_, start)| start);
+        }
+        // A finished profile anywhere left of the view can carry a level into it.
+        if self.extend.contains(&true) {
+            return self.data.first().map(|bar| bar.time);
         }
         self.ranges_in(self.view.clone())
             .map(|range| range.start)
@@ -573,6 +630,7 @@ impl ProfileStudy {
         self.data = data.to_vec();
         self.values = IndicatorValues::missing(data.len());
         self.cache.get_mut().clear();
+        *self.levels.get_mut() = LevelCache::default();
         self.refresh_ranges();
     }
 
@@ -597,6 +655,16 @@ impl ProfileStudy {
             cached.dirty |= cached.plot.bars.end > from;
             true
         });
+        // Profiles with a bar from `from` on are found again; the search for a level's first
+        // trade resumes where a bar may have changed.
+        let levels = self.levels.get_mut();
+        levels.profiles.retain(|_, (end, _)| *end <= from);
+        for level in levels.profiles.values_mut().flat_map(|(_, levels)| levels) {
+            if level.touch.is_some_and(|touch| touch >= from) {
+                level.touch = None;
+            }
+            level.searched = level.searched.min(from);
+        }
         if times_changed
             || (self.kind == Kind::Auto
                 && matches!(
@@ -667,6 +735,13 @@ impl ProfileStudy {
                 }
             }
         };
+        // A profile whose range changed holds no levels.
+        let ranges = &self.ranges;
+        self.levels.get_mut().profiles.retain(|start, (end, _)| {
+            ranges
+                .binary_search_by_key(start, |range| range.start)
+                .is_ok_and(|i| ranges[i].end == *end)
+        });
     }
 
     /// One row height for the chart-bar envelope of every session in view, rounded up
@@ -695,13 +770,17 @@ impl ProfileStudy {
         if ranges.is_empty() {
             return Vec::new();
         }
-        let Some(mut config) = VolumeProfileConfig::new(self.rows, self.value_area)
-            .and_then(|c| c.with_row_size((self.row_size > 0.0).then_some(self.row_size)))
-        else {
-            return Vec::new();
-        };
+        self.config(&ranges)
+            .map_or_else(Vec::new, |config| self.profiles_of(ranges, config))
+    }
+
+    /// The row layout, value area and colours of profiles built while `ranges` are in view;
+    /// `None` for settings no profile takes.
+    fn config(&self, ranges: &[Range<usize>]) -> Option<VolumeProfileConfig> {
+        let mut config = VolumeProfileConfig::new(self.rows, self.value_area)
+            .and_then(|c| c.with_row_size((self.row_size > 0.0).then_some(self.row_size)))?;
         if self.adaptive
-            && let Some(height) = self.adaptive_height(&ranges)
+            && let Some(height) = self.adaptive_height(ranges)
         {
             config = config.with_row_size(Some(height)).unwrap_or(config);
         }
@@ -712,6 +791,15 @@ impl ProfileStudy {
             self.colors[3].to_srgba_unmultiplied(),
             self.colors[4].to_srgba_unmultiplied(),
         ]);
+        Some(config)
+    }
+
+    /// The profiles of `ranges` under `config`, from the cache where it holds them.
+    fn profiles_of(
+        &self,
+        ranges: Vec<Range<usize>>,
+        config: VolumeProfileConfig,
+    ) -> Vec<StudyProfile> {
         let width = match self.kind {
             Kind::Visible => 1.0,
             Kind::Session | Kind::Periodic => self.width as f32,
@@ -828,6 +916,123 @@ impl ProfileStudy {
         let excess = cache.len().saturating_sub(keep);
         cache.drain(..excess);
         profiles
+    }
+
+    /// The levels of finished profiles that reach into `visible`, each from the bar after its
+    /// profile to the first later bar that trades in its row, or to the last bar.
+    fn levels(&self, visible: Range<usize>) -> Vec<ProfileLevel> {
+        let len = self.data.len();
+        if !self.extend.contains(&true) {
+            return Vec::new();
+        }
+        let in_view: Vec<_> = self.ranges_in(visible.clone()).collect();
+        // Levels lie on the rows that the profiles in view are drawn with.
+        let Some(config) = (!in_view.is_empty())
+            .then(|| self.config(&in_view))
+            .flatten()
+        else {
+            return Vec::new();
+        };
+        let mut cache = self.levels.borrow_mut();
+        if cache.config != Some(config) {
+            *cache = LevelCache {
+                config: Some(config),
+                profiles: BTreeMap::new(),
+            };
+        }
+        // A finished profile anywhere left of the view's end can carry a level into it.
+        // shortcut: a change of the adaptive row height rebuilds every finished profile once;
+        // keep levels per height if zooming over many sessions shows the cost.
+        let missing: Vec<_> = self
+            .ranges
+            .iter()
+            .filter(|range| range.end < len && range.start < visible.end)
+            .filter(|range| {
+                cache
+                    .profiles
+                    .get(&range.start)
+                    .is_none_or(|(end, _)| *end != range.end)
+            })
+            .cloned()
+            .collect();
+        if !missing.is_empty() {
+            let plots = self.profiles_of(missing.clone(), config);
+            for range in missing {
+                let levels = plots
+                    .iter()
+                    .find(|plot| plot.bars == range)
+                    .map_or_else(Vec::new, |plot| self.levels_of(plot));
+                cache.profiles.insert(range.start, (range.end, levels));
+            }
+        }
+        let color = self.colors[0].to_srgba_unmultiplied();
+        let mut found = Vec::new();
+        for (end, levels) in cache
+            .profiles
+            .range_mut(..visible.end)
+            .map(|(_, entry)| entry)
+        {
+            let end = *end;
+            if end >= len || end >= visible.end {
+                continue;
+            }
+            for level in levels {
+                if level.touch.is_none() && level.searched < len {
+                    let from = level.searched.max(end);
+                    level.touch = first_trade_in(&self.data[from..], &level.row).map(|i| from + i);
+                    level.searched = len;
+                }
+                let last = level.touch.unwrap_or(len - 1);
+                if last >= visible.start {
+                    found.push(ProfileLevel {
+                        bars: end..last + 1,
+                        price: level.price,
+                        kind: level.kind,
+                        color,
+                    });
+                }
+            }
+        }
+        found
+    }
+
+    /// The extended levels of the finished profile `plot`. There are none for a profile without
+    /// volume, or for one from executions that miss its first bars, whose levels are not the
+    /// session's.
+    fn levels_of(&self, plot: &StudyProfile) -> Vec<Level> {
+        let profile = &plot.profile;
+        if profile.source() == (ProfileSource::Executions { complete: false }) {
+            return Vec::new();
+        }
+        let Some((poc, (va_low, va_high))) = profile.poc_and_value_area(plot.config.value_area())
+        else {
+            return Vec::new();
+        };
+        let (low, height) = (profile.low(), profile.row_height());
+        let row = |row: usize| low + row as f64 * height..low + (row + 1) as f64 * height;
+        LEVELS
+            .into_iter()
+            .zip(self.extend)
+            .filter(|(_, on)| *on)
+            .map(|(kind, _)| {
+                let (price, row) = match kind {
+                    ProfileLevelKind::PointOfControl => {
+                        (low + (poc as f64 + 0.5) * height, row(poc))
+                    }
+                    ProfileLevelKind::ValueAreaHigh => {
+                        (low + (va_high + 1) as f64 * height, row(va_high))
+                    }
+                    ProfileLevelKind::ValueAreaLow => (low + va_low as f64 * height, row(va_low)),
+                };
+                Level {
+                    kind,
+                    price,
+                    row,
+                    touch: None,
+                    searched: plot.bars.end,
+                }
+            })
+            .collect()
     }
 }
 
@@ -959,6 +1164,9 @@ macro_rules! profile_study {
             fn volume_profiles(&self, visible: Range<usize>) -> Vec<StudyProfile> {
                 self.profile.profiles(visible)
             }
+            fn profile_levels(&self, visible: Range<usize>) -> Vec<ProfileLevel> {
+                self.profile.levels(visible)
+            }
             fn set_instrument(&mut self, instrument: Option<&Instrument>) -> bool {
                 self.profile.resolutions =
                     instrument.map_or_else(Vec::new, |i| i.profile_resolutions.clone());
@@ -1077,6 +1285,202 @@ impl VolProfileAnchored {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Hourly bars in three UTC sessions. With height 2, day one holds 2, 4, 2 in
+    /// [98,100), [100,102), [102,104), so its POC is 101 and its 70% area is [98,104).
+    pub(super) fn level_bars() -> Vec<Bar> {
+        let time: DateTime<Utc> = "2024-01-02T10:00:00Z".parse().unwrap();
+        [
+            (0, 99.0, 99.0, 99.0, 99.0, 2.0),
+            (1, 101.0, 101.0, 101.0, 101.0, 4.0),
+            (2, 103.0, 103.0, 103.0, 103.0, 2.0),
+            (24, 103.0, 104.0, 103.0, 104.0, 1.0),
+            (25, 104.0, 104.0, 103.0, 103.0, 1.0),
+            (48, 101.0, 101.0, 101.0, 101.0, 1.0),
+            (49, 99.0, 99.0, 99.0, 99.0, 1.0),
+        ]
+        .into_iter()
+        .map(|(hour, open, high, low, close, volume)| {
+            Bar::new(
+                time + TimeDelta::hours(hour),
+                open,
+                high,
+                low,
+                close,
+                volume,
+            )
+        })
+        .collect()
+    }
+
+    /// Finished session and periodic levels survive untouched sessions, end at independent
+    /// row revisits and stay consistent through corrections, appends, recomputes and eviction.
+    #[test]
+    fn finished_profiles_extend_their_levels_to_the_first_bar_trading_in_their_row() {
+        use crate::data::ProfileLevelKind::{
+            PointOfControl as P, ValueAreaHigh as H, ValueAreaLow as V,
+        };
+        use crate::studies::ConfiguredStudy;
+        let bars = level_bars();
+        let levels = |study: &dyn Indicator, view| -> Vec<_> {
+            study
+                .profile_levels(view)
+                .into_iter()
+                .map(|l| (l.kind, l.price, l.bars))
+                .collect()
+        };
+        let expected = vec![
+            (P, 101.0, 3..6),
+            (H, 104.0, 3..4),
+            (V, 98.0, 3..7),
+            (P, 103.0, 5..7),
+            (H, 104.0, 5..7),
+            (V, 102.0, 5..7),
+        ];
+        let mut periodic = VolProfilePeriodic::new(24);
+        periodic.set_input("period", InputValue::Choice(0)).unwrap();
+        for mut study in [
+            Box::new(VolProfileSession::new(24)) as Box<dyn Indicator>,
+            Box::new(periodic),
+        ] {
+            study.calculate(&bars);
+            assert!(study.profile_levels(0..7).is_empty());
+            study
+                .set_input("row_size", InputValue::Number(2.0))
+                .unwrap();
+            for id in ["extend_poc", "extend_vah", "extend_val"] {
+                study.set_input(id, InputValue::Toggle(true)).unwrap();
+            }
+            for (len, from, wanted) in [
+                (
+                    5,
+                    0,
+                    vec![(P, 101.0, 3..5), (H, 104.0, 3..4), (V, 98.0, 3..5)],
+                ),
+                (
+                    6,
+                    5,
+                    vec![
+                        (P, 101.0, 3..6),
+                        (H, 104.0, 3..4),
+                        (V, 98.0, 3..6),
+                        (P, 103.0, 5..6),
+                        (H, 104.0, 5..6),
+                        (V, 102.0, 5..6),
+                    ],
+                ),
+                (7, 6, expected.clone()),
+            ] {
+                if from == 0 {
+                    study.calculate(&bars[..len]);
+                } else {
+                    study.update(&bars[..len], from);
+                }
+                assert_eq!(
+                    levels(study.as_ref(), 0..len),
+                    wanted,
+                    "{} length {len}",
+                    study.name()
+                );
+                let mut fresh = study.clone_box();
+                fresh.calculate(&bars[..len]);
+                assert_eq!(levels(fresh.as_ref(), 0..len), wanted);
+            }
+            let mut corrected = bars.clone();
+            corrected[5] = Bar::new(bars[5].time, 105.0, 105.0, 105.0, 105.0, 1.0);
+            study.update(&corrected, 5);
+            let mut wanted = expected.clone();
+            wanted[0].2 = 3..7;
+            assert_eq!(levels(study.as_ref(), 0..7), wanted);
+            let mut fresh = study.clone_box();
+            fresh.calculate(&corrected);
+            assert_eq!(levels(fresh.as_ref(), 0..7), wanted);
+            study.calculate(&bars);
+            let visible: Vec<_> = expected
+                .iter()
+                .filter(|(_, _, r)| r.end > 5)
+                .cloned()
+                .collect();
+            assert_eq!(levels(study.as_ref(), 5..7), visible);
+            assert!(levels(study.as_ref(), 7..9).is_empty());
+            study.set_visible_range(5..7);
+            let request = StudyDataRequest {
+                symbol: String::new(),
+                timeframe: None,
+                metric: None,
+            };
+            assert_eq!(study.data_start(&request), Some(bars[0].time));
+            for id in ["extend_poc", "extend_vah"] {
+                study.set_input(id, InputValue::Toggle(false)).unwrap();
+            }
+            study.calculate(&bars);
+            assert_eq!(
+                levels(study.as_ref(), 0..7),
+                vec![(V, 98.0, 3..7), (V, 102.0, 5..7)]
+            );
+            study
+                .set_input("extend_val", InputValue::Toggle(false))
+                .unwrap();
+            study.calculate(&bars);
+            assert_eq!(study.data_start(&request), Some(bars[5].time));
+            for id in ["extend_poc", "extend_vah", "extend_val"] {
+                study.set_input(id, InputValue::Toggle(true)).unwrap();
+            }
+            let mut wrapped = ConfiguredStudy::new(study);
+            wrapped.calculate(&bars);
+            assert_eq!(levels(&wrapped, 0..7), expected);
+            assert!(wrapped.remove_oldest_bars(1));
+            assert!(wrapped.profile_levels(0..6).is_empty());
+            assert!(wrapped.volume_profiles(0..6).is_empty());
+            wrapped.calculate(&bars[1..]);
+            assert_eq!(
+                levels(&wrapped, 0..6),
+                vec![
+                    (P, 101.0, 2..5),
+                    (H, 104.0, 2..3),
+                    (V, 100.0, 2..5),
+                    (P, 103.0, 4..6),
+                    (H, 104.0, 4..6),
+                    (V, 102.0, 4..6),
+                ]
+            );
+        }
+        // The first finished session has no levels if retained executions miss its first bar.
+        // With all executions, its two-tick rows put the POC at 100.5 and end it at bar 5.
+        for skip in [0, 1] {
+            let mut study = VolProfileSession::new(24);
+            study.set_timeframe(Timeframe::Hour1);
+            study
+                .set_input("row_size", InputValue::Number(2.0))
+                .unwrap();
+            study
+                .set_input("extend_poc", InputValue::Toggle(true))
+                .unwrap();
+            let flow = &study.order_flow_inputs()[0];
+            flow.set_tick_size(Some(1.0));
+            let clock = BarClock::new(Timeframe::Hour1);
+            for bar in &bars[skip..] {
+                flow.push_trade(
+                    &clock,
+                    &crate::model::Tick::new(bar.time, bar.close, bar.volume, None),
+                );
+            }
+            study.calculate(&bars);
+            let profiles = study.volume_profiles(0..7);
+            assert_eq!(
+                profiles[0].profile.source(),
+                ProfileSource::Executions {
+                    complete: skip == 0
+                }
+            );
+            let got = levels(&study, 0..7);
+            if skip == 0 {
+                assert_eq!(got, vec![(P, 100.5, 3..6), (P, 102.5, 5..7)]);
+            } else {
+                assert_eq!(got, vec![(P, 102.5, 5..7)]);
+            }
+        }
+    }
 
     /// Profiles sum the executions held for their bars, in rows of whole ticks within the row
     /// count or of the row height, as a footprint with that many ticks per row sums them. One
@@ -1815,6 +2219,87 @@ mod rendering_tests {
                 |value| price.price_to_y(value),
             );
             assert_eq!(hit.is_some(), expected, "selection at ({x}, {value})");
+        }
+    }
+
+    /// Extensions use the profile's colour in either theme and stop at the touching bar's
+    /// centre, starting at the first later bar's left edge.
+    #[test]
+    fn extended_levels_paint_hairlines_in_the_profile_colour_of_either_theme() {
+        let bars = super::tests::level_bars();
+        let light = crate::theme::Theme::light();
+        let dark = crate::theme::Theme::dark();
+        let saved = Color32::from_rgb(41, 98, 255);
+        for (theme, color) in [(&light, None), (&dark, None), (&light, Some(saved))] {
+            let mut study = VolProfileSession::new(24);
+            study
+                .set_input("row_size", InputValue::Number(2.0))
+                .unwrap();
+            for id in ["extend_poc", "extend_vah", "extend_val"] {
+                study.set_input(id, InputValue::Toggle(true)).unwrap();
+            }
+            if let Some(color) = color {
+                study.set_colors(vec![color]);
+            }
+            study.calculate(&bars);
+            let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 200.0));
+            let price = PriceMap::new(
+                PriceTransform::default(),
+                PriceRange::new(96.0, 106.0),
+                0.0,
+                200.0,
+                false,
+            );
+            let coords = ChartMapping::new(rect, 50.0, 0, 6, 0.0, price);
+            let ctx = egui::Context::default();
+            crate::theme::apply_to_egui(&ctx, theme);
+            let indicators: Vec<Box<dyn Indicator>> = vec![Box::new(study)];
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                IndicatorRenderer::render(
+                    &RenderContext::new(ui.painter(), rect),
+                    &indicators,
+                    &bars,
+                    &price,
+                    &coords,
+                );
+            });
+            let lines: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::LineSegment { points, stroke } => Some((
+                        points[0].x,
+                        points[1].x,
+                        points[0].y,
+                        stroke.width,
+                        stroke.color,
+                    )),
+                    _ => None,
+                })
+                .collect();
+            output.drop_without_applying_deltas();
+            let color = color.unwrap_or(theme.ui.text);
+            let [r, g, b, _] = color.to_srgba_unmultiplied();
+            let va = Color32::from_rgba_unmultiplied(r, g, b, 200);
+            let expected = vec![
+                (199.0, 324.0, 100.0, 1.0, color),
+                (199.0, 224.0, 40.0, 1.0, va),
+                (199.0, 374.0, 160.0, 1.0, va),
+                (299.0, 374.0, 60.0, 1.0, color),
+                (299.0, 374.0, 40.0, 1.0, va),
+                (299.0, 374.0, 80.0, 1.0, va),
+            ];
+            assert_eq!(lines.len(), expected.len());
+            for ((x0, x1, y, width, color), (left, right, price_y, stroke, ink)) in
+                lines.into_iter().zip(expected)
+            {
+                assert!(
+                    (x0 - left).abs() < 1e-3
+                        && (x1 - right).abs() < 1e-3
+                        && (y - price_y).abs() < 1e-3
+                );
+                assert_eq!((width, color), (stroke, ink));
+            }
         }
     }
 

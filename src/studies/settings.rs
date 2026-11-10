@@ -1370,6 +1370,24 @@ impl Indicator for ConfiguredStudy {
             })
             .collect()
     }
+    fn profile_levels(&self, visible: std::ops::Range<usize>) -> Vec<crate::data::ProfileLevel> {
+        // Kept levels would index the evicted bars too.
+        if self.kept.is_some() {
+            return Vec::new();
+        }
+        if self.aligned.is_none() {
+            return self.study.profile_levels(visible);
+        }
+        // Source bars of a study on another interval or symbol are not chart bars.
+        self.study
+            .profile_levels(source_bars(&self.spans, &visible))
+            .into_iter()
+            .filter_map(|mut level| {
+                level.bars = chart_bars(&self.spans, &level.bars)?;
+                Some(level)
+            })
+            .collect()
+    }
     fn zones(&self) -> &[super::StudyZone] {
         if self.aligned.is_some() {
             &self.aligned_zones
@@ -1844,7 +1862,7 @@ mod tests {
                 })
                 .collect()
         };
-        for (name, [chart, other], sessions, (view, visible), markers, zones) in [
+        for (name, [chart, other], sessions, (view, visible), markers, zones, levels) in [
             (
                 "finer",
                 [(4, Timeframe::Min5), (20, Timeframe::Min1)],
@@ -1855,6 +1873,7 @@ mod tests {
                 (1..3, (1..3, 105.0, 115.0, vec![10.0])),
                 vec![0, 3],
                 0..4,
+                (2..4, 105.0),
             ),
             (
                 "coarser",
@@ -1866,6 +1885,7 @@ mod tests {
                 (3..12, (0..15, 100.0, 103.0, vec![3.0])),
                 vec![9],
                 5..20,
+                (10..20, 101.0),
             ),
         ] {
             let (interval, source_interval) = (chart.1, other.1);
@@ -1885,12 +1905,22 @@ mod tests {
                 study.update_data(&chart, 0, &[data]);
                 study
             };
+            let mut session = VolProfileSession::new(1);
+            session
+                .set_input("extend_poc", InputValue::Toggle(true))
+                .unwrap();
             let mut studies = [
-                calculated(Box::new(VolProfileSession::new(1))),
+                calculated(Box::new(session)),
                 calculated(Box::new(VolProfileVisible::new(1))),
                 calculated(Box::<Marks>::default()),
             ];
             assert_eq!(profiles(&studies[0], 0..chart.len()), sessions, "{name}");
+            let extended: Vec<_> = studies[0]
+                .profile_levels(0..chart.len())
+                .into_iter()
+                .map(|level| (level.bars, level.price))
+                .collect();
+            assert_eq!(extended, [levels], "{name}");
             assert_eq!(profiles(&studies[1], view), [visible], "{name}");
             let marked: Vec<_> = studies[2]
                 .markers()
@@ -1910,6 +1940,7 @@ mod tests {
             }
             for study in &studies {
                 assert!(profiles(study, 0..chart.len()).is_empty(), "{name}");
+                assert!(study.profile_levels(0..chart.len()).is_empty(), "{name}");
                 assert!(
                     study.markers().is_empty() && study.zones().is_empty(),
                     "{name}"

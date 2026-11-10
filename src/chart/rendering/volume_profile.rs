@@ -21,6 +21,18 @@ pub(crate) fn profile_span(plot: &StudyProfile, coords: &super::ChartMapping) ->
     }
 }
 
+/// From the left edge of a level's first bar to the centre of its last.
+pub(crate) fn level_span(
+    level: &crate::data::ProfileLevel,
+    coords: &super::ChartMapping,
+) -> Range<f32> {
+    if level.bars.is_empty() {
+        return 0.0..0.0;
+    }
+    coords.idx_to_x(level.bars.start) - coords.bar_spacing * 0.5
+        ..coords.idx_to_x(level.bars.end - 1)
+}
+
 pub(crate) fn hit_profile(
     point: Pos2,
     study: &dyn crate::studies::Indicator,
