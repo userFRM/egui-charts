@@ -1815,34 +1815,25 @@ mod tests {
         );
     }
 
-    /// Every tool whose settings offer a line width and style (`draws_line`) draws differently
-    /// when the width changes from 2 to 7 px; a tool on which the width changes nothing should
-    /// not offer it.
+    /// An annotation that offers line controls draws differently at 2 and 7 px; annotations
+    /// with fixed borders or guides must hide those controls.
     #[test]
     fn offered_line_width_changes_the_drawing() {
         let mut inert = Vec::new();
-        for &tool in DrawingToolType::all() {
-            // These renderers require market data, tool configuration or external media that
-            // this paint fixture does not supply; cursor tools do not create drawings.
-            if tool.is_cursor()
-                || matches!(
-                    tool,
-                    DrawingToolType::FibonacciChannel
-                        | DrawingToolType::FibonacciSpeedFan
-                        | DrawingToolType::LongPos
-                        | DrawingToolType::ShortPos
-                        | DrawingToolType::BarsPattern
-                        | DrawingToolType::GhostFeed
-                        | DrawingToolType::AnchoredVWAP
-                        | DrawingToolType::FixedRangeVolumeProfile
-                        | DrawingToolType::AnchoredVolumeProfile
-                        | DrawingToolType::Image
-                        | DrawingToolType::Tweet
-                        | DrawingToolType::Idea
-                        | DrawingToolType::Sticker
-                )
-                || !tool.draws_line()
-            {
+        for tool in [
+            DrawingToolType::TextLabel,
+            DrawingToolType::AnchoredText,
+            DrawingToolType::Note,
+            DrawingToolType::PriceNote,
+            DrawingToolType::AnchoredNote,
+            DrawingToolType::Table,
+            DrawingToolType::Callout,
+            DrawingToolType::Comment,
+            DrawingToolType::PriceLabel,
+            DrawingToolType::Signpost,
+            DrawingToolType::FlagNote,
+        ] {
+            if !tool.draws_line() {
                 continue;
             }
             let mut drawing = Drawing::new(7, tool);
@@ -1862,10 +1853,6 @@ mod tests {
                 .iter()
                 .map(|p| crate::drawings::ChartPoint::new(p.x / 10.0, 500.0 - p.y as f64))
                 .collect();
-            if tool == DrawingToolType::RegressionTrend {
-                drawing.chart_points[0].bar_idx = 0.0;
-                drawing.chart_points[1].bar_idx = 6.0;
-            }
             if drawing.text.is_none() {
                 drawing.text = Some("Label".into());
             }

@@ -811,7 +811,8 @@ mod tests {
             ] {
                 let solid = matches!(tool, Comment | PriceNote | Signpost);
                 let plain = matches!(tool, TextLabel | AnchoredText);
-                let border = |color| vec![Stroke::new(1.0, color)];
+                let border =
+                    |color| vec![Stroke::new(if tool == Callout { 2.0 } else { 1.0 }, color)];
                 let pin = tool == AnchoredNote;
                 let text = if pin { theme.ui.text } else { red };
                 let outline = if pin { theme.ui.border } else { red };
@@ -1089,6 +1090,7 @@ mod tests {
             GannFixed,
             Brush,
             Highlighter,
+            Callout,
         ] {
             for width in [1.0, 2.0, 3.0] {
                 let mut drawing = pattern(tool);
@@ -1114,7 +1116,7 @@ mod tests {
                                 p.points
                                     .windows(2)
                                     .any(|p| drawing.points.windows(2).any(|leg| leg == p))
-                                    || matches!(tool, Brush | Highlighter | SineLine)
+                                    || matches!(tool, Brush | Highlighter | SineLine | Callout)
                                     || matches!(tool, GannSquare | GannFixed)
                                     || (tool == TimeCycles
                                         && p.points.len() > 4
@@ -1122,7 +1124,7 @@ mod tests {
                                 Stroke::new(p.stroke.width, color),
                             )
                         }
-                        Shape::Rect(r) => (false, r.stroke),
+                        Shape::Rect(r) => (tool == Callout, r.stroke),
                         _ => continue,
                     };
                     if stroke.is_empty() {

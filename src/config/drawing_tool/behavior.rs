@@ -203,7 +203,6 @@ impl DrawingToolType {
                 | Self::PriceNote
                 | Self::AnchoredNote
                 | Self::Table
-                | Self::Callout
                 | Self::Comment
                 | Self::PriceLabel
                 | Self::Signpost
