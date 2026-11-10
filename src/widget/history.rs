@@ -16,8 +16,8 @@ pub(super) struct ChartHistory {
     undo: Vec<Action>,
     redo: Vec<Action>,
     pending: Option<Pending>,
-    /// A layout divider is being dragged.
-    pub(super) resizing: bool,
+    /// Expires when the divider drag ends or its layout is dropped.
+    pub(super) resizing: std::sync::Weak<()>,
     changed: bool,
     /// User edits recorded, undone or redone, kept when the history is cleared.
     pub(super) edits: u64,
@@ -207,6 +207,10 @@ struct Study {
 }
 
 impl ChartHistory {
+    pub(super) fn blocked(&self) -> bool {
+        self.pending.is_some() || self.resizing.strong_count() > 0
+    }
+
     /// Whether either stack holds this chart's part of cross-chart edit `id`.
     pub(super) fn holds_layout_edit(&self, id: u64) -> bool {
         self.undo.iter().chain(&self.redo).any(|action| {
@@ -869,7 +873,7 @@ impl Chart {
     }
 
     fn step_chart_history(&mut self, redo: bool) -> bool {
-        if self.history.pending.is_some() || self.history.resizing {
+        if self.history.blocked() {
             return false;
         }
         let stack = if redo {

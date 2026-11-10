@@ -610,6 +610,7 @@ impl Divider {
 }
 
 struct DividerDrag {
+    history_guard: Arc<()>,
     mode: ChartLayoutMode,
     count: usize,
     start: egui::Pos2,
@@ -873,18 +874,9 @@ impl LinkChange {
 
 /// Undo and redo steps of cross-chart edits, which every chart of the layout takes at the next
 /// [`ChartLayout::show`].
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct LayoutEdits {
     steps: Arc<Mutex<Vec<(u64, bool)>>>,
-}
-
-impl Clone for LayoutEdits {
-    /// A clone showing the same charts must see their pending history steps.
-    fn clone(&self) -> Self {
-        Self {
-            steps: Arc::clone(&self.steps),
-        }
-    }
 }
 
 impl LayoutEdits {
@@ -1170,9 +1162,17 @@ impl ChartLayout {
             let step = {
                 let mut steps = self.edits.steps.lock().unwrap();
                 let at = steps.iter().rposition(|(id, _)| {
-                    charts
+                    let mut belongs = false;
+                    for chart in charts
                         .iter()
-                        .any(|chart| chart.history.holds_layout_edit(*id))
+                        .filter(|chart| chart.history.holds_layout_edit(*id))
+                    {
+                        if chart.history.blocked() {
+                            return false;
+                        }
+                        belongs = true;
+                    }
+                    belongs
                 });
                 at.map(|at| steps.remove(at))
             };
@@ -1573,8 +1573,23 @@ impl ChartLayout {
         if self.move_divider(ui) {
             (rects, dividers) = self.geometry(rect, count);
         }
+        // Divider hit regions stay above the charts, but their input is known before painting.
+        let starting_resize = self.sizing.drag.is_none()
+            && dividers.iter().any(|divider| {
+                let key = (divider.group, divider.at);
+                ui.ctx()
+                    .is_being_dragged(ui.scope_id().with(("chart_divider", self.mode, key)))
+                    && (self.sizing.selected == Some(key) || !ui.input(|input| input.any_touches()))
+            });
+        let resize_start = starting_resize.then(|| Arc::new(()));
+        let resizing = self
+            .sizing
+            .drag
+            .as_ref()
+            .map(|drag| &drag.history_guard)
+            .or(resize_start.as_ref());
         for chart in charts.iter_mut() {
-            chart.history.resizing = self.sizing.drag.is_some();
+            chart.history.resizing = resizing.map(Arc::downgrade).unwrap_or_default();
         }
         self.step_layout_edits(charts);
         let over_divider = self.sizing.drag.is_some()
@@ -1786,6 +1801,14 @@ impl ChartLayout {
             && let Some(id) = charts[self.active].keyboard.chart_id
         {
             ui.memory_mut(|memory| memory.request_focus(id));
+        }
+        for chart in charts.iter_mut() {
+            chart.history.resizing = self
+                .sizing
+                .drag
+                .as_ref()
+                .map(|drag| Arc::downgrade(&drag.history_guard))
+                .unwrap_or_default();
         }
         self.record_sizes(charts[self.active]);
         self.record_links(charts[self.active]);
@@ -2110,6 +2133,7 @@ impl ChartLayout {
             {
                 let shift = ui.input(|input| input.modifiers.shift);
                 self.sizing.drag = Some(DividerDrag {
+                    history_guard: Arc::new(()),
                     mode: self.mode,
                     count,
                     start,
@@ -2601,15 +2625,35 @@ mod tests {
         charts[0].user_action(|chart| chart.config_mut().show_grid = false);
         assert!(charts[0].undo());
         let edits = charts[0].edit_count();
-        frame(&mut layout, &mut charts, vec![button(first, true)]);
-        for pos in [first + vec2(4.0, 0.0), second] {
-            frame(&mut layout, &mut charts, vec![Event::PointerMoved(pos)]);
-        }
         let command = egui::Modifiers {
             ctrl: true,
             command: true,
             ..Default::default()
         };
+        let undo = || Event::Key {
+            key: egui::Key::Z,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: command,
+        };
+        frame(&mut layout, &mut charts, vec![button(first, true)]);
+        for pos in [first + vec2(12.0, 0.0), second] {
+            frame(
+                &mut layout,
+                &mut charts,
+                vec![
+                    Event::PointerMoved(pos),
+                    Event::ModifiersChanged(command),
+                    undo(),
+                ],
+            );
+            assert_eq!(
+                charts[0].edit_count(),
+                edits,
+                "drag start preserves history"
+            );
+        }
         for key in [egui::Key::Z, egui::Key::Y] {
             frame(
                 &mut layout,
@@ -2651,6 +2695,19 @@ mod tests {
             assert_widths(&layout, expected);
         }
         assert!(!charts[0].redo());
+        frame(&mut layout, &mut charts, vec![button(second, true)]);
+        frame(
+            &mut layout,
+            &mut charts,
+            vec![Event::PointerMoved(second + vec2(8.0, 0.0))],
+        );
+        frame(&mut layout, &mut charts, vec![]);
+        assert!(!charts[0].undo());
+        drop(layout);
+        assert!(
+            charts[0].undo(),
+            "dropping a dragged layout releases history"
+        );
 
         for &mode in ChartLayoutMode::all() {
             let mut layout = ChartLayout {

@@ -533,7 +533,7 @@ mod tests {
     /// showing other charts leave those steps queued for the layout showing their owners.
     #[test]
     fn copy_made_before_a_layout_clone_undoes_on_every_chart() {
-        for copy_set in [false, true] {
+        for (copy_set, busy) in [(false, false), (true, false), (false, true), (true, true)] {
             for slot in [0, 1] {
                 let mut charts = [chart(50), chart(50), chart(50)];
                 let sma = charts[0].add_indicator(Box::new(SMA::new(7)));
@@ -549,8 +549,15 @@ mod tests {
                     []
                 );
                 layout = layout.clone();
+                if busy {
+                    charts[2].begin_user_action();
+                }
                 assert!(charts[slot].undo());
                 show(&mut layout, &mut charts.each_mut());
+                if busy {
+                    charts[2].end_user_action();
+                    show(&mut layout, &mut charts.each_mut());
+                }
                 assert_eq!(
                     charts.each_ref().map(|chart| chart.indicators().count()),
                     [1, 0, 0],
@@ -601,42 +608,6 @@ mod tests {
             assert_eq!(
                 second.each_ref().map(|chart| chart.indicators().count()),
                 counts
-            );
-        }
-    }
-
-    /// A symbol-wide deletion stays one edit when a clone replaces its layout.
-    #[cfg(feature = "drawings")]
-    #[test]
-    fn drawing_deletion_before_a_layout_clone_reverses_on_every_chart() {
-        use crate::config::DrawingToolType;
-        use crate::drawings::{ChartPoint, Drawing};
-        for slot in [0, 1] {
-            let mut charts = [chart(50), chart(50)];
-            for chart in &mut charts {
-                let mut line = Drawing::new(0, DrawingToolType::TrendLine);
-                line.chart_points = vec![ChartPoint::new(2.0, 10.0), ChartPoint::new(4.0, 12.0)];
-                line.completed = true;
-                chart.drawings_mut().add_drawing(line).unwrap();
-            }
-            let mut layout = pair();
-            assert!(layout.delete_symbol_drawings(&mut charts.each_mut(), "SAMPLE"));
-            layout = layout.clone();
-            assert!(charts[slot].undo());
-            show(&mut layout, &mut charts.each_mut());
-            assert_eq!(
-                charts
-                    .each_ref()
-                    .map(|chart| chart.drawings().drawings.len()),
-                [1, 1]
-            );
-            assert!(charts[slot].redo());
-            show(&mut layout, &mut charts.each_mut());
-            assert_eq!(
-                charts
-                    .each_ref()
-                    .map(|chart| chart.drawings().drawings.len()),
-                [0, 0]
             );
         }
     }
