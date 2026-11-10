@@ -37,6 +37,8 @@ struct CachedProfile {
     interest_available: bool,
     pain_available: bool,
     awaiting_chain: bool,
+    // Set by each rebuild and taken when held inputs are retried.
+    rebuilt: bool,
 }
 
 /// How an input the chain decides on is listed while it waits for the chain, or `None` for any
@@ -282,39 +284,45 @@ impl OptionsVolumeProfile {
 
     fn refresh(&self) {
         self.refresh_cache();
-        let (awaiting_chain, supplied) = {
-            let cache = self.cache.borrow();
-            (cache.awaiting_chain, cache.supplied.is_some())
-        };
-        if self.waiting_inputs.borrow().is_empty() || (awaiting_chain && !supplied) {
-            return;
-        }
-        // In saved order, since the measure decides which levels are offered.
-        let pending = self.waiting_inputs.take();
-        let labelled = pending.iter().any(|(id, _)| id == "measure_label");
-        let mut waiting = Vec::new();
-        for (id, value) in pending {
-            // A label names the measure. Without chain rows only Gamma exposure is listed,
-            // which a saved position does not index.
-            if id == "measure" && (labelled || awaiting_chain) {
-                waiting.push((id, value));
-                continue;
+        // Held inputs can only apply once new data or a setting has rebuilt the cache. Lookups
+        // below can rebuild it too, so the flag is taken only while inputs are held.
+        while !self.waiting_inputs.borrow().is_empty()
+            && std::mem::take(&mut self.cache.borrow_mut().rebuilt)
+        {
+            let (awaiting_chain, supplied) = {
+                let cache = self.cache.borrow();
+                (cache.awaiting_chain, cache.supplied.is_some())
+            };
+            if awaiting_chain && !supplied {
+                return;
             }
-            let input = self
-                .inputs()
-                .into_iter()
-                .find(|input| input.id == id && input.accepts(&value));
-            if input.is_some_and(|input| self.set_chain_input(&id, &value, &input)) {
-                if id == "measure_label" {
-                    waiting.retain(|(id, _)| id != "measure");
+            // In saved order, since the measure decides which levels are offered.
+            let pending = self.waiting_inputs.take();
+            let labelled = pending.iter().any(|(id, _)| id == "measure_label");
+            let mut waiting = Vec::new();
+            for (id, value) in pending {
+                // A label names the measure. Without chain rows only Gamma exposure is listed,
+                // which a saved position does not index.
+                if id == "measure" && (labelled || awaiting_chain) {
+                    waiting.push((id, value));
+                    continue;
                 }
-                *self.cache.borrow_mut() = CachedProfile::default();
-            } else {
-                waiting.push((id, value));
+                let input = self
+                    .inputs()
+                    .into_iter()
+                    .find(|input| input.id == id && input.accepts(&value));
+                if input.is_some_and(|input| self.set_chain_input(&id, &value, &input)) {
+                    if id == "measure_label" {
+                        waiting.retain(|(id, _)| id != "measure");
+                    }
+                    *self.cache.borrow_mut() = CachedProfile::default();
+                } else {
+                    waiting.push((id, value));
+                }
             }
+            self.waiting_inputs.replace(waiting);
+            self.refresh_cache();
         }
-        self.waiting_inputs.replace(waiting);
-        self.refresh_cache();
     }
 
     /// Set an input the chain decides on, as `input` lists it. False for any other id.
@@ -362,6 +370,7 @@ impl OptionsVolumeProfile {
                 if Arc::ptr_eq(&values, &cache.values) {
                     return;
                 }
+                cache.rebuilt = true;
                 let row_size = self.config.row_size().expect("fixed options row height");
                 (values, row_size)
             }
@@ -399,6 +408,7 @@ impl OptionsVolumeProfile {
                 if same_rows && cache.day == Some(day) && same_exposure {
                     return;
                 }
+                cache.rebuilt = true;
                 let nearest = nearest();
                 let selected_expiry = |expiry| {
                     expiries.binary_search(&expiry).is_ok()
@@ -1133,8 +1143,9 @@ impl Indicator for OptionsVolumeProfile {
             if id == "measure_label" {
                 self.open_interest.set(false);
                 self.gamma.set(false);
-                *self.cache.get_mut() = CachedProfile::default();
             }
+            // The rebuild on the next refresh retries the held value.
+            *self.cache.get_mut() = CachedProfile::default();
             match held {
                 Some(held) => waiting[held].1 = value,
                 None => waiting.push((id.to_owned(), value)),
