@@ -479,11 +479,12 @@ impl Chart {
                         if revealed {
                             egui::Sense::click()
                         } else {
-                            egui::Sense::hover()
+                            egui::Sense::focusable_noninteractive()
                         },
                     )
                     .on_hover_text(&name);
                 response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
+                let revealed = revealed || response.has_focus();
                 if revealed {
                     let theme = ui.active_theme();
                     plot.rect_filled(
@@ -739,15 +740,18 @@ mod tests {
     use super::*;
     use crate::widget::test_frames::{chart, frame, shapes};
     use crate::widget::{ChartElementId, ChartEvent, SeriesId};
-    use egui::{Event, PointerButton, Shape};
+    use egui::{Event, Key, PointerButton, Shape};
 
     #[test]
     fn tap_on_hidden_remove_control_reaches_the_chart() {
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
-            for touch_events in [false, true] {
+            for (touch_events, width) in
+                [(false, 800.0), (true, 800.0), (false, 320.0), (true, 320.0)]
+            {
                 let ctx = egui::Context::default();
                 crate::theme::apply_to_egui(&ctx, &theme);
                 let mut chart = chart(&[100.0], &[110.0]);
+                chart.set_size(Some(egui::vec2(width, 580.0)));
                 let peer = chart.add_comparison("Peer", egui::Color32::GOLD);
                 chart.set_data(peer, chart.bars(SeriesId::MAIN).to_vec());
                 frame(&ctx, &mut chart, 0.0, vec![]);
@@ -813,7 +817,8 @@ mod tests {
     #[test]
     fn overlay_legend_removal_keeps_other_series_and_undo_order() {
         for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
-            for restored in [false, true] {
+            for (restored, keyboard) in [(false, false), (true, false), (false, true), (true, true)]
+            {
                 let ctx = egui::Context::default();
                 crate::theme::apply_to_egui(&ctx, &theme);
                 let mut chart = chart(&[100.0], &[110.0]);
@@ -848,45 +853,61 @@ mod tests {
                 let rows = labels(painted);
                 assert_eq!(rows.len(), 3);
                 let pos = Pos2::new(rows[1].right() + 18.0, rows[1].center().y);
-                // A touch tap leaves no hover, so it must not remove an unrevealed row.
-                let tap = Pos2::new(rows[2].right() + 18.0, rows[2].center().y);
-                let button = |pressed, extra| {
-                    let mut events = vec![Event::PointerButton {
-                        pos: tap,
-                        button: PointerButton::Primary,
-                        pressed,
-                        modifiers: Default::default(),
-                    }];
-                    events.extend(extra);
-                    events
-                };
-                frame(
-                    &ctx,
-                    &mut chart,
-                    0.15,
-                    button(true, [Event::PointerMoved(tap)]),
-                );
-                frame(&ctx, &mut chart, 0.16, button(false, [Event::PointerGone]));
-                assert!(
-                    chart.series().any(|(id, _)| id == ids[2]),
-                    "touch tap removed"
-                );
                 chart
                     .selection
                     .select(ChartElementId::Series(ids[1]), Some(0));
-                frame(&ctx, &mut chart, 0.2, vec![Event::PointerMoved(pos)]);
+                if keyboard {
+                    let mut focused = false;
+                    for stop in 0..30 {
+                        let painted = shapes(
+                            &ctx,
+                            &mut chart,
+                            0.2 + stop as f64 * 0.001,
+                            vec![Event::Key {
+                                key: Key::Tab,
+                                physical_key: None,
+                                pressed: true,
+                                repeat: false,
+                                modifiers: Default::default(),
+                            }],
+                        );
+                        focused = ctx
+                            .memory(|memory| memory.focused())
+                            .and_then(|id| ctx.read_response(id))
+                            .is_some_and(|response| response.rect.center() == pos);
+                        if focused {
+                            assert!(
+                                painted.iter().any(|shape| matches!(shape,
+                                    Shape::Rect(outline) if outline.rect.contains(pos)
+                                        && outline.stroke.color == theme.ui.accent
+                                )),
+                                "Tab must reveal the focused control immediately"
+                            );
+                            break;
+                        }
+                    }
+                    assert!(focused, "Tab must reach a hidden remove control");
+                } else {
+                    frame(&ctx, &mut chart, 0.2, vec![Event::PointerMoved(pos)]);
+                }
                 for (time, pressed) in [(0.3, true), (0.4, false)] {
-                    frame(
-                        &ctx,
-                        &mut chart,
-                        time,
-                        vec![Event::PointerButton {
+                    let event = if keyboard {
+                        Event::Key {
+                            key: Key::Enter,
+                            physical_key: None,
+                            pressed,
+                            repeat: false,
+                            modifiers: Default::default(),
+                        }
+                    } else {
+                        Event::PointerButton {
                             pos,
                             button: PointerButton::Primary,
                             pressed,
                             modifiers: Default::default(),
-                        }],
-                    );
+                        }
+                    };
+                    frame(&ctx, &mut chart, time, vec![event]);
                 }
                 assert!(
                     !chart.series().any(|(id, _)| id == ids[1]),
