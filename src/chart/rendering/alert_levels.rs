@@ -25,9 +25,9 @@ pub fn render_alert_levels<'a>(
     format: impl Fn(f64) -> String,
 ) -> Option<Alert> {
     let mut changed = None;
-    // The drag was cancelled before widgets could consume Escape, even with a release this frame.
-    let escape = ui.input(|input| {
-        input.raw.events.iter().any(|event| {
+    let (escape, primary_down, primary_released) = ui.input(|input| {
+        // Widgets may have consumed Escape after it cancelled the drag.
+        let escape = input.raw.events.iter().any(|event| {
             matches!(
                 event,
                 egui::Event::Key {
@@ -36,8 +36,16 @@ pub fn render_alert_levels<'a>(
                     ..
                 }
             )
-        })
+        });
+        (
+            escape,
+            input.pointer.primary_down(),
+            input.pointer.button_released(egui::PointerButton::Primary),
+        )
     });
+    let dragged = ui.ctx().dragged_id();
+    let started = ui.ctx().drag_started_id();
+    let stopped = ui.ctx().drag_stopped_id();
     let painter = ui.painter().with_clip_rect(mapping.rect);
     let now = Utc::now();
     for alert in alerts
@@ -74,10 +82,17 @@ pub fn render_alert_levels<'a>(
                 .filter(|(_, v)| v.is_finite())
             {
                 let key = ui.scope_id().with(("alert_level", &id.0, index, edge));
-                let staged = ui
-                    .ctx()
-                    .data(|data| data.get_temp::<f64>(key))
-                    .unwrap_or(level);
+                let owns = |id| id == Some(key) || id == Some(key.with("line"));
+                let staged = ui.ctx().data_mut(|data| {
+                    // A hidden or replaced widget may never report its own drag stop.
+                    if escape
+                        || owns(started)
+                        || !(owns(dragged) && primary_down || owns(stopped) && primary_released)
+                    {
+                        data.remove::<f64>(key);
+                    }
+                    data.get_temp::<f64>(key).unwrap_or(level)
+                });
                 let y = mapping.price_to_y(staged);
                 if !y.is_finite() || !mapping.is_y_visible(y) {
                     continue;
@@ -515,11 +530,12 @@ mod tests {
                 false,
             ),
         );
-        for (touch, release_with_escape, consumed) in [
-            (false, false, false),
-            (false, true, false),
-            (false, true, true),
-            (true, false, false),
+        for (touch, release_with_escape, consumed, line_removed) in [
+            (false, false, false, false),
+            (false, true, false, false),
+            (false, true, true, false),
+            (true, false, false, false),
+            (false, false, false, true),
         ] {
             for x in [408.0, 100.0] {
                 let ctx = egui::Context::default();
@@ -573,6 +589,9 @@ mod tests {
                     (1.15, vec![]),
                 ];
                 for (step, (time, events)) in steps.into_iter().enumerate() {
+                    if step == 3 && line_removed {
+                        alert.extend_line = false;
+                    }
                     if step == 6 {
                         alert.condition = AlertCondition::Above(105.0);
                     }
@@ -604,7 +623,7 @@ mod tests {
                     output.drop_without_applying_deltas();
                     assert!(
                         changed.is_none(),
-                        "cancelled drag must not save, touch={touch}, release={release_with_escape}, consumed={consumed}, step={step}"
+                        "cancelled drag must not save, touch={touch}, release={release_with_escape}, consumed={consumed}, line_removed={line_removed}, step={step}"
                     );
                     if step >= 3 {
                         // y = 20 + (110 - price) * 200 / 20: 100 -> 120 and 105 -> 70.
