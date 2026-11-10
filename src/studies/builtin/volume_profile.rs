@@ -1777,6 +1777,47 @@ mod rendering_tests {
     use crate::scales::{PriceMap, PriceRange, PriceTransform};
     use crate::{model::Bar, studies::Indicator};
 
+    /// Hidden value area boundaries leave clicks to the plot beneath, while rows and the point
+    /// of control still select the study.
+    #[test]
+    fn hidden_value_area_lines_do_not_select() {
+        let time = |minute| chrono::DateTime::UNIX_EPOCH + TimeDelta::minutes(minute);
+        let bars = [
+            Bar::new(time(0), 10.0, 12.0, 10.0, 12.0, 100.0),
+            Bar::new(time(1), 20.0, 20.0, 10.0, 10.0, 100.0),
+            Bar::new(time(2), 12.0, 20.0, 12.0, 20.0, 100.0),
+        ];
+        let mut study = VolProfileSession::new(10);
+        study.calculate(&bars);
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 200.0));
+        let price = PriceMap::new(
+            PriceTransform::default(),
+            PriceRange::new(9.0, 21.0),
+            0.0,
+            200.0,
+            false,
+        );
+        let coords = ChartMapping::new(rect, 200.0, 0, 1, 0.0, price);
+        // Rows 0 and 1 hold 60 each, the rest 22.5 each. The 70% area is rows 0 to 5,
+        // prices 10 to 16; POC is 10.5. Every row ends at or before x=120.
+        for (x, value, expected) in [
+            (390.0, 10.0, false),
+            (390.0, 16.0, false),
+            (390.0, 10.5, true),
+            (20.0, 12.5, true),
+        ] {
+            let hit = crate::chart::indicators::hit_test_indicator(
+                egui::pos2(x, price.price_to_y(value)),
+                &study,
+                0,
+                0..3,
+                &coords,
+                |value| price.price_to_y(value),
+            );
+            assert_eq!(hit.is_some(), expected, "selection at ({x}, {value})");
+        }
+    }
+
     /// Painted rows determine the profile's selection and independent price bounds.
     #[test]
     fn visible_profile_paints_price_rows() {
