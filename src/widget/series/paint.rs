@@ -466,18 +466,24 @@ impl Chart {
                     continue;
                 }
                 let outline = label.union(control).intersect(rect);
+                let control_id = id.with(("remove_series", item.id));
+                let revealed = (ui
+                    .input(|input| input.pointer.hover_pos().is_some() && !input.any_touches())
+                    && ui.rect_contains_pointer(outline))
+                    || ui.memory(|memory| memory.has_focus(control_id));
                 let name = l10n::text(ui.ctx(), "Remove series");
                 let response = ui
                     .interact(
                         control,
-                        id.with(("remove_series", item.id)),
-                        egui::Sense::click(),
+                        control_id,
+                        if revealed {
+                            egui::Sense::click()
+                        } else {
+                            egui::Sense::hover()
+                        },
                     )
                     .on_hover_text(&name);
                 response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
-                let revealed = (ui.input(|input| input.pointer.hover_pos().is_some())
-                    && ui.rect_contains_pointer(outline))
-                    || response.has_focus();
                 if revealed {
                     let theme = ui.active_theme();
                     plot.rect_filled(
@@ -732,8 +738,75 @@ pub(in crate::widget) fn paint_last_price_pulse(
 mod tests {
     use super::*;
     use crate::widget::test_frames::{chart, frame, shapes};
-    use crate::widget::{ChartElementId, SeriesId};
+    use crate::widget::{ChartElementId, ChartEvent, SeriesId};
     use egui::{Event, PointerButton, Shape};
+
+    #[test]
+    fn tap_on_hidden_remove_control_reaches_the_chart() {
+        for theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            for touch_events in [false, true] {
+                let ctx = egui::Context::default();
+                crate::theme::apply_to_egui(&ctx, &theme);
+                let mut chart = chart(&[100.0], &[110.0]);
+                let peer = chart.add_comparison("Peer", egui::Color32::GOLD);
+                chart.set_data(peer, chart.bars(SeriesId::MAIN).to_vec());
+                frame(&ctx, &mut chart, 0.0, vec![]);
+                let label = shapes(&ctx, &mut chart, 0.1, vec![])
+                    .into_iter()
+                    .find_map(|shape| match shape {
+                        Shape::Text(text) if text.galley.text().starts_with("Peer  ") => {
+                            Some(Rect::from_min_size(text.pos, text.galley.size()))
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                for (index, pos) in [
+                    chart.get_chart_mapping().rect.center(),
+                    Pos2::new(label.right() + 18.0, label.center().y),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    chart.drain_events().for_each(drop);
+                    for (step, pressed) in [(0.0, true), (0.01, false)] {
+                        let mut events = vec![Event::PointerButton {
+                            pos,
+                            button: PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        }];
+                        if touch_events {
+                            events.push(Event::Touch {
+                                device_id: egui::TouchDeviceId(1),
+                                id: egui::TouchId(1),
+                                phase: if pressed {
+                                    egui::TouchPhase::Start
+                                } else {
+                                    egui::TouchPhase::End
+                                },
+                                pos,
+                                force: None,
+                            });
+                        }
+                        events.push(if pressed {
+                            Event::PointerMoved(pos)
+                        } else {
+                            Event::PointerGone
+                        });
+                        frame(&ctx, &mut chart, 0.2 + index as f64 + step, events);
+                    }
+                    assert!(
+                        chart.drain_events().any(|event| matches!(event,
+                            ChartEvent::Click { position, button: PointerButton::Primary }
+                                if position.pos == pos
+                        )),
+                        "tap at {pos:?} did not reach the chart (touch events: {touch_events})"
+                    );
+                    assert!(chart.series().any(|(id, _)| id == peer));
+                }
+            }
+        }
+    }
 
     /// A row removes its own handle, including after restore remaps ids; undo restores its
     /// data and legend position without disturbing the main series, studies or neighbours.
