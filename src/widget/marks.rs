@@ -9,12 +9,6 @@ use crate::services::{Marks, MarksPage, MarksRequest};
 use chrono::{DateTime, Utc};
 use std::sync::{Arc, Mutex, PoisonError};
 
-/// Where a bar mark with a host ID was painted.
-pub(super) struct MarkHit {
-    target: super::PointerTarget,
-    rect: egui::Rect,
-}
-
 pub(super) struct MarkSource {
     source: Arc<dyn Marks>,
     inbox: Arc<Inbox>,
@@ -238,18 +232,11 @@ impl Chart {
                 time: mark.time,
             });
         }
-        self.mark_hits
-            .borrow_mut()
-            .extend(hits.into_iter().filter_map(|(mark, rect)| {
-                Some(MarkHit {
-                    target: super::PointerTarget::Marker {
-                        id: Some(mark.id.clone()?),
-                        series,
-                        time: mark.time,
-                    },
-                    rect,
-                })
-            }));
+        self.mark_hits.borrow_mut().extend(
+            hits.into_iter()
+                .filter(|(mark, _)| mark.id.is_some())
+                .map(|(_, rect)| rect),
+        );
     }
 
     /// A later painted hit covers any annotation found underneath it.
@@ -319,7 +306,7 @@ impl Chart {
 
     /// The last host mark painted at `pos` in the previous frame, for selection gating.
     /// Drawing tools and the eraser take the click first.
-    pub(super) fn mark_at(&self, pos: egui::Pos2) -> Option<&super::PointerTarget> {
+    pub(super) fn mark_at(&self, pos: egui::Pos2) -> Option<&egui::Rect> {
         #[cfg(feature = "drawings")]
         if self.drawings.active_tool.is_some() || self.drawings.eraser_mode {
             return None;
@@ -327,8 +314,7 @@ impl Chart {
         self.clickable_marks
             .iter()
             .rev()
-            .find(|hit| hit.rect.contains(pos))
-            .map(|hit| &hit.target)
+            .find(|rect| rect.contains(pos))
     }
 
     /// Reports a click only for the host marker selected by this frame's paint order.
@@ -1066,7 +1052,7 @@ mod tests {
             );
             test_frames::frame(&ctx, &mut chart, 0.1, vec![]);
             test_frames::frame(&ctx, &mut chart, 0.2, vec![]);
-            let pos = chart.clickable_marks.last().unwrap().rect.center();
+            let pos = chart.clickable_marks.last().unwrap().center();
             let button = |pressed| {
                 vec![egui::Event::PointerButton {
                     pos,
@@ -1339,20 +1325,13 @@ mod tests {
                 .collect(),
         );
         let shapes = test_frames::shapes(&ctx, &mut chart, 0.2, vec![]);
-        for series in [SeriesId::MAIN, series] {
-            let hits = chart.mark_hits.borrow();
-            let ids: Vec<_> = hits
-                .iter()
-                .filter_map(|hit| match &hit.target {
-                    super::super::PointerTarget::Marker {
-                        series: owner,
-                        id: Some(id),
-                        ..
-                    } if *owner == series => Some(id.as_str()),
-                    _ => None,
-                })
-                .collect();
-            assert_eq!(ids, ["future-in", "edge-in", "middle"]);
+        let hits = chart.mark_hits.borrow();
+        assert_eq!(hits.len(), 6);
+        let mapping = chart.get_chart_mapping();
+        for series_hits in hits.chunks_exact(3) {
+            for (rect, index) in series_hits.iter().zip([102.0, left + 0.25, 90.0]) {
+                assert!(rect.x_range().contains(mapping.index_to_x(index)));
+            }
         }
         assert_eq!(
             shapes
@@ -1646,7 +1625,7 @@ mod tests {
             );
             test_frames::frame(&ctx, &mut chart, 0.1, vec![]);
             test_frames::frame(&ctx, &mut chart, 0.2, vec![]);
-            let pos = chart.clickable_marks.last().unwrap().rect.center();
+            let pos = chart.clickable_marks.last().unwrap().center();
             for pressed in [true, false] {
                 test_frames::frame(
                     &ctx,
