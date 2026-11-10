@@ -1902,3 +1902,42 @@ fn tapping_the_price_button_of_a_latched_touch_readout_opens_its_action() {
         }
     }
 }
+
+#[test]
+fn latched_touch_readout_is_the_reported_crosshair() {
+    use crate::widget::ChartEvent;
+    use egui::TouchPhase::{End, Start};
+    for enabled in [true, false] {
+        let ctx = egui::Context::default();
+        let mut chart = chart(&[100.0], &[110.0, 120.0]);
+        chart.chart_options.tooltip.on_long_press = enabled;
+        chart.chart_options.tooltip.touch_exit_mode =
+            crate::config::TouchTrackingExitMode::OnNextTap;
+        frame(&ctx, &mut chart, 0.0, vec![]);
+        chart.apply_synced_time_scale(6.0, -10.0);
+        frame(&ctx, &mut chart, 0.1, vec![]);
+        let map = chart.get_chart_mapping();
+        let pos = Pos2::new(map.idx_to_x(50), map.rect.center().y);
+        let time = chart.state.shown()[50].time;
+        let mut reported = None;
+        for (t, events, expected) in [
+            (1.0, touch_events(Start, pos), (!enabled).then_some(time)),
+            (1.6, vec![], Some(time)),
+            (2.0, touch_events(End, pos), enabled.then_some(time)),
+            (2.1, vec![], enabled.then_some(time)),
+            (2.2, touch_events(Start, pos), Some(time)),
+            (2.3, touch_events(End, pos), None),
+        ] {
+            frame(&ctx, &mut chart, t, events);
+            for event in chart.drain_events() {
+                if let ChartEvent::CrosshairMoved(pointer) = event {
+                    reported = pointer.and_then(|pointer| pointer.time);
+                }
+            }
+            assert_eq!(reported, expected, "enabled={enabled}, time={t}");
+            if enabled {
+                assert_eq!(reported, chart.hover_time());
+            }
+        }
+    }
+}

@@ -366,6 +366,8 @@ pub(super) struct HostEvents {
     pub annotation_target: std::cell::RefCell<Option<PointerTarget>>,
     pub primitive_hit: Option<super::PrimitiveHit>,
     pub volume_map: Option<crate::scales::PriceMap>,
+    /// Present for touch readout input, including a readout still waiting for its hold.
+    pub(super) touch_position: Option<Option<Pos2>>,
     #[cfg(feature = "drawings")]
     dropped_images: Vec<egui::DroppedFileHandle>,
 }
@@ -836,6 +838,7 @@ impl Chart {
             kind: self.host_events.kind.unwrap_or_else(|| match &origin {
                 Some((egui::Event::Touch { .. }, _)) => PointerKind::Touch,
                 Some(_) => PointerKind::Mouse,
+                None if self.host_events.touch_position.is_some() => PointerKind::Touch,
                 None => self
                     .host_events
                     .pointer
@@ -867,17 +870,21 @@ impl Chart {
             self.host_events.time_scale_size = size;
             self.host_events.push(ChartEvent::TimeScaleResized(size));
         }
-        let position = ui.input(|input| input.pointer.hover_pos()).and_then(|pos| {
-            ui.rect_contains_pointer(egui::Rect::from_min_max(
-                egui::pos2(self.last_rendered_price_rect.left(), ui.max_rect().top()),
-                egui::pos2(
-                    self.last_rendered_price_rect.right(),
-                    ui.max_rect().bottom(),
-                ),
-            ))
-            .then(|| self.pointer_at(ui, pos, self.pointer_origin(ui, pos, None)))
-            .flatten()
-        });
+        let position = if let Some(position) = self.host_events.touch_position {
+            position.and_then(|pos| self.pointer_at(ui, pos, self.pointer_origin(ui, pos, None)))
+        } else {
+            ui.input(|input| input.pointer.hover_pos()).and_then(|pos| {
+                ui.rect_contains_pointer(egui::Rect::from_min_max(
+                    egui::pos2(self.last_rendered_price_rect.left(), ui.max_rect().top()),
+                    egui::pos2(
+                        self.last_rendered_price_rect.right(),
+                        ui.max_rect().bottom(),
+                    ),
+                ))
+                .then(|| self.pointer_at(ui, pos, self.pointer_origin(ui, pos, None)))
+                .flatten()
+            })
+        };
         let unchanged = match (&position, &self.host_events.pointer) {
             (Some(position), Some(previous)) => {
                 // Button transitions alone do not move the cursor; changed touch details do.

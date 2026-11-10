@@ -209,6 +209,7 @@ impl Chart {
     ) -> Response {
         self.follow_chart_theme(&ui.active_theme());
         self.host_events.volume_map = None;
+        self.host_events.touch_position = None;
         self.host_events.target = None;
         self.host_events.primitive_hit = None;
         self.cover_annotation_hit();
@@ -3121,6 +3122,12 @@ impl Chart {
                 })
         }
         .and_then(|pos| self.crosshair_position(pos, &coords));
+        if touch_readout.touch_input
+            && self.chart_options.tooltip.enabled
+            && self.chart_options.tooltip.on_long_press
+        {
+            self.host_events.touch_position = Some(hover_pos);
+        }
         let mut study_action = None;
         let mut series_action = None;
         let mut legend_bottom = price_rect.top() + 8.0;
