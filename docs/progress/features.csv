@@ -757,7 +757,7 @@ Studies,Indicators,Relative Volatility Index,unverified,library,src/studies/buil
 Studies,Indicators,Relative Volume at Time,unverified,library,src/studies/builtin/relative_volume_at_time.rs;src/studies/factory/mod.rs;src/widget/studies.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Rob Booker - ADX Breakout,unverified,library,src/studies/builtin/adx_breakout.rs;src/studies/builtin/adx.rs;src/studies/factory/mod.rs;src/chart/rendering/indicator.rs,
 Studies,Indicators,Rob Booker - Knoxville Divergence,incomplete,library,;src/studies/builtin/knoxville_divergence.rs,1090
-Studies,Indicators,Rob Booker Intraday Pivot Points,unverified,library,src/studies/builtin/intraday_pivot_points.rs;src/chart/indicators/plots.rs;src/chart/rendering/legend/mod.rs;src/widget/pane/indicator/paint.rs,1091;2525
+Studies,Indicators,Rob Booker Intraday Pivot Points,incomplete,library,src/studies/builtin/intraday_pivot_points.rs;src/chart/indicators/plots.rs;src/chart/rendering/legend/mod.rs;src/widget/pane/indicator/paint.rs,1091;2525
 Studies,Indicators,Rob Booker Missed Pivot Points,incomplete,library,;src/studies/builtin/missed_pivots.rs,1091
 Studies,Indicators,Rob Booker Reversal,missing,library,,1090
 Studies,Indicators,Rob Booker Ziv Ghost Pivots,missing,library,,1091
