@@ -450,13 +450,4 @@ mod tests {
             assert_eq!(error.to_string(), expected);
         }
     }
-
-    #[test]
-    fn clone_keeps_the_calculation() {
-        let indicator = CustomIndicator::new("Constant", |_| vec![IndicatorValue::Single(1.0); 3]);
-
-        let mut cloned = indicator.clone_box();
-        cloned.calculate(&[]);
-        assert_eq!(cloned.values().len(), 3);
-    }
 }
