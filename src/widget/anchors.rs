@@ -38,7 +38,7 @@ impl Chart {
     /// Captures edited indices before the bars or the rendered element sequence change.
     pub(super) fn anchor_drawing_points(&mut self) {
         let bars = self.state.shown();
-        let timeframe = self.timeframe();
+        let timeframe = self.calendar_timeframe();
         let timezone = self.calendar_timezone();
         let mut anchor = |point: &mut ChartPoint| {
             if point
@@ -61,7 +61,7 @@ impl Chart {
     /// Projects retained timestamps against the current rendered bars, including whitespace.
     pub(super) fn project_drawing_points(&mut self) {
         let bars = self.state.shown();
-        let timeframe = self.timeframe();
+        let timeframe = self.calendar_timeframe();
         let timezone = self.calendar_timezone();
         let state = &self.state;
         let chart_type = self.chart_type;
@@ -101,7 +101,8 @@ impl Chart {
     /// Between bars time is interpolated; outside them the known timeframe duration or most
     /// common positive spacing among the outermost 16 bars is extended (shorter spacing breaks
     /// ties, one second if none), retaining repeated-edge ranks. Known month and year intervals
-    /// step by calendar months in the display time zone. Empty charts export retained
+    /// step by calendar months in the display time zone. Numeric and custom axes use key
+    /// spacing regardless of the chart timeframe. Empty charts export retained
     /// anchors; an index with no loaded mapping returns an error rather than clamping or
     /// inventing time.
     pub fn save_drawings(&self) -> Result<DrawingStorage, SaveError> {
@@ -246,7 +247,7 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     #[test]
-    fn whitespace_anchors_keep_their_slots_and_axis_dates() {
+    fn custom_key_drawing_anchors_ignore_the_timeframe() {
         use crate::model::Timeframe;
         use chrono::Duration;
 
@@ -266,7 +267,7 @@ mod tests {
         .map(|(day, hour, minute)| Utc.with_ymd_and_hms(2024, 3, day, hour, minute, 0).unwrap())
         .to_vec();
         let bar = |time| Bar::new(time, 10.0, 12.0, 9.0, 11.0, 1.0);
-        for (times, timeframe, timezone, expected_left, expected_right, next) in [
+        for ((times, timeframe, timezone, expected_left, expected_right, next), custom) in [
             // Thursday, Friday, Monday: the weekend cannot turn one slot into three days.
             (
                 vec![date(2024, 2, 8), date(2024, 2, 9), date(2024, 2, 12)],
@@ -407,10 +408,34 @@ mod tests {
                 date(2024, 3, 4) + Duration::milliseconds(750),
                 date(2024, 3, 4) + Duration::milliseconds(750),
             ),
-        ] {
+        ]
+        .into_iter()
+        .map(|row| (row, false))
+        // Custom ranks remain one second apart under any displayed calendar interval.
+        .chain(
+            [None, Some(Timeframe::Day1), Some(Timeframe::Month1)].map(|timeframe| {
+                let key = |rank| Utc.timestamp_opt(rank, 0).unwrap();
+                (
+                    (
+                        (0..3).map(key).collect(),
+                        timeframe,
+                        "UTC",
+                        key(-1),
+                        key(4),
+                        key(3),
+                    ),
+                    true,
+                )
+            }),
+        ) {
             let last = times.len() - 1;
-            let right_index = (last + 1) as f32;
+            let right_index = (last + if custom { 2 } else { 1 }) as f32;
             let mut chart = Chart::new(BarData::from_bars(times.into_iter().map(bar).collect()));
+            if custom {
+                chart.set_horizontal_scale(Some(std::sync::Arc::new(
+                    crate::scales::CustomHorizontalScale::new(0..6_u8, |key| key.to_string()),
+                )));
+            }
             if let Some(timeframe) = timeframe {
                 chart.set_timeframe(timeframe);
             }
@@ -438,7 +463,7 @@ mod tests {
             for (index, left, right) in [
                 (-0.5, expected_left, chart.state.shown()[0].time),
                 (
-                    last as f64 + 0.5,
+                    (last as f64 + f64::from(right_index)) / 2.0,
                     chart.state.shown()[last].time,
                     expected_right,
                 ),
@@ -460,7 +485,7 @@ mod tests {
                 300.0,
                 false,
             );
-            for start in [0, last] {
+            for start in [0, last].into_iter().filter(|_| !custom) {
                 let coords = crate::chart::rendering::ChartMapping::new(
                     rect, 100.0, start, last, 5.0, price,
                 );
@@ -485,9 +510,19 @@ mod tests {
                     );
                 }
             }
+            chart.update(SeriesId::MAIN, bar(next));
+            assert_eq!(
+                chart.drawings().drawings[0].chart_points[1].bar_idx,
+                right_index,
+                "custom={custom}, {timeframe:?}, before save/load"
+            );
+            assert_eq!(
+                chart.drawing_points(7).unwrap()[1].0,
+                expected_right,
+                "custom={custom}, {timeframe:?}"
+            );
             let saved = chart.save_drawings().unwrap().to_json().unwrap();
             chart.load_drawings(&saved).unwrap();
-            chart.update(SeriesId::MAIN, bar(next));
             assert_eq!(
                 chart.drawings().drawings[0].chart_points[1].bar_idx,
                 right_index
