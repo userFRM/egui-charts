@@ -625,6 +625,260 @@ mod tests {
     use super::*;
     use crate::studies::{ConfiguredStudy, SMA};
 
+    /// Channel fill styles and fork transparency preview, cancel, commit and restore on live bars.
+    #[test]
+    fn channel_and_fork_backgrounds_survive_preview_and_restore() {
+        use crate::model::{Bar, BarData};
+        use crate::studies::{IndicatorFactory, StudyTemplate};
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        for name in ["Donchian", "Auto Pitchfork"] {
+            let channel = name == "Donchian";
+            let mut bars: Vec<_> = [
+                100.0, 104.0, 107.0, 112.0, 104.0, 100.0, 106.0, 109.0, 113.0, 117.0,
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(i, low)| {
+                Bar::new(
+                    chrono::DateTime::from_timestamp(i as i64 * 60, 0).unwrap(),
+                    low,
+                    low + 1.0,
+                    low,
+                    low,
+                    1.0,
+                )
+            })
+            .collect();
+            let mut chart = crate::widget::Chart::new(BarData::from_bars(bars.clone()));
+            let id = chart.add_indicator(IndicatorFactory::new().create(name).unwrap());
+            let before = chart.indicator_mut(id).unwrap().snapshot_settings();
+            let defaults = chart.indicator_mut(id).unwrap().settings();
+            let mut edited = defaults.clone();
+            if channel {
+                assert_eq!(edited.fills.len(), 1);
+                edited.fills[0].color = egui::Color32::from_rgba_unmultiplied(120, 40, 180, 64);
+                edited.price_line_plots = vec![0, 1];
+                edited.untagged_plots = vec![0, 1, 2];
+            }
+            let inputs: Vec<(String, InputValue)> = if channel {
+                vec![
+                    ("period".into(), InputValue::Length(3)),
+                    ("offset".into(), InputValue::Integer(2)),
+                ]
+            } else {
+                vec![
+                    ("swing_size".into(), InputValue::Choice(1)),
+                    ("depth".into(), InputValue::Length(3)),
+                    ("fork_transparency".into(), InputValue::Length(75)),
+                ]
+            };
+            for (action, theme) in [("Cancel", Theme::light()), ("Apply", Theme::dark())] {
+                let mut dialog = IndicatorSettingsDialog::default();
+                assert!(dialog.open_for_chart(&chart, id));
+                dialog.tab = if channel { Tab::Style } else { Tab::Inputs };
+                dialog.edit.as_mut().unwrap().settings = edited.clone();
+                for (id, value) in &inputs {
+                    dialog
+                        .inputs
+                        .iter_mut()
+                        .find(|input| input.id == *id)
+                        .unwrap()
+                        .value = value.clone();
+                }
+                let mut applied = None;
+                let setup_theme = theme.clone();
+                let mut harness = Harness::builder()
+                    .allow_missing_glyphs()
+                    .with_size(egui::vec2(1440.0, 900.0))
+                    .with_context_setup(move |ctx| {
+                        egui_extras::install_image_loaders(ctx);
+                        crate::theme::apply_to_egui(ctx, &setup_theme);
+                    })
+                    .build_ui(|ui| {
+                        chart.show(ui);
+                        if let Some(edit) =
+                            dialog.show_preview_for_chart(ui.ctx(), &theme, &mut chart)
+                        {
+                            applied = Some(edit);
+                        }
+                    });
+                harness.run();
+                if channel {
+                    assert_eq!(harness.query_all_by_label("Latest value line").count(), 3);
+                    // The fill switch keeps the chosen colour and opacity while hidden.
+                    harness.get_by_label("Band 1").click();
+                    harness.run();
+                    harness.get_by_label("Band 1").click();
+                    harness.run();
+                } else {
+                    assert!(
+                        harness
+                            .query_all_by_label("Band transparency (%)")
+                            .next()
+                            .is_some()
+                    );
+                }
+                drop(harness);
+                let study = chart.indicator_mut(id).unwrap();
+                assert_eq!(study.settings(), edited);
+                if channel {
+                    // At bar 9: max(110,114,118)=118, min(109,113,117)=109.
+                    assert_eq!(study.plot_value(0, 11), Some(113.5));
+                    assert_eq!(study.plot_value(1, 11), Some(118.0));
+                    assert_eq!(study.plot_value(2, 11), Some(109.0));
+                    assert_eq!(study.fills()[0].color, edited.fills[0].color);
+                    assert!(study.plot_price_line(0) && study.plot_price_line(1));
+                    assert!(!study.plot_price_line(2));
+                } else {
+                    assert_eq!(
+                        study.drawings()[0]
+                            .pitchfork
+                            .as_ref()
+                            .unwrap()
+                            .background_opacity,
+                        64
+                    );
+                }
+                assert!(!chart.undo(), "previews stay outside history");
+                let mut harness = Harness::builder()
+                    .allow_missing_glyphs()
+                    .with_size(egui::vec2(1440.0, 900.0))
+                    .with_context_setup(egui_extras::install_image_loaders)
+                    .build_ui(|ui| {
+                        if let Some(edit) =
+                            dialog.show_preview_for_chart(ui.ctx(), &theme, &mut chart)
+                        {
+                            applied = Some(edit);
+                        }
+                    });
+                harness.run();
+                harness.get_by_label(action).click();
+                harness.run();
+                drop(harness);
+                assert!(chart.indicator_mut(id).unwrap().snapshot_settings() == before);
+                if action == "Apply" {
+                    let edit = applied.unwrap();
+                    chart.user_action(|chart| {
+                        chart
+                            .indicator_mut(id)
+                            .unwrap()
+                            .apply_settings(&edit.inputs, edit.settings)
+                            .unwrap()
+                    });
+                } else {
+                    assert!(applied.is_none());
+                }
+            }
+            assert!(chart.undo());
+            assert!(chart.indicator_mut(id).unwrap().snapshot_settings() == before);
+            assert!(chart.redo());
+            let study = chart.indicator_mut(id).unwrap();
+            study.calculate(&bars);
+            bars[9].high = 122.0;
+            study.update(&bars, 9);
+            if channel {
+                assert_eq!(study.plot_value(0, 11), Some(115.5));
+            }
+            for low in [95.0, 94.0, 93.0] {
+                bars.push(Bar::new(
+                    chrono::DateTime::from_timestamp(bars.len() as i64 * 60, 0).unwrap(),
+                    low,
+                    100.0,
+                    low,
+                    low,
+                    1.0,
+                ));
+                study.update(&bars, bars.len() - 1);
+            }
+            if channel {
+                assert_eq!(study.plot_value(0, 14), Some(96.5));
+            } else {
+                assert_eq!(
+                    study.drawings()[0]
+                        .chart_points
+                        .iter()
+                        .map(|p| (p.bar_idx, p.price))
+                        .collect::<Vec<_>>(),
+                    [(5.0, 100.0), (9.0, 122.0), (12.0, 93.0)]
+                );
+            }
+            let saved = serde_json::to_string(&StudyTemplate::from_study(study)).unwrap();
+            let mut loaded = serde_json::from_str::<StudyTemplate>(&saved)
+                .unwrap()
+                .create()
+                .unwrap();
+            loaded.calculate(&bars);
+            assert_eq!(loaded.settings(), edited);
+            for line in 0..study.line_count() {
+                for i in 0..bars.len() {
+                    assert_eq!(
+                        loaded.values().value(line, i),
+                        study.values().value(line, i)
+                    );
+                }
+            }
+            if channel {
+                let mut hidden = loaded.settings();
+                hidden.fills[0].visible = false;
+                loaded.apply_settings(&[], hidden).unwrap();
+                assert!(loaded.fills().is_empty());
+                assert_eq!(loaded.settings().fills[0].color, edited.fills[0].color);
+                // Older templates without band settings inherit the newly declared band.
+                let mut old =
+                    serde_json::to_value(StudyTemplate::from_study(loaded.as_ref())).unwrap();
+                old["settings"].as_object_mut().unwrap().remove("fills");
+                let restored = serde_json::from_value::<StudyTemplate>(old)
+                    .unwrap()
+                    .create()
+                    .unwrap();
+                assert_eq!(restored.fills()[0].color, defaults.fills[0].color);
+            } else {
+                assert_eq!(
+                    loaded.drawings()[0]
+                        .pitchfork
+                        .as_ref()
+                        .unwrap()
+                        .background_opacity,
+                    64
+                );
+                for (transparency, alpha) in [(0, 255), (50, 128), (85, 38), (100, 0)] {
+                    loaded
+                        .set_input("fork_transparency", InputValue::Length(transparency))
+                        .unwrap();
+                    loaded.calculate(&bars);
+                    assert_eq!(
+                        loaded.drawings()[0]
+                            .pitchfork
+                            .as_ref()
+                            .unwrap()
+                            .background_opacity,
+                        alpha
+                    );
+                }
+                let mut old =
+                    serde_json::to_value(StudyTemplate::from_study(loaded.as_ref())).unwrap();
+                old["inputs"]
+                    .as_array_mut()
+                    .unwrap()
+                    .retain(|input| input[0] != "fork_transparency");
+                let mut restored = serde_json::from_value::<StudyTemplate>(old)
+                    .unwrap()
+                    .create()
+                    .unwrap();
+                restored.calculate(&bars);
+                assert_eq!(
+                    restored.drawings()[0]
+                        .pitchfork
+                        .as_ref()
+                        .unwrap()
+                        .background_opacity,
+                    38
+                );
+            }
+        }
+    }
+
     #[test]
     fn smi_value_lines_apply_cancel_save_and_restore_independently() {
         use crate::scales::{PriceMap, PriceRange, PriceTransform};
