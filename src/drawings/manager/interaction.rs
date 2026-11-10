@@ -304,13 +304,18 @@ impl DrawingManager {
         H: Fn(f64, f32, f32) -> f64,
     {
         if let Some((id, handle)) = self.dragging_handle {
-            // A fitted end can be rounded or clamped away from its stored anchor.
+            // A derived handle can be rounded, clamped or shifted away from its stored anchor.
             if let Some(drawing) = self.drawings.iter().find(|d| d.id == id)
-                && drawing.tool_type == DrawingToolType::RegressionTrend
-                && self
-                    .get_handles(drawing)
-                    .into_iter()
-                    .any(|(h, point)| h == handle && x_to_bar(new_pos.x) == x_to_bar(point.x))
+                && matches!(
+                    drawing.tool_type,
+                    DrawingToolType::RegressionTrend | DrawingToolType::AnchoredVWAP
+                )
+                && self.get_handles(drawing).into_iter().any(|(h, point)| {
+                    h == handle
+                        && x_to_bar(new_pos.x) == x_to_bar(point.x)
+                        && (drawing.tool_type == DrawingToolType::RegressionTrend
+                            || drawing.points.first().is_some_and(|p| p.x != point.x))
+                })
             {
                 return;
             }
