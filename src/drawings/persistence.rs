@@ -1030,7 +1030,26 @@ mod v1 {
         drawing.pitchfork = None;
         drawing.volume_profile = None;
         drawing.line_style = LineStyle::Solid;
-        drawing.font_size = 12.0;
+        // The released renderers used fixed sizes, not the constructor's unused 12 pt field.
+        // Other tools had no stored text presentation; their added captions keep their defaults.
+        drawing.font_size = match tool_type {
+            DrawingToolType::TextLabel | DrawingToolType::AnchoredText => 14.0,
+            DrawingToolType::TrendAngle | DrawingToolType::Callout => 13.0,
+            DrawingToolType::Measure
+            | DrawingToolType::PriceRange
+            | DrawingToolType::DateRange
+            | DrawingToolType::PriceLabel
+            | DrawingToolType::PriceNote
+            | DrawingToolType::Signpost
+            | DrawingToolType::Comment
+            | DrawingToolType::AnchoredNote => 11.0,
+            DrawingToolType::InfoLine
+            | DrawingToolType::DateAndPriceRange
+            | DrawingToolType::Note
+            | DrawingToolType::FlagNote => 10.0,
+            DrawingToolType::FontIcon => (stored.line_width * 8.0).clamp(24.0, 72.0),
+            _ => drawing.font_size,
+        };
         drawing.font_weight = FontWeight::Normal;
         drawing.text_color = None;
         drawing.background = true;
@@ -1520,7 +1539,8 @@ mod tests {
             want.fib_config = None;
             want.fill_color = None;
             want.line_style = LineStyle::Solid;
-            want.font_size = 12.0;
+            // Only the text label rendered text here, in a fixed 14 pt font.
+            want.font_size = 14.0;
             want.text_color = None;
             want.background = true;
             want.border = true;
@@ -2126,6 +2146,20 @@ mod tests {
             (T::FibonacciRetracement, [100.0, 110.0]),
             (T::ParallelChannel, [100.0, 110.0]),
             (T::TextLabel, [100.0, 110.0]),
+            (T::AnchoredText, [100.0, 110.0]),
+            (T::Callout, [100.0, 110.0]),
+            (T::TrendAngle, [100.0, 110.0]),
+            (T::InfoLine, [100.0, 110.0]),
+            (T::Comment, [100.0, 110.0]),
+            (T::DateRange, [100.0, 110.0]),
+            (T::DateAndPriceRange, [100.0, 110.0]),
+            (T::PriceLabel, [100.0, 110.0]),
+            (T::PriceNote, [100.0, 110.0]),
+            (T::Signpost, [100.0, 110.0]),
+            (T::Note, [100.0, 110.0]),
+            (T::AnchoredNote, [100.0, 110.0]),
+            (T::FlagNote, [100.0, 110.0]),
+            (T::FontIcon, [100.0, 110.0]),
             (T::ArrowMarker, [100.0, 110.0]),
             (T::Measure, [110.0, 100.0]),
             (T::Measure, [100.0, 110.0]),
@@ -2168,7 +2202,26 @@ mod tests {
                 assert!(drawing.pitchfork.is_none(), "{tool:?}");
                 assert!(drawing.volume_profile.is_none(), "{tool:?}");
                 assert_eq!(drawing.line_style, LineStyle::Solid, "{tool:?}");
-                assert_eq!(drawing.font_size, 12.0, "{tool:?}");
+                // Fixed rendered sizes in v0.2.0, independent of its constructor defaults.
+                let font = match tool {
+                    T::TextLabel | T::AnchoredText => Some(14.0),
+                    T::Callout | T::TrendAngle => Some(13.0),
+                    T::Measure
+                    | T::PriceRange
+                    | T::DateRange
+                    | T::PriceLabel
+                    | T::PriceNote
+                    | T::Signpost
+                    | T::Comment
+                    | T::AnchoredNote => Some(11.0),
+                    T::InfoLine | T::DateAndPriceRange | T::Note | T::FlagNote => Some(10.0),
+                    // The fixture's width is 3: max(24, min(72, 3 * 8)) = 24.
+                    T::FontIcon => Some(24.0),
+                    _ => None,
+                };
+                if let Some(font) = font {
+                    assert_eq!(drawing.font_size, font, "{tool:?}");
+                }
                 assert_eq!(drawing.font_weight, FontWeight::Normal, "{tool:?}");
                 assert_eq!(drawing.text_color, None, "{tool:?}");
                 assert!(drawing.background && drawing.border, "{tool:?}");
