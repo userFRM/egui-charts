@@ -1328,7 +1328,7 @@ mod tests {
         let hits = chart.mark_hits.borrow();
         assert_eq!(hits.len(), 6);
         let mapping = chart.get_chart_mapping();
-        for series_hits in hits.chunks_exact(3) {
+        for series_hits in hits.as_chunks::<3>().0 {
             for (rect, index) in series_hits.iter().zip([102.0, left + 0.25, 90.0]) {
                 assert!(rect.x_range().contains(mapping.index_to_x(index)));
             }
