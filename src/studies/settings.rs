@@ -1203,7 +1203,8 @@ impl Indicator for ConfiguredStudy {
         if (edited.study.source().is_none() && edited.runs_on_other_bars())
             || edited.calculation_timeframe.is_some()
             || inputs.iter().any(|(id, value)| {
-                id == "source" && matches!(value, InputValue::Source(super::StudySource::Study { .. }))
+                id == "source"
+                    && matches!(value, InputValue::Source(super::StudySource::Study { .. }))
             })
         {
             inputs.sort_by_key(|(id, _)| match id.as_str() {
