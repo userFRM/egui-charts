@@ -16,7 +16,7 @@ fn position_tags_in_a_series_pane_follow_its_display_format() {
 
     for host in [false, true] {
         let ctx = Context::default();
-        let mut chart = chart(&[90.0], &[110.0]);
+        let mut chart = chart(&[90.0], &[90.0, 110.0]);
         let id = chart.add_series(SeriesOptions::default());
         chart.set_data(id, chart.bars(SeriesId::MAIN).to_vec());
         chart.series_style_mut(id).unwrap().display_format = Some(SeriesDisplayFormat {
@@ -60,8 +60,21 @@ fn position_tags_in_a_series_pane_follow_its_display_format() {
                     egui::Shape::Text(text) if text.pos.x >= plot.right()
                         && panel.y_range().contains(text.pos.y)
                         && text.galley.text() == expected
+                        && painted.iter().any(|shape| matches!(shape,
+                            egui::Shape::Rect(tag) if tag.rect.contains(text.pos)
+                                && tag.rect.right() > plot.right()
+                                && tag.rect.height() <= text.galley.size().y * 2.0
+                        ))
                 )),
-                "{expected} position tag"
+                "{expected} position tag: {:?}",
+                painted
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        egui::Shape::Text(text) if panel.y_range().contains(text.pos.y) =>
+                            Some((text.galley.text(), text.pos)),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
             );
         }
     }
