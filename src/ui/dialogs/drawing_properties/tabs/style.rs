@@ -52,7 +52,12 @@ impl StyleTab {
 
             if let Some(template) = &mut props.tool_settings {
                 let settings = &mut template.settings;
-                if settings.tool_type == DrawingToolType::FibonacciRetracement {
+                if matches!(
+                    settings.tool_type,
+                    DrawingToolType::FibonacciRetracement
+                        | DrawingToolType::FibonacciTimeZones
+                        | DrawingToolType::TrendBasedFibTime
+                ) {
                     let mut config = settings.fibonacci_config().into_owned();
                     let original = config.clone();
                     ui.label(l10n::text(ui.ctx(), "All colours"));
@@ -70,7 +75,14 @@ impl StyleTab {
                         }
                     }
                     ui.end_row();
-                    ui.label(l10n::text(ui.ctx(), "Trend line"));
+                    ui.label(l10n::text(
+                        ui.ctx(),
+                        if settings.tool_type == DrawingToolType::FibonacciTimeZones {
+                            "Initial line"
+                        } else {
+                            "Trend line"
+                        },
+                    ));
                     ui.checkbox(&mut config.trend_visible, l10n::text(ui.ctx(), "Visible"))
                         .accessible_name(l10n::text(ui.ctx(), "Show construction line"));
                     ui.end_row();

@@ -334,6 +334,9 @@ pub struct FibonacciLevel {
     /// Line width in points; absent inherits the drawing's level width.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<f32>,
+    /// Line pattern; absent inherits the drawing's level pattern.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_style: Option<crate::model::LineStyle>,
     /// Level color as RGBA
     pub color: [u8; 4],
     /// Whether this level is visible
@@ -352,6 +355,7 @@ impl FibonacciLevel {
             label: label.to_string(),
             text: String::new(),
             width: None,
+            line_style: None,
             color,
             visible: true,
             show_price: true,
@@ -386,10 +390,10 @@ impl FibonacciLevel {
 pub struct FibonacciConfig {
     /// Individual level configurations
     pub levels: Vec<FibonacciLevel>,
-    /// Width of every level line, in points.
+    /// Width of level lines without an assigned width, in points.
     #[serde(default = "fib_level_width")]
     pub level_width: f32,
-    /// Line pattern shared by every level.
+    /// Pattern of level lines without an assigned pattern.
     #[serde(default)]
     pub level_style: crate::model::LineStyle,
     /// Show background fill between levels
@@ -419,12 +423,16 @@ pub struct FibonacciConfig {
     #[serde(default = "fib_font_size")]
     pub label_size: f32,
     /// Retracement labels sit outside the Left/Right endpoint or midway at Center.
+    /// Time projections place labels left of, on, or right of each vertical level.
     /// Absent follows `labels_on_left` for earlier drawings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label_position: Option<LineTextHorizontalAlign>,
     /// Edge of a retracement label resting on its level; middle places it on the line.
     #[serde(default = "fib_vertical_align")]
     pub label_vertical: LineTextVerticalAlign,
+    /// Time projection labels at the top, middle or bottom of the pane; defaults to bottom.
+    #[serde(default = "fib_time_label_vertical")]
+    pub time_label_vertical: LineTextVerticalAlign,
     /// Whether custom retracement text is visible, independently of prices and ratios.
     #[serde(default = "percent_levels")]
     pub show_text: bool,
@@ -448,6 +456,10 @@ fn fib_font_size() -> f32 {
 
 fn fib_vertical_align() -> LineTextVerticalAlign {
     LineTextVerticalAlign::Middle
+}
+
+fn fib_time_label_vertical() -> LineTextVerticalAlign {
+    LineTextVerticalAlign::Bottom
 }
 
 fn fib_level_width() -> f32 {
@@ -499,6 +511,7 @@ impl FibonacciConfig {
             label_size: fib_font_size(),
             label_position: None,
             label_vertical: fib_vertical_align(),
+            time_label_vertical: fib_time_label_vertical(),
             show_text: true,
             text_position: LineTextHorizontalAlign::Center,
             text_vertical: fib_vertical_align(),
@@ -668,6 +681,7 @@ impl FibonacciConfig {
             label_size,
             label_position,
             label_vertical,
+            time_label_vertical,
             show_text,
             text_position,
             text_vertical,
@@ -681,7 +695,8 @@ impl FibonacciConfig {
                 .zip(&edited.levels)
             {
                 fields!(
-                    target, original, edited, value, label, color, visible, show_price, text, width
+                    target, original, edited, value, label, color, visible, show_price, text,
+                    width, line_style
                 );
             }
         } else {

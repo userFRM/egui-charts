@@ -143,8 +143,8 @@ impl Chart {
         Ok(())
     }
 
-    /// Replace a retracement's levels, typography, text placement and construction visibility
-    /// as one undoable edit. Unknown ids, locked drawings and invalid settings change nothing.
+    /// Replace a retracement's or time projection's levels, typography, label placement and
+    /// construction visibility as one undoable edit. Unknown ids, locked drawings and invalid settings change nothing.
     pub fn set_fibonacci_config(
         &mut self,
         id: usize,
@@ -159,9 +159,14 @@ impl Chart {
         if drawing.locked {
             return Err(DrawingError::Locked(id));
         }
-        if drawing.tool_type != crate::drawings::DrawingToolType::FibonacciRetracement {
+        if !matches!(
+            drawing.tool_type,
+            crate::drawings::DrawingToolType::FibonacciRetracement
+                | crate::drawings::DrawingToolType::FibonacciTimeZones
+                | crate::drawings::DrawingToolType::TrendBasedFibTime
+        ) {
             return Err(DrawingError::Invalid(
-                "Drawing is not a Fibonacci retracement",
+                "Drawing is not a Fibonacci retracement or time projection",
             ));
         }
         if !config.is_valid() {

@@ -279,7 +279,12 @@ impl DrawingProps {
                     elliott_degree,
                 );
                 if settings.fib_config != target.fib_config {
-                    if drawing.tool_type == crate::drawings::DrawingToolType::FibonacciRetracement {
+                    if matches!(
+                        drawing.tool_type,
+                        crate::drawings::DrawingToolType::FibonacciRetracement
+                            | crate::drawings::DrawingToolType::FibonacciTimeZones
+                            | crate::drawings::DrawingToolType::TrendBasedFibTime
+                    ) {
                         let original = target.fibonacci_config();
                         let edited = settings.fibonacci_config();
                         let mut config = drawing.fibonacci_config().into_owned();

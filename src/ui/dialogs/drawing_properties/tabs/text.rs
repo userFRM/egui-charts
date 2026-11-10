@@ -56,20 +56,29 @@ fn alignment_row<T: Copy + PartialEq, const N: usize>(
 pub struct TextTab;
 
 impl TextTab {
-    /// Tools with text to write and the trend angle, whose own labels have a font and a colour.
+    /// Tools with text to write or their own labels to place and size.
     pub(crate) fn available(tool: DrawingToolType) -> bool {
         tool.supports_text()
             || matches!(
                 tool,
-                DrawingToolType::TrendAngle | DrawingToolType::FibonacciRetracement
+                DrawingToolType::TrendAngle
+                    | DrawingToolType::FibonacciRetracement
+                    | DrawingToolType::FibonacciTimeZones
+                    | DrawingToolType::TrendBasedFibTime
             )
     }
 
     pub fn show(ui: &mut Ui, props: &mut DrawingProps, pickers: &mut [ColorPickerState; 3]) {
         ui.space_md();
         if let Some(template) = &mut props.tool_settings
-            && template.settings.tool_type == DrawingToolType::FibonacciRetracement
+            && matches!(
+                template.settings.tool_type,
+                DrawingToolType::FibonacciRetracement
+                    | DrawingToolType::FibonacciTimeZones
+                    | DrawingToolType::TrendBasedFibTime
+            )
         {
+            let time = template.settings.tool_type != DrawingToolType::FibonacciRetracement;
             let mut config = template.settings.fibonacci_config().into_owned();
             let original = config.clone();
             FormGrid::new("retracement_text").show(ui, |ui| {
@@ -110,13 +119,28 @@ impl TextTab {
                 alignment_row(
                     ui,
                     "Label height",
-                    &mut config.label_vertical,
-                    [
-                        (V::Bottom, "Top"),
-                        (V::Middle, "Middle"),
-                        (V::Top, "Bottom"),
-                    ],
+                    if time {
+                        &mut config.time_label_vertical
+                    } else {
+                        &mut config.label_vertical
+                    },
+                    if time {
+                        [
+                            (V::Top, "Top"),
+                            (V::Middle, "Middle"),
+                            (V::Bottom, "Bottom"),
+                        ]
+                    } else {
+                        [
+                            (V::Bottom, "Top"),
+                            (V::Middle, "Middle"),
+                            (V::Top, "Bottom"),
+                        ]
+                    },
                 );
+                if time {
+                    return;
+                }
                 ui.label("");
                 ui.checkbox(
                     &mut config.show_text,

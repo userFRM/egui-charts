@@ -437,26 +437,17 @@ impl Drawing {
 
     /// Vertical projections from the first anchor, or from C for trend-based time.
     pub(crate) fn render_fibonacci_time_zones(&self, painter: &egui::Painter, chart_rect: Rect) {
-        let &[start, end, ..] = self.points.as_slice() else {
-            return;
-        };
-        let unit = end.x - start.x;
-        if unit.abs() < 1.0 {
+        if self.points.len() < 2 {
             return;
         }
-        let origin = if self.tool_type == Tool::TrendBasedFibTime {
-            self.points.get(2).unwrap_or(&start).x
-        } else {
-            start.x
-        };
         let config = self.fibonacci_config();
         let mut levels: Vec<_> = config.visible_levels().collect();
         levels.sort_by(|a, b| a.value.total_cmp(&b.value));
         if config.show_background {
             for pair in levels.windows(2) {
-                let a = origin + unit * pair[0].value;
-                let b = origin + unit * pair[1].value;
-                if a.is_finite() && b.is_finite() {
+                if let Some(a) = self.fibonacci_time_level_x(pair[0].value)
+                    && let Some(b) = self.fibonacci_time_level_x(pair[1].value)
+                {
                     painter.rect_filled(
                         Rect::from_x_y_ranges(a.min(b)..=a.max(b), chart_rect.y_range()),
                         0.0,
@@ -466,7 +457,9 @@ impl Drawing {
             }
         }
         for level in levels {
-            let x = origin + unit * level.value;
+            let Some(x) = self.fibonacci_time_level_x(level.value) else {
+                continue;
+            };
             if !chart_rect.x_range().contains(x) {
                 continue;
             }
@@ -479,19 +472,27 @@ impl Drawing {
                 &config,
                 level,
             );
+            use crate::drawings::{LineTextHorizontalAlign as H, LineTextVerticalAlign as V};
+            let (x, horizontal) = match config.label_position.unwrap_or(if config.labels_on_left {
+                H::Left
+            } else {
+                H::Right
+            }) {
+                H::Left => (x - 4.0, egui::Align::Max),
+                H::Center => (x, egui::Align::Center),
+                H::Right => (x + 4.0, egui::Align::Min),
+            };
+            let (y, vertical) = match config.time_label_vertical {
+                V::Top => (chart_rect.top() + 4.0, egui::Align::Min),
+                V::Middle => (chart_rect.center().y, egui::Align::Center),
+                V::Bottom => (chart_rect.bottom() - 4.0, egui::Align::Max),
+            };
             paint_ratio_label(
                 painter,
                 &config,
                 level,
-                Pos2::new(
-                    x + if config.labels_on_left { -4.0 } else { 4.0 },
-                    chart_rect.bottom() - 4.0,
-                ),
-                if config.labels_on_left {
-                    egui::Align2::RIGHT_BOTTOM
-                } else {
-                    egui::Align2::LEFT_BOTTOM
-                },
+                Pos2::new(x, y),
+                egui::Align2([horizontal, vertical]),
             );
         }
         self.render_fib_trend(painter);
@@ -910,20 +911,44 @@ fn speed_fan_level_lines(start: Pos2, end: Pos2, ratio: f32, rect: Rect) -> Vec<
 }
 
 impl Drawing {
-    pub(super) fn fibonacci_time_zone_lines(&self, rect: Rect) -> Vec<[Pos2; 2]> {
-        let unit = self.points[1].x - self.points[0].x;
-        if unit.abs() < 1.0 {
-            return Vec::new();
+    /// Signed time interval from A to B, applied at A for zones and C for trend time.
+    pub(crate) fn fibonacci_time_level_x(&self, ratio: f32) -> Option<f32> {
+        let &[start, end, ..] = self.points.as_slice() else {
+            return None;
+        };
+        let unit = end.x - start.x;
+        if !unit.is_finite() || unit == 0.0 {
+            return None;
         }
-        self.fibonacci_config()
+        let origin = if self.tool_type == Tool::TrendBasedFibTime {
+            self.points.get(2).unwrap_or(&start).x
+        } else {
+            start.x
+        };
+        let x = origin + unit * ratio;
+        x.is_finite().then_some(x)
+    }
+
+    pub(super) fn fibonacci_time_zone_lines(&self, rect: Rect) -> Vec<[Pos2; 2]> {
+        let config = self.fibonacci_config();
+        let mut lines: Vec<_> = config
             .visible_levels()
             .filter_map(|level| {
-                let x = self.points[0].x + unit * level.value;
+                let x = self.fibonacci_time_level_x(level.value)?;
                 rect.x_range()
                     .contains(x)
                     .then(|| [Pos2::new(x, rect.min.y), Pos2::new(x, rect.max.y)])
             })
-            .collect()
+            .collect();
+        if config.trend_visible {
+            lines.extend(
+                self.points
+                    .windows(2)
+                    .filter(|p| p.iter().all(|p| p.is_finite()))
+                    .map(|p| [p[0], p[1]]),
+            );
+        }
+        lines
     }
 
     pub(super) fn fibonacci_speed_fan_lines(&self, rect: Rect) -> Vec<[Pos2; 2]> {
@@ -995,7 +1020,11 @@ fn paint_level_path(
         return;
     }
     let stroke = Stroke::new(effective_width(config, level), level_color(level));
-    if let Some((dash, gap)) = config.level_style.dash_pattern() {
+    if let Some((dash, gap)) = level
+        .line_style
+        .unwrap_or(config.level_style)
+        .dash_pattern()
+    {
         crate::painting::dashed_line::draw_dashed_polyline(painter, &points, stroke, dash, gap);
     } else {
         painter.add(egui::Shape::line(points, stroke));
@@ -1030,7 +1059,11 @@ fn paint_level_line(
         return;
     }
     let stroke = Stroke::new(effective_width(config, level), level_color(level));
-    if let Some((dash, gap)) = config.level_style.dash_pattern() {
+    if let Some((dash, gap)) = level
+        .line_style
+        .unwrap_or(config.level_style)
+        .dash_pattern()
+    {
         super::utils::draw_dashed_line(painter, points[0], points[1], stroke, dash, gap);
     } else {
         painter.line_segment(points, stroke);
@@ -1211,6 +1244,178 @@ fn fib_spiral_point(center: Pos2, edge: Pos2, theta: f64) -> Pos2 {
 mod tests {
     use super::*;
     use std::f32::consts::FRAC_PI_2;
+
+    /// A quarter of A=200 to B=400 is 50 bars, projected from A for zones and C=500
+    /// for trend time. Reversing A and B changes the sign, even on a logarithmic price scale.
+    #[test]
+    fn time_levels_keep_patterns_widths_alignment_and_hit_geometry() {
+        use crate::drawings::ChartPoint;
+        use crate::drawings::services::DrawingInteraction;
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(1000.0, 700.0));
+        for tool in [Tool::FibonacciTimeZones, Tool::TrendBasedFibTime] {
+            for reverse in [false, true] {
+                for (horizontal, vertical) in
+                    [("Left", "Top"), ("Center", "Middle"), ("Right", "Bottom")]
+                {
+                    let mut drawing = Drawing::new(7, tool);
+                    drawing.chart_points = vec![
+                        ChartPoint::new(if reverse { 400.0 } else { 200.0 }, 100.0),
+                        ChartPoint::new(if reverse { 200.0 } else { 400.0 }, 400.0),
+                    ];
+                    if tool == Tool::TrendBasedFibTime {
+                        drawing.chart_points.push(ChartPoint::new(500.0, 200.0));
+                    }
+                    let mut config =
+                        serde_json::to_value(drawing.fib_config.as_ref().unwrap()).unwrap();
+                    config["levels"] = serde_json::json!([
+                        {"value":0.25,"color":[255,0,0,255],"visible":true,"show_price":true,"width":40.0,"line_style":"Dashed"},
+                        {"value":0.5,"color":[0,255,0,255],"visible":true,"show_price":true},
+                        {"value":0.75,"color":[0,0,255,255],"visible":false,"show_price":true}
+                    ]);
+                    config["show_background"] = false.into();
+                    config["trend_visible"] = false.into();
+                    config["label_size"] = 20.0.into();
+                    config["label_position"] = horizontal.into();
+                    config["time_label_vertical"] = vertical.into();
+                    drawing.fib_config = Some(serde_json::from_value(config).unwrap());
+                    drawing.update_screen_coords(
+                        |bar| bar,
+                        |price| (700.0 - price.ln() * 50.0) as f32,
+                    );
+                    let origin = if tool == Tool::TrendBasedFibTime {
+                        500.0
+                    } else if reverse {
+                        400.0
+                    } else {
+                        200.0
+                    };
+                    let x = origin + if reverse { -50.0 } else { 50.0 };
+                    let ctx = egui::Context::default();
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(rect),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            drawing.render_fibonacci_time_zones(
+                                &ui.painter().with_clip_rect(rect),
+                                rect,
+                            );
+                        },
+                    );
+                    let shapes = output.shapes.clone();
+                    output.drop_without_applying_deltas();
+                    let lines: Vec<_> = shapes
+                        .iter()
+                        .filter_map(|shape| match &shape.shape {
+                            egui::Shape::LineSegment { points, stroke } => Some((points, stroke)),
+                            _ => None,
+                        })
+                        .collect();
+                    let red: Vec<_> = lines
+                        .iter()
+                        .filter(|(_, stroke)| stroke.color == Color32::RED)
+                        .collect();
+                    assert!(red.len() > 2, "{tool:?}: assigned dashed pattern");
+                    assert!(red.iter().all(|(points, stroke)| points[0].x == x
+                        && points[1].x == x
+                        && stroke.width == 40.0));
+                    assert!(
+                        lines.iter().any(
+                            |(_, stroke)| stroke.color == Color32::GREEN && stroke.width == 2.0
+                        )
+                    );
+                    assert!(
+                        lines.iter().all(|(_, stroke)| stroke.color == Color32::RED
+                            || stroke.color == Color32::GREEN),
+                        "hidden construction and levels"
+                    );
+                    let label = shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.text() == "0.25" => Some(text),
+                            _ => None,
+                        })
+                        .unwrap();
+                    assert_eq!(label.galley.job.sections[0].format.font_id.size, 20.0);
+                    assert_eq!(label.galley.job.sections[0].format.color, Color32::RED);
+                    let bounds = Rect::from_min_size(label.pos, label.galley.size());
+                    match horizontal {
+                        "Left" => assert!((bounds.right() - (x - 4.0)).abs() < 0.01),
+                        "Center" => assert!((bounds.center().x - x).abs() < 0.01),
+                        _ => assert!((bounds.left() - (x + 4.0)).abs() < 0.01),
+                    }
+                    match vertical {
+                        "Top" => assert!((bounds.top() - 4.0).abs() < 0.01),
+                        "Middle" => assert!((bounds.center().y - 350.0).abs() < 0.01),
+                        _ => assert!((bounds.bottom() - 696.0).abs() < 0.01),
+                    }
+                    let hit = DrawingInteraction::default();
+                    assert_eq!(
+                        hit.hit_test(
+                            Pos2::new(x + 18.0, 100.0),
+                            std::slice::from_ref(&drawing),
+                            "1D"
+                        ),
+                        Some(7)
+                    );
+                    let second_x = origin + if reverse { -100.0 } else { 100.0 };
+                    assert_eq!(
+                        hit.hit_test(
+                            Pos2::new(second_x + 18.0, 100.0),
+                            std::slice::from_ref(&drawing),
+                            "1D"
+                        ),
+                        None
+                    );
+                    let lines = drawing.outline(rect).unwrap().lines;
+                    assert_eq!(lines.len(), 2);
+                    assert!(lines.iter().any(|line| line[0].x == x && line[1].x == x));
+                    drawing
+                        .fib_config
+                        .as_mut()
+                        .unwrap()
+                        .levels
+                        .iter_mut()
+                        .for_each(|level| level.visible = false);
+                    let middle = drawing.points[0].lerp(drawing.points[1], 0.5);
+                    assert_eq!(
+                        hit.hit_test(middle, std::slice::from_ref(&drawing), "1D"),
+                        None
+                    );
+                    drawing.fib_config.as_mut().unwrap().trend_visible = true;
+                    assert_eq!(
+                        hit.hit_test(middle, std::slice::from_ref(&drawing), "1D"),
+                        Some(7)
+                    );
+                }
+            }
+            // Half a pixel per interval still projects ratio 89 by 44.5 pixels.
+            let mut drawing = Drawing::new(7, tool);
+            drawing.points = vec![Pos2::new(200.0, 100.0), Pos2::new(200.5, 200.0)];
+            if tool == Tool::TrendBasedFibTime {
+                drawing.points.push(Pos2::new(300.0, 100.0));
+            }
+            let config = drawing.fib_config.as_mut().unwrap();
+            config.levels = vec![FibonacciLevel::new(89.0, "", [255, 0, 0, 255])];
+            config.show_background = false;
+            config.trend_visible = false;
+            let x = if tool == Tool::TrendBasedFibTime {
+                344.5
+            } else {
+                244.5
+            };
+            let output = egui::Context::default().run_ui(Default::default(), |ui| {
+                drawing.render_fibonacci_time_zones(ui.painter(), rect)
+            });
+            let projected = output.shapes.iter().any(|shape| {
+                matches!(&shape.shape,
+                egui::Shape::LineSegment { points, .. } if points[0].x == x && points[1].x == x)
+            });
+            output.drop_without_applying_deltas();
+            assert!(projected, "subpixel interval keeps distant time levels");
+        }
+    }
 
     /// A quarter retracement of 100 to 200 is 175; a half log retracement of 100 to
     /// 400 is 200. Width and custom text choices do not change either geometry.
@@ -2158,7 +2363,7 @@ mod tests {
         let got: Vec<_> = zones
             .fibonacci_time_zone_lines(rect)
             .into_iter()
-            .filter(|line| line[0].x <= 300.0)
+            .filter(|line| line[0].x == line[1].x && line[0].x <= 300.0)
             .map(|line| (((line[0].x - 100.0) / 10.0) as u32, line[0].x))
             .collect();
         let want = [
