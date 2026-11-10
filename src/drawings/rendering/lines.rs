@@ -118,19 +118,24 @@ impl Drawing {
         }
     }
 
-    /// Ends from left to right, or in anchor order on a vertical line, extended to the pane edges
-    /// as configured; `None` below two anchors. A trend line, ray, extended line, info line or
-    /// trend angle extends left past its first anchor and right past its second, whichever way it
-    /// was drawn; other lines extend towards the pane's sides.
-    pub(crate) fn trend_line_ends(&self, rect: Rect) -> Option<(Pos2, Pos2)> {
+    /// Whether Left and Right extend past the first and second anchors, in drawing order.
+    /// Painting, hit testing and study price scales use the same rule.
+    pub(crate) fn extends_past_anchors(&self) -> bool {
         use crate::drawings::DrawingToolType as T;
+        matches!(
+            self.tool_type,
+            T::TrendLine | T::Ray | T::ExtendedLine | T::InfoLine | T::TrendAngle
+        )
+    }
+
+    /// Ends from left to right, or in anchor order on a vertical line, extended to the pane edges
+    /// as configured; `None` below two anchors. Left and Right extend past the anchors when
+    /// `extends_past_anchors` holds, and towards the pane's sides otherwise.
+    pub(crate) fn trend_line_ends(&self, rect: Rect) -> Option<(Pos2, Pos2)> {
         let &[a, b, ..] = self.points.as_slice() else {
             return None;
         };
-        if matches!(
-            self.tool_type,
-            T::TrendLine | T::Ray | T::ExtendedLine | T::InfoLine | T::TrendAngle
-        ) {
+        if self.extends_past_anchors() {
             let first = if self.extend_left {
                 ray_end(b, a, rect)
             } else {

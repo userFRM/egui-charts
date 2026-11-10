@@ -916,4 +916,61 @@ mod tests {
             );
         }
     }
+
+    /// A study's trend line, ray, extended line, info line or trend angle extends past the anchor each side
+    /// names. Drawn right to left from bar 9 to bar 3, Right runs on past bar 3 towards bar 0
+    /// and Left past bar 9 towards later bars, so its prices count in a view over bars 0..2 or
+    /// in one over bars 20..30, never both, and always in bars 4..6 between its anchors. A
+    /// vertical one at bar 5 extends along the price axis and reaches neither view. A rectangle
+    /// extends towards the pane's sides whichever way it was drawn.
+    #[test]
+    fn study_lines_drawn_right_to_left_scale_to_the_side_they_extend() {
+        use crate::drawings::DrawingToolType as T;
+        let (reversed, forward) = ([(9.0, 118.0), (3.0, 113.0)], [(3.0, 113.0), (9.0, 118.0)]);
+        let vertical = [(5.0, 113.0), (5.0, 118.0)];
+        let (right, left) = ((false, true), (true, false));
+        let mut wrong = Vec::new();
+        // Counted in bars 0..2 and in bars 20..30: for the lines, then for the rectangle.
+        for (anchors, flags, lines, sides) in [
+            (reversed, right, (true, false), (false, true)),
+            (reversed, left, (false, true), (true, false)),
+            (forward, right, (false, true), (false, true)),
+            (forward, left, (true, false), (true, false)),
+            (vertical, right, (false, false), (false, true)),
+            (vertical, left, (false, false), (true, false)),
+        ] {
+            for tool in [
+                T::TrendLine,
+                T::Ray,
+                T::ExtendedLine,
+                T::InfoLine,
+                T::TrendAngle,
+                T::Rect,
+            ] {
+                let mut drawing = Drawing::new(1, tool);
+                drawing.chart_points = anchors
+                    .iter()
+                    .map(|&(bar, price)| ChartPoint::new(bar, price))
+                    .collect();
+                (drawing.extend_left, drawing.extend_right) = flags;
+                drawing.completed = true;
+                let mut study = AutoDrawing::new(AutoDrawingKind::TrendLine, 5.0, 3);
+                study.drawings = vec![drawing];
+                let counted = |bars: std::ops::Range<usize>| {
+                    crate::studies::plots::drawing_prices(&study, bars)
+                        .next()
+                        .is_some()
+                };
+                let (before, after) = if tool == T::Rect { sides } else { lines };
+                let got = (counted(0..2), counted(4..6), counted(20..30));
+                if got != (before, true, after) {
+                    wrong.push(format!(
+                        "{tool:?} {anchors:?} {flags:?}: counted {got:?}, want {:?}",
+                        (before, true, after)
+                    ));
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
 }
